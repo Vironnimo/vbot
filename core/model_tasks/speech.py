@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-import io
+import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from core.model_tasks.artifacts import StoredArtifact, TaskArtifactStore
 from core.model_tasks.constants import (
     DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
+)
+from core.model_tasks.speech_input import (
+    PreparedTranscriptionAudio,
+    SpeechInputError,
+    TranscriptionInputPolicy,
+    prepare_transcription_audio,
 )
 from core.model_tasks.speech_local import (
     PRELOAD_OPTION,
@@ -26,6 +32,8 @@ from core.model_tasks.speech_playback import SpeechPlaybackStore
 from core.model_tasks.speech_providers import ProviderSpeechClient
 from core.model_tasks.speech_types import (
     SpeechAudioCallback,
+    SpeechBusyError,
+    SpeechError,
     SpeechProgress,
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
@@ -33,18 +41,17 @@ from core.model_tasks.speech_types import (
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
+from core.settings import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 from core.storage.layout import DataDirectoryLayout
 from core.usage import UsageRecorder
-from core.utils.errors import TaskError, VBotError
+from core.utils.errors import VBotError
 from core.utils.logging import get_logger
-from core.utils.workers import settle_before_cancelling
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("speech")
-
-
-class SpeechError(TaskError):
-    """Base class for expected speech errors."""
+_MAX_CONCURRENT_TRANSCRIPTIONS = 2
+_MAX_PENDING_TRANSCRIPTIONS = 4
 
 
 class SpeechConfigurationError(SpeechError):
@@ -94,13 +101,6 @@ class SpeechArtifact:
         }
 
 
-@dataclass(frozen=True)
-class _PreparedTranscriptionAudio:
-    audio: bytes
-    filename: str
-    media_type: str
-
-
 class SpeechService:
     """Execute STT/TTS through configured task-model bindings."""
 
@@ -113,8 +113,14 @@ class SpeechService:
         local_executor: LocalSpeechExecutor | None = None,
         transcription_audio_getter: Callable[[], Mapping[str, Any]] | None = None,
         usage_recorder: UsageRecorder | None = None,
+        max_input_bytes: int = DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
     ) -> None:
         self._runtime = runtime
+        self._max_input_bytes = max_input_bytes
+        self._transcriptions = asyncio.Semaphore(_MAX_CONCURRENT_TRANSCRIPTIONS)
+        self._pending_transcriptions = 0
+        self._input_workers = BoundedWorkerPool(name="speech_input", max_workers=2)
+        self._closed = False
         self.playbacks = SpeechPlaybackStore()
         self._usage_recorder = usage_recorder
         self._resolver = TaskBindingResolver(
@@ -144,23 +150,37 @@ class SpeechService:
 
         if not audio:
             raise SpeechConfigurationError("Audio input is empty")
+        if len(audio) > self._max_input_bytes:
+            raise SpeechInputError(
+                "Audio input exceeds the configured upload limit", too_large=True
+            )
+        if self._closed:
+            raise SpeechConfigurationError("Speech service is closed")
+        if self._pending_transcriptions >= _MAX_PENDING_TRANSCRIPTIONS:
+            raise SpeechBusyError(
+                "Transcription is busy. Retry after an active recording finishes."
+            )
+        # Admission and the counter run on the Event Loop before the first wait.
+        # Bound retained queued recordings as well as decoder/Provider work.
+        self._pending_transcriptions += 1
+        try:
+            if progress is not None:
+                progress.update("queued")
+            async with self._transcriptions:
+                if self._closed:
+                    raise SpeechConfigurationError("Speech service is closed")
+                return await self._transcribe(audio, filename, media_type, progress)
+        finally:
+            self._pending_transcriptions -= 1
+
+    async def _transcribe(
+        self, audio: bytes, filename: str, media_type: str, progress: SpeechProgress | None
+    ) -> SpeechTranscriptionResult:
         try:
             _binding, options, target_ref = self._resolver.resolve(TASK_SPEECH_TO_TEXT)
         except SpeechConfigurationError as exc:
             _LOGGER.warning("Speech transcription unavailable: %s", exc)
             raise
-
-        try:
-            prepared = await asyncio.to_thread(
-                _prepare_transcription_audio,
-                audio,
-                self._transcription_audio_getter(),
-            )
-        except Exception as exc:
-            _LOGGER.warning("Speech transcription audio conversion failed: %s", exc)
-            raise SpeechExecutionError(
-                "Audio input could not be converted for transcription"
-            ) from exc
 
         usage = TaskUsage(self._usage_recorder, TASK_SPEECH_TO_TEXT, target_ref)
         if target_ref.kind == "local":
@@ -168,9 +188,9 @@ class SpeechService:
                 async with usage.attempt() as call_id:
                     result = await self._local_executor.transcribe(
                         target_ref.local_id,
-                        prepared.audio,
-                        filename=prepared.filename,
-                        media_type=prepared.media_type,
+                        audio,
+                        filename=filename,
+                        media_type=media_type,
                         options=options,
                         progress=progress,
                     )
@@ -181,12 +201,19 @@ class SpeechService:
             except LocalSpeechError as exc:
                 raise SpeechUnsupportedTargetError(str(exc)) from exc
 
-        if progress is not None:
-            progress.update("transcribing")
-        provider_client = ProviderSpeechClient.from_runtime(
-            self._runtime, target_ref, usage_observer=usage
-        )
         try:
+            provider_client = ProviderSpeechClient.from_runtime(
+                self._runtime, target_ref, usage_observer=usage
+            )
+            if progress is not None:
+                progress.update("preparing")
+            prepared = await self._prepare_input(
+                audio, provider_client.transcription_input_policy()
+            )
+            if self._closed:
+                raise SpeechConfigurationError("Speech service is closed")
+            if progress is not None:
+                progress.update("transcribing")
             return await provider_client.transcribe(
                 prepared.audio,
                 filename=prepared.filename,
@@ -204,9 +231,37 @@ class SpeechService:
                 exc,
             )
             raise SpeechExecutionError(str(exc)) from exc
+
         except Exception as exc:
             _LOGGER.error("Speech transcription failed", exc_info=True)
             raise SpeechExecutionError(str(exc)) from exc
+
+    async def _prepare_input(
+        self, audio: bytes, policy: TranscriptionInputPolicy
+    ) -> PreparedTranscriptionAudio:
+        cancelled = threading.Event()
+
+        def check_cancel() -> None:
+            if cancelled.is_set():
+                raise asyncio.CancelledError()
+
+        work = asyncio.create_task(
+            self._input_workers.run(
+                prepare_transcription_audio,
+                audio,
+                self._transcription_audio_getter(),
+                policy,
+                check_cancel=check_cancel,
+            )
+        )
+        try:
+            await asyncio.wait((work,))
+        except asyncio.CancelledError:
+            cancelled.set()
+            work.cancel()
+            await settle_before_cancelling(asyncio.gather(work, return_exceptions=True))
+            raise
+        return work.result()
 
     def prepare_transcription(self) -> str:
         """Start loading the bound local STT engine because a transcription is coming.
@@ -253,12 +308,16 @@ class SpeechService:
         return await self._local_executor.release_memory(target)
 
     def close(self) -> None:
+        self._closed = True
         self.playbacks.close()
         self._local_executor.close()
+        self._input_workers.shutdown()
 
     async def aclose(self) -> None:
+        self._closed = True
         await self.playbacks.aclose()
         await self._local_executor.aclose()
+        await settle_before_cancelling(asyncio.to_thread(self._input_workers.shutdown))
 
     async def synthesize(
         self,
@@ -366,63 +425,6 @@ def _speech_artifact(stored: StoredArtifact) -> SpeechArtifact:
         media_type=stored.media_type,
         size_bytes=stored.size_bytes,
         file_path=stored.file_path,
-    )
-
-
-def _prepare_transcription_audio(
-    audio: bytes,
-    speech_settings: Mapping[str, Any],
-) -> _PreparedTranscriptionAudio:
-    transcription_audio = speech_settings.get("transcription_audio")
-    if not isinstance(transcription_audio, Mapping):
-        transcription_audio = DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS
-
-    audio_format = transcription_audio.get("format", DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["format"])
-    if not isinstance(audio_format, str) or audio_format not in {"wav", "flac"}:
-        raise ValueError("Unsupported transcription audio format")
-    sample_rate_hz = transcription_audio.get(
-        "sample_rate_hz",
-        DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["sample_rate_hz"],
-    )
-    if not isinstance(sample_rate_hz, int) or isinstance(sample_rate_hz, bool):
-        raise ValueError("Unsupported transcription audio sample rate")
-    codec = {"wav": "pcm_s16le", "flac": "flac"}[audio_format]
-    media_type = {"wav": "audio/wav", "flac": "audio/flac"}[audio_format]
-
-    import av
-
-    input_container = av.open(io.BytesIO(audio), mode="r")
-    output_buffer = io.BytesIO()
-    output_container = None
-    try:
-        if not input_container.streams.audio:
-            raise ValueError("Audio input has no audio stream")
-        output_container = av.open(output_buffer, mode="w", format=audio_format)
-        output_stream = cast(Any, output_container.add_stream(codec, rate=sample_rate_hz))
-        output_stream.layout = "mono"
-        resampler = av.AudioResampler(format="s16", layout="mono", rate=sample_rate_hz)
-
-        for frame in input_container.decode(audio=0):
-            for converted in resampler.resample(frame):
-                for packet in output_stream.encode(converted):
-                    output_container.mux(packet)
-        for converted in resampler.resample(None):
-            for packet in output_stream.encode(converted):
-                output_container.mux(packet)
-        for packet in output_stream.encode(None):
-            output_container.mux(packet)
-    finally:
-        input_container.close()
-        if output_container is not None:
-            output_container.close()
-
-    output_audio = output_buffer.getvalue()
-    if not output_audio:
-        raise ValueError("Audio conversion produced no output")
-    return _PreparedTranscriptionAudio(
-        audio=output_audio,
-        filename=f"recording.{audio_format}",
-        media_type=media_type,
     )
 
 

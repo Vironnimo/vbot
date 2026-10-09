@@ -17,11 +17,15 @@ from starlette.requests import ClientDisconnect  # type: ignore[import-not-found
 import server.app as server_app
 from core.model_tasks import (
     SpeechConfigurationError,
+    SpeechError,
+    SpeechExecutionError,
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
+    SpeechUnsupportedTargetError,
 )
+from core.model_tasks.speech_input import SpeechInputError
 from core.model_tasks.speech_playback import PLAYBACK_MEDIA_TYPE, SpeechPlaybackStore
-from core.model_tasks.speech_types import SpeechAudioChunk
+from core.model_tasks.speech_types import SpeechAudioChunk, SpeechBusyError
 from server.app import JSON_REQUEST_BODY_MAX_BYTES, _stream_speech, _stream_synthesis, create_app
 from tests.server.app_test_support import ServerStubRuntime
 
@@ -29,9 +33,24 @@ _AUDIO_FILE = {"file": ("clip.webm", b"audio", "audio/webm")}
 _NDJSON = {"Accept": "application/x-ndjson"}
 
 
-@pytest.mark.parametrize("fail", [False, True])
-def test_transcribe_answers_json_or_one_terminal_progress_event(tmp_path: Path, fail: bool) -> None:
-    with _client(tmp_path, _FailingSpeech() if fail else _Speech()) as client:
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        pytest.param(None, 200, id="success"),
+        pytest.param(SpeechConfigurationError("configuration sentinel"), 409, id="configuration"),
+        pytest.param(SpeechUnsupportedTargetError("target sentinel"), 422, id="unsupported-target"),
+        pytest.param(SpeechExecutionError("execution sentinel"), 502, id="execution"),
+        pytest.param(SpeechBusyError("capacity sentinel"), 429, id="capacity"),
+        pytest.param(SpeechInputError("invalid media sentinel"), 400, id="invalid-media"),
+        pytest.param(
+            SpeechInputError("input limit sentinel", too_large=True), 413, id="input-limit"
+        ),
+    ],
+)
+def test_transcribe_answers_json_or_one_terminal_progress_event(
+    tmp_path: Path, error: SpeechError | None, status: int
+) -> None:
+    with _client(tmp_path, _FailingSpeech(error) if error is not None else _Speech()) as client:
         plain = client.post("/api/speech/transcribe", files=_AUDIO_FILE)
         streamed = client.post("/api/speech/transcribe", headers=_NDJSON, files=_AUDIO_FILE)
 
@@ -39,9 +58,9 @@ def test_transcribe_answers_json_or_one_terminal_progress_event(tmp_path: Path, 
     assert streamed.headers["content-type"].startswith("application/x-ndjson")
     assert events[0]["type"] == "progress"
     assert len([event for event in events if event["type"] != "progress"]) == 1
-    if fail:
-        assert (plain.status_code, plain.json()["detail"]) == (409, "Speech is not configured")
-        assert events[-1]["type"] == "error" and events[-1]["status"] == 409
+    if error is not None:
+        assert (plain.status_code, plain.json()["detail"]) == (status, str(error))
+        assert events[-1] == {"type": "error", "detail": str(error), "status": status}
     else:
         assert (plain.status_code, plain.json()) == (200, {"text": "hello"})
         assert events[-1] == {"type": "result", "result": {"text": "hello"}}
@@ -316,6 +335,10 @@ class _Speech:
 
 
 class _FailingSpeech(_Speech):
+    def __init__(self, error: SpeechError) -> None:
+        super().__init__()
+        self.error = error
+
     @override
     async def transcribe(
         self,
@@ -325,4 +348,4 @@ class _FailingSpeech(_Speech):
         media_type: str,
         progress: Any = None,
     ) -> SpeechTranscriptionResult:
-        raise SpeechConfigurationError("Speech is not configured")
+        raise self.error
