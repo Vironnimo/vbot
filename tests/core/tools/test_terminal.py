@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.providers.tool_schema import render_tool_definitions
+from core.storage.temp_files import TemporaryFileManager
 from core.tools import terminal as terminal_module
 from core.tools import terminal_manager as manager_module
 from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
@@ -356,7 +358,7 @@ async def test_coding_agent_reference_launches_exact_arguments_and_submits_task(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("launch_error", "code", "message"),
+    ("launch_error", "code", "message", "failure_phase"),
     [
         (
             FileNotFoundError(2, "fixture executable is missing", "fixture-missing"),
@@ -364,21 +366,31 @@ async def test_coding_agent_reference_launches_exact_arguments_and_submits_task(
             "Program fixture-missing was not found, so no terminal was started. Pass the "
             "program's full path as command, or omit command to start the user's default shell "
             "and run it there.",
+            "process",
         ),
         (
             RuntimeError("fixture transport could not initialize"),
             "terminal_launch_failed",
             "No terminal was started: the program could not start (fixture transport could not "
             "initialize). Check command, args and workdir, then start again.",
+            "process",
+        ),
+        (
+            PermissionError("fixture log cannot be opened"),
+            "terminal_launch_failed",
+            "No terminal was started: the program could not start (fixture log cannot be "
+            "opened). Check command, args and workdir, then start again.",
+            "log",
         ),
     ],
-    ids=["missing-executable", "transport-failure"],
+    ids=["missing-executable", "transport-failure", "log-open-failure"],
 )
 async def test_launch_failure_is_reported_and_releases_capacity(
     tmp_path: Path,
     launch_error: Exception,
     code: str,
     message: str,
+    failure_phase: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(manager_module, "TERMINAL_MAX_LIVE_PER_SESSION", 1)
@@ -398,14 +410,25 @@ async def test_launch_failure_is_reported_and_releases_capacity(
             *,
             command_line: str | None = None,
         ) -> FakeTerminalAdapter:
-            if self.failing:
+            if self.failing and failure_phase == "process":
                 raise launch_error
             return super().__call__(argv, cwd, env, rows, columns, command_line=command_line)
 
     factory = RecoveringFactory()
+    temporary_files = TemporaryFileManager(tmp_path)
+    logs = temporary_files.root / "terminals"
+    open_file = Path.open
+
+    def open_log(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if factory.failing and failure_phase == "log" and path.parent == logs and mode == "a":
+            raise launch_error
+        return open_file(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_log)
     terminal_manager = TerminalManager(
         adapter_factory=factory,
         render_host=TerminalRenderHost.in_process(),
+        temporary_files=temporary_files,
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
     )
@@ -417,6 +440,10 @@ async def test_launch_failure_is_reported_and_releases_capacity(
         assert result == tool_failure(code, message, retryable=False)
         assert terminal_manager.list_terminals() == []
         assert factory.adapters == []
+        for path in logs.iterdir():
+            os.utime(path, (0, 0))
+        temporary_files.sweep()
+        assert list(logs.iterdir()) == []
 
         factory.failing = False
         recovered = await call(terminal_manager, context, arguments)

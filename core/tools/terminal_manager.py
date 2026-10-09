@@ -680,9 +680,11 @@ class TerminalManager:
                 transcript=command_options is not None,
             )
             if command_options is None:
-                log_path, log_handle, log_lease = self._open_raw_log()
+                log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log)
             elif self._temporary_files is not None:
-                transcript_lease = self._temporary_files.create(COMMAND_TEMPORARY_CATEGORY, ".log")
+                transcript_lease = await asyncio.to_thread(
+                    self._temporary_files.create, COMMAND_TEMPORARY_CATEGORY, ".log"
+                )
             adapter = await self._start_process(
                 argv, cwd, env, rows, columns, command_line, exact_env=exact_env
             )
@@ -1258,7 +1260,12 @@ class TerminalManager:
         if self._temporary_files is None:
             return None, None, None
         lease = self._temporary_files.create(TERMINAL_TEMPORARY_CATEGORY, ".log")
-        return lease.path, lease.path.open("a", encoding="utf-8", newline=""), lease
+        try:
+            handle = lease.path.open("a", encoding="utf-8", newline="")
+        except BaseException:
+            lease.finish()
+            raise
+        return lease.path, handle, lease
 
 
 def _launch_program(command: str | None) -> str:
