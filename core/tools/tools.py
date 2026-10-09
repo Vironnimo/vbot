@@ -801,7 +801,9 @@ class ToolPromptBlockRegistry:
     """
 
     def __init__(self) -> None:
-        self._declarations: dict[str, tuple[str | None, Callable[..., Any] | None, str | None]] = {}
+        self._declarations: dict[
+            str, tuple[str | None, Callable[..., Any] | None, str | None, str | None]
+        ] = {}
 
     def register(
         self,
@@ -810,11 +812,15 @@ class ToolPromptBlockRegistry:
         default_text: str | None = None,
         render: Callable[..., Any] | None = None,
         owner: str | None = None,
+        requires_generated: str | None = None,
     ) -> None:
         """Declare a prompt block for *tool_name* (exactly one text / render).
 
         *owner* gates the block on another owner than ``tool:<tool_name>``, such
         as ``builtin:<kind>`` for guidance only one built-in Agent gets.
+        *requires_generated* names the ``{generated:NAME}`` producer a static
+        block lists: the block renders nothing while that producer renders
+        nothing (``BlockDefinition.requires_generated``).
 
         *render* returns the block's text, or a ``core.prompts.RenderedBlock``
         that also names the catalog the text lists. Chat pins a dynamic block's
@@ -836,7 +842,7 @@ class ToolPromptBlockRegistry:
                 tool_name,
             )
             return
-        self._declarations[tool_name] = (default_text, render, owner)
+        self._declarations[tool_name] = (default_text, render, owner, requires_generated)
 
     def block_definitions(self) -> list[Any]:
         """Return the declared blocks as ``core.prompts.BlockDefinition`` objects.
@@ -848,13 +854,14 @@ class ToolPromptBlockRegistry:
         from core.prompts import BlockDefinition
 
         definitions: list[Any] = []
-        for tool_name, (default_text, render, owner) in self._declarations.items():
+        for tool_name, (default_text, render, owner, required) in self._declarations.items():
             definitions.append(
                 BlockDefinition(
                     id=f"tool:{tool_name}",
                     owner=owner or f"tool:{tool_name}",
                     default_text=default_text,
                     render=render,
+                    requires_generated=required,
                 )
             )
         return definitions

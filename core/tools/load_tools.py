@@ -21,12 +21,13 @@ from typing import Any
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.model_names import called_tool_name, model_tool_name
-from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, ON_DEMAND_TOOL_LIST_PRODUCER
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
     ToolDisplayPart,
+    ToolPromptBlockRegistry,
     ToolRegistry,
     tool_success,
 )
@@ -46,6 +47,14 @@ LOAD_TOOLS_PARAMETERS: JsonObject = {
     },
     "required": ["names"],
 }
+# Default text of the ``tool:load_tools`` System Prompt block.
+LOAD_TOOLS_BLOCK_TEXT = (
+    "## Tools Loaded on Demand\n\n"
+    "You can also use the Tools listed below, but their definitions are not in your Tool "
+    "list. Before you call one of them for the first time, load its definition with "
+    "`load_tools`. Load all Tools a task needs in one call.\n\n"
+    f"{{generated:{ON_DEMAND_TOOL_LIST_PRODUCER}}}"
+)
 _RESULT_SCHEMA: JsonObject = {
     "type": "object",
     "properties": {"content": {"type": "string"}},
@@ -83,9 +92,23 @@ _RETRY = (
 )
 
 
-def register_load_tools_tool(registry: ToolRegistry) -> None:
-    """Register the internal ``load_tools`` Tool."""
+def register_load_tools_tool(
+    registry: ToolRegistry, prompt_blocks: ToolPromptBlockRegistry | None = None
+) -> None:
+    """Register the internal ``load_tools`` Tool and its System Prompt block.
 
+    The ``tool:load_tools`` block is static, user-editable text
+    (:data:`LOAD_TOOLS_BLOCK_TEXT`) around the list of On-demand Tools
+    (``{generated:on_demand_tool_list}``); it renders nothing while that list
+    is empty.
+    """
+
+    if prompt_blocks is not None:
+        prompt_blocks.register(
+            LOAD_TOOLS_TOOL_NAME,
+            default_text=LOAD_TOOLS_BLOCK_TEXT,
+            requires_generated=ON_DEMAND_TOOL_LIST_PRODUCER,
+        )
     registry.register(
         LOAD_TOOLS_TOOL_NAME,
         LOAD_TOOLS_DESCRIPTION,
@@ -258,6 +281,7 @@ def _display_parts(arguments: JsonObject) -> Sequence[ToolDisplayPart]:
 
 
 __all__ = [
+    "LOAD_TOOLS_BLOCK_TEXT",
     "LOAD_TOOLS_DESCRIPTION",
     "LOAD_TOOLS_PARAMETERS",
     "register_load_tools_tool",

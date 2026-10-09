@@ -20,6 +20,14 @@ def _format_tool_list(tool_definitions: list[dict[str, Any]]) -> str:
     )
 
 
+def _format_on_demand_tool_list(entries: Sequence[tuple[str, str]]) -> str:
+    """List On-demand Tools as ``- name: summary``, in the given (sorted) order."""
+    return "\n".join(
+        f"- {model_tool_name(name)}: {summary}" if summary else f"- {model_tool_name(name)}"
+        for name, summary in entries
+    )
+
+
 def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
     # No ``- None`` fallback anymore: the ``core:channels`` block is owner
     # ``channel``, so with no enabled channels the whole block gates out (D5). This

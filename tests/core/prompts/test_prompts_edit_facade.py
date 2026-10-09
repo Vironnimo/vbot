@@ -25,6 +25,7 @@ _BUNDLED_LAYOUT = [
     "tool:project",
     "tool:subagent",
     "core:tools_list",
+    "tool:load_tools",
     "core:channels",
     "core:skills",
     "core:skill_maintenance",
