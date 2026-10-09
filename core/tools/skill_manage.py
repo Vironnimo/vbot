@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import re
 import threading
+import unicodedata
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -26,6 +27,7 @@ from core.skills.authoring import (
 from core.skills.skill_validator import (
     MAX_SKILL_NAME_LENGTH,
     SKILL_NAME_CHARSET_FRAGMENT,
+    SKILL_NAME_TRIGGER_PATTERN,
     parse_skill_front_matter,
     split_skill_document,
 )
@@ -176,6 +178,38 @@ SKILL_MANAGE_RENAME_SETTINGS_WARNING = (
     "The Skill selection of some Agents could not be changed and still names '{name}'. "
     "Name this in your reply so the user can change it to '{new_name}' in the Skill controls."
 )
+SKILL_MANAGE_CREATE_EXISTS = (
+    "Skill '{name}' already exists; nothing changed. Use action edit to replace its SKILL.md "
+    "or patch to change part of it, or create the new Skill under another name."
+)
+# A name the Tool cannot use: the rule, and the name built from the one received.
+SKILL_MANAGE_INVALID_NAME = (
+    '{field} "{value}" is not a valid Skill name; nothing changed. A Skill name starts with '
+    "a letter or digit and uses only letters, digits, '-' and '_', at most "
+    f"{MAX_SKILL_NAME_LENGTH} characters"
+)
+SKILL_MANAGE_SUPPORT_PATH = (
+    'file_path "{path}" is not under scripts/, references/ or assets/; nothing changed. '
+    'Support files live in one of these folders, such as "{suggestion}".'
+)
+SKILL_MANAGE_NO_FILE = "Skill '{name}' has no file {path}; nothing changed."
+SKILL_MANAGE_CREATE_FILE = (
+    "To create {path}, use action write_file with its complete text as content."
+)
+# Skills from a Project or shipped with vBot: no Tool changes them.
+SKILL_MANAGE_READ_ONLY = (
+    "Skill '{name}' is {label}, which is read-only; nothing changed. Name the change it needs "
+    "in your reply; do not change its files with file or shell Tools."
+)
+SKILL_MANAGE_NOT_CHANGEABLE = (
+    "Skill '{name}' is not one of your own Skills, so skill_manage cannot change it; nothing "
+    "changed. Name the change it needs in your reply."
+)
+# A file system failure: the write can have stopped partway.
+SKILL_MANAGE_FILE_ERROR = (
+    "skill_manage could not finish {action} of Skill '{name}' ({reason}); it may be partly "
+    "done. Load {names} with the skill Tool to see the current state before you retry."
+)
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "rename", "delete", "publish")
 # follow_merge(owner_id, name, target, delete) -> the references that could not move.
@@ -296,6 +330,23 @@ _WHOLE_FILE_ACTIONS = frozenset({"create", "edit", "write_file"})
 _HINT_DIRECTORIES = ("references", "scripts")
 _HINT_FILE_LIMIT = 200
 _HINT_TEXT_BYTES = 256 * 1024
+# The resource folder a support file path outside them most likely meant.
+_FOLDER_SPELLINGS = {
+    **{directory: directory for directory in RESOURCE_DIRECTORIES},
+    "reference": "references",
+    "refs": "references",
+    "docs": "references",
+    "doc": "references",
+    "script": "scripts",
+    "bin": "scripts",
+    "asset": "assets",
+    "templates": "assets",
+    "template": "assets",
+}
+_SCRIPT_SUFFIXES = frozenset(
+    {".py", ".sh", ".bash", ".ps1", ".js", ".mjs", ".ts", ".bat", ".cmd", ".rb", ".pl"}
+)
+_REFERENCE_SUFFIXES = frozenset({"", ".md", ".markdown", ".txt", ".rst"})
 
 # Typographic glyphs a Model may type where a file has the plain form. Mirrors the
 # patch folds of ``fuzzy_match`` so a folded match also folds its replacement.
@@ -540,7 +591,10 @@ def make_skill_manage_handler(
                 )
             )
         except OSError as error:
-            return _Outcome(tool_failure("skill_write_error", str(error)))
+            _LOGGER.warning(
+                "Skill write failed (skill=%s action=%s): %s", call.name, call.action, error
+            )
+            return _Outcome(tool_failure("skill_write_error", _file_error_message(call, error)))
 
         global_changed = target == "global" or call.action == "publish"
         # An own-home invalidation also reaches its shared receivers. Receiver
@@ -829,6 +883,7 @@ def _read_patch(call: _Call) -> _Call:
             "invalid_arguments", "old_string and new_string are identical; nothing to change."
         )
     call.file_path = call.file_path or SKILL_FILENAME
+    _check_support_path(call.file_path)
     return call
 
 
@@ -852,6 +907,7 @@ def _read_write_file(call: _Call) -> _Call:
     if call.file_path == SKILL_FILENAME:
         call.action = "edit"
         call.content = _complete_document(call)
+    _check_support_path(call.file_path)
     return call
 
 
@@ -869,6 +925,7 @@ def _read_remove_file(call: _Call) -> _Call:
             f"remove_file removes {call.file_path} and takes no text. Use write_file to "
             "replace the file or patch to change part of it.",
         )
+    _check_support_path(call.file_path)
     return call
 
 
@@ -948,6 +1005,93 @@ def _refuse_support_file(call: _Call, suggestion: str) -> None:
             f"{call.action} writes SKILL.md. To write {call.file_path}, use action "
             f"{suggestion} with that file_path; omit file_path to {call.action} SKILL.md.",
         )
+
+
+def _check_support_path(path: str) -> None:
+    """Refuse a clean support file path outside the resource folders, naming the fix."""
+    parts = path.split("/")
+    if path == SKILL_FILENAME or any(part in {"", ".", ".."} for part in parts):
+        # SKILL.md is no support file; a malformed path is the authoring check's.
+        return
+    if len(parts) > 1 and parts[0] in RESOURCE_DIRECTORIES:
+        return
+    raise _RefusalError(
+        "skill_write_rejected",
+        SKILL_MANAGE_SUPPORT_PATH.format(path=path, suggestion=_support_path_suggestion(parts)),
+    )
+
+
+def _support_path_suggestion(parts: list[str]) -> str:
+    """The path under a resource folder that ``parts`` most likely meant."""
+    folder = _FOLDER_SPELLINGS.get(parts[0].casefold()) if len(parts) > 1 else None
+    if folder is not None:
+        return "/".join((folder, *parts[1:]))
+    suffix = PurePosixPath(parts[-1]).suffix.casefold()
+    if suffix in _SCRIPT_SUFFIXES:
+        folder = "scripts"
+    elif suffix in _REFERENCE_SUFFIXES:
+        folder = "references"
+    else:
+        folder = "assets"
+    return "/".join((folder, *parts))
+
+
+def _check_file_exists(target_root: Path, call: _Call) -> None:
+    """Refuse a remove_file or support file patch of a file the Skill does not have."""
+    path = call.file_path
+    if path is None or path == SKILL_FILENAME:
+        return
+    package = find_skill_package_dir(target_root, call.name)
+    if package is None or (package / path).is_file():
+        return
+    files = _support_files(package)
+    lines = [SKILL_MANAGE_NO_FILE.format(name=call.name, path=path)]
+    if not files:
+        lines.append("It has no support files.")
+    elif len(files) <= _LISTED_NAME_LIMIT:
+        lines.append(f"Its support files: {', '.join(files)}.")
+    else:
+        shown = ", ".join(files[:_LISTED_NAME_LIMIT])
+        lines.append(f"Its support files include: {shown}.")
+    if call.action == "patch":
+        lines.append(SKILL_MANAGE_CREATE_FILE.format(path=path))
+    raise _RefusalError("skill_write_rejected", " ".join(lines))
+
+
+def _support_files(package: Path) -> list[str]:
+    files: list[str] = []
+    for directory in RESOURCE_DIRECTORIES:
+        # Path.walk never enters a link, Windows junctions included.
+        walk = (package / directory).walk()
+        files.extend(
+            (base / entry).relative_to(package).as_posix()
+            for base, _, names in walk
+            for entry in sorted(names)
+        )
+    return sorted(files)
+
+
+def _file_error_message(call: _Call, error: OSError) -> str:
+    names = f"'{call.name}'"
+    if call.action == "rename" and call.new_name:
+        names = f"'{call.new_name}' or '{call.name}'"
+    reason = error.strerror or type(error).__name__
+    return SKILL_MANAGE_FILE_ERROR.format(
+        action=call.action, name=call.name, reason=reason, names=names
+    )
+
+
+def _invalid_name_message(field_name: str, value: str) -> str | None:
+    """Why ``value`` cannot be a Skill name, with a name built from it; ``None`` if it can."""
+    if SKILL_NAME_TRIGGER_PATTERN.fullmatch(value):
+        return None
+    ascii_text = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9_-]+", "-", ascii_text.casefold())
+    slug = slug.lstrip("-_")[:MAX_SKILL_NAME_LENGTH].rstrip("-_")
+    message = SKILL_MANAGE_INVALID_NAME.format(field=field_name, value=value)
+    if slug and SKILL_NAME_TRIGGER_PATTERN.fullmatch(slug):
+        return f'{message}, such as "{slug}".'
+    return f"{message}."
 
 
 def _package_path(path: str, name: str) -> str:
@@ -1048,8 +1192,14 @@ def _apply(
 ) -> tuple[SkillWriteResult, str]:
     name = call.name
     if call.action == "create":
+        if (target_root / name).exists():
+            raise _RefusalError(
+                "skill_write_rejected", SKILL_MANAGE_CREATE_EXISTS.format(name=name)
+            )
         result = authoring.create(target_root, name, call.content or "", writer=writer)
         return result, f"Created Skill '{name}'."
+    if call.action in ("patch", "remove_file"):
+        _check_file_exists(target_root, call)
     if call.action == "edit":
         result = authoring.edit(target_root, name, call.content or "", writer=writer)
         return result, f"Replaced SKILL.md of Skill '{name}'."
@@ -1278,17 +1428,11 @@ def _scope_rejection_message(name: str, scope: str, action: str = "delete") -> s
             "nothing changed. Tell the user which change it needs; do not edit its files "
             "with file or shell Tools."
         )
-    labels = {
-        "bundled": "is a bundled Skill — read-only here.",
-        "project": "is a Project Skill — read-only here.",
-    }
-    lead = labels.get(scope)
-    if lead is None:
-        return f"Skill '{name}' not found."
-    return (
-        f"Skill '{name}' {lead} Non-private Skills are managed through the "
-        f"user-facing Skill controls; do not edit the package with file or shell tools."
-    )
+    labels = {"bundled": "a bundled Skill", "project": "a Project Skill"}
+    label = labels.get(scope)
+    if label is None:
+        return SKILL_MANAGE_NOT_CHANGEABLE.format(name=name)
+    return SKILL_MANAGE_READ_ONLY.format(name=name, label=label)
 
 
 def _lf(text: str) -> str:
@@ -1325,9 +1469,23 @@ def _normalize_skill_manage_arguments(arguments: Any) -> Any:
     if not isinstance(repaired, dict):
         return repaired
     _repair_name(repaired)
+    _check_names(repaired)
     _repair_file_path(repaired)
     _resolve_text(repaired)
     return repaired
+
+
+def _check_names(arguments: dict[str, Any]) -> None:
+    """Refuse a name or new_name no Skill can have, with the rule and a usable name."""
+    for field_name in ("name", "new_name"):
+        value = arguments.get(field_name)
+        if isinstance(value, str) and value:
+            if field_name == "new_name":
+                value = clean_skill_file_path(value).lstrip(_NAME_MARKS)
+                arguments[field_name] = value
+            message = _invalid_name_message(field_name, value)
+            if message is not None:
+                raise ToolContractError(message)
 
 
 def _repair_file_path(arguments: dict[str, Any]) -> None:
