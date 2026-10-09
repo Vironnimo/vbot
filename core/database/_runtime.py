@@ -99,6 +99,10 @@ class ConnectionRuntime:
         self._reader_connections: set[sqlite3.Connection] = set()
         self._reader_permits = threading.BoundedSemaphore(READ_CONNECTION_LIMIT)
         self._reader_lock = threading.Lock()
+        self._reader_condition = threading.Condition(self._reader_lock)
+        # Cold opens and claimed closes run outside the admission lock. Shutdown
+        # waits for this I/O, but never for a caller's checked-out read callback.
+        self._reader_io_pending = 0
         self._reader_access_closed = False
         self._reader_open_failed_at = 0.0
         self._reader_permit_exhausted = 0
@@ -114,10 +118,11 @@ class ConnectionRuntime:
         a foreign or newer database is refused untouched.
         """
         with self._lock:
-            if self._writer is not None:
-                return self._writer
-            if self._closed:
-                raise DatabaseUnavailableError(f"{self.label} is closed")
+            with self._reader_lock:
+                if self._reader_access_closed:
+                    raise DatabaseUnavailableError(f"{self.label} is closed")
+                if self._writer is not None:
+                    return self._writer
             connection: sqlite3.Connection | None = None
             try:
                 connection = connect_tracked(
@@ -134,11 +139,15 @@ class ConnectionRuntime:
                 connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
                 connection.execute(f"PRAGMA cache_size=-{WRITER_CACHE_KIB}")
                 verify(connection)
-                self._wal_active = apply_wal_with_fallback(connection, db_label=self.label) == "wal"
+                wal_active = apply_wal_with_fallback(connection, db_label=self.label) == "wal"
                 connection.execute(f"PRAGMA synchronous={self._synchronous}")
                 connection.execute("PRAGMA wal_autocheckpoint=1000")
                 connection.execute(f"PRAGMA journal_size_limit={_WAL_SIZE_LIMIT_BYTES}")
-                self._writer = connection
+                with self._reader_lock:
+                    if self._reader_access_closed:
+                        raise DatabaseUnavailableError(f"{self.label} is closed")
+                    self._wal_active = wal_active
+                    self._writer = connection
                 return connection
             except BaseException as exc:
                 if connection is not None:
@@ -242,13 +251,12 @@ class ConnectionRuntime:
 
     @contextlib.contextmanager
     def _read_transaction(self) -> Iterator[sqlite3.Connection]:
-        with self._lock:
-            if self._writer is None or self._closed:
-                raise DatabaseUnavailableError(f"{self.label} is closed")
-            wal_active = self._wal_active
-        connection = self._checkout_reader() if wal_active else None
+        connection = self._checkout_reader()
         if connection is None:
             with self._lock:
+                with self._reader_lock:
+                    if self._reader_access_closed:
+                        raise DatabaseUnavailableError(f"{self.label} is closed")
                 writer = self.writer
                 writer.execute("BEGIN")
                 try:
@@ -262,9 +270,15 @@ class ConnectionRuntime:
             return
         healthy = True
         try:
-            connection.execute("BEGIN")
+            with self._reader_lock:
+                if self._reader_access_closed:
+                    raise DatabaseUnavailableError(f"{self.label} is closed")
+                connection.execute("BEGIN")
             yield connection
-            connection.execute("COMMIT")
+            with self._reader_lock:
+                if self._reader_access_closed:
+                    raise DatabaseUnavailableError(f"{self.label} is closed")
+                connection.execute("COMMIT")
         except BaseException:
             healthy = False
             with contextlib.suppress(BaseException):
@@ -277,53 +291,69 @@ class ConnectionRuntime:
 
     def _checkout_reader(self) -> sqlite3.Connection | None:
         with self._reader_lock:
-            if self._reader_access_closed:
+            if self._reader_access_closed or self._writer is None:
+                raise DatabaseUnavailableError(f"{self.label} is closed")
+            if not self._wal_active:
                 return None
             if self._reader_open_failed_at and (
                 time.monotonic() - self._reader_open_failed_at < READ_OPEN_RETRY_SECONDS
             ):
                 return None
-        try:
-            return self._readers.get_nowait()
-        except queue.Empty:
-            pass
-        if not self._reader_permits.acquire(blocking=False):
-            with self._reader_lock:
+            try:
+                return self._readers.get_nowait()
+            except queue.Empty:
+                pass
+            if not self._reader_permits.acquire(blocking=False):
                 self._reader_permit_exhausted += 1
-            return None
+                return None
+            self._reader_io_pending += 1
         connection: sqlite3.Connection | None = None
+        published = False
         try:
-            connection = connect_tracked(
-                readonly_sqlite_uri(self.path),
-                tracking_path=self.path,
-                uri=True,
-                isolation_level=None,
-                check_same_thread=False,
-                timeout=5.0,
-            )
-            connection.row_factory = sqlite3.Row
-            if self._connection_setup is not None:
-                self._connection_setup(connection)
-            connection.execute("PRAGMA query_only=ON")
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute(f"PRAGMA cache_size=-{READER_CACHE_KIB}")
-            application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
-            if application_id != self._application_id:
-                raise DatabaseCorruptError(f"{self.label}: reader application identity mismatch")
-            generation = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if generation != self._format_generation:
-                raise DatabaseCorruptError(f"{self.label}: reader format generation mismatch")
+            try:
+                connection = connect_tracked(
+                    readonly_sqlite_uri(self.path),
+                    tracking_path=self.path,
+                    uri=True,
+                    isolation_level=None,
+                    check_same_thread=False,
+                    timeout=5.0,
+                )
+                connection.row_factory = sqlite3.Row
+                if self._connection_setup is not None:
+                    self._connection_setup(connection)
+                connection.execute("PRAGMA query_only=ON")
+                connection.execute("PRAGMA foreign_keys=ON")
+                connection.execute(f"PRAGMA cache_size=-{READER_CACHE_KIB}")
+                application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
+                if application_id != self._application_id:
+                    raise DatabaseCorruptError(
+                        f"{self.label}: reader application identity mismatch"
+                    )
+                generation = int(connection.execute("PRAGMA user_version").fetchone()[0])
+                if generation != self._format_generation:
+                    raise DatabaseCorruptError(f"{self.label}: reader format generation mismatch")
+            except BaseException:
+                with self._reader_lock:
+                    self._reader_open_failed_at = time.monotonic()
+                return None
             with self._reader_lock:
+                if self._reader_access_closed:
+                    raise DatabaseUnavailableError(f"{self.label} is closed")
                 self._reader_connections.add(connection)
+                published = True
             return connection
-        except BaseException:
-            if connection is not None:
-                with contextlib.suppress(BaseException):
-                    connection.close()
-            with self._reader_lock:
-                self._reader_open_failed_at = time.monotonic()
-            self._reader_permits.release()
-            return None
+        finally:
+            try:
+                if not published:
+                    if connection is not None:
+                        with contextlib.suppress(BaseException):
+                            connection.close()
+                    self._reader_permits.release()
+            finally:
+                with self._reader_condition:
+                    self._reader_io_pending -= 1
+                    self._reader_condition.notify_all()
 
     def _return_reader(self, connection: sqlite3.Connection) -> bool:
         with self._reader_lock:
@@ -336,12 +366,19 @@ class ConnectionRuntime:
                 return False
 
     def _close_reader(self, connection: sqlite3.Connection) -> None:
-        with contextlib.suppress(BaseException):
-            connection.close()
         with self._reader_lock:
-            self._reader_connections.discard(connection)
-        with contextlib.suppress(ValueError):
+            if connection not in self._reader_connections:
+                return
+            self._reader_connections.remove(connection)
+            self._reader_io_pending += 1
+        try:
+            with contextlib.suppress(BaseException):
+                connection.close()
             self._reader_permits.release()
+        finally:
+            with self._reader_condition:
+                self._reader_io_pending -= 1
+                self._reader_condition.notify_all()
 
     def checkpoint(self) -> None:
         """Run a non-blocking checkpoint without changing journal mode."""
@@ -428,8 +465,9 @@ class ConnectionRuntime:
 
     def close(self) -> None:
         """Close pooled readers and the writer, releasing all tracking entries."""
-        with self._reader_lock:
+        with self._reader_condition:
             self._reader_access_closed = True
+            self._reader_condition.wait_for(lambda: self._reader_io_pending == 0)
         while True:
             try:
                 connection = self._readers.get_nowait()
@@ -437,10 +475,9 @@ class ConnectionRuntime:
                 break
             self._close_reader(connection)
         with self._lock:
-            if self._closed:
-                return
             self._closed = True
-            writer, self._writer = self._writer, None
+            with self._reader_lock:
+                writer, self._writer = self._writer, None
             if writer is not None:
                 if self._wal_active:
                     with contextlib.suppress(BaseException):
@@ -451,6 +488,8 @@ class ConnectionRuntime:
             outstanding = list(self._reader_connections)
         for connection in outstanding:
             self._close_reader(connection)
+        with self._reader_condition:
+            self._reader_condition.wait_for(lambda: self._reader_io_pending == 0)
 
     def is_closed(self) -> bool:
         # This monotonic flag is only an observation, not a connection lease.

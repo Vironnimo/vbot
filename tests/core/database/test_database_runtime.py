@@ -8,7 +8,7 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Iterator
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import replace
 from pathlib import Path
@@ -284,6 +284,54 @@ def test_readers_are_bounded_permits_with_bounded_page_caches(wal_database: Data
     assert database.live_connection_count() == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("warm_reader", [False, True], ids=["cold", "pooled"])
+async def test_wal_readers_keep_their_snapshot_while_a_writer_commits(
+    wal_database: Database, warm_reader: bool
+) -> None:
+    database = wal_database
+    add_note(database, "before")
+    writer_connection = database.writer
+    if warm_reader:
+        assert note_bodies(database) == ["before"]
+    assert database.reader_stats()[0] == int(warm_reader)
+    writing: Future[None] = Future()
+    observed: Future[str] = Future()
+    release_writer, release_reader = threading.Event(), threading.Event()
+
+    def hold_write(connection: sqlite3.Connection) -> None:
+        connection.execute("UPDATE notes SET body = 'after'")
+        writing.set_result(None)
+        assert release_writer.wait(10)
+
+    def read_snapshot(connection: sqlite3.Connection) -> tuple[str, str]:
+        assert connection is not writer_connection
+        before = connection.execute("SELECT body FROM notes").fetchone()[0]
+        observed.set_result(before)
+        assert release_reader.wait(10)
+        return before, connection.execute("SELECT body FROM notes").fetchone()[0]
+
+    writer = asyncio.create_task(database.write_async(hold_write))
+    reader: asyncio.Task[tuple[str, str]] | None = None
+    try:
+        await asyncio.wait_for(asyncio.wrap_future(writing), timeout=10)
+        reader = asyncio.create_task(database.read_async(read_snapshot))
+        # The reader must see committed data before the writer is released.
+        assert await asyncio.wait_for(asyncio.wrap_future(observed), timeout=10) == "before"
+        assert not writer.done()
+        release_writer.set()
+        await asyncio.wait_for(writer, timeout=10)
+        release_reader.set()
+        assert await reader == ("before", "before")
+        assert note_bodies(database) == ["after"]
+    finally:
+        release_writer.set()
+        release_reader.set()
+        await asyncio.gather(
+            writer, *([reader] if reader is not None else []), return_exceptions=True
+        )
+
+
 def test_a_failed_reader_open_falls_back_to_the_writer_and_retries_later(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -433,14 +481,121 @@ def test_without_wal_every_read_is_a_transaction_on_the_writer(
     database.checkpoint()  # A closed database has nothing to checkpoint either.
 
 
-def test_close_releases_every_connection_and_refuses_further_work(data_dir: Path) -> None:
-    database = _open(data_dir)
-    database.close()
+@pytest.mark.parametrize("stage", ["idle", "checked-out", "inside-read"])
+def test_close_releases_every_connection_and_refuses_further_work(
+    wal_database: Database, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    database = wal_database
+    late_read = database.read()
+    assert note_bodies(database) == []  # Leave a reader in the pool.
+    if stage == "inside-read":
+        # Shutdown closes checked-out readers without waiting for their callbacks.
+        with pytest.raises(DatabaseUnavailableError), database.read():
+            database.close()
+    elif stage == "checked-out":
+        checked_out, release = threading.Event(), threading.Event()
+        real_checkout = database._runtime._checkout_reader
+
+        def checkout() -> sqlite3.Connection | None:
+            connection = real_checkout()
+            checked_out.set()
+            assert release.wait(10)
+            return connection
+
+        monkeypatch.setattr(database._runtime, "_checkout_reader", checkout)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            reading = executor.submit(note_bodies, database)
+            try:
+                assert checked_out.wait(10)
+                database.close()
+            finally:
+                release.set()
+            with pytest.raises(DatabaseUnavailableError):
+                reading.result(timeout=10)
+    else:
+        database.close()
 
     assert database.is_closed() is True
     assert not has_live_connection(database.path)
     with pytest.raises(DatabaseUnavailableError):
         add_note(database, "late")
+    with pytest.raises(DatabaseUnavailableError), late_read:
+        pytest.fail("a read context created before close cannot enter afterwards")
+    with pytest.raises(DatabaseUnavailableError):
+        note_bodies(database)
+    database.close()
+    assert database.live_connection_count() == 0
+
+
+@pytest.mark.parametrize("phase", ["opening", "closing"])
+def test_close_waits_for_reader_connection_io(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    started, release = threading.Event(), threading.Event()
+    close_waiting = threading.Semaphore(0)
+    blocked_reader: sqlite3.Connection | None = None
+    prepared = 0
+    reader_closes = 0
+    read_failure = ValueError("discard this reader")
+
+    def prepare(connection: sqlite3.Connection) -> None:
+        nonlocal prepared, blocked_reader
+        prepared += 1
+        if prepared == 2:
+            blocked_reader = connection
+            if phase == "opening":
+                started.set()
+                assert release.wait(10)
+
+    database = _open_in_wal(data_dir, connection_setup=prepare)
+    real_close = connections_module.TrackedConnection.close
+    real_wait = database._runtime._reader_condition.wait
+
+    def close_connection(connection: connections_module.TrackedConnection) -> None:
+        nonlocal reader_closes
+        try:
+            if connection is blocked_reader:
+                reader_closes += 1
+                if phase == "closing":
+                    started.set()
+                    assert release.wait(10)
+        finally:
+            real_close(connection)
+
+    def wait_for_io(timeout: float | None = None) -> bool:
+        # Observe admission closing before releasing the blocked connection I/O.
+        close_waiting.release()
+        return real_wait(timeout)
+
+    def read() -> None:
+        with database.read():
+            raise read_failure
+
+    monkeypatch.setattr(connections_module.TrackedConnection, "close", close_connection)
+    monkeypatch.setattr(database._runtime._reader_condition, "wait", wait_for_io)
+    with closing(database), ThreadPoolExecutor(max_workers=3) as executor:
+        reading = executor.submit(read)
+        try:
+            assert started.wait(10)
+            closers = [executor.submit(database.close) for _ in range(2)]
+            for _ in closers:
+                assert close_waiting.acquire(timeout=10)
+            assert all(not closer.done() for closer in closers)
+            assert has_live_connection(database.path)
+            release.set()
+            expected = DatabaseUnavailableError if phase == "opening" else ValueError
+            with pytest.raises(expected) as raised:
+                reading.result(timeout=10)
+            if phase == "closing":
+                assert raised.value is read_failure
+            for closer in closers:
+                closer.result(timeout=10)
+            assert reader_closes == 1
+            assert database.reader_stats()[0] == 0
+            assert database.live_connection_count() == 0
+        finally:
+            release.set()
+    database.close()
 
 
 @pytest.mark.asyncio
@@ -496,9 +651,9 @@ async def test_async_admission_keeps_the_loop_running_during_a_write(
         elif operation == "read":
             assert (
                 await database.read_async(
-                    lambda connection: connection.execute("SELECT body FROM notes").fetchone()[0]
+                    lambda connection: connection.execute("SELECT 1").fetchone()[0]
                 )
-                == "held"
+                == 1
             )
         else:
             await database.write_async(
