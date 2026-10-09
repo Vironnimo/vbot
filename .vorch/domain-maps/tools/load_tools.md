@@ -4,10 +4,11 @@
 
 ## Interfaces
 
-- Registration: `register_load_tools_tool(registry)`, called once at Runtime bootstrap (`core/runtime/_bootstrap.py`). `internal=True`: it is never part of a Tool Access Policy, `tool.list` or the WebUI picker, and is callable only where the request lists it. Chat lists it exactly while the Agent loads Tools on demand.
+- Registration: `register_load_tools_tool(registry, prompt_blocks=None)`, called once at Runtime bootstrap (`core/runtime/_bootstrap.py`) with the Runtime's `ToolPromptBlockRegistry`; given one, it also registers the System Prompt block `tool:load_tools`: static, user-editable text (`LOAD_TOOLS_BLOCK_TEXT`) around `{generated:on_demand_tool_list}`, with `requires_generated` so it renders nothing while no On-demand Tool is listed (`prompts.md`). `internal=True`: it is never part of a Tool Access Policy, `tool.list` or the WebUI picker, and is callable only where the request lists it. Chat lists it exactly while the Agent loads Tools on demand.
 - Inputs from the caller: `ToolExecutionConfig.loadable_tools` maps registry names of the On-demand Tools the call may load to their Model request definitions (after per-Model routing); those Tools are also in `input_contracts`, so an On-demand Tool is callable before it is loaded. The executor sets `ToolContext.offered_tools` to the listed Tools only (`input_contracts` minus `loadable_tools`) and `ToolContext.loadable_tools` to the map. A loadable Tool the Run's allowlist refuses (`context.can_call`) counts as unknown.
 - Recording a load: the handler calls `context.record_loaded_tools(names)`; the call's owned effects (committed only for an `ok` result) pass `(tool_call_id, registry names)` to `ToolExecutionConfig.tool_load_registrar`. A failed call records nothing.
 - Unknown-Tool failures list loadable Tools and listed internal Tools among the available Tools (`ToolRegistry._unknown_tool_message`).
+- Chat: the Tool pin, the silent `loaded` note a successful call persists with its Tool Result, the `on_demand` note for a Tool that becomes loadable mid-epoch, and Compaction's handling -> `chat/request-building.md` -> Tool catalog per prompt epoch.
 
 ## Result
 
@@ -40,3 +41,9 @@ Display: one identifier part listing the requested Model-facing names. Tests: `t
 | `Nothing was loaded: the call named no Tool.` / `Nothing was loaded: no Tool named "<name>" can be loaded.` | States that nothing changed and why, with the rejected value. |
 | `Call load_tools again with "names" set to the Tools the task needs from that list, for example {"names": [...]}.` | The next call in copyable form. |
 | `Every Tool you can use is already available; call it directly by name.` | Stops retries when there is nothing to load. |
+| Block `## Tools Loaded on Demand` | The heading the description points to, so the Agent finds the names. |
+| Block `You can also use the Tools listed below, but their definitions are not in your Tool list.` | Says the listed Tools are usable, so the Agent does not treat them as unavailable. |
+| Block ``Before you call one of them for the first time, load its definition with `load_tools`.`` | The required next action, and only once per Tool. |
+| Block `Load all Tools a task needs in one call.` | Keeps extra Model turns low. |
+| Block entries `- <name>: <summary>` | The Model-facing name to call and one sentence to decide whether the task needs the Tool. |
+| `on_demand` note ``Tool <name> is now available: <summary> Load its definition with `load_tools` before you call it.`` | A Tool enabled mid-epoch is not in the pinned block; the note gives the same facts and next action. |
