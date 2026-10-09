@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+import threading
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +26,7 @@ from core.model_tasks import (
 )
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.speech_local import LocalSpeechExecutionError
+from core.model_tasks.speech_types import SpeechAudioCallback, SpeechAudioChunk
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.storage.layout import DataDirectoryLayout
 
@@ -49,8 +52,14 @@ async def test_synthesize_artifact_persists_metadata(tmp_path: Path) -> None:
     service = SpeechService(
         _TtsModelTasks(), cast(Any, object()), tmp_path, local_executor=_LocalTts()
     )
+    chunks = []
 
-    artifact = await service.synthesize_artifact("hello")
+    async def on_audio(chunk: SpeechAudioChunk) -> None:
+        chunks.append(chunk)
+        assert not DataDirectoryLayout(tmp_path).speech.exists()
+
+    artifact = await service.synthesize_artifact("hello", on_audio=on_audio)
+    assert chunks == [SpeechAudioChunk(b"\0\0", 24000)]
 
     assert artifact.media_type == "audio/mpeg"
     assert artifact.size_bytes == 5
@@ -59,6 +68,42 @@ async def test_synthesize_artifact_persists_metadata(tmp_path: Path) -> None:
     assert (
         service.get_artifact(artifact.id).to_dict()["url"] == f"/api/speech/artifacts/{artifact.id}"
     )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_artifact_publication_finishes_without_blocking_the_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = SpeechService(
+        _TtsModelTasks(), cast(Any, object()), tmp_path, local_executor=_LocalTts()
+    )
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    published = []
+    write = service._artifacts.write
+
+    def publish(*args: Any, **kwargs: Any) -> Any:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        result = write(*args, **kwargs)
+        published.append(result.id)
+        return result
+
+    monkeypatch.setattr(service._artifacts, "write", publish)
+    task = asyncio.create_task(service.synthesize_artifact("hello"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert service.get_artifact(published[0]).file_path.read_bytes() == b"audio"
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await service.aclose()
 
 
 class _MissingModelTasks:
@@ -193,7 +238,10 @@ class _LocalTts(LocalSpeechExecutor):
         *,
         options: dict[str, object],
         progress: Any = None,
+        on_audio: SpeechAudioCallback | None = None,
     ) -> SpeechSynthesisResult:
+        if on_audio is not None:
+            await on_audio(SpeechAudioChunk(b"\0\0", 24000))
         return SpeechSynthesisResult(audio=b"audio", media_type="audio/mpeg", format="mp3")
 
 

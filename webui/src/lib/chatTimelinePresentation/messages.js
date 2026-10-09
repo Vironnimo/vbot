@@ -4,7 +4,7 @@ import { formatMoment } from '$lib/timeText.js';
 import { isPlainObject } from '$lib/values.js';
 import { toolNameForRunTool } from './toolFacts.js';
 import { timestampToMs, formatDurationMs } from './time.js';
-import { getAttachmentUrl } from '$lib/api.js';
+import { getAttachmentUrl, isSpeechPlaybackUrl } from '$lib/api.js';
 
 export const isUserItem = (item) =>
   item.type === 'assistant_run'
@@ -370,7 +370,8 @@ export const speechArtifactFromResult = (event) =>
 
 export const isTextToSpeechTool = (tool) =>
   toolNameForRunTool(tool) === 'generate_speech' &&
-  speechArtifactFromEnvelope(tool.result) !== null;
+  (speechArtifactFromEnvelope(tool.result) !== null ||
+    isSpeechPlaybackUrl(tool.speechPlayback));
 
 export const speechArtifactFromTool = (tool) =>
   speechArtifactFromEnvelope(tool.result);

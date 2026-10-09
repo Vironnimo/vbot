@@ -16,6 +16,7 @@ import {
   CHAT_STATUS_INTERRUPTED,
 } from './model.js';
 import { isPlainObject } from '../values.js';
+import { isSpeechPlaybackUrl } from '../api.js';
 
 // Reasoning has no explicit end event: any other live Run event (except the
 // idle heartbeat) means the streamed reasoning draft stopped growing, so its
@@ -305,6 +306,21 @@ export function mergeToolOutput(assistantRun, event) {
   );
   tool.toolCallId = toolCallId ?? tool.toolCallId;
   tool.output = typeof payload.screen === 'string' ? payload.screen : '';
+  tool.events = [...tool.events, event];
+  syncAssistantRunCollections(assistantRun);
+}
+
+export function mergeSpeechPlayback(assistantRun, event) {
+  const payload = event.payload ?? {};
+  if (!payload.tool_call_id || !isSpeechPlaybackUrl(payload.url)) return;
+  const tool = upsertToolRow(
+    assistantRun,
+    toolKeyFromValues(payload.tool_call_id),
+    event,
+    { id: payload.tool_call_id },
+  );
+  tool.toolCallId = payload.tool_call_id;
+  tool.speechPlayback = payload.url;
   tool.events = [...tool.events, event];
   syncAssistantRunCollections(assistantRun);
 }

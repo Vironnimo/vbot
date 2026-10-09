@@ -644,16 +644,28 @@
           </details>
           {#if isTextToSpeechTool(child)}
             {@const speechArtifact = speechArtifactFromTool(child)}
-            {#if speechArtifact}
+            {@const playback = ['running', 'success'].includes(child.status)
+              ? child.speechPlayback
+              : ''}
+            {#if speechArtifact || playback}
               <!-- Only a live Run starts its fresh speech, once per source: a
                    player first mounted for a Run rebuilt from Session history,
                    or mounted again after scrolling away, stays paused, while
                    one kept through the handoff keeps playing. -->
               <AudioPlayer
                 class="speech-audio-player"
-                src={speechArtifact.url}
+                src={speechArtifact?.url ?? ''}
+                {playback}
+                cancelled={['cancelled', 'interrupted', 'failed'].includes(
+                  item.status,
+                )}
                 autoplay={item.source === 'live' &&
-                  viewState.claimAutoplay(speechArtifact.url)}
+                  !['cancelled', 'interrupted', 'failed'].includes(
+                    item.status,
+                  ) &&
+                  viewState.claimAutoplay(
+                    `${item.runId ?? item.id}:${child.toolCallId ?? child.id}`,
+                  )}
               />
             {/if}
           {/if}

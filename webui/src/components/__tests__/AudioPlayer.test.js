@@ -11,6 +11,7 @@ import {
 } from '../../lib/chatState.js';
 import { t } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
+import * as speechPlayback from '../../lib/speechPlayback.js';
 
 vi.mock(
   'svelte',
@@ -370,93 +371,283 @@ it('keeps a requested automatic start when autoplay is withdrawn before the audi
   expect(control('audio.pause')).toBeTruthy();
 });
 
-it('keeps speech playing when its finished Run is rebuilt from Session history', async () => {
-  const url = '/api/speech/artifacts/aud_live';
-  const envelope = {
-    ok: true,
-    error: null,
-    data: { artifact: { id: 'aud_live', kind: 'speech', url } },
-    artifacts: [],
-  };
-  const toolCall = {
-    id: 'call-speech',
-    name: 'generate_speech',
-    arguments: { text: 'test-owned speech' },
-  };
-  const messages = [
-    { id: 'user-one', role: 'user', content: 'Read it aloud' },
-    { id: 'assistant-one', role: 'assistant', tool_calls: [toolCall] },
-    {
-      id: 'tool-one',
-      role: 'tool',
-      tool_call_id: toolCall.id,
-      name: toolCall.name,
-      content: JSON.stringify(envelope),
-    },
-    { id: 'assistant-two', role: 'assistant', content: 'Spoken.' },
-  ];
-  const props = reactiveProps({
-    sessionState: ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-speech-handoff',
-    ),
-    agentName: 'Alpha',
-  });
-  const { sessionState } = props;
-  let sequence = 0;
-  const appendEvent = (type, payload) =>
-    appendRunEvent(sessionState, {
-      type,
-      run_id: 'run-speech',
-      sequence: ++sequence,
-      payload,
+it.each([false, true])(
+  'keeps speech through History handoff (early streaming: %s)',
+  async (early) => {
+    const stream = {
+      play: vi.fn(),
+      pause: vi.fn(),
+      setVolume: vi.fn(),
+      stop: vi.fn(),
+    };
+    if (early)
+      vi.spyOn(speechPlayback, 'createSpeechPlayback').mockImplementation(
+        ({ onState }) => {
+          stream.play.mockImplementation(() =>
+            onState({
+              paused: false,
+              loading: false,
+              currentTime: 0.1,
+              duration: 0,
+            }),
+          );
+          return stream;
+        },
+      );
+    const url = '/api/speech/artifacts/aud_live';
+    const envelope = {
+      ok: true,
+      error: null,
+      data: { artifact: { id: 'aud_live', kind: 'speech', url } },
+      artifacts: [],
+    };
+    const toolCall = {
+      id: 'call-speech',
+      name: 'generate_speech',
+      arguments: { text: 'test-owned speech' },
+    };
+    const messages = [
+      { id: 'user-one', role: 'user', content: 'Read it aloud' },
+      { id: 'assistant-one', role: 'assistant', tool_calls: [toolCall] },
+      {
+        id: 'tool-one',
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        content: JSON.stringify(envelope),
+      },
+      { id: 'assistant-two', role: 'assistant', content: 'Spoken.' },
+    ];
+    const props = reactiveProps({
+      sessionState: ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-speech-handoff',
+      ),
+      agentName: 'Alpha',
     });
-  startRun(sessionState, { run_id: 'run-speech', status: 'running' });
-  appendEvent('user_message_persisted', { message: messages[0] });
-  // A streamed Tool preview is dropped when the Run ends.
-  appendEvent('tool_call_delta', {
-    tool_call_id: toolCall.id,
-    name_delta: toolCall.name,
-  });
-  appendEvent('tool_call_started', {
-    assistant_message_id: 'assistant-one',
-    tool_call: toolCall,
-  });
-  appendEvent('tool_call_result', {
-    assistant_message_id: 'assistant-one',
-    tool_call: toolCall,
-    result: envelope,
-  });
-  render(props, ChatTimelineHost);
-  const audio = document.querySelector('audio');
-  expect(audio?.getAttribute('src')).toBe(url);
-  ready(audio);
-  await flush();
-  expect(play).toHaveBeenCalledTimes(1);
-  const pausesWhilePlaying = pause.mock.calls.length;
+    const { sessionState } = props;
+    let sequence = 0;
+    const appendEvent = (type, payload) =>
+      appendRunEvent(sessionState, {
+        type,
+        run_id: 'run-speech',
+        sequence: ++sequence,
+        payload,
+      });
+    startRun(sessionState, { run_id: 'run-speech', status: 'running' });
+    appendEvent('user_message_persisted', { message: messages[0] });
+    // A streamed Tool preview is dropped when the Run ends.
+    appendEvent('tool_call_delta', {
+      tool_call_id: toolCall.id,
+      name_delta: toolCall.name,
+    });
+    appendEvent('tool_call_started', {
+      assistant_message_id: 'assistant-one',
+      tool_call: toolCall,
+    });
+    if (early)
+      appendEvent('speech_playback', {
+        tool_call_id: toolCall.id,
+        url: '/api/speech/playback/early',
+      });
+    else
+      appendEvent('tool_call_result', {
+        assistant_message_id: 'assistant-one',
+        tool_call: toolCall,
+        result: envelope,
+      });
+    render(props, ChatTimelineHost);
+    const audio = document.querySelector('audio');
+    if (!early) {
+      expect(audio?.getAttribute('src')).toBe(url);
+      ready(audio);
+    }
+    await flush();
+    expect(play).toHaveBeenCalledTimes(early ? 0 : 1);
+    const pausesWhilePlaying = pause.mock.calls.length;
 
-  appendEvent('assistant_output', { message: messages[3] });
-  appendEvent('run_completed', { status: 'completed' });
-  await flush();
-  expect(sessionState.streamingRunEvents).toEqual([]);
-  expect(document.querySelector('audio')).toBe(audio);
+    if (early) {
+      // History may contain the final Tool result before SSE delivers it.
+      loadHistory(
+        sessionState,
+        messages.slice(0, 3).map((message, index) => ({
+          ...message,
+          history_run_id: 'run-speech',
+          history_sequence: index + 1,
+        })),
+      );
+      await flush();
+      expect(document.querySelector('audio')).toBe(audio);
+      expect(audio.getAttribute('src')).toBe(url);
+      expect(stream.stop).not.toHaveBeenCalled();
+      appendEvent('tool_call_result', {
+        assistant_message_id: 'assistant-one',
+        tool_call: toolCall,
+        result: envelope,
+      });
+    }
 
-  loadHistory(
-    sessionState,
-    messages.map((message, index) => ({
-      ...message,
-      history_run_id: 'run-speech',
-      history_sequence: index + 1,
-    })),
-    { runs: [{ run_id: 'run-speech', complete: true }] },
+    appendEvent('assistant_output', { message: messages[3] });
+    appendEvent('run_completed', { status: 'completed' });
+    await flush();
+    expect(sessionState.streamingRunEvents).toEqual([]);
+    expect(document.querySelector('audio')).toBe(audio);
+
+    loadHistory(
+      sessionState,
+      messages.map((message, index) => ({
+        ...message,
+        history_run_id: 'run-speech',
+        history_sequence: index + 1,
+      })),
+      { runs: [{ run_id: 'run-speech', complete: true }] },
+    );
+    await flush();
+
+    expect(sessionState.runEvents).toEqual([]);
+    expect(document.querySelector('audio')).toBe(audio);
+    expect(audio.getAttribute('src')).toBe(url);
+    expect(pause.mock.calls.length).toBe(pausesWhilePlaying);
+    expect(play).toHaveBeenCalledTimes(early ? 0 : 1);
+    if (early) {
+      expect(stream.play).toHaveBeenCalledOnce();
+      expect(stream.stop).not.toHaveBeenCalled();
+    }
+    expect(control('audio.pause')).toBeTruthy();
+  },
+);
+
+it.each(['ended', 'failed', 'cancelled'])(
+  'keeps early speech through its artifact and only manually replays after %s',
+  async (outcome) => {
+    let report;
+    const stream = {
+      play: vi.fn(() =>
+        report({
+          paused: false,
+          loading: false,
+          currentTime: 0.1,
+          duration: 0,
+        }),
+      ),
+      pause: vi.fn(() =>
+        report({ paused: true, loading: false, currentTime: 0.1, duration: 0 }),
+      ),
+      setVolume: vi.fn(),
+      stop: vi.fn(),
+    };
+    const create = vi
+      .spyOn(speechPlayback, 'createSpeechPlayback')
+      .mockImplementation(({ onState }) => {
+        report = onState;
+        return stream;
+      });
+    const props = reactiveProps({
+      src: '',
+      playback: '/api/speech/playback/early',
+      autoplay: true,
+    });
+    render(props);
+    await flush();
+    const audio = document.querySelector('audio');
+    expect(stream.play).toHaveBeenCalledOnce();
+    expect(control('audio.pause')).toBeTruthy();
+    expect(control('audio.seek').disabled).toBe(true);
+    props.src = '/api/speech/artifacts/final';
+    props.playback = '';
+    props.autoplay = false;
+    await flush();
+    ready(audio);
+    await flush();
+    expect(document.querySelector('audio')).toBe(audio);
+    expect(stream.stop).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledOnce();
+    expect(play).not.toHaveBeenCalled();
+    control('audio.pause').click();
+    await flush();
+    expect(stream.pause).toHaveBeenCalledOnce();
+    control('audio.play').click();
+    await flush();
+    expect(stream.play).toHaveBeenCalledTimes(2);
+    if (outcome === 'cancelled') props.cancelled = true;
+    else
+      report({
+        paused: true,
+        loading: false,
+        currentTime: 1,
+        duration: 1,
+        ended: outcome === 'ended',
+        error:
+          outcome === 'failed'
+            ? new Error('test-owned stream failure')
+            : undefined,
+      });
+    await flush();
+    expect(play).not.toHaveBeenCalled();
+    control('audio.play').click();
+    await flush();
+    expect(audio.getAttribute('src')).toBe(props.src);
+    expect(play).toHaveBeenCalledOnce();
+  },
+);
+
+it('pauses early speech when another shared player starts and releases it on teardown', async () => {
+  let report;
+  const stream = {
+    play: vi.fn(() =>
+      report({ paused: false, loading: false, currentTime: 0, duration: 0 }),
+    ),
+    pause: vi.fn(() =>
+      report({ paused: true, loading: false, currentTime: 0, duration: 0 }),
+    ),
+    setVolume: vi.fn(),
+    stop: vi.fn(),
+  };
+  vi.spyOn(speechPlayback, 'createSpeechPlayback').mockImplementation(
+    ({ onState }) => {
+      report = onState;
+      return stream;
+    },
   );
+  const first = render({
+    playback: '/api/speech/playback/early',
+    autoplay: true,
+  });
+  render({ src: '/second.wav' });
   await flush();
+  const players = document.querySelectorAll('.audio-player');
+  ready(players[1].querySelector('audio'));
+  control('audio.play', players[1]).click();
+  await flush();
+  expect(stream.pause).toHaveBeenCalledOnce();
+  await unmount(first);
+  components.shift();
+  expect(stream.stop).toHaveBeenCalledOnce();
+});
 
-  expect(sessionState.runEvents).toEqual([]);
-  expect(document.querySelector('audio')).toBe(audio);
-  expect(audio.getAttribute('src')).toBe(url);
-  expect(pause.mock.calls.length).toBe(pausesWhilePlaying);
-  expect(play).toHaveBeenCalledTimes(1);
-  expect(control('audio.pause')).toBeTruthy();
+it('uses the final artifact on manual Play when the browser blocked the early start', async () => {
+  const stream = {
+    play: vi.fn(),
+    pause: vi.fn(),
+    setVolume: vi.fn(),
+    stop: vi.fn(),
+  };
+  vi.spyOn(speechPlayback, 'createSpeechPlayback').mockReturnValue(stream);
+  const props = reactiveProps({
+    src: '',
+    playback: '/api/speech/playback/early',
+    autoplay: true,
+  });
+  render(props);
+  await flush();
+  props.src = '/api/speech/artifacts/final';
+  await flush();
+  ready();
+  expect(stream.stop).toHaveBeenCalledOnce();
+  expect(play).not.toHaveBeenCalled();
+  control('audio.play').click();
+  await flush();
+  expect(play).toHaveBeenCalledOnce();
+  expect(stream.play).toHaveBeenCalledOnce();
 });

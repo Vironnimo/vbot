@@ -3,6 +3,8 @@ failed calls say."""
 
 from __future__ import annotations
 
+import asyncio
+import struct
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,8 @@ from core.model_tasks import (
     SpeechOutcomeUnknownError,
     TaskUsageContext,
 )
+from core.model_tasks.speech_playback import SpeechPlaybackStore
+from core.model_tasks.speech_types import SpeechAudioChunk
 from core.providers.errors import ProviderAuthError
 from core.runs.run import RunExecutionOwner
 from core.tools.speech import (
@@ -42,12 +46,19 @@ class _SpeechService:
         self._error = error
         self.spoken: str | None = None
         self.usage_context: TaskUsageContext | None = None
+        self.playbacks = SpeechPlaybackStore()
+        self.after_audio: Any = None
 
-    async def synthesize_artifact(self, text: str, *, usage_context: TaskUsageContext) -> object:
+    async def synthesize_artifact(
+        self, text: str, *, usage_context: TaskUsageContext, on_audio: Any
+    ) -> object:
         self.usage_context = usage_context
         if self._error is not None:
             raise self._error
         self.spoken = text
+        await on_audio(SpeechAudioChunk(audio=b"\x01\x00", sample_rate_hz=24_000))
+        if self.after_audio is not None:
+            await self.after_audio()
         return SimpleNamespace(file_path=self._file_path, to_dict=lambda: dict(_ARTIFACT_PAYLOAD))
 
 
@@ -80,11 +91,20 @@ async def test_speech_is_returned_as_an_artifact_for_the_run(tmp_path: Path) -> 
     registry = ToolRegistry()
     register_generate_speech_tool(registry, service)
     tool = registry.get(GENERATE_SPEECH_TOOL_NAME)
+    events = []
+
+    async def emit(event_type: str, payload: dict[str, Any]) -> None:
+        events.append((event_type, payload))
+        playback = service.playbacks.get(payload["url"].rsplit("/", 1)[-1])
+        assert playback is not None
+        assert playback.finished_at is None
+        assert await anext(playback.frames()) == struct.pack("<II", 24_000, 2) + b"\x01\x00"
 
     result = await _speak(
         tmp_path,
         {"text": "hello"},
         service,
+        emit_hook=emit,
         project_id="project",
         execution_owner=RunExecutionOwner(
             "extension", "group", "participant", "generation", "epoch"
@@ -106,6 +126,43 @@ async def test_speech_is_returned_as_an_artifact_for_the_run(tmp_path: Path) -> 
     assert result["artifacts"] == [_ARTIFACT_PAYLOAD]
     # The model-facing copy carries the absolute file path for out-of-chat delivery.
     assert result["data"] == {"artifact": {**_ARTIFACT_PAYLOAD, "path": model_path(audio_path)}}
+    assert len(events) == 1
+    assert events[0][0] == "speech_playback"
+    assert events[0][1]["tool_call_id"] == "tool-call"
+    playback = service.playbacks.get(events[0][1]["url"].rsplit("/", 1)[-1])
+    assert playback is not None
+    assert [frame async for frame in playback.frames()][-1] == bytes(8)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_interrupted_speech_terminates_playback_without_a_completed_artifact(
+    tmp_path: Path, cancel: bool
+) -> None:
+    service = _SpeechService(tmp_path / "unused.mp3")
+    playbacks = []
+
+    async def emit(_event_type: str, payload: dict[str, Any]) -> None:
+        playback = service.playbacks.get(payload["url"].rsplit("/", 1)[-1])
+        assert playback is not None
+        playbacks.append(playback)
+
+    async def fail() -> None:
+        if cancel:
+            raise asyncio.CancelledError
+        raise SpeechExecutionError("synthesis interrupted")
+
+    service.after_audio = fail
+    if cancel:
+        with pytest.raises(asyncio.CancelledError):
+            await _speak(tmp_path, {"text": "hello"}, service, emit_hook=emit)
+    else:
+        result = await _speak(tmp_path, {"text": "hello"}, service, emit_hook=emit)
+        assert result["ok"] is False
+        assert result["artifacts"] == []
+    playback = playbacks[0]
+    frames = [frame async for frame in playback.frames()]
+    assert frames[-1][8:] == (b"cancelled" if cancel else b"failed")
 
 
 @pytest.mark.asyncio

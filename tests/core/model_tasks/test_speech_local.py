@@ -250,9 +250,10 @@ def test_stereo_48khz_is_resampled_to_mono_16khz() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancellation_finishes_running_chunk_skips_the_rest_and_shutdown_releases_model() -> (
-    None
-):
+@pytest.mark.parametrize("phase", ["loading", "transcribing"])
+async def test_cancellation_finishes_running_call_skips_the_rest_and_shutdown_releases_model(
+    phase: str,
+) -> None:
     events: list[Any] = []
     started: Future[int] = Future()
     release = threading.Event()
@@ -261,13 +262,19 @@ async def test_cancellation_finishes_running_chunk_skips_the_rest_and_shutdown_r
 
     def blocking(_samples: Any, _options: Mapping[str, Any]) -> SpeechTranscriptionResult:
         started.set_result(threading.get_ident())
-        release.wait(timeout=5)
+        assert release.wait(timeout=5)
         return SpeechTranscriptionResult(text="done")
 
+    def create(_options: Mapping[str, Any]) -> Engine:
+        if phase == "loading":
+            started.set_result(threading.get_ident())
+            assert release.wait(timeout=5)
+        return model
+
     model.transcribe = MagicMock(side_effect=blocking)  # type: ignore[method-assign]
-    executor = LocalSpeechExecutor(engines=[replace(entry, create=lambda _options: model)])
-    # Two chunks: cancellation lets the running one finish (an in-process engine
-    # cannot be interrupted) and never starts the second.
+    executor = LocalSpeechExecutor(engines=[replace(entry, create=create)])
+    # Cancellation lets the running load or chunk finish (an in-process engine
+    # cannot be interrupted) and never starts the next engine call.
     task = asyncio.create_task(
         executor.transcribe(
             "first",
@@ -293,7 +300,7 @@ async def test_cancellation_finishes_running_chunk_skips_the_rest_and_shutdown_r
             await task
         with pytest.raises(asyncio.CancelledError):
             await closing
-        assert model.transcribe.call_count == 1
+        assert model.transcribe.call_count == (phase == "transcribing")
         assert events == [("first", "close")]
     finally:
         release.set()
@@ -936,11 +943,14 @@ async def test_prepare_loads_once_in_background_and_transcription_waits_for_it()
     gate = threading.Event()
     gate.set()
     failures = iter([RuntimeError("private load failure")])
+    loading: Future[None] = Future()
 
     def create(options: Mapping[str, Any]) -> Engine:
         events.append(("first", "load", dict(options)))
         if (failure := next(failures, None)) is not None:
             raise failure
+        if options["custom"] == "two":
+            loading.set_result(None)
         assert gate.wait(5)
         return Engine("first", events)
 
@@ -958,6 +968,15 @@ async def test_prepare_loads_once_in_background_and_transcription_waits_for_it()
         gate.clear()
         events.clear()
         assert executor.prepare("first", {"custom": "two"}) == "loading"
+        assert executor.prepare("first", {"custom": "two"}) == "loading"
+        await asyncio.wrap_future(loading)
+        cancelled = asyncio.create_task(transcribe(executor, custom="two"))
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        # The cancelled caller was queued behind a shared preload; it cannot
+        # cancel that load or prevent another request from reusing it.
         assert executor.prepare("first", {"custom": "two"}) == "loading"
         request = asyncio.create_task(transcribe(executor, custom="two"))
         await asyncio.sleep(0)

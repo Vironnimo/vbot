@@ -10,7 +10,12 @@ from typing import Any
 
 import httpx
 
-from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
+from core.model_tasks.speech_audio import decode_speech_audio, pcm_to_wav
+from core.model_tasks.speech_types import (
+    SpeechAudioCallback,
+    SpeechSynthesisResult,
+    SpeechTranscriptionResult,
+)
 from core.providers.errors import ProviderError
 from core.providers.task_client import (
     EXTRA_OPTIONS_KEY,
@@ -56,12 +61,14 @@ class ProviderSpeechClient(ProviderTaskClient):
             options=options,
         )
 
-    async def synthesize(self, text: str, *, options: JsonObject) -> SpeechSynthesisResult:
+    async def synthesize(
+        self, text: str, *, options: JsonObject, on_audio: SpeechAudioCallback | None = None
+    ) -> SpeechSynthesisResult:
         """Call an OpenAI-compatible text-to-speech endpoint."""
 
         if self._provider.id == "mistral":
             raise ProviderError("Mistral speech execution is not implemented yet", retryable=False)
-        return await self._synthesize_openai_compatible(text, options=options)
+        return await self._synthesize_openai_compatible(text, options=options, on_audio=on_audio)
 
     async def _transcribe_openrouter(
         self,
@@ -122,6 +129,7 @@ class ProviderSpeechClient(ProviderTaskClient):
         text: str,
         *,
         options: JsonObject,
+        on_audio: SpeechAudioCallback | None = None,
     ) -> SpeechSynthesisResult:
         response_format = _response_format(options)
         payload: JsonObject = {
@@ -131,29 +139,88 @@ class ProviderSpeechClient(ProviderTaskClient):
         payload.update(_normalized_tts_options(options, provider_id=self._provider.id))
         merge_extra_options(payload, options)
 
-        def _parse(response: httpx.Response) -> SpeechSynthesisResult:
-            if not response.content:
+        def _result(response: httpx.Response, audio: bytes) -> SpeechSynthesisResult:
+            if not audio:
                 raise ProviderError(
                     "Speech synthesis response contains no audio",
                     retryable=True,
                 )
-            media_type = response.headers.get("content-type", "")
-            if not media_type:
-                media_type = _media_type_for_format(response_format)
+            media_type = _speech_content_type(response, response_format)
+            result_format = response_format
+            if media_type.split(";", 1)[0].strip().lower() == "audio/pcm":
+                rate, channels = _pcm_format(media_type, self._provider.id)
+                audio = pcm_to_wav(audio, rate, channels)
+                media_type, result_format = "audio/wav", "wav"
             return SpeechSynthesisResult(
-                audio=response.content,
+                audio=audio,
                 media_type=media_type.split(";", 1)[0],
-                format=response_format,
+                format=result_format,
                 generation_id=response.headers.get("x-generation-id"),
             )
+
+        async def _consume(response: httpx.Response) -> SpeechSynthesisResult:
+            assert on_audio is not None
+            content_type = _speech_content_type(response, response_format)
+            media_type = content_type.split(";", 1)[0].strip().lower()
+            audio_format = {
+                "audio/mpeg": "mp3",
+                "audio/mp3": "mp3",
+                "audio/wav": "wav",
+                "audio/x-wav": "wav",
+                "audio/ogg": "opus",
+                "audio/opus": "opus",
+                "audio/aac": "aac",
+                "audio/flac": "flac",
+                "audio/pcm": "pcm",
+            }.get(media_type, response_format)
+            rate, channels = (
+                _pcm_format(content_type, self._provider.id) if audio_format == "pcm" else (None, 1)
+            )
+            audio = await decode_speech_audio(
+                response.aiter_bytes(),
+                on_audio,
+                audio_format=audio_format,
+                pcm_sample_rate=rate,
+                pcm_channels=channels,
+            )
+            return _result(response, audio)
 
         return await self.post_and_parse(
             SPEECH_ENDPOINT,
             timeout=DEFAULT_SPEECH_TIMEOUT,
-            parse=_parse,
+            parse=lambda response: _result(response, response.content),
+            consume=_consume if on_audio is not None else None,
             json=payload,
             retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
+
+
+def _speech_content_type(response: httpx.Response, response_format: str) -> str:
+    content_type: str = response.headers.get("content-type", "")
+    media_type, separator, parameters = content_type.partition(";")
+    if media_type.strip().lower() in {"", "application/octet-stream", "binary/octet-stream"}:
+        return _media_type_for_format(response_format) + (separator + parameters)
+    return content_type
+
+
+def _pcm_format(content_type: str, provider_id: str) -> tuple[int, int]:
+    """PCM has no header: use response metadata, or OpenAI's documented format."""
+    parameters = {}
+    for part in content_type.split(";")[1:]:
+        key, separator, value = part.partition("=")
+        if separator:
+            parameters[key.strip().lower()] = value.strip().strip('"')
+    try:
+        rate = int(parameters.get("rate", "24000" if provider_id == "openai" else ""))
+        channels = int(parameters.get("channels", "1"))
+    except ValueError as error:
+        raise ValueError(
+            "Speech PCM response does not identify its sample rate. "
+            "Choose a model and output format that provide audio metadata."
+        ) from error
+    if not 8000 <= rate <= 192000 or channels not in (1, 2):
+        raise ValueError("Speech PCM response has an unsupported audio format")
+    return rate, channels
 
 
 def audio_format_from(filename: str = "", media_type: str = "") -> str:

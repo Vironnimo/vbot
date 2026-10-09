@@ -8,6 +8,7 @@ import json
 import sys
 import threading
 import wave
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -21,6 +22,7 @@ from core.model_tasks.local_targets import LocalTaskTargetDescriptor
 from core.model_tasks.model_files import ModelFilesError, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
+    _AUDIO,
     _PROGRESS,
     LocalSpeechError,
     LocalSpeechExecutionError,
@@ -31,7 +33,7 @@ from core.model_tasks.speech_local import (
 )
 from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup
-from core.model_tasks.speech_types import SpeechProgress, SpeechSynthesisResult
+from core.model_tasks.speech_types import SpeechAudioChunk, SpeechProgress, SpeechSynthesisResult
 
 
 @pytest.mark.asyncio
@@ -219,6 +221,74 @@ async def test_synthesis_substitution_cache_voice_changes_and_stt_switch():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["cancellation", "shutdown"])
+async def test_synthesis_waits_for_playback_cleanup_when_request_or_executor_ends(ending):
+    heard, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    engine_closed = threading.Event()
+
+    class Engine:
+        def synthesize(self, text, options):
+            callback = _AUDIO.get()
+            assert callback is not None
+            callback(SpeechAudioChunk(b"\0\0", 24000))
+            return SpeechSynthesisResult(b"audio", "audio/wav", "wav")
+
+        def close(self):
+            engine_closed.set()
+
+    async def receive(chunk):
+        heard.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+
+    executor = LocalSpeechExecutor(
+        engines=[
+            SpeechEngineDefinition(
+                LocalTaskTargetDescriptor(
+                    id="custom",
+                    label="Custom",
+                    task_types=(TASK_TEXT_TO_SPEECH,),
+                    availability=lambda: True,
+                ),
+                lambda _options: Engine(),
+                (),
+            )
+        ]
+    )
+    request = asyncio.create_task(
+        executor.synthesize("custom", "hello", options={}, on_audio=receive)
+    )
+    closing = None
+    try:
+        await asyncio.wait_for(heard.wait(), 1)
+        if ending == "cancellation":
+            request.cancel()
+        else:
+            closing = asyncio.create_task(executor.aclose())
+        await asyncio.wait_for(cleaning.wait(), 1)
+        assert not request.done()
+        if closing is not None:
+            assert not closing.done()
+        release.set()
+        if ending == "cancellation":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(request, 1)
+        else:
+            with pytest.raises(LocalSpeechError):
+                await asyncio.wait_for(request, 1)
+            await asyncio.wait_for(closing, 1)
+        assert engine_closed.is_set()
+    finally:
+        release.set()
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("engine", ["qwen3-tts", "chatterbox"])
 @pytest.mark.parametrize("packaged", [False, True])
 async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_ready(
@@ -321,7 +391,8 @@ def test_worker_loads_the_installed_model_offline(monkeypatch, engine):
 
 
 @pytest.mark.parametrize("engine", ["qwen3-tts", "chatterbox"])
-def test_worker_generates_playable_wav_and_keeps_every_text_chunk(tmp_path, engine):
+@pytest.mark.parametrize("streaming", [False, True])
+def test_worker_generates_playable_wav_and_keeps_every_text_chunk(tmp_path, engine, streaming):
     text = "Dies ist ein Satz. " * 35
     pieces = speech_worker.chunks(text)
     assert " ".join(pieces).split() == text.split()
@@ -337,10 +408,25 @@ def test_worker_generates_playable_wav_and_keeps_every_text_chunk(tmp_path, engi
         sr=24000,
     )
     output = tmp_path / "voice.wav"
-    speech_worker.generate(model, engine, text, {"language": "de"}, str(output))
+    streamed = []
+
+    def ready(index):
+        # Each complete chunk is playable before the SDK is asked for the next part.
+        generator = model.generate_custom_voice if engine == "qwen3-tts" else model.generate
+        assert generator.call_count == index + 1
+        with wave.open(str(output.with_name(f"chunk-{index}.wav")), "rb") as chunk:
+            assert chunk.getframerate() == 24000 and chunk.getnchannels() == 1
+            assert chunk.getnframes() == 240
+            streamed.append(chunk.readframes(chunk.getnframes()))
+
+    speech_worker.generate(
+        model, engine, text, {"language": "de"}, str(output), ready if streaming else None
+    )
     with wave.open(str(output)) as audio:
         assert audio.getframerate() == 24000 and audio.getnchannels() == 1
         assert audio.getnframes() == 240 * len(pieces)
+        if streaming:
+            assert audio.readframes(audio.getnframes()) == b"".join(streamed)
     calls = (
         model.generate_custom_voice.call_args_list
         if engine == "qwen3-tts"
@@ -349,49 +435,98 @@ def test_worker_generates_playable_wav_and_keeps_every_text_chunk(tmp_path, engi
     assert len(calls) == len(pieces)
 
 
-def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(tmp_path, monkeypatch):
+@pytest.mark.parametrize("delivery", ["buffered", "streamed", "consumer_failure"])
+def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(
+    tmp_path, monkeypatch, delivery
+):
     from core.model_tasks import speech_local
 
+    streaming = delivery != "buffered"
+    failed = delivery == "consumer_failure"
     output = io.BytesIO()
     with wave.open(output, "wb") as audio:
         audio.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
         audio.writeframes(b"\0\0" * 100)
-    kill_tree = Mock(return_value=True)
+    killed = False
+    held_open = []
+
+    def kill(*args):
+        nonlocal killed
+        killed = True
+        for handle in held_open:
+            handle.close()
+        return True
+
+    kill_tree = Mock(side_effect=kill)
     monkeypatch.setattr("core.utils.processes.windows_taskkill_tree", kill_tree)
     if sys.platform != "win32":
         monkeypatch.setattr("os.killpg", kill_tree)
     process = Mock()
-    process.stdout.readline.side_effect = [
-        '{"phase":"loading"}\n',
-        '{"loaded":true}\n',
-        '{"phase":"synthesizing"}\n',
-        '{"done":true}\n',
-    ]
-    process.poll.return_value = None
+    emitted = []
+    responses = iter(
+        [
+            '{"phase":"loading"}\n',
+            '{"loaded":true}\n',
+            '{"phase":"synthesizing"}\n',
+            *(['{"audio_chunk":0}\n'] if streaming else []),
+            '{"done":true}\n',
+        ]
+    )
+
+    def readline(_size):
+        response = next(responses)
+        if '"done"' in response and streaming:
+            assert len(emitted) == 1
+            assert emitted[0].audio == b"\0\0" * 100
+            assert emitted[0].sample_rate_hz == 24000
+        return response
+
+    process.stdout.readline.side_effect = readline
+    process.poll.side_effect = lambda: 0 if killed else None
 
     def write(line):
         request = json.loads(line)
         if "output" in request:
             Path(request["output"]).write_bytes(output.getvalue())
+            if failed:
+                # The real child holds the final WAV open until generation ends.
+                # On Windows cleanup must end it before removing this directory.
+                held_open.append(Path(request["output"]).open("rb"))  # noqa: SIM115 - kill owns it
+            assert request["stream_audio"] is streaming
+            if streaming:
+                Path(request["output"]).with_name("chunk-0.wav").write_bytes(output.getvalue())
 
     process.stdin.write.side_effect = write
     popen = Mock(return_value=process)
     monkeypatch.setattr(speech_local.subprocess, "Popen", popen)
     setup = LocalSpeechSetup(engine="qwen3-tts", directory=tmp_path)
     token = _PROGRESS.set(SpeechProgress())
+
+    def receive(chunk):
+        emitted.append(chunk)
+        if failed:
+            raise RuntimeError("test playback failure")
+
+    audio_token = _AUDIO.set(receive if streaming else None)
     engine = _TtsEngine(setup, _WaitingWorkers(), {"model_path": "installed"})
     try:
         # Construction returns once the worker loaded the installed model.
         load = json.loads(process.stdin.write.call_args.args[0])
         assert load == {"load": True, "options": {"model_path": "installed"}}
         assert _PROGRESS.get().snapshot()["phase"] == "loading"
-        result = engine.synthesize("private test text", {})
-        assert result.audio == output.getvalue()
+        if failed:
+            with pytest.raises(RuntimeError, match="test playback failure"):
+                engine.synthesize("private test text", {})
+            assert killed
+        else:
+            result = engine.synthesize("private test text", {})
+            assert result.audio == output.getvalue()
         assert "private test text" not in str(popen.call_args)
         assert _PROGRESS.get().snapshot()["phase"] == "synthesizing"
         assert not Path(json.loads(process.stdin.write.call_args.args[0])["output"]).exists()
     finally:
         _PROGRESS.reset(token)
+        _AUDIO.reset(audio_token)
         engine.close()
     assert popen.call_args.args[0][:3] == [str(setup.python), "-I", "-B"]
     assert kill_tree.call_count == 1
@@ -400,12 +535,39 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(tmp_pa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ending", ["deadline", "cancellation", "shutdown"])
-async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, ending):
+@pytest.mark.parametrize("phase", ["loading", "synthesizing"])
+async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, ending, phase):
     from core.model_tasks import speech_local
 
-    monkeypatch.setattr(speech_local, "_SYNTHESIS_DEADLINE_S", 0.05 if ending == "deadline" else 60)
+    monkeypatch.setattr(
+        speech_local, "_LOAD_DEADLINE_S", 0.05 if (ending, phase) == ("deadline", "loading") else 60
+    )
+    monkeypatch.setattr(
+        speech_local,
+        "_SYNTHESIS_DEADLINE_S",
+        0.05 if (ending, phase) == ("deadline", "synthesizing") else 60,
+    )
     monkeypatch.setattr(speech_local, "_CANCEL_GRACE_S", 0.05)
     asked, killed = threading.Event(), threading.Event()
+    armed = Future()
+
+    class Timer:
+        def __init__(self, interval, function, args=()):
+            self.interval, self.function, self.args = interval, function, args
+            self.cancelled = False
+
+        def start(self):
+            if self.interval == 0.05:
+                armed.set_result(self)
+
+        def cancel(self):
+            self.cancelled = True
+
+        def fire(self):
+            assert not self.cancelled
+            self.function(*self.args)
+
+    monkeypatch.setattr(speech_local, "Timer", Timer)
 
     def kill_tree(*_arguments):
         killed.set()
@@ -414,11 +576,12 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
     monkeypatch.setattr("core.utils.processes.windows_taskkill_tree", kill_tree)
     if sys.platform != "win32":
         monkeypatch.setattr("os.killpg", kill_tree)
-    # The child loads, takes the request and never answers; only killing it ends its output.
+    # The child stops answering during load or synthesis; killing it ends its output.
     process = Mock()
     process.poll.side_effect = lambda: 0 if killed.is_set() else None
-    process.stdin.write.side_effect = lambda line: '"text"' in line and asked.set()
-    loaded = iter(['{"loaded":true}\n'])
+    request_field = '"load"' if phase == "loading" else '"text"'
+    process.stdin.write.side_effect = lambda line: request_field in line and asked.set()
+    loaded = iter([] if phase == "loading" else ['{"loaded":true}\n'])
 
     def readline(_size):
         if (line := next(loaded, None)) is not None:
@@ -442,6 +605,9 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
             request.cancel()
         elif ending == "shutdown":
             await asyncio.wait_for(executor.aclose(), 5)
+        if ending != "shutdown":
+            timer = await asyncio.wrap_future(armed)
+            await asyncio.to_thread(timer.fire)
         done, _pending = await asyncio.wait((request,), timeout=5)
         assert done and killed.is_set()
         if ending == "cancellation":
@@ -452,6 +618,10 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
                 LocalSpeechExecutionError if ending == "deadline" else LocalSpeechError
             )
         assert executor.memory_status()["models"][0]["loaded"] is False
+        process.wait.assert_called_once()
+        if phase == "loading":
+            requests = [json.loads(call.args[0]) for call in process.stdin.write.call_args_list]
+            assert all("text" not in request for request in requests)
     finally:
         killed.set()
         await executor.aclose()

@@ -32,6 +32,7 @@
   let previewBusy = $state(false);
   let previewError = $state('');
   let previewAudio = $state(null);
+  let previewPlayback = $state('');
   let previewProgress = $state({ phase: 'preparing', elapsed_seconds: 0 });
   let previewController = null;
   const job = createLocalSetupJob({
@@ -56,16 +57,24 @@
     previewBusy = true;
     previewError = '';
     previewAudio = null;
+    previewPlayback = '';
     previewProgress = { phase: 'queued', elapsed_seconds: 0 };
     try {
       const result = await previewSpeech(previewText, {
         signal: previewController.signal,
         onProgress: (progress) => {
-          if (!destroyed) previewProgress = progress;
+          if (!destroyed && !previewController.signal.aborted)
+            previewProgress = progress;
+        },
+        onPlayback: ({ url }) => {
+          if (!destroyed && !previewController.signal.aborted)
+            previewPlayback = url;
         },
       });
-      if (!destroyed) previewAudio = result.url;
+      if (!destroyed && !previewController.signal.aborted)
+        previewAudio = result.url;
     } catch (error) {
+      previewPlayback = '';
       if (!destroyed && !previewController.signal.aborted)
         previewError =
           error?.message || t('settings.localSpeech.previewFailed');
@@ -186,16 +195,21 @@
           )}
           · {previewProgress.elapsed_seconds ?? 0}s
         </span>
-        <Button onClick={() => previewController?.abort()}
-          >{t('settings.localSpeech.cancelPreview')}</Button
+        <Button
+          onClick={() => {
+            previewController?.abort();
+            previewPlayback = '';
+          }}>{t('settings.localSpeech.cancelPreview')}</Button
         >
       {/if}
     </div>
     {#if previewError}<Banner variant="warn"
         ><span role="alert">{previewError}</span></Banner
       >{/if}
-    {#if previewAudio}<AudioPlayer
-        src={previewAudio}
+    {#if previewAudio || previewPlayback}<AudioPlayer
+        src={previewAudio ?? ''}
+        playback={previewPlayback}
+        autoplay={Boolean(previewPlayback)}
         ariaLabel={t('settings.localSpeech.previewAudio')}
       />{/if}
   </div>

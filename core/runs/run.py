@@ -75,6 +75,7 @@ TRANSIENT_EVENT_TYPES = frozenset(
         TOOL_CALL_OUTPUT_EVENT,
         STREAM_ATTEMPT_RESTARTED_EVENT,
         PROVIDER_HEARTBEAT_EVENT,
+        "speech_playback",
     }
 )
 # Replay bound for a terminal Run: the terminal event plus the unbroken run of

@@ -6,16 +6,21 @@ OpenAI-compatible Providers; text-to-speech sends the same JSON body to both.
 
 from __future__ import annotations
 
+import asyncio
+import io
 import json
+import wave
+from collections.abc import AsyncIterator
 from email.parser import BytesParser
 from email.policy import default as default_policy
-from typing import cast
+from typing import cast, override
 
 import httpx
 import pytest
 import respx
 
 from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
+from core.model_tasks.speech_types import SpeechAudioChunk
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
@@ -194,27 +199,164 @@ async def test_openrouter_tts_sends_json_and_returns_audio_bytes(
 
 
 @pytest.mark.parametrize(
-    ("response", "message"),
+    "response",
     [
+        pytest.param(httpx.Response(502, text="invalid upstream response"), id="ambiguous-502"),
+        pytest.param(httpx.Response(200, content=b""), id="empty-success"),
         pytest.param(
-            httpx.Response(502, text="invalid upstream response"), "HTTP 502", id="ambiguous-502"
+            httpx.Response(200, content=b"\x00\x01", headers={"content-type": "audio/pcm"}),
+            id="pcm-with-unknown-rate",
         ),
-        pytest.param(httpx.Response(200, content=b""), "no audio", id="empty-success"),
+        pytest.param(
+            httpx.Response(
+                200,
+                content=b"\x00",
+                headers={"content-type": "audio/pcm;rate=22050;channels=1"},
+            ),
+            id="pcm-with-incomplete-sample",
+        ),
     ],
 )
+@pytest.mark.parametrize("streaming", [False, True], ids=["buffered", "streamed"])
 @pytest.mark.asyncio
 @respx.mock
 async def test_openrouter_tts_never_replays_an_unknown_outcome(
-    response: httpx.Response, message: str
+    response: httpx.Response, streaming: bool
 ) -> None:
+    if streaming:
+        response = httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            stream=httpx.ByteStream(response.content),
+        )
     route = respx.post(f"{OPENROUTER_BASE}/audio/speech").mock(return_value=response)
+    chunks: list[SpeechAudioChunk] = []
 
-    with pytest.raises(ProviderOutcomeUnknownError, match=message):
+    async def on_audio(chunk: SpeechAudioChunk) -> None:
+        chunks.append(chunk)
+
+    with pytest.raises(ProviderOutcomeUnknownError) as raised:
         await _client("openrouter", "openai/gpt-4o-mini-tts").synthesize(
-            "hello", options={"voice": "alloy"}
+            "hello", options={"voice": "alloy"}, on_audio=on_audio if streaming else None
         )
 
+    assert raised.value.retryable is False
     assert route.call_count == 1
+    assert chunks == []
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "content_type", "sample_rate"),
+    [
+        ("openai", "audio/pcm", 24000),
+        ("openai", "application/octet-stream", 24000),
+        ("openrouter", "audio/pcm;rate=22050;channels=1", 22050),
+        ("openrouter", "application/octet-stream;rate=22050;channels=1", 22050),
+    ],
+    ids=["openai-pcm", "openai-generic", "openrouter-pcm", "openrouter-generic"],
+)
+@pytest.mark.parametrize("streaming", [False, True], ids=["buffered", "streamed"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_pcm_synthesis_returns_a_playable_wav_with_the_original_samples(
+    provider_id: str, content_type: str, sample_rate: int, streaming: bool
+) -> None:
+    pcm = b"\x01\x00\xff\xff" * 128
+    route = respx.post(url__regex=r".*/audio/speech").mock(
+        return_value=httpx.Response(
+            200,
+            stream=httpx.ByteStream(pcm),
+            headers={"content-type": content_type, "x-generation-id": "test-generation"},
+        )
+    )
+    chunks: list[SpeechAudioChunk] = []
+
+    async def on_audio(chunk: SpeechAudioChunk) -> None:
+        chunks.append(chunk)
+
+    result = await _client(provider_id, "test-tts").synthesize(
+        "hello", options={"response_format": "pcm"}, on_audio=on_audio if streaming else None
+    )
+
+    assert (result.media_type, result.format, result.generation_id) == (
+        "audio/wav",
+        "wav",
+        "test-generation",
+    )
+    with wave.open(io.BytesIO(result.audio), "rb") as wav:
+        assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) == (sample_rate, 1, 2)
+        assert wav.readframes(wav.getnframes()) == pcm
+    assert route.call_count == 1
+    if streaming:
+        assert b"".join(chunk.audio for chunk in chunks) == pcm
+        assert all(chunk.sample_rate_hz == sample_rate for chunk in chunks)
+
+
+@pytest.mark.parametrize("outcome", ["completed", "read_failure", "cancelled"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_streamed_tts_plays_before_provider_completion_and_closes_without_replay(
+    outcome: str,
+) -> None:
+    first_pcm, last_pcm = b"\x01\x00" * 32768, b"\xfe\xff" * 1024
+
+    class AudioStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.release = asyncio.Event()
+            self.closed = False
+
+        @override
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield first_pcm
+            await self.release.wait()
+            if outcome == "read_failure":
+                raise httpx.ReadError("test interrupted audio response")
+            yield last_pcm
+
+        @override
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = AudioStream()
+    route = respx.post(f"{OPENAI_BASE}/audio/speech").mock(
+        return_value=httpx.Response(200, stream=stream, headers={"content-type": "audio/pcm"})
+    )
+    first_received = asyncio.Event()
+    chunks: list[SpeechAudioChunk] = []
+
+    async def on_audio(chunk: SpeechAudioChunk) -> None:
+        chunks.append(chunk)
+        first_received.set()
+
+    task = asyncio.create_task(
+        _client("openai", "test-tts").synthesize(
+            "hello", options={"response_format": "pcm"}, on_audio=on_audio
+        )
+    )
+    try:
+        await first_received.wait()
+        assert not task.done() and not stream.closed
+        assert chunks[0].audio and chunks[0].sample_rate_hz == 24000
+        if outcome == "cancelled":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            stream.release.set()
+            if outcome == "read_failure":
+                with pytest.raises(ProviderOutcomeUnknownError) as raised:
+                    await task
+                assert raised.value.retryable is False
+            else:
+                result = await task
+                with wave.open(io.BytesIO(result.audio), "rb") as wav:
+                    assert wav.readframes(wav.getnframes()) == first_pcm + last_pcm
+                assert b"".join(chunk.audio for chunk in chunks) == first_pcm + last_pcm
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert stream.closed and route.call_count == 1
 
 
 def _form_parts(request: httpx.Request) -> dict[str, object]:

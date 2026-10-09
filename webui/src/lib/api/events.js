@@ -55,6 +55,7 @@ export const RUN_EVENT_TYPES = [
   RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
   RUN_EVENT_TOOL_CALL_DELTA,
   'tool_call_started',
+  'speech_playback',
   RUN_EVENT_TOOL_CALL_OUTPUT,
   'tool_call_result',
   'subagent_session_started',

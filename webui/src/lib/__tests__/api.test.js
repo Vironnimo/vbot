@@ -1004,11 +1004,13 @@ describe('HTTP media transfers', () => {
 
   it('streams synthesis progress and returns the server-owned audio artifact', async () => {
     const onProgress = vi.fn();
+    const onPlayback = vi.fn();
     const fetch = vi
       .fn()
       .mockResolvedValue(
         new Response(
           '{"type":"progress","phase":"loading","elapsed_seconds":12}\n' +
+            '{"type":"playback","url":"/api/speech/playback/stream_test"}\n' +
             '{"type":"result","result":{"url":"/api/speech/artifacts/aud_test"}}\n',
         ),
       );
@@ -1016,6 +1018,7 @@ describe('HTTP media transfers', () => {
     const result = await api.previewSpeech('test-owned text', {
       fetch,
       onProgress,
+      onPlayback,
       baseUrl: 'http://localhost:9000',
     });
 
@@ -1031,6 +1034,9 @@ describe('HTTP media transfers', () => {
       elapsed_seconds: 12,
     });
     expect(result.url).toBe('/api/speech/artifacts/aud_test');
+    expect(onPlayback).toHaveBeenCalledExactlyOnceWith({
+      url: '/api/speech/playback/stream_test',
+    });
   });
 
   it.each([

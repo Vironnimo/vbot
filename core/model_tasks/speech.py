@@ -22,8 +22,10 @@ from core.model_tasks.speech_local import (
     LocalSpeechExecutor,
     LocalSpeechSetup,
 )
+from core.model_tasks.speech_playback import SpeechPlaybackStore
 from core.model_tasks.speech_providers import ProviderSpeechClient
 from core.model_tasks.speech_types import (
+    SpeechAudioCallback,
     SpeechProgress,
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
@@ -35,6 +37,7 @@ from core.storage.layout import DataDirectoryLayout
 from core.usage import UsageRecorder
 from core.utils.errors import TaskError, VBotError
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("speech")
@@ -112,6 +115,7 @@ class SpeechService:
         usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._runtime = runtime
+        self.playbacks = SpeechPlaybackStore()
         self._usage_recorder = usage_recorder
         self._resolver = TaskBindingResolver(
             model_tasks, configuration_error=SpeechConfigurationError
@@ -249,9 +253,11 @@ class SpeechService:
         return await self._local_executor.release_memory(target)
 
     def close(self) -> None:
+        self.playbacks.close()
         self._local_executor.close()
 
     async def aclose(self) -> None:
+        await self.playbacks.aclose()
         await self._local_executor.aclose()
 
     async def synthesize(
@@ -260,6 +266,7 @@ class SpeechService:
         *,
         progress: SpeechProgress | None = None,
         usage_context: TaskUsageContext | None = None,
+        on_audio: SpeechAudioCallback | None = None,
     ) -> SpeechSynthesisResult:
         """Synthesize one text string using the configured TTS binding."""
 
@@ -280,6 +287,7 @@ class SpeechService:
                         normalized_text,
                         options=options,
                         progress=progress,
+                        **({"on_audio": on_audio} if on_audio is not None else {}),
                     )
             except LocalSpeechExecutionError as exc:
                 raise SpeechExecutionError(str(exc)) from exc
@@ -292,7 +300,11 @@ class SpeechService:
             self._runtime, target_ref, usage_observer=usage
         )
         try:
-            return await provider_client.synthesize(normalized_text, options=options)
+            return await provider_client.synthesize(
+                normalized_text,
+                options=options,
+                **({"on_audio": on_audio} if on_audio is not None else {}),
+            )
         except SpeechError:
             raise
         except ProviderOutcomeUnknownError as exc:
@@ -324,14 +336,20 @@ class SpeechService:
         *,
         progress: SpeechProgress | None = None,
         usage_context: TaskUsageContext | None = None,
+        on_audio: SpeechAudioCallback | None = None,
     ) -> SpeechArtifact:
         """Synthesize speech and persist it as a runtime artifact."""
 
-        result = await self.synthesize(text, progress=progress, usage_context=usage_context)
-        stored = self._artifacts.write(
-            result.audio,
-            extension=_extension_for_audio(result.media_type, result.format),
-            media_type=result.media_type,
+        result = await self.synthesize(
+            text, progress=progress, usage_context=usage_context, on_audio=on_audio
+        )
+        stored = await settle_before_cancelling(
+            asyncio.to_thread(
+                self._artifacts.write,
+                result.audio,
+                extension=_extension_for_audio(result.media_type, result.format),
+                media_type=result.media_type,
+            )
         )
         return _speech_artifact(stored)
 
