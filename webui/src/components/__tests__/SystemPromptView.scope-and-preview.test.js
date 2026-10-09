@@ -513,6 +513,7 @@ describe('SystemPromptView scope and preview', () => {
                 parameters: {},
               },
               tokens: 100,
+              on_demand: true,
             },
           ],
         },
@@ -530,12 +531,17 @@ describe('SystemPromptView scope and preview', () => {
       JSON.parse(document.querySelector('.tool-schema').textContent),
     ).toEqual(definition.parameters);
     expect(document.querySelector('.tool-detail script')).toBeNull();
+    expect(document.querySelector('.tool-on-demand-note')).toBeNull();
     const search = document.querySelector('input[type="search"]');
     search.value = 'READ-FIXTURE';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     expect(document.querySelector('.tool-detail h3').textContent).toBe('read');
     expect(document.querySelectorAll('.tool-index-item')).toHaveLength(1);
+    expect(document.querySelector('.tool-index-item').textContent).toContain(
+      t('systemPrompt.tools.onDemand'),
+    );
+    expect(document.querySelector('.tool-on-demand-note')).not.toBeNull();
     search.value = 'not-found';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();

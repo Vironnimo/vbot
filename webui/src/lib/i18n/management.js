@@ -897,6 +897,9 @@ export default Object.freeze({
   'systemPrompt.tools.parameters': 'Parameters · JSON Schema',
   'systemPrompt.tools.original': 'Complete definition · JSON',
   'systemPrompt.tools.noMatches': 'No matching Tools',
+  'systemPrompt.tools.onDemand': 'On demand',
+  'systemPrompt.tools.onDemandHint':
+    'Loaded on demand: this definition is not sent with every request. The System Prompt lists the Tool by name and summary, and the Agent loads the definition when it needs the Tool. Its tokens are not part of the Tool total.',
   'systemPrompt.tools.searchHint':
     'Try a Tool name or a word from its description.',
   'systemPrompt.preview.about': 'About this preview',
