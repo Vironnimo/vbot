@@ -14,7 +14,9 @@ from ``metadata.vbot.author``); ``external`` records files changed outside the
 Skill write owner, noticed before the next write or history read of that Skill.
 An ``archive`` revision of a Skill merged into another one lists what moved to
 that Skill with it (``followed``): its shares and the automations that triggered
-it.
+it. A ``rename`` revision, recorded under the new name with ``renamed_from``,
+carries the Skill's lineage (origin, pin, files) over from the former name; the
+history of the new name includes the revisions recorded under its former names.
 A line that is not a readable revision (a torn write, a hand edit) is skipped
 with a warning; an append after a last line without its newline starts a new
 line, so the fragment stays separate and the new revision stays readable.
@@ -55,7 +57,16 @@ MAX_STORED_TEXT_BYTES = 1024 * 1024
 
 SkillActor = Literal["human", "agent", "reflection", "librarian"]
 SkillRevisionKind = Literal[
-    "baseline", "create", "change", "external", "archive", "restore", "revert", "pin", "unpin"
+    "baseline",
+    "create",
+    "change",
+    "external",
+    "archive",
+    "restore",
+    "revert",
+    "pin",
+    "unpin",
+    "rename",
 ]
 SkillFileChangeKind = Literal["created", "updated", "deleted"]
 # ``published``: the Skill moved into another home, such as a private Skill made global.
@@ -70,7 +81,18 @@ ARCHIVE_REASONS: tuple[SkillArchiveReason, ...] = ("deleted", "absorbed", "inact
 EXTERNAL_ACTOR = "external"
 
 _KINDS = frozenset(
-    {"baseline", "create", "change", "external", "archive", "restore", "revert", "pin", "unpin"}
+    {
+        "baseline",
+        "create",
+        "change",
+        "external",
+        "archive",
+        "restore",
+        "revert",
+        "pin",
+        "unpin",
+        "rename",
+    }
 )
 SkillReferenceKind = Literal["shared", "bootstrap", "cron", "calendar"]
 _REFERENCE_KINDS = frozenset({"shared", "bootstrap", "cron", "calendar"})
@@ -130,7 +152,9 @@ class SkillRevision:
     archived package involved. ``origin``/``created_at``/``pinned`` carry a
     Skill's provenance where a revision starts or restores it. ``followed``
     lists, on the archive revision of a Skill merged into ``absorbed_into``,
-    what moved to that Skill with it.
+    what moved to that Skill with it. ``renamed_from`` is the name the Skill
+    had before this revision renamed it to ``skill`` (a ``rename``, or the
+    ``revert`` of one).
     """
 
     id: int
@@ -151,11 +175,23 @@ class SkillRevision:
     archive_id: str | None = None
     reverts: tuple[int, ...] = ()
     followed: tuple[SkillReference, ...] = ()
+    renamed_from: str | None = None
 
     @property
     def moves(self) -> bool:
         """Whether the revision started, ended or moved the Skill's live package."""
-        return self.kind in ("baseline", "create") or self.live is not None
+        return (
+            self.kind in ("baseline", "create")
+            or self.live is not None
+            or self.renamed_from is not None
+        )
+
+    @property
+    def names(self) -> frozenset[str]:
+        """The Skill names whose presence or content this revision concerns."""
+        if self.renamed_from is None:
+            return frozenset({self.skill})
+        return frozenset({self.skill, self.renamed_from})
 
     def to_dict(self) -> dict[str, Any]:
         """Return the public projection: no file texts or hashes.
@@ -181,6 +217,7 @@ class SkillRevision:
             "reason",
             "absorbed_into",
             "archive_id",
+            "renamed_from",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -252,6 +289,8 @@ class _Lineage:
     changed_at: str | None = None
     changed_by: str | None = None
     files: dict[str, str] = field(default_factory=dict)
+    # Names the Skill had before, each with the id of the revision that renamed it.
+    former: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass
@@ -281,10 +320,31 @@ class SkillHistory:
     # -- reading ---------------------------------------------------------------
 
     def revisions(self, skill: str | None = None) -> list[SkillRevision]:
-        """Return the revisions of *skill* (all when ``None``), oldest first."""
+        """Return the revisions of *skill* (all when ``None``), oldest first.
+
+        A renamed Skill's revisions include those recorded under its former
+        names before each rename; a former name's include the rename itself.
+        """
         with self._lock():
-            revisions = self._load().revisions
-            return [r for r in revisions if skill is None or r.skill == skill]
+            log = self._load()
+            if skill is None:
+                return list(log.revisions)
+            lineage = log.lineages.get(skill)
+            former = lineage.former if lineage is not None else ()
+            return [
+                revision
+                for revision in log.revisions
+                if skill in revision.names
+                or any(revision.skill == name and revision.id < until for name, until in former)
+            ]
+
+    def current_name(self, former_name: str) -> str | None:
+        """Return the name of the live Skill that was once named *former_name*, if any."""
+        with self._lock():
+            for name, lineage in self._load().lineages.items():
+                if lineage.live and any(former == former_name for former, _ in lineage.former):
+                    return name
+            return None
 
     def revision(self, revision_id: int) -> SkillRevision | None:
         with self._lock():
@@ -321,14 +381,12 @@ class SkillHistory:
     def text(self, skill: str, path: str, digest: str) -> str | None:
         """Return the stored text of *path* whose bytes hash to *digest*, if any.
 
-        Any revision of *skill* that stored that file version serves; the text is
-        read back from its line on disk.
+        Any revision of *skill*, under its current or a former name, that stored
+        that file version serves; the text is read back from its line on disk.
         """
         with self._lock():
             log = self._load()
-            for revision in reversed(log.revisions):
-                if revision.skill != skill:
-                    continue
+            for revision in reversed(self.revisions(skill)):
                 for record in revision.files:
                     if record.path == path and record.after == digest and record.stored:
                         text = self._stored_text(log, revision.id, path)
@@ -412,6 +470,7 @@ class SkillHistory:
         archive_id: str | None = None,
         reverts: Iterable[int] = (),
         followed: Iterable[SkillReference] = (),
+        renamed_from: str | None = None,
     ) -> SkillRevision:
         """Append one revision; ``texts`` maps a file path to its stored text after."""
         with self._lock():
@@ -434,6 +493,7 @@ class SkillHistory:
                 archive_id=archive_id,
                 reverts=tuple(reverts),
                 followed=tuple(followed),
+                renamed_from=renamed_from,
             )
 
     def changes(
@@ -515,6 +575,7 @@ class SkillHistory:
         archive_id: str | None = None,
         reverts: tuple[int, ...] = (),
         followed: tuple[SkillReference, ...] = (),
+        renamed_from: str | None = None,
     ) -> SkillRevision:
         stored = tuple(
             SkillFileRecord(
@@ -545,6 +606,7 @@ class SkillHistory:
             archive_id=archive_id,
             reverts=reverts,
             followed=followed,
+            renamed_from=renamed_from,
         )
         line = json.dumps(_line(revision, texts), ensure_ascii=False, separators=(",", ":"))
         data = (line + "\n").encode("utf-8")
@@ -692,6 +754,11 @@ def _advance(log: _Log, revision: SkillRevision, span: tuple[int, int]) -> None:
     log.revisions.append(revision)
     log.by_id[revision.id] = revision
     log.spans[revision.id] = span
+    if revision.renamed_from is not None and revision.renamed_from != revision.skill:
+        moved = log.lineages.pop(revision.renamed_from, None)
+        if moved is not None and moved.live:
+            moved.former = (*moved.former, (revision.renamed_from, revision.id))
+            log.lineages[revision.skill] = moved
     lineage = log.lineages.get(revision.skill)
     if revision.kind in ("baseline", "create") or lineage is None:
         lineage = _Lineage(
@@ -768,6 +835,7 @@ def _line(revision: SkillRevision, texts: Mapping[str, str]) -> dict[str, Any]:
         "reason",
         "absorbed_into",
         "archive_id",
+        "renamed_from",
     ):
         value = getattr(revision, key)
         if value is not None:
@@ -808,6 +876,7 @@ def _parse_revision(line: bytes) -> SkillRevision | None:
             archive_id=_optional_text(data.get("archive_id")),
             reverts=tuple(_integer(item) for item in _array(data.get("reverts", []))),
             followed=tuple(_parse_reference(item) for item in _array(data.get("followed", []))),
+            renamed_from=_optional_text(data.get("renamed_from")),
         )
     # ValueError includes undecodable bytes and invalid JSON; RecursionError is
     # deeply nested JSON.

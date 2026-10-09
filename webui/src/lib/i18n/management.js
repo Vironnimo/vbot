@@ -347,6 +347,7 @@ export default Object.freeze({
   'skills.revision.revert': 'Reverted revision {revisions}',
   'skills.revision.pin': 'Pinned',
   'skills.revision.unpin': 'Unpinned',
+  'skills.revision.rename': 'Renamed from {name}',
   'skills.revision.baseline': 'Recorded as found',
   'skills.revision.fileAdded': 'Added {path}',
   'skills.revision.fileChanged': 'Changed {path}',
