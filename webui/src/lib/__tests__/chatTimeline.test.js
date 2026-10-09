@@ -490,7 +490,7 @@ describe('History and live Run projection', () => {
     const second = assistantRun(state, 'run-finished');
     expect(second.items).toBe(first.items);
     expect(second.events).toBe(first.events);
-    expect(assistantRun(state, 'run-active').items).not.toBe(
+    expect(assistantRun(state, 'run-active').items).toBe(
       assistantRun(state, 'run-active').items,
     );
 
@@ -502,6 +502,64 @@ describe('History and live Run projection', () => {
     expect(rebuilt.items).not.toBe(first.items);
     expect(rebuilt.tools.map((tool) => tool.toolCallId)).toEqual(['call-late']);
   });
+
+  it.each(['live', 'mixed'])(
+    'keeps unchanged %s children immutable through streaming, replay and replacement',
+    (mode) => {
+      const state = session();
+      start(state, 'run-active');
+      const message = {
+        id: 'first',
+        role: 'assistant',
+        content: 'First',
+        history_run_id: 'run-active',
+      };
+      append(state, 'run-active', 1, 'assistant_output', { message });
+      append(state, 'run-active', 3, 'tool_call_started', {
+        tool_call: { id: 'read', name: 'read', arguments: { path: 'notes' } },
+      });
+      append(state, 'run-active', 4, 'tool_call_result', {
+        tool_call: { id: 'read', name: 'read' },
+        result: { ok: true },
+      });
+      if (mode === 'mixed') loadHistory(state, [message]);
+      append(state, 'run-active', 5, 'assistant_output_delta', {
+        content_delta: 'A',
+      });
+      const first = assistantRun(state);
+      append(state, 'run-active', 6, 'assistant_output_delta', {
+        content_delta: 'B',
+      });
+      const next = assistantRun(state);
+      expect(next.items.slice(0, 2)).toEqual(first.items.slice(0, 2));
+      expect(next.items[0]).toBe(first.items[0]);
+      expect(next.tools[0]).toBe(first.tools[0]);
+      expect(next.outputs.at(-1).content).toBe('AB');
+      expect(first.outputs.at(-1).content).toBe('A');
+      expect(first.outputs.at(-1).events[0].payload.content_delta).toBe('A');
+
+      // An earlier event and a same-length replacement must behave exactly like
+      // projecting that replay in a fresh view, even after a prefix was cached.
+      append(state, 'run-active', 2, 'model_fallback_activated', {
+        to_model: 'backup',
+      });
+      expect(render(state)).toEqual(render({ ...state }));
+      state.runEvents = state.runEvents.map((event) =>
+        event.sequence === 4
+          ? {
+              ...event,
+              payload: {
+                ...event.payload,
+                result: { ok: false, error: 'Changed result' },
+              },
+            }
+          : event,
+      );
+      expect(assistantRun(state).tools[0].status).toBe('failed');
+      expect(render(state)).toEqual(render({ ...state }));
+      expect(first.tools[0].status).toBe('success');
+    },
+  );
 
   it('hands back unchanged History rows as the same objects while a Run streams', () => {
     const state = session();

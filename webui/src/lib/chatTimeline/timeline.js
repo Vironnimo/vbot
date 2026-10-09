@@ -1,10 +1,6 @@
 import { t } from '../i18n.js';
 import { stripTimelineSequence, normalizedIterationCount } from './model.js';
-import {
-  createHistoryItemReuse,
-  finishHistoryItemReuse,
-  historyTimelineItems,
-} from './history.js';
+import { createHistoryItemReuse, finishHistoryItemReuse } from './history.js';
 import { keepLiveRunIdentities, reconcileTimeline } from './reconciliation.js';
 import { liveTimelineItems } from './live.js';
 
@@ -46,15 +42,9 @@ export function assistantRunChildProgressKey(child) {
   return `${chunkCount}:${latestSequence ?? ''}:${contentLength}`;
 }
 
-// Per-session memo of projected assistant_run items, keyed by run. A run
-// whose group contains a terminal event and no retained streaming delta can no
-// longer change: non-delta run events are appended exactly once
-// (appendRunEvent dedups by run_id + sequence) and never mutated. A terminal
-// Run may temporarily retain deltas while canonical output is still in flight,
-// so that group stays uncached until History confirms their persistence.
-// Reusing every other terminal Run's projection across the ≤33 ms streaming
-// flushes keeps the per-flush rebuild cost bound to the active Run instead of
-// growing with Session age (handoff3 B10).
+// Per-session immutable Run projections. The live owner reuses completed
+// phases and unchanged children while replaying the active streaming tail;
+// replay and History replacement invalidate any affected prefix.
 const liveRunProjectionCachesBySession = new WeakMap();
 
 function liveRunProjectionCache(sessionState) {
@@ -94,9 +84,7 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
   const reuse = historyItemReuse(sessionState);
   const reconciledItems = keepLiveRunIdentities(
     sessionState,
-    runEvents.length > 0
-      ? reconcileTimeline(sessionState, liveItems, reuse)
-      : historyTimelineItems(sessionState.messages, reuse),
+    reconcileTimeline(sessionState, liveItems, reuse),
   );
   finishHistoryItemReuse(reuse);
 
@@ -178,14 +166,18 @@ function applyCurrentRunIterationCount(liveItems, currentRun) {
   if (iterationCount === null || !currentRun?.runId) {
     return;
   }
-  const assistantRun = (liveItems ?? []).find(
+  const index = (liveItems ?? []).findIndex(
     (item) => item?.type === 'assistant_run' && item.runId === currentRun.runId,
   );
-  if (assistantRun) {
-    assistantRun.startTimestamp =
-      currentRun.startedAt ?? assistantRun.startTimestamp;
-    assistantRun.iterationCount = iterationCount;
-  }
+  if (index < 0) return;
+  const assistantRun = liveItems[index];
+  const startTimestamp = currentRun.startedAt ?? assistantRun.startTimestamp;
+  if (
+    assistantRun.startTimestamp === startTimestamp &&
+    assistantRun.iterationCount === iterationCount
+  )
+    return;
+  liveItems[index] = { ...assistantRun, startTimestamp, iterationCount };
 }
 
 function childStreamingProgress(child) {

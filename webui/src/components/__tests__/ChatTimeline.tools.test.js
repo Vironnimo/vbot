@@ -6,6 +6,7 @@ import {
   detailRow,
   detailText,
   flushSync,
+  openDisclosures,
   setupChatTimelineSuite,
   stubClipboard,
   timelineSession,
@@ -149,6 +150,7 @@ describe('ChatTimeline Tools', () => {
         const lineText = line.textContent;
         for (const text of shows) expect(lineText).toContain(text);
         for (const text of hides) expect(lineText).not.toContain(text);
+        if (detail) openDisclosures('.tool-event');
         const argsText = detailText('chat.toolArgs');
         for (const text of detail?.shows ?? [])
           expect(argsText).toContain(text);
@@ -205,6 +207,7 @@ describe('ChatTimeline Tools', () => {
       ['an empty object as no data', {}, null],
     ])('renders Args %s', (_case, args, expected) => {
       timeline.render(sessionWithTool([toolStarted('call', 'probe', args)]));
+      openDisclosures('.tool-event');
 
       expect(detailText('chat.toolArgs')).toBe(expected ?? noData());
     });
@@ -253,6 +256,7 @@ describe('ChatTimeline Tools', () => {
         ]),
       );
 
+      openDisclosures('.tool-event');
       expect(detailText('chat.toolResultLabel')).toBe(expected ?? noData());
     });
 
@@ -271,6 +275,7 @@ describe('ChatTimeline Tools', () => {
       );
 
       expect(summaryLine().querySelector('.te-dot.error')).toBeTruthy();
+      openDisclosures('.tool-event');
       const resultCode = document.querySelector('.teb-code.error');
       expect(resultCode.textContent).toContain('invalid_regex');
       expect(resultCode.textContent).toContain('Invalid regular expression');
@@ -331,6 +336,7 @@ describe('ChatTimeline Tools', () => {
         ]),
       );
 
+      openDisclosures('.tool-event');
       const files =
         detailRow('chat.toolChanges').querySelectorAll('.tool-diff-file');
       expect(files[0].querySelector('.tool-diff-file__path').textContent).toBe(
@@ -375,6 +381,8 @@ describe('ChatTimeline Tools', () => {
       expect(rawCall.querySelector('summary').textContent.trim()).toBe(
         t('chat.toolRawCall'),
       );
+      expect(rawCall.querySelector('.tool-raw-call__body')).toBeNull();
+      openDisclosures('.tool-raw-call');
       expect(detailText('chat.toolArgs')).toBe('patch: *** Begin Patch');
       expect(detailText('chat.toolResultLabel')).toBe(
         'status: partial\ncontent: Updated.',
@@ -414,6 +422,7 @@ describe('ChatTimeline Tools', () => {
         ]),
       );
 
+      openDisclosures('.tool-event');
       const lists = document.querySelectorAll('.tool-results');
       expect(lists).toHaveLength(1);
       const items = Array.from(
@@ -463,6 +472,7 @@ describe('ChatTimeline Tools', () => {
         ]),
       );
 
+      openDisclosures('.tool-event');
       const sections = document.querySelectorAll('.tool-memory');
       expect(sections).toHaveLength(1);
       expect(sections[0].querySelector('.teb-label').textContent).toBe(
@@ -522,6 +532,7 @@ describe('ChatTimeline Tools', () => {
         ]),
       );
 
+      openDisclosures('.tool-event');
       expect(detailText('chat.toolDetailLabel.command')).toBe('npm test');
       expect(detailText('chat.toolDetailLabel.output')).toBe('{"passed": 3}');
       expect(detailRow('chat.toolDetailLabel.query')).toBeNull();
@@ -571,6 +582,7 @@ describe('ChatTimeline Tools', () => {
         sessionWithTool([toolStarted('call', name, createArgs(large))]),
       );
 
+      openDisclosures('.tool-event');
       const argsText = detailText('chat.toolArgs');
       for (const text of args.shows) expect(argsText).toContain(text);
       for (const text of args.hides) expect(argsText).not.toContain(text);
@@ -872,6 +884,8 @@ describe('ChatTimeline Tools', () => {
         ]),
       );
 
+      expect(document.querySelector('.tool-media')).toBeNull();
+      openDisclosures('.tool-event');
       const [sources, media] = document.querySelectorAll('.tool-media');
       expect(sources.querySelector('.teb-label').textContent).toBe(
         t('chat.toolMediaSources'),
@@ -987,14 +1001,13 @@ describe('ChatTimeline Tools', () => {
           await timeline.unmount();
           document.body.innerHTML = '';
           timeline.render(sessionState);
+          expect(document.querySelector('.tool-image-preview')).toBeNull();
+          openDisclosures('.tool-event');
           const previews = [
             ...document.querySelectorAll('.tool-image-preview'),
           ];
           expect(previews).toHaveLength(name === 'analyze_image' ? 2 : 1);
           const disclosure = previews[0].closest('details');
-          expect(disclosure.open).toBe(false);
-          disclosure.querySelector('summary').click();
-          flushSync();
           expect(disclosure.open).toBe(true);
           expect(previews[0].querySelector('img').getAttribute('src')).toBe(
             expectedSource,
@@ -1073,6 +1086,7 @@ describe('ChatTimeline Tools', () => {
         },
         agentName: 'Alpha',
       });
+      openDisclosures('.tool-event');
       const original = document.querySelector('.tool-image-preview img');
       original.dispatchEvent(new Event('error'));
       expect(original.hidden).toBe(true);
@@ -1170,6 +1184,7 @@ describe('ChatTimeline Tools', () => {
         ]),
       );
 
+      openDisclosures('.tool-event');
       expect(document.querySelector('.tool-image-preview')).toBeNull();
       expect(document.body.textContent).toContain('ordinary text');
     });

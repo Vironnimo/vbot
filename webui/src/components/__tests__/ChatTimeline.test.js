@@ -7,6 +7,7 @@ import {
   flushAsync,
   flushSync,
   follows,
+  openDisclosures,
   setupChatTimelineSuite,
   stubClipboard,
   timelineSession,
@@ -464,6 +465,8 @@ describe('ChatTimeline messages', () => {
         ]),
       );
 
+      expect(document.querySelector('.reasoning-body')).toBeNull();
+      openDisclosures('.reasoning-block');
       const reasoningBody = document.querySelector(
         '.reasoning-block .reasoning-body',
       );
@@ -496,6 +499,7 @@ describe('ChatTimeline messages', () => {
         ...deltas,
       ]);
       timeline.render(sessionState);
+      openDisclosures('.reasoning-block');
       expect(
         document.querySelectorAll('.reasoning-summary__section'),
       ).toHaveLength(2);
@@ -527,6 +531,7 @@ describe('ChatTimeline messages', () => {
       // Remount as a reconnect would, using the stable Run projection.
       await timeline.unmount();
       timeline.render(sessionState);
+      openDisclosures('.reasoning-block');
       expect(document.querySelectorAll('.reasoning-summary')).toHaveLength(1);
       expect(
         document.querySelectorAll('.reasoning-summary__section'),
@@ -556,6 +561,9 @@ describe('ChatTimeline messages', () => {
           ]),
         );
 
+        expect(document.querySelector('details').open).toBe(false);
+        expect(document.querySelector('.reasoning-body')).toBeNull();
+        openDisclosures('.reasoning-block');
         expect(
           document.querySelectorAll('.reasoning-summary__section'),
         ).toHaveLength(2);
@@ -563,7 +571,6 @@ describe('ChatTimeline messages', () => {
         expect(
           document.querySelector('summary').getAttribute('aria-label'),
         ).toBe(t('chat.reasoning.summary'));
-        expect(document.querySelector('details').open).toBe(false);
         expect(
           document.querySelector('.reasoning-summary__section').textContent,
         ).toContain('A readable summary.');
@@ -586,6 +593,7 @@ describe('ChatTimeline messages', () => {
       );
 
       expect(document.querySelector('.reasoning-summary')).toBeNull();
+      openDisclosures('.reasoning-block');
       expect(document.querySelector('.reasoning-body').textContent).toContain(
         'Additional raw reasoning.',
       );

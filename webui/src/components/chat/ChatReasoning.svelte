@@ -74,39 +74,41 @@
       <path d="m4 6 4 4 4-4" />
     </svg>
   </summary>
-  <div class="reasoning-body">
-    <div class="reasoning-body__actions">
-      <CopyButton
-        text={copyText}
-        class="chat-copy-action reasoning-copy"
-        label={isSummary
-          ? t('chat.reasoning.copySummary')
-          : t('chat.copyReasoning')}
-        copiedLabel={isSummary
-          ? t('chat.reasoning.summaryCopied')
-          : t('chat.reasoningCopied')}
-      />
+  {#if open}
+    <div class="reasoning-body">
+      <div class="reasoning-body__actions">
+        <CopyButton
+          text={copyText}
+          class="chat-copy-action reasoning-copy"
+          label={isSummary
+            ? t('chat.reasoning.copySummary')
+            : t('chat.copyReasoning')}
+          copiedLabel={isSummary
+            ? t('chat.reasoning.summaryCopied')
+            : t('chat.reasoningCopied')}
+        />
+      </div>
+      {#if isSummary}
+        {#each sections as section, index (index)}
+          <div class="reasoning-summary__section">
+            <MarkdownContent
+              source={section}
+              streaming={working && index === sections.length - 1}
+              reasoning
+              class="reasoning-markdown"
+            />
+          </div>
+        {/each}
+      {:else}
+        <MarkdownContent
+          {source}
+          streaming={working}
+          reasoning
+          class="reasoning-markdown"
+        />
+      {/if}
     </div>
-    {#if isSummary}
-      {#each sections as section, index (index)}
-        <div class="reasoning-summary__section">
-          <MarkdownContent
-            source={section}
-            streaming={working && index === sections.length - 1}
-            reasoning
-            class="reasoning-markdown"
-          />
-        </div>
-      {/each}
-    {:else}
-      <MarkdownContent
-        {source}
-        streaming={working}
-        reasoning
-        class="reasoning-markdown"
-      />
-    {/if}
-  </div>
+  {/if}
 </details>
 
 <style>

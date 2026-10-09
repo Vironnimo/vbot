@@ -21,6 +21,7 @@
 
   let {
     tool,
+    open = true,
     toolName = '',
     args,
     // Live output while the call runs: the command's current screen.
@@ -36,6 +37,12 @@
   } = $props();
 
   const viewState = timelineViewState();
+  // First open pays for formatting and media. Keep that mounted afterwards so
+  // collapsing a Tool cannot reset playback, selection or internal scroll.
+  let revealed = $state(false);
+  $effect(() => {
+    if (open) revealed = true;
+  });
 
   const TEXT_LABELS = {
     command: () => t('chat.toolDetailLabel.command'),
@@ -98,55 +105,59 @@
   {/if}
 {/snippet}
 
-<div class="tool-event-body tool-event-details">
-  <ToolMedia items={media} />
-  {#if blocks}
-    {#each blocks as block, index (index)}
-      {#if block.type === 'text'}
-        {#if block.label === 'output' && streamed}
-          {@render outputSections()}
+{#if open || revealed}
+  <div class="tool-event-body tool-event-details">
+    <ToolMedia items={media} />
+    {#if blocks}
+      {#each blocks as block, index (index)}
+        {#if block.type === 'text'}
+          {#if block.label === 'output' && streamed}
+            {@render outputSections()}
+          {:else}
+            <ToolDetailSection
+              label={TEXT_LABELS[block.label]()}
+              value={block.text}
+              literal
+            />
+          {/if}
+        {:else if block.type === 'file_changes'}
+          <ToolDiff changes={block.files} />
+        {:else if block.type === 'results'}
+          <ToolResults items={block.items} />
+        {:else if block.type === 'memory_changes'}
+          <ToolMemoryChanges {block} />
         {:else}
-          <ToolDetailSection
-            label={TEXT_LABELS[block.label]()}
-            value={block.text}
-            literal
-          />
+          <ToolNotice notice={block} />
         {/if}
-      {:else if block.type === 'file_changes'}
-        <ToolDiff changes={block.files} />
-      {:else if block.type === 'results'}
-        <ToolResults items={block.items} />
-      {:else if block.type === 'memory_changes'}
-        <ToolMemoryChanges {block} />
-      {:else}
-        <ToolNotice notice={block} />
+      {/each}
+      {#if !streamsReplaceOutput}
+        {@render outputSections()}
       {/if}
-    {/each}
-    {#if !streamsReplaceOutput}
-      {@render outputSections()}
-    {/if}
-    {#if blocks.length > 0 || media.length > 0}
-      <details
-        class="tool-raw-call"
-        open={viewState.isOpen(rawKey)}
-        ontoggle={(event) =>
-          viewState.setOpen(rawKey, event.currentTarget.open)}
-      >
-        <summary class="tool-raw-call__summary">
-          {t('chat.toolRawCall')}
-        </summary>
-        <div class="tool-raw-call__body">
-          {@render argsSection(true)}
-          {@render resultSection()}
-        </div>
-      </details>
+      {#if blocks.length > 0 || media.length > 0}
+        <details
+          class="tool-raw-call"
+          open={viewState.isOpen(rawKey)}
+          ontoggle={(event) =>
+            viewState.setOpen(rawKey, event.currentTarget.open)}
+        >
+          <summary class="tool-raw-call__summary">
+            {t('chat.toolRawCall')}
+          </summary>
+          {#if viewState.isOpen(rawKey)}
+            <div class="tool-raw-call__body">
+              {@render argsSection(true)}
+              {@render resultSection()}
+            </div>
+          {/if}
+        </details>
+      {:else}
+        {@render argsSection(true)}
+        {@render resultSection()}
+      {/if}
     {:else}
-      {@render argsSection(true)}
+      {@render argsSection(false)}
+      {@render outputSections()}
       {@render resultSection()}
     {/if}
-  {:else}
-    {@render argsSection(false)}
-    {@render outputSections()}
-    {@render resultSection()}
-  {/if}
-</div>
+  </div>
+{/if}

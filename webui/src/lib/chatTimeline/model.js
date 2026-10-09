@@ -134,7 +134,39 @@ export function timestampToMs(timestamp) {
   return Number.isNaN(value) ? null : value;
 }
 
+// Reducers may extend a cached prefix, but a projection already handed to
+// Svelte must stay immutable. Copy the row list now and a child only when an
+// event actually changes it; unchanged children keep their rendered identity.
+const sharedRunChildren = new WeakMap();
+const batchedRuns = new WeakSet();
+
+export function copyAssistantRunItem(assistantRun) {
+  const copy = { ...assistantRun, items: [...assistantRun.items] };
+  sharedRunChildren.set(copy, new Set(copy.items));
+  return copy;
+}
+
+export function writableRunChild(assistantRun, child) {
+  const shared = sharedRunChildren.get(assistantRun);
+  if (!shared?.has(child)) return child;
+  const copy = { ...child };
+  assistantRun.items[assistantRun.items.indexOf(child)] = copy;
+  shared.delete(child);
+  return copy;
+}
+
+export function batchAssistantRunUpdates(assistantRun, update) {
+  batchedRuns.add(assistantRun);
+  try {
+    update();
+  } finally {
+    batchedRuns.delete(assistantRun);
+    syncAssistantRunCollections(assistantRun);
+  }
+}
+
 export function syncAssistantRunCollections(assistantRun) {
+  if (batchedRuns.has(assistantRun)) return;
   assistantRun.items.sort(compareTimelineChildren);
   assistantRun.reasoning = assistantRun.items.filter(
     (item) => item.type === 'reasoning',

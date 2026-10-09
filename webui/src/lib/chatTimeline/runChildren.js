@@ -1,6 +1,7 @@
 import {
   timestampToMs,
   syncAssistantRunCollections,
+  writableRunChild,
   firstSeenSequence,
   toolKeyFromToolCall,
   toolKeyFromValues,
@@ -42,7 +43,10 @@ export function freezeStreamingReasoningEstimates(
     if (startedMs === null || endedMs === null || endedMs < startedMs) {
       continue;
     }
-    item.durationEstimateMs = Math.max(0, endedMs - startedMs);
+    writableRunChild(assistantRun, item).durationEstimateMs = Math.max(
+      0,
+      endedMs - startedMs,
+    );
   }
 }
 
@@ -63,13 +67,14 @@ export function appendTextSection(
   }
 
   const sequence = event?.sequence ?? assistantRun.items.length;
-  const existingItem = mergeableTextSection(assistantRun, {
+  let existingItem = mergeableTextSection(assistantRun, {
     type,
     content,
     message: message ?? event?.payload?.message,
     streaming,
   });
   if (existingItem) {
+    existingItem = writableRunChild(assistantRun, existingItem);
     updateReasoningSummary(existingItem, event, message, streaming);
     existingItem.content = streaming
       ? `${existingItem.content}${content}`
@@ -122,7 +127,7 @@ function updateReasoningSummary(item, event, message, streaming) {
   const index = event?.payload?.summary_index;
   const text = event?.payload?.summary_text;
   if (!Number.isInteger(index) || index < 0 || typeof text !== 'string') return;
-  const sections = item.reasoningSummary ?? [];
+  const sections = [...(item.reasoningSummary ?? [])];
   if (index > sections.length) return;
   sections[index] = `${sections[index] ?? ''}${text}`;
   item.reasoningSummary = sections;
@@ -400,7 +405,7 @@ export function mergeSubAgentSessionStarted(assistantRun, event) {
 
 function upsertToolRow(assistantRun, key, event, toolCall = {}) {
   const assistantMessageId = event?.payload?.assistant_message_id;
-  const existingTool = assistantRun.items.findLast(
+  let existingTool = assistantRun.items.findLast(
     (item) =>
       item.type === 'tool_call' &&
       (!assistantMessageId ||
@@ -410,6 +415,7 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
       (item.key === key || toolMatchesCall(item, toolCall)),
   );
   if (existingTool) {
+    existingTool = writableRunChild(assistantRun, existingTool);
     existingTool.key = moreStableToolKey(existingTool.key, key);
     existingTool.assistantMessageId ??= assistantMessageId;
     return existingTool;
@@ -480,9 +486,10 @@ export function settleUnfinishedTools(assistantRun, runStatus, event) {
       continue;
     }
 
-    item.status = status;
-    item.endTimestamp = event.timestamp ?? item.endTimestamp;
-    item.events = [...(item.events ?? []), event];
+    const writable = writableRunChild(assistantRun, item);
+    writable.status = status;
+    writable.endTimestamp = event.timestamp ?? item.endTimestamp;
+    writable.events = [...(item.events ?? []), event];
     changed = true;
   }
 

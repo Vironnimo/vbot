@@ -372,7 +372,7 @@ it('keeps a requested automatic start when autoplay is withdrawn before the audi
 });
 
 it.each([false, true])(
-  'keeps speech through History handoff (early streaming: %s)',
+  'keeps speech in a closed Working group through History handoff (early streaming: %s)',
   async (early) => {
     const stream = {
       play: vi.fn(),
@@ -408,7 +408,12 @@ it.each([false, true])(
     };
     const messages = [
       { id: 'user-one', role: 'user', content: 'Read it aloud' },
-      { id: 'assistant-one', role: 'assistant', tool_calls: [toolCall] },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        reasoning: 'Read it aloud.',
+        tool_calls: [toolCall],
+      },
       {
         id: 'tool-one',
         role: 'tool',
@@ -425,6 +430,7 @@ it.each([false, true])(
         'session-speech-handoff',
       ),
       agentName: 'Alpha',
+      chatWorkingMode: 'compact',
     });
     const { sessionState } = props;
     let sequence = 0;
@@ -437,6 +443,7 @@ it.each([false, true])(
       });
     startRun(sessionState, { run_id: 'run-speech', status: 'running' });
     appendEvent('user_message_persisted', { message: messages[0] });
+    appendEvent('reasoning', { message: messages[1] });
     // A streamed Tool preview is dropped when the Run ends.
     appendEvent('tool_call_delta', {
       tool_call_id: toolCall.id,
@@ -458,6 +465,9 @@ it.each([false, true])(
         result: envelope,
       });
     render(props, ChatTimelineHost);
+    const working = document.querySelector('.working-block');
+    expect(working.open).toBe(false);
+    expect(working.querySelector('.reasoning-block')).toBeNull();
     const audio = document.querySelector('audio');
     if (!early) {
       expect(audio?.getAttribute('src')).toBe(url);
@@ -466,6 +476,13 @@ it.each([false, true])(
     await flush();
     expect(play).toHaveBeenCalledTimes(early ? 0 : 1);
     const pausesWhilePlaying = pause.mock.calls.length;
+
+    for (const open of [true, false]) {
+      working.open = open;
+      working.dispatchEvent(new Event('toggle'));
+      await flush();
+      expect(document.querySelector('audio')).toBe(audio);
+    }
 
     if (early) {
       // History may contain the final Tool result before SSE delivers it.
