@@ -29,6 +29,7 @@ from core.chat.errors import ImageBudgetExceededError
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
+    estimate_wire_request_input_tokens,
 )
 from core.providers.errors import ProviderRequestTooLargeError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -514,6 +515,13 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
 
     class RebuildingAdapter(FakeAdapter):
         @override
+        def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
+            # Estimate the same visible Tool names as the recorded send (for
+            # example, powershell on Windows), including when called before send.
+            messages, tools = wire_shaping.model_facing_request(list(messages), list(tools or []))
+            return super().estimate_request_input_tokens(messages, model_id=model_id, tools=tools)
+
+        @override
         def request_image_limit(self, model_id: str) -> int | None:
             # Each retirement goes down to half the limit: the newest two frames.
             return 4 if count_limit else None
@@ -648,6 +656,15 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
             )
             session = runtime.chat_sessions.get(session_address("coder", "session-one"))
             persisted = session.load()
+            saved_steps = [message for message in persisted if message.role == "assistant"]
+            for step, sent in zip(saved_steps, adapter.requests, strict=True):
+                # Count/body retirements must replace the prepared accounting too:
+                # estimated input describes exactly the request the Provider accepted.
+                assert step.usage is not None
+                assert step.usage["input_tokens_estimated"] is True
+                assert step.usage["input_tokens"] == estimate_wire_request_input_tokens(
+                    adapter, sent.messages, model_id=sent.model_id, tools=sent.kwargs["tools"]
+                )
             assert persisted[-1].iteration_count == 16
             assert not any(message.role == "error" for message in persisted)
             assert len(rejected_sizes) == (3 if provider_pressure else 0)

@@ -236,11 +236,20 @@ def test_estimate_factor_scales_only_the_estimated_part_of_a_projection():
     assert accounting.project(base, **args)["tokens"] == 150_000
     assistant = {"role": "assistant", "content": "done " * 200}
     delta = estimate_request_input_tokens([assistant])[0]
-    projection = accounting.project([*base, assistant], **args)
+    prepared = accounting.prepare([*base, assistant], **args)
+    projection = accounting.project_prepared(prepared)
     assert projection["estimated_delta_tokens"] == round(delta * 1.5)
     assert projection["tokens"] == 150_000 + round(delta * 1.5)
     accounting.observe({"input_tokens": 9, "input_tokens_estimated": True}, base, **args)
     assert len(calibration.samples) == 1
+    # Reusing a prepared request must still see calibration taught by another Run.
+    calibration.value = 2.0
+    assert accounting.project_prepared(prepared)["tokens"] == 150_000 + round(delta * 2.0)
+    accounting.reset()
+    assert accounting.project_prepared(prepared) == {
+        "tokens": round((raw + delta) * 2.0),
+        "estimated": True,
+    }
 
 
 def test_measurement_continues_across_runs_until_compaction():
@@ -305,7 +314,8 @@ def test_request_measurement_does_not_cross_rebuilt_context(change):
             "scope": "new-epoch",
             "tools": [{"function": {"name": "new"}}],
         }[change]
-    projection = accounting.project(base, **args)
+    prepared = accounting.prepare(base, **args)
+    projection = accounting.project_prepared(prepared)
     assert projection["estimated"] is True
     assert projection["tokens"] > 120_000
     assert "provider_input_tokens" not in projection
@@ -382,8 +392,9 @@ def test_identical_requests_are_estimated_once_and_changes_estimate_afresh():
     args = {"target": _route(adapter), "tools": [], "scope": "epoch"}
     request = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
 
-    before = accounting.project(request, **args)
-    accounting.observe({"input_tokens": 5_000}, request, **args)
+    prepared = accounting.prepare(request, **args)
+    before = accounting.project_prepared(prepared)
+    accounting.observe_prepared({"input_tokens": 5_000}, prepared)
     continuation = [*request, {"role": "assistant", "content": "done"}]
     accounting.project(continuation, **args)
     accounting.project([dict(message) for message in continuation], **args)
@@ -395,6 +406,11 @@ def test_identical_requests_are_estimated_once_and_changes_estimate_afresh():
     accounting.project(edited, **args)
     accounting.project(request, **{**args, "tools": [{"function": {"name": "read"}}]})
     assert adapter.estimates == 4
+    # A snapshot owns only digests/counts: a later request edit cannot rewrite it.
+    request[1]["content"] = "a changed request " * 100
+    assert accounting.project_prepared(prepared)["tokens"] == 5_000
+    assert accounting.project(request, **args)["tokens"] > 5_000
+    assert adapter.estimates == 5
 
 
 def test_estimate_memo_is_bounded_and_retains_only_digests():

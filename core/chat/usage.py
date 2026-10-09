@@ -63,6 +63,21 @@ class ContextRoute:
 
 
 @dataclass(frozen=True)
+class RequestContextEstimate:
+    """Digests and an uncorrected count of one prepared request, without its content.
+
+    Reuse this value only for that exact request. A new hook result, continuation,
+    image projection, route or prompt scope needs a fresh ``prepare`` call. The
+    measurement anchor and calibration remain live when this value is projected.
+    """
+
+    model_reference: str
+    key: str
+    request: str
+    tokens: int
+
+
+@dataclass(frozen=True)
 class _Anchor:
     """The newest measured request: its Provider input and uncorrected local estimate."""
 
@@ -164,18 +179,44 @@ class RequestContextUsage:
         tokens = _optional_non_negative_int(usage.get("input_tokens"))
         if tokens is None or usage_token_is_estimated(usage, "input_tokens"):
             return
+        self.observe_prepared(
+            usage, self.prepare(messages, target=target, tools=tools, scope=scope)
+        )
+
+    def prepare(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        target: ContextTarget,
+        tools: Sequence[Mapping[str, Any]],
+        scope: str,
+    ) -> RequestContextEstimate:
+        """Count one request once for its send, measured response and Context consumers."""
         key = _context_key(messages, target, tools, scope)
         request = _context_digest(messages)
-        estimate = self._estimate(key, request, target, messages, tools)
+        return RequestContextEstimate(
+            target.model_reference,
+            key,
+            request,
+            self._estimate(key, request, target, messages, tools),
+        )
+
+    def observe_prepared(self, usage: Mapping[str, Any], prepared: RequestContextEstimate) -> None:
+        """Anchor on the response to an exactly prepared request; blocking calibration write."""
+        tokens = _optional_non_negative_int(usage.get("input_tokens"))
+        if tokens is None or usage_token_is_estimated(usage, "input_tokens"):
+            return
         output_tokens = (
             None
             if usage_token_is_estimated(usage, "output_tokens")
             else _optional_non_negative_int(usage.get("output_tokens"))
         )
-        self._anchor = _Anchor(key, request, tokens, output_tokens, estimate)
+        self._anchor = _Anchor(
+            prepared.key, prepared.request, tokens, output_tokens, prepared.tokens
+        )
         if self.calibration is not None:
             self.calibration.record_input_estimate(
-                target.model_reference, measured=tokens, estimated=estimate
+                prepared.model_reference, measured=tokens, estimated=prepared.tokens
             )
 
     def project(
@@ -193,17 +234,27 @@ class RequestContextUsage:
         to; the projection carries it, so the Session's Context usage names the
         window it fills.
         """
-        key = _context_key(messages, target, tools, scope)
-        request = _context_digest(messages)
-        estimate = self._estimate(key, request, target, messages, tools)
-        factor = self.factor(target)
-        result: JsonObject = {"tokens": round(estimate * factor), "estimated": True}
+        return self.project_prepared(
+            self.prepare(messages, target=target, tools=tools, scope=scope),
+            context_window=context_window,
+        )
+
+    def project_prepared(
+        self, prepared: RequestContextEstimate, *, context_window: int | None = None
+    ) -> JsonObject:
+        """Project an unchanged request with the current anchor and calibration; no scanning."""
+        factor = (
+            self.calibration.input_estimate_factor(prepared.model_reference)
+            if self.calibration is not None
+            else 1.0
+        )
+        result: JsonObject = {"tokens": round(prepared.tokens * factor), "estimated": True}
         anchor = self._anchor
-        if anchor is not None and anchor.key == key:
-            delta = round((estimate - anchor.estimate) * factor)
+        if anchor is not None and anchor.key == prepared.key:
+            delta = round((prepared.tokens - anchor.estimate) * factor)
             # A subtraction that would erase a nonempty request is no evidence.
-            if anchor.input_tokens + delta > 0 or estimate == 0:
-                changed = request != anchor.request
+            if anchor.input_tokens + delta > 0 or prepared.tokens == 0:
+                changed = prepared.request != anchor.request
                 result = {
                     "tokens": max(0, anchor.input_tokens + delta),
                     "estimated": changed,

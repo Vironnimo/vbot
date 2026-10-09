@@ -297,7 +297,7 @@ async def test_user_cancel_before_visible_output_does_not_persist_assistant(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "worker",
-    ["record_delivered", "project"],
+    ["record_delivered", "_prepare_assistant_context"],
     ids=["first-preparation-step", "last-preparation-step"],
 )
 async def test_cancel_during_completed_answer_preparation_preserves_visible_answer(

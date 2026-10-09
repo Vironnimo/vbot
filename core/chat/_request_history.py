@@ -20,6 +20,7 @@ from core.chat.messages import (
     JsonObject,
 )
 from core.chat.tool_dispatch import _read_media_outputs
+from core.chat.usage import ContextTarget, RequestContextEstimate, RequestContextUsage
 from core.chat.wire_shaping import (
     RequestImageBudget,
     _embed_notes_into_request,
@@ -35,6 +36,46 @@ class _PreparedRequestMessages:
 
     messages: list[JsonObject]
     effective_messages: list[ChatMessage]
+
+
+def _prepare_request_context(
+    messages: list[JsonObject],
+    *,
+    budget: RequestImageBudget,
+    image_limit: int | None,
+    accounting: RequestContextUsage,
+    target: ContextTarget,
+    tools: list[JsonObject],
+    scope: str,
+) -> tuple[list[JsonObject], RequestContextEstimate]:
+    """Limit images and count the exact request in one worker boundary."""
+    messages = limit_request_images(messages, budget=budget, image_limit=image_limit, remember=True)
+    return messages, accounting.prepare(messages, target=target, tools=tools, scope=scope)
+
+
+def _prepare_tool_context(
+    messages: list[JsonObject],
+    continuation: list[JsonObject],
+    *,
+    budget: RequestImageBudget,
+    image_limit: int | None,
+    accounting: RequestContextUsage,
+    target: ContextTarget,
+    tools: list[JsonObject],
+    scope: str,
+) -> tuple[list[JsonObject], list[JsonObject], RequestContextEstimate]:
+    """Retire live images before counting the completed Tool continuation."""
+    messages = limit_request_images(messages, budget=budget, image_limit=image_limit, remember=True)
+    continuation, estimate = _prepare_request_context(
+        continuation,
+        budget=budget,
+        image_limit=image_limit,
+        accounting=accounting,
+        target=target,
+        tools=tools,
+        scope=scope,
+    )
+    return messages, continuation, estimate
 
 
 def _prepare_request_messages(
