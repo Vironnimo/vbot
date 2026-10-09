@@ -29,6 +29,7 @@ from core.model_tasks.local_targets import LocalTaskTargetDescriptor
 from core.model_tasks.model_files import ModelFile, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
+    PRELOAD_OPTION,
     LocalSpeechError,
     LocalSpeechExecutionError,
     LocalSpeechExecutor,
@@ -1329,7 +1330,7 @@ async def test_shutdown_waits_for_other_engines_even_when_one_close_fails():
 
 
 @pytest.mark.parametrize("task_type", [TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH])
-def test_local_speech_options_do_not_expose_an_offline_switch(task_type):
+def test_local_speech_options_offer_preload_but_no_offline_switch(task_type):
     executor = LocalSpeechExecutor()
     try:
         definitions = [
@@ -1339,7 +1340,11 @@ def test_local_speech_options_do_not_expose_an_offline_switch(task_type):
         ]
         assert len(definitions) == (4 if task_type == TASK_SPEECH_TO_TEXT else 3)
         for entry in definitions:
-            assert "offline" not in {field.name for field in entry.descriptor.option_fields}
+            names = {field.name for field in entry.descriptor.option_fields}
+            assert "offline" not in names
             assert "offline" not in entry.load_options
+            # Preloading never changes what the engine loads.
+            assert PRELOAD_OPTION in names
+            assert PRELOAD_OPTION not in entry.load_options
     finally:
         executor.close()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -219,18 +219,22 @@ class SpeechService:
             return "not_local"
         return self._local_executor.prepare(target_ref.local_id, options)
 
-    def preload_configured(self) -> None:
-        """Start loading the bound local STT engine when its binding asks to preload.
+    def preload_configured(
+        self, task_types: Iterable[str] = (TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH)
+    ) -> None:
+        """Start loading each bound local speech engine whose binding asks to preload.
 
-        Called after Runtime startup and after the binding changed. A model that
-        is already loaded stays; turning the option off unloads nothing.
+        Called for both bindings after Runtime startup, and for a binding after it
+        changed. A model that is already loaded stays; turning the option off
+        unloads nothing.
         """
-        try:
-            _binding, options, target_ref = self._resolver.resolve(TASK_SPEECH_TO_TEXT)
-        except SpeechConfigurationError:
-            return
-        if target_ref.kind == "local" and options.get(PRELOAD_OPTION) is True:
-            self._local_executor.prepare(target_ref.local_id, options)
+        for task_type in task_types:
+            try:
+                _binding, options, target_ref = self._resolver.resolve(task_type)
+            except SpeechConfigurationError:
+                continue
+            if target_ref.kind == "local" and options.get(PRELOAD_OPTION) is True:
+                self._local_executor.prepare(target_ref.local_id, options)
 
     def local_setup_for(self, target: str) -> LocalSpeechSetup:
         return self._local_executor.setup_for(target)

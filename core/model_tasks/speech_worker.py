@@ -1,8 +1,9 @@
 """Standalone speech child entry point; imports vBot only for managed STT engines.
 
 The parent owns serialization, paths, timeouts and process lifetime, and
-installs every model before it starts a child: requests carry the model's
-directory as the ``model_path`` option, and the child never contacts the Hub.
+installs every model before it starts a child: the first request carries the
+model's directory as the ``model_path`` option, and the child never contacts
+the Hub. A ``load`` request only loads the model and answers ``loaded``.
 Libraries write diagnostics to stderr; stdout carries only bounded JSON
 control frames.
 """
@@ -154,10 +155,13 @@ def main() -> None:
     for line in sys.stdin:
         try:
             request = json.loads(line)
-            if not 0 < len(request["text"]) <= 5000:
-                raise ValueError("Invalid text length")
             if model is None:
                 model = load(engine, request["options"], progress)
+            if request.get("load"):
+                emit({"loaded": True})
+                continue
+            if not 0 < len(request["text"]) <= 5000:
+                raise ValueError("Invalid text length")
             progress("synthesizing")
             generate(model, engine, request["text"], request["options"], request["output"])
             emit({"done": True})

@@ -56,15 +56,66 @@ _LOGGER = get_logger("speech.local")
 _SAMPLE_RATE = 16_000
 _CHUNK_SAMPLES = 30 * _SAMPLE_RATE
 _LOAD_OPTIONS = ("model_path", "device", "dtype")
-# Local STT option asking the Runtime to load the engine after startup and binding changes.
+# Local speech option asking the Runtime to load the engine after startup and binding changes.
 PRELOAD_OPTION = "preload"
-# A managed STT worker that has not answered within these seconds is ended.
+# English names of the language codes the local engines accept.
+_LANGUAGE_NAMES = {
+    "ar": "Arabic",
+    "bg": "Bulgarian",
+    "cs": "Czech",
+    "da": "Danish",
+    "de": "German",
+    "el": "Greek",
+    "en": "English",
+    "es": "Spanish",
+    "et": "Estonian",
+    "fa": "Persian",
+    "fi": "Finnish",
+    "fil": "Filipino",
+    "fr": "French",
+    "he": "Hebrew",
+    "hi": "Hindi",
+    "hr": "Croatian",
+    "hu": "Hungarian",
+    "id": "Indonesian",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "lt": "Lithuanian",
+    "lv": "Latvian",
+    "mk": "Macedonian",
+    "ms": "Malay",
+    "nb": "Norwegian Bokmål",
+    "nl": "Dutch",
+    "nn": "Norwegian Nynorsk",
+    "no": "Norwegian",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ro": "Romanian",
+    "ru": "Russian",
+    "sk": "Slovak",
+    "sl": "Slovenian",
+    "sv": "Swedish",
+    "sw": "Swahili",
+    "th": "Thai",
+    "tr": "Turkish",
+    "uk": "Ukrainian",
+    "vi": "Vietnamese",
+    "yue": "Cantonese",
+    "zh": "Chinese",
+}
+# A speech worker child that has not answered within these seconds is ended.
 _LOAD_DEADLINE_S = 900.0
-_INFERENCE_DEADLINE_S = 600.0  # one chunk of at most 30 seconds of audio
+_INFERENCE_DEADLINE_S = 600.0  # one STT chunk of at most 30 seconds of audio
 # A local TTS worker that has not answered within these seconds is ended.
-_SYNTHESIS_DEADLINE_S = 1800.0  # its load plus at most 5,000 characters
+_SYNTHESIS_DEADLINE_S = 1800.0  # at most 5,000 characters
 # A cancelled request's running engine call may still finish within these seconds.
 _CANCEL_GRACE_S = 30.0
+_TTS_UNAVAILABLE = (
+    "Local speech synthesis is unavailable. Open Settings → Voice → Speech models, "
+    "select the local text-to-speech engine under Text to speech, and choose Install. "
+    "Wait for setup to finish before retrying."
+)
 _PROGRESS: ContextVar[SpeechProgress | None] = ContextVar("local_speech_progress", default=None)
 
 
@@ -114,6 +165,38 @@ class SpeechEngineDefinition:
     environment: str = ""
 
 
+def _preload_field(first_use: str) -> TaskModelOptionField:
+    return TaskModelOptionField(
+        PRELOAD_OPTION,
+        "boolean",
+        "Load at server start",
+        default=False,
+        description="Load the model in the background when the vBot server starts or this "
+        f"binding changes, so the first {first_use} does not wait for loading. "
+        "The model then stays in memory even while unused.",
+    )
+
+
+def _language_choice(value: str, region: str = "") -> TaskModelOptionChoice:
+    """A language choice labelled with its English name; *region* tells variants apart."""
+    name = _LANGUAGE_NAMES[value.split("-")[0]]
+    return TaskModelOptionChoice(value, f"{name} ({region})" if region else name)
+
+
+def _stt_language_field(choices: Sequence[TaskModelOptionChoice]) -> TaskModelOptionField:
+    return TaskModelOptionField(
+        "language",
+        "select",
+        "Language",
+        default="",
+        description="The language of your recordings. Automatic detects it in each recording.",
+        options=(
+            TaskModelOptionChoice("", "Automatic"),
+            *sorted(choices, key=lambda choice: choice.label),
+        ),
+    )
+
+
 def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
     """Return fresh registrations; importing this module needs no ML packages."""
     common = (
@@ -159,27 +242,44 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
             "Leave empty to use the installed model.",
             server_path="directory",
         ),
-        TaskModelOptionField(
-            PRELOAD_OPTION,
-            "boolean",
-            "Load at server start",
-            default=False,
-            description="Load the model in the background when the vBot server starts or this "
-            "binding changes, so the first transcription does not wait for loading. "
-            "The model then stays in memory even while unused.",
-        ),
+        _preload_field("transcription"),
     )
-    language = TaskModelOptionField(
-        "language",
-        "text",
-        "Language",
-        default="",
-        description=(
-            "Leave empty for automatic detection, or enter a language code such as de or en."
-        ),
+    # The codes Qwen3-ASR names in its forced-language prompt.
+    qwen_language = _stt_language_field(
+        tuple(
+            _language_choice(code)
+            for code in (
+                *("ar", "cs", "da", "de", "el", "en", "es", "fa", "fi", "fil", "fr", "hi"),
+                *("hu", "id", "it", "ja", "ko", "mk", "ms", "nl", "pl", "pt", "ro", "ru"),
+                *("sv", "th", "tr", "vi", "yue", "zh"),
+            )
+        )
+    )
+    # Nemotron's prompt dictionary keys for the locales it emits. A bare code
+    # stands for the locale the dictionary maps it to (en: en-US, es: es-US,
+    # fr: fr-FR, pt: pt-PT); the other variant is named by its locale.
+    nemotron_language = _stt_language_field(
+        (
+            *(
+                _language_choice(code)
+                for code in (
+                    *("ar", "bg", "cs", "da", "de", "el", "et", "fi", "hi", "hr", "hu", "it"),
+                    *("ko", "lt", "lv", "nb", "nl", "nn", "pl", "ro", "ru", "sk", "sl", "sv"),
+                    *("tr", "uk", "he-IL", "ja-JP", "th-TH", "vi-VN", "zh-CN"),
+                )
+            ),
+            _language_choice("en", "US"),
+            _language_choice("en-GB", "UK"),
+            _language_choice("es", "US"),
+            _language_choice("es-ES", "Spain"),
+            _language_choice("fr", "France"),
+            _language_choice("fr-CA", "Canada"),
+            _language_choice("pt", "Portugal"),
+            _language_choice("pt-BR", "Brazil"),
+        )
     )
     qwen_options = (
-        language,
+        qwen_language,
         TaskModelOptionField(
             "prompt",
             "textarea",
@@ -219,7 +319,7 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
             "nemotron3.5-asr",
             "Nemotron 3.5 ASR Streaming 0.6B",
             "OpenMDW-1.1",
-            (language, *common),
+            (nemotron_language, *common),
             _NemotronEngine,
         ),
     )
@@ -542,18 +642,21 @@ class LocalSpeechExecutor:
                 return None  # Not a failure: nobody waits for an error.
 
     def prepare(self, local_id: str, options: Mapping[str, Any]) -> str:
-        """Start loading one STT engine in the background, before its first request.
+        """Start loading one engine in the background, before its first request.
 
         Returns ``loaded`` when the engine already runs with these load options,
         ``loading`` when a load started or is still running, and ``unavailable``
-        when the engine cannot run here. A transcription that arrives meanwhile
-        waits for the load. Failures are logged, never raised. Event Loop only.
+        when the engine cannot run here. A request that arrives meanwhile waits
+        for the load. Failures are logged, never raised. Event Loop only.
         """
         state = self._states.get(local_id)
+        definition = self._definitions.get(local_id)
+        if state is None or definition is None:
+            return "unavailable"
         try:
-            if state is None:
-                raise LocalSpeechError(f"Local speech-to-text target is not available: {local_id}")
-            _definition, merged, key = self._stt_request(local_id, dict(options))
+            _definition, merged, key = self._request(
+                local_id, dict(options), definition.descriptor.task_types[0]
+            )
         except LocalSpeechError:
             return "unavailable"
         if state.engine is not None and state.key == key:
@@ -580,42 +683,54 @@ class LocalSpeechExecutor:
         except LocalSpeechError:
             pass  # Logged by the worker; the next transcription reports it to its caller.
         except Exception:
-            _LOGGER.error("Local STT preload failed (engine=%s)", local_id, exc_info=True)
+            _LOGGER.error("Local speech preload failed (engine=%s)", local_id, exc_info=True)
         finally:
             state.pending -= 1
 
     def _prepare(self, local_id: str, options: dict[str, Any]) -> None:
-        definition, options, key = self._stt_request(local_id, options)
+        definition = self._definitions[local_id]
+        definition, options, key = self._request(
+            local_id, options, definition.descriptor.task_types[0]
+        )
         state = self._states[local_id]
         if key != state.key:
             state.unload()
         try:
             self._loaded_engine(state, definition, options, key)
         except Exception as error:
-            failure = self._failed(state, local_id, error)
+            failure = self._failed(state, definition, error)
             if failure is error:
                 raise
             raise failure from error
 
-    def _stt_request(
-        self, local_id: str, options: dict[str, Any]
+    def _request(
+        self, local_id: str, options: dict[str, Any], task_type: str
     ) -> tuple[SpeechEngineDefinition, dict[str, Any], tuple[Any, ...]]:
-        """Validate one STT request; return its definition, options and load identity."""
-        if self._closed:
-            raise LocalSpeechError(
-                "Local speech recognition is closed. Restart the vBot server before retrying."
-            )
+        """Validate one *task_type* request; return its definition, options and load identity."""
         definition = self._definitions.get(local_id)
-        if definition is None or TASK_SPEECH_TO_TEXT not in definition.descriptor.task_types:
-            raise LocalSpeechError(f"Local speech-to-text target is not available: {local_id}")
-        if not definition.descriptor.can_execute():
-            raise LocalSpeechError(
-                f"The local speech-to-text model {definition.descriptor.label} is not "
-                "installed. Open Settings → Voice → Speech models, select it under Speech "
-                "to text, and choose Install. Restart the server if Settings asks for it."
-            )
+        if task_type == TASK_TEXT_TO_SPEECH:
+            if (
+                self._closed
+                or definition is None
+                or task_type not in definition.descriptor.task_types
+                or not definition.descriptor.can_execute()
+            ):
+                raise LocalSpeechError(_TTS_UNAVAILABLE)
+        else:
+            if self._closed:
+                raise LocalSpeechError(
+                    "Local speech recognition is closed. Restart the vBot server before retrying."
+                )
+            if definition is None or task_type not in definition.descriptor.task_types:
+                raise LocalSpeechError(f"Local speech-to-text target is not available: {local_id}")
+            if not definition.descriptor.can_execute():
+                raise LocalSpeechError(
+                    f"The local speech-to-text model {definition.descriptor.label} is not "
+                    "installed. Open Settings → Voice → Speech models, select it under Speech "
+                    "to text, and choose Install. Restart the server if Settings asks for it."
+                )
         schema = TaskModelOptionSchema(
-            TASK_SPEECH_TO_TEXT,
+            task_type,
             definition.descriptor.public_id,
             definition.descriptor.option_fields,
         )
@@ -637,40 +752,50 @@ class LocalSpeechExecutor:
         definition: SpeechEngineDefinition,
         options: dict[str, Any],
         key: tuple[Any, ...],
-    ) -> LocalTranscriptionEngine:
+    ) -> LocalTranscriptionEngine | LocalSynthesisEngine:
         if state.engine is None:
             local_id = definition.descriptor.id
+            task = _task_name(definition)
             if (progress := _PROGRESS.get()) is not None:
                 progress.update("loading")
-            _LOGGER.debug("Loading local STT model (engine=%s)", local_id)
+            _LOGGER.debug("Loading local %s model (engine=%s)", task, local_id)
             started = monotonic()
             state.engine = definition.create(self._engine_options(local_id, options))
             state.key = key
             _LOGGER.info(
-                "Loaded local STT model (engine=%s seconds=%.1f)", local_id, monotonic() - started
+                "Loaded local %s model (engine=%s seconds=%.1f)",
+                task,
+                local_id,
+                monotonic() - started,
             )
-        return cast(LocalTranscriptionEngine, state.engine)
+        return state.engine
 
-    def _failed(self, state: _EngineState, local_id: str, error: Exception) -> LocalSpeechError:
+    def _failed(
+        self, state: _EngineState, definition: SpeechEngineDefinition, error: Exception
+    ) -> LocalSpeechError:
         """Unload after a failure and return the error the caller should see."""
         state.unload()
+        task = _task_name(definition)
         _LOGGER.log(
             # Closing ends running workers; that is no failure of the engine.
             logging.DEBUG if self._closed else logging.WARNING,
-            "Local STT failed (engine=%s error_type=%s)",
-            local_id,
+            "Local %s failed (engine=%s error_type=%s)",
+            task,
+            definition.descriptor.id,
             type(error).__name__,
         )
         if isinstance(error, LocalSpeechError):
             return error
+        work = "recognition" if task == "STT" else "synthesis"
         if isinstance(error, TimeoutError):
             return LocalSpeechExecutionError(
-                "Local speech recognition stopped responding and was ended. Retry; if it "
+                f"Local speech {work} stopped responding and was ended. Retry; if it "
                 "happens again, check the selected device and available memory."
             )
+        checks = "device, model directory" if task == "STT" else "device"
         return LocalSpeechExecutionError(
-            f"Local speech recognition failed ({type(error).__name__}). "
-            "Check the selected device, model directory and available memory."
+            f"Local speech {work} failed ({type(error).__name__}). "
+            f"Check the selected {checks} and available memory."
         )
 
     def _transcribe(
@@ -680,7 +805,7 @@ class LocalSpeechExecutor:
         options: dict[str, Any],
         cancellation: _Cancellation,
     ) -> SpeechTranscriptionResult:
-        definition, options, key = self._stt_request(local_id, options)
+        definition, options, key = self._request(local_id, options, TASK_SPEECH_TO_TEXT)
         state = self._states[local_id]
         if key != state.key:
             state.unload()
@@ -694,7 +819,9 @@ class LocalSpeechExecutor:
                 # Exact digital silence needs no model and must not invent text.
                 if not samples.any():
                     continue
-                engine = self._loaded_engine(state, definition, options, key)
+                engine = cast(
+                    LocalTranscriptionEngine, self._loaded_engine(state, definition, options, key)
+                )
                 if (progress := _PROGRESS.get()) is not None:
                     progress.update("transcribing")
                 with cancellation.running(engine):
@@ -724,7 +851,7 @@ class LocalSpeechExecutor:
             if cancellation.aborted:
                 self._ended_by_cancellation(state, local_id)
                 raise _RequestCancelledError("Local speech request was cancelled.") from error
-            failure = self._failed(state, local_id, error)
+            failure = self._failed(state, definition, error)
             if failure is error:
                 raise
             raise failure from error
@@ -818,11 +945,7 @@ class LocalSpeechExecutor:
             progress.update("queued")
         state = self._states.get(local_id)
         if self._closed or state is None:
-            raise LocalSpeechError(
-                "Local speech synthesis is unavailable. Open Settings → Voice → Speech models, "
-                "select the local text-to-speech engine under Text to speech, and choose Install. "
-                "Wait for setup to finish before retrying."
-            )
+            raise LocalSpeechError(_TTS_UNAVAILABLE)
         return await self._run(state, self._synthesize, local_id, text, dict(options), progress)
 
     def _synthesize(
@@ -834,53 +957,23 @@ class LocalSpeechExecutor:
         cancellation: _Cancellation,
     ) -> SpeechSynthesisResult | None:
         """Synthesize on the engine's worker; ``None`` once the caller cancelled."""
-        definition = self._definitions.get(local_id)
-        if (
-            self._closed
-            or definition is None
-            or (TASK_TEXT_TO_SPEECH not in definition.descriptor.task_types)
-            or not definition.descriptor.can_execute()
-        ):
-            raise LocalSpeechError(
-                "Local speech synthesis is unavailable. Open Settings → Voice → Speech models, "
-                "select the local text-to-speech engine under Text to speech, and choose Install. "
-                "Wait for setup to finish before retrying."
-            )
+        definition, options, key = self._request(local_id, options, TASK_TEXT_TO_SPEECH)
         if not 0 < len(text) <= 5000:
             raise LocalSpeechError(
                 "Local speech synthesis accepts at most 5000 characters per request. "
                 "Split the text into shorter requests."
             )
-        schema = TaskModelOptionSchema(
-            TASK_TEXT_TO_SPEECH,
-            definition.descriptor.public_id,
-            definition.descriptor.option_fields,
-        )
-        try:
-            validate_task_model_options(schema, options)
-        except ValueError as error:
-            raise LocalSpeechError(str(error)) from error
-        options = {**schema.default_options(), **options}
-        load_options = (
-            options
-            if definition.load_options is None
-            else {name: options.get(name) for name in definition.load_options}
-        )
         state = self._states[local_id]
-        key = (local_id, json.dumps(load_options, sort_keys=True))
         with _PROGRESS.set(progress):
             try:
                 cancellation.check()
                 if key != state.key:
                     state.unload()
-                if state.engine is None:
-                    if progress is not None:
-                        progress.update("loading")
-                    state.engine = definition.create(self._engine_options(local_id, options))
-                    state.key = key
+                engine = cast(
+                    LocalSynthesisEngine, self._loaded_engine(state, definition, options, key)
+                )
                 if progress is not None:
                     progress.update("synthesizing")
-                engine = cast(LocalSynthesisEngine, state.engine)
                 with cancellation.running(engine):
                     result = engine.synthesize(text, options)
                 if not result.audio:
@@ -892,25 +985,14 @@ class LocalSpeechExecutor:
                 if cancellation.aborted:
                     self._ended_by_cancellation(state, local_id)
                     return None
-                state.unload()
-                if isinstance(error, LocalSpeechError):
+                failure = self._failed(state, definition, error)
+                if failure is error:
                     raise  # Closing ended the worker.
-                _LOGGER.log(
-                    # Closing ends running workers; that is no failure of the engine.
-                    logging.DEBUG if self._closed else logging.WARNING,
-                    "Local TTS failed (engine=%s, error_type=%s)",
-                    local_id,
-                    type(error).__name__,
-                )
-                if isinstance(error, TimeoutError):
-                    raise LocalSpeechExecutionError(
-                        "Local speech synthesis stopped responding and was ended. Retry; if it "
-                        "happens again, check the selected device and available memory."
-                    ) from error
-                raise LocalSpeechExecutionError(
-                    "Local speech synthesis failed. Check the selected device and available "
-                    "memory, then retry."
-                ) from error
+                raise failure from error
+
+
+def _task_name(definition: SpeechEngineDefinition) -> str:
+    return "STT" if TASK_SPEECH_TO_TEXT in definition.descriptor.task_types else "TTS"
 
 
 def _tts_definitions(
@@ -929,7 +1011,10 @@ def _tts_definitions(
             options=tuple(TaskModelOptionChoice(x, x) for x in choices),
         )
 
-    common = (select("device", "Device", "auto", ("auto", "cuda", "cpu", "mps")),)
+    common = (
+        select("device", "Device", "auto", ("auto", "cuda", "cpu", "mps")),
+        _preload_field("speech output"),
+    )
     qwen_options = (
         select(
             "voice",
@@ -955,7 +1040,6 @@ def _tts_definitions(
                 "Italian",
             ),
         ),
-        *common,
     )
     instructions = TaskModelOptionField(
         "instructions",
@@ -965,34 +1049,24 @@ def _tts_definitions(
         description="Optional style instructions, such as a calm or cheerful voice.",
     )
     chatter_options = (
-        select(
+        TaskModelOptionField(
             "language",
+            "select",
             "Language",
-            "en",
-            (
-                "ar",
-                "da",
-                "de",
-                "el",
-                "en",
-                "es",
-                "fi",
-                "fr",
-                "he",
-                "hi",
-                "it",
-                "ja",
-                "ko",
-                "ms",
-                "nl",
-                "no",
-                "pl",
-                "pt",
-                "ru",
-                "sv",
-                "sw",
-                "tr",
-                "zh",
+            default="en",
+            required=True,
+            options=tuple(
+                sorted(
+                    (
+                        _language_choice(code)
+                        for code in (
+                            *("ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi", "it"),
+                            *("ja", "ko", "ms", "nl", "no", "pl", "pt", "ru", "sv", "sw", "tr"),
+                            "zh",
+                        )
+                    ),
+                    key=lambda choice: choice.label,
+                )
             ),
         ),
         TaskModelOptionField(
@@ -1016,9 +1090,9 @@ def _tts_definitions(
             "qwen3-tts",
             "Qwen3-TTS 1.7B",
             "Apache-2.0",
-            (*qwen_options, instructions),
+            (*qwen_options, instructions, *common),
         ),
-        ("qwen3-tts-0.6b", "qwen3-tts", "Qwen3-TTS 0.6B", "Apache-2.0", qwen_options),
+        ("qwen3-tts-0.6b", "qwen3-tts", "Qwen3-TTS 0.6B", "Apache-2.0", (*qwen_options, *common)),
         ("chatterbox", "chatterbox", "Chatterbox Multilingual V3", "MIT", chatter_options),
     ):
         model = SPEECH_MODELS[local_id]
@@ -1131,21 +1205,32 @@ class _WorkerProcess:
             raise LocalSpeechError(self._closed_message)
         raise RuntimeError("Speech worker exited")
 
+    def _load(self, options: Mapping[str, Any]) -> None:
+        """Have the child load its model; a child that fails to is closed."""
+        try:
+            self._exchange({"load": True, "options": dict(options)}, "loaded", _LOAD_DEADLINE_S)
+        except BaseException:
+            self.close()
+            raise
+
     def close(self) -> None:
         _close_speech_process(self._process)
 
 
 class _TtsEngine(_WorkerProcess):
-    """A cached SDK process with fixed entry point and parent-owned output paths."""
+    """A cached SDK process with fixed entry point and parent-owned output paths.
+
+    Construction returns once the child reports the model loaded, so the
+    executor's load boundary (logs, progress, preloading) covers the real load.
+    """
 
     _closed_message = "Local speech synthesis is closed. Restart the vBot server before retrying."
 
     def __init__(
         self, setup: LocalSpeechSetup, waiting: _WaitingWorkers, options: Mapping[str, Any]
     ) -> None:
-        # The worker loads this model directory with the first request.
-        self._model_path = options["model_path"]
         super().__init__(setup.python, [setup.engine], waiting)
+        self._load(options)
 
     def synthesize(self, text: str, options: Mapping[str, Any]) -> SpeechSynthesisResult:
         with tempfile.TemporaryDirectory(prefix="vbot-tts-") as directory:
@@ -1153,7 +1238,7 @@ class _TtsEngine(_WorkerProcess):
             self._exchange(
                 {
                     "text": text,
-                    "options": {**options, "model_path": self._model_path},
+                    "options": dict(options),
                     "output": str(output),
                 },
                 "done",
@@ -1195,11 +1280,7 @@ class _ManagedSttEngine(_WorkerProcess):
         options: Mapping[str, Any],
     ) -> None:
         super().__init__(setup.python, ["--stt", engine, str(app_root)], waiting)
-        try:
-            self._exchange({"load": True, "options": dict(options)}, "loaded", _LOAD_DEADLINE_S)
-        except BaseException:
-            self.close()
-            raise
+        self._load(options)
 
     def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
         payload = self._exchange(

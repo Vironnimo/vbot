@@ -22,6 +22,7 @@ from core.model_tasks import (
     SpeechTranscriptionResult,
     TaskModelError,
 )
+from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.speech_local import LocalSpeechExecutionError
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.storage.layout import DataDirectoryLayout
@@ -102,21 +103,37 @@ async def test_provider_transcription_preserves_independent_local_models(tmp_pat
 
 
 @pytest.mark.parametrize(
-    ("target", "options", "state", "preloads"),
+    ("target", "options", "task_type", "state", "preloads"),
     [
-        (None, {}, "unavailable", False),
-        ("openrouter/whisper-large-v3::api-key", {"preload": True}, "not_local", False),
-        ("local/parakeet", {}, "loading", False),
-        ("local/parakeet", {"preload": True}, "loading", True),
+        (None, {}, TASK_SPEECH_TO_TEXT, "unavailable", False),
+        (
+            "openrouter/whisper-large-v3::api-key",
+            {"preload": True},
+            TASK_SPEECH_TO_TEXT,
+            "not_local",
+            False,
+        ),
+        ("local/parakeet", {}, TASK_SPEECH_TO_TEXT, "loading", False),
+        ("local/parakeet", {"preload": True}, TASK_SPEECH_TO_TEXT, "loading", True),
+        # A text-to-speech binding preloads too, but never prepares a transcription.
+        ("local/chatterbox", {"preload": True}, TASK_TEXT_TO_SPEECH, "unavailable", True),
     ],
 )
-def test_transcription_preparation_loads_only_the_bound_local_engine(
-    tmp_path: Path, target: str | None, options: dict[str, object], state: str, preloads: bool
+def test_preparation_and_preload_load_only_the_bound_local_engine(
+    tmp_path: Path,
+    target: str | None,
+    options: dict[str, object],
+    task_type: str,
+    state: str,
+    preloads: bool,
 ) -> None:
     executor = LocalSpeechExecutor(engines=[])
     executor.prepare = MagicMock(return_value="loading")  # type: ignore[method-assign]
     service = SpeechService(
-        _SttModelTasks(target, options), cast(Any, object()), tmp_path, local_executor=executor
+        _SttModelTasks(target, options, task_type),
+        cast(Any, object()),
+        tmp_path,
+        local_executor=executor,
     )
     try:
         assert service.prepare_transcription() == state
@@ -124,7 +141,9 @@ def test_transcription_preparation_loads_only_the_bound_local_engine(
         executor.prepare.reset_mock()
         service.preload_configured()
         if preloads:
-            executor.prepare.assert_called_once_with("parakeet", options)
+            executor.prepare.assert_called_once_with(
+                cast(str, target).removeprefix("local/"), options
+            )
         else:
             executor.prepare.assert_not_called()
     finally:
@@ -132,12 +151,18 @@ def test_transcription_preparation_loads_only_the_bound_local_engine(
 
 
 class _SttModelTasks:
-    def __init__(self, target: str | None, options: dict[str, object]) -> None:
+    def __init__(
+        self,
+        target: str | None,
+        options: dict[str, object],
+        bound_task: str = TASK_SPEECH_TO_TEXT,
+    ) -> None:
         self._target = target
         self._options = options
+        self._bound_task = bound_task
 
     def binding_for(self, task_type: str) -> object:
-        if self._target is None:
+        if self._target is None or task_type != self._bound_task:
             raise TaskModelError("No task model configured")
         return SimpleNamespace(task_type=task_type, target=self._target, options=self._options)
 
