@@ -31,6 +31,7 @@ from core.tools import (
 from core.tools.availability import ToolAccess
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tools
 from tests.core.chat.chat_loop_adapter_support import (
     BlockingReasoningStreamingStubAdapter,
     BlockingStreamingStubAdapter,
@@ -167,6 +168,7 @@ class StubAgent:
     allowed_skills: list[str] | None = None
     workspace: Path | None = None
     root_project_id: str | None = None
+    tool_loading: dict[str, Any] | None = None
 
     @property
     def tool_access(self) -> ToolAccess:
@@ -398,6 +400,7 @@ class StubPrompts:
         self.build_calls: list[tuple[str, str, Any]] = []
         self.build_pin_calls: list[dict[str, str | None]] = []
         self.effective_tool_name_calls: list[tuple[str, ...]] = []
+        self.on_demand_tool_calls: list[tuple[tuple[str, str], ...]] = []
         self.render_project_files_calls: list[Any] = []
         self.render_working_project_context_calls: list[Any] = []
         self.render_soul_calls = 0
@@ -420,6 +423,7 @@ class StubPrompts:
         skill_catalog: Any = None,
         read_paths: list[Path] | None = None,
         effective_tool_definitions: Any = None,
+        on_demand_tools: Any = None,
         session_tool_grants: Any = (),
         pinned_blocks: Any = None,
         request_block_definitions: Any = (),
@@ -428,6 +432,7 @@ class StubPrompts:
         self.effective_tool_name_calls.append(
             tuple(str(definition["name"]) for definition in (effective_tool_definitions or ()))
         )
+        self.on_demand_tool_calls.append(tuple(on_demand_tools or ()))
         self.build_calls.append((agent.id, agent_body, project_context))
         self.build_pin_calls.append(
             {
@@ -449,10 +454,15 @@ class StubPrompts:
                 project_context, tool_available=lambda _name: False, on_read=on_read
             )
         )
+        # The On-demand Tools as the ``tool:load_tools`` block lists them.
+        on_demand_list = "\n".join(
+            f"- {name}: {summary}" for name, summary in on_demand_tools or ()
+        )
         parts = [
             agent_body,
             f"System for {agent.id}",
             rendered_project,
+            on_demand_list,
             *[
                 definition.default_text
                 for definition in request_block_definitions
@@ -569,6 +579,16 @@ class StubPrompts:
                 "parameters": {"type": "object"},
             }
             definitions = [weather, *definitions]
+        names = [str(definition["name"]) for definition in definitions]
+        if self.tool_registry is not None and on_demand_tools(
+            agent, names, session_tool_grants=session_tool_grants
+        ):
+            definitions = [
+                *definitions,
+                *self.tool_registry.provider_definitions(
+                    [LOAD_TOOLS_TOOL_NAME], include_internal=True, ready_only=ready_only
+                ),
+            ]
         return list({str(definition["name"]): definition for definition in definitions}.values())
 
     async def build_system_prompt_async(self, agent: StubAgent, **options: Any) -> str:

@@ -201,6 +201,10 @@ class BlockDefinition:
     # even for scopes with an older persisted layout (a layout entry, once
     # written, always wins over this default).
     default_enabled: bool = True
+    # A static text block that only makes sense around one producer's output
+    # names that ``{generated:NAME}`` producer here: the block renders nothing
+    # while the producer renders nothing, whatever its (edited) text says.
+    requires_generated: str | None = None
 
     def __post_init__(self) -> None:
         # Exactly one of default_text / render: a static block carries text, a
@@ -648,7 +652,9 @@ def resolve_block_text(
       (producers), ``{include:…}`` (workspace files) and build-time
       ``replacements`` (runtime variables such as ``{server_hostname}``/``{model}``)
       in one pass over the template via :func:`expand_block_template` — inserted
-      text is never re-expanded, and a block without markers is untouched.
+      text is never re-expanded, and a block without markers is untouched. A
+      block with ``requires_generated`` resolves to ``""`` while that producer
+      renders nothing.
     - **static data** block: its ``default_text`` is rendered **verbatim** —
       never run through marker/include/replacement expansion (mirrors today's
       "agent body substituted last, literally"). A data block that needs expansion
@@ -663,6 +669,9 @@ def resolve_block_text(
         # Data is not editable and may be request-local, with no storage path.
         return definition.default_text or ""
 
+    required = definition.requires_generated
+    if required is not None and not _render_generated_marker(required, producers, context).strip():
+        return ""
     override = override_resolver(definition, context.scope)
     text = override if override is not None else (definition.default_text or "")
     return expand_block_template(text, context, producers=producers, replacements=replacements)

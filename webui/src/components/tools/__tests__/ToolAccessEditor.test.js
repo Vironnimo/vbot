@@ -382,6 +382,148 @@ describe('ToolAccessEditor', () => {
     expect(document.activeElement).toBe(bulkAction);
     expect(document.querySelector('[role="radiogroup"]')).toBeNull();
   });
+
+  describe('On-demand Tools', () => {
+    const loadingTools = [
+      ...tools.map((tool) =>
+        ['read', 'write'].includes(tool.name)
+          ? { ...tool, loaded_by_default: true }
+          : tool,
+      ),
+      { name: 'message_parent', activation: 'session_grant', ready: true },
+    ];
+
+    function mountLoading(props) {
+      mountedComponent = mount(ToolAccessEditor, {
+        target: document.body,
+        props: {
+          value: { mode: 'all', denied: ['generate_image'] },
+          tools: loadingTools,
+          ...props,
+        },
+      });
+      flushSync();
+    }
+
+    const pins = () => [
+      ...document.querySelectorAll('[data-tool-always-loaded]'),
+    ];
+    const pinNames = (pressed) =>
+      pins()
+        .filter((pin) => pin.getAttribute('aria-pressed') === String(pressed))
+        .map((pin) => pin.dataset.toolAlwaysLoaded);
+    const loadingSwitch = () =>
+      document.querySelector('[data-tool-loading-switch]');
+
+    it.each([
+      [false, null],
+      [true, { on_demand: true }],
+    ])(
+      'offers the switch only to editors that enable it (%s)',
+      (toolLoadingEditable, expected) => {
+        const onToolLoadingChange = vi.fn();
+        mountLoading({
+          toolLoadingEditable,
+          toolLoading: null,
+          onToolLoadingChange,
+        });
+        expect(pins()).toEqual([]);
+        if (!toolLoadingEditable) {
+          expect(loadingSwitch()).toBeNull();
+          return;
+        }
+        expect(loadingSwitch().getAttribute('aria-checked')).toBe('false');
+        loadingSwitch().click();
+        expect(onToolLoadingChange).toHaveBeenCalledWith(expected);
+      },
+    );
+
+    // The stored value stays for when Tools are allowed again.
+    it('hides the switch and pins without Tool access and keeps the stored value', async () => {
+      const onChange = vi.fn();
+      const onToolLoadingChange = vi.fn();
+      const props = {
+        toolLoadingEditable: true,
+        toolLoading: { on_demand: true, always_loaded: ['read'] },
+        onChange,
+        onToolLoadingChange,
+      };
+      mountLoading(props);
+      expect(loadingSwitch()).toBeTruthy();
+      buttonWithText(t('toolAccess.deselectAll')).click();
+      expect(onChange).toHaveBeenLastCalledWith({ mode: 'none' });
+
+      await unmount(mountedComponent);
+      mountLoading({ ...props, value: { mode: 'none' } });
+      expect(loadingSwitch()).toBeNull();
+      expect(pins()).toEqual([]);
+      toolChip('read').click();
+      expect(onChange.mock.calls.at(-1)[0]).toMatchObject({
+        mode: 'selected',
+        allowed: ['read'],
+      });
+      expect(onToolLoadingChange).not.toHaveBeenCalled();
+    });
+
+    it('shows the default set and writes the explicit list on the first change', () => {
+      const onToolLoadingChange = vi.fn();
+      mountLoading({
+        toolLoadingEditable: true,
+        toolLoading: { on_demand: true },
+        onToolLoadingChange,
+      });
+
+      expect(pinNames(true)).toEqual(['read', 'write']);
+      // Disallowed and session-granted Tools are listed but offer no choice.
+      for (const name of ['generate_image', 'message_parent']) {
+        expect(toolChip(name)).toBeTruthy();
+        expect(pinNames(false)).not.toContain(name);
+      }
+      expect(
+        document
+          .querySelector('[data-tool-loading-summary]')
+          .textContent.trim(),
+      ).toBe(
+        t('toolAccess.alwaysLoaded.summary', {
+          alwaysLoaded: 2,
+          onDemand: pinNames(false).length,
+        }),
+      );
+      expect(
+        [...document.querySelectorAll('button')].some(
+          (button) =>
+            button.textContent.trim() === t('toolAccess.alwaysLoaded.reset'),
+        ),
+      ).toBe(false);
+
+      document
+        .querySelector('[data-tool-always-loaded="session_search"]')
+        .click();
+      expect(onToolLoadingChange).toHaveBeenCalledWith({
+        on_demand: true,
+        always_loaded: ['read', 'write', 'session_search'],
+      });
+    });
+
+    it('resets an explicit list and keeps it while switched off', () => {
+      const onToolLoadingChange = vi.fn();
+      const toolLoading = { on_demand: true, always_loaded: ['memory'] };
+      mountLoading({
+        toolLoadingEditable: true,
+        toolLoading,
+        onToolLoadingChange,
+      });
+      expect(pinNames(true)).toEqual(['memory']);
+
+      buttonWithText(t('toolAccess.alwaysLoaded.reset')).click();
+      expect(onToolLoadingChange).toHaveBeenLastCalledWith({ on_demand: true });
+      loadingSwitch().click();
+      expect(onToolLoadingChange).toHaveBeenLastCalledWith({
+        on_demand: false,
+        always_loaded: ['memory'],
+      });
+    });
+  });
 });
 
 function toolChip(name) {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,6 +28,9 @@ ToolReadinessPredicate = Callable[[], bool]
 # changed; returns short English text telling the Model what changed, or
 # ``None`` to stay silent about a change that leaves the parameters as they are.
 ToolDefinitionChangeNote = Callable[[JsonObject, JsonObject], str | None]
+# The longest one-line summary an On-demand Tool listing shows for a Tool.
+MAX_TOOL_SUMMARY_LENGTH = 200
+_WHITESPACE = re.compile(r"\s+")
 
 
 class ToolError(VBotError):
@@ -114,6 +118,10 @@ class Tool:
     parameters: JsonObject
     handler: ToolHandler
     result_schema: JsonObject | None = field(default=None, repr=False)
+    # Optional one-sentence, Model-facing summary that lists the Tool where its
+    # full definition is not shown (On-demand Tools). ``None`` summarizes the
+    # description's first sentence (:func:`tool_summary`).
+    summary: str | None = None
     contract: ToolContract = field(init=False, repr=False, compare=False)
     internal: bool = False
     # Discoverable through a stable routing Tool; still registered for policy and dispatch.
@@ -194,6 +202,15 @@ class Tool:
     )
 
     def __post_init__(self) -> None:
+        if self.summary is not None:
+            if not isinstance(self.summary, str) or not self.summary.strip():
+                raise ValueError("Tool summary must be a non-empty string or None")
+            summary = _WHITESPACE.sub(" ", self.summary).strip()
+            if len(summary) > MAX_TOOL_SUMMARY_LENGTH:
+                raise ValueError(
+                    f"Tool summary must be at most {MAX_TOOL_SUMMARY_LENGTH} characters"
+                )
+            object.__setattr__(self, "summary", summary)
         if self.argument_normalizer is not None and not callable(self.argument_normalizer):
             raise ValueError("argument_normalizer must be callable")
         if self.definition_change_note is not None and not callable(self.definition_change_note):
@@ -247,6 +264,32 @@ def _checked_unadvertised_parameters(
             raise ValueError(f"unadvertised parameter is also advertised: {name}")
         Draft202012Validator.check_schema(schema)
     return copy.deepcopy(parameters)
+
+
+def tool_summary(tool: Tool, description: str | None = None) -> str:
+    """Return the one-line summary that lists *tool* without its full definition.
+
+    The Tool's declared ``summary`` wins. Otherwise the first sentence of
+    *description* (the Tool's own description when ``None``, else the one a
+    Definition Profile or route resolved) is used: cut at the first ". " or line
+    break, whitespace collapsed, and capped at :data:`MAX_TOOL_SUMMARY_LENGTH`
+    characters with an ellipsis.
+    """
+    if tool.summary is not None:
+        return tool.summary
+    return first_sentence_summary(tool.description if description is None else description)
+
+
+def first_sentence_summary(description: str) -> str:
+    """Return *description*'s first sentence as one bounded line (see :func:`tool_summary`)."""
+    text = description.strip()
+    ends = [index for index in (text.find(". ") + 1, text.find("\n")) if index > 0]
+    if ends:
+        text = text[: min(ends)]
+    text = _WHITESPACE.sub(" ", text).strip()
+    if len(text) > MAX_TOOL_SUMMARY_LENGTH:
+        text = text[: MAX_TOOL_SUMMARY_LENGTH - 1].rstrip() + "…"
+    return text
 
 
 def tool_is_ready(tool: Tool) -> bool:

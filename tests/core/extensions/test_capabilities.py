@@ -73,7 +73,8 @@ def test_extension_tools_dispatch_off_the_loop_and_obey_allowlists(tmp_path: Pat
         "    return tool_success({'value': arguments.get('value'),"
         " 'thread_id': threading.get_ident()})\n"
         "def register(api):\n"
-        "    api.register_tool('ext_echo', 'desc', {'type': 'object'}, _handler)\n",
+        "    api.register_tool('ext_echo', 'desc', {'type': 'object'}, _handler,"
+        " summary='Echo a value.')\n",
     )
     registry, tools = _loaded_tools(root)
 
@@ -84,6 +85,7 @@ def test_extension_tools_dispatch_off_the_loop_and_obey_allowlists(tmp_path: Pat
     # Sync handlers run on a worker thread, never on the event loop thread.
     assert result["data"]["thread_id"] != threading.get_ident()
     assert tools.get("ext_echo").parallel_safe is True
+    assert tools.get("ext_echo").summary == "Echo a value."
     assert [tool.name for tool in tools.list_tools(allowed_tools=["ext_echo"])] == ["ext_echo"]
     assert tools.list_tools(allowed_tools=[]) == []
     assert record(registry, "echo_ext").capability_errors == []

@@ -2,6 +2,7 @@
   // SystemPromptView owns prompt edits and request reconciliation. This reader
   // owns the separate, searchable Tool-definition surface, without edit state.
   import { t } from '$lib/i18n.js';
+  import Badge from './ui/Badge.svelte';
   import Button from './ui/Button.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import TextField from './ui/TextField.svelte';
@@ -72,11 +73,18 @@
               onClick={() => (selectedName = entry.definition.name)}
             >
               <span class="tool-name">{entry.definition.name}</span>
-              <span class="tool-size"
-                >{t('systemPrompt.preview.tokenCount', {
-                  count: entry.tokens,
-                })}</span
-              >
+              <span class="tool-index-meta">
+                <span class="tool-size"
+                  >{t('systemPrompt.preview.tokenCount', {
+                    count: entry.tokens,
+                  })}</span
+                >
+                {#if entry.on_demand}
+                  <Badge variant="info"
+                    >{t('systemPrompt.tools.onDemand')}</Badge
+                  >
+                {/if}
+              </span>
             </Button>
           {/each}
         </nav>
@@ -97,6 +105,11 @@
             >
           </header>
           <div class="tool-detail-body">
+            {#if selected.on_demand}
+              <p class="tool-on-demand-note">
+                {t('systemPrompt.tools.onDemandHint')}
+              </p>
+            {/if}
             <h4>{t('systemPrompt.tools.description')}</h4>
             <p class="tool-description">{selected.definition.description}</p>
             <h4>
@@ -183,6 +196,18 @@
     box-shadow:
       inset 2px 0 0 var(--accent),
       var(--focus-ring);
+  }
+  .tool-index-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .tool-on-demand-note {
+    margin: 0 0 20px;
+    color: var(--text-med);
+    font-size: var(--fs-body-md);
+    line-height: 1.6;
   }
   .tool-name {
     font-size: var(--fs-body-sm);

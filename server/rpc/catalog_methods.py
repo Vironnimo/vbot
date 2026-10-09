@@ -17,6 +17,7 @@ from core.projects import (
 )
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
+from core.tools.on_demand import always_loaded_tools
 from core.utils.workers import BoundedWorkerPool
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -37,6 +38,7 @@ _COMMAND_CATALOG_OUTPUT = {
     "state_change": "action",
 }
 _CATALOG_WORKERS = BoundedWorkerPool(name="catalog", max_workers=4)
+_DEFAULT_ALWAYS_LOADED = always_loaded_tools(None)
 
 
 def _list_tools(state: Any, params: JsonObject) -> JsonObject:
@@ -72,6 +74,9 @@ def _project_annotated_tool_response(tool: Any) -> JsonObject:
     )
     response["project_configurable"] = reason is None
     response["project_configurability_reason"] = reason
+    # Whether an Agent with On-demand Tools keeps this Tool in its Tool list
+    # while it has not chosen its always-loaded Tools.
+    response["loaded_by_default"] = tool.name in _DEFAULT_ALWAYS_LOADED
     return response
 
 

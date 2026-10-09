@@ -24,7 +24,12 @@ from core.prompts._catalog import (
     _require_scope_agent_id,
     load_bundled_default_layout,
 )
-from core.prompts._formatting import _format_channel_list, _format_skill_catalog, _format_tool_list
+from core.prompts._formatting import (
+    _format_channel_list,
+    _format_on_demand_tool_list,
+    _format_skill_catalog,
+    _format_tool_list,
+)
 from core.prompts._types import (
     AGENT_SCOPE_KEY_PREFIX,
     BLOCK_OWNER_ALWAYS,
@@ -97,6 +102,13 @@ from core.tools.availability import (
     subagent_allowed_agents,
 )
 from core.tools.model_names import model_tool_name
+from core.tools.on_demand import (
+    LOAD_TOOLS_TOOL_NAME,
+    ON_DEMAND_TOOL_LIST_PRODUCER,
+    loads_tools_on_demand,
+    on_demand_tool_entries,
+    on_demand_tools,
+)
 from core.tools.tools import ToolDefinitionProfileContext
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
@@ -151,6 +163,9 @@ __all__ = [
 
 PROMPT_WORKER_LIMIT = 4
 _LOGGER = get_logger("prompts")
+
+# ``(registry name, summary)`` of each On-demand Tool, resolved on first use.
+OnDemandEntries = Callable[[], tuple[tuple[str, str], ...]]
 
 _PROMPT_WORKERS = BoundedWorkerPool(
     name="prompt",
@@ -246,6 +261,7 @@ class SystemPromptManager:
         skill_catalog: PinnedSkillCatalog | None = None,
         read_paths: list[Path] | None = None,
         effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
+        on_demand_tools: Sequence[tuple[str, str]] | None = None,
         session_tool_grants: Sequence[str] = (),
         pinned_blocks: Mapping[str, str] | None = None,
         request_block_definitions: Sequence[BlockDefinition] = (),
@@ -298,6 +314,15 @@ class SystemPromptManager:
         set decides whether a notice that stands in for an oversized file or a cut
         Memory section names the Tool that shows the rest.
 
+        ``on_demand_tools`` are the ``(registry name, summary)`` pairs of the
+        Agent's On-demand Tools (Chat passes its prompt epoch's pinned list); the
+        ``on_demand_tool_list`` producer lists them for the ``tool:load_tools``
+        block, and they count as available Tools for gate 2 and
+        ``tool_available`` because the Agent can call them. ``None`` with
+        ``effective_tool_definitions`` means none; ``None`` without them
+        classifies the Agent's live Tools (``core.tools.on_demand``), and the
+        live ``tool_list`` leaves them out.
+
         ``pinned_blocks`` maps Tool and Extension dynamic block ids to the text each
         emits instead of rendering (Chat passes its prompt epoch's pinned texts,
         see :meth:`render_dynamic_blocks`); the gates still apply, and a dynamic
@@ -305,7 +330,13 @@ class SystemPromptManager:
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
-        effective_tool_names = _tool_names(effective_tool_definitions)
+        on_demand = self._on_demand_entries(
+            agent,
+            effective_tool_definitions=effective_tool_definitions,
+            on_demand_tools=on_demand_tools,
+            session_tool_grants=session_tool_grants,
+        )
+        effective_tool_names = _tool_names(effective_tool_definitions, on_demand)
         context = self._render_context(
             agent,
             scope_key,
@@ -324,6 +355,7 @@ class SystemPromptManager:
             skill_registry,
             skill_catalog,
             effective_tool_definitions=effective_tool_definitions,
+            on_demand=on_demand,
             session_tool_grants=session_tool_grants,
         )
         layout = self._catalog.resolve_layout(scope_key)
@@ -362,6 +394,7 @@ class SystemPromptManager:
         agent_project_id: str | None = None,
         subagent_session: bool = False,
         effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
+        on_demand_tools: Sequence[tuple[str, str]] | None = None,
         session_tool_grants: Sequence[str] = (),
     ) -> dict[str, RenderedBlock]:
         """Render live the Tool and Extension dynamic blocks a build with these inputs shows.
@@ -376,7 +409,15 @@ class SystemPromptManager:
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
-        effective_tool_names = _tool_names(effective_tool_definitions)
+        effective_tool_names = _tool_names(
+            effective_tool_definitions,
+            self._on_demand_entries(
+                agent,
+                effective_tool_definitions=effective_tool_definitions,
+                on_demand_tools=on_demand_tools,
+                session_tool_grants=session_tool_grants,
+            ),
+        )
         context = self._render_context(
             agent,
             scope_key,
@@ -818,6 +859,7 @@ class SystemPromptManager:
         skill_catalog: PinnedSkillCatalog | None = None,
         *,
         effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
+        on_demand: OnDemandEntries = tuple,
         session_tool_grants: Sequence[str] = (),
     ) -> dict[str, BlockProducer]:
         """Build the ``{generated:NAME}`` producer registry for this build.
@@ -831,7 +873,9 @@ class SystemPromptManager:
         itself lives in the memory domain's :func:`read_memory_files`). When a
         prompt-epoch ``skill_catalog`` is given, its producer returns the frozen
         text instead of re-filtering the live registry; given
-        ``effective_tool_definitions``, ``tool_list`` renders exactly those.
+        ``effective_tool_definitions``, ``tool_list`` renders exactly those, and
+        the live ``tool_list`` leaves out the On-demand Tools. ``on_demand_tool_list``
+        renders *on_demand* as ``- name: summary`` lines.
         """
         active_skill_registry = self._resolve_skill_registry(skill_registry)
 
@@ -843,9 +887,19 @@ class SystemPromptManager:
                         for definition in effective_tool_definitions
                     ]
                 )
+            on_demand_names = {name for name, _summary in on_demand()}
             return _format_tool_list(
-                self._prompt_definitions_for_agent(context.agent, session_tool_grants)
+                [
+                    definition
+                    for definition in self._prompt_definitions_for_agent(
+                        context.agent, session_tool_grants
+                    )
+                    if definition.get("name") not in on_demand_names
+                ]
             )
+
+        def on_demand_tool_list(_context: BlockRenderContext) -> str:
+            return _format_on_demand_tool_list(on_demand())
 
         def channel_list(context: BlockRenderContext) -> str:
             return _format_channel_list(self._agent_enabled_channels(context.agent))
@@ -866,6 +920,7 @@ class SystemPromptManager:
 
         return {
             "tool_list": tool_list,
+            ON_DEMAND_TOOL_LIST_PRODUCER: on_demand_tool_list,
             "channel_list": channel_list,
             "skill_catalog": skill_catalog_text,
             MEMORY_FILES_PRODUCER_NAME: memory_files,
@@ -1049,11 +1104,21 @@ class SystemPromptManager:
             ready_only=ready_only,
             profile_context=profile_context,
         )
-        return apply_agent_target_tool_visibility(
-            definitions,
-            agent_id=agent.id,
-            allowed_agents=subagent_allowed_agents(
-                agent_tool_settings(getattr(agent, "tools", {}))
+        return _with_load_tools(
+            agent,
+            apply_agent_target_tool_visibility(
+                definitions,
+                agent_id=agent.id,
+                allowed_agents=subagent_allowed_agents(
+                    agent_tool_settings(getattr(agent, "tools", {}))
+                ),
+            ),
+            session_tool_grants,
+            lambda: self._tool_registry.provider_definitions(
+                [LOAD_TOOLS_TOOL_NAME],
+                include_internal=True,
+                ready_only=ready_only,
+                profile_context=profile_context,
             ),
         )
 
@@ -1077,13 +1142,54 @@ class SystemPromptManager:
             session_grants=resolution.session_tool_grants,
             profile_context=profile_context,
         )
-        return apply_agent_target_tool_visibility(
-            definitions,
-            agent_id=agent.id,
-            allowed_agents=subagent_allowed_agents(
-                agent_tool_settings(getattr(agent, "tools", {}))
+        return _with_load_tools(
+            agent,
+            apply_agent_target_tool_visibility(
+                definitions,
+                agent_id=agent.id,
+                allowed_agents=subagent_allowed_agents(
+                    agent_tool_settings(getattr(agent, "tools", {}))
+                ),
+            ),
+            session_tool_grants,
+            lambda: self._tool_registry.prompt_definitions(
+                [LOAD_TOOLS_TOOL_NAME], include_internal=True, profile_context=profile_context
             ),
         )
+
+    def _on_demand_entries(
+        self,
+        agent: PromptAgent,
+        *,
+        effective_tool_definitions: Sequence[Mapping[str, Any]] | None,
+        on_demand_tools: Sequence[tuple[str, str]] | None,
+        session_tool_grants: Sequence[str],
+    ) -> OnDemandEntries:
+        """Return the On-demand Tools one build lists, resolved on first use.
+
+        Given *on_demand_tools* are used as they are. Without them, a build with
+        *effective_tool_definitions* lists none, and a live build classifies the
+        Tools the Agent's Tool list would offer.
+        """
+        if on_demand_tools is not None:
+            given = tuple((str(name), str(summary)) for name, summary in on_demand_tools)
+            return lambda: given
+        if effective_tool_definitions is not None or not loads_tools_on_demand(agent):
+            return tuple
+        resolved: tuple[tuple[str, str], ...] | None = None
+
+        def entries() -> tuple[tuple[str, str], ...]:
+            nonlocal resolved
+            if resolved is None:
+                resolved = on_demand_tool_entries(
+                    self._tool_registry,
+                    agent,
+                    self._provider_definitions_for_agent(agent, session_tool_grants),
+                    session_tool_grants=session_tool_grants,
+                )
+            return resolved
+
+        return entries
 
     def _resolve_build_scope(self, agent: PromptAgent, scope: Any = None) -> PromptScope:
         if scope is None:
@@ -1160,10 +1266,37 @@ class SystemPromptManager:
         return self._catalog.reset_layout(scope)
 
 
-def _tool_names(definitions: Sequence[Mapping[str, Any]] | None) -> frozenset[str] | None:
+def _tool_names(
+    definitions: Sequence[Mapping[str, Any]] | None, on_demand: OnDemandEntries
+) -> frozenset[str] | None:
+    """Return the Tools a build with *definitions* counts as available, or ``None`` (live).
+
+    The On-demand Tools count: the Agent can call them.
+    """
     if definitions is None:
         return None
-    return frozenset(str(definition["name"]) for definition in definitions)
+    return frozenset(
+        [*(str(definition["name"]) for definition in definitions), *(n for n, _ in on_demand())]
+    )
+
+
+def _with_load_tools(
+    agent: PromptAgent,
+    definitions: list[JsonObject],
+    session_tool_grants: Sequence[str],
+    load_tools: Callable[[], list[JsonObject]],
+) -> list[JsonObject]:
+    """Return *definitions* with ``load_tools`` appended once while one of them is on demand.
+
+    ``load_tools`` belongs to the Agent's Tools exactly while it has a Tool to
+    load, so an Agent whose Tool list keeps every Tool never gets it.
+    """
+    names = [str(definition.get("name")) for definition in definitions]
+    if LOAD_TOOLS_TOOL_NAME in names or not on_demand_tools(
+        agent, names, session_tool_grants=session_tool_grants
+    ):
+        return definitions
+    return [*definitions, *load_tools()]
 
 
 def _selected_layout(

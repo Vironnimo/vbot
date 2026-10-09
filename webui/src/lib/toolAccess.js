@@ -369,6 +369,99 @@ export function toolIsConfigurable(tool) {
   );
 }
 
+// On-demand Tools: an Agent's `tool_loading` decides which allowed Tools are
+// sent with every request ("always loaded"); the Agent loads the others when
+// it needs them. It never changes Tool access. The value is
+// `{on_demand, always_loaded?}`: a missing `always_loaded` means the default
+// set, the catalog Tools marked `loaded_by_default`; an explicit list (also
+// `[]`) is the user's choice and keeps names the catalog does not know. Off
+// without a list is the same as no value and normalizes to null.
+
+// The file edit Tools are one unit: marking or unmarking one of them as
+// always loaded marks or unmarks all of them.
+const FILE_EDIT_TOOLS = Object.freeze(['edit', 'write', 'apply_patch']);
+
+export function normalizeToolLoading(value) {
+  if (!isPlainObject(value)) return null;
+  const onDemand = value.on_demand === true;
+  if (!Array.isArray(value.always_loaded)) {
+    return onDemand ? { on_demand: true } : null;
+  }
+  return {
+    on_demand: onDemand,
+    always_loaded: normalizeNames(value.always_loaded),
+  };
+}
+
+// Switching keeps an explicit list, so turning the switch back on restores
+// the user's choice.
+export function setToolsOnDemand(value, enabled) {
+  return normalizeToolLoading({
+    ...normalizeToolLoading(value),
+    on_demand: enabled === true,
+  });
+}
+
+export function toolLoadingUsesDefaultSet(value) {
+  return !Array.isArray(normalizeToolLoading(value)?.always_loaded);
+}
+
+// Whether the Tool counts as always loaded; a file edit Tool counts when any
+// of the unit does.
+export function toolIsAlwaysLoaded(value, tool, catalog = []) {
+  const names = new Set(
+    alwaysLoadedNames(normalizeToolLoading(value), catalog),
+  );
+  return toolLoadingUnit(tool?.name).some((name) => names.has(name));
+}
+
+// Marks or unmarks the Tool (with its unit). The first change writes the
+// effective default set as the explicit list.
+export function setToolAlwaysLoaded(value, tool, enabled, catalog = []) {
+  const current = normalizeToolLoading(value) ?? { on_demand: false };
+  const unit = toolLoadingUnit(tool?.name);
+  let names = alwaysLoadedNames(current, catalog);
+  if (enabled) {
+    const known = new Set(
+      (Array.isArray(catalog) ? catalog : []).map((entry) => entry?.name),
+    );
+    for (const name of unit) {
+      if ((name === tool?.name || known.has(name)) && !names.includes(name)) {
+        names.push(name);
+      }
+    }
+  } else {
+    names = names.filter((name) => !unit.includes(name));
+  }
+  return normalizeToolLoading({
+    on_demand: current.on_demand,
+    always_loaded: names,
+  });
+}
+
+export function resetAlwaysLoadedTools(value) {
+  return normalizeToolLoading({
+    on_demand: normalizeToolLoading(value)?.on_demand === true,
+  });
+}
+
+function alwaysLoadedNames(loading, catalog) {
+  if (Array.isArray(loading?.always_loaded)) return [...loading.always_loaded];
+  return normalizeNames(
+    (Array.isArray(catalog) ? catalog : [])
+      .filter((tool) => tool?.loaded_by_default === true)
+      .map((tool) => tool.name),
+  );
+}
+
+export function isFileEditTool(name) {
+  return FILE_EDIT_TOOLS.includes(name);
+}
+
+function toolLoadingUnit(name) {
+  return isFileEditTool(name) ? [...FILE_EDIT_TOOLS] : [name];
+}
+
 function configurableNames(catalog, ceiling) {
   return groupToolCatalog(catalog, ceiling)
     .flatMap((group) => group.members)

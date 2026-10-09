@@ -26,6 +26,7 @@ from core.tools import (
     register_edit_tools,
     tool_success,
 )
+from core.tools.load_tools import register_load_tools_tool
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -703,3 +704,210 @@ async def test_a_model_change_keeps_the_file_edit_tools_of_the_prompt_epoch(
     assert _call_names(messages) == ["apply_patch", "write"]
     assert [result["ok"] for result in tool_results(messages)] == [True, True]
     assert (tmp_path / "workspace" / "a.txt").read_bytes() == b"a\n"
+
+
+_SEARCH_PARAMETERS = {
+    "type": "object",
+    "properties": {"query": {"type": "string"}},
+    "required": ["query"],
+    "additionalProperties": False,
+}
+_SEARCH = {
+    "name": "search",
+    "description": "Search the web. Returns ranked hits.",
+    "parameters": _SEARCH_PARAMETERS,
+}
+_FETCH = {"name": "fetch", "description": "Fetch a page.", "parameters": {"type": "object"}}
+_ON_DEMAND = {"on_demand": True, "always_loaded": ["read"]}
+
+
+def _on_demand_tools() -> tuple[ToolRegistry, list[str]]:
+    """``read`` stays in the Tool list; ``search`` and ``fetch`` load on demand."""
+    dispatched: list[str] = []
+    tools = ToolRegistry()
+    register_load_tools_tool(tools)
+    tools.register("read", "Read a file.", {"type": "object"}, _recording_handler(dispatched))
+    tools.register(
+        "search", str(_SEARCH["description"]), _SEARCH_PARAMETERS, _recording_handler(dispatched)
+    )
+    tools.register(
+        "fetch",
+        str(_FETCH["description"]),
+        {"type": "object"},
+        _recording_handler(dispatched),
+        summary="Fetch one web page.",
+    )
+    return tools, dispatched
+
+
+def _loaded_text(result: JsonObject) -> str:
+    assert result["ok"], result
+    return str(result["data"]["content"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("list_announced", [False, True], ids=["pinned-list", "listing-route"])
+async def test_on_demand_tools_are_listed_in_the_system_prompt_and_loaded_when_needed(
+    tmp_path: Path, list_announced: bool
+) -> None:
+    tools, dispatched = _on_demand_tools()
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [],
+        allowed_tools=["read", "search", "fetch"],
+        tool_loading=_ON_DEMAND,
+        adapter=StubAdapter(
+            [
+                tool_turn(("load", "load_tools", {"names": ["search"]})),
+                # Loading grants nothing: fetch runs without being loaded first.
+                tool_turn(("use", "search", {"query": "vbot"}), ("direct", "fetch")),
+                final("done"),
+                tool_turn(("again", "load_tools", {"names": "search, fetch"})),
+                final("bye"),
+            ],
+            list_announced_tools=list_announced,
+        ),
+    )
+    loop = build_chat_loop(runtime)
+
+    await loop.send("coder", "Search", session_id="session-one")
+    await loop.send("coder", "Again", session_id="session-one")
+
+    requests = runtime.adapter.requests
+    assert dispatched == ["search", "fetch"]
+    pinned = _tools_sent(runtime)[0]
+    assert [tool["name"] for tool in pinned] == ["read", "load_tools"]
+    if list_announced:
+        assert _tools_sent(runtime)[1:] == [
+            [*pinned, _SEARCH],
+            [*pinned, _SEARCH],
+            [*pinned, _SEARCH],
+            [*pinned, _SEARCH, _FETCH],
+        ]
+    else:
+        assert _tools_sent(runtime) == [pinned] * 5
+    # The System Prompt lists the On-demand Tools by summary and stays the same throughout.
+    system = requests[0]["messages"][0]["content"]
+    assert "- fetch: Fetch one web page.\n- search: Search the web." in system
+    assert [request["messages"][0]["content"] for request in requests] == [system] * 5
+    # A load is recorded silently: the load_tools Result already showed the definition.
+    assert _announced(runtime) == [("loaded", "search"), ("loaded", "fetch")]
+    assert not any(_reminders(request) for request in requests)
+    first_load, _search, _fetch, second_load = tool_results(history(runtime))
+    assert _loaded_text(first_load) == (
+        "- search: loaded\n\n"
+        "Tool: search\n"
+        "Description: Search the web. Returns ranked hits.\n"
+        'Parameters (JSON Schema): {"type":"object","properties":{"query":{"type":"string"}},'
+        '"required":["query"],"additionalProperties":false}\n\n'
+        "Call the loaded Tools by name with normal Tool calls."
+    )
+    assert _loaded_text(second_load).startswith(
+        "- search: already available; call it directly\n- fetch: loaded\n\nTool: fetch\n"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_tools", "pinned", "announced"),
+    [
+        (
+            ["read", "search", "fetch", "extra"],
+            ["read", "load_tools"],
+            [("on_demand", "extra"), ("loaded", "extra")],
+        ),
+        # Nothing was on demand when the epoch started: load_tools arrives with the first Tool
+        # to load.
+        (
+            ["read", "extra"],
+            ["read"],
+            [("added", "load_tools"), ("on_demand", "extra"), ("loaded", "extra")],
+        ),
+    ],
+    ids=["load-tools-listed", "first-on-demand-tool"],
+)
+async def test_a_tool_enabled_mid_session_is_announced_for_loading(
+    tmp_path: Path,
+    allowed_tools: list[str],
+    pinned: list[str],
+    announced: list[tuple[str, str]],
+) -> None:
+    tools, dispatched = _on_demand_tools()
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            final("ready"),
+            tool_turn(("load", "load_tools", {"names": ["extra"]})),
+            tool_turn(("use", "extra")),
+            final("done"),
+        ],
+        allowed_tools=allowed_tools,
+        tool_loading=_ON_DEMAND,
+    )
+    loop = build_chat_loop(runtime)
+
+    await loop.send("coder", "Start", session_id="session-one")
+    tools.register("extra", "Extra Tool. Does more.", {"type": "object"}, tools.get("read").handler)
+    await loop.send("coder", "Use the new Tool", session_id="session-one")
+
+    requests = runtime.adapter.requests
+    assert [tool["name"] for tool in _tools_sent(runtime)[0]] == pinned
+    assert dispatched == ["extra"]
+    assert _announced(runtime) == announced
+    assert _reminders(requests[1]).count("Tool extra is now available") == 1
+    assert (
+        "Tool extra is now available: Extra Tool. Load its definition with `load_tools` "
+        "before you call it." in _reminders(requests[1])
+    )
+    # The epoch's Tool list and System Prompt stay as pinned.
+    assert _tools_sent(runtime) == [_tools_sent(runtime)[0]] * 4
+    assert requests[1]["messages"][0]["content"] == requests[0]["messages"][0]["content"]
+    assert "extra" not in requests[0]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_a_restricted_run_keeps_load_tools_and_loads_only_the_tools_it_may_call(
+    tmp_path: Path,
+) -> None:
+    tools, _dispatched = _on_demand_tools()
+    maps_ready = True
+    tools.register(
+        "maps",
+        "Find places.",
+        {"type": "object"},
+        tools.get("read").handler,
+        ready=lambda: maps_ready,
+        readiness_hint="Requires a Maps connection - set the API key in Settings -> Extensions.",
+    )
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            final("ready"),
+            tool_turn(("load", "load_tools", {"names": ["search", "fetch", "maps"]})),
+            final("done"),
+        ],
+        allowed_tools=["read", "search", "fetch", "maps"],
+        tool_loading=_ON_DEMAND,
+    )
+    loop = build_chat_loop(runtime)
+    await loop.send("coder", "Start", session_id="session-one")
+    # Listed in the epoch's System Prompt, maps stops being ready.
+    maps_ready = False
+
+    run = await loop.start_run(
+        "coder", "Go", session_id="session-one", tool_restriction=("search", "maps")
+    )
+    await run.wait()
+
+    # A listed Tool this Run refuses or that is not ready is reported as listed but unusable.
+    (result,) = tool_results(history(runtime))
+    assert _loaded_text(result).startswith(
+        "- search: loaded\n"
+        "- fetch: listed, but cannot be used right now; continue without it\n"
+        "- maps: listed, but cannot be used right now (Requires a Maps connection - set the "
+        "API key in Settings -> Extensions); continue without it\n\nTool: search\n"
+    )
+    assert _announced(runtime) == [("loaded", "search")]

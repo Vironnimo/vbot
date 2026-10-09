@@ -9,6 +9,7 @@
   { "id": "tool:project", "enabled": true, "source": "tool" },
   { "id": "tool:subagent", "enabled": true, "source": "tool" },
   { "id": "core:tools_list", "enabled": false, "source": "core" },
+  { "id": "tool:load_tools", "enabled": true, "source": "tool" },
   { "id": "core:channels", "enabled": true, "source": "core" },
   { "id": "core:skills", "enabled": true, "source": "core" },
   { "id": "core:skill_maintenance", "enabled": true, "source": "core" },

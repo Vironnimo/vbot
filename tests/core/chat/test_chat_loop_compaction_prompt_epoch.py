@@ -14,6 +14,7 @@ from core.chat import ChatMessage
 from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._tool_epoch import ToolEpochPin
+from core.chat.messages import ToolCall
 from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
@@ -34,6 +35,7 @@ from core.prompts.pinned_context import (
 from core.runs import Run, RunExecutionOwner
 from core.tools import ANALYZE_IMAGE_TOOL_NAME, ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
+from core.tools.load_tools import register_load_tools_tool
 from tests.core.chat.chat_loop_compaction_test_support import (
     auto_compact,
     compact_context,
@@ -204,6 +206,51 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
     sent = json.dumps(rebuilt.tools)
     assert sent == json.dumps(list(pin.definitions)) == json.dumps(next_run.request_state.tools)
     assert json.dumps(rebuilt.tools[1]["parameters"]) == json.dumps(ordered)
+
+
+@pytest.mark.asyncio
+async def test_compaction_keeps_the_on_demand_tools_the_agent_called_in_its_tool_list(
+    tmp_path: Path,
+) -> None:
+    # An On-demand Tool the Agent called in the ending epoch stays in the new epoch's
+    # Tool list; one it only loaded is listed in the System Prompt again.
+    tools = ToolRegistry()
+    register_load_tools_tool(tools)
+    for name in ("kept", "called", "loaded"):
+        tools.register(
+            name, f"{name.title()} Tool.", {"type": "object"}, lambda *_args: tool_success({})
+        )
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["kept", "called", "loaded"],
+        tool_loading={"on_demand": True, "always_loaded": ["kept"]},
+    )
+    runtime = compaction_runtime(tmp_path, agent=agent, tools=tools)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    context = await run_context(
+        loop, Run(run_id="run-1", agent_id="coder", session_id=session.id), session
+    )
+    state = context.request_state
+    assert state.tool_epoch.pin.names == ("kept", "load_tools")
+    session.append(ChatMessage.note(state.tool_loads["loaded"].note_content()))
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2", content=None, tool_calls=[ToolCall(id="c1", name="called")]
+        )
+    )
+    session.append(ChatMessage.tool(tool_call_id="c1", name="called", content="{}"))
+
+    rebuilt = await compact_context(loop, context)
+
+    pin = ToolEpochPin.from_payload(
+        runtime.chat_sessions.prompt_pin(session.address, PINNED_TOOL_DEFINITIONS_SLOT)
+    )
+    assert pin is not None and pin.names == ("called", "kept", "load_tools")
+    assert pin.on_demand == (("loaded", "Loaded Tool."),)
+    assert rebuilt.tool_epoch.loadable_names == ("loaded",)
 
 
 @pytest.mark.asyncio

@@ -40,6 +40,7 @@ def tool_runtime(
     allowed_tools: list[str] | None = None,
     model: str = "openai/gpt-5.2",
     workspace: Path | None = None,
+    tool_loading: dict[str, Any] | None = None,
     **runtime_options: Any,
 ) -> Any:
     """A StubRuntime whose Agent ``coder`` may use every registered Tool by default."""
@@ -48,6 +49,7 @@ def tool_runtime(
         model=model,
         allowed_tools=["*"] if allowed_tools is None else allowed_tools,
         workspace=workspace,
+        tool_loading=tool_loading,
     )
     adapter = runtime_options.pop("adapter", None) or StubAdapter(responses)
     return StubRuntime(

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._step_outcomes import _ToolProgress
 from core.chat._stream_draft import StreamDraft
-from core.chat._tool_epoch import ToolEpochView
+from core.chat._tool_epoch import ToolChange, ToolEpochView
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock
 from core.chat.errors import ChatError
@@ -98,7 +98,10 @@ class RequestState:
     ``tool_contracts`` follow ``tool_epoch``, the pinned Tools plus the Tool
     changes announced to the Model (``None`` only for a state assembled without
     a Session request build). ``prompt_blocks`` holds the dynamic block texts
-    the System Prompt shows.
+    the System Prompt shows. ``tool_loads`` holds, per On-demand Tool the
+    Model may load now, the ``loaded`` change a ``load_tools`` call records:
+    its definition as the Run's primary route shows it (``None`` until a Tool
+    catalog was measured for this state).
     """
 
     messages: list[JsonObject]
@@ -108,6 +111,30 @@ class RequestState:
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
     tool_epoch: ToolEpochView | None = None
     prompt_blocks: PromptBlockPin | None = None
+    tool_loads: Mapping[str, ToolChange] | None = None
+
+    @property
+    def loadable_tools(self) -> dict[str, JsonObject]:
+        """The definitions a ``load_tools`` call may return now, by registry name."""
+        if self.tool_epoch is None or not self.tool_loads:
+            return {}
+        return {
+            name: change.definition
+            for name in self.tool_epoch.loadable_names
+            if (change := self.tool_loads.get(name)) is not None and change.definition is not None
+        }
+
+    @property
+    def unloadable_tools(self) -> frozenset[str]:
+        """The On-demand Tools the Model was told it can load that cannot be loaded now.
+
+        They are not ready or not offered on the Run's primary route. Empty until
+        a Tool catalog was measured for this state.
+        """
+        if self.tool_epoch is None or self.tool_loads is None:
+            return frozenset()
+        loadable = self.loadable_tools
+        return frozenset(name for name in self.tool_epoch.loadable_names if name not in loadable)
 
 
 _RequestState = RequestState
@@ -519,6 +546,9 @@ class RequestBuildInputs:
     # List announced Tool additions in the request's Tool list: for a route
     # that drops calls to unlisted Tools, and for every fallback route.
     list_announced_tools: bool = False
+    # With ``fresh_prompt_epoch``: On-demand Tools the new Tool pin lists anyway
+    # (those the Agent called in the epoch a Compaction ended).
+    keep_listed_tools: frozenset[str] = frozenset()
 
     @classmethod
     def from_context(

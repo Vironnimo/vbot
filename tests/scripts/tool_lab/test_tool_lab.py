@@ -12,7 +12,7 @@ from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.database import write_bootstrap_marker
 from core.sessions.sessions import ChatSessionManager
-from scripts.tool_lab import replay
+from scripts.tool_lab import definitions, replay
 from scripts.tool_lab.__main__ import main
 from scripts.tool_lab.sessions import Filters
 from tests.core.sessions.history_fixtures import seed_history
@@ -135,3 +135,40 @@ async def test_replay_exports_session_edits_and_classifies_their_replay(tmp_path
     assert (sessions, stats.calls, stats.cases) == (1, 3, 3)
     assert [result.case["target"]["label"] for result in results] == ["self", "eventual", "self"]
     assert [result.label for result in results] == ["same", "fixed", "same"]
+
+
+def test_definitions_summary_counts_on_demand_tools_apart_from_the_tool_list() -> None:
+    def tool(name: str, tokens: int, *, offered: bool = True, on_demand: bool = False) -> Any:
+        return definitions.ToolDefinition(name, {"name": name}, tokens, offered, on_demand)
+
+    view = definitions.AgentView(
+        "main",
+        100,
+        (
+            definitions.PromptBlock("core:soul", "Soul.", 70),
+            definitions.PromptBlock("tool:load_tools", "Loaded on demand.", 30),
+        ),
+        (
+            tool("read", 10),
+            tool("load_tools", 5),
+            tool("web_search", 40, on_demand=True),
+            tool("status", 20, offered=False),
+        ),
+    )
+
+    lines = definitions.summary(view).splitlines()
+
+    assert lines[0] == (
+        "Agent main: System Prompt 100 tokens, 2 Tool definitions 15 tokens, "
+        "together 115 tokens (estimates)"
+    )
+    assert lines[1] == (
+        "1 On-demand Tools: listed in block tool:load_tools (30 tokens); "
+        "their definitions (40 tokens) load with load_tools"
+    )
+    assert [line.split()[0] for line in lines[-4:]] == [
+        "load_tools",
+        "read",
+        "~web_search",
+        "*status",
+    ]

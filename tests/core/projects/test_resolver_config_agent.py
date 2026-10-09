@@ -313,6 +313,23 @@ def test_vbot_tool_override_replaces_repository_denials_until_cleared(
     assert restored_effective["source"] == "agent"
 
 
+def test_tool_loading_override_reaches_the_config_agent_until_cleared(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+    value = {"on_demand": True, "always_loaded": ["read"]}
+
+    unset = resolver.resolve_agent("vbot", "builder").tool_loading
+    projects.set_override("vbot", "builder", "tool_loading", value)
+    overridden = resolver.resolve_agent("vbot", "builder").tool_loading
+    projects.clear_override("vbot", "builder", "tool_loading")
+
+    assert (unset, overridden) == (None, value)
+    assert resolver.resolve_agent("vbot", "builder").tool_loading is None
+
+
 @pytest.mark.parametrize(
     ("mode", "granted_access", "usable"),
     [

@@ -31,6 +31,7 @@ describe('createAgentFormValues', () => {
       compaction_policy: null,
       custom_system_prompt_enabled: false,
       librarian_enabled: true,
+      tool_loading: null,
     });
   });
 
@@ -278,6 +279,40 @@ describe('normalizeAgentForm', () => {
       top_p: 0.5,
       temperature: null,
     });
+  });
+
+  // On-demand Tools: an edit sends the whole value and null turns them off;
+  // off without a list is the same as no value. A new Agent sends it only
+  // when it is set (the create payload above omits it).
+  it.each([
+    ['switched on', null, { on_demand: true }, { on_demand: true }],
+    [
+      'switched off with a list',
+      { on_demand: true, always_loaded: ['read'] },
+      { on_demand: false, always_loaded: ['read'] },
+      { on_demand: false, always_loaded: ['read'] },
+    ],
+    ['switched off', { on_demand: true }, { on_demand: false }, null],
+    ['saved off', { on_demand: false }, null, undefined],
+  ])('sends On-demand Tools %s', (_label, saved, edited, sent) => {
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      tool_loading: saved,
+    });
+    const { payload } = normalizeAgentForm(
+      { ...initialValues, tool_loading: edited },
+      { mode: AGENT_FORM_MODE_EDIT, initialValues },
+    );
+
+    expect(payload).toEqual(
+      sent === undefined
+        ? { id: 'coder' }
+        : { id: 'coder', tool_loading: sent },
+    );
+    expect(
+      normalizeAgentForm({ id: 'coder', tool_loading: edited }).payload
+        .tool_loading,
+    ).toEqual(sent ?? undefined);
   });
 });
 

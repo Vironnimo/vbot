@@ -74,6 +74,9 @@ ToolCallResultPersistedRegistrar = Callable[[str, ToolResultPersistedCallback], 
 ToolDeliveryReceipt = tuple[str, str, str]
 ToolDeliveryReceiptHook = Callable[[str, ToolDeliveryReceipt], None]
 ToolTurnEndHook = Callable[[str], None]
+# (tool_call_id, registry names) for the Tools a successful ``load_tools`` call
+# loaded; Chat records them with that call's Tool Result.
+ToolLoadHook = Callable[[str, Sequence[str]], None]
 # (tool_call_id, tool_name, payload) -> payload_id. Chat stages the payload and
 # persists it with this call's Tool Result in the same Session transaction.
 ToolResultPayloadHook = Callable[[str, str, Any], str]
@@ -146,6 +149,16 @@ class ToolContext:
         default_factory=list, init=False, repr=False, compare=False
     )
     _turn_end_requested: bool = field(default=False, init=False, repr=False, compare=False)
+    # On-demand Tools the Model was not shown a definition of yet, by registry
+    # name, with the Provider definition ``load_tools`` returns for each.
+    loadable_tools: Mapping[str, JsonObject] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    # On-demand Tools the Model was told it can load whose definition cannot be
+    # loaded now (not ready, or not offered on this route), by registry name.
+    unloadable_tools: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
+    tool_load_hook: ToolLoadHook | None = field(default=None, repr=False, compare=False)
+    _loaded_tools: list[str] = field(default_factory=list, init=False, repr=False, compare=False)
     allowed_skills: Sequence[str] | None = None
     # Environment credentials made available by Skills active in this Session.
     # Bash combines these transient grants with the Agent's permanent Tool settings.
@@ -469,6 +482,14 @@ class ToolContext:
             raise RuntimeError("Graceful turn completion is unavailable for this Tool call")
         object.__setattr__(self, "_turn_end_requested", True)
 
+    def record_loaded_tools(self, names: Sequence[str]) -> None:
+        """Record that this call gave the Model the definitions of *names* (registry names).
+
+        Chat makes the Tools part of the prompt epoch's Tool knowledge once this
+        call succeeded, in the same Session transaction as its Tool Result.
+        """
+        self._loaded_tools.extend(names)
+
     def _commit_owned_effects(self) -> None:
         """Hand successful-call effects to the batch owner after validation."""
         if self.delivery_receipt_hook is not None:
@@ -476,6 +497,8 @@ class ToolContext:
                 self.delivery_receipt_hook(self.tool_call_id, receipt)
         if self._turn_end_requested and self.request_turn_end_hook is not None:
             self.request_turn_end_hook(self.tool_call_id)
+        if self._loaded_tools and self.tool_load_hook is not None:
+            self.tool_load_hook(self.tool_call_id, tuple(self._loaded_tools))
 
     def _retain_result_contract(self, contract: ToolContract) -> None:
         """Keep the canonical dispatch selection for this call's result checks."""
@@ -545,8 +568,14 @@ class ToolExecutionConfig:
     tool_settings: Mapping[str, Any] | None = None
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     # Model-facing contracts of the Tools in this cycle's Model request, by registry
-    # name; empty when the group runs without a Model request.
+    # name; empty when the group runs without a Model request. On-demand Tools
+    # have one before they are loaded, so a direct call runs.
     input_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
+    # See ``ToolContext.loadable_tools``; these Tools count as not shown.
+    loadable_tools: Mapping[str, JsonObject] = field(default_factory=dict)
+    # See ``ToolContext.unloadable_tools``.
+    unloadable_tools: Collection[str] = frozenset()
+    tool_load_registrar: ToolLoadHook | None = None
     # Session-scoped file-content tracker for git-style change statistics.
     # ``None`` keeps direct/legacy execution groups without change tracking.
     change_tracker: ChangeTracker | None = field(

@@ -637,6 +637,7 @@
       {skillCatalog}
       {availableAgentTargets}
       {agentTargetCatalogError}
+      toolLoadingEditable={!agent?.builtin}
       bind:formValues
       {navigateToExtensions}
       {onToast}

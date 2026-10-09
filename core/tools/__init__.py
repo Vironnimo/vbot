@@ -149,6 +149,7 @@ from core.tools.tools import (
     ToolExecutor,
     ToolFamily,
     ToolHandler,
+    ToolLoadHook,
     ToolNotAllowedError,
     ToolNoteHook,
     ToolNotFoundError,
@@ -164,6 +165,7 @@ from core.tools.tools import (
     tool_failure_for_exception,
     tool_is_ready,
     tool_success,
+    tool_summary,
 )
 from core.tools.update_handoff import UpdateHandoffs
 from core.tools.web_fetch import (
@@ -279,6 +281,7 @@ __all__ = [
     "ToolExecutor",
     "ToolFamily",
     "ToolHandler",
+    "ToolLoadHook",
     "ToolNoteHook",
     "ToolNotAllowedError",
     "ToolNotFoundError",
@@ -325,6 +328,7 @@ __all__ = [
     "tool_failure",
     "tool_failure_for_exception",
     "tool_is_ready",
+    "tool_summary",
     "tool_success",
     "compile_tool_contract",
     "memory_tool_enabled",

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from core.chat._boundaries import _finish_visible_boundary
 from core.chat._queued_input import persist_steering_input, rebuild_after_steering
-from core.chat._run_state import _AssistantStep
+from core.chat._run_state import RequestState, _AssistantStep
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
@@ -32,6 +32,7 @@ from core.chat._step_outcomes import (
     _with_offered_tool_names,
     tool_result_facts,
 )
+from core.chat._tool_epoch import ToolChange
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.errors import ChatError
 from core.chat.messages import (
@@ -155,13 +156,22 @@ class AgenticProgression:
         tool_dispatch_context: ToolDispatchContext,
         assistant_message_id: str,
         tool_messages: list[ChatMessage],
-    ) -> None:
-        """Persist a turn's Tool Results with the deferred Notes in one transaction."""
+    ) -> list[ToolChange]:
+        """Persist a turn's Tool Results with the deferred Notes in one transaction.
+
+        A ``load_tools`` call whose Result is persisted adds a silent ``loaded``
+        note per Tool it loaded to the same transaction; returns those changes.
+        """
         run = context.run
         session = context.session
+        loads = _tool_load_changes(context.request_state, tool_dispatch_context, tool_messages)
         deferred_notes = session.take_deferred_notes()
         session.assistant_message_id = assistant_message_id
-        batch_messages = [*tool_messages, *deferred_notes]
+        batch_messages = [
+            *tool_messages,
+            *(ChatMessage.note(change.note_content()) for change in loads),
+            *deferred_notes,
+        ]
         persist_started = time.perf_counter()
         binding = context.request.temporary_binding
         result_facts = tool_dispatch_context.with_result_payloads(tool_result_facts(tool_messages))
@@ -217,6 +227,7 @@ class AgenticProgression:
             loaded_project_id = project_tool_context_id(tool_message)
             if context.project_id is None and loaded_project_id is not None:
                 await self._requests._apply_project_skill_context(context, loaded_project_id)
+        return loads
 
     async def _finish_tool_round(
         self,
@@ -347,7 +358,10 @@ class AgenticProgression:
             tool_epoch = state.tool_epoch
             if context.tool_progress.finalization_reason is None and tool_epoch is not None:
                 tool_key = (self._dependencies.tools.revision, tool_epoch.pin.epoch)
-                if tool_key != evaluated_tool_key:
+                # A rebuilt state has not measured what its On-demand Tools load.
+                if tool_key != evaluated_tool_key or (
+                    state.tool_loads is None and tool_epoch.loadable_names
+                ):
                     evaluated_tool_key = tool_key
                     tool_catalog = await self._requests.live_tool_catalog(
                         context, known=tool_epoch.allowed_names, told=tool_epoch.known_names
@@ -546,6 +560,8 @@ class AgenticProgression:
                 session_tool_grants=state.session_tool_grants,
                 tool_contracts=state.tool_contracts,
                 removed_tool_names=removed_tool_names,
+                loadable_tools=state.loadable_tools,
+                unloadable_tools=state.unloadable_tools,
                 change_tracker=self._dependencies.change_tracker,
                 allow_owned_effects=context.request.temporary_binding is not None,
             )
@@ -1018,13 +1034,26 @@ class AgenticProgression:
                         # The stream broke after these calls started; the note
                         # follows their results.
                         session.add_note(recovery_note)
-                    await _finish_visible_boundary(
+                    loaded_tools = await _finish_visible_boundary(
                         self._persist_tool_results(
                             context, tool_dispatch_context, assistant_message.id, tool_messages
                         ),
                         run,
                         True,
                     )
+                    if loaded_tools:
+                        # The loaded Tools are known now: callable with the
+                        # loaded definition, and no longer loadable.
+                        state = await self._requests.adopt_tool_changes(
+                            state,
+                            loaded_tools,
+                            list_announced=(
+                                target is not context.primary_target
+                                or not target.unlisted_tool_calls
+                            ),
+                        )
+                        context.request_state = state
+                        tools = state.tools
                     binding = context.request.temporary_binding
                     extension_registry = self._dependencies.get_extension_registry()
                     if assistant_step.failure is not None:
@@ -1203,3 +1232,27 @@ class AgenticProgression:
                 # answer is already durable and remains the Run result; the Run
                 # manager sees ``cancel_requested`` and marks the Run cancelled.
         return assistant_message
+
+
+def _tool_load_changes(
+    state: RequestState | None,
+    tool_dispatch_context: ToolDispatchContext,
+    tool_messages: Sequence[ChatMessage],
+) -> list[ToolChange]:
+    """Return the ``loaded`` changes of the ``load_tools`` calls among *tool_messages*.
+
+    Each Tool counts once, with the definition the call returned.
+    """
+    loads = state.tool_loads if state is not None else None
+    if not loads:
+        return []
+    persisted = {message.tool_call_id for message in tool_messages}
+    changes: dict[str, ToolChange] = {}
+    for tool_call_id, names in tool_dispatch_context.tool_loads:
+        if tool_call_id not in persisted:
+            continue
+        for name in names:
+            change = loads.get(name)
+            if change is not None:
+                changes.setdefault(name, change)
+    return list(changes.values())

@@ -5,7 +5,7 @@ import {
   buildAgentTargetOptions,
 } from './agentTargetOptions.js';
 import { parseAgentAddress } from './agentAddress.js';
-import { normalizeToolAccess } from './toolAccess.js';
+import { normalizeToolAccess, normalizeToolLoading } from './toolAccess.js';
 import { asText, isPlainObject } from './values.js';
 
 export const AGENT_FORM_MODE_CREATE = 'create';
@@ -58,6 +58,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'custom_system_prompt_enabled',
   'compaction_policy',
   'librarian_enabled',
+  'tool_loading',
 ]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -95,6 +96,8 @@ export function createAgentFormValues(agent = {}) {
       : null,
     // Librarian passes curate the Agent's own Skills unless switched off.
     librarian_enabled: agent.librarian_enabled !== false,
+    // On-demand Tools; null while off.
+    tool_loading: normalizeToolLoading(agent.tool_loading),
   };
 }
 
@@ -141,6 +144,8 @@ export function normalizeAgentForm(values, options = {}) {
     // A new Agent sends only the sampling values the user set, so an unset
     // field stays with the inherited value or the Provider default.
     includeEmptySampling: mode === AGENT_FORM_MODE_EDIT,
+    // An edit sends null to turn On-demand Tools off; a new Agent omits it.
+    includeEmptyToolLoading: mode === AGENT_FORM_MODE_EDIT,
   };
   let payload = buildAgentPayload(normalized, sampling, payloadOptions);
 
@@ -249,6 +254,7 @@ function normalizeValues(values = {}) {
       ? normalizeCompactionPolicy(values.compaction_policy)
       : null,
     librarian_enabled: values.librarian_enabled !== false,
+    tool_loading: normalizeToolLoading(values.tool_loading),
   };
 }
 
@@ -310,6 +316,10 @@ function buildAgentPayload(normalized, sampling, options = {}) {
     if (value !== null || options.includeEmptySampling) {
       payload[field] = value;
     }
+  }
+
+  if (normalized.tool_loading !== null || options.includeEmptyToolLoading) {
+    payload.tool_loading = normalized.tool_loading;
   }
 
   if (normalized.name || options.includeEmptyName) {

@@ -2,9 +2,12 @@
 
 The System Prompt is assembled by the production prompt manager for one Agent
 of a fresh Runtime, and the Tool definitions are the ones that Agent's Provider
-request carries. ``--all`` adds every registered Tool, including internal,
-opt-in and Session-scoped ones, so a Tool outside the default allowlist can be
-reviewed too.
+request carries. While the Agent loads Tools on demand, its Tool list keeps
+only the always-loaded Tools and ``load_tools``; the On-demand Tools are
+counted apart, by the System Prompt block that lists them and by the
+definitions ``load_tools`` returns. ``--all`` adds every registered Tool,
+including internal, opt-in and Session-scoped ones, so a Tool outside the
+default allowlist can be reviewed too.
 """
 
 from __future__ import annotations
@@ -15,8 +18,12 @@ from typing import Any
 
 from core.projects.resolver import runtime_agent_body
 from core.runtime.runtime import Runtime
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tools
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
 from scripts.tool_lab._lab_runtime import lab_runtime
+
+# The System Prompt block that lists the On-demand Tools.
+_LOAD_TOOLS_BLOCK = f"tool:{LOAD_TOOLS_TOOL_NAME}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +39,8 @@ class ToolDefinition:
     definition: dict[str, Any]
     tokens: int
     offered: bool
+    # Offered but not in the Tool list: the System Prompt lists it, ``load_tools`` loads it.
+    on_demand: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,12 +65,14 @@ async def collect(agent_id: str, *, include_all: bool = False) -> AgentView:
             if detail["included"]
         )
         offered, definitions = tool_definitions(runtime, agent_id, include_all=include_all)
+        left_out = on_demand_tools(agent, offered)
         tools = tuple(
             ToolDefinition(
                 name,
                 definition,
                 estimate_json_tokens(definition)[0],
                 name in offered,
+                name in left_out,
             )
             for name, definition in definitions.items()
         )
@@ -90,20 +101,29 @@ def tool_definitions(
 
 
 def summary(view: AgentView) -> str:
-    offered = [tool for tool in view.tools if tool.offered]
-    tool_tokens = sum(tool.tokens for tool in offered)
+    listed = [tool for tool in view.tools if tool.offered and not tool.on_demand]
+    on_demand = [tool for tool in view.tools if tool.on_demand]
+    tool_tokens = sum(tool.tokens for tool in listed)
     lines = [
         f"Agent {view.agent_id}: System Prompt {view.prompt_tokens} tokens, "
-        f"{len(offered)} Tool definitions {tool_tokens} tokens, "
+        f"{len(listed)} Tool definitions {tool_tokens} tokens, "
         f"together {view.prompt_tokens + tool_tokens} tokens (estimates)",
-        "",
-        "System Prompt blocks:",
     ]
+    if on_demand:
+        block = sum(block.tokens for block in view.blocks if block.id == _LOAD_TOOLS_BLOCK)
+        lines.append(
+            f"{len(on_demand)} On-demand Tools: listed in block {_LOAD_TOOLS_BLOCK} "
+            f"({block} tokens); their definitions ({sum(tool.tokens for tool in on_demand)} "
+            "tokens) load with load_tools"
+        )
+    lines.extend(["", "System Prompt blocks:"])
     lines.extend(f"  {block.id:<28} {block.tokens:>6}" for block in view.blocks)
     lines.append("")
-    lines.append("Tool definitions (* = not offered to this Agent by default):")
-    for tool in sorted(view.tools, key=lambda item: (not item.offered, item.name)):
-        marker = " " if tool.offered else "*"
+    lines.append(
+        "Tool definitions (~ = loaded on demand, * = not offered to this Agent by default):"
+    )
+    for tool in sorted(view.tools, key=lambda item: (not item.offered, item.on_demand, item.name)):
+        marker = "*" if not tool.offered else "~" if tool.on_demand else " "
         parameters = tool.definition.get("parameters") or {}
         names = ", ".join((parameters.get("properties") or {}).keys())
         lines.append(f" {marker}{tool.name:<22} {tool.tokens:>6}  {names}")

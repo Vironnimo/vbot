@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Literal
@@ -152,6 +153,7 @@ def _build_config_agent(
     *,
     project_id: str | None = None,
     resolved_top_p: float | None = None,
+    tool_loading: Any = None,
 ) -> ConfigAgent:
     return ConfigAgent(
         id=scanned.agent_id,
@@ -172,6 +174,7 @@ def _build_config_agent(
         compaction_policy=(
             dict(compaction_policy) if isinstance(compaction_policy, dict) else None
         ),
+        tool_loading=copy.deepcopy(tool_loading) if isinstance(tool_loading, dict) else None,
     )
 
 

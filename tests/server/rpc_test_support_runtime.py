@@ -95,11 +95,12 @@ class StubPrompts:
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,
         effective_tool_definitions: object = None,
+        on_demand_tools: object = None,
         session_tool_grants: object = (),
         pinned_blocks: object = None,
         request_block_definitions: object = (),
     ) -> str:
-        del agent_project_id, pinned_blocks, request_block_definitions
+        del agent_project_id, pinned_blocks, request_block_definitions, on_demand_tools
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
             return f"Custom system for {scope_agent_id}"
