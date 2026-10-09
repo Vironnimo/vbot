@@ -971,6 +971,9 @@ class CronService:
                     late=self._late_fire(_schedule.OwedFire(due_at=owed.due_at)),
                     event_due=owed,
                 )
+                # An event edit during admission may move an open occurrence
+                # before the last scan, including after a withdrawn claim.
+                settled = None
                 if job.id in self._pending_restarts:
                     return
                 continue

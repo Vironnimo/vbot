@@ -289,6 +289,16 @@ async def test_event_admission_rechecks_the_occurrence_after_waiting(
     job = await _event_job(services, event.id)
     occurrence_id = f"{event.id}_20300110T0900"
     parked = _park_idle_scheduler(monkeypatch)
+    idle_wait = cron_timing._sleep_until_utc
+
+    async def reach_first_due(target: datetime, **kwargs: Any) -> bool:
+        if services.clock.now == _local("2030-01-10T08:30"):
+            assert target == _local("2030-01-10T09:00")
+            services.clock.now = target
+            return True
+        return await idle_wait(target, **kwargs)
+
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", reach_first_due)
     saving, release = asyncio.Event(), asyncio.Event()
     save = services.cron._save_jobs_after_fire
     first = True
@@ -307,7 +317,8 @@ async def test_event_admission_rechecks_the_occurrence_after_waiting(
             await services.cron._run_slots.acquire()
     else:
         monkeypatch.setattr(services.cron, "_save_jobs_after_fire", held_save)
-    services.clock.now = _local("2030-01-10T09:00")
+    # Establish a settled scan before the selected occurrence comes due.
+    services.clock.now = _local("2030-01-10T08:30")
     services.cron.start()
     try:
         if phase == "slot":
@@ -318,7 +329,7 @@ async def test_event_admission_rechecks_the_occurrence_after_waiting(
         if change == "remove":
             await services.calendar.delete_occurrence(occurrence_id)
         elif change in ("later", "earlier"):
-            start = "2030-01-10T11:00" if change == "later" else "2030-01-10T08:45"
+            start = "2030-01-10T11:00" if change == "later" else "2030-01-10T08:15"
             await services.calendar.update_occurrence(occurrence_id, start=start)
         elif change == "context":
             await services.calendar.update_occurrence(occurrence_id, location="New room")
@@ -344,7 +355,7 @@ async def test_event_admission_rechecks_the_occurrence_after_waiting(
             services.trigger.trigger_run.assert_awaited_once()
             [note] = _notes(services)
             if change == "earlier":
-                assert "2030-01-10T08:45" in note
+                assert "2030-01-10T08:15" in note
             elif change == "context":
                 assert "Location: New room" in note
             else:
