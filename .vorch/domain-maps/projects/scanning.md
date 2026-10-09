@@ -26,7 +26,7 @@ Source order decides winners, then stable path order within a Source. The Team i
 
 `ScanReport` owns records only: bad_model, slug_collision, unslugifiable_name, orphan, unavailable_tool, invalid_source, skill_collision and source_scope. Source assembly supplies structural findings; resolution supplies usable-Model and pointer findings; RPC supplies unavailable Project Tools. Each Profile also carries its translation report.
 
-Membership can be cached; each Run rereads the selected Profile. Project show/open rescans and refreshes detection. Skill registry/inventory rebuilds also refresh Sources. Mutations of order, activation, cwd or Model mappings invalidate Team/Skill projections.
+Membership and its winning definition can be cached; each Run uses the adapter's direct read of the selected file or named definition, with live inherited settings. This reuses the Team's source choice, not its configuration; new competitors require the normal Team rescan/invalidation. Removed or renamed definitions fall back to the ordered live search. Selected discovered files are checked for links along their source-folder path before reading. Codex still validates every explicit role config file because an invalid role source makes the shared configuration unavailable, but translates only the selected role and does not scan unrelated standalone files. There is no separate parsed-configuration cache. Project show/open rescans and refreshes detection. Skill registry/inventory rebuilds also refresh Sources. Mutations of order, activation, cwd or Model mappings invalidate Team/Skill projections.
 
 ## Source and evidence
 

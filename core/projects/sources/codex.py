@@ -25,7 +25,24 @@ class CodexAdapter:
     source = "codex"
 
     def scan(self, root: Path) -> list[AgentProfile]:
-        paths = reading.files(root / ".codex/agents", ".toml", recursive=True)
+        return self._scan(root)
+
+    def read(self, root: Path, selected: AgentProfile) -> AgentProfile | None:
+        if not reading.is_file_strict(selected.source_path):
+            return None
+        return next(iter(self._scan(root, selected)), None)
+
+    def _scan(self, root: Path, selected: AgentProfile | None = None) -> list[AgentProfile]:
+        paths = (
+            reading.files(root / ".codex/agents", ".toml", recursive=True)
+            if selected is None
+            else (
+                [selected.source_path]
+                if selected.source_path.name.endswith(".toml")
+                and reading.is_source_file(root / ".codex/agents", selected.source_path)
+                else []
+            )
+        )
         definitions: list[tuple[Path, dict[str, Any]]] = []
         result: list[AgentProfile] = []
         referenced: set[Path] = set()
@@ -70,9 +87,18 @@ class CodexAdapter:
                         "name": name,
                         "description": reading.string(role, "description"),
                     }
-                    definitions.append((path, fields))
+                    if selected is None or (
+                        path == selected.source_path and name == selected.display_name
+                    ):
+                        definitions.append((path, fields))
                     referenced.add(path)
         except (OSError, ValueError) as error:
+            if selected is not None:
+                return [
+                    unavailable(
+                        self.source, selected.source_path, selected.display_name, str(error)
+                    )
+                ]
             result.append(unavailable(self.source, config_path, "codex-config", str(error)))
             # A broken repository config cannot turn its files into unrestricted Agents.
             return [
@@ -85,7 +111,8 @@ class CodexAdapter:
             try:
                 definitions.append((path, tomllib.loads(reading.read_text(path))))
             except (OSError, ValueError) as error:
-                result.append(unavailable(self.source, path, path.stem, str(error)))
+                name = path.stem if selected is None else selected.display_name
+                result.append(unavailable(self.source, path, name, str(error)))
         for path, fields in definitions:
             try:
                 fields = {**inherited, **fields}
@@ -113,7 +140,7 @@ class CodexAdapter:
                 )
                 result.append(agent)
             except (OSError, ValueError) as error:
-                name = fields.get("name")
+                name = fields.get("name") if selected is None else selected.display_name
                 result.append(
                     unavailable(
                         self.source,

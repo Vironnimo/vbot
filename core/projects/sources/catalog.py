@@ -18,6 +18,8 @@ class AgentAdapter(Protocol):
 
     def scan(self, root: Path) -> list[AgentProfile]: ...
 
+    def read(self, root: Path, selected: AgentProfile) -> AgentProfile | None: ...
+
 
 @dataclass(frozen=True)
 class SourceDefinition:

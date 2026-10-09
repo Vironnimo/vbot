@@ -8,13 +8,26 @@ from typing import Any
 
 import yaml
 
-from core.utils.file_status import is_dir_strict, is_file_strict, is_link_status
+from core.utils.file_status import is_dir_strict, is_file_strict, is_link_status, stat_or_none
 
 MAX_SOURCE_BYTES = 128 * 1024
 
 
 class SourceError(ValueError):
     """A source cannot safely supply runtime configuration."""
+
+
+def is_source_file(folder: Path, path: Path) -> bool:
+    """Check a previously discovered file without walking its siblings or following links."""
+    if path == folder or not path.is_relative_to(folder):
+        return False
+    for entry in (path, *path.parents):
+        status = stat_or_none(entry, follow_symlinks=False)
+        if status is None or is_link_status(status):
+            return False
+        if entry == folder:
+            return is_file_strict(path)
+    return False
 
 
 def read_text(path: Path) -> str:

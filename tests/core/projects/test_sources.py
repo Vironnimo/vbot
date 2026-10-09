@@ -9,11 +9,12 @@ import pytest
 from core.agents import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.projects._resolution_values import profile_tool_access
 from core.projects.scan_report import FindingType
-from core.projects.sources import SourceSelection, scan_project
+from core.projects.sources import SourceSelection, read_profile, scan_project
 from core.projects.sources.catalog import detect_sources, refresh_sources, skill_roots
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess, resolve_tool_access
 from tests.core.projects.resolver_test_support import (
+    AgentResolutionError,
     _openai_configured,
     _resolver,
 )
@@ -178,7 +179,9 @@ NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
 )
 def test_imports_grant_the_tools_an_agent_may_use(repo, source, path, document, expected, status):
     write(repo, path, document)
-    profile = scan_project(repo, sources=[SourceSelection(f"{source}.agents")]).team[0]
+    sources = [SourceSelection(f"{source}.agents")]
+    profile = scan_project(repo, sources=sources).team[0]
+    assert read_profile(repo, sources, profile.agent_id, selected=profile) == profile
     assert profile.status == status
     policy = profile_tool_access(profile, tuple(sorted(ALL_TOOLS)))
     assert set(policy.allowed) == expected
@@ -221,6 +224,121 @@ def test_mixed_sources_priority_and_new_detection_preserve_winners(repo):
     assert next(item for item in refreshed if item.id == "cursor.agents").enabled is False
     reordered = scan_project(repo, sources=[sources[1], sources[0], sources[2]])
     assert reordered.team[1].source == "opencode"
+    selected = result.team[1]
+    write(repo, ".claude/agents/reviewer.md", "---\nname: renamed\n---\nRenamed.")
+    fallback = read_profile(repo, sources, "reviewer", selected=selected)
+    assert fallback is not None and fallback.source == "opencode"
+    (repo / ".claude/agents/reviewer.md").unlink()
+    assert read_profile(repo, sources, "reviewer", selected=selected) == fallback
+
+
+@pytest.mark.parametrize("source", ["claude", "opencode", "codex"])
+def test_selected_profile_reloads_inherited_rules_and_only_its_definition(
+    repo, monkeypatch, source
+):
+    from core.projects.sources import _reading as reading
+
+    if source == "claude":
+        config = write(repo, ".claude/settings.json", "{}")
+        path = write(repo, ".claude/agents/definition.md", "---\nname: reviewer\n---\nBefore.")
+        write(repo, ".claude/agents/other.md", "---\nname: other\n---\nOther.")
+        changed_config = '{"permissions":{"deny":["Bash"]}}'
+        changed_source = "---\nname: reviewer\n---\nAfter."
+        expected_reads = {config, path}
+    elif source == "opencode":
+        config = write(
+            repo,
+            "opencode.json",
+            '{"agent":{"reviewer":{"prompt":"{file:reviewer.txt}"},'
+            '"other":{"prompt":"{file:other.txt}"}}}',
+        )
+        path = write(repo, "reviewer.txt", "Before.")
+        write(repo, "other.txt", "Other.")
+        changed_config = config.read_text(encoding="utf-8")[:-1] + ',"permission":{"bash":"deny"}}'
+        changed_source = "After."
+        expected_reads = {config, path}
+    else:
+        config = write(
+            repo,
+            ".codex/config.toml",
+            "[features]\nshell_tool=true\n"
+            '[agents.other]\nconfig_file="agents/role.data"\ndescription="Other role"\n'
+            '[agents.reviewer]\nconfig_file="agents/role.data"\ndescription="Selected role"\n'
+            '[agents.independent]\nconfig_file="independent.toml"\n',
+        )
+        path = write(repo, ".codex/agents/role.data", 'developer_instructions="Before."')
+        independent = write(repo, ".codex/independent.toml", 'developer_instructions="Other."')
+        write(repo, ".codex/agents/standalone.toml", 'name="standalone"')
+        changed_config = config.read_text(encoding="utf-8").replace(
+            "shell_tool=true", "shell_tool=false"
+        )
+        changed_source = 'name="reviewer"\ndeveloper_instructions="After."'
+        expected_reads = {config, path, independent}
+    sources = [SourceSelection(f"{source}.agents")]
+    selected = next(
+        agent for agent in scan_project(repo, sources=sources).team if agent.agent_id == "reviewer"
+    )
+    config.write_text(changed_config, encoding="utf-8")
+    path.write_text(changed_source, encoding="utf-8")
+    original_read = reading.read_text
+    reads: list[Path] = []
+
+    def read_text(source_path):
+        reads.append(source_path)
+        return original_read(source_path)
+
+    monkeypatch.setattr(reading, "read_text", read_text)
+    reloaded = read_profile(repo, sources, "reviewer", selected=selected)
+    assert reloaded is not None and reloaded.agent_id == "reviewer"
+    assert reloaded.body == "After."
+    assert set(profile_tool_access(reloaded, tuple(ALL_TOOLS)).allowed) == NO_SHELL
+    assert set(reads) == expected_reads
+    if source == "codex":
+        assert reloaded.description == "Selected role"
+        # Every explicit role file still validates the inherited configuration.
+        independent.write_text("broken = [", encoding="utf-8")
+        invalid = read_profile(repo, sources, "reviewer", selected=selected)
+        assert invalid is not None and invalid.unavailable_reason
+        # Removing a role must not promote an arbitrary referenced config file
+        # into a standalone .toml definition, even if it declares the same name.
+        config.write_text("[features]\nshell_tool=false\n", encoding="utf-8")
+        assert read_profile(repo, sources, "reviewer", selected=selected) is None
+
+
+@pytest.mark.parametrize("source", ["claude", "opencode", "codex"])
+@pytest.mark.parametrize("failure", ["malformed", "unreadable"])
+def test_a_selected_unavailable_profile_never_uses_a_shadowed_definition(
+    agents, projects, repo, deny_access, source, failure
+):
+    if source == "codex":
+        path = write(
+            repo, ".codex/agents/definition.toml", 'name="reviewer"\nmodel="openai/gpt-5.2"'
+        )
+        broken = "name = ["
+    else:
+        filename = "reviewer" if source == "opencode" else "definition"
+        path = write(
+            repo,
+            f".{source}/agents/{filename}.md",
+            "---\nname: reviewer\nmodel: openai/gpt-5.2\n---\nSelected.",
+        )
+        broken = "---\nname: [\n---\nBroken."
+    write(repo, ".cursor/agents/reviewer.md", "---\nmodel: openai/gpt-5.2\n---\nShadowed.")
+    project = projects.create(
+        "repo",
+        "Repo",
+        repo,
+        sources=[{"id": f"{source}.agents"}, {"id": "cursor.agents"}],
+    )
+    resolver = _resolver(agents, projects, _openai_configured())
+    resolver.rescan_project(project)
+    if failure == "malformed":
+        path.write_text(broken, encoding="utf-8")
+    else:
+        deny_access(path)
+    with pytest.raises(AgentResolutionError) as error:
+        resolver.resolve_agent("repo", "reviewer")
+    assert type(error.value) is AgentResolutionError
 
 
 @pytest.mark.parametrize(
