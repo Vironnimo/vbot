@@ -318,6 +318,10 @@ def register_channel_send_tool(
         CHANNEL_SEND_TOOL_DESCRIPTION,
         CHANNEL_SEND_TOOL_PARAMETERS,
         handler,
+        summary=(
+            "Send a message or files to a chat in your messaging Channels, or send files along "
+            "with your reply."
+        ),
         open_input_schema=True,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,
         argument_normalizer=_normalize_channel_send_arguments,

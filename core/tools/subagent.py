@@ -159,6 +159,10 @@ def register_subagent_tools(
         SUBAGENT_TOOL_DESCRIPTION,
         SUBAGENT_TOOL_PARAMETERS,
         coordinator.spawn,
+        summary=(
+            "Delegate tasks to Sub-Agents that work in their own Sessions, and message, list or "
+            "cancel them."
+        ),
         execution_slot_required=False,
         open_input_schema=True,
         argument_normalizer=_normalize_subagent_arguments,

@@ -75,6 +75,21 @@ CANONICAL_REGISTERED_TOOLS = sorted(
     + COMPUTER_USE_TOOLS
 )
 
+# Tools whose description opens with a sentence short and clear enough to list
+# them while they are loaded on demand. Every other Tool an Agent can load on
+# demand declares a summary.
+FIRST_SENTENCE_SUMMARY_TOOLS = {
+    "apply_patch",
+    "bash",
+    "edit",
+    "generate_image",
+    "generate_music",
+    "generate_video",
+    "search_files",
+    "skill",
+    "write",
+}
+
 BUNDLED_SKILLS = [
     "coding-agents",
     "computer-use",
@@ -120,6 +135,23 @@ def test_start_registers_each_builtin_tool_once_with_a_result_contract(
             continue
         assert tool.result_schema is not None
         assert len(tool.contract.schema_fingerprint) == 64
+
+
+def test_loadable_tools_declare_a_summary_unless_their_first_sentence_serves(
+    shared_runtime: Runtime,
+) -> None:
+    # Live Tools serve only the built-in Live Agents, which never load Tools on
+    # demand; Session-granted Tools are always loaded.
+    never_on_demand = (
+        set(LIVE_TOOL_NAMES)
+        | set(SESSION_GRANTED_BUILTIN_TOOLS)
+        | _declared_hidden_session_tools(shared_runtime)
+    )
+    tools = [tool for tool in shared_runtime.tools.list_tools() if tool.name not in never_on_demand]
+
+    assert sorted(tool.name for tool in tools if tool.summary is None) == sorted(
+        FIRST_SENTENCE_SUMMARY_TOOLS
+    )
 
 
 def test_builtin_provider_definitions_expose_model_visible_metadata_only(

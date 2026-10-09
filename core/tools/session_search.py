@@ -258,6 +258,10 @@ def register_session_search_tool(
         build_session_search_description(recall_backend),
         build_session_search_parameters(recall_backend),
         make_session_search_handler(recall_backend, sessions, timezone_name_loader),
+        summary=(
+            "Search past conversations, for example for earlier decisions or what the user said "
+            "before."
+        ),
         family="sessions",
         open_input_schema=True,
         handler_validates_arguments=True,

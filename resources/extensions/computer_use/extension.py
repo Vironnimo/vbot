@@ -1012,6 +1012,10 @@ def register(api: ExtensionAPI) -> None:
         COMPUTER_DESCRIPTION,
         COMPUTER_PARAMETERS,
         service.computer,
+        summary=(
+            "Operate the server's desktop with screenshots, mouse and keyboard, for apps no other "
+            "Tool can reach."
+        ),
         display=ToolDisplay(summary_fields=("action",)),
         argument_normalizer=normalize_computer,
         **shared,
@@ -1021,6 +1025,10 @@ def register(api: ExtensionAPI) -> None:
         COMPUTER_BATCH_DESCRIPTION,
         COMPUTER_BATCH_PARAMETERS,
         service.computer_batch,
+        summary=(
+            "Run several predictable desktop steps, such as click, type and press Enter, in one "
+            "call."
+        ),
         display=ToolDisplay(summary_builder=_summary),
         argument_normalizer=normalize_batch,
         **shared,
@@ -1030,6 +1038,10 @@ def register(api: ExtensionAPI) -> None:
         COMPUTER_APPS_DESCRIPTION,
         COMPUTER_APPS_PARAMETERS,
         service.computer_apps,
+        summary=(
+            "Find apps on the server's desktop, bring one to the front, or ask the user to "
+            "approve apps."
+        ),
         display=ToolDisplay(summary_fields=("action",), summary_builder=_apps_summary),
         argument_normalizer=normalize_apps,
         **shared,

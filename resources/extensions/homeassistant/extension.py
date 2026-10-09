@@ -965,6 +965,10 @@ def register(api: Any) -> None:
         HA_LIST_ENTITIES_DESCRIPTION,
         HA_LIST_ENTITIES_PARAMETERS,
         list_entities_handler,
+        summary=(
+            "List Home Assistant entities such as lights and sensors with their state, by domain "
+            "or area."
+        ),
         argument_normalizer=list_entities_normalizer(
             HA_LIST_ENTITIES_NAME, HA_LIST_ENTITIES_PARAMETERS
         ),
@@ -980,6 +984,10 @@ def register(api: Any) -> None:
         HA_GET_STATE_DESCRIPTION,
         HA_GET_STATE_PARAMETERS,
         get_state_handler,
+        summary=(
+            "Get the current state and attributes of one Home Assistant entity, such as a sensor "
+            "or light."
+        ),
         argument_normalizer=get_state_normalizer(HA_GET_STATE_NAME, HA_GET_STATE_PARAMETERS),
         result_schema={"type": "object", "required": ["entity_id", "state"]},
         display=ToolDisplay(summary_fields=("entity_id",)),
@@ -994,6 +1002,9 @@ def register(api: Any) -> None:
         HA_LIST_SERVICES_DESCRIPTION,
         HA_LIST_SERVICES_PARAMETERS,
         list_services_handler,
+        summary=(
+            "List Home Assistant services and their fields, to find out how to control a device."
+        ),
         argument_normalizer=list_services_normalizer(
             HA_LIST_SERVICES_NAME, HA_LIST_SERVICES_PARAMETERS
         ),
@@ -1010,6 +1021,7 @@ def register(api: Any) -> None:
         HA_CALL_SERVICE_DESCRIPTION,
         HA_CALL_SERVICE_PARAMETERS,
         call_service_handler,
+        summary="Control Home Assistant devices by calling a service, such as turning on a light.",
         argument_normalizer=call_service_normalizer(
             HA_CALL_SERVICE_NAME, HA_CALL_SERVICE_PARAMETERS
         ),

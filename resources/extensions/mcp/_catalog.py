@@ -39,6 +39,7 @@ from ._definitions import (
     MCP_MORE_NAMES,
     MCP_TOOLS_ADDED,
     MCP_TOOLS_REMOVED,
+    SUMMARY_CHARACTERS,
 )
 
 CATALOG_DATABASE = "catalog"
@@ -95,12 +96,7 @@ def connection_description(connection: str, about: str, tools: Sequence[str]) ->
     *about* is the user's description of the connection, else the server's title;
     empty leaves it out. *tools* are the remote Tool names in server order.
     """
-    about = " ".join(about.split())
-    heading = f"MCP connection {connection}"
-    if about:
-        heading = f"{heading}: {about}"
-    if not heading.endswith((".", "!", "?")):
-        heading += "."
+    heading = _heading(connection, about)
     if not tools:
         listing = MCP_DESCRIPTION_NO_TOOLS
     else:
@@ -111,6 +107,25 @@ def connection_description(connection: str, about: str, tools: Sequence[str]) ->
             names = f"{names}, {more}" if names else more
         listing = MCP_DESCRIPTION_TOOLS.format(names=names)
     return f"{heading} {MCP_DESCRIPTION_USAGE} {listing}"
+
+
+def connection_summary(connection: str, about: str) -> str:
+    """The line that lists the connection Tool while it is loaded on demand.
+
+    It is the description's heading, which changes only with *about*, not with
+    the catalog, so a catalog change does not re-list the Tool.
+    """
+    return _capped(_heading(connection, about), SUMMARY_CHARACTERS)
+
+
+def _heading(connection: str, about: str) -> str:
+    about = " ".join(about.split())
+    heading = f"MCP connection {connection}"
+    if about:
+        heading = f"{heading}: {about}"
+    if not heading.endswith((".", "!", "?")):
+        heading += "."
+    return heading
 
 
 def described_tools(description: str) -> ToolNames | None:
@@ -220,6 +235,11 @@ class CatalogSummaries:
         while len(described) > _DESCRIPTIONS_KEPT:
             del described[next(iter(described))]
         return text
+
+    def summary(self, connection: str, about: str | None) -> str:
+        """The connection Tool's summary; *about* is the user's description."""
+        known = self._summaries.get(connection)
+        return connection_summary(connection, about or (known.title if known else ""))
 
     def change_note(self, connection: str) -> ChangeNote:
         """The connection Tool's ``definition_change_note``."""

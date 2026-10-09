@@ -525,6 +525,10 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         MEMORY_TOOL_DESCRIPTION,
         MEMORY_TOOL_PARAMETERS,
         make_memory_handler(memory_service),
+        summary=(
+            "Save, change or remove facts about the user and the environment that you see in "
+            "every future Session."
+        ),
         activation="memory_mode",
         constraints=("identity_agent",),
         open_input_schema=True,

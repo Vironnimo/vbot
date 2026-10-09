@@ -343,6 +343,7 @@ def register_status_tool(
                 timezone_name_loader,
             )
         ),
+        summary="Check a Session's model, context and cache usage, runtime and activity.",
         open_input_schema=True,
         argument_normalizer=_normalize_status_arguments,
         result_schema={"type": "object", "required": ["text", "agent_id", "session_id"]},
