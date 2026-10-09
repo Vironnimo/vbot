@@ -3,9 +3,12 @@ response classification."""
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -80,6 +83,11 @@ def _counting_client() -> ProviderTaskClient:
 
 def _json(response: httpx.Response) -> Any:
     return response.json()
+
+
+async def _consume_json(response: httpx.Response) -> Any:
+    await response.aread()
+    return _json(response)
 
 
 # ---------------------------------------------------------------------------
@@ -361,19 +369,35 @@ _VERIFIED_503_POLICY = TaskRequestRetryPolicy(
 )
 @respx.mock
 @pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True], ids=["buffered", "streamed"])
 async def test_post_retries_only_what_its_policy_proves_safe(
     replies: Any,
     retry_policy: TaskRequestRetryPolicy,
     expected: Any,
     calls: int | None,
     detail: str | None,
+    streaming: bool,
 ) -> None:
+    if streaming and isinstance(replies, list):
+        replies = [
+            httpx.Response(
+                reply.status_code, headers=reply.headers, stream=httpx.ByteStream(reply.content)
+            )
+            if isinstance(reply, httpx.Response)
+            else reply
+            for reply in replies
+        ]
     route = respx.post(_THINGS_URL).mock(side_effect=replies)
     client = _counting_client()
 
     async def post() -> Any:
         return await client.post_and_parse(
-            "/things", timeout=5.0, parse=_json, json={"prompt": "p"}, retry_policy=retry_policy
+            "/things",
+            timeout=5.0,
+            parse=_json,
+            consume=_consume_json if streaming else None,
+            json={"prompt": "p"},
+            retry_policy=retry_policy,
         )
 
     if isinstance(expected, type):
@@ -413,8 +437,9 @@ async def test_post_retries_only_what_its_policy_proves_safe(
 )
 @respx.mock
 @pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True], ids=["buffered", "streamed"])
 async def test_retryable_parse_failure_follows_the_retry_policy(
-    retry_policy: TaskRequestRetryPolicy, expected: Any, calls: int
+    retry_policy: TaskRequestRetryPolicy, expected: Any, calls: int, streaming: bool
 ) -> None:
     route = respx.post(_THINGS_URL).mock(return_value=httpx.Response(200, json=_OK))
     parsed: list[int] = []
@@ -425,9 +450,17 @@ async def test_retryable_parse_failure_follows_the_retry_policy(
             raise ProviderError("incomplete batch", retryable=True)
         return response.json()
 
+    async def consume(response: httpx.Response) -> Any:
+        await response.aread()
+        return parse(response)
+
     async def post() -> Any:
         return await _counting_client().post_and_parse(
-            "/things", timeout=5.0, parse=parse, retry_policy=retry_policy
+            "/things",
+            timeout=5.0,
+            parse=parse,
+            consume=consume if streaming else None,
+            retry_policy=retry_policy,
         )
 
     if isinstance(expected, type):
@@ -472,7 +505,7 @@ async def test_get_is_replay_safe_and_retries_a_transient_server_error() -> None
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("method", ["GET", "POST", "POST_STREAM"])
 @pytest.mark.parametrize("outcome", ["http_rejection", "parser_auth_error"])
 async def test_only_an_http_rejection_refreshes_the_token_and_replays_the_same_request(
     method: str, outcome: str
@@ -501,7 +534,7 @@ async def test_only_an_http_rejection_refreshes_the_token_and_replays_the_same_r
         token_getter=getter,
     )
     first_status = 401 if outcome == "http_rejection" else 200
-    route = respx.route(method=method, url=_PROVIDER_BASE_URL + "/task").mock(
+    route = respx.route(method=method.split("_")[0], url=_PROVIDER_BASE_URL + "/task").mock(
         side_effect=[
             httpx.Response(first_status, json={"result": "initial"}),
             httpx.Response(200, json={"result": "done"}),
@@ -513,6 +546,10 @@ async def test_only_an_http_rejection_refreshes_the_token_and_replays_the_same_r
             raise ProviderAuthError("test parser auth failure")
         return str(response.json()["result"])
 
+    async def consume(response: httpx.Response) -> str:
+        await response.aread()
+        return parse(response)
+
     async def invoke() -> str:
         if method == "GET":
             return await client.get_and_parse("/task", timeout=1, parse=parse)
@@ -520,6 +557,7 @@ async def test_only_an_http_rejection_refreshes_the_token_and_replays_the_same_r
             "/task",
             timeout=1,
             parse=parse,
+            consume=consume if method == "POST_STREAM" else None,
             json={"prompt": "same input"},
             retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
@@ -535,6 +573,191 @@ async def test_only_an_http_rejection_refreshes_the_token_and_replays_the_same_r
             await invoke()
         assert getter.refreshes == 0
         assert route.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Incremental response consumption
+# ---------------------------------------------------------------------------
+
+
+class _GatedResponseStream(httpx.AsyncByteStream):
+    def __init__(self, *, read_failure: bool = False) -> None:
+        self.release = asyncio.Event()
+        self.read_failure = read_failure
+        self.closed = False
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"first"
+        await self.release.wait()
+        if self.read_failure:
+            raise httpx.ReadError("test interrupted response")
+        yield b"second"
+
+    @override
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize(
+    "outcome", ["completed", "early_return", "cancelled", "read_failure", "consumer_failure"]
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_delivers_before_completion_and_closes_every_outcome_without_replay(
+    tmp_path: Path, outcome: str
+) -> None:
+    stream = _GatedResponseStream(read_failure=outcome == "read_failure")
+    route = respx.post(_THINGS_URL).mock(return_value=httpx.Response(200, stream=stream))
+    observer = SimpleNamespace(start=AsyncMock(return_value="call"), finish=AsyncMock())
+    traces = DebugTraceStore(tmp_path, trace_limit=10)
+    client = ProviderTaskClient.from_runtime(
+        _StubRuntime(_make_provider(), traces),
+        SimpleNamespace(
+            provider_id="example",
+            model_id="example/some-model",
+            connection_id="example:api-key",
+            local_connection_id="api-key",
+        ),
+        usage_observer=observer,
+        debug_context=DebugContext(
+            run_id="run-1",
+            agent_id="agent-1",
+            session_id="session-1",
+            provider_id="example",
+            connection_id="example:api-key",
+            model_id="example/some-model",
+            streaming=True,
+            iteration_number=0,
+        ),
+    )
+    first_received = asyncio.Event()
+    chunks: list[bytes] = []
+
+    async def consume(response: httpx.Response) -> bytes:
+        assert not response.is_closed
+        async for chunk in response.aiter_bytes():
+            chunks.append(chunk)
+            first_received.set()
+            if outcome == "early_return":
+                return chunk
+            if outcome == "consumer_failure":
+                raise ProviderError("test unusable stream", retryable=True)
+        return b"".join(chunks)
+
+    def parse(_response: httpx.Response) -> bytes:
+        raise AssertionError("a streaming call must only use its consumer")
+
+    task = asyncio.create_task(
+        client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=parse,
+            consume=consume,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+    )
+    try:
+        await first_received.wait()
+        assert chunks == [b"first"]
+        if outcome not in {"early_return", "consumer_failure"}:
+            assert not task.done() and not stream.closed
+        if outcome == "cancelled":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            stream.release.set()
+            if outcome in {"read_failure", "consumer_failure"}:
+                with pytest.raises(ProviderOutcomeUnknownError) as raised:
+                    await task
+                assert raised.value.retryable is False
+            else:
+                assert await task == (b"first" if outcome == "early_return" else b"firstsecond")
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert stream.closed and route.call_count == 1
+    expected_status = (
+        "cancelled"
+        if outcome == "cancelled"
+        else "failed"
+        if outcome in {"read_failure", "consumer_failure"}
+        else "completed"
+    )
+    observer.start.assert_awaited_once()
+    observer.finish.assert_awaited_once_with(
+        "call",
+        usage=None,
+        result=b"".join(chunks) if expected_status == "completed" else None,
+        status=expected_status,
+    )
+    await drain_debug_traces()
+    recorded = traces.get_traces()
+    assert len(recorded) == 1
+    trace = traces.get_trace(recorded[0]["trace_id"])
+    assert trace["response"]["body"] == b"".join(chunks).decode()
+
+
+@pytest.mark.parametrize(
+    ("status_code", "accepted"),
+    [(200, True), (200, False), (400, False)],
+    ids=["accepted", "unusable", "rejected"],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_records_usage_read_by_its_consumer_even_when_the_result_is_unusable(
+    status_code: int,
+    accepted: bool,
+) -> None:
+    class UsageStream(httpx.AsyncByteStream):
+        @override
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'{"usage":{"input_tokens":4}}'
+
+    route = respx.post(_THINGS_URL).mock(
+        return_value=httpx.Response(status_code, stream=UsageStream())
+    )
+    observer = SimpleNamespace(start=AsyncMock(return_value="call"), finish=AsyncMock())
+    provider = _make_provider()
+    client = ProviderTaskClient(
+        provider=provider,
+        connection=provider.connections[0],
+        credential="test-token",
+        model_id="test-model",
+        usage_observer=observer,
+    )
+
+    async def consume(response: httpx.Response) -> str:
+        assert status_code == 200
+        await response.aread()
+        if not accepted:
+            raise ValueError("test unusable result")
+        return "parsed"
+
+    async def invoke() -> Any:
+        return await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=_json,
+            consume=consume,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+
+    if accepted:
+        assert await invoke() == "parsed"
+    else:
+        with pytest.raises(ProviderOutcomeUnknownError if status_code == 200 else ProviderError):
+            await invoke()
+    assert route.call_count == 1
+    observer.finish.assert_awaited_once_with(
+        "call",
+        usage={"input_tokens": 4},
+        result="parsed" if accepted else None,
+        status="completed" if accepted else "failed",
+    )
 
 
 # ---------------------------------------------------------------------------

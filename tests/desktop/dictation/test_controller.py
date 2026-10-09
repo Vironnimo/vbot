@@ -26,6 +26,7 @@ from tests.desktop.hotkey_test_support import FakeHotkeyApi
 from tests.desktop.speech.speech_test_support import (
     FakeInputStream,
     FakeSoundDevice,
+    Overflow,
     silence,
     tone,
     wait_until,
@@ -88,6 +89,7 @@ class FakeServer:
         self.release_transcription = threading.Event()
         self.release_transcription.set()
         self.transcribing = threading.Event()
+        self.transcribed = threading.Event()
         self.uploads: list[bytes] = []
         self.urls: list[str] = []
         # Answer "Teil <n>" per upload that holds sound, "" for silence.
@@ -116,6 +118,7 @@ class _FakeClient:
         self.server.uploads.append(audio)
         self.server.transcribing.set()
         assert self.server.release_transcription.wait(5)
+        self.server.transcribed.set()
         if isinstance(self.server.transcript, Exception):
             raise self.server.transcript
         if self.server.numbered:
@@ -331,12 +334,43 @@ def test_escape_cancels_the_take_without_inserting(make_rig: Any, during: str) -
 
     rig.escape()
     wait_until(lambda: "cancel" in rig.cues.played)
-    rig.server.release_transcription.set()
     rig.wait_idle()
 
     assert rig.inserter.inserted == []
     assert rig.cues.played[-1] == "cancel"
     assert rig.controller.status()["last_failure"] is None
+
+    if during == "transcribing":
+        # A cancelled request that replies late cannot end or insert into the next take.
+        rig.start_take()
+        rig.server.release_transcription.set()
+        assert rig.server.transcribed.wait(1)
+        assert rig.controller.status()["state"] == "recording"
+        assert rig.inserter.inserted == []
+        rig.press()
+        rig.wait_idle()
+        assert rig.inserter.inserted == [("Hallo Welt", TARGET_WINDOW)]
+
+
+@pytest.mark.parametrize(
+    ("gap", "code"),
+    [(Overflow(), "recording_interrupted"), (OSError("lost microphone"), "microphone_read_failed")],
+    ids=["overflow", "read-failure"],
+)
+def test_lost_audio_ends_the_take_without_inserting_an_incomplete_transcript(
+    make_rig: Any, gap: object, code: str
+) -> None:
+    rig = make_rig()
+    rig.start_take()
+
+    rig.sd.feed(gap, WORD)
+    rig.wait_idle()
+
+    assert rig.inserter.inserted == []
+    assert rig.cues.played == ["listen", "failed"]
+    assert rig.controller.status()["last_failure"]["code"] == code
+    assert rig.page.recording[-1] is False
+    assert rig.page.wake_phrases_paused[-1] is False
 
 
 @pytest.mark.parametrize(

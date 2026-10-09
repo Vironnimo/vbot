@@ -35,6 +35,37 @@ function start(state, runId) {
 
 const render = visibleTimelineItemsForRender;
 
+it('attaches early speech to its running Tool and keeps that row for the final artifact', () => {
+  const state = session();
+  start(state, 'run-speech');
+  const toolCall = {
+    id: 'speech-call',
+    name: 'generate_speech',
+    arguments: { text: 'test-owned text' },
+  };
+  append(state, 'run-speech', 1, 'tool_call_started', { tool_call: toolCall });
+  append(state, 'run-speech', 2, 'speech_playback', {
+    tool_call_id: toolCall.id,
+    url: '/api/speech/playback/early',
+  });
+  const early = assistantRun(state).tools[0];
+  expect(early.speechPlayback).toBe('/api/speech/playback/early');
+  expect(early.status).toBe('running');
+  append(state, 'run-speech', 3, 'tool_call_result', {
+    tool_call: toolCall,
+    result: {
+      ok: true,
+      data: {
+        artifact: { kind: 'speech', url: '/api/speech/artifacts/final' },
+      },
+    },
+  });
+  const final = assistantRun(state).tools[0];
+  expect(final.id).toBe(early.id);
+  expect(final.speechPlayback).toBe(early.speechPlayback);
+  expect(final.status).toBe('success');
+});
+
 function assistantRun(state, runId) {
   return render(state).find(
     (item) =>

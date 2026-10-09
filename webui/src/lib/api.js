@@ -24,6 +24,8 @@ export {
   cancelLocalSetup,
   restartAfterLocalSpeechSetup,
   previewSpeech,
+  readSpeechPlayback,
+  isSpeechPlaybackUrl,
   listTaskModelTargets,
   getTaskModelOptions,
   transcribeSpeech,

@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +100,14 @@ def chunks(text: str) -> list[str]:
     return result
 
 
-def generate(model: Any, engine: str, text: str, options: dict[str, Any], output: str) -> None:
+def generate(
+    model: Any,
+    engine: str,
+    text: str,
+    options: dict[str, Any],
+    output: str,
+    chunk_ready: Callable[[int], None] | None = None,
+) -> None:
     np = importlib.import_module("numpy")
     with wave.open(output, "wb") as wav:
         wav.setnchannels(1)
@@ -127,7 +135,14 @@ def generate(model: Any, engine: str, text: str, options: dict[str, Any], output
                 raise ValueError("Invalid audio")
             if index == 0:
                 wav.setframerate(rate)
-            wav.writeframes((np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes())
+            pcm = (np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes()
+            wav.writeframes(pcm)
+            if chunk_ready is not None:
+                chunk_path = Path(output).with_name(f"chunk-{index}.wav")
+                with wave.open(str(chunk_path), "wb") as chunk:
+                    chunk.setparams((1, 2, rate, 0, "NONE", "not compressed"))
+                    chunk.writeframes(pcm)
+                chunk_ready(index)
 
 
 def main() -> None:
@@ -163,7 +178,16 @@ def main() -> None:
             if not 0 < len(request["text"]) <= 5000:
                 raise ValueError("Invalid text length")
             progress("synthesizing")
-            generate(model, engine, request["text"], request["options"], request["output"])
+            generate(
+                model,
+                engine,
+                request["text"],
+                request["options"],
+                request["output"],
+                (lambda index: emit({"audio_chunk": index}))
+                if request.get("stream_audio")
+                else None,
+            )
             emit({"done": True})
         except Exception as error:
             emit({"error": type(error).__name__})

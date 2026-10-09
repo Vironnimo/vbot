@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import struct
 from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, suppress
 from dataclasses import replace
@@ -70,6 +71,9 @@ class FakeCall:
             else {"type": "webrtc", "sdp": f"answer-{call_id}"}
         )
         self.audio: list[bytes] = []
+        self.playback_reports: list[tuple[int, int, bool, bool]] = []
+        self.playback_resets = 0
+        self.playback_syncs = 0
         self.notices: list[LiveRunNotice] = []
         self.close_calls = 0
         self.abort_calls = 0
@@ -97,6 +101,17 @@ class FakeCall:
 
     def push_audio(self, pcm: bytes) -> None:
         self.audio.append(pcm)
+
+    def report_playback(
+        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
+    ) -> None:
+        self.playback_reports.append((generation, played_samples, enabled, cleared))
+
+    def reset_playback(self) -> None:
+        self.playback_resets += 1
+
+    def sync_playback(self) -> None:
+        self.playback_syncs += 1
 
     async def wait_closed(self) -> None:
         await self._closed.wait()
@@ -391,17 +406,20 @@ async def test_relay_audio_reaches_only_an_attached_owner(live: Harness) -> None
     call.host.publish_audio(b"\x02\x00")
     call.host.publish_audio(b"")
     call.host.publish({"type": "playback_clear"})
-    await settle(lambda: len(reader.frames) == 3)
+    await settle(lambda: len(reader.frames) == 2)
     assert reader.frames == [
         {"type": "state", "phase": "live"},
-        b"\x02\x00",
         {"type": "playback_clear"},
     ]
+    assert call.playback_syncs == 1
+    call.host.publish_audio(b"\x03\x00", generation=2, start_samples=24_000)
+    await settle(lambda: len(reader.frames) == 3)
+    assert reader.frames[-1] == struct.pack("<II", 2, 24_000) + b"\x03\x00"
 
 
 @pytest.mark.asyncio
-async def test_relay_audio_beyond_its_bound_is_dropped_and_keeps_the_owner() -> None:
-    harness = Harness(LiveCallLimits(owner_audio_limit_bytes=4))
+async def test_relay_overflow_resets_playback_instead_of_splicing_a_gap() -> None:
+    harness = Harness(LiveCallLimits(owner_audio_limit_bytes=20))
     try:
         call = await harness.start_relay()
         owner = harness.registry.attach(call.id)
@@ -409,11 +427,15 @@ async def test_relay_audio_beyond_its_bound_is_dropped_and_keeps_the_owner() -> 
         for index in range(3):
             call.host.publish_audio(bytes([index, 0]))
         call.host.publish({"type": "state", "phase": "live"})
-        assert owner.close_code is None
+        assert owner.close_code == LIVE_SOCKET_CLOSE_LAGGED
+        assert call.playback_resets == 1
         reader = OwnerReader(owner)
         harness.readers.append(reader)
-        await settle(lambda: len(reader.frames) == 3)
-        assert reader.frames == [b"\x00\x00", b"\x01\x00", {"type": "state", "phase": "live"}]
+        await settle(lambda: reader.done)
+        assert reader.frames == []
+        fresh = harness.attach(call)
+        await settle(lambda: len(fresh.frames) == 1)
+        assert fresh.frames == [{"type": "state", "phase": "live"}]
     finally:
         await harness.close()
 
@@ -432,6 +454,33 @@ async def test_microphone_audio_from_the_owner_reaches_the_call(live: Harness) -
     first.receive_audio(b"\x03\x00")
     second.receive_audio(b"\x04\x00")
     assert call.audio == [b"\x01\x00\x02\x00", bytes(LIVE_AUDIO_FRAME_MAX_BYTES), b"\x04\x00"]
+
+
+@pytest.mark.asyncio
+async def test_playback_receipts_only_accept_the_current_owner_and_valid_sample_counts(
+    live: Harness,
+) -> None:
+    call = await live.start_relay()
+    owner = live.registry.attach(call.id)
+    assert owner is not None
+    report = {"type": "playback", "generation": 2, "played_samples": 2400, "enabled": True}
+    owner.receive_text(json.dumps(report))
+    for invalid in (
+        {"generation": True},
+        {"played_samples": -1},
+        {"played_samples": 2**32},
+        {"played_samples": 1.5},
+        {"enabled": "true"},
+        {"cleared": 1},
+    ):
+        owner.receive_text(json.dumps({**report, **invalid}))
+    replacement = live.registry.attach(call.id)
+    assert replacement is not None
+    owner.receive_text(json.dumps({**report, "played_samples": 4800}))
+    replacement.receive_text(json.dumps({**report, "enabled": False, "cleared": True}))
+    assert call.playback_reports == [(2, 2400, True, False), (2, 2400, False, True)]
+    replacement.detach()
+    assert call.playback_resets == 2
 
 
 # -- stopping and ending ------------------------------------------------------
@@ -959,7 +1008,7 @@ def test_socket_relays_audio_both_ways_as_binary_frames(tmp_path: Path) -> None:
             websocket.send_bytes(b"\x01")
             websocket.send_json({"type": "ignored"})
             portal(client).call(call.host.publish_audio, b"\x05\x00")
-            assert websocket.receive_bytes() == b"\x05\x00"
+            assert websocket.receive_bytes() == struct.pack("<II", 1, 0) + b"\x05\x00"
             portal(client).call(call.host.publish, {"type": "playback_clear"})
             assert websocket.receive_json() == {"type": "playback_clear"}
             assert call.audio == [b"\x01\x00\x02\x00"]

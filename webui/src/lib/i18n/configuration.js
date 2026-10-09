@@ -167,6 +167,10 @@ export default Object.freeze({
   'settings.dictation.result.nothingHeard': 'No speech was heard.',
   'settings.dictation.result.microphoneUnavailable':
     'No compatible microphone was available.',
+  'settings.dictation.result.recordingInterrupted':
+    'Audio was lost during recording. No text was inserted. Please dictate again.',
+  'settings.dictation.result.microphoneReadFailed':
+    'The microphone stopped delivering audio. No text was inserted. Check the microphone and try again.',
   'settings.dictation.result.serverUnreachable':
     'vBot could not reach the server.',
   'settings.dictation.result.speechToTextUnconfigured':

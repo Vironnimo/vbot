@@ -1,7 +1,7 @@
 """The xAI Grok Voice session state, sans IO.
 
 :class:`XaiSession` normalizes the realtime provider events into wire events,
-keeps the response gate and the playback estimate, and returns the client
+keeps the response gate and the accessor's rendered audio prefix, and returns the client
 events to send; :class:`core.model_tasks._live_xai.XaiLiveWire` drives it with
 socket frames, commands, and timer ticks. Server VAD takes turns and cancels a
 response the user talks over.
@@ -29,7 +29,6 @@ from typing import Any, TypeGuard
 
 from core.model_tasks._live_results import live_failure, live_result_text
 from core.model_tasks._live_wire import (
-    RELAY_BYTES_PER_MS,
     RELAY_SAMPLE_RATE,
     JsonObject,
     WireAudio,
@@ -59,7 +58,9 @@ _CREATE_ATTEMPTS = 2
 _RESPONSE_STALL_SECONDS = 30.0
 _REMEMBERED_IDS = 256
 _REMEMBERED_RESPONSES = 32
-_AUDIO_ITEMS = 8
+# A clear acknowledgement supplies the exact last rendered prefix. A lost
+# owner cannot answer, so fall back to its last confirmed prefix after this.
+_PLAYBACK_CLEAR_SECONDS = 0.5
 _CLOSE_ERROR_TYPES = ("max_duration", "timeout")
 _AUDIO_DELTAS = frozenset({"response.output_audio.delta", "response.audio.delta"})
 _AUDIO_DONES = frozenset({"response.output_audio.done", "response.audio.done"})
@@ -118,10 +119,17 @@ class _Response:
 class _AudioItem:
     item_id: str
     response_id: str | None
-    play_start: float
-    play_end: float
+    generation: int
+    start_samples: int
     produced_bytes: int = 0
     complete: bool = False
+
+
+@dataclass
+class _Playback:
+    samples: int = 0
+    played: int = 0
+    clear_at: float | None = None
 
 
 class _Recent:
@@ -151,7 +159,7 @@ class XaiSession:
     (Tool outputs and announcements) that no completed response covered yet,
     and only while no response is pending or active, the user is not
     speaking, every function call of the last completed response has an
-    output, and the estimated playback has drained. One create covers every
+    output, and the accessor has confirmed playback drained. One create covers every
     pending addition.
     """
 
@@ -188,11 +196,13 @@ class XaiSession:
         self._last_completed_calls: frozenset[str] = frozenset()
         self._handled_calls = _Recent()
         self._fenced = _Recent()
-        # Playback estimate of forwarded assistant audio.
-        self._playback_end = 0.0
-        # When vBot may speak again: the playback end plus a margin, or the
-        # moment the accessor cleared its playback.
-        self._quiet_at = 0.0
+        # Only the accessor knows what its AudioWorklet actually rendered.
+        self._playback_generation = 1
+        self._playback_enabled = False
+        self._playback: dict[int, _Playback] = {1: _Playback()}
+        self._audio_fenced = _Recent()
+        self._audio_fenced_items = _Recent()
+        self._audio_cutoffs: OrderedDict[str, list[JsonObject]] = OrderedDict()
         self._audio_items: OrderedDict[str, _AudioItem] = OrderedDict()
         self._audio_carrier = _Recent()
         # Captions.
@@ -270,10 +280,39 @@ class XaiSession:
             {"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode("ascii")}
         ]
 
+    def playback(
+        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
+    ) -> _Step:
+        """Keep a monotonically increasing rendered prefix, never a delivery estimate.
+
+        Generation zero is the owner's initial readiness report. Older reports
+        can finish a pending clear but cannot change the current playback state.
+        """
+        step = _Step()
+        progress = self._playback.get(generation)
+        if progress is not None:
+            progress.played = max(progress.played, min(played_samples, progress.samples))
+        if generation not in {0, self._playback_generation}:
+            if progress is not None and cleared:
+                step.commands.extend(self._truncate_playback(generation))
+            step.commands.extend(self._flush())
+            return step
+        changed = enabled != self._playback_enabled
+        self._playback_enabled = enabled
+        if cleared or (changed and not enabled):
+            self._clear_playback(step, wait=False)
+        self._forget_played_audio()
+        step.commands.extend(self._flush())
+        return step
+
     def tick(self) -> list[JsonObject]:
         """Expire stale gate state and flush when the gate opened."""
 
         now = self._clock()
+        commands: list[JsonObject] = []
+        for generation, progress in list(self._playback.items()):
+            if progress.clear_at is not None and now >= progress.clear_at:
+                commands.extend(self._truncate_playback(generation))
         if (
             self._create_sent_at is not None
             and now >= self._create_sent_at + _CREATE_PENDING_SECONDS
@@ -293,12 +332,10 @@ class XaiSession:
         if active is not None and now >= active.touched + _RESPONSE_STALL_SECONDS:
             self._fenced.put(self._active or "")
             self._active = None
-        return self._flush()
+        return [*commands, *self._flush()]
 
     def next_deadline(self) -> float | None:
         """Return the next time :meth:`tick` can change anything, if any."""
-
-        now = self._clock()
         deadlines: list[float] = []
         if self._create_sent_at is not None:
             deadlines.append(self._create_sent_at + _CREATE_PENDING_SECONDS)
@@ -307,10 +344,14 @@ class XaiSession:
             deadlines.append(active.touched + _RESPONSE_STALL_SECONDS)
         if self._unseen_response_at is not None:
             deadlines.append(self._unseen_response_at + _RESPONSE_STALL_SECONDS)
-        if self._added > self._spoken:
-            deadlines.append(self._quiet_at)
-        future = [deadline for deadline in deadlines if deadline > now]
-        return min(future) if future else None
+        deadlines.extend(
+            progress.clear_at
+            for progress in self._playback.values()
+            if progress.clear_at is not None
+        )
+        # A state change can wake the timer after a deadline already passed.
+        # Keep overdue work visible so the driver ticks immediately.
+        return min(deadlines) if deadlines else None
 
     def finish(self) -> list[WireEvent]:
         """Return the final events once the socket ended; the last is :class:`WireClosed`."""
@@ -415,31 +456,13 @@ class XaiSession:
     def _on_speech_started(self, step: _Step, event: JsonObject) -> None:
         self._user_speaking = True
         self._finish_user_items(step, keep=_text(event.get("item_id")))
-        step.events.append(WirePlaybackClear())
-        now = self._clock()
         for item in self._audio_items.values():
-            produced_ms = item.produced_bytes / RELAY_BYTES_PER_MS
-            played_ms = min(produced_ms, max(0.0, (now - item.play_start) * 1000))
-            if item.complete and played_ms >= produced_ms:
-                continue
-            end_ms = int(played_ms)
-            if end_ms > 0:
-                step.commands.append(
-                    {
-                        "type": "conversation.item.truncate",
-                        "item_id": item.item_id,
-                        "content_index": 0,
-                        "audio_end_ms": end_ms,
-                    }
-                )
             # The caption keeps the text received so far; the provider's
             # truncated transcript is not reliable.
             self._finish_assistant(step, item.item_id)
             if item.response_id:
                 self._fence(item.response_id)
-        self._audio_items.clear()
-        self._playback_end = now
-        self._quiet_at = now
+        self._clear_playback(step, wait=True)
         if self._active is not None:
             # Server VAD cancels the running response; late output is stale.
             active = self._responses.get(self._active)
@@ -484,7 +507,24 @@ class XaiSession:
         response_id = _text(event.get("response_id")) or None
         item_id = _text(event.get("item_id"))
         delta = event.get("delta")
-        if not item_id or not isinstance(delta, str) or response_id in self._fenced:
+        if not item_id or not isinstance(delta, str):
+            return
+        if response_id and (response_id in self._fenced or response_id in self._audio_fenced):
+            # A cancelled response can still introduce another audio item.
+            # Its speech was never forwarded, so retain none of that item.
+            cuts = self._audio_cutoffs.setdefault(response_id, [])
+            if item_id not in self._audio_items and item_id not in self._audio_fenced_items:
+                cut = {
+                    "type": "conversation.item.truncate",
+                    "item_id": item_id,
+                    "content_index": 0,
+                    "audio_end_ms": 0,
+                }
+                cuts.append(cut)
+                step.commands.append(cut)
+                self._audio_fenced_items.put(item_id)
+                while len(self._audio_cutoffs) > _REMEMBERED_RESPONSES:
+                    self._audio_cutoffs.popitem(last=False)
             return
         if not _carrier_matches(self._audio_carrier, item_id, kind):
             return
@@ -495,20 +535,24 @@ class XaiSession:
         if not pcm:
             return
         self._mark_output(response_id)
-        now = self._clock()
-        start = max(now, self._playback_end)
-        self._playback_end = start + len(pcm) / RELAY_BYTES_PER_MS / 1000
-        self._quiet_at = self._playback_end
+        generation = self._playback_generation
+        progress = self._playback[generation]
+        start = progress.samples
+        progress.samples += len(pcm) // 2
         item = self._audio_items.get(item_id)
         if item is None:
             item = _AudioItem(
-                item_id=item_id, response_id=response_id, play_start=start, play_end=start
+                item_id=item_id,
+                response_id=response_id,
+                generation=generation,
+                start_samples=start,
             )
             self._audio_items[item_id] = item
-            self._forget_played_audio(now)
         item.produced_bytes += len(pcm)
-        item.play_end = self._playback_end
-        step.events.append(WireAudio(item_id=item_id, pcm=pcm))
+        if self._playback_enabled:
+            step.events.append(
+                WireAudio(item_id=item_id, pcm=pcm, generation=generation, start_samples=start)
+            )
 
     def _on_transcript_delta(self, step: _Step, event: JsonObject, kind: str) -> None:
         response_id = _text(event.get("response_id")) or None
@@ -568,12 +612,16 @@ class XaiSession:
         record = self._responses.pop(response_id, None)
         if self._active == response_id:
             self._active = None
+        step.commands.extend(self._audio_cutoffs.pop(response_id, []))
         for item_id, owner in list(self._item_response.items()):
             if owner == response_id:
                 self._finish_assistant(step, item_id)
         for item in self._audio_items.values():
             if item.response_id == response_id:
                 item.complete = True
+        if not self._playback_enabled and self._playback[self._playback_generation].samples:
+            self._clear_playback(step, wait=False)
+        self._forget_played_audio()
         if record is None:
             return
         self._finish_user_items(step, only=record.open_user_items)
@@ -616,7 +664,6 @@ class XaiSession:
     # -- helpers ----------------------------------------------------------
 
     def _flush(self) -> list[JsonObject]:
-        now = self._clock()
         if (
             not self._started
             or self._close_reason is not None
@@ -626,12 +673,17 @@ class XaiSession:
             or self._user_speaking
             or self._last_completed_calls & self._awaiting.keys()
             or self._unseen_response_at is not None
-            or now < self._quiet_at
+            or any(progress.clear_at is not None for progress in self._playback.values())
+            or (
+                self._playback_enabled
+                and self._playback[self._playback_generation].played
+                < self._playback[self._playback_generation].samples
+            )
         ):
             return []
         self._creates += 1
         self._create_attempts += 1
-        self._create_sent_at = now
+        self._create_sent_at = self._clock()
         self._create_event_id = f"vbot_rc_{self._creates}"
         self._create_covers = self._added
         return [{"type": "response.create", "event_id": self._create_event_id}]
@@ -648,10 +700,56 @@ class XaiSession:
         if response is not None:
             response.has_output = True
 
-    def _forget_played_audio(self, now: float) -> None:
+    def _forget_played_audio(self) -> None:
         for item_id, item in list(self._audio_items.items()):
-            if len(self._audio_items) > _AUDIO_ITEMS or (item.complete and item.play_end <= now):
+            progress = self._playback.get(item.generation)
+            if (
+                item.complete
+                and progress is not None
+                and item.start_samples + item.produced_bytes // 2 <= progress.played
+            ):
                 del self._audio_items[item_id]
+
+    def _clear_playback(self, step: _Step, *, wait: bool) -> None:
+        generation = self._playback_generation
+        progress = self._playback[generation]
+        for item in self._audio_items.values():
+            if item.generation == generation and item.response_id:
+                self._audio_fenced.put(item.response_id)
+        progress.clear_at = self._clock() + (_PLAYBACK_CLEAR_SECONDS if wait else 0)
+        self._playback_generation += 1
+        self._playback[self._playback_generation] = _Playback()
+        step.events.append(WirePlaybackClear(self._playback_generation))
+        if not wait or progress.played == progress.samples:
+            step.commands.extend(self._truncate_playback(generation))
+
+    def _truncate_playback(self, generation: int) -> list[JsonObject]:
+        progress = self._playback.pop(generation, None)
+        if progress is None:
+            return []
+        commands: list[JsonObject] = []
+        for item_id, item in list(self._audio_items.items()):
+            if item.generation != generation:
+                continue
+            del self._audio_items[item_id]
+            samples = min(item.produced_bytes // 2, max(0, progress.played - item.start_samples))
+            if item.complete and samples == item.produced_bytes // 2:
+                continue
+            command = {
+                "type": "conversation.item.truncate",
+                "item_id": item_id,
+                "content_index": 0,
+                "audio_end_ms": samples * 1000 // RELAY_SAMPLE_RATE,
+            }
+            commands.append(command)
+            self._audio_fenced_items.put(item_id)
+            if not item.complete and item.response_id:
+                # Muting playback need not cancel a Tool-bearing response.
+                # Reapply its heard boundary once generation has finished.
+                self._audio_cutoffs.setdefault(item.response_id, []).append(command)
+                while len(self._audio_cutoffs) > _REMEMBERED_RESPONSES:
+                    self._audio_cutoffs.popitem(last=False)
+        return commands
 
     def _finish_assistant(self, step: _Step, item_id: str, text: str | None = None) -> None:
         accumulated = self._assistant_text.pop(item_id, None)

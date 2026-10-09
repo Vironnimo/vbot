@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
-from contextlib import aclosing, asynccontextmanager, suppress
+from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, cast, override
 
@@ -24,7 +24,8 @@ from core.model_tasks import (
     SpeechExecutionError,
     SpeechUnsupportedTargetError,
 )
-from core.model_tasks.speech_types import SpeechProgress
+from core.model_tasks.speech_playback import PLAYBACK_MEDIA_TYPE, SpeechPlayback
+from core.model_tasks.speech_types import SpeechAudioChunk, SpeechProgress
 from core.runs import RunNotFoundError
 from core.skills import SKILL_ARCHIVE_MAX_BYTES
 from core.tools.terminal_manager import TerminalNotFoundError
@@ -36,6 +37,7 @@ from core.utils.server_control import (
     is_authorized_control_token,
     normalize_stop_initiator,
 )
+from core.utils.workers import finish_despite_cancel
 from server._app_lifecycle import (
     _app_chat_runs,
     _fire_extension_startup,
@@ -131,6 +133,23 @@ JSON_REQUEST_BODY_MAX_BYTES = 1_048_576
 
 # How often a speech progress stream reports while the operation still runs.
 SPEECH_PROGRESS_HEARTBEAT_SECONDS = 0.5
+
+
+class _SpeechStreamingResponse(StreamingResponse):  # type: ignore[misc]
+    """Close speech generators even when the connection ends during a send."""
+
+    def __init__(self, content: AsyncGenerator[str | bytes], **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self._speech_stream = content
+
+    @override
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # StreamingResponse does not close an iterator suspended at yield.
+            # Its request-local inference or spool reader must settle now.
+            await finish_despite_cancel(self._speech_stream.aclose())
 
 
 class _UploadTooLargeMultipartError(MultiPartException):  # type: ignore[misc]
@@ -518,7 +537,7 @@ def create_app(
         finally:
             await file.close()
         if "application/x-ndjson" in request.headers.get("accept", ""):
-            return StreamingResponse(
+            return _SpeechStreamingResponse(
                 _stream_speech(
                     lambda progress: speech_service.transcribe(
                         audio, filename=filename, media_type=media_type, progress=progress
@@ -528,8 +547,9 @@ def create_app(
                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             )
         try:
-            result = await speech_service.transcribe(
-                audio, filename=filename, media_type=media_type
+            result = await _speech_until_disconnect(
+                request,
+                speech_service.transcribe(audio, filename=filename, media_type=media_type),
             )
         except SpeechError as exc:
             raise _speech_http_exception(exc) from exc
@@ -550,18 +570,27 @@ def create_app(
         if not isinstance(text, str) or not text.strip():
             raise HTTPException(status_code=400, detail="text must be a non-empty string")
         if "application/x-ndjson" in request.headers.get("accept", ""):
-            return StreamingResponse(
-                _stream_speech(
-                    lambda progress: speech_service.synthesize_artifact(text, progress=progress)
-                ),
+            return _SpeechStreamingResponse(
+                _stream_synthesis(speech_service, text),
                 media_type="application/x-ndjson",
                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             )
         try:
-            result = await speech_service.synthesize(text)
+            result = await _speech_until_disconnect(request, speech_service.synthesize(text))
         except SpeechError as exc:
             raise _speech_http_exception(exc) from exc
         return Response(content=result.audio, media_type=result.media_type)
+
+    @app.get("/api/speech/playback/{playback_id}")
+    async def get_speech_playback(request: Request, playback_id: str) -> StreamingResponse:
+        playback = request.app.state.runtime.speech.playbacks.get(playback_id)
+        if playback is None:
+            raise HTTPException(status_code=410, detail="Speech playback is no longer available")
+        return _SpeechStreamingResponse(
+            playback.frames(),
+            media_type=PLAYBACK_MEDIA_TYPE,
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/speech/artifacts/{artifact_id}")
     async def get_speech_artifact(request: Request, artifact_id: str) -> FileResponse:
@@ -964,16 +993,61 @@ async def _stream_request_body_with_limit(
         yield chunk
 
 
+async def _speech_until_disconnect[Result](
+    request: Request, operation: Awaitable[Result]
+) -> Result:
+    """Run speech after the upload, cancelling and settling it when the client leaves."""
+
+    async def disconnected() -> None:
+        while True:
+            if (await request.receive())["type"] == "http.disconnect":
+                return
+
+    task = asyncio.ensure_future(operation)
+    disconnect = asyncio.create_task(disconnected(), name="speech-disconnect")
+    try:
+        done, _pending = await asyncio.wait({task, disconnect}, return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            return task.result()
+        disconnect.result()
+        # Nothing reaches the departed client; finish the request without an
+        # unhandled cancellation or an internal-error log.
+        raise HTTPException(status_code=499, detail="Client disconnected")
+    finally:
+        if not task.done():
+            task.cancel()
+        disconnect.cancel()
+        await finish_despite_cancel(asyncio.gather(task, disconnect, return_exceptions=True))
+
+
 async def _stream_speech(
     operation: Callable[[SpeechProgress], Awaitable[Any]],
+    *,
+    updates: asyncio.Queue[JsonObject] | None = None,
 ) -> AsyncGenerator[str]:
     """Request-local progress heartbeats followed by one terminal result."""
     progress = SpeechProgress()
     task = asyncio.ensure_future(operation(progress))
+    update_task: asyncio.Task[JsonObject] | None = None
     try:
         while not task.done():
             yield json.dumps({"type": "progress", **progress.snapshot()}) + "\n"
-            await asyncio.wait({task}, timeout=SPEECH_PROGRESS_HEARTBEAT_SECONDS)
+            if updates is None:
+                await asyncio.wait({task}, timeout=SPEECH_PROGRESS_HEARTBEAT_SECONDS)
+            else:
+                if update_task is None:
+                    update_task = asyncio.create_task(updates.get(), name="speech-playback-ready")
+                await asyncio.wait(
+                    {task, update_task},
+                    timeout=SPEECH_PROGRESS_HEARTBEAT_SECONDS,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if update_task.done():
+                    yield json.dumps(update_task.result()) + "\n"
+                    update_task = None
+        if updates is not None:
+            while not updates.empty():
+                yield json.dumps(updates.get_nowait()) + "\n"
         try:
             result = task.result()
         except SpeechError as exc:
@@ -993,10 +1067,50 @@ async def _stream_speech(
     finally:
         if not task.done():
             task.cancel()
+        if update_task is not None:
+            update_task.cancel()
         # Local inference keeps its existing cancellation-safe worker semantics:
         # a disconnected client cannot release an engine still doing work.
-        with suppress(asyncio.CancelledError, Exception):
-            await task
+        await finish_despite_cancel(
+            asyncio.gather(
+                task, *([update_task] if update_task is not None else []), return_exceptions=True
+            )
+        )
+
+
+def _stream_synthesis(speech_service: Any, text: str) -> AsyncGenerator[str]:
+    """Announce early binary playback, then retain the ordinary artifact result."""
+    updates: asyncio.Queue[JsonObject] = asyncio.Queue(maxsize=1)
+    playback: SpeechPlayback | None = None
+
+    async def publish_audio(chunk: SpeechAudioChunk) -> None:
+        nonlocal playback
+        first = playback is None
+        if first:
+            playback = speech_service.playbacks.create()
+        if playback is None:
+            return
+        await playback.append(chunk.audio, chunk.sample_rate_hz)
+        if first:
+            updates.put_nowait({"type": "playback", "url": playback.url})
+
+    async def synthesize(progress: SpeechProgress) -> Any:
+        try:
+            result = await speech_service.synthesize_artifact(
+                text, progress=progress, on_audio=publish_audio
+            )
+        except BaseException as exc:
+            if playback is not None:
+                playback.finish(
+                    "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+                )
+            raise
+        else:
+            if playback is not None:
+                playback.finish()
+            return result
+
+    return _stream_speech(synthesize, updates=updates)
 
 
 def _speech_http_exception(error: SpeechError) -> HTTPException:

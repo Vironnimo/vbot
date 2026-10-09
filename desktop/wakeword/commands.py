@@ -24,8 +24,9 @@ The WAV uses the capture's recording rate (the echo stage output).
 
 :class:`CommandPipeline` processes finished recordings on up to three daemon
 workers (``vbot-voice-command-N``): transcribe, drop reserved cancel phrases,
-resolve the Session, send. It never blocks the listener, and stops (without
-publishing) once its stop event is set.
+then resolve the Session and send in submission order per Agent. A ready
+transcript waiting for an earlier command occupies no worker. It never blocks
+the listener, and stops (without publishing) once its stop event is set.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from desktop.speech.capture import (
@@ -344,12 +345,20 @@ class CommandOutcome:
     error_code: str | None = None
 
 
+@dataclass(eq=False)
+class _PendingCommand:
+    command: Command
+    transcript: str | None = None
+
+
 class CommandPipeline:
     """Transcribes and sends recorded commands on up to ``max_workers`` daemon threads.
 
     ``on_stage(command_id, stage)`` reports ``transcribing`` and ``sending``;
     ``on_outcome`` receives exactly one :class:`CommandOutcome` per command,
-    unless the pipeline stopped (``stop_event``) while it ran.
+    unless the request was cancelled or the pipeline stopped or closed before delivery.
+    Transcriptions run in parallel; Session resolution and sending follow
+    submission order per Agent. Waiting transcripts leave workers free.
     """
 
     def __init__(
@@ -367,7 +376,9 @@ class CommandPipeline:
         self._on_outcome = on_outcome
         self._max_workers = max_workers
         self._condition = threading.Condition()
-        self._queue: deque[Command] = deque()
+        self._queue: deque[_PendingCommand] = deque()
+        self._ready: deque[_PendingCommand] = deque()
+        self._pending: dict[str, deque[_PendingCommand]] = {}
         self._workers: list[threading.Thread] = []
         self._idle_workers = 0
         self._closed = False
@@ -377,8 +388,13 @@ class CommandPipeline:
         with self._condition:
             if self._closed or self._stop.is_set():
                 return False
-            self._queue.append(command)
-            if self._idle_workers == 0 and len(self._workers) < self._max_workers:
+            pending = _PendingCommand(command)
+            self._pending.setdefault(command.agent_id, deque()).append(pending)
+            self._queue.append(pending)
+            if (
+                len(self._queue) + len(self._ready) > self._idle_workers
+                and len(self._workers) < self._max_workers
+            ):
                 worker = threading.Thread(
                     target=self._work,
                     name=f"vbot-voice-command-{len(self._workers) + 1}",
@@ -390,7 +406,7 @@ class CommandPipeline:
         return True
 
     def close(self, timeout: float) -> bool:
-        """Discard queued commands and wait up to ``timeout`` for the workers.
+        """Discard commands waiting to transcribe or send and wait for the workers.
 
         A command already talking to the server finishes its current request
         first; ``False`` when a worker is still busy after ``timeout``.
@@ -398,6 +414,8 @@ class CommandPipeline:
         with self._condition:
             self._closed = True
             self._queue.clear()
+            self._ready.clear()
+            self._pending.clear()
             self._condition.notify_all()
             workers = list(self._workers)
         deadline = time.monotonic() + timeout
@@ -409,37 +427,66 @@ class CommandPipeline:
         while True:
             with self._condition:
                 self._idle_workers += 1
-                self._condition.wait_for(lambda: self._closed or bool(self._queue))
+                self._condition.wait_for(
+                    lambda: self._closed or bool(self._ready) or bool(self._queue)
+                )
                 self._idle_workers -= 1
                 if self._closed:
                     return
-                command = self._queue.popleft()
-            outcome = self._process(command)
-            if outcome is not None and not self._stop.is_set():
+                pending = self._ready.popleft() if self._ready else self._queue.popleft()
+            result = self._process(pending.command, pending.transcript)
+            if isinstance(result, str):
+                with self._condition:
+                    if not self._closed:
+                        pending.transcript = result
+                        pending.command = replace(pending.command, wav=b"")
+                        if self._pending[pending.command.agent_id][0] is pending:
+                            self._ready.append(pending)
+                            self._condition.notify()
+                continue
+            if result is not None and not self._stop.is_set():
                 try:
-                    self._on_outcome(outcome)
+                    self._on_outcome(result)
                 except Exception:
                     logger.exception("Voice command outcome handler failed")
+            self._finish(pending)
 
-    def _process(self, command: Command) -> CommandOutcome | None:
+    def _finish(self, pending: _PendingCommand) -> None:
+        with self._condition:
+            commands = self._pending.get(pending.command.agent_id)
+            if commands is None:
+                return  # close() discarded all pending commands.
+            was_first = commands[0] is pending
+            commands.remove(pending)
+            if not commands:
+                del self._pending[pending.command.agent_id]
+            elif was_first and commands[0].transcript is not None:
+                self._ready.append(commands[0])
+                self._condition.notify()
+
+    def _process(self, command: Command, transcript: str | None) -> str | CommandOutcome | None:
         def outcome(kind: str, **fields: Any) -> CommandOutcome:
             return CommandOutcome(command.command_id, command.model_id, kind, **fields)
 
         try:
-            self._on_stage(command.command_id, STAGE_TRANSCRIBING)
-            try:
-                transcript = self._client.transcribe(command.wav).strip()
-            except SpeechServerError as exc:
-                logger.warning("Voice command transcription failed (%s): %s", exc.error_code, exc)
-                return outcome(EVENT_TRANSCRIPTION_FAILED, error_code=exc.error_code)
-            if not transcript:
-                logger.info("Voice command transcript was empty")
-                return outcome(EVENT_NO_SPEECH)
-            if is_voice_cancel_phrase(transcript):
-                logger.info("Voice command cancelled by a cancel phrase")
-                return outcome(EVENT_CANCELLED)
             if self._stop.is_set():
                 return None
+            if transcript is None:
+                self._on_stage(command.command_id, STAGE_TRANSCRIBING)
+                try:
+                    transcript = self._client.transcribe(command.wav).strip()
+                except SpeechServerError as exc:
+                    logger.warning(
+                        "Voice command transcription failed (%s): %s", exc.error_code, exc
+                    )
+                    return outcome(EVENT_TRANSCRIPTION_FAILED, error_code=exc.error_code)
+                if not transcript:
+                    logger.info("Voice command transcript was empty")
+                    return outcome(EVENT_NO_SPEECH)
+                if is_voice_cancel_phrase(transcript):
+                    logger.info("Voice command cancelled by a cancel phrase")
+                    return outcome(EVENT_CANCELLED)
+                return transcript
             self._on_stage(command.command_id, STAGE_SENDING)
             target = self._client.resolve_session(command.agent_id, command.session_behavior)
             session_id = self._client.send_command(command.agent_id, target, transcript)

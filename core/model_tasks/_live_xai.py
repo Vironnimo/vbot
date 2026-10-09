@@ -201,6 +201,17 @@ class XaiLiveWire:
         async with self._lock:
             await self._send(self._session.audio(pcm))
 
+    async def update_playback(
+        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
+    ) -> list[WireEvent]:
+        async with self._lock:
+            step = self._session.playback(
+                generation, played_samples, enabled=enabled, cleared=cleared
+            )
+            await self._send(step.commands)
+        self._state_changed.set()
+        return step.events
+
     async def request_close(self) -> None:
         """xAI has no session close event; closing the socket ends the session."""
         await self.aclose()

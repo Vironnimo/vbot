@@ -22,8 +22,9 @@ import re
 import signal
 import subprocess
 import tempfile
+import wave
 from collections.abc import Callable, Container, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import partial
@@ -41,9 +42,12 @@ from core.model_tasks.options import (
     TaskModelOptionSchema,
     validate_task_model_options,
 )
+from core.model_tasks.speech_audio import ThreadAudioCallback
 from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup, ServerSpeechStack
 from core.model_tasks.speech_types import (
+    SpeechAudioCallback,
+    SpeechAudioChunk,
     SpeechProgress,
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
@@ -117,6 +121,9 @@ _TTS_UNAVAILABLE = (
     "Wait for setup to finish before retrying."
 )
 _PROGRESS: ContextVar[SpeechProgress | None] = ContextVar("local_speech_progress", default=None)
+_AUDIO: ContextVar[Callable[[SpeechAudioChunk], None] | None] = ContextVar(
+    "local_speech_audio", default=None
+)
 
 
 class LocalSpeechError(VBotError):
@@ -405,6 +412,7 @@ class _Cancellation:
     def running(self, engine: object) -> Iterator[None]:
         """Worker thread: one engine call, which a cancellation may abort after its grace."""
         with self._lock:
+            self.check()
             self._abort = getattr(engine, "abort", None)
             self._arm()
         try:
@@ -431,6 +439,11 @@ class _Cancellation:
             if self._abort is not None:
                 self.aborted = True
                 self._abort()
+
+
+_CANCELLATION: ContextVar[_Cancellation | None] = ContextVar(
+    "local_speech_cancellation", default=None
+)
 
 
 class LocalSpeechExecutor:
@@ -527,6 +540,7 @@ class LocalSpeechExecutor:
         }
         self._closed = False
         self._close_task: asyncio.Task[None] | None = None
+        self._audio_callbacks: set[ThreadAudioCallback] = set()
 
     def _can_execute(self, descriptor: LocalTaskTargetDescriptor) -> bool:
         return not self.setups[descriptor.id].blocks_execution and descriptor.can_execute()
@@ -589,6 +603,7 @@ class LocalSpeechExecutor:
         state: _EngineState,
         function: Callable[..., Result | None],
         *arguments: Any,
+        on_cancel: Callable[[], None] | None = None,
     ) -> Result:
         """Run one request on the engine's worker, passing it a ``_Cancellation``.
 
@@ -603,6 +618,8 @@ class LocalSpeechExecutor:
             await asyncio.wait((request,))
         except asyncio.CancelledError:
             cancellation.request()
+            if on_cancel is not None:
+                on_cancel()
             request.cancel()
             await settle_before_cancelling(asyncio.wait((request,)))
             raise
@@ -633,7 +650,7 @@ class LocalSpeechExecutor:
         """Transcribe on the engine's worker; ``None`` once the caller cancelled."""
         # Scope built-in loader reporting to this worker invocation without adding
         # transport or progress requirements to third-party engine factories.
-        with _PROGRESS.set(progress):
+        with _PROGRESS.set(progress), _CANCELLATION.set(cancellation):
             if progress is not None:
                 progress.update("preparing")
             try:
@@ -890,6 +907,8 @@ class LocalSpeechExecutor:
         for setup in self.setups.values():
             setup.close()
         self._closed = True
+        for callback in tuple(self._audio_callbacks):
+            callback.close()
         self._waiting.close()
         for state in self._states.values():
             if state.preparing is not None:
@@ -914,6 +933,8 @@ class LocalSpeechExecutor:
         await settle_before_cancelling(self._close_task, on_late_failure=_log_close_failure)
 
     async def _finish_close(self) -> None:
+        for callback in tuple(self._audio_callbacks):
+            callback.close()
         # Ending loading and transcribing workers releases their worker threads.
         # Killing a process tree blocks, so it must not run on the Event Loop.
         await asyncio.to_thread(self._waiting.close)
@@ -940,13 +961,31 @@ class LocalSpeechExecutor:
         *,
         options: dict[str, Any],
         progress: SpeechProgress | None = None,
+        on_audio: SpeechAudioCallback | None = None,
     ) -> SpeechSynthesisResult:
         if progress is not None:
             progress.update("queued")
         state = self._states.get(local_id)
         if self._closed or state is None:
             raise LocalSpeechError(_TTS_UNAVAILABLE)
-        return await self._run(state, self._synthesize, local_id, text, dict(options), progress)
+        callback = ThreadAudioCallback(on_audio) if on_audio is not None else None
+        if callback is not None:
+            self._audio_callbacks.add(callback)
+        try:
+            return await self._run(
+                state,
+                self._synthesize,
+                local_id,
+                text,
+                dict(options),
+                progress,
+                callback,
+                on_cancel=callback.close if callback is not None else None,
+            )
+        finally:
+            if callback is not None:
+                callback.close()
+                self._audio_callbacks.discard(callback)
 
     def _synthesize(
         self,
@@ -954,6 +993,7 @@ class LocalSpeechExecutor:
         text: str,
         options: dict[str, Any],
         progress: SpeechProgress | None,
+        on_audio: Callable[[SpeechAudioChunk], None] | None,
         cancellation: _Cancellation,
     ) -> SpeechSynthesisResult | None:
         """Synthesize on the engine's worker; ``None`` once the caller cancelled."""
@@ -964,7 +1004,7 @@ class LocalSpeechExecutor:
                 "Split the text into shorter requests."
             )
         state = self._states[local_id]
-        with _PROGRESS.set(progress):
+        with _PROGRESS.set(progress), _CANCELLATION.set(cancellation), _AUDIO.set(on_audio):
             try:
                 cancellation.check()
                 if key != state.key:
@@ -1166,6 +1206,7 @@ class _WorkerProcess:
         answer: str,
         deadline: float,
         phases: Container[str] | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> Any:
         """Send one request line and return the child's ``answer`` field.
 
@@ -1185,6 +1226,8 @@ class _WorkerProcess:
                 event = json.loads(line)
                 if event.get("error"):
                     raise RuntimeError(event["error"])
+                if on_event is not None:
+                    on_event(event)
                 if (
                     (phase := event.get("phase"))
                     and (phases is None or phase in phases)
@@ -1208,7 +1251,9 @@ class _WorkerProcess:
     def _load(self, options: Mapping[str, Any]) -> None:
         """Have the child load its model; a child that fails to is closed."""
         try:
-            self._exchange({"load": True, "options": dict(options)}, "loaded", _LOAD_DEADLINE_S)
+            cancellation = _CANCELLATION.get()
+            with cancellation.running(self) if cancellation is not None else nullcontext():
+                self._exchange({"load": True, "options": dict(options)}, "loaded", _LOAD_DEADLINE_S)
         except BaseException:
             self.close()
             raise
@@ -1235,16 +1280,48 @@ class _TtsEngine(_WorkerProcess):
     def synthesize(self, text: str, options: Mapping[str, Any]) -> SpeechSynthesisResult:
         with tempfile.TemporaryDirectory(prefix="vbot-tts-") as directory:
             output = Path(directory) / "speech.wav"
-            self._exchange(
-                {
-                    "text": text,
-                    "options": dict(options),
-                    "output": str(output),
-                },
-                "done",
-                _SYNTHESIS_DEADLINE_S,
-                ("loading", "synthesizing"),
-            )
+            callback = _AUDIO.get()
+            next_chunk = 0
+            total_bytes = 0
+
+            def chunk_ready(event: dict[str, Any]) -> None:
+                nonlocal next_chunk, total_bytes
+                if "audio_chunk" not in event:
+                    return
+                index = event["audio_chunk"]
+                if callback is None or type(index) is not int or index != next_chunk:
+                    raise ValueError("Invalid speech audio chunk")
+                path = output.with_name(f"chunk-{index}.wav")
+                size = path.stat().st_size
+                total_bytes += size
+                if not size > 44 or total_bytes > 64 * 1024 * 1024:
+                    raise ValueError("Invalid speech audio chunk size")
+                with wave.open(str(path), "rb") as wav:
+                    if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+                        raise ValueError("Invalid speech audio chunk format")
+                    chunk = SpeechAudioChunk(wav.readframes(wav.getnframes()), wav.getframerate())
+                path.unlink()
+                callback(chunk)
+                next_chunk += 1
+
+            try:
+                self._exchange(
+                    {
+                        "text": text,
+                        "options": dict(options),
+                        "output": str(output),
+                        "stream_audio": callback is not None,
+                    },
+                    "done",
+                    _SYNTHESIS_DEADLINE_S,
+                    ("loading", "synthesizing"),
+                    chunk_ready,
+                )
+            except BaseException:
+                # A failed/cancelled playback consumer can leave the child still
+                # generating into its WAV. Reap it before Windows removes files.
+                self.close()
+                raise
             if not 44 < output.stat().st_size <= 64 * 1024 * 1024:
                 raise ValueError("Invalid output size")
             return SpeechSynthesisResult(output.read_bytes(), "audio/wav", "wav")

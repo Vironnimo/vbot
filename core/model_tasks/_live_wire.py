@@ -100,15 +100,19 @@ class WireToolCall:
 
 @dataclass(frozen=True)
 class WireAudio:
-    """Assistant audio to play, little-endian PCM in the relay format (relay media)."""
+    """PCM to render at a source-sample offset in one relay playback generation."""
 
     item_id: str
     pcm: bytes
+    generation: int = 1
+    start_samples: int = 0
 
 
 @dataclass(frozen=True)
 class WirePlaybackClear:
-    """The user started speaking; audio not yet played must be dropped (relay media)."""
+    """Discard previous relay audio and begin this generation at sample zero."""
+
+    generation: int = 1
 
 
 @dataclass(frozen=True)
@@ -175,6 +179,12 @@ class LiveWire(Protocol):
 
     async def send_audio(self, pcm: bytes) -> None:
         """Forward microphone PCM (relay media only); dropped before the session runs."""
+        ...
+
+    async def update_playback(
+        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
+    ) -> list[WireEvent]:
+        """Apply the accessor's rendered audio prefix; return any playback reset."""
         ...
 
     @property

@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from threading import Lock
 from time import monotonic
 from typing import Any
 
 JsonObject = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SpeechAudioChunk:
+    """Playable mono PCM16 little-endian samples, delivered before synthesis ends."""
+
+    audio: bytes
+    sample_rate_hz: int
+
+
+type SpeechAudioCallback = Callable[[SpeechAudioChunk], Awaitable[None]]
 
 
 class SpeechProgress:

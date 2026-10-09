@@ -390,6 +390,12 @@ class OpenAILiveWire:
     async def send_audio(self, pcm: bytes) -> None:
         """WebRTC audio flows between the accessor and OpenAI; nothing to forward."""
 
+    async def update_playback(
+        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
+    ) -> list[WireEvent]:
+        """WebRTC playback is managed by the Provider."""
+        return []
+
     async def announce(self, text: str) -> None:
         if self._dialect == DIALECT_CODEX:
             for chunk in chunk_text(text, _CODEX_APPEND_MAX_BYTES):

@@ -16,9 +16,11 @@ Failures raise typed errors whose ``error_code`` is a stable code:
 - :class:`SpeechServerInvalidResponse`: a response that does not match the
   contract, with the failed operation's code.
 
-:class:`SpeechRequestCancelled` is not a server failure: it is raised when the
-client's cancel event is set before an attempt or during a retry backoff. A
-request already in flight runs to its own timeout.
+:class:`SpeechRequestCancelled` is not a server failure: setting the client's
+cancel event also cancels requests in flight. The public interface stays
+synchronous; one private event-loop thread owns the async HTTP transport, so
+cancelling a request closes its connection instead of abandoning a blocked
+network thread.
 
 Retries: idempotent reads (``settings.get_path``, ``task_model.status``) and
 transcription make up to :data:`MAX_ATTEMPTS` attempts on transport failures and
@@ -28,6 +30,8 @@ one attempt. Environment proxies are ignored (``trust_env=False``).
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 import random
 import threading
@@ -39,9 +43,10 @@ import httpx
 logger = logging.getLogger("vbot.desktop.speech.server_client")
 
 RPC_TIMEOUT_SECONDS = 10.0
-# Local speech-to-text may download model weights on first use: keep the
-# connection and upload phases bounded apart from the long inference wait.
+# Keep connection and upload phases bounded apart from a long inference wait.
 TRANSCRIPTION_TIMEOUT = httpx.Timeout(600.0, connect=10.0, write=30.0, pool=10.0)
+_CANCELLATION_POLL_SECONDS = 0.05
+_CLOSE_TIMEOUT_SECONDS = 2.0
 MAX_ATTEMPTS = 3
 MAX_BACKOFF_SECONDS = 10.0
 # Mirrors the always-retryable set in core/utils/http_status.py; duplicated
@@ -104,7 +109,7 @@ class SpeechServerInvalidResponse(SpeechServerError):  # noqa: N818 - names the 
 
 
 class SpeechRequestCancelled(Exception):  # noqa: N818 - a signal, not a failure
-    """The client's cancel event stopped a call before or between attempts."""
+    """The client's lifetime ended before or during a request."""
 
 
 class SpeechServerClient:
@@ -121,7 +126,7 @@ class SpeechServerClient:
         server_url: str,
         *,
         cancel: threading.Event,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         base_url = (server_url or "").strip().rstrip("/")
         if not base_url:
@@ -130,13 +135,17 @@ class SpeechServerClient:
         self._cancel = cancel
         # No keep-alive: a pooled connection the server closed in the meantime
         # would fail a single-attempt mutation for no reason.
-        self._http = httpx.Client(
+        self._http = httpx.AsyncClient(
             transport=transport,
             trust_env=False,
             limits=httpx.Limits(max_keepalive_connections=0),
         )
         self._budget_lock = threading.Lock()
         self._upload_budget_bytes: int | None = None
+        self._request_lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._closed = False
 
     @property
     def server_url(self) -> str:
@@ -144,8 +153,65 @@ class SpeechServerClient:
         return self._server_url
 
     def close(self) -> None:
-        """Release the connection pool."""
-        self._http.close()
+        """Cancel outstanding requests and release their connections and loop."""
+        with self._request_lock:
+            if self._closed:
+                return
+            self._closed = True
+            loop, thread = self._loop, self._thread
+            if loop is None:
+                return  # No request opened the transport.
+            closing = asyncio.run_coroutine_threadsafe(self._close_http(), loop)
+        try:
+            closing.result(_CLOSE_TIMEOUT_SECONDS)
+        except Exception:
+            logger.warning("Speech HTTP client did not close cleanly", exc_info=True)
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            if thread is not None:
+                thread.join(_CLOSE_TIMEOUT_SECONDS)
+
+    async def _close_http(self) -> None:
+        current = asyncio.current_task()
+        pending = [task for task in asyncio.all_tasks() if task is not current]
+        for task in pending:
+            if not task.cancelling():
+                task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        await self._http.aclose()
+
+    def _serve_http(self, loop: asyncio.AbstractEventLoop) -> None:
+        try:
+            loop.run_forever()
+        finally:
+            loop.close()
+
+    def _request(self, url: str, **request: Any) -> httpx.Response:
+        with self._request_lock:
+            self._raise_if_cancelled()
+            if self._loop is None:
+                self._loop = asyncio.new_event_loop()
+                self._thread = threading.Thread(
+                    target=self._serve_http,
+                    args=(self._loop,),
+                    name="vbot-speech-http",
+                    daemon=True,
+                )
+                self._thread.start()
+            future = asyncio.run_coroutine_threadsafe(self._http.post(url, **request), self._loop)
+        try:
+            while not future.done():
+                self._raise_if_cancelled()
+                concurrent.futures.wait((future,), timeout=_CANCELLATION_POLL_SECONDS)
+            self._raise_if_cancelled()
+            try:
+                return future.result()
+            except concurrent.futures.CancelledError as exc:
+                raise SpeechRequestCancelled("Speech server request cancelled") from exc
+        finally:
+            if not future.done():
+                future.cancel()
 
     def __enter__(self) -> Self:
         return self
@@ -340,7 +406,7 @@ class SpeechServerClient:
             self._raise_if_cancelled()
             last_attempt = attempt == attempts - 1
             try:
-                response = self._http.post(url, timeout=timeout, **request)
+                response = self._request(url, timeout=timeout, **request)
             except httpx.RequestError as exc:
                 if last_attempt or not retry_transport_error(exc):
                     raise SpeechServerUnreachable(
@@ -361,7 +427,7 @@ class SpeechServerClient:
             raise SpeechRequestCancelled("Speech server request cancelled")
 
     def _raise_if_cancelled(self) -> None:
-        if self._cancel.is_set():
+        if self._cancel.is_set() or self._closed:
             raise SpeechRequestCancelled("Speech server request cancelled")
 
 

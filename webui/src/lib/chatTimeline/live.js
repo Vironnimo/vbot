@@ -28,6 +28,7 @@ import {
   appendToolDelta,
   mergeToolStarted,
   mergeToolOutput,
+  mergeSpeechPlayback,
   mergeToolResult,
   mergeSubAgentSessionStarted,
   settleUnfinishedTools,
@@ -472,6 +473,11 @@ export function appendLiveRunEvent(assistantRun, event) {
     return;
   }
 
+  if (event.type === 'speech_playback') {
+    mergeSpeechPlayback(assistantRun, event);
+    return;
+  }
+
   if (event.type === 'subagent_session_started') {
     mergeSubAgentSessionStarted(assistantRun, event);
   }
@@ -489,6 +495,7 @@ function isAssistantRunEvent(event) {
     'reasoning',
     RUN_EVENT_TOOL_CALL_DELTA,
     'tool_call_started',
+    'speech_playback',
     RUN_EVENT_TOOL_CALL_OUTPUT,
     'tool_call_result',
     'subagent_session_started',

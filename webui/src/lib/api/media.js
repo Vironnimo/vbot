@@ -285,7 +285,12 @@ export async function previewSpeech(text, options = {}) {
       status: response.status,
     });
   }
-  const result = await readSpeechProgress(response, options.onProgress);
+  const result = await readSpeechProgress(
+    response,
+    options.onProgress,
+    'speech.synthesize',
+    options.onPlayback,
+  );
   if (
     !isPlainObject(result) ||
     !/^\/api\/speech\/artifacts\/[^/?#]+$/.test(result.url ?? '')
@@ -410,6 +415,7 @@ async function readSpeechProgress(
   response,
   onProgress,
   method = 'speech.transcribe',
+  onPlayback,
 ) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -441,6 +447,8 @@ async function readSpeechProgress(
         if (!line.trim()) continue;
         const event = JSON.parse(line);
         if (event.type === 'progress') onProgress?.(event);
+        else if (event.type === 'playback' && isSpeechPlaybackUrl(event.url))
+          onPlayback?.({ url: event.url });
         else if (event.type === 'result') return event.result;
         else if (event.type === 'error') {
           throw new ApiClientError(RPC_ERROR_HTTP, event.detail, {
@@ -455,6 +463,85 @@ async function readSpeechProgress(
           'Speech ended before a result arrived. Please try again.',
           { method },
         );
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+export function isSpeechPlaybackUrl(url) {
+  return (
+    typeof url === 'string' &&
+    /^\/api\/speech\/playback\/[a-zA-Z0-9_-]+$/.test(url)
+  );
+}
+
+// Incremental PCM transport. Each frame is two uint32le values (sample rate,
+// byte length), followed by mono PCM16le. A zero rate seals the stream: empty
+// payload means success; a payload is a stable error code. EOF alone fails.
+export async function* readSpeechPlayback(url, options = {}) {
+  if (!isSpeechPlaybackUrl(url))
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Invalid speech playback URL',
+    );
+  const response = await (options.fetch ?? globalThis.fetch)(
+    buildHttpUrl(url, options.baseUrl),
+    { signal: options.signal },
+  );
+  if (!response.ok || !response.body)
+    throw new ApiClientError(RPC_ERROR_HTTP, 'Speech playback is unavailable', {
+      status: response.status,
+    });
+  const reader = response.body.getReader();
+  let chunk = new Uint8Array();
+  let offset = 0;
+  async function readBytes(length) {
+    const bytes = new Uint8Array(length);
+    let filled = 0;
+    while (filled < length) {
+      if (offset === chunk.length) {
+        const next = await reader.read();
+        if (next.done)
+          throw new ApiClientError(
+            RPC_ERROR_RESPONSE,
+            'Speech playback ended unexpectedly',
+          );
+        chunk = next.value;
+        offset = 0;
+      }
+      const count = Math.min(length - filled, chunk.length - offset);
+      bytes.set(chunk.subarray(offset, offset + count), filled);
+      filled += count;
+      offset += count;
+    }
+    return bytes;
+  }
+  try {
+    while (true) {
+      const header = new DataView((await readBytes(8)).buffer);
+      const sampleRate = header.getUint32(0, true);
+      const length = header.getUint32(4, true);
+      if (
+        length > 32768 ||
+        (sampleRate && (sampleRate < 8000 || sampleRate > 192000 || length % 2))
+      )
+        throw new ApiClientError(
+          RPC_ERROR_RESPONSE,
+          'Invalid speech playback frame',
+        );
+      const bytes = await readBytes(length);
+      if (!sampleRate) {
+        if (length)
+          throw new ApiClientError(
+            RPC_ERROR_RESPONSE,
+            'Speech playback stopped',
+            { details: { code: new TextDecoder().decode(bytes) } },
+          );
+        return;
+      }
+      if (length) yield { sampleRate, bytes };
     }
   } finally {
     await reader.cancel().catch(() => {});

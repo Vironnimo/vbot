@@ -26,8 +26,9 @@ the take at once, so the user does not keep talking into nothing.
 
 Only one take runs at a time; a press while one is transcribing is ignored. A
 take that ends too short (under :data:`MIN_RECORDING_SECONDS`, for example a
-tap in hold mode) is dropped like a cancel. A take keeps what it recorded when
-the microphone fails midway. The status keeps the latest failure
+tap in hold mode) is dropped like a cancel. A capture gap or microphone failure
+ends the take with an explicit failure instead of inserting incomplete text.
+The status keeps the latest failure
 (``last_failure``) so the settings can explain a failure cue afterwards.
 """
 
@@ -104,6 +105,8 @@ ERROR_DICTATION_CONFIG_INVALID = "dictation_config_invalid"
 # ``last_failure`` codes besides the speech server's and the microphone's.
 ERROR_INSERT_FAILED = "insert_failed"
 ERROR_DICTATION_FAILED = "dictation_failed"
+ERROR_RECORDING_INTERRUPTED = "recording_interrupted"
+ERROR_MICROPHONE_READ_FAILED = "microphone_read_failed"
 NOTICE_INSERTED_TO_CLIPBOARD = "inserted_to_clipboard"
 NOTICE_NOTHING_HEARD = "nothing_heard"
 
@@ -436,7 +439,9 @@ class DictationController:
             CAPTURE_CAPTURING,
             CAPTURE_OPENING,
             ERROR_MICROPHONE_UNAVAILABLE,
+            GAP_READ_FAILED,
             AudioBlock,
+            CaptureGap,
         )
 
         stop = threading.Event()
@@ -478,11 +483,17 @@ class DictationController:
                 elif not capturing and state != CAPTURE_OPENING:
                     raise _Failed(ERROR_MICROPHONE_UNAVAILABLE)
                 elif capturing and state != CAPTURE_CAPTURING:
-                    logger.warning("The microphone stopped during dictation; keeping the audio")
-                    break
+                    raise _Failed(ERROR_MICROPHONE_READ_FAILED)
                 if end_at is not None and self._clock() >= end_at:
                     break
                 item = subscription.read(timeout=_READ_TIMEOUT_SECONDS)
+                if isinstance(item, CaptureGap):
+                    logger.debug("Dictation capture lost audio (reason=%s)", item.reason)
+                    raise _Failed(
+                        ERROR_MICROPHONE_READ_FAILED
+                        if item.reason == GAP_READ_FAILED
+                        else ERROR_RECORDING_INTERRUPTED
+                    )
                 if not isinstance(item, AudioBlock):
                     continue
                 if skipped < START_SKIP_SECONDS:
@@ -550,7 +561,10 @@ class _Transcriber:
     def finish(self) -> str:
         """Wait for every submitted piece; returns their joined texts."""
         self._pieces.put(None)
-        self._thread.join()
+        while self._thread.is_alive():
+            if self._take.cancelled.is_set():
+                raise _Cancelled
+            self._thread.join(_READ_TIMEOUT_SECONDS)
         if self._take.cancelled.is_set():
             raise _Cancelled
         if self.failure is not None:
@@ -587,6 +601,8 @@ class _Transcriber:
             except Exception:
                 logger.exception("Dictation could not transcribe piece %d", number)
                 self.failure = ERROR_DICTATION_FAILED
+                return
+            if self._stopped.is_set() or self._take.cancelled.is_set():
                 return
             logger.info("Dictation piece %d transcribed (%.1f s)", number, seconds)
             self._texts.append(text.strip())

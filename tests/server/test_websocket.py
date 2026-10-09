@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any, cast, override
 
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.tools.terminal_manager import TerminalClosedError, TerminalNotFoundError
+from server._streams import _stream_websocket_events
 from server.app import create_app
 from server.events import APP_ERROR_EVENT, RUN_STARTED_SERVER_EVENT
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
@@ -203,6 +205,93 @@ async def test_websocket_disconnect_during_hello_unregisters_client(tmp_path: Pa
     with TestClient(app):
         await endpoint(DisconnectingWebSocket())
         assert app.state.client_registry.list() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["disconnect", "cancel", "send_failure", "stream_end"])
+async def test_websocket_receives_during_blocked_send_and_settles_both_directions(
+    ending: str,
+) -> None:
+    """Slow speaker delivery must not delay microphone, control, or disconnect frames."""
+    incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    received: asyncio.Queue[bytes | str] = asyncio.Queue()
+    sending = asyncio.Event()
+    release_send = asyncio.Event()
+    send_settled = asyncio.Event()
+    stream_closed = asyncio.Event()
+    waiting_receives = 0
+    sent: list[Any] = []
+
+    class Socket:
+        async def receive(self) -> dict[str, Any]:
+            nonlocal waiting_receives
+            waiting_receives += 1
+            try:
+                return await incoming.get()
+            finally:
+                waiting_receives -= 1
+
+        async def send_bytes(self, data: bytes) -> None:
+            sending.set()
+            try:
+                await release_send.wait()
+                if ending == "send_failure":
+                    raise WebSocketDisconnect(code=1001)
+                sent.append(data)
+            finally:
+                send_settled.set()
+
+        async def send_json(self, data: Any) -> None:
+            sent.append(data)
+
+    async def output() -> AsyncGenerator[bytes | dict[str, Any]]:
+        try:
+            yield b"assistant"
+            yield {"type": "caption"}
+        finally:
+            stream_closed.set()
+
+    before = asyncio.all_tasks()
+    async with aclosing(output()) as stream, asyncio.timeout(1):
+        task = asyncio.create_task(
+            _stream_websocket_events(
+                cast(Any, Socket()),
+                stream,
+                on_binary=received.put_nowait,
+                on_text=received.put_nowait,
+            )
+        )
+        try:
+            await sending.wait()
+            incoming.put_nowait({"type": "websocket.receive", "bytes": b"microphone"})
+            incoming.put_nowait({"type": "websocket.receive", "text": "playback report"})
+            assert await received.get() == b"microphone"
+            assert await received.get() == "playback report"
+            assert not send_settled.is_set()
+
+            if ending == "disconnect":
+                incoming.put_nowait({"type": "websocket.disconnect"})
+                assert await task is False
+            elif ending == "cancel":
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                release_send.set()
+                if ending == "send_failure":
+                    with pytest.raises(WebSocketDisconnect):
+                        await task
+                else:
+                    assert await task is True
+                    assert sent == [b"assistant", {"type": "caption"}]
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert send_settled.is_set()
+    assert stream_closed.is_set()
+    assert waiting_receives == 0
+    assert not (asyncio.all_tasks() - before)
 
 
 class StubTerminalWebsocketManager:

@@ -17,6 +17,8 @@ const LIVE_MEDIA_KINDS = new Set(['webrtc', 'relay']);
 // Microphone audio waiting in the socket beyond this (2 s of PCM16 mono
 // 24 kHz) is dropped: late speech only confuses the voice model.
 const LIVE_AUDIO_BUFFER_LIMIT_BYTES = 96000;
+// Outbound relay PCM starts with uint32 LE generation + source sample offset.
+const LIVE_AUDIO_HEADER_BYTES = 8;
 // `live.start` accepts at most this many wake phrases.
 const LIVE_WAKE_PHRASES_MAX = 8;
 // Server close codes of the owner socket, named by what the caller should do:
@@ -121,7 +123,7 @@ export function sendLiveUiResult(callId, requestId, outcome, options = {}) {
 
 // Owner socket for one Live call. Text frames are JSON objects for `onEvent`;
 // a malformed frame reaches `onError` without closing the socket. Binary
-// frames are relay audio for `onAudio` (an ArrayBuffer). While the socket is
+// frames are relay audio for `onAudio` ({generation, start_samples, buffer}). While the socket is
 // open, `sendAudio` sends microphone audio and `sendJson` one JSON report. `onClose` receives the
 // close event and its outcome: `ended` (after the `closed` frame),
 // `unknown_call`, `replaced` (a newer owner socket took over; do not reattach),
@@ -163,7 +165,29 @@ export function openLiveCallSocket(callId, handlers = {}, options = {}) {
   }
   listen('message', (event) => {
     if (event.data instanceof ArrayBuffer) {
-      handlers.onAudio?.(event.data, event);
+      const buffer = event.data;
+      if (
+        buffer.byteLength <= LIVE_AUDIO_HEADER_BYTES ||
+        buffer.byteLength % 2
+      ) {
+        handlers.onError?.(
+          new ApiClientError(
+            LIVE_SOCKET_ERROR_RESPONSE,
+            'Invalid Live audio frame',
+          ),
+          event,
+        );
+        return;
+      }
+      const header = new DataView(buffer);
+      handlers.onAudio?.(
+        {
+          generation: header.getUint32(0, true),
+          start_samples: header.getUint32(4, true),
+          buffer: buffer.slice(LIVE_AUDIO_HEADER_BYTES),
+        },
+        event,
+      );
       return;
     }
     let frame;

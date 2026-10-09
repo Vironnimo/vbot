@@ -272,6 +272,7 @@ class ProviderTaskClient:
         *,
         timeout: float,
         parse: Callable[[httpx.Response], ParsedResultT],
+        consume: Callable[[httpx.Response], Awaitable[ParsedResultT]] | None = None,
         json: JsonObject | None = None,
         data: dict[str, str] | None = None,
         files: Any | None = None,
@@ -287,6 +288,10 @@ class ProviderTaskClient:
         same way transient network/HTTP errors are when the endpoint is replay
         safe. Non-idempotent endpoints suppress ambiguous retries unless their
         policy declares an explicit safe status or verified idempotency header.
+        With *consume*, successful response bytes are read by that asynchronous
+        callback while the response is open, without buffering ahead. Error
+        bodies are still read before classification. Streaming callbacks own
+        incremental decoding and must tolerate replay if the policy permits it.
         A supplied HTTP client is caller-owned and remains open after this call.
         """
 
@@ -304,50 +309,88 @@ class ProviderTaskClient:
                 observer = self._usage_observer
                 call_id = await observer.start() if observer is not None else ""
                 usage: Mapping[str, Any] | None = None
+                usage_observed = False
                 parsed: Any = None
                 status: Literal["completed", "failed", "cancelled"] = "completed"
                 try:
                     try:
-                        response = await client.post(
-                            endpoint,
-                            json=json,
-                            data=data,
-                            files=files,
-                            headers=request_headers,
-                            timeout=timeout,
+                        response_context = (
+                            client.stream(
+                                "POST",
+                                endpoint,
+                                json=json,
+                                data=data,
+                                files=files,
+                                headers=request_headers,
+                                timeout=timeout,
+                            )
+                            if consume is not None
+                            else nullcontext(
+                                await client.post(
+                                    endpoint,
+                                    json=json,
+                                    data=data,
+                                    files=files,
+                                    headers=request_headers,
+                                    timeout=timeout,
+                                )
+                            )
                         )
+                        async with response_context as response:
+                            if consume is not None and response.status_code >= 400:
+                                await response.aread()
+                            if observer is not None:
+                                try:
+                                    _ = response.content
+                                except httpx.ResponseNotRead:
+                                    pass
+                                else:
+                                    usage = await self._observe_response_usage(response)
+                                    usage_observed = True
+                            auth_recovery.record_response(
+                                response.status_code,
+                                request_headers,
+                                response.text if response.status_code >= 400 else "",
+                            )
+                            _classify_task_response_for_retry_policy(
+                                response,
+                                retry_policy=retry_policy,
+                                operation_key=operation_key,
+                                extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
+                            )
+                            try:
+                                parsed = (
+                                    await consume(response)
+                                    if consume is not None
+                                    else parse(response)
+                                )
+                                return parsed  # type: ignore[no-any-return]
+                            except ProviderOutcomeUnknownError, ProviderContentRefusedError:
+                                raise
+                            except (ProviderError, ValueError) as exc:
+                                if retry_policy.can_replay_after_ambiguous_failure:
+                                    raise
+                                raise _outcome_unknown(
+                                    operation_key,
+                                    f"the provider returned HTTP {response.status_code}, "
+                                    "but vBot could not "
+                                    f"confirm a usable result: {exc}",
+                                ) from exc
+                            finally:
+                                if observer is not None and not usage_observed:
+                                    try:
+                                        _ = response.content
+                                    except httpx.ResponseNotRead:
+                                        # Iterating binary output need not retain
+                                        # it. Accounting never forces a full read.
+                                        pass
+                                    else:
+                                        usage = await self._observe_response_usage(response)
                     except httpx.TransportError as exc:
                         raise _task_transport_error(
                             exc,
                             retry_policy=retry_policy,
                             operation_key=operation_key,
-                        ) from exc
-                    if observer is not None:
-                        usage = await self._observe_response_usage(response)
-                    auth_recovery.record_response(
-                        response.status_code,
-                        request_headers,
-                        response.text if response.status_code >= 400 else "",
-                    )
-                    _classify_task_response_for_retry_policy(
-                        response,
-                        retry_policy=retry_policy,
-                        operation_key=operation_key,
-                        extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
-                    )
-                    try:
-                        parsed = parse(response)
-                        return parsed  # type: ignore[no-any-return]
-                    except ProviderOutcomeUnknownError, ProviderContentRefusedError:
-                        raise
-                    except (ProviderError, ValueError) as exc:
-                        if retry_policy.can_replay_after_ambiguous_failure:
-                            raise
-                        raise _outcome_unknown(
-                            operation_key,
-                            f"the provider returned HTTP {response.status_code}, "
-                            "but vBot could not "
-                            f"confirm a usable result: {exc}",
                         ) from exc
                 except asyncio.CancelledError:
                     status = "cancelled"

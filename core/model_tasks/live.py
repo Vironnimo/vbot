@@ -28,7 +28,8 @@ Accessor updates published through :meth:`LiveCallHost.publish`:
   limits the session: seconds until it ends the call)
 * ``{"type": "caption", "role": "user" | "assistant", "text": str, "final": bool}``
 * ``{"type": "activity", "busy": bool, "label": str | None}``
-* ``{"type": "playback_clear"}`` (relay media: drop audio not yet played)
+* ``{"type": "playback_clear", "generation": <int>}`` (relay media: discard
+  earlier audio and start the new generation at sample zero)
 * ``{"type": "closed", "reason": str | None, "usage": dict | None}``; reasons
   include ``closed`` (an ordinary close), ``expired`` (the provider's session
   limit), ``connection_lost``, ``start_timeout``, and ``aborted``
@@ -171,7 +172,7 @@ class LiveCallHost(Protocol):
 
     def publish(self, update: JsonObject) -> None: ...
 
-    def publish_audio(self, pcm: bytes) -> None: ...
+    def publish_audio(self, pcm: bytes, *, generation: int = 1, start_samples: int = 0) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,20 @@ class LiveCall(Protocol):
 
         Ignored for WebRTC calls, before the call is live, and while it closes.
         """
+        ...
+
+    def report_playback(
+        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
+    ) -> None:
+        """Keep the accessor's actual rendered PCM prefix (relay only)."""
+        ...
+
+    def reset_playback(self) -> None:
+        """Drop pending relay output after owner loss or overflow."""
+        ...
+
+    def sync_playback(self) -> None:
+        """Publish the relay generation to a newly attached owner."""
         ...
 
     async def wait_closed(self) -> None:

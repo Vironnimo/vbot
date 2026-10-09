@@ -14,6 +14,7 @@ import psutil  # type: ignore[import-untyped]
 from core.performance import count
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
 from core.utils.timestamps import format_canonical_timestamp
+from core.utils.workers import finish_despite_cancel
 from server._app_lifecycle import _app_chat_runs
 from server._http_dependencies import Request, WebSocket
 from server.clients import ClientEntry, ClientRegistry
@@ -62,64 +63,71 @@ async def _stream_websocket_events(
 
     Inbound binary frames go to *on_binary* and text frames to *on_text* when
     given; every other inbound frame is ignored. Returns ``True`` when *stream*
-    ended and ``False`` when the client disconnected first.
+    ended and ``False`` when the client disconnected first. Receiving stays
+    independent of sending, so a slow download cannot hold up microphone
+    audio, playback reports, or the disconnect that ends a blocked send.
     """
-    stream_iter = stream.__aiter__()
-    disconnect_task = asyncio.create_task(websocket.receive(), name="websocket-receive")
-    # The pending stream read survives across loop iterations: cancelling it to
-    # handle a stray client frame would finalize the async generator and
-    # silently end server-push delivery.
-    event_task: asyncio.Task[Any] | None = None
-    try:
+
+    async def receive() -> None:
         while True:
-            if event_task is None:
-                event_task = asyncio.create_task(
-                    stream_iter.__anext__(), name="websocket-stream-next"
-                )
-            done, _pending = await asyncio.wait(
-                {event_task, disconnect_task},
-                timeout=WS_HEARTBEAT_INTERVAL_SECONDS,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if not done:
-                await websocket.send_json(
-                    {"type": "heartbeat", "timestamp": datetime.now(UTC).isoformat()}
-                )
-                continue
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                return
+            data = message.get("bytes")
+            if on_binary is not None and isinstance(data, bytes):
+                on_binary(data)
+            text = message.get("text")
+            if on_text is not None and isinstance(text, str):
+                on_text(text)
 
-            if disconnect_task in done:
-                message = disconnect_task.result()
-                if message.get("type") == "websocket.disconnect":
-                    return False
-                data = message.get("bytes")
-                if on_binary is not None and isinstance(data, bytes):
-                    on_binary(data)
-                text = message.get("text")
-                if on_text is not None and isinstance(text, str):
-                    on_text(text)
-                # Keep listening for the disconnect without disturbing the
-                # pending stream read.
-                disconnect_task = asyncio.create_task(websocket.receive(), name="websocket-receive")
-
-            if event_task in done:
-                completed_event_task = event_task
-                event_task = None
+    async def send() -> None:
+        stream_iter = stream.__aiter__()
+        event_task: asyncio.Task[Any] | None = None
+        try:
+            while True:
+                if event_task is None:
+                    event_task = asyncio.create_task(
+                        stream_iter.__anext__(), name="websocket-stream-next"
+                    )
+                # Keep the pending read through heartbeats; cancelling it would
+                # close an async generator and end server-push delivery.
+                done, _pending = await asyncio.wait(
+                    {event_task}, timeout=WS_HEARTBEAT_INTERVAL_SECONDS
+                )
+                if not done:
+                    await websocket.send_json(
+                        {"type": "heartbeat", "timestamp": datetime.now(UTC).isoformat()}
+                    )
+                    continue
+                completed_event_task, event_task = event_task, None
                 try:
                     event = completed_event_task.result()
                 except StopAsyncIteration:
-                    return True
+                    return
                 if isinstance(event, bytes):
                     await websocket.send_bytes(event)
                 else:
                     await websocket.send_json(event)
+        finally:
+            if event_task is not None:
+                event_task.cancel()
+                await finish_despite_cancel(asyncio.gather(event_task, return_exceptions=True))
+
+    receiver = asyncio.create_task(receive(), name="websocket-receive")
+    sender = asyncio.create_task(send(), name="websocket-send")
+    try:
+        done, _pending = await asyncio.wait({receiver, sender}, return_when=asyncio.FIRST_COMPLETED)
+        if receiver in done:
+            receiver.result()
+            return False
+        sender.result()
+        return True
     finally:
-        disconnect_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await disconnect_task
-        if event_task is not None:
-            event_task.cancel()
-            with suppress(asyncio.CancelledError, StopAsyncIteration):
-                await event_task
+        receiver.cancel()
+        sender.cancel()
+        # ASGI shutdown can cancel again while cleanup is already settling.
+        # Neither pump nor an outstanding stream read may outlive this call.
+        await finish_despite_cancel(asyncio.gather(receiver, sender, return_exceptions=True))
 
 
 async def _close_log_stream(stream: Any) -> None:

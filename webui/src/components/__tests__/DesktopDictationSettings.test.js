@@ -171,6 +171,16 @@ describe('DesktopDictationSettings', () => {
     ['inserted_to_clipboard', FAILED_AT, 'settings.dictation.result.clipboard'],
     ['insert_failed', FAILED_AT, 'settings.dictation.result.insertFailed'],
     ['nothing_heard', null, 'settings.dictation.result.nothingHeard'],
+    [
+      'recording_interrupted',
+      FAILED_AT,
+      'settings.dictation.result.recordingInterrupted',
+    ],
+    [
+      'microphone_read_failed',
+      FAILED_AT,
+      'settings.dictation.result.microphoneReadFailed',
+    ],
     ['something_new', FAILED_AT, 'settings.dictation.result.failed'],
   ])(
     'tells how the last dictation ended with %s',

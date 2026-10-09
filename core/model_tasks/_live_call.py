@@ -208,6 +208,7 @@ class LiveCallSession:
         self._audio_backlog_bytes = 0
         self._audio_ready = asyncio.Event()
         self._audio_overflow_logged = False
+        self._playback_generation = 1
 
     @property
     def id(self) -> str:
@@ -280,6 +281,37 @@ class LiveCallSession:
                 )
         self._audio_ready.set()
 
+    def report_playback(
+        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
+    ) -> None:
+        """Apply one owner report without blocking the socket's microphone pump."""
+        if self._relay and not self._closing and not self._done.is_set():
+            self._spawn(
+                self._update_playback(generation, played_samples, enabled, cleared),
+                name=f"live-call-playback:{self._log_id}",
+            )
+
+    def reset_playback(self) -> None:
+        """An owner disappeared or dropped output; retire its pending audio."""
+        self.report_playback(0, 0, enabled=False, cleared=True)
+
+    def sync_playback(self) -> None:
+        """Give a newly attached owner the current relay generation."""
+        if self._relay:
+            self._publish({"type": "playback_clear", "generation": self._playback_generation})
+
+    async def _update_playback(
+        self, generation: int, played_samples: int, enabled: bool, cleared: bool
+    ) -> None:
+        async def send() -> None:
+            events = await self._wire.update_playback(
+                generation, played_samples, enabled=enabled, cleared=cleared
+            )
+            for event in events:
+                self._handle(event)
+
+        await self._send_command(send)
+
     def announce_run(self, notice: LiveRunNotice) -> None:
         if notice.run_id in self._announced or self._done.is_set() or self._closing:
             return
@@ -344,9 +376,10 @@ class LiveCallSession:
                     self._speak(self._unspoken.popleft())
         elif isinstance(event, WireAudio):
             if self._phase == "live" and not self._closing:
-                self._publish_audio(event.pcm)
+                self._publish_audio(event)
         elif isinstance(event, WirePlaybackClear):
-            self._publish({"type": "playback_clear"})
+            self._playback_generation = event.generation
+            self._publish({"type": "playback_clear", "generation": event.generation})
         elif isinstance(event, WireCaption):
             self._on_caption(event)
         elif isinstance(event, WireDelegation):
@@ -804,9 +837,11 @@ class LiveCallSession:
                 type(exc).__name__,
             )
 
-    def _publish_audio(self, pcm: bytes) -> None:
+    def _publish_audio(self, event: WireAudio) -> None:
         try:
-            self._host.publish_audio(pcm)
+            self._host.publish_audio(
+                event.pcm, generation=event.generation, start_samples=event.start_samples
+            )
         except Exception as exc:
             _LOGGER.warning(
                 "Live call audio delivery failed (call=%s error_type=%s)",

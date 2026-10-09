@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from core.model_tasks import (
@@ -12,6 +13,8 @@ from core.model_tasks import (
     SpeechUnsupportedTargetError,
     TaskUsageContext,
 )
+from core.model_tasks.speech_playback import SpeechPlayback
+from core.model_tasks.speech_types import SpeechAudioChunk
 from core.tools._media_failures import provider_failure_message, unavailable_message
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
@@ -83,9 +86,27 @@ def make_generate_speech_handler(speech_service: Any):
                 retryable=False,
             )
 
+        playback: SpeechPlayback | None = None
+        announced = False
+
+        async def publish_audio(chunk: SpeechAudioChunk) -> None:
+            nonlocal playback, announced
+            if playback is None:
+                playback = speech_service.playbacks.create()
+            if playback is None:
+                return
+            await playback.append(chunk.audio, chunk.sample_rate_hz)
+            if not announced:
+                announced = True
+                await context.emit(
+                    "speech_playback",
+                    {"tool_call_id": context.tool_call_id, "url": playback.url},
+                )
+
         try:
             artifact = await speech_service.synthesize_artifact(
                 text,
+                on_audio=publish_audio,
                 usage_context=TaskUsageContext(
                     agent_id=context.agent_id,
                     project_id=context.project_id,
@@ -98,7 +119,18 @@ def make_generate_speech_handler(speech_service: Any):
                 ),
             )
         except SpeechError as exc:
+            if playback is not None:
+                playback.finish("failed")
             return _speech_failure(exc)
+        except BaseException as exc:
+            if playback is not None:
+                playback.finish(
+                    "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+                )
+            raise
+        else:
+            if playback is not None:
+                playback.finish()
 
         # The model-facing data carries the audio file's absolute path so the agent
         # can deliver it outside the web chat (e.g. channel_send); the UI-facing
