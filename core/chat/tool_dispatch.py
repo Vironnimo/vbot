@@ -87,6 +87,9 @@ class ToolDispatchContext:
     # On-demand Tools a ``load_tools`` call may load: registry name -> the
     # definition it returns (``RequestState.loadable_tools``).
     loadable_tools: Mapping[str, JsonObject] = field(default_factory=dict)
+    # On-demand Tools the Model was told it can load that cannot be loaded now
+    # (``RequestState.unloadable_tools``).
+    unloadable_tools: Collection[str] = frozenset()
     change_tracker: ChangeTracker | None = None
     allow_owned_effects: bool = False
     _result_persisted_callbacks: dict[str, list[ToolResultPersistedCallback]] = field(
@@ -861,6 +864,7 @@ class ToolRound:
             tool_result_payload_registrar=context.stage_result_payload,
             input_contracts=context.tool_contracts,
             loadable_tools=context.loadable_tools,
+            unloadable_tools=context.unloadable_tools,
             tool_load_registrar=context.record_tool_load,
             change_tracker=context.change_tracker,
         )

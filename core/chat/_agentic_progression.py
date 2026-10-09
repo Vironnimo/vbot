@@ -561,6 +561,7 @@ class AgenticProgression:
                 tool_contracts=state.tool_contracts,
                 removed_tool_names=removed_tool_names,
                 loadable_tools=state.loadable_tools,
+                unloadable_tools=state.unloadable_tools,
                 change_tracker=self._dependencies.change_tracker,
                 allow_owned_effects=context.request.temporary_binding is not None,
             )

@@ -154,6 +154,9 @@ class ToolContext:
     loadable_tools: Mapping[str, JsonObject] = field(
         default_factory=dict, repr=False, compare=False
     )
+    # On-demand Tools the Model was told it can load whose definition cannot be
+    # loaded now (not ready, or not offered on this route), by registry name.
+    unloadable_tools: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
     tool_load_hook: ToolLoadHook | None = field(default=None, repr=False, compare=False)
     _loaded_tools: list[str] = field(default_factory=list, init=False, repr=False, compare=False)
     allowed_skills: Sequence[str] | None = None
@@ -570,6 +573,8 @@ class ToolExecutionConfig:
     input_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
     # See ``ToolContext.loadable_tools``; these Tools count as not shown.
     loadable_tools: Mapping[str, JsonObject] = field(default_factory=dict)
+    # See ``ToolContext.unloadable_tools``.
+    unloadable_tools: Collection[str] = frozenset()
     tool_load_registrar: ToolLoadHook | None = None
     # Session-scoped file-content tracker for git-style change statistics.
     # ``None`` keeps direct/legacy execution groups without change tracking.

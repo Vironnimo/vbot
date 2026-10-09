@@ -872,22 +872,42 @@ async def test_a_restricted_run_keeps_load_tools_and_loads_only_the_tools_it_may
     tmp_path: Path,
 ) -> None:
     tools, _dispatched = _on_demand_tools()
+    maps_ready = True
+    tools.register(
+        "maps",
+        "Find places.",
+        {"type": "object"},
+        tools.get("read").handler,
+        ready=lambda: maps_ready,
+        readiness_hint="Requires a Maps connection - set the API key in Settings -> Extensions.",
+    )
     runtime = tool_runtime(
         tmp_path,
         tools,
-        [tool_turn(("load", "load_tools", {"names": ["search", "fetch"]})), final("done")],
-        allowed_tools=["read", "search", "fetch"],
+        [
+            final("ready"),
+            tool_turn(("load", "load_tools", {"names": ["search", "fetch", "maps"]})),
+            final("done"),
+        ],
+        allowed_tools=["read", "search", "fetch", "maps"],
         tool_loading=_ON_DEMAND,
     )
-    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime)
+    await loop.send("coder", "Start", session_id="session-one")
+    # Listed in the epoch's System Prompt, maps stops being ready.
+    maps_ready = False
 
-    run = await build_chat_loop(runtime).start_run(
-        "coder", "Go", session_id="session-one", tool_restriction=("search",)
+    run = await loop.start_run(
+        "coder", "Go", session_id="session-one", tool_restriction=("search", "maps")
     )
     await run.wait()
 
+    # A listed Tool this Run refuses or that is not ready is reported as listed but unusable.
     (result,) = tool_results(history(runtime))
     assert _loaded_text(result).startswith(
-        "- search: loaded\n- fetch: not available to load\n\nTool: search\n"
+        "- search: loaded\n"
+        "- fetch: listed, but cannot be used right now; continue without it\n"
+        "- maps: listed, but cannot be used right now (Requires a Maps connection - set the "
+        "API key in Settings -> Extensions); continue without it\n\nTool: search\n"
     )
     assert _announced(runtime) == [("loaded", "search")]

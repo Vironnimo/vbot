@@ -124,6 +124,18 @@ class RequestState:
             if (change := self.tool_loads.get(name)) is not None and change.definition is not None
         }
 
+    @property
+    def unloadable_tools(self) -> frozenset[str]:
+        """The On-demand Tools the Model was told it can load that cannot be loaded now.
+
+        They are not ready or not offered on the Run's primary route. Empty until
+        a Tool catalog was measured for this state.
+        """
+        if self.tool_epoch is None or self.tool_loads is None:
+            return frozenset()
+        loadable = self.loadable_tools
+        return frozenset(name for name in self.tool_epoch.loadable_names if name not in loadable)
+
 
 _RequestState = RequestState
 
