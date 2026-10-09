@@ -7,14 +7,19 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatMessage
+from core.chat import ChatMessage, ToolCall
 from core.chat._message_history import effective_compaction_messages
 from core.chat.wire_shaping import (
     _embed_notes_into_request,
     _notes_to_request_messages,
     _restore_in_run_assistant_reasoning,
 )
-from core.compaction import CompactionService, CompactionSettings, find_tail_boundary
+from core.compaction import (
+    CompactionError,
+    CompactionService,
+    CompactionSettings,
+    find_tail_boundary,
+)
 from core.compaction.compaction import (
     COMPACTION_SUMMARY_NOTE_PREFIX,
     TAIL_SOFT_LIMIT_PERCENT,
@@ -75,6 +80,107 @@ def test_find_tail_boundary_starts_at_a_whole_step(
     messages: list[ChatMessage], boundary: str
 ) -> None:
     assert find_tail_boundary(messages, tail_tokens=1) == boundary
+
+
+def _historical_steps(steps: tuple[str, ...]) -> list[ChatMessage]:
+    """Build valid records whose ordering may contain incomplete or orphaned Tool cycles."""
+    messages = []
+    for index, step in enumerate(steps):
+        key = f"message-{index}"
+        if step.startswith(("call:", "silent-call:")):
+            messages.append(
+                ChatMessage.assistant(
+                    message_id=key,
+                    content=None if step.startswith("silent-call:") else "",
+                    model="test/model",
+                    tool_calls=[
+                        ToolCall(id=call_id, name="read", arguments={})
+                        for call_id in step.split(":", 1)[1].split(",")
+                    ],
+                )
+            )
+        elif step.startswith("result:"):
+            messages.append(message(key, "tool", "result", tool_call_id=step[7:], name="read"))
+        elif step == "reasoning":
+            messages.append(
+                ChatMessage.assistant(model="test/model", content=None, reasoning="thinking")
+            )
+        elif step == "assistant":
+            messages.append(assistant(key, "answer"))
+        elif step == "run_summary":
+            messages.append(
+                ChatMessage.run_summary(
+                    run_id="historical-run",
+                    status="completed",
+                    timing={
+                        "started_at": "2026-05-19T12:00:00+00:00",
+                        "completed_at": "2026-05-19T12:00:01+00:00",
+                        "duration_ms": 1_000,
+                    },
+                    iteration_count=1,
+                )
+            )
+        elif step == "agent_takeover":
+            messages.append(
+                ChatMessage.agent_takeover(from_address="one@project", to_address="two@project")
+            )
+        elif step == "error":
+            messages.append(ChatMessage.error("provider", "historical error"))
+        else:
+            messages.append(message(key, step, step))
+    return messages
+
+
+@pytest.mark.parametrize(
+    ("steps", "boundary_index"),
+    [
+        (("call:a,b", "result:b", "note", "run_summary", "agent_takeover", "error", "result:a"), 0),
+        (("silent-call:a", "result:a"), 0),
+        (("call:a,a", "result:a"), 0),
+        (("call:a", "result:a", "call:a", "result:a"), 0),
+        (("result:orphan", "user", "assistant"), 1),
+        (("call:a", "user", "assistant"), 1),
+        (("call:a,b", "result:a", "assistant", "user"), 2),
+        (("call:a", "result:b", "user"), 2),
+        (("call:a", "result:a", "result:a", "assistant"), 3),
+        (("call:a", "user", "result:a", "assistant"), 3),
+        (("user", "call:a"), None),
+        (("user", "call:a,b", "result:b"), None),
+        (("user", "result:orphan"), None),
+        (("call:a", "reasoning", "result:a"), None),
+        (("user", "reasoning"), 0),
+        (("reasoning",), None),
+    ],
+    ids=[
+        "parallel-results-in-reverse-order-ignore-metadata-carriers",
+        "assistant-without-content-can-start-complete-cycle",
+        "duplicate-call-ids-still-form-one-pending-id",
+        "call-ids-may-repeat-in-later-cycles",
+        "orphan-before-valid-tail",
+        "unresolved-cycle-before-valid-tail",
+        "partial-batch-before-valid-tail",
+        "foreign-result-before-valid-tail",
+        "duplicate-result-before-valid-tail",
+        "result-cannot-cross-user",
+        "unresolved-cycle-at-end",
+        "partial-batch-at-end",
+        "orphan-at-end",
+        "result-cannot-cross-reasoning-only-assistant",
+        "reasoning-only-assistant-can-follow-user",
+        "reasoning-only-assistant-is-no-boundary",
+    ],
+)
+def test_find_tail_boundary_keeps_only_provider_safe_suffixes_of_historical_sequences(
+    steps: tuple[str, ...], boundary_index: int | None
+) -> None:
+    messages = _historical_steps(steps)
+    # A target larger than this history selects the oldest valid cut, not merely
+    # the newest safe step; corruption before that cut cannot invalidate its Tail.
+    if boundary_index is None:
+        with pytest.raises(CompactionError):
+            find_tail_boundary(messages, tail_tokens=100_000)
+    else:
+        assert find_tail_boundary(messages, tail_tokens=100_000) == messages[boundary_index].id
 
 
 def test_working_tail_treats_the_latest_user_as_an_ordinary_step() -> None:
