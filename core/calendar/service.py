@@ -461,11 +461,15 @@ class CalendarService:
                 f"duration_minutes must not exceed {MAX_DURATION_MINUTES}"
             )
         window_start, window_end = _checked_window(window_start_utc, window_end_utc)
+        self._ensure_events_loaded(allow_degraded=True)
         reference_now = _as_utc(now_utc) if now_utc is not None else datetime.now(UTC)
         duration = timedelta(minutes=duration_minutes)
         busy = [
             (max(item.start_utc, window_start), min(item.end_utc, window_end))
-            for item in self.occurrences_in_window(window_start, window_end)
+            for event in self._events.values()
+            for item in window_occurrences(
+                event, window_start, window_end, self._timezone, limit=None
+            )
         ]
         merged = _merge_intervals(busy)
         cursor = max(window_start, reference_now)

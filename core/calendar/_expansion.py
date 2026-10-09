@@ -63,7 +63,7 @@ def window_occurrences(
     window_start: datetime,
     window_end: datetime,
     system_tz: ZoneInfo,
-    limit: int,
+    limit: int | None,
 ) -> list[EventOccurrence]:
     """The occurrences of ``event`` overlapping the half-open UTC window, in start order."""
     series = event_series(event, system_tz)
@@ -84,7 +84,7 @@ def window_occurrences(
         if item.original_start not in found and _overlaps(item, window_start, window_end):
             found[str(item.original_start)] = item
     ordered = sorted(found.values(), key=lambda item: (item.start_utc, item.id))
-    return ordered[:limit]
+    return ordered if limit is None else ordered[:limit]
 
 
 def iter_occurrences(
