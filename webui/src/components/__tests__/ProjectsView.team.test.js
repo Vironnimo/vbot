@@ -642,6 +642,35 @@ describe('ProjectsView Team', () => {
     );
   });
 
+  // Switching it off clears the override (controller test).
+  it('sets an On-demand Tools override from the member switch', async () => {
+    serveProject(
+      {},
+      { team: [member({ agent_id: 'builder', display_name: 'Builder' })] },
+    );
+    mockCatalogs({
+      tools: [{ name: 'bash', loaded_by_default: true }, 'read'],
+    });
+    view.mount();
+    await selectDemo();
+    await expandMember('builder');
+
+    const loadingSwitch = () =>
+      memberDetail('builder')?.querySelector('[data-tool-loading-switch]');
+    await waitForCondition(loadingSwitch);
+    expect(loadingSwitch().getAttribute('aria-checked')).toBe('false');
+    loadingSwitch().click();
+    flushSync();
+    await wait(AUTO_SAVE_WAIT_MS);
+    await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
+    expect(setOverrideMock).toHaveBeenCalledWith(
+      'demo',
+      'builder',
+      'tool_loading',
+      { on_demand: true },
+    );
+  });
+
   it('shows each member repository-owned Sub-Agent targets and denied tools', async () => {
     serveProject(
       {},

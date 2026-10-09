@@ -422,6 +422,35 @@ describe('AgentsView behavior and access', () => {
     });
   });
 
+  it('auto-saves an Always loaded change as the explicit On-demand Tools list', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [{ ...baseAgent(), tool_loading: { on_demand: true } }],
+        tools: [
+          { name: 'bash', loaded_by_default: true },
+          { name: 'subagent', loaded_by_default: false },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    const selector = '[data-tool-always-loaded="subagent"]';
+    await waitForElement(selector);
+    const pin = document.body.querySelector(selector);
+    expect(pin.getAttribute('aria-pressed')).toBe('false');
+
+    vi.useFakeTimers();
+    pin.click();
+    flushSync();
+    await advanceAutosave();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      tool_loading: { on_demand: true, always_loaded: ['bash', 'subagent'] },
+    });
+  });
+
   it('orders access sections as Tools, Skills, then Sub-Agents', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({

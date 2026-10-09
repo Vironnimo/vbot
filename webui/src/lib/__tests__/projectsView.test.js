@@ -723,6 +723,7 @@ describe('Projects controller Team overrides', () => {
           temperature: 0.3,
           top_p: 0.8,
           thinking_effort: 'low',
+          tool_loading: { on_demand: true, always_loaded: ['read'] },
         },
         effective: {
           model: { value: 'openai/gpt-mini', source: 'override' },
@@ -756,6 +757,7 @@ describe('Projects controller Team overrides', () => {
       thinking_effort: 'low',
       compaction_policy: null,
       tool_access: { mode: 'all' },
+      tool_loading: { on_demand: true, always_loaded: ['read'] },
     });
     expect(controller.overrideDraft('planner')).toEqual({
       model: 'openai/gpt-5.2',
@@ -764,6 +766,7 @@ describe('Projects controller Team overrides', () => {
       thinking_effort: 'high',
       compaction_policy: null,
       tool_access: { mode: 'all' },
+      tool_loading: null,
     });
   });
 
@@ -774,6 +777,8 @@ describe('Projects controller Team overrides', () => {
     ['top_p', '0,9', 0.9],
     ['temperature', '', null],
     ['top_p', 'abc', null],
+    ['tool_loading', { on_demand: true }, { on_demand: true }],
+    ['tool_loading', { on_demand: false, always_loaded: ['read'] }, null],
   ])('sets the %s override typed as %j to %j', async (field, draft, sent) => {
     const setOverride = vi.fn().mockResolvedValue({ scan });
     const { controller } = await loadedController({}, { setOverride });
@@ -790,7 +795,11 @@ describe('Projects controller Team overrides', () => {
     }
   });
 
-  it('clears a sampling override whose box was emptied', async () => {
+  // An emptied sampling box and On-demand Tools switched off mean no override.
+  it.each([
+    ['temperature', ''],
+    ['tool_loading', { on_demand: false, always_loaded: ['read'] }],
+  ])('clears the %s override saved as %j', async (field, draft) => {
     const setOverride = vi.fn().mockResolvedValue({ scan });
     const clearOverride = vi.fn().mockResolvedValue({ scan });
     const { controller } = await loadedController(
@@ -798,14 +807,10 @@ describe('Projects controller Team overrides', () => {
       { setOverride, clearOverride },
     );
     controller.selectProject('demo', scan);
-    controller.updateOverrideDraft('builder', 'temperature', '');
+    controller.updateOverrideDraft('builder', field, draft);
 
     await expect(controller.savePendingOverrides()).resolves.toBe(true);
-    expect(clearOverride).toHaveBeenCalledWith(
-      'demo',
-      'builder',
-      'temperature',
-    );
+    expect(clearOverride).toHaveBeenCalledWith('demo', 'builder', field);
     expect(setOverride).not.toHaveBeenCalled();
   });
 
@@ -1097,7 +1102,12 @@ describe('Project scan projections', () => {
             source_path: '.opencode/agents/builder.md',
             denied_tools: ['bash'],
             tools: { subagent: { allowed_agents: ['builder'] } },
-            overrides: { model: 'openai/gpt-mini', top_p: 0.8, unknown: 'x' },
+            overrides: {
+              model: 'openai/gpt-mini',
+              top_p: 0.8,
+              tool_loading: { on_demand: true, always_loaded: [' read '] },
+              unknown: 'x',
+            },
             effective: {
               model: { value: 'openai/gpt-mini', source: 'override' },
               temperature: { value: 0.2, source: 'agent' },
@@ -1122,7 +1132,11 @@ describe('Project scan projections', () => {
         denied_tools: ['bash'],
         tools: { subagent: { allowed_agents: ['builder'] } },
         // Only the known override fields survive.
-        overrides: { model: 'openai/gpt-mini', top_p: 0.8 },
+        overrides: {
+          model: 'openai/gpt-mini',
+          top_p: 0.8,
+          tool_loading: { on_demand: true, always_loaded: ['read'] },
+        },
         effective: {
           model: { value: 'openai/gpt-mini', source: 'override' },
           temperature: { value: 0.2, source: 'agent' },
