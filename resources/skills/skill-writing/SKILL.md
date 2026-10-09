@@ -96,5 +96,5 @@ When the material holds no method that will repeat, create no Skill and say so. 
 
 ## Check the result
 
-1. Fix each `Hint:` line the `skill_manage` result reported. Read the saved Skill again only when that result reported a hint or you saved the Skill without `skill_manage`: load it with the `skill` Tool for your own, `vbot skill read <name> --scope <scope>` for another scope. Done when no hint is left and the saved text is the text you intended.
+1. Read the saved Skill: load it with the `skill` Tool for your own, `vbot skill read <name> --scope <scope>` for another scope. Fix each `Hint:` line the `skill_manage` result reported. Done when the saved text is the text you intended and no hint is left.
 2. Tell the user in one or two sentences what you created or changed and when it helps, or why nothing was saved. Report a failed write as failed. Do not paste the Skill back.

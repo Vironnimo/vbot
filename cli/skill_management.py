@@ -632,8 +632,6 @@ def format_skill_revision(revision: Mapping[str, Any]) -> list[str]:
         what = f"revert of revision {targets}"
     elif kind == "archive":
         what = f"archived ({_archive_reason(revision)})"
-    elif kind == "rename":
-        what = f"renamed from {_string_or_default(revision.get('renamed_from'), '?')}"
     elif kind == "external" and revision.get("live") is False:
         what = "removed outside vBot"
     else:

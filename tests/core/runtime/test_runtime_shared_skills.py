@@ -373,64 +373,6 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
 
 
 @pytest.mark.asyncio
-async def test_a_renamed_skills_shares_settings_and_automations_follow_it(
-    config: Config, tmp_path: Path
-) -> None:
-    runtime = Runtime(config, safe_startup_mode="test")
-    runtime.start()
-    try:
-        runtime.agents.create("receiver", "Receiver")
-        runtime.agents.update("receiver", allowed_skills=["deploy-web"])
-        data_dir = runtime.storage.data_dir
-        write_agent_skill(data_dir, "main", "deploy-web", "Deploy the web app.")
-        runtime.skill_policy.set_shared("main", "deploy-web", shared=True, receivers=["receiver"])
-        private = SkillPackageRef("agent", "deploy-web", "main")
-        runtime.skill_policy.set_package_disabled(private, disabled=True)
-        job = await runtime.cron_service.create_job(
-            agent_id="main",
-            name="Nightly",
-            prompt="/deploy-web tonight",
-            schedule_type="interval",
-            interval_seconds=3600,
-        )
-        context = ToolContext(
-            agent_id="main",
-            session_id="session-one",
-            run_id="run-one",
-            tool_call_id="call-one",
-            tool_name="skill_manage",
-            tool_call_index=0,
-            workspace=tmp_path,
-            vbot_root=tmp_path,
-            data_root=data_dir,
-            cwd=tmp_path,
-        )
-
-        result = await runtime.tools.dispatch(
-            context,
-            {"action": "rename", "name": "deploy-web", "new_name": "web-deploy"},
-            ["skill_manage"],
-        )
-
-        assert result["data"]["content"].splitlines()[0] == (
-            "Renamed Skill 'deploy-web' to 'web-deploy'."
-        )
-        policy = runtime.skill_policy.load()
-        assert policy.shared == {"main": {"web-deploy": frozenset({"receiver"})}}
-        assert SkillPackageRef("agent", "web-deploy", "main") in policy.disabled_packages
-        assert private not in policy.disabled_packages
-        # The old name stays in a selection: it can also name a global or bundled Skill.
-        assert runtime.agents.get("receiver").allowed_skills == ["deploy-web", "web-deploy"]
-        assert runtime.cron_service.get_job(job.id).prompt == "/web-deploy tonight"
-        home = runtime.agent_skills_dir("main")
-        assert not (home / "deploy-web").exists()
-        [revision] = runtime.skill_authoring.history(home, "web-deploy", limit=1)
-        assert (revision.kind, revision.renamed_from) == ("rename", "deploy-web")
-    finally:
-        runtime.stop()
-
-
-@pytest.mark.asyncio
 async def test_skill_manage_publishes_into_and_changes_only_the_global_home(
     config: Config, tmp_path: Path
 ) -> None:

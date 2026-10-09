@@ -7,11 +7,6 @@ the request changed the same part of that Skill: one of its files, its pin, or
 its presence in the home. Revisions the caller names as related (such as earlier
 reverts of the same change) never block. Each reverted revision records one
 ``revert`` revision.
-
-A ``rename`` concerns both of its names: its revert gives the Skill its former
-name back, with the ``SKILL.md`` text from before, and records the ``revert``
-under that name with ``renamed_from``. A revision recorded under the former name
-before the rename conflicts with the rename, so it reverts together with it.
 """
 
 from __future__ import annotations
@@ -80,7 +75,7 @@ class RevertActor:
 @dataclass
 class _Step:
     target: SkillRevision
-    action: Literal["archive", "restore", "content", "pin", "rename"]
+    action: Literal["archive", "restore", "content", "pin"]
     archive_id: str | None = None
     reason: str | None = None
     absorbed_into: str | None = None
@@ -95,16 +90,6 @@ class _Step:
     @property
     def skill(self) -> str:
         return self.target.skill
-
-    @property
-    def renamed_to(self) -> str | None:
-        """For a rename step, the name the Skill gets back."""
-        return self.target.renamed_from if self.action == "rename" else None
-
-    @property
-    def recorded_skill(self) -> str:
-        """The Skill name the step's ``revert`` revision is recorded under."""
-        return self.renamed_to or self.skill
 
 
 def check_revert(
@@ -144,7 +129,7 @@ def revert_revisions(
         try:
             recorded.append(
                 history.append(
-                    skill=step.recorded_skill,
+                    skill=step.skill,
                     kind="revert",
                     actor=actor.actor,
                     files=step.records,
@@ -160,7 +145,6 @@ def revert_revisions(
                     absorbed_into=step.absorbed_into if step.action == "archive" else None,
                     archive_id=step.archive_id,
                     reverts=(step.target.id,),
-                    renamed_from=step.skill if step.renamed_to is not None else None,
                 )
             )
         except OSError as error:
@@ -184,7 +168,7 @@ def _plan(
         if revision is None:
             raise RevertError(f"Revision {revision_id} does not exist in this Skill home.")
         targets.append(revision)
-    for skill in {name for target in targets for name in target.names}:
+    for skill in {target.skill for target in targets}:
         _skill_path(root, skill)
         history.observe(skill, live_package(root, skill))
     _check_conflicts(history, targets, related)
@@ -238,10 +222,10 @@ def _check_conflicts(
             if (
                 later.id > target.id
                 and later.id not in requested
-                and target.names & later.names
+                and later.skill == target.skill
                 and _overlaps(target, later)
             ):
-                raise RevertConflictError(target.id, later.id, later.skill)
+                raise RevertConflictError(target.id, later.id, target.skill)
 
 
 def _inverse(history: SkillHistory, root: Path, target: SkillRevision) -> _Step:
@@ -273,24 +257,10 @@ def _inverse(history: SkillHistory, root: Path, target: SkillRevision) -> _Step:
             reason=info.reason if info is not None and info.reason else "deleted",
             absorbed_into=info.absorbed_into if info is not None else None,
         )
-    if target.renamed_from is not None:
-        # The Skill gets its former name back, with the files the rename changed.
-        _skill_path(root, target.renamed_from)
-        return _Step(target, "rename", writes=_earlier_texts(history, root, target))
     if target.kind == "create":
         return _Step(target, "archive", reason="deleted")
     if target.pinned is not None and not target.files:
         return _Step(target, "pin", pinned=not target.pinned)
-    writes = _earlier_texts(history, root, target)
-    if not writes:
-        raise RevertError(f"Revision {target.id} changed nothing that can be reverted.")
-    return _Step(target, "content", writes=writes)
-
-
-def _earlier_texts(
-    history: SkillHistory, root: Path, target: SkillRevision
-) -> dict[str, str | None]:
-    """The text each file *target* changed had before it; ``None`` for a created file."""
     writes: dict[str, str | None] = {}
     for record in target.files:
         _package_path(root / target.skill, record.path, target.id)
@@ -304,14 +274,15 @@ def _earlier_texts(
                 f"text of {record.path} (it is not UTF-8 text or is larger than 1 MiB)."
             )
         writes[record.path] = text
-    return writes
+    if not writes:
+        raise RevertError(f"Revision {target.id} changed nothing that can be reverted.")
+    return _Step(target, "content", writes=writes)
 
 
 def _simulate(root: Path, archive_root: Path, steps: list[_Step]) -> None:
     """Check every step against the state the earlier steps leave."""
-    names = {name for step in steps for name in (step.skill, step.renamed_to) if name}
-    live = {name: live_package(root, name) is not None for name in names}
-    occupied = {name: (root / name).exists() for name in names}
+    live = {step.skill: live_package(root, step.skill) is not None for step in steps}
+    occupied = {step.skill: (root / step.skill).exists() for step in steps}
     archived: dict[str, bool] = {}
 
     def available(archive_id: str) -> bool:
@@ -347,15 +318,6 @@ def _simulate(root: Path, archive_root: Path, steps: list[_Step]) -> None:
                 f"Revision {target.id} cannot be reverted: Skill '{step.skill}' is not "
                 "in this home."
             )
-        if step.renamed_to is not None:
-            if occupied[step.renamed_to]:
-                raise RevertError(
-                    f"Revision {target.id} cannot be reverted: a Skill named "
-                    f"'{step.renamed_to}' exists. Delete or rename it first."
-                )
-            live[step.skill] = occupied[step.skill] = False
-            live[step.renamed_to] = occupied[step.renamed_to] = True
-            continue
         if step.action == "archive":
             if step.archive_id is not None and available(step.archive_id):
                 raise RevertError(
@@ -376,8 +338,6 @@ def _execute(root: Path, archive_root: Path, steps: list[_Step]) -> None:
                 _restore(root, archive_root, step, undo)
             elif step.action == "content":
                 _content(root, step, undo)
-            elif step.action == "rename":
-                _rename(root, step, undo)
     except OSError as error:
         failed: list[str] = []
         for skill, action in reversed(undo):
@@ -427,24 +387,8 @@ def _restore(
     step.records, step.texts = diff_states({}, package_state(package))
 
 
-def _rename(root: Path, step: _Step, undo: list[tuple[str, Callable[[], object]]]) -> None:
-    """Give the Skill its former name back, then the texts the rename changed."""
-    assert step.renamed_to is not None
-    package, destination = root / step.skill, root / step.renamed_to
-    package.rename(destination)
-    undo.append((step.skill, lambda: destination.rename(package)))
-    _content(root, step, undo, package=destination)
-
-
-def _content(
-    root: Path,
-    step: _Step,
-    undo: list[tuple[str, Callable[[], object]]],
-    *,
-    package: Path | None = None,
-) -> None:
-    """Write the step's texts into *package*, the Skill's package by default."""
-    package = package if package is not None else root / step.skill
+def _content(root: Path, step: _Step, undo: list[tuple[str, Callable[[], object]]]) -> None:
+    package = root / step.skill
     before: dict[str, FileState] = {}
     after: dict[str, FileState] = {}
     for path, text in step.writes.items():

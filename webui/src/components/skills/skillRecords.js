@@ -127,10 +127,6 @@ export function skillRevisionText(revision) {
       return t('skills.revision.pin');
     case 'unpin':
       return t('skills.revision.unpin');
-    case 'rename':
-      return t('skills.revision.rename', {
-        name: revision.renamed_from ?? '?',
-      });
     case 'baseline':
       return t('skills.revision.baseline');
     default:

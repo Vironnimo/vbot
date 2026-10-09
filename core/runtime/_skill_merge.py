@@ -11,11 +11,6 @@ the delete succeeded. Restoring the archived Skill moves nothing back.
 
 A delete without ``absorbed_into`` moves nothing: it returns what still names
 the deleted Skill, so the caller can say so.
-
-A ``skill_manage`` rename moves the same references, under the same lock, to the
-Skill's new name once the rename succeeded (``follow_skill_rename``). The Skill
-settings of Agents follow inside the rename itself
-(``SkillRuntime.rename_agent_skill``).
 """
 
 from __future__ import annotations
@@ -112,74 +107,3 @@ async def follow_skill_merge(
             len(failed),
         )
     return tuple(failed)
-
-
-async def follow_skill_rename(
-    services: SkillMergeServices,
-    owner_id: str,
-    name: str,
-    new_name: str,
-    rename: Callable[[], Awaitable[bool]],
-) -> tuple[tuple[SkillReference, ...], tuple[SkillReference, ...]]:
-    """Rename the Skill ``name`` of ``owner_id`` to ``new_name`` and move what named it.
-
-    ``rename()`` renames the Skill and says whether it did. Its shares and the
-    triggers in the owner's live automations then name ``new_name``. Returns
-    what moved and what did not; nothing moves when the rename failed.
-    """
-    automation = services.automation
-    async with automation.lock:
-        receivers = sorted(services.policy.load().shared.get(owner_id, {}).get(name, ()))
-        automations = automation.agent_skill_triggers(owner_id, name)
-        shares = tuple(
-            SkillReference("shared", receiver, services.agent_name(receiver))
-            for receiver in receivers
-        )
-        if not await rename():
-            return (), ()
-        failed: list[SkillReference] = []
-        if shares:
-            try:
-                services.policy.move_shared(owner_id, name, new_name)
-            except SkillPolicyError as error:
-                _LOGGER.error(
-                    "Skill shares did not follow a rename (agent=%s skill=%s new_name=%s): %s",
-                    owner_id,
-                    name,
-                    new_name,
-                    error,
-                )
-                failed.extend(shares)
-            else:
-                services.shares_changed()
-        triggers: list[SkillReference] = []
-        for reference in automations:
-            followed = SkillReference(reference.kind, reference.id, reference.name)
-            triggers.append(followed)
-            try:
-                await automation.rename_skill_triggers(owner_id, reference, name, new_name)
-            except Exception as error:
-                # Each automation owner refuses with its own error type.
-                _LOGGER.error(
-                    "Automation did not follow a Skill rename (agent=%s skill=%s new_name=%s "
-                    "automation=%s): %s",
-                    owner_id,
-                    name,
-                    new_name,
-                    reference.label,
-                    error,
-                )
-                failed.append(followed)
-    planned = (*shares, *triggers)
-    if planned:
-        _LOGGER.info(
-            "Skill rename moved references (agent=%s skill=%s new_name=%s shares=%d "
-            "automations=%d failed=%d)",
-            owner_id,
-            name,
-            new_name,
-            len(shares),
-            len(triggers),
-            len(failed),
-        )
-    return tuple(reference for reference in planned if reference not in failed), tuple(failed)

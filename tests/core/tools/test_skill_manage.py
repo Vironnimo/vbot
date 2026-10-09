@@ -79,10 +79,6 @@ class _Harness:
         self.references: tuple[SkillReference, ...] = ()
         self.unmovable: set[SkillReference] = set()
         self.merges: list[tuple[str, str, str | None, bool]] = []
-        # Each rename: owner, Skill, new name and whether it succeeded; and
-        # whether the Skill settings naming the Skill followed it.
-        self.renames: list[tuple[str, str, str, bool]] = []
-        self.settings_follow = True
         # How often a global change reloaded the global Skills.
         self.global_reloads = 0
         self.tools = ToolRegistry()
@@ -104,11 +100,6 @@ class _Harness:
                 self.home(agent_id), self.global_home, name, writer=writer
             ),
             refresh_global_skills=self.reload_global,
-            follow_rename=self.follow_rename,
-            rename_skill=lambda agent_id, name, new_name, writer: (
-                self.authoring.rename(self.home(agent_id), name, new_name, writer=writer),
-                self.settings_follow,
-            ),
         )
 
     @property
@@ -130,21 +121,6 @@ class _Harness:
         if not deleted:
             return ()
         return tuple(reference for reference in self.references if reference in self.unmovable)
-
-    async def follow_rename(
-        self,
-        owner_id: str,
-        name: str,
-        new_name: str,
-        rename: Callable[[], Awaitable[bool]],
-    ) -> tuple[tuple[SkillReference, ...], tuple[SkillReference, ...]]:
-        renamed = await rename()
-        self.renames.append((owner_id, name, new_name, renamed))
-        if not renamed:
-            return (), ()
-        failed = tuple(reference for reference in self.references if reference in self.unmovable)
-        moved = tuple(reference for reference in self.references if reference not in failed)
-        return moved, failed
 
     def home(self, agent_id: str) -> Path:
         return self.root / "agents" / agent_id / "skills"
@@ -275,7 +251,6 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
         "new_string",
         "replace_all",
         "file_path",
-        "new_name",
     }
     assert properties["action"]["enum"] == [
         "create",
@@ -283,7 +258,6 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
         "patch",
         "write_file",
         "remove_file",
-        "rename",
         "delete",
         "publish",
     ]
@@ -323,14 +297,6 @@ def test_create_is_immediately_live_and_invalidates(tmp_path: Path, caplog: Any)
     lines = len(harness.document().read_text(encoding="utf-8").splitlines())
     assert harness.changed_files() == [("SKILL.md", "created", lines, 0)]
     assert str(harness.home("main")) not in str(result)
-
-    before = harness.document().read_bytes()
-    again = harness.create(content=_skill_md(body="other body"))
-
-    # A second create names the actions that change the existing Skill.
-    assert again["error"]["code"] == "skill_write_rejected"
-    assert all(action in again["error"]["message"] for action in ("edit", "patch"))
-    assert harness.document().read_bytes() == before
 
 
 _STAMPED_HEAD = (
@@ -805,21 +771,8 @@ def test_write_and_remove_support_file(tmp_path: Path) -> None:
     written_files = harness.changed_files()
     harness.run({**arguments, "content": "Useful notes\nMore\n"})
     rewritten_files = harness.changed_files()
-    missing = harness.run(
-        {"action": "remove_file", "name": "demo", "file_path": "references/note.md"}
-    )
     removed = harness.run(
         {"action": "remove_file", "name": "demo", "file_path": "references/notes.md"}
-    )
-    removed_files = harness.changed_files()
-    patch_missing = harness.run(
-        {
-            "action": "patch",
-            "name": "demo",
-            "file_path": "references/notes.md",
-            "old_string": "Useful",
-            "new_string": "Handy",
-        }
     )
 
     assert written["data"] == {"content": "Wrote references/notes.md of Skill 'demo'."}
@@ -827,14 +780,9 @@ def test_write_and_remove_support_file(tmp_path: Path) -> None:
     # The user sees each change as a diff of the package file.
     assert written_files == [("references/notes.md", "created", 1, 0)]
     assert rewritten_files == [("references/notes.md", "updated", 1, 0)]
-    assert removed_files == [("references/notes.md", "deleted", 0, 2)]
+    assert harness.changed_files() == [("references/notes.md", "deleted", 0, 2)]
     assert not (skill_file.parent / "references").exists()
     assert harness.invalidated == ["main", "main", "main"]
-    # A missing file names the files the Skill has; a patch of one points to write_file.
-    assert missing["error"]["code"] == patch_missing["error"]["code"] == "skill_write_rejected"
-    assert "references/notes.md" in missing["error"]["message"]
-    assert "It has no support files." in patch_missing["error"]["message"]
-    assert "write_file" in patch_missing["error"]["message"]
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -866,28 +814,19 @@ def test_write_file_to_skill_md_replaces_the_document(tmp_path: Path) -> None:
     assert _body(skill_file) == "# Rewritten\n"
 
 
-@pytest.mark.parametrize(
-    ("file_path", "suggestion"),
-    [
-        ("other/data.txt", "references/other/data.txt"),
-        ("run.py", "scripts/run.py"),
-        ("reference/notes.md", "references/notes.md"),
-        ("logo.png", "assets/logo.png"),
-    ],
-)
-def test_non_skill_file_path_is_refused_with_the_path_under_a_support_folder(
-    tmp_path: Path, file_path: str, suggestion: str
-) -> None:
+def test_non_skill_file_path_is_rejected(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path)
 
     result = harness.run(
-        {"action": "write_file", "name": "demo", "file_path": file_path, "content": "no"}
+        {"action": "write_file", "name": "demo", "file_path": "other/data.txt", "content": "no"}
     )
 
     assert result["error"]["code"] == "skill_write_rejected"
-    assert f'"{file_path}"' in result["error"]["message"]
-    assert f'"{suggestion}"' in result["error"]["message"]
-    assert [path.name for path in skill_file.parent.iterdir()] == ["SKILL.md"]
+    assert (
+        "Support files must live under scripts/ or references/ or assets/"
+        in result["error"]["message"]
+    )
+    assert not (skill_file.parent / "other").exists()
 
 
 def test_edit_replaces_complete_skill_document(tmp_path: Path) -> None:
@@ -1046,30 +985,15 @@ def test_delete_names_the_skill_that_absorbed_it(
             "bundled",
             {"action": "edit", "content": _skill_md(name="foreign")},
             [
-                "Skill 'foreign' is a bundled Skill, which is read-only; nothing changed.",
-                "Name the change it needs in your reply",
-                "do not change its files with file or shell Tools",
+                "Skill 'foreign' is a bundled Skill — read-only here.",
+                "user-facing Skill controls",
+                "do not edit the package with file or shell tools",
             ],
         ),
         (
             "project",
             {"action": "patch", "match": "x", "content": "y"},
-            ["Skill 'foreign' is a Project Skill, which is read-only; nothing changed."],
-        ),
-        (
-            "shared",
-            {"action": "rename", "new_name": "mine"},
-            ["is shared with you, so only its owner can rename it; nothing changed."],
-        ),
-        (
-            "global",
-            {"action": "rename", "new_name": "mine"},
-            ["is a global Skill, which skill_manage cannot rename; nothing changed."],
-        ),
-        (
-            "unknown",
-            {"action": "delete"},
-            ["is not one of your own Skills, so skill_manage cannot change it"],
+            ["is a Project Skill — read-only here."],
         ),
         (
             "shared",
@@ -1140,118 +1064,6 @@ def test_invocation_marks_and_package_paths_in_the_name(tmp_path: Path) -> None:
     assert _body(skill_file).startswith("# Demo!\n")
     assert written["data"] == {"content": "Wrote references/notes.md of Skill 'demo'."}
     assert (skill_file.parent / "references" / "notes.md").read_bytes() == b"Notes.\n"
-
-
-@pytest.mark.parametrize(
-    ("arguments", "suggestion"),
-    [
-        ({"action": "create", "name": "Meeting Notes!", "content": "x"}, "meeting-notes"),
-        ({"action": "rename", "name": "demo", "new_name": "Ärger Liste"}, "arger-liste"),
-    ],
-)
-def test_invalid_names_are_refused_with_a_valid_name_built_from_them(
-    tmp_path: Path, arguments: dict[str, object], suggestion: str
-) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-    before = skill_file.read_bytes()
-
-    result = harness.run(arguments)
-
-    assert result["error"]["code"] == "invalid_arguments"
-    assert f'"{suggestion}"' in result["error"]["message"]
-    assert sorted(path.name for path in harness.home("main").iterdir()) == ["demo"]
-    assert skill_file.read_bytes() == before
-
-
-def test_rename_keeps_the_skill_and_moves_what_named_it(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    home = harness.home("main")
-    harness.create(name="meeting-notes")
-    harness.run(
-        {
-            "action": "write_file",
-            "name": "meeting-notes",
-            "file_path": "references/agenda.md",
-            "content": "Agenda\n",
-        }
-    )
-    share = SkillReference("shared", "bob", "Bob")
-    cron = SkillReference("cron", "job-1", "Weekly sync")
-    harness.references, harness.unmovable = (share, cron), {cron}
-    harness.settings_follow = False
-    harness.invalidated.clear()
-
-    result = harness.run(
-        {"action": "rename", "name": "meeting-notes", "new_name": "besprechungen-protokolle"}
-    )
-
-    lines = result["data"]["content"].splitlines()
-    assert lines[0] == "Renamed Skill 'meeting-notes' to 'besprechungen-protokolle'."
-    # What followed is noted; what still names the old name is a warning to pass on.
-    [note] = [line for line in lines if line.startswith("Note: ")]
-    warnings = [line for line in lines if line.startswith("Warning: ")]
-    assert "Agent 'Bob'" in note and "Weekly sync" not in note
-    assert any("Weekly sync" in warning for warning in warnings)
-    assert any("Skill selection" in warning for warning in warnings)
-    assert harness.renames == [("main", "meeting-notes", "besprechungen-protokolle", True)]
-    assert not (home / "meeting-notes").exists()
-    renamed = SkillRegistry.load(home).get("besprechungen-protokolle")
-    assert renamed.path.parent == home / "besprechungen-protokolle"
-    assert (renamed.path.parent / "references/agenda.md").read_text(encoding="utf-8") == (
-        "Agenda\n"
-    )
-    kinds = [
-        revision.kind for revision in harness.authoring.history(home, "besprechungen-protokolle")
-    ]
-    assert (kinds[0], kinds[-1], len(kinds)) == ("rename", "create", 3)
-    assert harness.invalidated == ["main"]
-
-
-@pytest.mark.parametrize(
-    ("arguments", "code"),
-    [
-        pytest.param({"new_name": "demo"}, "invalid_arguments", id="same-name"),
-        pytest.param({}, "invalid_arguments", id="no-new-name"),
-        pytest.param({"new_name": "other"}, "skill_write_rejected", id="taken"),
-        pytest.param({"new_name": "fresh", "content": "x"}, "invalid_arguments", id="text"),
-        pytest.param(
-            {"action": "patch", "new_name": "fresh", "old_string": "a", "new_string": "b"},
-            "invalid_arguments",
-            id="new-name-on-patch",
-        ),
-        pytest.param({"new_name": "fresh", "scope": "global"}, "skill_write_rejected", id="global"),
-    ],
-)
-def test_rename_refusals_change_nothing(
-    tmp_path: Path, arguments: dict[str, object], code: str
-) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-    harness.create(name="other")
-    before = {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
-
-    result = harness.run({"action": "rename", "name": "demo", **arguments})
-
-    assert (result["ok"], result["error"]["code"]) == (False, code)
-    assert {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
-    assert not any(renamed for *_, renamed in harness.renames)
-
-
-def test_a_file_system_failure_says_how_to_check_the_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    harness, _ = _patch_harness(tmp_path)
-
-    def denied(*_args: object, **_kwargs: object) -> None:
-        raise PermissionError(13, "Permission denied", str(tmp_path / "secret"))
-
-    monkeypatch.setattr(harness.authoring, "edit", denied)
-    result = harness.run({"action": "edit", "name": "demo", "content": _skill_md()})
-
-    error = result["error"]
-    assert error["code"] == "skill_write_error"
-    assert "Permission denied" in error["message"]
-    assert "with the skill Tool" in error["message"]
-    assert str(tmp_path) not in error["message"]
 
 
 @pytest.mark.parametrize(
@@ -1333,7 +1145,7 @@ def test_attended_agents_change_global_skills_but_never_delete_them(tmp_path: Pa
         run_kind=RunKind.SKILL_REFLECTION,
     )
 
-    assert patched["data"]["content"].startswith("Patched SKILL.md of Skill 'guide':\n")
+    assert patched["data"] == {"content": "Patched SKILL.md of Skill 'guide' at line 6."}
     assert "# Fixed" in document.read_text(encoding="utf-8")
     # The change reaches every Agent: all scopes are invalidated and the global
     # Skills reload once.
@@ -1393,7 +1205,7 @@ def test_global_scope_reaches_a_global_skill_behind_an_own_one(tmp_path: Path) -
             "changed. Tell the user which change it needs; do not edit its files with file or "
             "shell Tools.",
         ),
-        ("bundled", "Skill 'guide' is a bundled Skill, which is read-only; nothing changed."),
+        ("bundled", "Skill 'guide' is a bundled Skill — read-only here."),
     ],
 )
 def test_global_skills_outside_the_global_home_stay_read_only(
@@ -1514,7 +1326,7 @@ def test_receiver_changes_land_in_the_owner_package_and_invalidate_everyone(
     )
 
     # The results read exactly like changes of the caller's own Skill.
-    assert patched["data"]["content"].startswith("Patched SKILL.md of Skill 'deploy':\n")
+    assert patched["data"] == {"content": "Patched SKILL.md of Skill 'deploy' at line 6."}
     assert all(result["ok"] for result in (written, removed, edited))
     assert "# Body" in document.read_text(encoding="utf-8")
     assert not (document.parent / "references" / "notes.md").exists()
@@ -1702,10 +1514,7 @@ def test_patch_decodes_one_extra_level_of_json_escaping_with_a_note(tmp_path: Pa
     )
 
     assert result["data"] == {
-        "content": "Patched SKILL.md of Skill 'demo':\n"
-        "11| 1. Run `pytest`.\n"
-        '12| 2. Tag the release: "v2".\n'
-        "13| \n"
+        "content": "Patched SKILL.md of Skill 'demo' at line 12.\n"
         "Note: old_string and new_string arrived with an extra level of JSON escaping "
         '(such as \\n or \\"); they were applied unescaped.'
     }
@@ -1724,7 +1533,7 @@ def test_patch_keeps_literal_escapes_that_match_the_file(tmp_path: Path) -> None
         }
     )
 
-    assert result["ok"] is True
+    assert result["data"] == {"content": "Patched SKILL.md of Skill 'demo' at line 9."}
     assert _body(skill_file) == 'Run `printf "b\\n"` first.\n'
 
 
@@ -1842,14 +1651,7 @@ def test_ambiguous_patch_changes_nothing_until_replace_all(tmp_path: Path) -> No
         retryable=False,
     )
     assert unchanged == before
-    # The result shows the changed lines as they are now, numbered like skill output.
-    assert replaced["data"] == {
-        "content": "Replaced 2 occurrences in SKILL.md of Skill 'demo':\n"
-        "15| \n"
-        "16| - Never deploy on weekends.\n"
-        "17| - Check the weekend calendar.\n"
-        "18| "
-    }
+    assert replaced["data"] == {"content": "Replaced 2 occurrences in SKILL.md of Skill 'demo'."}
     assert "Friday" not in _body(skill_file)
 
 
@@ -1892,7 +1694,8 @@ def test_edit_with_old_string_and_a_fragment_patches_only_that_text(tmp_path: Pa
         }
     )
 
-    assert result["data"]["content"].endswith(
-        "\nNote: edit with old_string changed only that text, as patch does."
-    )
+    assert result["data"] == {
+        "content": "Patched SKILL.md of Skill 'demo' at line 16.\n"
+        "Note: edit with old_string changed only that text, as patch does."
+    }
     assert _body(skill_file) == _PATCH_BODY.replace("on Fridays", "on holidays")

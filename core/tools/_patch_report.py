@@ -47,7 +47,7 @@ def _gutter(number: int, text: str) -> str:
     return f"{number}{LINE_NUMBER_GUTTER_SEPARATOR} {text}"
 
 
-def after_preview(before: str, after: str) -> list[str]:
+def _after_preview(before: str, after: str) -> list[str]:
     """Return the changed regions of ``after`` with line numbers."""
     old_lines = split_text_lines(before, keepends=True)
     new_lines = split_text_lines(after, keepends=True)
@@ -119,7 +119,7 @@ def file_report(
         return report
     if before is None or after is None or before == after:
         return report
-    report.preview = after_preview(before, after)
+    report.preview = _after_preview(before, after)
     report.syntax_warning = warning_for_edited_file(path, before, after)
     return report
 
