@@ -79,6 +79,10 @@ class _Harness:
         self.references: tuple[SkillReference, ...] = ()
         self.unmovable: set[SkillReference] = set()
         self.merges: list[tuple[str, str, str | None, bool]] = []
+        # Each rename: owner, Skill, new name and whether it succeeded; and
+        # whether the Skill settings naming the Skill followed it.
+        self.renames: list[tuple[str, str, str, bool]] = []
+        self.settings_follow = True
         # How often a global change reloaded the global Skills.
         self.global_reloads = 0
         self.tools = ToolRegistry()
@@ -100,6 +104,11 @@ class _Harness:
                 self.home(agent_id), self.global_home, name, writer=writer
             ),
             refresh_global_skills=self.reload_global,
+            follow_rename=self.follow_rename,
+            rename_skill=lambda agent_id, name, new_name, writer: (
+                self.authoring.rename(self.home(agent_id), name, new_name, writer=writer),
+                self.settings_follow,
+            ),
         )
 
     @property
@@ -121,6 +130,21 @@ class _Harness:
         if not deleted:
             return ()
         return tuple(reference for reference in self.references if reference in self.unmovable)
+
+    async def follow_rename(
+        self,
+        owner_id: str,
+        name: str,
+        new_name: str,
+        rename: Callable[[], Awaitable[bool]],
+    ) -> tuple[tuple[SkillReference, ...], tuple[SkillReference, ...]]:
+        renamed = await rename()
+        self.renames.append((owner_id, name, new_name, renamed))
+        if not renamed:
+            return (), ()
+        failed = tuple(reference for reference in self.references if reference in self.unmovable)
+        moved = tuple(reference for reference in self.references if reference not in failed)
+        return moved, failed
 
     def home(self, agent_id: str) -> Path:
         return self.root / "agents" / agent_id / "skills"
@@ -251,6 +275,7 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
         "new_string",
         "replace_all",
         "file_path",
+        "new_name",
     }
     assert properties["action"]["enum"] == [
         "create",
@@ -258,6 +283,7 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
         "patch",
         "write_file",
         "remove_file",
+        "rename",
         "delete",
         "publish",
     ]
@@ -997,6 +1023,16 @@ def test_delete_names_the_skill_that_absorbed_it(
         ),
         (
             "shared",
+            {"action": "rename", "new_name": "mine"},
+            ["is shared with you, so only its owner can rename it; nothing changed."],
+        ),
+        (
+            "global",
+            {"action": "rename", "new_name": "mine"},
+            ["is a global Skill, which skill_manage cannot rename; nothing changed."],
+        ),
+        (
+            "shared",
             {"action": "delete"},
             ["is shared with you", "only its owner or the user can delete it"],
         ),
@@ -1064,6 +1100,79 @@ def test_invocation_marks_and_package_paths_in_the_name(tmp_path: Path) -> None:
     assert _body(skill_file).startswith("# Demo!\n")
     assert written["data"] == {"content": "Wrote references/notes.md of Skill 'demo'."}
     assert (skill_file.parent / "references" / "notes.md").read_bytes() == b"Notes.\n"
+
+
+def test_rename_keeps_the_skill_and_moves_what_named_it(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    home = harness.home("main")
+    harness.create(name="meeting-notes")
+    harness.run(
+        {
+            "action": "write_file",
+            "name": "meeting-notes",
+            "file_path": "references/agenda.md",
+            "content": "Agenda\n",
+        }
+    )
+    share = SkillReference("shared", "bob", "Bob")
+    cron = SkillReference("cron", "job-1", "Weekly sync")
+    harness.references, harness.unmovable = (share, cron), {cron}
+    harness.settings_follow = False
+    harness.invalidated.clear()
+
+    result = harness.run(
+        {"action": "rename", "name": "meeting-notes", "new_name": "besprechungen-protokolle"}
+    )
+
+    lines = result["data"]["content"].splitlines()
+    assert lines[0] == "Renamed Skill 'meeting-notes' to 'besprechungen-protokolle'."
+    # What followed is noted; what still names the old name is a warning to pass on.
+    [note] = [line for line in lines if line.startswith("Note: ")]
+    warnings = [line for line in lines if line.startswith("Warning: ")]
+    assert "Agent 'Bob'" in note and "Weekly sync" not in note
+    assert any("Weekly sync" in warning for warning in warnings)
+    assert any("Skill selection" in warning for warning in warnings)
+    assert harness.renames == [("main", "meeting-notes", "besprechungen-protokolle", True)]
+    assert not (home / "meeting-notes").exists()
+    renamed = SkillRegistry.load(home).get("besprechungen-protokolle")
+    assert renamed.path.parent == home / "besprechungen-protokolle"
+    assert (renamed.path.parent / "references/agenda.md").read_text(encoding="utf-8") == (
+        "Agenda\n"
+    )
+    kinds = [
+        revision.kind for revision in harness.authoring.history(home, "besprechungen-protokolle")
+    ]
+    assert (kinds[0], kinds[-1], len(kinds)) == ("rename", "create", 3)
+    assert harness.invalidated == ["main"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "code"),
+    [
+        pytest.param({"new_name": "demo"}, "invalid_arguments", id="same-name"),
+        pytest.param({}, "invalid_arguments", id="no-new-name"),
+        pytest.param({"new_name": "other"}, "skill_write_rejected", id="taken"),
+        pytest.param({"new_name": "fresh", "content": "x"}, "invalid_arguments", id="text"),
+        pytest.param(
+            {"action": "patch", "new_name": "fresh", "old_string": "a", "new_string": "b"},
+            "invalid_arguments",
+            id="new-name-on-patch",
+        ),
+        pytest.param({"new_name": "fresh", "scope": "global"}, "skill_write_rejected", id="global"),
+    ],
+)
+def test_rename_refusals_change_nothing(
+    tmp_path: Path, arguments: dict[str, object], code: str
+) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+    harness.create(name="other")
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+    result = harness.run({"action": "rename", "name": "demo", **arguments})
+
+    assert (result["ok"], result["error"]["code"]) == (False, code)
+    assert {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+    assert not any(renamed for *_, renamed in harness.renames)
 
 
 @pytest.mark.parametrize(

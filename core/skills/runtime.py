@@ -1145,6 +1145,77 @@ class SkillRuntime:
         self.invalidate_agent_skills(None)
         return result
 
+    def rename_agent_skill(
+        self, agent_id: str, name: str, new_name: str, *, writer: SkillWriter
+    ) -> tuple[SkillWriteResult, bool]:
+        """Rename an Identity Agent's private Skill; the Skill settings naming it follow.
+
+        A turned-off private package stays off under ``new_name``. Where the
+        owner's ``excluded_skills``, or a receiver's ``allowed_skills`` (without
+        ``*``) or ``excluded_skills``, names ``name``, ``new_name`` joins it; the
+        old entry stays, since it can also name a global or bundled Skill. Shares
+        and automation triggers are not changed here: Runtime moves them
+        (``core/runtime/_skill_merge.py``). Returns the write and whether every
+        setting followed; a setting that did not is logged.
+        """
+        if self._authoring is None:
+            raise RuntimeError("Skill authoring is not configured")
+        result = self._authoring.rename(
+            self.agent_skills_dir(agent_id), name, new_name, writer=writer
+        )
+        return result, self._follow_rename_settings(agent_id, name, new_name)
+
+    def _follow_rename_settings(self, agent_id: str, name: str, new_name: str) -> bool:
+        complete = True
+        policy = self._policy.load()
+        private = SkillPackageRef("agent", name, agent_id)
+        try:
+            if private in policy.disabled_packages:
+                renamed = SkillPackageRef("agent", new_name, agent_id)
+                self._policy.set_package_disabled(renamed, disabled=True)
+                self._policy.set_package_disabled(private, disabled=False)
+        except Exception as error:
+            complete = False
+            self._log_rename_failure("switch", agent_id, name, new_name, error)
+        receivers = sorted(policy.shared.get(agent_id, {}).get(name, ()))
+        for holder in (agent_id, *receivers):
+            try:
+                agent = self._agents.find(holder)
+                if agent is None:
+                    continue
+                changes: dict[str, list[str]] = {}
+                if name in agent.excluded_skills and new_name not in agent.excluded_skills:
+                    changes["excluded_skills"] = [*agent.excluded_skills, new_name]
+                allowed = agent.allowed_skills
+                if (
+                    holder != agent_id
+                    and allowed is not None
+                    and "*" not in allowed
+                    and name in allowed
+                    and new_name not in allowed
+                ):
+                    changes["allowed_skills"] = [*allowed, new_name]
+                if changes:
+                    self._agents.update(holder, **changes)
+            except Exception as error:
+                complete = False
+                self._log_rename_failure(f"selection of {holder}", agent_id, name, new_name, error)
+        self.invalidate_agent_skills(None)
+        return complete
+
+    def _log_rename_failure(
+        self, setting: str, agent_id: str, name: str, new_name: str, error: Exception
+    ) -> None:
+        if self._logger is not None:
+            self._logger.error(
+                "Skill %s did not follow a rename (agent=%s skill=%s new_name=%s): %s",
+                setting,
+                agent_id,
+                name,
+                new_name,
+                error,
+            )
+
     def _shared_package_dirs(self, receiver_agent_id: str) -> list[Path]:
         """Resolve every owner's shared private Skill packages for one receiver.
 

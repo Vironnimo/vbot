@@ -162,13 +162,35 @@ SKILL_MANAGE_ABSORBED_INTO_UNKNOWN = (
     "absorbed_into names '{target}', which is not one of your own Skills; nothing changed. "
     "Name one of your own Skills that now holds the instructions of '{name}'."
 )
+# A rename gives one of the caller's own Skills another name. Its files and
+# history stay, and what named it follows (``follow_rename``, ``rename_skill``).
+SKILL_MANAGE_RENAMED = "Renamed Skill '{name}' to '{new_name}'."
+SKILL_MANAGE_RENAME_SAME = "Skill '{name}' already has this name; nothing changed."
+SKILL_MANAGE_RENAME_EXISTS = (
+    "Skill '{new_name}' already exists; nothing changed. Choose another new_name."
+)
+SKILL_MANAGE_NEW_NAME_ACTION = (
+    "new_name is used only by rename; nothing changed. Omit new_name for {action}."
+)
+SKILL_MANAGE_RENAME_SETTINGS_WARNING = (
+    "The Skill selection of some Agents could not be changed and still names '{name}'. "
+    "Name this in your reply so the user can change it to '{new_name}' in the Skill controls."
+)
 
-_ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete", "publish")
+_ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "rename", "delete", "publish")
 # follow_merge(owner_id, name, target, delete) -> the references that could not move.
 SkillMergeFollower = Callable[
     [str, str, str | None, Callable[[tuple[SkillReference, ...]], Awaitable[bool]]],
     Awaitable[tuple[SkillReference, ...]],
 ]
+# follow_rename(owner_id, name, new_name, rename) -> what moved, what did not.
+SkillRenameFollower = Callable[
+    [str, str, str, Callable[[], Awaitable[bool]]],
+    Awaitable[tuple[tuple[SkillReference, ...], tuple[SkillReference, ...]]],
+]
+# rename_skill(owner_id, name, new_name, writer) -> the write, and whether every
+# Skill setting naming the Skill followed (``SkillRuntime.rename_agent_skill``).
+SkillRenamer = Callable[[str, str, str, SkillWriter], tuple[SkillWriteResult, bool]]
 # Actions that may operate on a Skill shared into the caller (maintained in the
 # owner's package), by every writer, and on a global Skill by an attended Agent.
 # ``create`` and ``publish`` are own-home-only by definition; ``delete`` stays
@@ -231,6 +253,7 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
                 "write_file and remove_file; omit to patch SKILL.md."
             ),
         },
+        "new_name": {"type": "string", "description": "Required for rename."},
     },
     "required": ["action", "name"],
 }
@@ -324,9 +347,11 @@ class _Call:
     file_path: str | None = None
     description: str | None = None
     absorbed_into: str | None = None
+    new_name: str | None = None
     # ``global`` when the call names the global home explicitly, else ``None``.
     scope: str | None = None
     notes: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 def make_skill_manage_handler(
@@ -339,6 +364,7 @@ def make_skill_manage_handler(
     on_changed: Callable[[], None] | None = None,
     resolve_global_skills_dir: Callable[[], Path] | None = None,
     publish_skill: Callable[[str, str, SkillWriter], SkillWriteResult] | None = None,
+    rename_skill: SkillRenamer | None = None,
 ) -> Callable[[ToolContext, JsonObject, str | None, tuple[SkillReference, ...]], _Outcome]:
     """Return the direct Skill-management handler.
 
@@ -375,6 +401,10 @@ def make_skill_manage_handler(
     moves an own Skill into that home (``SkillRuntime.publish_agent_skill``).
     The handler's outcome says whether the global home changed, so the caller
     reloads the global Skills.
+
+    ``rename_skill(agent_id, name, new_name, writer)`` renames an own Skill and
+    lets the Skill settings naming it follow; without it the handler renames
+    the package alone.
     """
 
     # (Run id, Skill name) -> the newest outside revision the Run was told about.
@@ -463,6 +493,10 @@ def make_skill_manage_handler(
                     raise _RefusalError(
                         "skill_not_found", _unknown_skill_message(call.name, own_root)
                     )
+            if call.action == "rename" and call.new_name == call.name:
+                raise _RefusalError(
+                    "invalid_arguments", SKILL_MANAGE_RENAME_SAME.format(name=call.name)
+                )
             # Checks and write run under one Skill write lock, so a change that
             # lands after a check cannot be overwritten by this write.
             hints: list[str] = []
@@ -480,7 +514,12 @@ def make_skill_manage_handler(
                         check_unchanged_since(target_root, call.name, writer, run_started_at)
                     if call.action == "delete":
                         _check_absorbed_into(call, own_root)
-                    result, summary = _apply(authoring, target_root, call, writer, followed)
+                    if call.action == "rename":
+                        result, summary = _rename(
+                            authoring, own_root, call, writer, owner_id, rename_skill
+                        )
+                    else:
+                        result, summary = _apply(authoring, target_root, call, writer, followed)
                     hints = _hints(authoring, target_root, call, result)
         except _RefusalError as refusal:
             return _Outcome(tool_failure(refusal.code, refusal.message, retryable=False))
@@ -521,7 +560,7 @@ def make_skill_manage_handler(
         # Deliberately identical for own and shared targets: a receiving Agent
         # must not be able to tell a shared Skill apart from its own.
         lines = [summary]
-        lines.extend(f"Warning: {warning}" for warning in result.warnings)
+        lines.extend(f"Warning: {warning}" for warning in (*result.warnings, *call.warnings))
         lines.extend(f"Note: {note}" for note in call.notes)
         lines.extend(f"Hint: {hint}" for hint in hints)
         return _Outcome(tool_success({"content": "\n".join(lines)}), global_changed)
@@ -541,8 +580,10 @@ def _global_target(call: _Call, writer: SkillWriter, global_root: Path | None) -
     """The global home for a change of a global Skill, or the refusal of the call."""
     if call.action == "create":
         raise _RefusalError("invalid_arguments", SKILL_MANAGE_GLOBAL_CREATE)
-    if call.action == "delete":
-        raise _RefusalError("skill_write_rejected", _scope_rejection_message(call.name, "global"))
+    if call.action in ("delete", "rename"):
+        raise _RefusalError(
+            "skill_write_rejected", _scope_rejection_message(call.name, "global", call.action)
+        )
     if global_root is None:
         raise _RefusalError("skill_write_rejected", _scope_rejection_message(call.name, "external"))
     if writer.background:
@@ -570,6 +611,33 @@ def _publish(
         )
     result = publish_skill(owner_id, call.name, writer)
     return result, SKILL_MANAGE_PUBLISHED.format(name=call.name)
+
+
+def _rename(
+    authoring: SkillAuthoringService,
+    own_root: Path,
+    call: _Call,
+    writer: SkillWriter,
+    owner_id: str,
+    rename_skill: SkillRenamer | None,
+) -> tuple[SkillWriteResult, str]:
+    """Give the caller's own Skill ``call.name`` the name ``call.new_name``."""
+    new_name = call.new_name or ""
+    if new_name.casefold() != call.name.casefold() and (
+        (own_root / new_name).exists() or find_skill_package_dir(own_root, new_name) is not None
+    ):
+        raise _RefusalError(
+            "skill_write_rejected", SKILL_MANAGE_RENAME_EXISTS.format(new_name=new_name)
+        )
+    if rename_skill is None:
+        result = authoring.rename(own_root, call.name, new_name, writer=writer)
+    else:
+        result, followed = rename_skill(owner_id, call.name, new_name, writer)
+        if not followed:
+            call.warnings.append(
+                SKILL_MANAGE_RENAME_SETTINGS_WARNING.format(name=call.name, new_name=new_name)
+            )
+    return result, SKILL_MANAGE_RENAMED.format(name=call.name, new_name=new_name)
 
 
 def _after(timestamp: str, moment: datetime) -> bool:
@@ -670,10 +738,15 @@ def _read_call(arguments: JsonObject) -> _Call:
         file_path=_text(arguments, "file_path"),
         description=_text(arguments, "description"),
         absorbed_into=_text(arguments, "absorbed_into"),
+        new_name=_text(arguments, "new_name"),
     )
     if call.absorbed_into is not None and call.action != "delete":
         raise _RefusalError(
             "invalid_arguments", SKILL_MANAGE_ABSORBED_INTO_ACTION.format(action=call.action)
+        )
+    if call.new_name not in (None, call.name) and call.action != "rename":
+        raise _RefusalError(
+            "invalid_arguments", SKILL_MANAGE_NEW_NAME_ACTION.format(action=call.action)
         )
     call.scope = _check_scope(arguments.get("scope"))
     if arguments.get("category"):
@@ -799,6 +872,21 @@ def _read_remove_file(call: _Call) -> _Call:
     return call
 
 
+def _read_rename(call: _Call) -> _Call:
+    if call.new_name is None:
+        raise _RefusalError(
+            "invalid_arguments", "rename needs new_name, the Skill's new name; nothing changed."
+        )
+    if call.file_path is not None or call.content or call.new_string or call.old_string:
+        raise _RefusalError(
+            "invalid_arguments",
+            "rename gives the whole Skill a new name and takes no file_path or text; nothing "
+            "changed. Omit them, and change the Skill's text with edit or patch in a separate "
+            "call.",
+        )
+    return call
+
+
 def _read_publish(call: _Call) -> _Call:
     if call.file_path is not None or call.content or call.new_string or call.old_string:
         raise _RefusalError(
@@ -831,6 +919,7 @@ _ACTION_READERS: dict[str, Callable[[_Call], _Call]] = {
     "patch": _read_patch,
     "write_file": _read_write_file,
     "remove_file": _read_remove_file,
+    "rename": _read_rename,
     "delete": _read_delete,
     "publish": _read_publish,
 }
@@ -1162,6 +1251,11 @@ def _scope_rejection_message(name: str, scope: str, action: str = "delete") -> s
     if scope == "shared":
         if action == "publish":
             return f"Skill '{name}' is shared with you; only its owner can make it global."
+        if action == "rename":
+            return (
+                f"Skill '{name}' is shared with you, so only its owner can rename it; "
+                "nothing changed."
+            )
         return (
             f"Skill '{name}' is shared with you — only its owner or the user can "
             f"delete it. Edits still go through skill_manage."
@@ -1169,6 +1263,11 @@ def _scope_rejection_message(name: str, scope: str, action: str = "delete") -> s
     if scope == "global":
         if action == "publish":
             return f"Skill '{name}' is already a global Skill; nothing changed."
+        if action == "rename":
+            return (
+                f"Skill '{name}' is a global Skill, which skill_manage cannot rename; nothing "
+                "changed. Name the wanted name in your reply so the user can rename it."
+            )
         return (
             f"Skill '{name}' is a global Skill, which only the user can delete in the Skill "
             "controls; nothing changed."
@@ -1220,6 +1319,7 @@ def _normalize_skill_manage_arguments(arguments: Any) -> Any:
             "category",
             "description",
             "absorbed_into",
+            "new_name",
         ),
     )
     if not isinstance(repaired, dict):
@@ -1304,6 +1404,8 @@ def register_skill_manage_tool(
     resolve_global_skills_dir: Callable[[], Path] | None = None,
     publish_skill: Callable[[str, str, SkillWriter], SkillWriteResult] | None = None,
     refresh_global_skills: Callable[[], Awaitable[None]] | None = None,
+    follow_rename: SkillRenameFollower | None = None,
+    rename_skill: SkillRenamer | None = None,
 ) -> None:
     """Register identity-only direct Skill management.
 
@@ -1320,6 +1422,11 @@ def register_skill_manage_tool(
     delete succeeded moves each of them to ``target``, returning those it could
     not move. Without, ``target`` is ``None``: nothing moves and it returns what
     still names the Skill. The result then notes them.
+
+    ``follow_rename(owner_id, name, new_name, rename)`` runs every rename: it
+    calls ``rename()``, which says whether the rename succeeded, then moves the
+    shares and automation triggers naming ``name`` to ``new_name`` and returns
+    what moved and what did not. The result notes both.
     """
     handler = make_skill_manage_handler(
         authoring,
@@ -1330,6 +1437,7 @@ def register_skill_manage_tool(
         on_changed=on_changed,
         resolve_global_skills_dir=resolve_global_skills_dir,
         publish_skill=publish_skill,
+        rename_skill=rename_skill,
     )
 
     def guarded_handler(
@@ -1357,6 +1465,11 @@ def register_skill_manage_tool(
         started = None
         if run_started_at is not None and context.run_kind is RunKind.LIBRARIAN:
             started = run_started_at(context.run_id)
+        renaming = _renaming(arguments)
+        if follow_rename is not None and renaming is not None:
+            return await dispatch_rename(
+                context, arguments, started, global_changes, renaming, follow_rename
+            )
         merge = _merge(arguments)
         if follow_merge is None or merge is None:
             return await run_tool_worker(
@@ -1380,6 +1493,30 @@ def register_skill_manage_tool(
             _note_orphaned(result, name, failed)
         elif result.get("ok") is True and planned:
             _note_followed(result, name, target or name, planned, failed)
+        return result
+
+    async def dispatch_rename(
+        context: ToolContext,
+        arguments: JsonObject,
+        started: str | None,
+        global_changes: list[bool],
+        renaming: tuple[str, str],
+        follow: SkillRenameFollower,
+    ) -> JsonObject:
+        name, new_name = renaming
+        results: list[JsonObject] = []
+
+        async def rename() -> bool:
+            result = await run_tool_worker(
+                guarded_handler, context, arguments, started, (), global_changes
+            )
+            results.append(result)
+            return result.get("ok") is True
+
+        moved, failed = await follow(context.skill_subject_id, name, new_name, rename)
+        result = results[0]
+        if result.get("ok") is True and (moved or failed):
+            _note_followed(result, name, new_name, [*moved, *failed], failed)
         return result
 
     registry.register(
@@ -1416,6 +1553,16 @@ def _merge(arguments: JsonObject) -> tuple[str, str | None] | None:
     if target == name:
         return None
     return name, target
+
+
+def _renaming(arguments: JsonObject) -> tuple[str, str] | None:
+    """The Skill name and new name of a rename the handler can carry out, else ``None``."""
+    name, new_name = arguments.get("name"), arguments.get("new_name")
+    if arguments.get("action") != "rename" or not isinstance(name, str):
+        return None
+    if not isinstance(new_name, str) or not new_name or new_name == name:
+        return None
+    return name, new_name
 
 
 def _note_orphaned(result: JsonObject, name: str, references: tuple[SkillReference, ...]) -> None:

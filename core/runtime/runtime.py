@@ -91,7 +91,7 @@ from core.runtime._recall import RecallIntegration
 from core.runtime._service_access import _StartedService
 from core.runtime._settings import SettingsChangeEffects, apply_settings_change
 from core.runtime._shutdown import run_shutdown, run_shutdown_async
-from core.runtime._skill_merge import SkillMergeServices, follow_skill_merge
+from core.runtime._skill_merge import SkillMergeServices, follow_skill_merge, follow_skill_rename
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
@@ -662,6 +662,28 @@ class Runtime:
         )
         return await follow_skill_merge(services, owner_id, name, target, delete)
 
+    async def follow_skill_rename(
+        self,
+        owner_id: str,
+        name: str,
+        new_name: str,
+        rename: Callable[[], Awaitable[bool]],
+    ) -> tuple[tuple[SkillReference, ...], tuple[SkillReference, ...]]:
+        """Rename an Identity Agent's Skill and move its shares and triggers to ``new_name``.
+
+        ``rename()`` renames the Skill; returns what moved and what did not
+        (``core/runtime/_skill_merge.py``).
+        """
+        if self._skill_policy is None:
+            raise RuntimeError("Skill policy service not available")
+        services = SkillMergeServices(
+            policy=self._skill_policy,
+            automation=self.automation_references,
+            agent_name=self._agent_name,
+            shares_changed=lambda: self.invalidate_agent_skills(None),
+        )
+        return await follow_skill_rename(services, owner_id, name, new_name, rename)
+
     def _agent_name(self, agent_id: str) -> str:
         agent = self.agents.find(agent_id)
         return agent.name if agent is not None and agent.name else agent_id
@@ -745,6 +767,11 @@ class Runtime:
         self, agent_id: str, name: str, writer: SkillWriter
     ) -> SkillWriteResult:
         return self._skill_operations().publish_agent_skill(agent_id, name, writer=writer)
+
+    def _rename_agent_skill(
+        self, agent_id: str, name: str, new_name: str, writer: SkillWriter
+    ) -> tuple[SkillWriteResult, bool]:
+        return self._skill_operations().rename_agent_skill(agent_id, name, new_name, writer=writer)
 
     def _reload_channel_tool_if_started(self) -> None:
         if not self._started:
@@ -1005,6 +1032,8 @@ class Runtime:
                     resolve_global_skills_dir=lambda: self.global_skills_dir,
                     publish_skill=self._publish_agent_skill,
                     refresh_global_skills=self.reload_skills_async,
+                    follow_rename=self.follow_skill_rename,
+                    rename_skill=self._rename_agent_skill,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))

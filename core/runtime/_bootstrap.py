@@ -465,6 +465,8 @@ def bootstrap(runtime: Runtime) -> None:
             resolve_global_skills_dir=lambda: runtime.global_skills_dir,
             publish_skill=runtime._publish_agent_skill,
             refresh_global_skills=runtime.reload_skills_async,
+            follow_rename=runtime.follow_skill_rename,
+            rename_skill=runtime._rename_agent_skill,
         )
         runtime._projects = ProjectStore(
             runtime._storage.data_dir,
