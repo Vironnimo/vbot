@@ -80,7 +80,7 @@
       "note": "Kimi K2.7 Code always thinks: the request always enables thinking and sends no effort."
     },
     {
-      "when": {"ids": ["grok-4.6", "grok-4.7", "kimi-k3", "space-bunny"]},
+      "when": {"ids": ["grok-4.6", "grok-4.7", "kimi-k3", "space-bunny", "step-5-preview-free"]},
       "set": {"reasoning": {"off": "low"}},
       "note": "These Models always reason; none asks for the cheapest rung (low) instead of the higher default."
     },
@@ -161,6 +161,16 @@
         "date": "2026-10-08",
         "connections": ["api-key"],
         "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    },
+    "step-5-preview-free": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "connections": ["api-key"],
+        "date": "2026-10-09",
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:none, sampling, tool_replay, replay, image"
       }
     }
   }

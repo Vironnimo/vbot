@@ -282,6 +282,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "hy4-preview",
             "hy3",
             "space-bunny",
+            "step-5-preview-free",
             "omen-alpha",
         ),
         "messages": (
@@ -301,7 +302,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert len(expected) == 37
+    assert len(expected) == 38
 
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
@@ -315,7 +316,9 @@ def test_opencode_go_response_fields_are_not_history_field_guesses(
     """Profiles describe inbound response carriers, not outbound replay."""
 
     expected = {
-        **dict.fromkeys(("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview"), "reasoning"),
+        **dict.fromkeys(
+            ("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview", "step-5-preview-free"), "reasoning"
+        ),
         **dict.fromkeys(
             (
                 "glm-5.1",
@@ -352,6 +355,19 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                 "reasoning": _FIVE_LEVELS,
             },
             id="space-bunny",
+        ),
+        pytest.param(
+            "step-5-preview-free",
+            {
+                "name": "Step 5 Preview Free",
+                "context_window": 1_000_000,
+                "max_output_tokens": 65_536,
+                "tools": True,
+                "vision": True,
+                "reasoning": (True, "levels", ("low", "medium", "high")),
+                "replay_scope": "full_history",
+            },
+            id="step-5-preview-free",
         ),
         pytest.param(
             "longcat-2.5-preview-free",

@@ -6271,6 +6271,32 @@
       "release_date": "2026-07-21",
       "temperature": true
     },
+    "google/gemini-nano-banana-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "gemini-flash",
+      "last_updated": "2026-10-06",
+      "max_output_tokens": 32768,
+      "name": "Nano Banana 2.1",
+      "release_date": "2026-10-06",
+      "temperature": false
+    },
     "google/gemini-omni-flash-preview": {
       "capabilities": {
         "input_modalities": [

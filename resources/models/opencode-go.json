@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-08T12:33:32.487620+00:00",
+  "fetched_at": "2026-10-09T15:57:19.932179+00:00",
   "models": {
     "claude-haiku-5-5": {
       "capabilities": {
@@ -1769,6 +1769,55 @@
           "output": 0.6
         },
         "source": "models.dev:opencode-go/space-bunny"
+      }
+    },
+    "step-5-preview-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_go": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "step-5-preview-free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode-go/step-5-preview-free"
       }
     }
   },
