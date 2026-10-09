@@ -29,7 +29,7 @@ Read only the capability sections needed for the task: [entry point](#the-entry-
 > extensions you would run by hand. This is intentional: vBot is a single-user,
 > technical-user tool.
 
-`API_VERSION` is currently **12**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible. Require the version that added what you use, so older vBot versions reject the Extension cleanly: v3 Tool Families; v4 managed operations and live Tool catalogs; v5 `requires_opt_in=True`; v6 page declarations and explicit Tool catalog visibility; v7 Extension databases (`host.open_database`); v8 Tool result payloads (`context.attach_result_payload`, `host.load_result_payload`); v9 Tool-gated prompt blocks (`requires_tool`); v10 owned Session group listing and archiving (`temporary_agents.groups()`, `temporary_agents.archive_group()`); v11 OAuth browser redirects (`host.oauth_redirects`, documented in `core/extensions/oauth_redirects.py`); v12 server folder listing for pages (`client.listDirectory`, documented in [extension-pages.md](extension-pages.md#pages)).
+`API_VERSION` is currently **13**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible. Require the version that added what you use, so older vBot versions reject the Extension cleanly: v3 Tool Families; v4 managed operations and live Tool catalogs; v5 `requires_opt_in=True`; v6 page declarations and explicit Tool catalog visibility; v7 Extension databases (`host.open_database`); v8 Tool result payloads (`context.attach_result_payload`, `host.load_result_payload`); v9 Tool-gated prompt blocks (`requires_tool`); v10 owned Session group listing and archiving (`temporary_agents.groups()`, `temporary_agents.archive_group()`); v11 OAuth browser redirects (`host.oauth_redirects`, documented in `core/extensions/oauth_redirects.py`); v12 server folder listing for pages (`client.listDirectory`, documented in [extension-pages.md](extension-pages.md#pages)); v13 Tool summaries (`summary=` on `api.register_tool`).
 
 ## Install and discovery
 
@@ -75,7 +75,7 @@ The `api` object (`ExtensionAPI`) offers:
 | `api.on(event, handler)` | a hook handler for one event |
 | `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=())` | a slash command |
 | `api.register_tool_family(family_id, label)` | a Tool Family owned by this Extension |
-| `api.register_tool(name, description, parameters, handler, *, internal=False, catalog_visible=True, requires_opt_in=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, unadvertised_parameters=None, family=None)` | an agent tool |
+| `api.register_tool(name, description, parameters, handler, *, summary=None, internal=False, catalog_visible=True, requires_opt_in=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, unadvertised_parameters=None, family=None)` | an agent tool |
 | `api.register_page(page_id, title, entry, *, icon="network")` | an Extension-owned HTML page declaration |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None, requires_tool=None)` | a System Prompt block |
@@ -575,6 +575,10 @@ def register(api):
 API v8 Extension Tools can keep a large result with its Tool Result in Session history instead of in files. In a Tool handler, check `context.result_payloads_available`. When it is true, `payload_id = context.attach_result_payload(value)` stores the JSON-serializable `value` with this call's Tool Result and returns an opaque id; put that id in the result you return. It is false for calls outside a Session, such as management operations and the CLI; `attach_result_payload` then raises `RuntimeError`, so return the value inline instead. Attach only while the call runs. vBot stores the payload only if the handler returns a result: if the handler raises, returns an invalid result, or its Run is cancelled, nothing is stored.
 
 To read a payload later, a Tool call in the same Session passes its own `ToolContext` to `await host.load_result_payload(context, payload_id)`. It returns the value, or `None` when the id is unknown, belongs to another Extension, or its Tool Result is not in that Session's current history. Forks of the Session can read the payloads they inherited. Apply your own access checks after loading. Declare `"api_version": 8` in `extension.json`.
+
+## Tool summary
+
+An Agent that loads Tools on demand sees most of its Tools only as one line, `name: summary`, until it loads a Tool's full definition. Pass `summary="..."` to `api.register_tool(...)` (or the same field in a live Tool catalog) when the first sentence of your description does not tell a reader what the Tool is for, or is longer than about 160 characters. Write one sentence of at most 200 characters for the Model. Without it, vBot uses the description's first sentence. Declare `"api_version": 13` when you pass it.
 
 ## Explicit Tool permission
 

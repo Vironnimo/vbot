@@ -205,6 +205,7 @@ class ExtensionCapabilityInstaller:
                 declaration.description,
                 declaration.parameters,
                 declaration.handler,
+                summary=declaration.summary,
                 internal=declaration.internal,
                 catalog_visible=declaration.catalog_visible,
                 requires_opt_in=declaration.requires_opt_in,

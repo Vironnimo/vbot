@@ -51,6 +51,7 @@ from core.tools._tool_definitions import (
     ToolNotFoundError,
     ToolReadinessPredicate,
     tool_is_ready,
+    tool_summary,
 )
 from core.tools._tool_display import (
     DEFAULT_TOOL_DISPLAY_MAX_CHARACTERS,
@@ -218,6 +219,7 @@ class ToolRegistry:
         parameters: JsonObject,
         handler: ToolHandler,
         *,
+        summary: str | None = None,
         internal: bool = False,
         deferred: bool = False,
         session_scoped: bool = False,
@@ -254,6 +256,8 @@ class ToolRegistry:
         extension (``None`` for a built-in), set at extension-tool apply time.
         ``definition_change_note`` lets a Tool announce a change of its
         description to a Session that already knows it (see :class:`Tool`).
+        ``summary`` is the optional one-sentence, Model-facing text that lists
+        the Tool where its full definition is not shown (:func:`tool_summary`).
         """
         family_definition = None
         if family is not None:
@@ -278,6 +282,7 @@ class ToolRegistry:
             parameters=parameters,
             handler=handler,
             result_schema=result_schema,
+            summary=summary,
             internal=internal,
             deferred=deferred,
             session_scoped=session_scoped,
@@ -1133,6 +1138,7 @@ __all__ = [
     "tool_failure",
     "tool_failure_for_exception",
     "tool_is_ready",
+    "tool_summary",
     "tool_success",
     "ToolCallCancelCheck",
     "ToolCallCancelRegistrar",

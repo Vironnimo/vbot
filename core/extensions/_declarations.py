@@ -21,7 +21,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 12
+API_VERSION = 13
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
 CommandHandler = Callable[..., Any]
@@ -135,6 +135,9 @@ class ToolDeclaration:
     description: str
     parameters: dict[str, Any]
     handler: Callable[..., Any]
+    # Optional one-sentence, Model-facing summary listing the Tool where its
+    # full definition is not shown (On-demand Tools); forwarded verbatim.
+    summary: str | None = None
     internal: bool = False
     catalog_visible: bool = True
     requires_opt_in: bool = False
