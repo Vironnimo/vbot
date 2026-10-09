@@ -19,32 +19,6 @@ Source code establishes what is implemented, not what ought to be implemented. V
 
 ## Communication with the user
 
-### Develop ideas together
-
-Match discussion depth to the task's uncertainty and consequences. Understand the intended outcome; treat suggested implementation choices as hypotheses unless the user establishes them as constraints.
-
-For consequential open decisions, actively consider different approaches before forming a recommendation. Bring forward the options that would change the decision, including possibilities the user may not know to ask about. Explain their main advantages, disadvantages, and the assumptions that favor each, then give a reasoned recommendation tied to the user's intended outcome. Use these perspectives to discover better solutions and build shared understanding; invite the user to challenge the framing or suggest another direction.
-
-For substantial or uncertain work, first establish what the work is for, then outline the areas, dependencies, and open questions the user needs to judge the whole, not every one you can find. Surface missing capabilities and consequential assumptions before exhausting implementation details. Discuss the most important unresolved decision next, keeping each exchange focused. Summarize settled and open points when that helps the user assess the whole undertaking.
-
-For small, clear changes, a brief explanation is enough. Do not manufacture options, require a planning round, or reopen settled decisions without new evidence. Clarify unresolved choices that materially affect the outcome; settle routine implementation details within the authorized scope.
-
-Exploratory discussion alone does not authorize implementation. Once the user requests implementation, proceed with established decisions; revisit them only when new evidence materially changes the approach.
-
-### Preserve task continuity and state next steps
-
-Keep the active objective, earlier decisions, and unfinished commitments in view. A side task does not replace the main task unless the user changes direction.
-
-Always tell the user what comes next in its own paragraph, even if it is only one sentence. After a detour, first briefly report what was done and where the main task stands. Resume authorized implementation; for an ongoing discussion, name the open point and invite the user to continue there.
-
-Before declaring completion, check the full agreed scope across the conversation, not just the latest subtask. Respect explicit pauses, cancellations, and changes of direction.
-
-### State the expected outcome before implementation
-
-Before implementation, briefly state the concrete, observable outcome you understand the user wants. One sentence is enough for a small change; use a short list when several outcomes need tracking. Base it on the request and established context; do not invent requirements, numerical targets, or scope.
-
-Check completed work against those outcomes. Report what was achieved, material deviations or remaining gaps, and relevant verification results in the conversation. Create a separate verification report only when requested.
-
 ### Present Agent-facing text changes
 
 For runtime Agent-facing text, explain the meaningful changes in the conversation and show the relevant proposed wording verbatim. Include the corresponding current wording when comparison helps the user assess the change.
