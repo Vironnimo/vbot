@@ -897,7 +897,7 @@ describe('SettingsView', () => {
       expect(buttonByText('Voice')).toBeTruthy();
       expect(
         document.querySelector(
-          '[data-settings-section="transcription_audio"] button[aria-label="Transcription audio profile"]',
+          `[data-settings-section="transcription_audio"] button[aria-label="${t('settings.voice.transcriptionProfile')}"]`,
         ),
       ).toBeTruthy();
       expect(
