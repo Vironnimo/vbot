@@ -518,9 +518,16 @@ it.each([false, true])(
   },
 );
 
-it.each(['ended', 'failed', 'cancelled'])(
-  'keeps early speech through its artifact and only manually replays after %s',
-  async (outcome) => {
+it.each([
+  { outcome: 'ended', seekTo: null, artifact: 'ready' },
+  { outcome: 'failed', seekTo: null, artifact: 'ready' },
+  { outcome: 'cancelled', seekTo: null, artifact: 'ready' },
+  { outcome: 'ended', seekTo: 30, artifact: 'ready' },
+  { outcome: 'ended', seekTo: 30, artifact: 'pending-metadata' },
+  { outcome: 'ended', seekTo: 30, artifact: 'pending-source' },
+])(
+  'manually replays early speech after $outcome with seek=$seekTo and artifact=$artifact',
+  async ({ outcome, seekTo, artifact }) => {
     let report;
     const stream = {
       play: vi.fn(() =>
@@ -554,11 +561,16 @@ it.each(['ended', 'failed', 'cancelled'])(
     expect(stream.play).toHaveBeenCalledOnce();
     expect(control('audio.pause')).toBeTruthy();
     expect(control('audio.seek').disabled).toBe(true);
-    props.src = '/api/speech/artifacts/final';
-    props.playback = '';
+    load.mockImplementation(function () {
+      this.currentTime = 0;
+    });
+    if (artifact !== 'pending-source') {
+      props.src = '/api/speech/artifacts/final';
+      props.playback = '';
+    }
     props.autoplay = false;
     await flush();
-    ready(audio);
+    if (artifact === 'ready') ready(audio, 60);
     await flush();
     expect(document.querySelector('audio')).toBe(audio);
     expect(stream.stop).not.toHaveBeenCalled();
@@ -575,8 +587,8 @@ it.each(['ended', 'failed', 'cancelled'])(
       report({
         paused: true,
         loading: false,
-        currentTime: 1,
-        duration: 1,
+        currentTime: 60,
+        duration: 60,
         ended: outcome === 'ended',
         error:
           outcome === 'failed'
@@ -585,10 +597,32 @@ it.each(['ended', 'failed', 'cancelled'])(
       });
     await flush();
     expect(play).not.toHaveBeenCalled();
+    if (seekTo !== null) {
+      const seek = control('audio.seek');
+      expect(seek.disabled).toBe(false);
+      seek.value = String(seekTo);
+      seek.dispatchEvent(new Event('input', { bubbles: true }));
+      await flush();
+      expect(control('audio.play')).toBeTruthy();
+      expect(seek.value).toBe(String(seekTo));
+    }
+    if (artifact === 'pending-source') {
+      props.src = '/api/speech/artifacts/final';
+      props.playback = '';
+      await flush();
+    }
     control('audio.play').click();
     await flush();
     expect(audio.getAttribute('src')).toBe(props.src);
     expect(play).toHaveBeenCalledOnce();
+    expect(audio.currentTime).toBe(seekTo ?? 0);
+    if (artifact !== 'ready') {
+      ready(audio, 60);
+      await flush();
+      expect(audio.currentTime).toBe(seekTo);
+      expect(control('audio.seek').value).toBe(String(seekTo));
+      expect(play).toHaveBeenCalledOnce();
+    }
   },
 );
 

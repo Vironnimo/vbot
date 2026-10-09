@@ -150,7 +150,9 @@ schedules at most about two seconds in WebAudio plus one bounded frame, with
 backpressure during Pause. `AudioPlayer` owns this resource and keeps it through
 the final artifact and History handoff without replaying audio. Seeking and speed
 become available after streaming ends, download when the artifact arrives;
-manual replay uses that artifact. Transient failure never auto-replays a partial answer. Tool/Run
+manual replay uses that artifact from the beginning unless the user selected a
+position, which survives an artifact or metadata that arrives later. Transient
+failure never auto-replays a partial answer. Tool/Run
 cancellation and component teardown stop playback and abort its request. The
 Settings preview uses the same player from its NDJSON `playback` notification.
 Mounted coverage: `components/__tests__/AudioPlayer.test.js`.
