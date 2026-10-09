@@ -46,6 +46,21 @@ class OpenCodeAdapter:
     source = "opencode"
 
     def scan(self, root: Path) -> list[AgentProfile]:
+        return self._scan(root)
+
+    def read(self, root: Path, selected: AgentProfile) -> AgentProfile | None:
+        path = selected.source_path
+        if path in (root / relative for relative in CONFIG_FILES):
+            if not reading.is_file_strict(path):
+                return None
+        elif not any(
+            reading.is_source_file(root / folder, path)
+            for folder in (".opencode/agents", ".opencode/agent")
+        ):
+            return None
+        return next(iter(self._scan(root, selected)), None)
+
+    def _scan(self, root: Path, selected: AgentProfile | None = None) -> list[AgentProfile]:
         result: list[AgentProfile] = []
         global_fields: dict[str, Any] = {}
         definitions: list[tuple[Path, str, dict[str, Any]]] = []
@@ -73,7 +88,11 @@ class OpenCodeAdapter:
                 agents = config.get("agent", {})
                 if not isinstance(agents, dict):
                     raise reading.SourceError("agent must be an object keyed by name.")
+                if selected is not None and path != selected.source_path:
+                    continue
                 for name, fields in agents.items():
+                    if selected is not None and name != selected.display_name:
+                        continue
                     if not isinstance(fields, dict):
                         result.append(
                             unavailable(
@@ -86,7 +105,9 @@ class OpenCodeAdapter:
                         definitions.append((path, name, fields))
             except (OSError, ValueError) as error:
                 problem = str(error)
-                result.append(unavailable(self.source, path, path.stem, problem))
+                if selected is None or path == selected.source_path:
+                    name = path.stem if selected is None else selected.display_name
+                    result.append(unavailable(self.source, path, name, problem))
         for path, name, fields in definitions:
             try:
                 if problem:
@@ -104,7 +125,16 @@ class OpenCodeAdapter:
         # duplicates visible for the source report instead of silently dropping them.
         markdown: list[AgentProfile] = []
         for folder in (".opencode/agents", ".opencode/agent"):
-            for path in reading.files(root / folder, ".md", recursive=True):
+            paths = (
+                reading.files(root / folder, ".md", recursive=True)
+                if selected is None
+                else (
+                    [selected.source_path]
+                    if selected.source_path.is_relative_to(root / folder)
+                    else []
+                )
+            )
+            for path in paths:
                 try:
                     fields, body = reading.markdown(path)
                     if problem:

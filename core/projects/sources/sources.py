@@ -132,9 +132,27 @@ def read_profile(
     sources: list[SourceSelection],
     agent_id: str,
     adapters: dict[str, AgentAdapter] | None = None,
+    *,
+    selected: AgentProfile | None = None,
 ) -> AgentProfile | None:
-    """Read live configuration, including unavailable winners, without scanning Skills."""
+    """Reload the selected definition, falling back to discovery if it disappeared."""
     adapters = default_adapters() if adapters is None else adapters
+    if selected is not None:
+        for selection in sources:
+            definition = SOURCE_CATALOG.get(selection.id)
+            if (
+                selection.enabled
+                and definition is not None
+                and definition.kind == "agents"
+                and definition.ecosystem == selected.source
+                and selection.includes(root, selected.source_path)
+            ):
+                agent = adapters[selected.source].read(root, selected)
+                if agent is not None and agent.agent_id == agent_id:
+                    return agent
+                break
+    # A removed or renamed selected definition may expose a previously shadowed
+    # winner. Preserve the ordinary ordered search for that uncommon case.
     for selection in sources:
         definition = SOURCE_CATALOG.get(selection.id)
         if not selection.enabled or definition is None or definition.kind != "agents":

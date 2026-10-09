@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 # mypy: disable-error-code=arg-type
+import sqlite3
 from contextlib import contextmanager
 
 import pytest
@@ -190,6 +191,11 @@ async def test_inbox_batches_complete_posts_within_the_delivered_character_budge
         assert [len(entry["text"]) for entry in current["entries"]] == [16_000]
         assert current["pending_remaining"] == 3
         assert prepared["entries"][1]["text"] == "x" * 4_000
+        automatic = await value.prepare_automatic_delivery(
+            started["swarm_id"], recipient, expected_epoch=swarm["epoch"]
+        )
+        assert automatic["entries"] == current["entries"]
+        assert automatic["pending_remaining"] == 3
     finally:
         await value.close()
         database.close()
@@ -283,6 +289,73 @@ async def test_overlapping_prepared_batches_acknowledge_each_recipient_once(tmp_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["idle", "running", "quiet"])
+async def test_automatic_delivery_loads_only_a_batch_of_eligible_post_bodies(
+    store, swarm_database, monkeypatch, state: str
+) -> None:
+    started = await _swarm(store)
+    sid = started["swarm_id"]
+    swarm = await store.get_swarm(sid)
+    sender, recipient = [item["id"] for item in swarm["participants"]]
+    await store.apply_delivery_settings(
+        sid,
+        {
+            **swarm["delivery"],
+            "batch_messages": 2,
+            "main": {"mode": "idle", "wake_idle": True},
+        },
+        expected_revision=1,
+        request_id="bounded-batch",
+        actor="test",
+    )
+    await store.set_participant_state(sid, recipient, "running" if state == "running" else "idle")
+    posts = []
+    for index in range(6):
+        post = await store.post(
+            sid,
+            sender,
+            text=f"Post {index}: " + "x" * 2000,
+            recipients=[recipient] if state != "quiet" and index in {3, 5} else [],
+            request_id=f"bounded-{index}",
+        )
+        posts.append(post["post_id"])
+
+    loaded_posts = []
+
+    def observe_posts(cursor, values):
+        row = sqlite3.Row(cursor, values)
+        if any(column[0] == "text" for column in cursor.description):
+            loaded_posts.append(row["id"])
+        return row
+
+    monkeypatch.setattr(swarm_database.writer, "row_factory", observe_posts)
+    if state == "running":
+        batch = await store.prepare_automatic_delivery(
+            sid, recipient, expected_epoch=swarm["epoch"]
+        )
+        expected = [posts[3], posts[5]]
+    else:
+        batch = await store.prepare_wake(
+            sid, recipient, expected_epoch=swarm["epoch"], wake_routes=frozenset({"ping"})
+        )
+        expected = [] if state == "quiet" else posts[:2]
+    assert [entry["id"] for entry in batch["entries"]] == expected
+    assert loaded_posts == expected
+    assert batch["pending_remaining"] == len(posts) - len(expected)
+    # The addressed post at the end can wake an idle reader even though the
+    # first batch contains only older ordinary posts. A quiet scan freezes none.
+    assert batch["wake"] is (state == "idle")
+    assert len((await store.list_prepared_deliveries()).entries) == bool(expected)
+    if expected:
+        replay = await store.prepare_automatic_delivery(
+            sid, recipient, expected_epoch=swarm["epoch"]
+        )
+        assert replay["entries"] == batch["entries"]
+        assert replay["receipt_id"] == batch["receipt_id"]
+        assert replay["content_hash"] == batch["content_hash"]
+
+
+@pytest.mark.asyncio
 async def test_pending_reads_do_not_scan_delivered_board_history(store, monkeypatch):
     """A busy Board must not delay all Store work behind historical delivery scans."""
     from resources.extensions.swarm._store_delivery import _prepare_automatic_delivery
@@ -323,6 +396,21 @@ async def test_pending_reads_do_not_scan_delivered_board_history(store, monkeypa
                     (f"historical-{i}", peer, "main", "2026-01-01T00:00:00+00:00")
                     for i in range(2000)
                     for peer in peers[1:]
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO delivery_batches(receipt_id,participant_id,content_hash,"
+                "effect_kind,created_at,acknowledged_at) VALUES(?,?,?,?,?,?)",
+                [
+                    (
+                        f"delivered-{i}",
+                        peers[1],
+                        "saved-hash",
+                        "swarm_automatic",
+                        "2026-01-01T00:00:00.000000Z",
+                        "2026-01-01T00:00:00.000000Z",
+                    )
+                    for i in range(2000)
                 ],
             )
 
@@ -383,5 +471,5 @@ async def test_pending_reads_do_not_scan_delivered_board_history(store, monkeypa
     assert [entry["text"] for entry in prepared["entries"]] == ["Pending now"]
     assert replayed["entries"] == prepared["entries"]
     assert replayed["replayed"]
-    # Work is proportional to outstanding deliveries, not 22,000 delivered rows.
+    # Work excludes 22,000 delivered recipients and 2,000 acknowledged batches.
     assert steps < 10000

@@ -875,15 +875,33 @@ def _is_tail_lead_in_note(message: ChatMessage) -> bool:
 
 
 def _safe_tail_boundary_indices(messages: list[ChatMessage]) -> list[int]:
+    """Find every valid suffix in one reverse pass through messages and Tool Calls.
+
+    This is ``_validate_projection`` read backwards: Results accumulate until
+    their immediately preceding Assistant declares exactly those Call ids.
+    An invalid completed block cannot be repaired by extending the suffix to
+    the left, but boundaries already found to its right remain valid.
+    """
     boundaries: list[int] = []
-    for index, message in enumerate(messages):
-        if not _can_start_tail(message):
+    results: set[str | None] = set()
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role in {"note", "run_summary", "agent_takeover", "error"}:
             continue
-        try:
-            _validate_projection(messages[index:])
-        except CompactionError:
+        if message.role == "tool":
+            if message.tool_call_id in results:
+                break  # A repeated Result is orphaned after its first occurrence.
+            results.add(message.tool_call_id)
             continue
-        boundaries.append(index)
+        if message.role == "assistant":
+            if {call.id for call in message.tool_calls or []} != results:
+                break  # Missing or foreign Results make every earlier cut unsafe.
+            results.clear()
+        elif results:
+            break  # Results cannot cross a User or another visible message.
+        if _can_start_tail(message):
+            boundaries.append(index)
+    boundaries.reverse()
     return boundaries
 
 

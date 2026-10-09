@@ -1049,7 +1049,7 @@ class AgentResolver:
             raise AgentResolutionError(str(error)) from error
 
     def _read_agent_fresh(self, project: Project, agent_id: str) -> AgentProfile:
-        """Re-scan the repo and return this agent's current scanned profile.
+        """Reload the selected repository definition and its inherited settings.
 
         Reads the live config from disk so a repo edit is reflected on the next
         run. If the agent vanished from the repo since the cached Team was built
@@ -1057,8 +1057,21 @@ class AgentResolver:
         silent fall-back to the stale cached profile.
         """
         try:
+            # Team resolution has already selected a winner. A temporary Profile
+            # may be requested before that scan; keep its ordinary live lookup
+            # instead of filling the Team/Skill report just for this read.
+            selected: AgentProfile | None = None
+            cached = self._team_cache.get(project.project_id)
+            if cached is not None and cached[0] == _team_key(project):
+                selected = next(
+                    (member for member in cached[1].team if member.agent_id == agent_id), None
+                )
             member = read_profile(
-                _project_root(project), project.sources, agent_id, self._source_adapters
+                _project_root(project),
+                project.sources,
+                agent_id,
+                self._source_adapters,
+                selected=selected,
             )
         except (OSError, ValueError) as error:
             raise AgentResolutionError(

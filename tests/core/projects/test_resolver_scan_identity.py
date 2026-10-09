@@ -225,39 +225,138 @@ async def test_async_resolution_on_a_closed_session_database_fails_cleanly(
     assert isinstance(member, ConfigAgent)
 
 
+@pytest.mark.parametrize(
+    ("source", "suffix", "document"),
+    [
+        ("opencode", "md", "---\nmodel: {model}\n---\n{body}\n"),
+        ("claude", "md", "---\nname: {name}\nmodel: {model}\n---\n{body}\n"),
+        (
+            "codex",
+            "toml",
+            'name="{name}"\nmodel="{model}"\ndeveloper_instructions="{body}\\n"\n',
+        ),
+    ],
+)
 def test_single_agent_config_is_read_fresh_per_resolve(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    suffix: str,
+    document: str,
 ) -> None:
-    # Arrange: open-time scan caches the Team; then the repo file changes model.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2", body="v1")
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-    resolver.rescan_project(project)  # caches the Team at open time
+    from core.projects.sources import _reading as reading
 
-    # Mutate the repo file after the Team scan.
-    _write_agent(repo, "builder.md", model="openai/gpt-mini", body="v2")
-
-    # Act
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    # Assert: config (model + body) reflects the live file, not the cached scan.
-    assert isinstance(runtime_agent, ConfigAgent)
-    assert runtime_agent.model == "openai/gpt-mini"
-    assert runtime_agent.body == "v2\n"
-
-
-def test_cached_member_whose_source_vanished_is_not_found(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    folder = repo / f".{source}/agents/nested"
+    folder.mkdir(parents=True)
+    path = folder / f"{'builder' if source == 'opencode' else 'definition'}.{suffix}"
+    path.write_text(
+        document.format(name="builder", model="openai/gpt-5.2", body="v1"), encoding="utf-8"
+    )
+    (folder / f"other.{suffix}").write_text(
+        document.format(name="other", model="openai/gpt-5.2", body="Other."), encoding="utf-8"
+    )
     project = _project(projects, repo)
     resolver = _resolver(agents, projects, _openai_configured())
     resolver.rescan_project(project)
 
-    next(repo.rglob("builder.md")).unlink()
+    path.write_text(
+        document.format(name="builder", model="openai/gpt-mini", body="v2"), encoding="utf-8"
+    )
+    reads: list[Path] = []
+    original_read = reading.read_text
 
-    with pytest.raises(ResolutionAgentNotFoundError):
+    def read_text(source_path: Path) -> str:
+        reads.append(source_path)
+        return original_read(source_path)
+
+    def no_discovery(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("A cached selected definition needs no repository walk.")
+
+    monkeypatch.setattr(reading, "read_text", read_text)
+    monkeypatch.setattr(reading, "files", no_discovery)
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+    effective = resolver.effective_config(project.project_id, "builder")
+
+    assert isinstance(runtime_agent, ConfigAgent)
+    assert runtime_agent.model == "openai/gpt-mini"
+    assert runtime_agent.body.rstrip() == "v2"
+    assert effective["model"]["value"] == "openai/gpt-mini"
+    assert reads and set(reads) == {path}
+
+
+@pytest.mark.parametrize("change", ["delete", "rename", "linked-file", "linked-directory"])
+def test_cached_member_whose_source_vanished_is_not_found(
+    agents: AgentStore, projects: ProjectStore, repo: Path, change: str
+) -> None:
+    path = _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+    resolver.rescan_project(project)
+
+    if change == "delete":
+        path.unlink()
+    elif change == "rename":
+        path.rename(path.with_name("renamed.md"))
+    else:
+        target = repo / "linked-definition"
+        original = path if change == "linked-file" else path.parent
+        original.rename(target)
+        try:
+            original.symlink_to(target, target_is_directory=change == "linked-directory")
+        except OSError, NotImplementedError:
+            pytest.skip("symlink creation not permitted on this host")
+
+    # A linked source root reports a source error; a linked file is excluded.
+    error = AgentResolutionError if change == "linked-directory" else ResolutionAgentNotFoundError
+    with pytest.raises(error):
         resolver.resolve_agent(project.project_id, "builder")
+
+
+def test_selected_definition_priority_changes_on_rescan_or_source_mutation(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", body="OpenCode.")
+    project = projects.create(
+        "vbot",
+        "vBot",
+        repo,
+        sources=[{"id": "claude.agents"}, {"id": "opencode.agents"}],
+    )
+    resolver = _resolver(agents, projects, _openai_configured())
+    resolver.rescan_project(project)
+    folder = repo / ".claude/agents"
+    folder.mkdir(parents=True)
+    path = folder / "definition.md"
+    path.write_text("---\nname: builder\nmodel: openai/gpt-5.2\n---\nClaude.", encoding="utf-8")
+    resolved = resolver.resolve_agent("vbot", "builder")
+    assert isinstance(resolved, ConfigAgent)
+    assert resolved.body == "OpenCode.\n"
+    resolver.rescan_project(project)
+    resolved = resolver.resolve_agent("vbot", "builder")
+    assert isinstance(resolved, ConfigAgent)
+    assert resolved.body == "Claude."
+
+    projects.update("vbot", sources=[{"id": "opencode.agents"}, {"id": "claude.agents"}])
+    resolved = resolver.resolve_agent("vbot", "builder")
+    assert isinstance(resolved, ConfigAgent)
+    assert resolved.body == "OpenCode.\n"
+    projects.update(
+        "vbot",
+        sources=[
+            {"id": "opencode.agents", "agent_paths": [".opencode/agents/other.md"]},
+            {"id": "claude.agents"},
+        ],
+    )
+    resolved = resolver.resolve_agent("vbot", "builder")
+    assert isinstance(resolved, ConfigAgent)
+    assert resolved.body == "Claude."
+    # A rename removes the selected id. The ordered fallback still observes the
+    # scope, so it cannot revive the now-excluded OpenCode definition.
+    path.write_text("---\nname: renamed\n---\nRenamed.", encoding="utf-8")
+    with pytest.raises(ResolutionAgentNotFoundError):
+        resolver.resolve_agent("vbot", "builder")
 
 
 def test_team_membership_uses_cache_not_live_new_file(

@@ -39,6 +39,25 @@ from ._store_values import (
 )
 
 
+def _delivery_rows(
+    connection: sqlite3.Connection,
+    swarm_id: str,
+    participant_id: str,
+    post_ids: Sequence[str],
+) -> list[sqlite3.Row]:
+    """Load full posts only after their delivery candidates have been selected."""
+    if not post_ids:
+        return []
+    placeholders = ",".join("?" for _ in post_ids)
+    return connection.execute(
+        f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} "
+        "FROM recipients r JOIN posts p ON p.id=r.post_id "
+        "JOIN discussions d ON d.id=p.discussion_id "
+        f"WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL AND p.id IN ({placeholders}) ORDER BY p.sequence",
+        (swarm_id, participant_id, *post_ids),
+    ).fetchall()
+
+
 def _prepare_delivery(
     db: SwarmDatabase,
     swarm_id: str,
@@ -68,14 +87,7 @@ def _prepare_delivery(
         else:
             if not post_ids:
                 return {"entries": [], "receipt_id": None, "pending_remaining": 0}
-            placeholders = ",".join("?" for _ in post_ids)
-            rows = connection.execute(
-                f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} "
-                "FROM recipients r JOIN posts p ON p.id=r.post_id "
-                "JOIN discussions d ON d.id=p.discussion_id "
-                f"WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL AND p.id IN ({placeholders}) ORDER BY p.sequence",
-                (swarm_id, participant_id, *post_ids),
-            ).fetchall()
+            rows = _delivery_rows(connection, swarm_id, participant_id, post_ids)
             receipt_id = new_id("rcp")
         entries = [_post(row) for row in rows]
         if not entries:
@@ -193,14 +205,21 @@ def _prepare_automatic_delivery(
                 "settings_revision": int(prepared["settings_revision"]),
                 "replayed": True,
             }
-        # Ordered delivery scans must start from outstanding recipients, not posts.
+        # Scan only the facts needed for policy and wake decisions. Full posts and
+        # their context are loaded for at most one batch, not the entire backlog.
         pending = connection.execute(
-            f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id JOIN discussions d ON d.id=p.discussion_id "
+            "SELECT p.id,p.sequence,p.author_kind,r.route_class FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id "
             "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence",
             (swarm_id, participant_id),
-        ).fetchall()
-        eligible = []
+        )
+        eligible_ids: list[str] = []
+        pending_count = 0
+        newest = 0
+        can_wake = False
         for row in pending:
+            pending_count += 1
+            newest = int(row["sequence"])
+            can_wake = can_wake or wakes(settings, row["route_class"], row["author_kind"])
             policy = settings[row["route_class"]]
             if policy["mode"] == "pull" and not (
                 participant["state"] == "idle" and policy["wake_idle"]
@@ -208,8 +227,8 @@ def _prepare_automatic_delivery(
                 continue
             if policy["mode"] == "idle" and participant["state"] != "idle":
                 continue
-            eligible.append(row)
-        newest = max((int(row["sequence"]) for row in pending), default=0)
+            if len(eligible_ids) < settings["batch_messages"]:
+                eligible_ids.append(str(row["id"]))
         epoch = connection.execute(
             "SELECT epoch,is_open FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
         ).fetchone()
@@ -220,14 +239,17 @@ def _prepare_automatic_delivery(
             announce
             and newest > announced
             and not participant["wake_pending"]
-            and any(wakes(settings, row["route_class"], row["author_kind"]) for row in pending)
+            and can_wake
             and participant["state"] in {"idle"}
         )
         rows = (
             _budgeted_rows(
-                eligible, settings["batch_messages"], settings["batch_chars"], delivered=True
+                _delivery_rows(connection, swarm_id, participant_id, eligible_ids),
+                settings["batch_messages"],
+                settings["batch_chars"],
+                delivered=True,
             )
-            if eligible
+            if eligible_ids and not (wake_routes is not None and not wake)
             else []
         )
         if wake:
@@ -246,7 +268,7 @@ def _prepare_automatic_delivery(
             return {
                 "entries": [],
                 "wake": wake,
-                "pending_remaining": len(pending),
+                "pending_remaining": pending_count,
                 "settings_revision": int(settings_row["revision"]),
                 "admission_boundary": resolved_boundary,
             }
@@ -281,7 +303,7 @@ def _prepare_automatic_delivery(
             "content_hash": content_hash,
             "effect_kind": "swarm_automatic",
             "wake": wake,
-            "pending_remaining": len(pending) - len(entries),
+            "pending_remaining": pending_count - len(entries),
             "settings_revision": int(settings_row["revision"]),
             "admission_boundary": resolved_boundary,
         }

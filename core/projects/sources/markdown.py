@@ -66,6 +66,20 @@ class MarkdownAdapter:
 
     def scan(self, root: Path) -> list[AgentProfile]:
         paths = reading.files(root / self.folder, self.suffix, recursive=True)
+        settings, problem = self._settings(root)
+        return [
+            agent for path in paths if (agent := self._read(path, settings, problem)) is not None
+        ]
+
+    def read(self, root: Path, selected: AgentProfile) -> AgentProfile | None:
+        if not reading.is_source_file(root / self.folder, selected.source_path):
+            return None
+        settings, problem = self._settings(root)
+        return self._read(
+            selected.source_path, settings, problem, unavailable_name=selected.display_name
+        )
+
+    def _settings(self, root: Path) -> tuple[dict[str, Any], str | None]:
         settings: dict[str, Any] = {}
         problem = None
         if self.source == "claude":
@@ -86,20 +100,27 @@ class MarkdownAdapter:
                                 settings[key] = value
             except (OSError, ValueError) as error:
                 problem = str(error)
-        result: list[AgentProfile] = []
-        for path in paths:
-            name = path.stem.removesuffix(".agent")
-            try:
-                if not reading.has_frontmatter(path) and not path.name.endswith(".agent.md"):
-                    continue  # Agent definitions declare frontmatter; other files document.
-                fields, body = reading.markdown(path)
-                name = reading.string(fields, "name", name)
-                if problem:
-                    raise reading.SourceError(problem)
-                result.append(self._convert(path, fields, body, settings))
-            except (OSError, ValueError) as error:
-                result.append(unavailable(self.source, path, name, str(error)))
-        return result
+        return settings, problem
+
+    def _read(
+        self,
+        path: Path,
+        settings: dict[str, Any],
+        problem: str | None,
+        *,
+        unavailable_name: str | None = None,
+    ) -> AgentProfile | None:
+        name = path.stem.removesuffix(".agent")
+        try:
+            if not reading.has_frontmatter(path) and not path.name.endswith(".agent.md"):
+                return None  # Agent definitions declare frontmatter; other files document.
+            fields, body = reading.markdown(path)
+            name = reading.string(fields, "name", name)
+            if problem:
+                raise reading.SourceError(problem)
+            return self._convert(path, fields, body, settings)
+        except (OSError, ValueError) as error:
+            return unavailable(self.source, path, unavailable_name or name, str(error))
 
     def _convert(
         self, path: Path, fields: dict[str, Any], body: str, settings: dict[str, Any]

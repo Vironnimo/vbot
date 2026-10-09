@@ -127,16 +127,19 @@ def _build_passages(
     passages: list[Passage] = []
     step = target_chars - overlap_chars
     window_start = 0
+    first_index = 0
+    end_index = 0
     while window_start < len(stream):
         window_end = min(window_start + target_chars, len(stream))
-        intersecting = [
-            fragment
-            for fragment in fragments
-            if fragment.stream_end > window_start and fragment.stream_start < window_end
-        ]
-        if intersecting:
-            first = intersecting[0]
-            last = intersecting[-1]
+        # Both window boundaries only advance. Walk each fragment at most once
+        # per boundary instead of searching the whole Session for every window.
+        while first_index < len(fragments) and fragments[first_index].stream_end <= window_start:
+            first_index += 1
+        while end_index < len(fragments) and fragments[end_index].stream_start < window_end:
+            end_index += 1
+        if first_index < end_index:
+            first = fragments[first_index]
+            last = fragments[end_index - 1]
             start_offset = max(window_start - first.stream_start, 0)
             end_offset = min(window_end - last.stream_start, len(last.text))
             text = stream[window_start:window_end]

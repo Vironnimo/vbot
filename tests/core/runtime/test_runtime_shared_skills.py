@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import shutil
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,11 +15,14 @@ from typing import Any
 import pytest
 import yaml
 
+import core.skills.skills as skill_module
 from core.runtime.runtime import Runtime
 from core.skills.policy import SkillPackageRef
+from core.skills.skill_validator import ValidationResult
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_GLOBAL,
+    SkillMetadata,
     SkillRegistry,
 )
 from core.tools import ToolContext
@@ -43,6 +47,20 @@ def _names(registry: SkillRegistry) -> set[str]:
 
 def _allowed(registry: SkillRegistry, allowlist: list[str]) -> list[str]:
     return [skill.name for skill in registry.filter_allowed(allowlist)]
+
+
+@pytest.fixture
+def metadata_reads(monkeypatch: pytest.MonkeyPatch) -> Counter[Path]:
+    """Count actual package parses, without timing assertions or large collections."""
+    reads: Counter[Path] = Counter()
+    original = skill_module._read_skill_metadata  # noqa: SLF001 - the metadata I/O seam.
+
+    def read(path: Path) -> tuple[SkillMetadata | None, ValidationResult]:
+        reads[path.resolve()] += 1
+        return original(path)
+
+    monkeypatch.setattr(skill_module, "_read_skill_metadata", read)
+    return reads
 
 
 @pytest.mark.asyncio
@@ -102,26 +120,45 @@ async def test_owner_skill_mutation_refreshes_shared_receivers_in_every_project(
 
 
 def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
-    runtime: Runtime, tmp_path: Path
+    runtime: Runtime, tmp_path: Path, metadata_reads: Counter[Path]
 ) -> None:
     data_dir = runtime.storage.data_dir
     runtime.agents.create("two", "Two", allowed_skills=["unrelated"])
-    write_agent_skill(data_dir, "main", "deploy", "Shared playbook.")
-    write_agent_skill(data_dir, "main", "secret-notes", "Unshared neighbour.")
+    package = write_agent_skill(data_dir, "main", "deploy", "Shared playbook.")
+    # Shared names follow normalized metadata, even when the folder differs or
+    # a later package declares the same name. The first package still wins.
+    package = package.rename(package.with_name("a-deploy-folder"))
+    duplicate = write_agent_skill(data_dir, "main", "z-duplicate", "Later duplicate.")
+    document = duplicate / "SKILL.md"
+    document.write_text(
+        document.read_text(encoding="utf-8").replace("name: z-duplicate", "name: deploy"),
+        encoding="utf-8",
+    )
+    write_agent_skill(data_dir, "main", "release", "Another shared playbook.")
+    secret = write_agent_skill(data_dir, "main", "secret-notes", "Unshared neighbour.")
     owner_before = runtime.skills_for(None, "main")
     repo = tmp_path / "repo"
     repo.mkdir()
     project = runtime.projects.create("p", "P", repo)
 
     runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
+    runtime.skill_policy.set_shared("main", "release", shared=True, receivers=["two"])
     runtime.invalidate_agent_skills("main")
     # Librarian aging counts the receivers' use of the Skills the owner shares.
-    assert runtime.shared_skill_receivers("main") == {"deploy": frozenset({"two"})}
+    assert runtime.shared_skill_receivers("main") == {
+        "deploy": frozenset({"two"}),
+        "release": frozenset({"two"}),
+    }
     assert runtime.shared_skill_receivers("two") == {}
 
+    metadata_reads.clear()
     registry = runtime.skills_for(None, "two")
-    assert "deploy" in _names(registry)
+    assert {"deploy", "release"} <= _names(registry)
     assert "secret-notes" not in _names(registry)
+    assert registry.get("deploy").path == (package / "SKILL.md").resolve()
+    # Resolving several shares scans an owner's home once. Loading the selected
+    # packages into the receiver's registry does not reread unshared neighbours.
+    assert metadata_reads[(secret / "SKILL.md").resolve()] == 1
     # Receiver-facing origin: indistinguishable from its own Skills, but filtered
     # by the receiver's allowlist like any global Skill, never always allowed.
     assert registry.get("deploy").origin == SKILL_ORIGIN_AGENT
@@ -134,7 +171,7 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
     # The owner's view is unchanged, including its always-allowed private Skills.
     owner_after = runtime.skills_for(None, "main")
     assert _names(owner_after) == _names(owner_before)
-    assert sorted(_allowed(owner_after, [])) == ["deploy", "secret-notes"]
+    assert sorted(_allowed(owner_after, [])) == ["deploy", "release", "secret-notes"]
 
     # A config-Agent Run passes no identity id: the private-home boundary stays
     # identity-only, so the project bundle never carries shared Skills.
@@ -151,10 +188,11 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
 
 
 def test_a_stale_shared_entry_warns_once_until_it_resolves_not_per_registry_build(
-    runtime: Runtime, caplog: pytest.LogCaptureFixture
+    runtime: Runtime, caplog: pytest.LogCaptureFixture, metadata_reads: Counter[Path]
 ) -> None:
     runtime.agents.create("two", "Two")
     runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
+    runtime.skill_policy.set_shared("main", "release", shared=True, receivers=["two"])
     runtime.skill_policy.set_shared("gone", "notes", shared=True, receivers=["two"])
 
     def warnings_of_builds(count: int) -> list[str]:
@@ -167,15 +205,90 @@ def test_a_stale_shared_entry_warns_once_until_it_resolves_not_per_registry_buil
 
     # One warning per stale entry, however many receiver registries are built.
     first = warnings_of_builds(3)
-    assert len(first) == 2
+    assert len(first) == 3
     assert any("gone" in message for message in first)
     assert any("deploy" in message for message in first)
     # The package appears, so the entry resolves; losing it again warns again.
     package = write_agent_skill(runtime.storage.data_dir, "main", "deploy", "Shared.")
+    write_agent_skill(runtime.storage.data_dir, "main", "release", "Shared release.")
+    secret = write_agent_skill(runtime.storage.data_dir, "main", "secret", "Unshared.")
     assert warnings_of_builds(2) == []
+    runtime.skills_for(None, "main")
+    metadata_reads.clear()
+    assert runtime.skill_inventory()["stale_shared"] == [{"agent_id": "gone", "name": "notes"}]
+    # Inventory's source and dependency scans plus one stale-share scan. Adding
+    # another shared name must not add another read of the entire owner's home.
+    assert metadata_reads[(secret / "SKILL.md").resolve()] <= 3
     shutil.rmtree(package)
     [again] = warnings_of_builds(2)
     assert "deploy" in again
+
+
+def test_background_protection_resolves_each_home_once_and_keeps_owner_precedence(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, metadata_reads: Counter[Path]
+) -> None:
+    data_dir = runtime.storage.data_dir
+    for agent_id in ("a-owner", "z-owner", "unrelated"):
+        runtime.agents.create(agent_id, agent_id)
+    own = write_agent_skill(data_dir, "main", "duplicate", "Own wins.")
+    own = own.rename(own.with_name("own-folder"))
+    shared_one = write_agent_skill(data_dir, "a-owner", "shared-one", "First owner wins.")
+    shared_one = shared_one.rename(shared_one.with_name("imported-folder"))
+    for owner_id, private_names in (
+        ("a-owner", ("duplicate", "shared-two")),
+        ("z-owner", ("shared-one", "shared-three")),
+        ("unrelated", ("private",)),
+    ):
+        for name in private_names:
+            write_agent_skill(data_dir, owner_id, name, "Fixture.")
+    for owner_id, shared_names in (
+        ("a-owner", ("duplicate", "shared-one", "shared-two", "missing")),
+        ("z-owner", ("shared-one", "shared-three")),
+    ):
+        for name in shared_names:
+            runtime.skill_policy.set_shared(owner_id, name, shared=True, receivers=["main"])
+    runtime.skill_policy.set_shared("unrelated", "private", shared=True, receivers=["a-owner"])
+    runtime.skill_policy.set_shared("gone", "missing", shared=True, receivers=["main"])
+    home_protection = {
+        runtime.agent_skills_dir("main"): {"own-folder": "pinned"},
+        runtime.agent_skills_dir("a-owner"): {
+            "duplicate": "unknown",
+            "imported-folder": "pinned",
+            "shared-two": "unknown",
+        },
+        runtime.agent_skills_dir("z-owner"): {
+            "shared-one": "unknown",
+            "shared-three": "pinned",
+        },
+    }
+    history_reads: Counter[Path] = Counter()
+
+    def protection(home: Path) -> dict[str, str]:
+        history_reads[home] += 1
+        return home_protection[home]
+
+    monkeypatch.setattr(runtime.skill_authoring, "background_protection", protection)
+    metadata_reads.clear()
+    assert runtime.background_skill_protection("main", iter(())) == {}
+    assert not metadata_reads
+    assert runtime.background_skill_protection(
+        "main", iter(["shared-three", "duplicate", "shared-two", "shared-one", "missing"])
+    ) == {
+        "shared-three": "pinned",
+        "duplicate": "pinned",
+        "shared-two": "unknown",
+        "shared-one": "pinned",
+    }
+    assert history_reads == dict.fromkeys(home_protection, 1)
+    assert metadata_reads[(own / "SKILL.md").resolve()] == 1
+    assert metadata_reads[(shared_one / "SKILL.md").resolve()] == 1
+    assert all(reads == 1 for reads in metadata_reads.values())
+    assert not any("unrelated" in path.parts for path in metadata_reads)
+
+    # Operation-local lookups neither retain the previous owner nor need an
+    # explicit registry invalidation when policy changes between calls.
+    runtime.skill_policy.set_shared("a-owner", "shared-one", shared=False)
+    assert runtime.background_skill_protection("main", ["shared-one"]) == {"shared-one": "unknown"}
 
 
 @pytest.mark.asyncio

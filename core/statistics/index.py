@@ -127,6 +127,8 @@ CREATE TABLE stat_records (
 CREATE INDEX stat_records_run
     ON stat_records(session_key, run_id, seq, role, instant)
     WHERE run_id IS NOT NULL;
+CREATE INDEX stat_records_cache_order ON stat_records(session_key, seq)
+    WHERE role IN ('assistant', 'compaction_checkpoint', 'agent_takeover');
 CREATE TABLE stat_calls {CALL_TABLE_DEFINITION};
 CREATE INDEX stat_calls_retrospective
     ON stat_calls(model_key) WHERE retrospective = 1;
@@ -535,8 +537,7 @@ def _reconcile_sources(
     )
     if sources.usage_recorder is not None:
         reconcile_usage(connection, sources.usage_recorder, changes)
-    repriced = refresh_retrospective_costs(connection, sources.pricing_lookup)
-    changes.repriced(repriced["stat_calls"], repriced["stat_usage_calls"])
+    refresh_retrospective_costs(connection, sources.pricing_lookup, changes)
     maintain_rollups(connection, changes)
     return indexed
 
@@ -754,6 +755,19 @@ def _append(
             (session_key,),
         )
     }
+    current_kinds = {record.run_id: record.run_kind for record in runs}
+    stored_kinds = {run_id: str(values[2]) for run_id, values in stored.items()}
+    changes.run_origins(
+        connection,
+        session_key,
+        key,
+        (
+            run_id
+            for run_id in current_kinds.keys() | stored_kinds.keys()
+            if current_kinds.get(run_id) != stored_kinds.get(run_id)
+        ),
+        row.next_seq,
+    )
     changed_runs = _write_run_records(connection, session_key, runs, stored)
     _write_session_state(
         connection,
@@ -771,14 +785,8 @@ def _append(
         {str(record[5]) for record in rows.records if record[5]} | changed_runs,
     )
     if rows.records:
-        # New records extend the Session's per-Session cubes.
-        changes.fact_sessions.add(session_key)
-    if {record.run_id: record.run_kind for record in runs} != {
-        run_id: str(values[2]) for run_id, values in stored.items()
-    }:
-        # Run identities decide the origin of this Session's Tools and requests.
-        changes.fact_sessions.add(session_key)
-        changes.addresses.add(key)
+        # A validated own-audit tail cannot change an earlier contribution.
+        changes.appends[session_key] = int(rows.records[0][1])
 
 
 def _write_run_records(
