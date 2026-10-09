@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from core.model_tasks.speech_audio import decode_speech_audio, pcm_to_wav
+from core.model_tasks.speech_input import SpeechInputError, TranscriptionInputPolicy
 from core.model_tasks.speech_types import (
     SpeechAudioCallback,
     SpeechSynthesisResult,
@@ -35,6 +36,36 @@ DEFAULT_SPEECH_TIMEOUT = 120.0
 class ProviderSpeechClient(ProviderTaskClient):
     """Small OpenAI-compatible speech HTTP client bound to one target."""
 
+    def transcription_input_policy(self) -> TranscriptionInputPolicy:
+        """Return preparation formats and conservative vBot request ceilings.
+
+        OpenAI documents a 25 MB transcription upload limit. OpenRouter's
+        larger JSON uploads depend on its selected upstream, which vBot does
+        not pin; unknown compatible endpoints have no verified higher limit.
+        Both therefore keep the same 25 MB file ceiling. OpenRouter's 36 MB
+        JSON ceiling is vBot's bound, including base64 and request options,
+        not a claim about every upstream's maximum request size.
+        """
+        if self._provider.id == "mistral":
+            raise ProviderError("Mistral speech execution is not implemented yet", retryable=False)
+        if self._provider.id == "openai":
+            # OpenAI Audio Transcriptions API reference, reviewed 2026-10-09.
+            return TranscriptionInputPolicy(
+                accepted_formats=frozenset(
+                    {"flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"}
+                ),
+            )
+        if self._provider.id == "openrouter":
+            # OpenRouter's STT guide lists these input formats; individual
+            # upstreams may still reject a format they do not support.
+            return TranscriptionInputPolicy(
+                accepted_formats=frozenset({"wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"}),
+                max_request_bytes=36_000_000,
+            )
+        # Keep the existing WAV/FLAC conversion path for unverified compatible
+        # Providers rather than inferring OpenAI's full media contract.
+        return TranscriptionInputPolicy(accepted_formats=frozenset({"wav", "flac"}))
+
     async def transcribe(
         self,
         audio: bytes,
@@ -45,8 +76,12 @@ class ProviderSpeechClient(ProviderTaskClient):
     ) -> SpeechTranscriptionResult:
         """Call the selected provider's speech-to-text endpoint."""
 
-        if self._provider.id == "mistral":
-            raise ProviderError("Mistral speech execution is not implemented yet", retryable=False)
+        policy = self.transcription_input_policy()
+        if len(audio) > policy.max_audio_bytes:
+            raise SpeechInputError(
+                f"Transcription audio exceeds the target limit of {policy.max_audio_bytes} bytes",
+                too_large=True,
+            )
         if self._provider.id == "openrouter":
             return await self._transcribe_openrouter(
                 audio,
@@ -82,12 +117,26 @@ class ProviderSpeechClient(ProviderTaskClient):
         payload: JsonObject = {
             "model": self._model_id,
             "input_audio": {
-                "data": base64.b64encode(audio).decode("ascii"),
+                "data": "",
                 "format": audio_format,
             },
         }
         payload.update(_normalized_stt_options(options, provider_id=self._provider.id))
         merge_extra_options(payload, options)
+        max_request_bytes = self.transcription_input_policy().max_request_bytes
+        if max_request_bytes is not None:
+            # Match httpx's JSON encoding, counting every option and UTF-8
+            # byte before allocating the base64 string. Base64 needs no JSON
+            # escaping, so its exact contribution is known from the byte count.
+            encoder = json.JSONEncoder(ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+            request_bytes = sum(len(part.encode("utf-8")) for part in encoder.iterencode(payload))
+            request_bytes += 4 * ((len(audio) + 2) // 3)
+            if request_bytes > max_request_bytes:
+                raise SpeechInputError(
+                    f"Transcription request exceeds the limit of {max_request_bytes} bytes",
+                    too_large=True,
+                )
+        payload["input_audio"]["data"] = base64.b64encode(audio).decode("ascii")
 
         return await self.post_and_parse(
             OPENROUTER_TRANSCRIPTIONS_ENDPOINT,

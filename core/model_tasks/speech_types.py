@@ -8,7 +8,17 @@ from threading import Lock
 from time import monotonic
 from typing import Any
 
+from core.utils.errors import TaskError
+
 JsonObject = dict[str, Any]
+
+
+class SpeechError(TaskError):
+    """Base class for expected speech errors."""
+
+
+class SpeechBusyError(SpeechError):
+    """The bounded transcription queue has no capacity for another recording."""
 
 
 @dataclass(frozen=True)

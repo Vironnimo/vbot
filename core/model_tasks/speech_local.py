@@ -14,7 +14,6 @@ import asyncio
 import base64
 import gc
 import importlib
-import io
 import json
 import logging
 import os
@@ -23,8 +22,8 @@ import signal
 import subprocess
 import tempfile
 import wave
-from collections.abc import Callable, Container, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext, suppress
+from collections.abc import Callable, Container, Generator, Iterator, Mapping, Sequence
+from contextlib import closing, contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import partial
@@ -43,6 +42,7 @@ from core.model_tasks.options import (
     validate_task_model_options,
 )
 from core.model_tasks.speech_audio import ThreadAudioCallback
+from core.model_tasks.speech_input import SpeechInputError, iter_decoded_frames
 from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup, ServerSpeechStack
 from core.model_tasks.speech_types import (
@@ -830,31 +830,33 @@ class LocalSpeechExecutor:
             segments: list[dict[str, Any]] = []
             languages: set[str] = set()
             saw_samples = False
-            for start, samples in _audio_chunks(audio):
-                saw_samples = True
-                cancellation.check()
-                # Exact digital silence needs no model and must not invent text.
-                if not samples.any():
-                    continue
-                engine = cast(
-                    LocalTranscriptionEngine, self._loaded_engine(state, definition, options, key)
-                )
-                if (progress := _PROGRESS.get()) is not None:
-                    progress.update("transcribing")
-                with cancellation.running(engine):
-                    result = engine.transcribe(samples, options)
-                if not isinstance(result.text, str):
-                    raise ValueError("Local engine returned a non-text transcription")
-                if result.text.strip():
-                    segments.append(
-                        {
-                            "start": start / _SAMPLE_RATE,
-                            "end": (start + len(samples)) / _SAMPLE_RATE,
-                            "text": result.text.strip(),
-                        }
+            with closing(_audio_chunks(audio, check_cancel=cancellation.check)) as chunks:
+                for start, samples in chunks:
+                    saw_samples = True
+                    cancellation.check()
+                    # Exact digital silence needs no model and must not invent text.
+                    if not samples.any():
+                        continue
+                    engine = cast(
+                        LocalTranscriptionEngine,
+                        self._loaded_engine(state, definition, options, key),
                     )
-                    if result.language:
-                        languages.add(result.language)
+                    if (progress := _PROGRESS.get()) is not None:
+                        progress.update("transcribing")
+                    with cancellation.running(engine):
+                        result = engine.transcribe(samples, options)
+                    if not isinstance(result.text, str):
+                        raise ValueError("Local engine returned a non-text transcription")
+                    if result.text.strip():
+                        segments.append(
+                            {
+                                "start": start / _SAMPLE_RATE,
+                                "end": (start + len(samples)) / _SAMPLE_RATE,
+                                "text": result.text.strip(),
+                            }
+                        )
+                        if result.language:
+                            languages.add(result.language)
             if not saw_samples:
                 raise ValueError("Audio contains no samples")
             return SpeechTranscriptionResult(
@@ -863,6 +865,9 @@ class LocalSpeechExecutor:
                 segments=tuple(segments),
             )
         except _RequestCancelledError:
+            raise
+        except SpeechInputError:
+            # Rejected recordings do not invalidate a healthy cached model.
             raise
         except Exception as error:
             if cancellation.aborted:
@@ -1404,22 +1409,20 @@ def _log_close_failure(error: BaseException) -> None:
     _LOGGER.error("Local speech shutdown failed after its caller was cancelled", exc_info=error)
 
 
-def _audio_chunks(audio: bytes) -> Iterator[tuple[int, Any]]:
-    """Decode to bounded mono 16 kHz float32 chunks without dropping samples."""
-    import av
+def _audio_chunks(
+    audio: bytes, *, check_cancel: Callable[[], None] | None = None
+) -> Generator[tuple[int, Any]]:
+    """Decode original audio once into bounded mono 16 kHz inference chunks."""
     import numpy as np
 
     pending = np.empty(0, dtype=np.float32)
     offset = 0
-    with av.open(io.BytesIO(audio), mode="r") as container:
-        resampler = av.AudioResampler(format="fltp", layout="mono", rate=_SAMPLE_RATE)
-
-        def frames() -> Iterator[Any]:
-            for frame in container.decode(audio=0):
-                yield from resampler.resample(frame)
-            yield from resampler.resample(None)
-
-        for frame in frames():
+    with closing(
+        iter_decoded_frames(
+            audio, sample_rate=_SAMPLE_RATE, sample_format="fltp", check_cancel=check_cancel
+        )
+    ) as frames:
+        for frame in frames:
             pending = np.concatenate((pending, frame.to_ndarray().reshape(-1)))
             while len(pending) >= _CHUNK_SAMPLES:
                 # Prefer a quiet boundary in the final second. Every sample is

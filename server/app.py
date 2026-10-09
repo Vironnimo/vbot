@@ -24,8 +24,9 @@ from core.model_tasks import (
     SpeechExecutionError,
     SpeechUnsupportedTargetError,
 )
+from core.model_tasks.speech_input import SpeechInputError
 from core.model_tasks.speech_playback import PLAYBACK_MEDIA_TYPE, SpeechPlayback
-from core.model_tasks.speech_types import SpeechAudioChunk, SpeechProgress
+from core.model_tasks.speech_types import SpeechAudioChunk, SpeechBusyError, SpeechProgress
 from core.runs import RunNotFoundError
 from core.skills import SKILL_ARCHIVE_MAX_BYTES
 from core.tools.terminal_manager import TerminalNotFoundError
@@ -1114,6 +1115,10 @@ def _stream_synthesis(speech_service: Any, text: str) -> AsyncGenerator[str]:
 
 
 def _speech_http_exception(error: SpeechError) -> HTTPException:
+    if isinstance(error, SpeechBusyError):
+        return HTTPException(status_code=429, detail=str(error))
+    if isinstance(error, SpeechInputError):
+        return HTTPException(status_code=413 if error.too_large else 400, detail=str(error))
     if isinstance(error, SpeechConfigurationError):
         return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, SpeechUnsupportedTargetError):

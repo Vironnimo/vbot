@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import wave
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
@@ -208,7 +208,9 @@ async def test_failed_inference_releases_model_and_can_retry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_digital_silence_and_invalid_audio() -> None:
+async def test_digital_silence_and_invalid_audio(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.model_tasks import speech_input
+
     events: list[Any] = []
     executor = LocalSpeechExecutor(engines=[definition("first", events)])
     try:
@@ -217,10 +219,17 @@ async def test_digital_silence_and_invalid_audio() -> None:
         )
         assert result.text == ""
         assert not events
-        with pytest.raises(LocalSpeechExecutionError):
-            await executor.transcribe(
-                "first", b"broken", filename="a.wav", media_type="audio/wav", options={}
-            )
+        assert (await transcribe(executor)).text == "first"
+        monkeypatch.setattr(speech_input, "MAX_TRANSCRIPTION_SECONDS", 0.1)
+        for rejected in (b"broken", wav(np.zeros(3200))):
+            with pytest.raises(speech_input.SpeechInputError) as failure:
+                await executor.transcribe(
+                    "first", rejected, filename="a.wav", media_type="audio/wav", options={}
+                )
+            assert failure.value.too_large == (rejected != b"broken")
+            assert executor.memory_status()["models"][0]["loaded"]
+        assert (await transcribe(executor)).text == "first"
+        assert [event[1] for event in events] == ["load", "transcribe", "transcribe"]
     finally:
         await executor.aclose()
 
@@ -242,23 +251,82 @@ def test_long_audio_chunks_cover_every_sample_once_and_use_quiet_boundary() -> N
     )
 
 
-def test_stereo_48khz_is_resampled_to_mono_16khz() -> None:
-    chunks = list(_audio_chunks(wav(np.full((48_000, 2), 1000), rate=48_000, channels=2)))
-    assert len(chunks) == 1
-    assert len(chunks[0][1]) == 16_000
-    assert np.isfinite(chunks[0][1]).all()
+@pytest.mark.asyncio
+@pytest.mark.parametrize("audio_format", ["wav", "webm"])
+async def test_stereo_48khz_is_resampled_to_mono_16khz(audio_format: str) -> None:
+    import av
+
+    audio = wav(np.full((48_000, 2), 1000), rate=48_000, channels=2)
+    if audio_format == "webm":
+        output = io.BytesIO()
+        with (
+            av.open(io.BytesIO(audio), mode="r") as source,
+            av.open(output, mode="w", format="webm") as target,
+        ):
+            stream = target.add_stream("libopus", rate=48_000)
+            stream.layout = "stereo"
+            for frame in source.decode(audio=0):
+                for packet in stream.encode(frame):
+                    target.mux(packet)
+            for packet in stream.encode(None):
+                target.mux(packet)
+        audio = output.getvalue()
+
+    observed: list[Any] = []
+    events: list[Any] = []
+    model = Engine("first", events)
+    original = model.transcribe
+
+    def observe(samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
+        observed.append(samples.copy())
+        return original(samples, options)
+
+    model.transcribe = observe  # type: ignore[method-assign]
+    executor = LocalSpeechExecutor(
+        engines=[replace(definition("first", events), create=lambda _options: model)]
+    )
+    try:
+        result = await executor.transcribe(
+            "first",
+            audio,
+            filename=f"input.{audio_format}",
+            media_type=f"audio/{audio_format}",
+            options={},
+        )
+        assert result.segments == ({"start": 0.0, "end": 1.0, "text": "first"},)
+        assert len(observed) == 1
+        assert observed[0].shape == (16_000,) and observed[0].dtype == np.float32
+        assert np.isfinite(observed[0]).all()
+    finally:
+        await executor.aclose()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["loading", "transcribing"])
+@pytest.mark.parametrize("phase", ["decoding", "loading", "transcribing"])
 async def test_cancellation_finishes_running_call_skips_the_rest_and_shutdown_releases_model(
     phase: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from core.model_tasks import speech_local
+
     events: list[Any] = []
     started: Future[int] = Future()
     release = threading.Event()
     entry = definition("first", events)
     model = Engine("first", events)
+    decoder_closed = threading.Event()
+    decode_original = speech_local.iter_decoded_frames
+
+    def decode(audio: bytes, **options: Any) -> Generator[Any]:
+        try:
+            if phase == "decoding":
+                started.set_result(threading.get_ident())
+                assert release.wait(timeout=5)
+            yield from decode_original(audio, **options)
+        finally:
+            decoder_closed.set()
+
+    monkeypatch.setattr(speech_local, "iter_decoded_frames", decode)
 
     def blocking(_samples: Any, _options: Mapping[str, Any]) -> SpeechTranscriptionResult:
         started.set_result(threading.get_ident())
@@ -273,8 +341,8 @@ async def test_cancellation_finishes_running_call_skips_the_rest_and_shutdown_re
 
     model.transcribe = MagicMock(side_effect=blocking)  # type: ignore[method-assign]
     executor = LocalSpeechExecutor(engines=[replace(entry, create=create)])
-    # Cancellation lets the running load or chunk finish (an in-process engine
-    # cannot be interrupted) and never starts the next engine call.
+    # Cancellation settles the current native operation and never starts the
+    # next decode frame or engine call; the engine stays busy until it settles.
     task = asyncio.create_task(
         executor.transcribe(
             "first",
@@ -301,7 +369,8 @@ async def test_cancellation_finishes_running_call_skips_the_rest_and_shutdown_re
         with pytest.raises(asyncio.CancelledError):
             await closing
         assert model.transcribe.call_count == (phase == "transcribing")
-        assert events == [("first", "close")]
+        assert decoder_closed.is_set()
+        assert events == ([] if phase == "decoding" else [("first", "close")])
     finally:
         release.set()
         await executor.aclose()

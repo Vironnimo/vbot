@@ -133,7 +133,7 @@ def normalize_speech_settings(speech: Any) -> dict[str, Any]:
 
 
 def normalize_transcription_audio_settings(value: Any) -> dict[str, Any]:
-    """Return one complete Provider-facing transcription audio profile."""
+    """Return the complete fallback conversion profile for Provider transcription."""
 
     if value is None:
         return dict(DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS)

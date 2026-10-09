@@ -254,6 +254,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._storage.data_dir,
             local_executor=local_speech,
             transcription_audio_getter=runtime._storage.load_speech_settings,
+            max_input_bytes=runtime._speech_upload_max_size_bytes,
             usage_recorder=runtime._usage_recorder,
         )
         runtime._image = ImageService(

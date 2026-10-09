@@ -10,7 +10,7 @@ import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -25,8 +25,13 @@ from core.model_tasks import (
     TaskModelError,
 )
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
+from core.model_tasks.speech_input import (
+    PreparedTranscriptionAudio,
+    SpeechInputError,
+    TranscriptionInputPolicy,
+)
 from core.model_tasks.speech_local import LocalSpeechExecutionError
-from core.model_tasks.speech_types import SpeechAudioCallback, SpeechAudioChunk
+from core.model_tasks.speech_types import SpeechAudioCallback, SpeechAudioChunk, SpeechBusyError
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.storage.layout import DataDirectoryLayout
 
@@ -113,8 +118,6 @@ class _MissingModelTasks:
 
 @pytest.mark.asyncio
 async def test_local_inference_failure_is_execution_error(tmp_path: Path) -> None:
-    from unittest.mock import AsyncMock
-
     executor = LocalSpeechExecutor(engines=[])
     executor.transcribe = AsyncMock(side_effect=LocalSpeechExecutionError("GPU unavailable"))  # type: ignore[method-assign]
     service = SpeechService(
@@ -128,9 +131,177 @@ async def test_local_inference_failure_is_execution_error(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_provider_transcription_preserves_independent_local_models(tmp_path: Path) -> None:
-    from unittest.mock import AsyncMock
+async def test_local_transcription_receives_original_input_without_reading_conversion_profile(
+    tmp_path: Path,
+) -> None:
+    executor = LocalSpeechExecutor(engines=[])
+    executor.transcribe = AsyncMock(return_value=SpeechTranscriptionResult(text="hello"))  # type: ignore[method-assign]
+    profile = MagicMock(side_effect=AssertionError("Local STT must not read the upload profile"))
+    service = SpeechService(
+        _SttModelTasks("local/parakeet", {"language": "de"}),
+        cast(Any, object()),
+        tmp_path,
+        local_executor=executor,
+        transcription_audio_getter=profile,
+    )
+    audio = _webm_audio_bytes()
+    try:
+        result = await service.transcribe(
+            audio, filename="browser.webm", media_type="audio/webm;codecs=opus"
+        )
+        assert result.text == "hello"
+        executor.transcribe.assert_awaited_once_with(
+            "parakeet",
+            audio,
+            filename="browser.webm",
+            media_type="audio/webm;codecs=opus",
+            options={"language": "de"},
+            progress=None,
+        )
+        profile.assert_not_called()
+    finally:
+        await service.aclose()
 
+
+@pytest.mark.asyncio
+async def test_transcription_admission_limits_active_requests_and_discards_cancelled_waiters(
+    tmp_path: Path,
+) -> None:
+    entered: asyncio.Queue[bytes] = asyncio.Queue()
+    release = asyncio.Event()
+
+    async def transcribe(_local_id: str, audio: bytes, **_kwargs: Any) -> SpeechTranscriptionResult:
+        entered.put_nowait(audio)
+        await release.wait()
+        return SpeechTranscriptionResult(text="hello")
+
+    executor = LocalSpeechExecutor(engines=[])
+    executor.transcribe = AsyncMock(side_effect=transcribe)  # type: ignore[method-assign]
+    service = SpeechService(
+        _SttModelTasks("local/parakeet", {}),
+        cast(Any, object()),
+        tmp_path,
+        local_executor=executor,
+    )
+    tasks = [asyncio.create_task(service.transcribe(audio)) for audio in (b"first", b"second")]
+    try:
+        assert await asyncio.wait_for(entered.get(), 1) == b"first"
+        assert await asyncio.wait_for(entered.get(), 1) == b"second"
+        waiter = asyncio.create_task(service.transcribe(b"cancelled"))
+        queued = asyncio.create_task(service.transcribe(b"queued"))
+        tasks.extend((waiter, queued))
+        await asyncio.sleep(0)
+        assert entered.empty()
+        with pytest.raises(SpeechBusyError):
+            await asyncio.wait_for(service.transcribe(b"rejected"), 1)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        replacement = asyncio.create_task(service.transcribe(b"replacement"))
+        tasks.append(replacement)
+        await asyncio.sleep(0)
+        assert not replacement.done()
+        assert entered.empty()
+        with pytest.raises(SpeechBusyError):
+            await asyncio.wait_for(service.transcribe(b"still full"), 1)
+        release.set()
+        await asyncio.gather(*tasks[:2], queued, replacement)
+        assert {
+            await asyncio.wait_for(entered.get(), 1),
+            await asyncio.wait_for(entered.get(), 1),
+        } == {b"queued", b"replacement"}
+        assert (await service.transcribe(b"later")).text == "hello"
+        assert await asyncio.wait_for(entered.get(), 1) == b"later"
+        assert executor.transcribe.await_count == 5
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["local/parakeet", "openrouter/whisper-large-v3::api-key"])
+async def test_transcription_rejects_oversized_source_before_target_execution(
+    tmp_path: Path, target: str
+) -> None:
+    executor = LocalSpeechExecutor(engines=[])
+    executor.transcribe = AsyncMock()  # type: ignore[method-assign]
+    service = SpeechService(
+        _SttModelTasks(target, {}),
+        cast(Any, object()),
+        tmp_path,
+        local_executor=executor,
+        max_input_bytes=4,
+    )
+    try:
+        with (
+            patch("core.model_tasks.speech.ProviderSpeechClient.from_runtime") as factory,
+            pytest.raises(SpeechInputError) as error,
+        ):
+            await service.transcribe(b"oversized")
+        assert error.value.too_large
+        executor.transcribe.assert_not_awaited()
+        factory.assert_not_called()
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_audio_preparation_joins_worker_without_sending_to_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = asyncio.Event()
+    release, finished, cancellation_observed = (
+        threading.Event(),
+        threading.Event(),
+        threading.Event(),
+    )
+    loop = asyncio.get_running_loop()
+
+    def prepare(
+        audio: bytes, _settings: object, _policy: object, *, check_cancel: Any = None
+    ) -> PreparedTranscriptionAudio:
+        loop.call_soon_threadsafe(entered.set)
+        try:
+            assert release.wait(1)
+            assert check_cancel is not None
+            try:
+                check_cancel()
+            except BaseException:
+                cancellation_observed.set()
+                raise
+            return PreparedTranscriptionAudio(audio, "recording.wav", "audio/wav")
+        finally:
+            finished.set()
+
+    monkeypatch.setattr("core.model_tasks.speech.prepare_transcription_audio", prepare)
+    client = _CapturingProviderSpeechClient()
+    service = SpeechService(_ProviderSttModelTasks(), cast(Any, object()), tmp_path)
+    task: asyncio.Task[SpeechTranscriptionResult] | None = None
+    try:
+        with patch(
+            "core.model_tasks.speech.ProviderSpeechClient.from_runtime", return_value=client
+        ):
+            task = asyncio.create_task(service.transcribe(_wav_audio_bytes()))
+            await asyncio.wait_for(entered.wait(), 1)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 1)
+        assert finished.is_set()
+        assert cancellation_observed.is_set()
+        assert client.audio == b""
+    finally:
+        release.set()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_transcription_preserves_independent_local_models(tmp_path: Path) -> None:
     executor = LocalSpeechExecutor(engines=[])
     executor.release_memory = AsyncMock()  # type: ignore[method-assign]
     service = SpeechService(
@@ -279,6 +450,9 @@ class _FailingProviderSpeechClient:
     def __init__(self, exception: Exception) -> None:
         self._exception = exception
 
+    def transcription_input_policy(self) -> TranscriptionInputPolicy:
+        return TranscriptionInputPolicy(accepted_formats=frozenset({"wav"}))
+
     async def transcribe(self, *_args: object, **_kwargs: object) -> object:
         raise self._exception
 
@@ -287,10 +461,21 @@ class _FailingProviderSpeechClient:
 
 
 class _CapturingProviderSpeechClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        accepted_formats: frozenset[str] = frozenset({"wav", "flac"}),
+        *,
+        max_audio_bytes: int = 25_000_000,
+    ) -> None:
+        self._policy = TranscriptionInputPolicy(
+            accepted_formats=accepted_formats, max_audio_bytes=max_audio_bytes
+        )
         self.audio = b""
         self.filename = ""
         self.media_type = ""
+
+    def transcription_input_policy(self) -> TranscriptionInputPolicy:
+        return self._policy
 
     async def transcribe(
         self,
@@ -307,7 +492,7 @@ class _CapturingProviderSpeechClient:
 
 
 @pytest.mark.asyncio
-async def test_transcribe_normalizes_provider_audio_to_configured_profile(
+async def test_transcribe_normalizes_unsupported_provider_audio_to_configured_profile(
     tmp_path: Path,
 ) -> None:
     import av
@@ -326,15 +511,18 @@ async def test_transcribe_normalizes_provider_audio_to_configured_profile(
         },
     )
 
-    with patch(
-        "core.model_tasks.speech.ProviderSpeechClient.from_runtime",
-        return_value=client,
-    ):
-        result = await service.transcribe(
-            _webm_audio_bytes(),
-            filename="browser.webm",
-            media_type="audio/webm",
-        )
+    try:
+        with patch(
+            "core.model_tasks.speech.ProviderSpeechClient.from_runtime",
+            return_value=client,
+        ):
+            result = await service.transcribe(
+                _webm_audio_bytes(),
+                filename="browser.webm",
+                media_type="audio/webm",
+            )
+    finally:
+        await service.aclose()
 
     assert result.text == "hello"
     assert client.filename == "recording.flac"
@@ -350,6 +538,48 @@ async def test_transcribe_normalizes_provider_audio_to_configured_profile(
 
 
 @pytest.mark.asyncio
+async def test_transcribe_preserves_accepted_compressed_audio_and_detects_its_format(
+    tmp_path: Path,
+) -> None:
+    client = _CapturingProviderSpeechClient(frozenset({"webm", "wav"}))
+    service = SpeechService(_ProviderSttModelTasks(), cast(Any, object()), tmp_path)
+    audio = _webm_audio_bytes()
+    try:
+        with patch(
+            "core.model_tasks.speech.ProviderSpeechClient.from_runtime", return_value=client
+        ):
+            result = await service.transcribe(
+                audio, filename="misleading.wav", media_type="audio/wav"
+            )
+        assert result.text == "hello"
+        assert client.audio == audio
+        assert client.filename == "recording.webm"
+        assert client.media_type == "audio/webm"
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("too_large", [False, True], ids=["undecodable", "converted-limit"])
+async def test_provider_input_rejection_remains_an_input_error_without_sending(
+    tmp_path: Path, too_large: bool
+) -> None:
+    client = _CapturingProviderSpeechClient(frozenset({"wav"}), max_audio_bytes=1024)
+    service = SpeechService(_ProviderSttModelTasks(), cast(Any, object()), tmp_path)
+    audio = _webm_audio_bytes() if too_large else b"not an audio recording"
+    try:
+        with (
+            patch("core.model_tasks.speech.ProviderSpeechClient.from_runtime", return_value=client),
+            pytest.raises(SpeechInputError) as error,
+        ):
+            await service.transcribe(audio)
+        assert error.value.too_large is too_large
+        assert client.audio == b""
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
 async def test_transcribe_logs_provider_error_at_warning_without_traceback(
     tmp_path: Path,
     caplog: Any,
@@ -359,15 +589,18 @@ async def test_transcribe_logs_provider_error_at_warning_without_traceback(
     service = SpeechService(_ProviderSttModelTasks(), cast(Any, object()), tmp_path)
     failing_client = _FailingProviderSpeechClient(ProviderError("rate limited"))
 
-    with (
-        patch(
-            "core.model_tasks.speech.ProviderSpeechClient.from_runtime",
-            return_value=failing_client,
-        ),
-        caplog.at_level(logging.WARNING, logger="vbot.speech"),
-        pytest.raises(SpeechExecutionError, match="rate limited"),
-    ):
-        await service.transcribe(_wav_audio_bytes())
+    try:
+        with (
+            patch(
+                "core.model_tasks.speech.ProviderSpeechClient.from_runtime",
+                return_value=failing_client,
+            ),
+            caplog.at_level(logging.WARNING, logger="vbot.speech"),
+            pytest.raises(SpeechExecutionError, match="rate limited"),
+        ):
+            await service.transcribe(_wav_audio_bytes())
+    finally:
+        await service.aclose()
 
     relevant = [r for r in caplog.records if "Speech transcription failed" in r.getMessage()]
     assert relevant, "expected a log record for the failed transcription"

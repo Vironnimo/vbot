@@ -7,18 +7,22 @@ OpenAI-compatible Providers; text-to-speech sends the same JSON body to both.
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import wave
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from email.parser import BytesParser
 from email.policy import default as default_policy
 from typing import cast, override
+from unittest.mock import Mock
 
 import httpx
 import pytest
 import respx
 
+from core.model_tasks.speech_input import SpeechInputError
 from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
 from core.model_tasks.speech_types import SpeechAudioChunk
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
@@ -31,6 +35,95 @@ OPENAI_BASE = "https://api.openai.com/v1"
 def test_audio_format_from_prefers_browser_mime_type() -> None:
     assert audio_format_from(filename="clip.bin", media_type="audio/webm;codecs=opus") == "webm"
     assert audio_format_from(filename="clip.wav", media_type="") == "wav"
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "formats", "max_request_bytes"),
+    [
+        ("openai", {"flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"}, None),
+        ("openrouter", {"wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"}, 36_000_000),
+        ("custom", {"wav", "flac"}, None),
+    ],
+)
+def test_transcription_policy_preserves_only_the_targets_supported_formats(
+    provider_id: str, formats: set[str], max_request_bytes: int | None
+) -> None:
+    policy = _client(provider_id, "test-stt").transcription_input_policy()
+    assert policy.accepted_formats == formats
+    assert policy.max_audio_bytes == 25_000_000
+    assert policy.max_request_bytes == max_request_bytes
+
+
+def test_unsupported_transcription_target_is_rejected_before_preparation() -> None:
+    with pytest.raises(ProviderError) as raised:
+        _client("mistral", "test-stt").transcription_input_policy()
+    assert raised.value.retryable is False
+
+
+@pytest.mark.parametrize("provider_id", ["openai", "openrouter", "custom"])
+@pytest.mark.parametrize("audio_size", [8, 9], ids=["at-limit", "over-limit"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_transcription_payload_limit_is_checked_before_encoding_or_http(
+    provider_id: str, audio_size: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(provider_id, "test-stt")
+    policy = replace(client.transcription_input_policy(), max_audio_bytes=8)
+    monkeypatch.setattr(ProviderSpeechClient, "transcription_input_policy", lambda self: policy)
+    encode = Mock(wraps=base64.b64encode)
+    monkeypatch.setattr("core.model_tasks.speech_providers.base64.b64encode", encode)
+    route = respx.post(url__regex=r".*/audio/transcriptions").respond(200, json={"text": "hello"})
+    transcription = client.transcribe(
+        b"a" * audio_size, filename="recording.wav", media_type="audio/wav", options={}
+    )
+    if audio_size > policy.max_audio_bytes:
+        with pytest.raises(SpeechInputError) as raised:
+            await transcription
+        assert raised.value.too_large is True
+        assert route.call_count == encode.call_count == 0
+    else:
+        assert (await transcription).text == "hello"
+        assert route.call_count == 1
+
+
+@pytest.mark.parametrize("budget_delta", [0, -1], ids=["at-limit", "over-limit"])
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_request_limit_includes_base64_padding_and_utf8_options(
+    budget_delta: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client("openrouter", "test-stt")
+    expected = {
+        "model": "test-stt",
+        "input_audio": {"data": "YWJjZA==", "format": "wav"},
+        "note": {"context": "Sprachprüfung 🎙️"},
+    }
+    # Use the transport's actual encoding as the independent size oracle.
+    request_size = len(httpx.Request("POST", OPENROUTER_BASE, json=expected).content)
+    policy = replace(
+        client.transcription_input_policy(), max_request_bytes=request_size + budget_delta
+    )
+    monkeypatch.setattr(ProviderSpeechClient, "transcription_input_policy", lambda self: policy)
+    encode = Mock(wraps=base64.b64encode)
+    monkeypatch.setattr("core.model_tasks.speech_providers.base64.b64encode", encode)
+    route = respx.post(f"{OPENROUTER_BASE}/audio/transcriptions").respond(
+        200, json={"text": "hello"}
+    )
+    transcription = client.transcribe(
+        b"abcd",
+        filename="recording.wav",
+        media_type="audio/wav",
+        options={"extra_options": {"note": expected["note"]}},
+    )
+    if budget_delta < 0:
+        with pytest.raises(SpeechInputError) as raised:
+            await transcription
+        assert raised.value.too_large is True
+        assert route.call_count == encode.call_count == 0
+    else:
+        assert (await transcription).text == "hello"
+        assert len(route.calls.last.request.content) == request_size
+        assert json.loads(route.calls.last.request.content) == expected
 
 
 @pytest.mark.asyncio

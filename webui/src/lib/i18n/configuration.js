@@ -1223,22 +1223,22 @@ export default Object.freeze({
   'settings.language.en': 'English',
   'settings.voice.title': 'Voice',
   'settings.voice.aboutAria': 'About {name}',
-  'settings.voice.transcriptionProfile': 'Transcription audio profile',
-  'settings.voice.transcriptionProfileLabel': 'Audio profile',
+  'settings.voice.transcriptionProfile': 'Transcription conversion profile',
+  'settings.voice.transcriptionProfileLabel': 'Conversion profile',
   'settings.voice.transcriptionProfileHelp':
-    'Every recording for the Speech to text Model, from the Chat or Terminal microphone and from commands spoken after a wake phrase, is converted to this format first. Wakeword detection itself always listens at 16 kHz.\n\nMaximum compatibility sends 16 kHz WAV. High fidelity sends 48 kHz FLAC, which keeps more detail but makes larger uploads. Custom lets you choose the format and sample rate.',
+    'Used only when a transcription Provider needs a different format or a smaller file. Supported original recordings are sent unchanged. Local speech recognition decodes the original recording directly at 16 kHz and ignores this profile.\n\nThe recommended preset uses 16 kHz WAV. The 48 kHz FLAC preset preserves a higher source sample rate when available. Custom lets you choose the format and sample rate.',
   'settings.voice.transcriptionProfileCompatibility':
-    'Maximum compatibility (recommended)',
-  'settings.voice.transcriptionProfileHighQuality': 'High fidelity',
+    '16 kHz WAV (recommended)',
+  'settings.voice.transcriptionProfileHighQuality': '48 kHz FLAC',
   'settings.voice.transcriptionProfileCustom': 'Custom',
   'settings.voice.transcriptionFormat': 'Format',
   'settings.voice.transcriptionFormatHelp':
-    'Mono, signed 16-bit audio. WAV has the broadest Provider support; FLAC is lossless and smaller.',
+    'For conversion only: mono, signed 16-bit audio. WAV is widely supported; FLAC stores the converted audio losslessly in smaller files.',
   'settings.voice.transcriptionFormatWav': 'WAV (PCM16)',
   'settings.voice.transcriptionFormatFlac': 'FLAC (lossless PCM16)',
   'settings.voice.transcriptionSampleRate': 'Sample rate',
   'settings.voice.transcriptionSampleRateHelp':
-    '16 kHz is the speech-focused default. Higher rates retain more source detail but create larger uploads.',
+    'For conversion only. 16 kHz is the speech-focused default. A higher rate can retain more detail from a higher-rate source, but cannot restore detail missing from the recording.',
   'settings.voice.transcriptionSampleRate16': '16 kHz (recommended for speech)',
   'settings.voice.enabled': 'Wakeword listening',
   'settings.voice.enabledHelp':

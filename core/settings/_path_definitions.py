@@ -166,7 +166,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
     _static(
         "speech.upload_max_size_bytes",
         "integer",
-        "Maximum accepted speech upload size in bytes.",
+        "Maximum accepted transcription input size in bytes, including internal callers.",
         application=APPLICATION_RESTART,
         default=DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
         minimum=1,
@@ -174,21 +174,21 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
     _static(
         "speech.transcription_audio.profile",
         "string",
-        "Provider-facing transcription audio profile.",
+        "Fallback audio profile when a transcription Provider requires conversion.",
         default=DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["profile"],
         allowed_values=tuple(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES)),
     ),
     _static(
         "speech.transcription_audio.format",
         "string",
-        "Provider-facing transcription audio container and codec.",
+        "Container and codec for transcription Provider fallback conversion.",
         default=DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["format"],
         allowed_values=tuple(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS)),
     ),
     _static(
         "speech.transcription_audio.sample_rate_hz",
         "integer",
-        "Provider-facing transcription audio sample rate in hertz.",
+        "Sample rate in hertz for transcription Provider fallback conversion.",
         default=DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["sample_rate_hz"],
         allowed_values=tuple(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES)),
     ),
