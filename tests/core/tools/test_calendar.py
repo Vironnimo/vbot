@@ -436,15 +436,29 @@ class TestIds:
     ) -> None:
         assert tool.refused(call) == message
 
-    def test_unknown_event_names_the_list_call(self, tool: CalendarTool) -> None:
-        envelope, _text = tool.call({"action": "delete", "id": "evt_missing"})
+    @pytest.mark.parametrize(
+        ("item_id", "listing"),
+        [
+            ("evt_missing", '{"action":"list"}'),
+            # An occurrence of an unknown event names the list of all events.
+            ("evt_missing_20300108T0900", '{"action":"list"}'),
+        ],
+    )
+    @pytest.mark.parametrize("action", ["update", "delete"])
+    def test_unknown_event_names_the_list_call(
+        self, tool: CalendarTool, action: str, item_id: str, listing: str
+    ) -> None:
+        _standup(tool)
+        before = [event.to_dict() for event in tool.events()]
 
-        assert envelope["error"] == {
-            "code": "event_not_found",
-            "message": (
-                'No event has id "evt_missing". {"action":"list"} shows events and their ids.'
-            ),
-        }
+        changes = {"title": "Moved"} if action == "update" else {}
+
+        envelope, _text = tool.call({"action": action, "id": item_id, **changes})
+
+        message = envelope["error"]["message"]
+        assert envelope["error"]["code"] == "event_not_found"
+        assert message.startswith("calendar was not run: ") and listing in message
+        assert [event.to_dict() for event in tool.events()] == before
 
     def test_unknown_occurrence_names_the_list_call_that_shows_the_series(
         self, tool: CalendarTool
@@ -453,11 +467,9 @@ class TestIds:
 
         envelope, _text = tool.call({"action": "delete", "id": f"{standup}_20300108T0900"})
 
-        listing = f'{{"action":"list","id":"{standup}"}}'
-        assert envelope["error"]["message"] == (
-            f'No occurrence has id "{standup}_20300108T0900". {listing} shows the event\'s '
-            "occurrences."
-        )
+        message = envelope["error"]["message"]
+        assert message.startswith("calendar was not run: ")
+        assert f'{{"action":"list","id":"{standup}"}}' in message
         assert f"{standup}_20300107T0900" in tool.succeeded(
             {"action": "list", "id": standup, "time_min": "2030-01-01"}
         )

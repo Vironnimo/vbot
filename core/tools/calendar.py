@@ -230,7 +230,8 @@ class _CalendarTool:
         except CalendarCallRefusedError as error:
             return tool_failure("invalid_arguments", str(error))
         except CalendarEventNotFoundError:
-            return tool_failure("event_not_found", _not_found(arguments.get("id")))
+            event_ids = {event.id for event in self._calendar.list_events()}
+            return tool_failure("event_not_found", _not_found(arguments.get("id"), event_ids))
         except CalendarValidationError as error:
             return tool_failure("invalid_arguments", _validation_message(arguments, error))
         except CalendarStorageError as error:
@@ -641,12 +642,17 @@ def _missing_id(action: str, arguments: JsonObject) -> str:
     )
 
 
-def _not_found(item_id: Any) -> str:
+def _not_found(item_id: Any, event_ids: set[str]) -> str:
+    """Refuse an unknown id, naming the list call that shows the valid ones."""
     parsed = parse_occurrence_id(item_id) if isinstance(item_id, str) else None
-    if parsed is not None:
-        listing = render_call({"action": "list", "id": parsed[0]})
-        return f'No occurrence has id "{item_id}". {listing} shows the event\'s occurrences.'
-    return f'No event has id "{item_id}". {{"action":"list"}} shows events and their ids.'
+    if parsed is None:
+        text = f'no event has id "{item_id}"'
+    else:
+        text = f'no occurrence has id "{item_id}"'
+        if parsed[0] in event_ids:
+            listing = render_call({"action": "list", "id": parsed[0]})
+            return f"{REFUSAL_PREFIX}{text}; {listing} shows the event's occurrences."
+    return f'{REFUSAL_PREFIX}{text}; {{"action":"list"}} shows events and their ids.'
 
 
 def _validation_message(arguments: JsonObject, error: CalendarValidationError) -> str:
