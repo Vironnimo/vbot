@@ -177,12 +177,19 @@ describe('ChatView Runs', () => {
       await chat.mountChat({}, { ready: null });
       const source = await startRun('run-batched', 'Start batched stream');
 
-      source.emit('reasoning_delta', { reasoning_delta: 'Think ' });
-      source.emit('reasoning_delta', { reasoning_delta: 'fast' });
-      flushSync();
-      expect(document.body.textContent).not.toContain('Think fast');
+      vi.useFakeTimers();
+      try {
+        source.emit('assistant_output_delta', { content_delta: 'Streamed ' });
+        source.emit('assistant_output_delta', { content_delta: 'answer' });
+        flushSync();
+        expect(document.body.textContent).not.toContain('Streamed');
 
-      await waitForText('Think fast');
+        await vi.advanceTimersByTimeAsync(50);
+        flushSync();
+        expect(document.body.textContent).toContain('Streamed answer');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('forwards a live bash row background action to the Run control RPC', async () => {
