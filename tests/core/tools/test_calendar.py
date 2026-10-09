@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.calendar import CalendarService
+from core.tools._calendar_arguments import STAND_INS
 from core.tools.calendar import CALENDAR_TOOL_NAME, CALENDAR_TOOL_PARAMETERS
 from tests.core.tools.scheduling_tool_support import CalendarTool, calendar_tool, clock_at
 
@@ -138,6 +141,40 @@ class TestCreate:
             '"location":"Home"}'
         )
 
+    @pytest.mark.parametrize(
+        ("call", "field", "value"),
+        [
+            (
+                {"action": "create", "title": "X", "start": "next tuesday 2pm"},
+                "start",
+                "next tuesday 2pm",
+            ),
+            (
+                {"action": "create", "title": "X", "start": "2030-01-10", "end": "2030-02-30"},
+                "end",
+                "2030-02-30",
+            ),
+            ({"action": "update", "id": "{standup}", "start": "9am"}, "start", "9am"),
+            (
+                {"action": "update", "id": "{standup}_20300109T0900", "end": "half past ten"},
+                "end",
+                "half past ten",
+            ),
+        ],
+    )
+    def test_an_unreadable_time_is_refused_with_the_value_received(
+        self, tool: CalendarTool, call: dict[str, str], field: str, value: str
+    ) -> None:
+        standup = _standup(tool)
+
+        message = tool.refused(
+            {key: text.replace("{standup}", standup) for key, text in call.items()}
+        )
+
+        corrected = json.loads(message.split(" Send: ", 1)[1])
+        assert f'"{value}"' in message.split(" Send: ", 1)[0]
+        assert corrected[field] == STAND_INS[field]
+
     def test_invalid_rule_is_refused(self, tool: CalendarTool) -> None:
         message = tool.refused(
             {
@@ -226,7 +263,7 @@ class TestList:
         envelope, text = tool.call({"action": "list", "time_min": "2030-01-10", "query": "piano"})
 
         assert envelope["data"]["events"] == 3
-        assert "query: piano" in text
+        assert "query" not in text
         assert "Dentist" not in text
 
     def test_a_long_series_lists_its_first_occurrences(self, tool: CalendarTool) -> None:
@@ -261,6 +298,12 @@ class TestList:
                 {"time_min": "next tuesday"},
                 'calendar was not run: time_min "next tuesday" is not a date or local date-time. '
                 'Send: {"action":"list","time_min":"<2030-01-10 or 2030-01-10T15:00>"}',
+            ),
+            (
+                {"time_min": "2030-01-10", "time_max": "friday"},
+                'calendar was not run: time_max "friday" is not a date or local date-time. '
+                'Send: {"action":"list","time_min":"2030-01-10",'
+                '"time_max":"<2030-01-10 or 2030-01-10T15:00>"}',
             ),
         ],
     )
@@ -357,8 +400,9 @@ class TestUpdate:
 
     @pytest.mark.parametrize("action", ["update", "delete"])
     def test_an_occurrence_id_changes_or_deletes_only_that_occurrence(
-        self, tool: CalendarTool, action: str
+        self, tool: CalendarTool, monkeypatch: pytest.MonkeyPatch, action: str
     ) -> None:
+        _now(monkeypatch, datetime(2030, 1, 8, 12, tzinfo=UTC))
         standup = _standup(tool)
         changes = {"title": "Long standup", "end": "2030-01-09T10:00"} if action == "update" else {}
 
@@ -379,7 +423,9 @@ class TestUpdate:
         else:
             assert text == (
                 f"id: {standup}_20300109T0900\ntitle: Standup\nstart: 2030-01-09T09:00\n"
-                "status: deleted; the rest of the series stays"
+                "status: deleted; the rest of the series stays\n"
+                # The series goes on without the deleted occurrence.
+                "next: 2030-01-14T09:00, 2030-01-16T09:00, 2030-01-21T09:00"
             )
             assert f"{standup}_20300109T0900" not in listing
         assert f"  {standup}_20300107T0900 2030-01-07T09:00\n" in listing
@@ -432,15 +478,29 @@ class TestIds:
     ) -> None:
         assert tool.refused(call) == message
 
-    def test_unknown_event_names_the_list_call(self, tool: CalendarTool) -> None:
-        envelope, _text = tool.call({"action": "delete", "id": "evt_missing"})
+    @pytest.mark.parametrize(
+        ("item_id", "listing"),
+        [
+            ("evt_missing", '{"action":"list"}'),
+            # An occurrence of an unknown event names the list of all events.
+            ("evt_missing_20300108T0900", '{"action":"list"}'),
+        ],
+    )
+    @pytest.mark.parametrize("action", ["update", "delete"])
+    def test_unknown_event_names_the_list_call(
+        self, tool: CalendarTool, action: str, item_id: str, listing: str
+    ) -> None:
+        _standup(tool)
+        before = [event.to_dict() for event in tool.events()]
 
-        assert envelope["error"] == {
-            "code": "event_not_found",
-            "message": (
-                'No event has id "evt_missing". {"action":"list"} shows events and their ids.'
-            ),
-        }
+        changes = {"title": "Moved"} if action == "update" else {}
+
+        envelope, _text = tool.call({"action": action, "id": item_id, **changes})
+
+        message = envelope["error"]["message"]
+        assert envelope["error"]["code"] == "event_not_found"
+        assert message.startswith("calendar was not run: ") and listing in message
+        assert [event.to_dict() for event in tool.events()] == before
 
     def test_unknown_occurrence_names_the_list_call_that_shows_the_series(
         self, tool: CalendarTool
@@ -449,11 +509,9 @@ class TestIds:
 
         envelope, _text = tool.call({"action": "delete", "id": f"{standup}_20300108T0900"})
 
-        listing = f'{{"action":"list","id":"{standup}"}}'
-        assert envelope["error"]["message"] == (
-            f'No occurrence has id "{standup}_20300108T0900". {listing} shows the event\'s '
-            "occurrences."
-        )
+        message = envelope["error"]["message"]
+        assert message.startswith("calendar was not run: ")
+        assert f'{{"action":"list","id":"{standup}"}}' in message
         assert f"{standup}_20300107T0900" in tool.succeeded(
             {"action": "list", "id": standup, "time_min": "2030-01-01"}
         )
@@ -470,6 +528,57 @@ def test_delete_reports_the_cron_jobs_it_removed(tool: CalendarTool) -> None:
         f"id: {standup}\ntitle: Standup\nstatus: deleted with all its occurrences\n"
         f'deleted_cron_jobs: {job} "Agenda"'
     )
+
+
+def _fail_writes(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
+    def refuse(path: Path, *_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError(13, "Zugriff verweigert", str(path))
+
+    monkeypatch.setattr(f"{module}.write_json_document", refuse)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"action": "create", "title": "Dentist", "start": "2030-01-10T15:00"},
+        {"action": "update", "id": "{standup}", "title": "Moved"},
+        {"action": "update", "id": "{standup}_20300109T0900", "title": "Moved"},
+        {"action": "delete", "id": "{standup}"},
+        {"action": "delete", "id": "{standup}_20300109T0900"},
+    ],
+)
+def test_a_calendar_that_cannot_be_saved_changes_nothing(
+    tool: CalendarTool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, call: dict[str, str]
+) -> None:
+    standup = _standup(tool)
+    before = [event.to_dict() for event in tool.events()]
+    _fail_writes(monkeypatch, "core.calendar.service")
+
+    envelope, text = tool.call(
+        {key: value.replace("{standup}", standup) for key, value in call.items()}
+    )
+
+    assert envelope["error"]["code"] == "calendar_storage_error"
+    assert str(tmp_path) not in text and "Zugriff" not in text
+    assert [event.to_dict() for event in tool.events()] == before
+    monkeypatch.undo()
+    reloaded = CalendarService(tmp_path, tz="Europe/Berlin").list_events()
+    assert [event.to_dict() for event in reloaded] == before
+
+
+def test_a_deleted_event_whose_cron_jobs_cannot_be_deleted_says_so(
+    tool: CalendarTool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    standup = _standup(tool)
+    job = _bind_job(tool, standup)
+    _fail_writes(monkeypatch, "core.automation.cron")
+
+    envelope, text = tool.call({"action": "delete", "id": standup})
+
+    assert envelope["error"]["code"] == "cron_storage_error"
+    assert standup in text and str(tmp_path) not in text
+    assert tool.events() == []
+    assert [item.id for item in tool.cron.list_jobs()] == [job]
 
 
 @pytest.mark.parametrize("action", ["update", "delete"])

@@ -8,6 +8,7 @@ from itertools import islice
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from core.automation.cron import CronServiceError
 from core.calendar import (
     MAX_WINDOW_DAYS,
     CalendarEventNotFoundError,
@@ -20,7 +21,9 @@ from core.calendar import (
 from core.calendar.service import FIND_FREE_MAX_RESULTS
 from core.projects import format_agent_address
 from core.tools._calendar_arguments import (
+    ATTENDEES_FIELD,
     CHANGE_FIELDS,
+    LONG_TEXT,
     OMIT,
     REFUSAL_PREFIX,
     REMINDER_FIELD,
@@ -28,6 +31,7 @@ from core.tools._calendar_arguments import (
     STAND_INS,
     UNADVERTISED_PARAMETERS,
     WHEN_FIELD,
+    WINDOW_ACTIONS,
     CalendarCallRefusedError,
     length_text,
     normalize_calendar_arguments,
@@ -208,8 +212,10 @@ class _CalendarTool:
     async def run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         action = arguments["action"]
         try:
-            if REMINDER_FIELD in arguments:
-                raise CalendarCallRefusedError(_reminder_refusal(arguments, context.offers("cron")))
+            if REMINDER_FIELD in arguments or ATTENDEES_FIELD in arguments:
+                raise CalendarCallRefusedError(
+                    self._unsupported_refusal(arguments, context.offers("cron"))
+                )
             if action in _REFERENCE_ACTIONS and "id" not in arguments:
                 raise CalendarCallRefusedError(_missing_id(action, arguments))
             if action == "list":
@@ -224,19 +230,31 @@ class _CalendarTool:
         except CalendarCallRefusedError as error:
             return tool_failure("invalid_arguments", str(error))
         except CalendarEventNotFoundError:
-            return tool_failure("event_not_found", _not_found(arguments.get("id")))
+            event_ids = {event.id for event in self._calendar.list_events()}
+            return tool_failure("event_not_found", _not_found(arguments.get("id"), event_ids))
         except CalendarValidationError as error:
             return tool_failure("invalid_arguments", _validation_message(arguments, error))
         except CalendarStorageError as error:
+            # The service rolls a failed save back, and the file is replaced atomically.
             _LOGGER.warning("Calendar storage error for action=%s: %s", action, error)
-            return tool_failure(
-                "calendar_storage_error", f"{error}. Do not repeat the same call unchanged."
-            )
+            if action in WINDOW_ACTIONS:
+                text = (
+                    "vBot cannot read its calendar file on the server. Retrying will not help; "
+                    "tell the user that vBot cannot read its calendar data."
+                )
+            else:
+                text = (
+                    "Nothing was changed: vBot cannot read or write its calendar file on the "
+                    "server. Retrying will not help; tell the user that vBot cannot save its "
+                    "calendar data."
+                )
+            return tool_failure("calendar_storage_error", text)
         except CalendarServiceError as error:
             _LOGGER.warning("Calendar service error for action=%s: %s", action, error)
-            return tool_failure(
-                "calendar_service_error", f"{error}. Do not repeat the same call unchanged."
-            )
+            text = f"The calendar could not complete the call: {str(error).rstrip('. ')}."
+            if action not in WINDOW_ACTIONS:
+                text += ' {"action":"list"} shows whether it changed anything.'
+            return tool_failure("calendar_service_error", text)
 
     # -- reading ------------------------------------------------------------------------
 
@@ -261,8 +279,6 @@ class _CalendarTool:
             "window": _window_text(start, end, zone),
             "timezone": self._calendar.system_timezone_name(),
         }
-        if query:
-            data["query"] = query
         if found:
             data["content"] = "\n\n".join(
                 self._event_block(events[event_id], items) for event_id, items in found.items()
@@ -343,6 +359,7 @@ class _CalendarTool:
                     **{name: STAND_INS[name] for name in missing},
                 )
             )
+        _check_event_times(arguments)
         event = self._calendar.create_event(
             title=arguments["title"],
             start=arguments["start"],
@@ -366,6 +383,7 @@ class _CalendarTool:
                     start=STAND_INS["start"],
                 )
             )
+        _check_event_times(arguments)
         parsed = parse_occurrence_id(item_id)
         if parsed is None:
             event = await self._calendar.update_event(item_id, actor="tool", **fields)
@@ -385,16 +403,29 @@ class _CalendarTool:
         item_id = arguments["id"]
         if parse_occurrence_id(item_id) is not None:
             occurrence = await self._calendar.delete_occurrence(item_id, actor="tool")
+            series = self._calendar.get_event(occurrence.event_id)
             return tool_success(
                 {
                     "id": occurrence.id,
                     "title": occurrence.title,
                     "start": _time_text(occurrence.start),
                     "status": "deleted; the rest of the series stays",
+                    "next": self._next_text(series),
                 }
             )
         event = self._calendar.get_event(item_id)
-        jobs = await self._calendar.delete_event(item_id, actor="tool")
+        try:
+            jobs = await self._calendar.delete_event(item_id, actor="tool")
+        except CronServiceError as error:
+            # The event stays deleted; its jobs wait without it and no longer run.
+            _LOGGER.warning("Cron jobs of deleted event %s were not deleted: %s", item_id, error)
+            return tool_failure(
+                "cron_storage_error",
+                f'Event {event.id} "{event.title}" was deleted, but the cron jobs bound to it '
+                "were not: vBot cannot read or write its cron job file on the server. Those jobs "
+                "no longer run. Retrying will not help; tell the user that vBot cannot save its "
+                "cron job data.",
+            )
         data: JsonObject = {
             "id": event.id,
             "title": event.title,
@@ -404,17 +435,91 @@ class _CalendarTool:
             data["deleted_cron_jobs"] = ", ".join(f'{job.id} "{job.name}"' for job in jobs)
         return tool_success(data)
 
+    # -- refusals -------------------------------------------------------------------------
+
+    def _unsupported_refusal(self, arguments: JsonObject, cron_offered: bool) -> str:
+        """Refuse attendees and reminders, which the calendar does not keep.
+
+        Attendees can be recorded as a description line; reminders are cron jobs
+        bound to the event. A corrected update carries the stored description the
+        line joins; when that text is unknown or too long to show, the refusal
+        names the next step instead of a call.
+        """
+        call = {
+            key: value
+            for key, value in arguments.items()
+            if key not in (REMINDER_FIELD, ATTENDEES_FIELD)
+        }
+        texts: list[str] = []
+        steps: list[str] = []
+        event_call = None
+        if ATTENDEES_FIELD in arguments:
+            texts.append("the calendar cannot invite attendees.")
+            line = "Attendees: " + ", ".join(arguments[ATTENDEES_FIELD])
+            description = self._description_with(call, line)
+            if description is None:
+                steps.append(_attendee_step(call, line))
+            else:
+                texts.append("To record them, put them in description.")
+                event_call = render_call(call, description=description)
+        reminder = arguments.get(REMINDER_FIELD)
+        if reminder is not None:
+            texts.append(f"{'The' if texts else 'the'} calendar has no reminders.")
+            if cron_offered:
+                texts.append("cron runs an instruction before, at or after an event.")
+            changes = call["action"] == "create" or any(name in call for name in CHANGE_FIELDS)
+            if changes and not steps and event_call is None:
+                event_call = render_call(call)
+        if event_call is not None:
+            steps.append(f"Send: {event_call}")
+        if reminder is not None and cron_offered:
+            item_id = call.get("id")
+            parsed = parse_occurrence_id(item_id) if isinstance(item_id, str) else None
+            cron_call = render_cron_call(
+                {
+                    "action": "create",
+                    "event_id": (parsed[0] if parsed else item_id) or "<event id from the result>",
+                    "prompt": reminder.get("prompt"),
+                    "schedule": reminder.get("schedule", REMINDER_SCHEDULE_STAND_IN),
+                }
+            )
+            steps.append(f"{'Then send' if steps else 'Send'} to cron: {cron_call}")
+        return REFUSAL_PREFIX + " ".join([*texts, *steps])
+
+    def _description_with(self, call: JsonObject, line: str) -> str | None:
+        """The description the call leaves, with ``line`` added; None when it cannot be shown.
+
+        A description the call sends replaces the stored one, so the line joins
+        it; otherwise the line joins the stored description of the event or
+        occurrence the update names.
+        """
+        if call["action"] == "update" and not isinstance(call.get("id"), str):
+            return None
+        if "description" in call or call["action"] == "create":
+            current = call.get("description")
+        else:
+            item_id = call["id"]
+            if parse_occurrence_id(item_id) is None:
+                current = self._calendar.get_event(item_id).description
+            else:
+                current = self._calendar.get_occurrence(item_id).description
+        text = f"{current}\n{line}" if current else line
+        return text if len(text) <= LONG_TEXT else None
+
     # -- rendering ------------------------------------------------------------------------
 
     def _event_result(self, event: CalendarEvent) -> JsonObject:
         data = self._event_fields(event)
         if event.recurring:
-            upcoming = islice(
-                self._calendar.iter_occurrences(event, datetime.now(UTC)), _NEXT_OCCURRENCES
-            )
-            starts = [_time_text(item.start) for item in upcoming]
-            data["next"] = ", ".join(starts) or "none ahead"
+            data["next"] = self._next_text(event)
         return data
+
+    def _next_text(self, event: CalendarEvent) -> str:
+        """The next starts of a repeating event, or that none is ahead."""
+        upcoming = islice(
+            self._calendar.iter_occurrences(event, datetime.now(UTC)), _NEXT_OCCURRENCES
+        )
+        return ", ".join(_time_text(item.start) for item in upcoming) or "none ahead"
 
     def _event_fields(self, event: CalendarEvent) -> JsonObject:
         """One event in the Agent-facing shape: local times, the last day of an all-day event."""
@@ -503,49 +608,51 @@ def _occurrence_fields(occurrence: EventOccurrence) -> JsonObject:
     return data
 
 
-def _reminder_refusal(arguments: JsonObject, cron_offered: bool) -> str:
-    """Refuse a reminder: the calendar keeps events; cron runs an instruction at them."""
-    reminder = arguments[REMINDER_FIELD]
-    call = {key: value for key, value in arguments.items() if key != REMINDER_FIELD}
-    event_call = None
-    if call["action"] == "create" or any(name in call for name in CHANGE_FIELDS):
-        event_call = render_call(call)
-    text = f"{REFUSAL_PREFIX}the calendar has no reminders."
-    if cron_offered:
-        text += " cron runs an instruction before, at or after an event."
-    send = [f"Send: {event_call}"] if event_call else []
-    if cron_offered:
-        item_id = call.get("id")
-        parsed = parse_occurrence_id(item_id) if isinstance(item_id, str) else None
-        cron_call = render_cron_call(
-            {
-                "action": "create",
-                "event_id": (parsed[0] if parsed else item_id) or "<event id from the result>",
-                "prompt": reminder.get("prompt"),
-                "schedule": reminder.get("schedule", REMINDER_SCHEDULE_STAND_IN),
-            }
+def _attendee_step(call: JsonObject, line: str) -> str:
+    """The way to record attendees when no corrected call can carry the description."""
+    if call["action"] == "create" or "description" in call:
+        return (
+            f'To record them, send the call again without attendees and with the line "{line}" '
+            "at the end of description."
         )
-        send.append(f"{'Then send' if send else 'Send'} to cron: {cron_call}")
-    return " ".join([text, *send])
+    item_id = call.get("id")
+    if isinstance(item_id, str):
+        parsed = parse_occurrence_id(item_id)
+        listing = render_call({"action": "list", "id": parsed[0] if parsed else item_id})
+    else:
+        listing = _listing(call)
+    return (
+        f'To record them, add the line "{line}" to the end of the event\'s description, after '
+        f"its current text; {listing} shows the event with its description."
+    )
+
+
+def _listing(arguments: JsonObject) -> str:
+    """The list call that shows the event a call names by its title, or all events."""
+    title = arguments.get("title")
+    return render_call({"action": "list", "query": title}) if title else '{"action":"list"}'
 
 
 def _missing_id(action: str, arguments: JsonObject) -> str:
-    title = arguments.get("title")
-    listing = render_call({"action": "list", "query": title}) if title else '{"action":"list"}'
     return refusal(
-        f'{action} needs the event "id"; {listing} shows events and their ids.',
+        f'{action} needs the event "id"; {_listing(arguments)} shows events and their ids.',
         arguments,
         id=STAND_INS["id"],
         **({"title": OMIT} if action == "delete" else {}),
     )
 
 
-def _not_found(item_id: Any) -> str:
+def _not_found(item_id: Any, event_ids: set[str]) -> str:
+    """Refuse an unknown id, naming the list call that shows the valid ones."""
     parsed = parse_occurrence_id(item_id) if isinstance(item_id, str) else None
-    if parsed is not None:
-        listing = render_call({"action": "list", "id": parsed[0]})
-        return f'No occurrence has id "{item_id}". {listing} shows the event\'s occurrences.'
-    return f'No event has id "{item_id}". {{"action":"list"}} shows events and their ids.'
+    if parsed is None:
+        text = f'no event has id "{item_id}"'
+    else:
+        text = f'no occurrence has id "{item_id}"'
+        if parsed[0] in event_ids:
+            listing = render_call({"action": "list", "id": parsed[0]})
+            return f"{REFUSAL_PREFIX}{text}; {listing} shows the event's occurrences."
+    return f'{REFUSAL_PREFIX}{text}; {{"action":"list"}} shows events and their ids.'
 
 
 def _validation_message(arguments: JsonObject, error: CalendarValidationError) -> str:
@@ -567,14 +674,30 @@ def _bound(arguments: JsonObject, name: str, zone: ZoneInfo) -> datetime | None:
             return datetime.combine(date.fromisoformat(text), time.min, zone).astimezone(UTC)
         moment = datetime.fromisoformat(text)
     except ValueError:
-        raise CalendarCallRefusedError(
-            refusal(
-                f'{name} "{value}" is not a date or local date-time.',
-                arguments,
-                **{name: STAND_INS[name]},
-            )
-        ) from None
+        raise _not_a_time(arguments, name) from None
     return (moment if moment.tzinfo else moment.replace(tzinfo=zone)).astimezone(UTC)
+
+
+def _check_event_times(arguments: JsonObject) -> None:
+    """Refuse a start or end that is neither a date nor a date-time, naming the value."""
+    for name in ("start", "end"):
+        value = arguments.get(name)
+        if not isinstance(value, str):
+            continue
+        try:
+            datetime.fromisoformat(value.strip())
+        except ValueError:
+            raise _not_a_time(arguments, name) from None
+
+
+def _not_a_time(arguments: JsonObject, name: str) -> CalendarCallRefusedError:
+    return CalendarCallRefusedError(
+        refusal(
+            f'{name} "{arguments[name]}" is not a date or local date-time.',
+            arguments,
+            **{name: STAND_INS[name]},
+        )
+    )
 
 
 def _days_after(start: datetime, days: int, zone: ZoneInfo) -> datetime:

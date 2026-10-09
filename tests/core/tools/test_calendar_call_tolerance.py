@@ -6,13 +6,14 @@ canonical call, and each refusal names the corrected call.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from core.calendar import CalendarEvent
+from core.calendar import CalendarEvent, parse_occurrence_id
 from tests.core.tools.scheduling_tool_support import CalendarTool, calendar_tool, clock_at
 
 
@@ -310,6 +311,70 @@ def test_without_cron_a_reminder_is_refused_without_naming_it(tmp_path: Path) ->
         "calendar was not run: the calendar has no reminders. Send: "
         '{"action":"create","title":"Call mom","start":"2030-01-11T18:00"}'
     )
+
+
+@pytest.mark.parametrize(
+    ("call", "description"),
+    [
+        # The line joins the stored description instead of replacing it.
+        (
+            {"action": "update", "id": "{event}", "attendees": '["tom@example.com"]'},
+            "Room 4, bring slides\nAttendees: tom@example.com",
+        ),
+        (
+            {"action": "update", "id": "{event}", "guests": ["tom@example.com", "Ann"]},
+            "Room 4, bring slides\nAttendees: tom@example.com, Ann",
+        ),
+        # A description the call sends replaces the stored one, so the line joins it.
+        (
+            {"action": "update", "id": "{event}", "description": "Room 5", "attendees": ["tom"]},
+            "Room 5\nAttendees: tom",
+        ),
+        (
+            {"action": "update", "id": "{series}_20300114T0900", "attendees": [{"email": "tom"}]},
+            "Daily sync\nAttendees: tom",
+        ),
+    ],
+)
+def test_attendees_are_refused_with_a_call_that_records_them_in_the_description(
+    tool: CalendarTool, call: dict[str, Any], description: str
+) -> None:
+    event = tool.service.create_event(
+        title="Review", start="2030-01-10T15:00", description="Room 4, bring slides"
+    ).id
+    series = tool.service.create_event(
+        title="Standup",
+        start="2030-01-07T09:00",
+        rrule="FREQ=WEEKLY;BYDAY=MO",
+        description="Daily sync",
+    ).id
+    filled = {
+        key: value.replace("{event}", event).replace("{series}", series)
+        if isinstance(value, str)
+        else value
+        for key, value in call.items()
+    }
+
+    message = tool.refused(filled)
+
+    corrected = json.loads(message.split(" Send: ", 1)[1])
+    assert corrected == {"action": "update", "id": filled["id"], "description": description}
+    tool.succeeded(corrected)
+    if parse_occurrence_id(filled["id"]):
+        assert tool.service.get_occurrence(filled["id"]).description == description
+    else:
+        assert tool.service.get_event(event).description == description
+
+
+def test_attendees_of_an_update_without_id_name_the_list_call_instead_of_a_call(
+    tool: CalendarTool,
+) -> None:
+    tool.service.create_event(title="Review", start="2030-01-10T15:00", description="Room 4")
+
+    message = tool.refused({"action": "update", "title": "Review", "attendees": ["tom"]})
+
+    assert "Send:" not in message
+    assert '{"action":"list","query":"Review"}' in message
 
 
 @pytest.mark.parametrize(
