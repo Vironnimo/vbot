@@ -20,7 +20,9 @@ from core.calendar import (
 from core.calendar.service import FIND_FREE_MAX_RESULTS
 from core.projects import format_agent_address
 from core.tools._calendar_arguments import (
+    ATTENDEES_FIELD,
     CHANGE_FIELDS,
+    LONG_TEXT,
     OMIT,
     REFUSAL_PREFIX,
     REMINDER_FIELD,
@@ -208,8 +210,10 @@ class _CalendarTool:
     async def run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         action = arguments["action"]
         try:
-            if REMINDER_FIELD in arguments:
-                raise CalendarCallRefusedError(_reminder_refusal(arguments, context.offers("cron")))
+            if REMINDER_FIELD in arguments or ATTENDEES_FIELD in arguments:
+                raise CalendarCallRefusedError(
+                    self._unsupported_refusal(arguments, context.offers("cron"))
+                )
             if action in _REFERENCE_ACTIONS and "id" not in arguments:
                 raise CalendarCallRefusedError(_missing_id(action, arguments))
             if action == "list":
@@ -404,6 +408,77 @@ class _CalendarTool:
             data["deleted_cron_jobs"] = ", ".join(f'{job.id} "{job.name}"' for job in jobs)
         return tool_success(data)
 
+    # -- refusals -------------------------------------------------------------------------
+
+    def _unsupported_refusal(self, arguments: JsonObject, cron_offered: bool) -> str:
+        """Refuse attendees and reminders, which the calendar does not keep.
+
+        Attendees can be recorded as a description line; reminders are cron jobs
+        bound to the event. A corrected update carries the stored description the
+        line joins; when that text is unknown or too long to show, the refusal
+        names the next step instead of a call.
+        """
+        call = {
+            key: value
+            for key, value in arguments.items()
+            if key not in (REMINDER_FIELD, ATTENDEES_FIELD)
+        }
+        texts: list[str] = []
+        steps: list[str] = []
+        event_call = None
+        if ATTENDEES_FIELD in arguments:
+            texts.append("the calendar cannot invite attendees.")
+            line = "Attendees: " + ", ".join(arguments[ATTENDEES_FIELD])
+            description = self._description_with(call, line)
+            if description is None:
+                steps.append(_attendee_step(call, line))
+            else:
+                texts.append("To record them, put them in description.")
+                event_call = render_call(call, description=description)
+        reminder = arguments.get(REMINDER_FIELD)
+        if reminder is not None:
+            texts.append(f"{'The' if texts else 'the'} calendar has no reminders.")
+            if cron_offered:
+                texts.append("cron runs an instruction before, at or after an event.")
+            changes = call["action"] == "create" or any(name in call for name in CHANGE_FIELDS)
+            if changes and not steps and event_call is None:
+                event_call = render_call(call)
+        if event_call is not None:
+            steps.append(f"Send: {event_call}")
+        if reminder is not None and cron_offered:
+            item_id = call.get("id")
+            parsed = parse_occurrence_id(item_id) if isinstance(item_id, str) else None
+            cron_call = render_cron_call(
+                {
+                    "action": "create",
+                    "event_id": (parsed[0] if parsed else item_id) or "<event id from the result>",
+                    "prompt": reminder.get("prompt"),
+                    "schedule": reminder.get("schedule", REMINDER_SCHEDULE_STAND_IN),
+                }
+            )
+            steps.append(f"{'Then send' if steps else 'Send'} to cron: {cron_call}")
+        return REFUSAL_PREFIX + " ".join([*texts, *steps])
+
+    def _description_with(self, call: JsonObject, line: str) -> str | None:
+        """The description the call leaves, with ``line`` added; None when it cannot be shown.
+
+        A description the call sends replaces the stored one, so the line joins
+        it; otherwise the line joins the stored description of the event or
+        occurrence the update names.
+        """
+        if call["action"] == "update" and not isinstance(call.get("id"), str):
+            return None
+        if "description" in call or call["action"] == "create":
+            current = call.get("description")
+        else:
+            item_id = call["id"]
+            if parse_occurrence_id(item_id) is None:
+                current = self._calendar.get_event(item_id).description
+            else:
+                current = self._calendar.get_occurrence(item_id).description
+        text = f"{current}\n{line}" if current else line
+        return text if len(text) <= LONG_TEXT else None
+
     # -- rendering ------------------------------------------------------------------------
 
     def _event_result(self, event: CalendarEvent) -> JsonObject:
@@ -503,37 +578,34 @@ def _occurrence_fields(occurrence: EventOccurrence) -> JsonObject:
     return data
 
 
-def _reminder_refusal(arguments: JsonObject, cron_offered: bool) -> str:
-    """Refuse a reminder: the calendar keeps events; cron runs an instruction at them."""
-    reminder = arguments[REMINDER_FIELD]
-    call = {key: value for key, value in arguments.items() if key != REMINDER_FIELD}
-    event_call = None
-    if call["action"] == "create" or any(name in call for name in CHANGE_FIELDS):
-        event_call = render_call(call)
-    text = f"{REFUSAL_PREFIX}the calendar has no reminders."
-    if cron_offered:
-        text += " cron runs an instruction before, at or after an event."
-    send = [f"Send: {event_call}"] if event_call else []
-    if cron_offered:
-        item_id = call.get("id")
-        parsed = parse_occurrence_id(item_id) if isinstance(item_id, str) else None
-        cron_call = render_cron_call(
-            {
-                "action": "create",
-                "event_id": (parsed[0] if parsed else item_id) or "<event id from the result>",
-                "prompt": reminder.get("prompt"),
-                "schedule": reminder.get("schedule", REMINDER_SCHEDULE_STAND_IN),
-            }
+def _attendee_step(call: JsonObject, line: str) -> str:
+    """The way to record attendees when no corrected call can carry the description."""
+    if call["action"] == "create" or "description" in call:
+        return (
+            f'To record them, send the call again without attendees and with the line "{line}" '
+            "at the end of description."
         )
-        send.append(f"{'Then send' if send else 'Send'} to cron: {cron_call}")
-    return " ".join([text, *send])
+    item_id = call.get("id")
+    if isinstance(item_id, str):
+        parsed = parse_occurrence_id(item_id)
+        listing = render_call({"action": "list", "id": parsed[0] if parsed else item_id})
+    else:
+        listing = _listing(call)
+    return (
+        f'To record them, add the line "{line}" to the end of the event\'s description, after '
+        f"its current text; {listing} shows the event with its description."
+    )
+
+
+def _listing(arguments: JsonObject) -> str:
+    """The list call that shows the event a call names by its title, or all events."""
+    title = arguments.get("title")
+    return render_call({"action": "list", "query": title}) if title else '{"action":"list"}'
 
 
 def _missing_id(action: str, arguments: JsonObject) -> str:
-    title = arguments.get("title")
-    listing = render_call({"action": "list", "query": title}) if title else '{"action":"list"}'
     return refusal(
-        f'{action} needs the event "id"; {listing} shows events and their ids.',
+        f'{action} needs the event "id"; {_listing(arguments)} shows events and their ids.',
         arguments,
         id=STAND_INS["id"],
         **({"title": OMIT} if action == "delete" else {}),

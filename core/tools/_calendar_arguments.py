@@ -11,7 +11,10 @@ with the corrected call.
 Reminders and instructions to run at an event (``reminders``,
 ``minutes_before``, ``prompt``, ``add_action``) become the unadvertised
 ``reminder``, which the handler refuses with the ``cron`` call that does it:
-only the handler knows whether that Tool is offered. A ``when`` phrase such as
+only the handler knows whether that Tool is offered. Attendees (``attendees``,
+``guests``, also as a JSON string) become the unadvertised ``attendees`` list
+of names, which the handler refuses with a description line: only the handler
+knows the stored description that line joins. A ``when`` phrase such as
 ``this week`` stays unadvertised for the handler, which resolves it against
 the server clock and time zone.
 """
@@ -21,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from contextlib import suppress
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -38,10 +42,13 @@ from core.tools.contracts import ToolContract, ToolContractError
 REFUSAL_PREFIX = "calendar was not run: "
 WHEN_FIELD = "when"
 REMINDER_FIELD = "reminder"
+ATTENDEES_FIELD = "attendees"
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
     WHEN_FIELD: {"type": "string", "minLength": 1},
     # The schedule and instruction of a requested reminder; the handler refuses it.
     REMINDER_FIELD: {"type": "object"},
+    # The names of requested attendees; the handler refuses them.
+    ATTENDEES_FIELD: {"type": "array", "items": {"type": "string"}},
 }
 OMIT = object()
 """``render_call`` override that removes a field from the rendered call."""
@@ -62,6 +69,8 @@ STAND_INS = {
 """Values only the Agent can supply, shown in a corrected call in their field's place."""
 REMINDER_SCHEDULE_STAND_IN = "<start or end, e.g. start - 30m>"
 REMINDER_PROMPT_STAND_IN = "<instruction>"
+LONG_TEXT = 120
+"""Descriptions longer than this show as a stand-in in a corrected call."""
 
 
 class CalendarCallRefusedError(ValueError):
@@ -82,8 +91,9 @@ _CALL_ORDER = (
     "query",
     "duration",
     WHEN_FIELD,
+    # Rendered so that a call refused for another reason still asks for its attendees.
+    ATTENDEES_FIELD,
 )
-_LONG_TEXT = 120
 _REMINDER_ACTION = "add_reminder"
 _TEMPLATE = re.compile(r"^\s*<[^<>]+>\s*$")
 
@@ -269,6 +279,7 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
     value = _read_time_objects(value, problems)
     zone_name, original_start = _take_zone(value), _take_original_start(value)
     reminder = _take_reminder(value)
+    attendees = _take_attendees(value)
     for key in [key for key in value if spelling(key) in _RULE_KEYS]:
         value[key] = _rule_text(value[key], problems)
     normalized = normalize_call_arguments(
@@ -284,6 +295,8 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
     _read_extras(normalized, problems)
     _omit_placeholders(normalized)
     action = _read_action(normalized, reminder)
+    if attendees and action in {"create", "update"}:
+        normalized[ATTENDEES_FIELD] = attendees
     if zone_name is not None:
         _apply_zone(normalized, zone_name, problems)
     if action in WINDOW_ACTIONS:
@@ -304,7 +317,7 @@ def render_call(arguments: Mapping[str, Any], **overrides: Any) -> str:
     call = {**arguments, **overrides}
     ordered = {name: call[name] for name in _CALL_ORDER if name in call and call[name] is not OMIT}
     text = ordered.get("description")
-    if isinstance(text, str) and len(text) > _LONG_TEXT:
+    if isinstance(text, str) and len(text) > LONG_TEXT:
         ordered["description"] = "<the description from this call>"
     return json.dumps(ordered, ensure_ascii=False, separators=(",", ":"))
 
@@ -504,18 +517,21 @@ def _read_extras(arguments: dict[str, Any], problems: _Problems) -> None:
                 problems.add(
                     f'there is one local calendar; "{key}" "{item}" cannot select another.'
                 )
-        elif word in _ATTENDEE_KEYS:
-            names = _attendee_names(arguments.pop(key))
-            if names:
-                problems.add(
-                    "the calendar cannot invite attendees. To record them, put them in description."
-                )
-                line = "Attendees: " + ", ".join(names)
-                text = arguments.get("description")
-                arguments["description"] = f"{text}\n{line}" if isinstance(text, str) else line
+
+
+def _take_attendees(arguments: dict[str, Any]) -> list[str]:
+    """Take attendee fields out of the call; return the names they give."""
+    names: list[str] = []
+    for key in [key for key in arguments if spelling(key) in _ATTENDEE_KEYS]:
+        names.extend(_attendee_names(arguments.pop(key)))
+    return names
 
 
 def _attendee_names(item: Any) -> list[str]:
+    """Names from a list, one entry or a JSON text of either; an entry may be a Google object."""
+    if isinstance(item, str) and item.strip().startswith(("[", "{")):
+        with suppress(ValueError):
+            item = json.loads(item)
     names: list[str] = []
     for entry in item if isinstance(item, list) else [item]:
         if isinstance(entry, dict):
@@ -671,7 +687,9 @@ def _merge(arguments: dict[str, Any], name: str, item: Any, problems: _Problems)
 
 
 __all__ = [
+    "ATTENDEES_FIELD",
     "CHANGE_FIELDS",
+    "LONG_TEXT",
     "OMIT",
     "REFUSAL_PREFIX",
     "REMINDER_FIELD",
