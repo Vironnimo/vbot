@@ -60,6 +60,7 @@ class RecordingTriggerService:
 
     def __init__(self) -> None:
         self.notices: list[Notice] = []
+        self._submitted = asyncio.Event()
 
     def submit_completion(
         self,
@@ -84,6 +85,7 @@ class RecordingTriggerService:
                 execution_owner,
             )
         )
+        self._submitted.set()
         if on_persisted is not None:
             on_persisted()
         delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -92,6 +94,15 @@ class RecordingTriggerService:
 
     def to(self, target: SessionAddress) -> list[Notice]:
         return [notice for notice in self.notices if notice.target == target]
+
+    async def wait_for_notice(self, notice_id: str) -> Notice:
+        """Wait for the named delivery, including one already submitted."""
+        while True:
+            for notice in self.notices:
+                if notice.notice_id == notice_id:
+                    return notice
+            self._submitted.clear()
+            await self._submitted.wait()
 
 
 class FakeAgents:
