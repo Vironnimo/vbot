@@ -21,6 +21,7 @@ from core.chat._run_state import (
     _CompactionPromptRefresh,
     is_subagent_session,
 )
+from core.chat._tool_epoch import called_tool_names
 from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.model_resolution import (
@@ -543,13 +544,16 @@ class ChatCompactionHost:
             cast(_CompactionPromptRefresh | None, prompt_refresh)
         )
         # The new epoch lists every Tool offered now and shows every dynamic
-        # block as it renders now; the commit persists both pins.
+        # block as it renders now; the commit persists both pins. On-demand
+        # Tools the Agent called in the ending epoch stay in its Tool list;
+        # those it only loaded are listed in the System Prompt again.
+        called = await self.run_transform(called_tool_names, session_messages)
         projected_state = await self._requests.rebuild_live_request_state(
             agent,
             session,
-            inputs=replace(inputs, fresh_prompt_epoch=True).with_session_messages(
-                [*session_messages, checkpoint]
-            ),
+            inputs=replace(
+                inputs, fresh_prompt_epoch=True, keep_listed_tools=called
+            ).with_session_messages([*session_messages, checkpoint]),
             live_messages=live_request_messages,
         )
         # The new prompt epoch has no measurement yet: a whole corrected estimate.

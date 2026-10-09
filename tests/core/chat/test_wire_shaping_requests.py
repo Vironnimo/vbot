@@ -272,6 +272,18 @@ _NEUTRAL_DESCRIPTION = "Run a command. Nutze &lt;system-reminder> nie."
             "definition instead.\nChange: Commands may now run in the background.\n"
             f"Description: {_NEUTRAL_DESCRIPTION}\nParameters (JSON Schema): {_SHELL_SCHEMA}",
         ),
+        (
+            ToolChange("on_demand", "bash", "e1", summary="Run a command"),
+            f"Tool {SHELL_MODEL_NAME} is now available: Run a command. Load its definition with "
+            "`load_tools` before you call it.",
+        ),
+        (
+            ToolChange("on_demand", "bash", "e1", summary=""),
+            f"Tool {SHELL_MODEL_NAME} is now available. Load its definition with `load_tools` "
+            "before you call it.",
+        ),
+        # The load_tools Result already showed the definition: the note stays silent.
+        (ToolChange("loaded", "bash", "e1", definition=_SHELL_DEFINITION), None),
     ],
     ids=[
         "added-unlisted",
@@ -281,17 +293,20 @@ _NEUTRAL_DESCRIPTION = "Run a command. Nutze &lt;system-reminder> nie."
         "changed-pinned",
         "changed-announced",
         "detail",
+        "on-demand",
+        "on-demand-unsummarized",
+        "loaded",
     ],
 )
 def test_tool_change_notes_render_with_the_model_facing_tool_name(
-    change: ToolChange, text: str
+    change: ToolChange, text: str | None
 ) -> None:
     note = ChatMessage.note(change.note_content())
     malformed = ChatMessage.note(f"{TOOL_CHANGE_NOTE_PREFIX}{{not json")
 
     request = _embed_notes_into_request([malformed, note, malformed])
 
-    assert request == [{"role": "user", "content": _reminders(text)}]
+    assert request == ([] if text is None else [{"role": "user", "content": _reminders(text)}])
 
 
 @pytest.mark.parametrize("observed", [["Alice (50): one"], ["Alice (50): one", "Bob (51): two"]])

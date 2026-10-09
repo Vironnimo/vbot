@@ -1013,7 +1013,9 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
     place, right where the activation happened. Passive channel observations become
     separate, explicitly untrusted quoted-context user messages, never system
     reminders. A malformed skill, Tool-change or prompt-block change note is
-    dropped from the request (it stays in canonical Session history for debugging).
+    dropped from the request (it stays in canonical Session history for debugging),
+    and so is a ``loaded`` Tool-change note: the ``load_tools`` Result before it
+    already showed the definition.
     """
     request_messages: list[JsonObject] = []
     note_run: list[ChatMessage] = []
@@ -1033,7 +1035,9 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
     for note in notes:
         if not note.content and note.role != "run_summary":
             continue
-        if is_tool_change_note(note) and tool_change_from_note(note) is None:
+        if is_tool_change_note(note) and (
+            (tool_change := tool_change_from_note(note)) is None or tool_change.change == "loaded"
+        ):
             continue
         if is_prompt_block_change_note(note) and prompt_block_change_from_note(note) is None:
             continue

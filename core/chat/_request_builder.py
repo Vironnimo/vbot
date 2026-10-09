@@ -25,6 +25,7 @@ from core.chat._request_history import (
 from core.chat._run_state import RequestBuildInputs, _ModelTarget, _RequestState
 from core.chat._tool_epoch import (
     LiveToolCatalog,
+    ToolChange,
     ToolEpochPin,
     ToolEpochView,
     definition_source,
@@ -90,6 +91,7 @@ from core.tools import (
     offer_edit_dialect,
     tool_is_ready,
 )
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tool_entries
 from core.tools.terminal import project_terminal_tool_definitions
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -361,13 +363,13 @@ class RequestBuilder:
         live = self._dependencies.get_system_prompts().render_dynamic_blocks(
             agent,
             block_ids=pin.blocks.keys(),
-            **self._block_render_inputs(inputs, tool_pin.definitions),
+            **self._block_render_inputs(inputs, tool_pin),
         )
         change = plan_prompt_block_change(pin, messages, live)
         return None if change is None else change.note_content()
 
     def _block_render_inputs(
-        self, inputs: RequestBuildInputs, tool_definitions: Sequence[JsonObject]
+        self, inputs: RequestBuildInputs, tool_pin: ToolEpochPin
     ) -> dict[str, Any]:
         """The System Prompt inputs dynamic blocks render from, for builds and pins alike."""
         return {
@@ -377,7 +379,8 @@ class RequestBuilder:
             "memory_files_context": inputs.memory_files_context,
             "agent_project_id": inputs.agent_project_id,
             "subagent_session": inputs.subagent_session,
-            "effective_tool_definitions": tool_definitions,
+            "effective_tool_definitions": tool_pin.definitions,
+            "on_demand_tools": tool_pin.on_demand,
         }
 
     async def _prompt_block_pin(
@@ -423,6 +426,9 @@ class RequestBuilder:
         # The Tool list is the prompt epoch's pin: the Session's first request
         # pins the Tools it offers, and every later request sends the same
         # definitions (plus announced additions on routes that must list them).
+        # An Agent that loads Tools on demand pins only the Tools its Tool list
+        # keeps; the System Prompt lists the others and ``load_tools`` returns
+        # their definitions.
         # Tool changes since the pin reach the Model as ``[tool-change]`` notes,
         # which the Run announces at its request boundaries; dispatch follows
         # what they told the Model. Tool and Extension dynamic blocks show the
@@ -475,10 +481,12 @@ class RequestBuilder:
             )
         if pin is None:
             assert catalog is not None
-            pin = await _CHAT_TRANSFORM_WORKERS.run(ToolEpochPin.start, catalog)
+            pin = await _CHAT_TRANSFORM_WORKERS.run(
+                partial(ToolEpochPin.start, catalog, keep=inputs.keep_listed_tools)
+            )
             if not inputs.fresh_prompt_epoch:
                 pin = await self._ensure_tool_epoch_pin(session, pin)
-        render_inputs = self._block_render_inputs(inputs, pin.definitions)
+        render_inputs = self._block_render_inputs(inputs, pin)
         prompt_blocks = await self._prompt_block_pin(
             agent, session, render_inputs, fresh=inputs.fresh_prompt_epoch
         )
@@ -496,10 +504,12 @@ class RequestBuilder:
                 "This Session has an invalid configuration. "
                 "Ask the user to check it through its Extension."
             )
+        tool_loads = tool_epoch.loads(catalog) if catalog is not None else None
         tools, allowed_tool_names, session_tool_grants, tool_contracts = await self._tool_fields(
             tool_epoch,
             live_tool_grants,
             list_announced=inputs.list_announced_tools,
+            tool_loads=tool_loads,
         )
         request_block_definitions: tuple[BlockDefinition, ...] = ()
         if session_capability is not None and inputs.temporary_binding is not None:
@@ -590,6 +600,7 @@ class RequestBuilder:
                 tool_contracts,
                 tool_epoch,
                 prompt_blocks,
+                tool_loads,
             )
 
         current_user_message, read_media_outputs = await _CHAT_TRANSFORM_WORKERS.run(
@@ -644,6 +655,7 @@ class RequestBuilder:
             tool_contracts,
             tool_epoch,
             prompt_blocks,
+            tool_loads,
         )
 
     async def rebuild_live_request_state(
@@ -722,21 +734,54 @@ class RequestBuilder:
         """Add a note for each Tool change since *state*'s Tool epoch and adopt it.
 
         Returns *state* with the dispatch allowlist, contracts and request Tools
-        of the announced knowledge; unchanged when nothing changed.
+        of the announced knowledge, and with the definitions *catalog* gives
+        the On-demand Tools the Model may load; unchanged when nothing changed.
         """
         tool_epoch = state.tool_epoch
         if tool_epoch is None:
             return state
         changes = tool_epoch.plan(catalog, unlisted_tool_calls=unlisted_tool_calls)
-        if not changes:
-            return state
         for change in changes:
             session.add_note(change.note_content())
         tool_epoch = tool_epoch.with_changes(changes)
+        tool_loads = tool_epoch.loads(catalog)
+        if not changes and tool_loads == (state.tool_loads or {}):
+            if state.tool_loads is None and tool_epoch.loadable_names:
+                return replace(state, tool_loads=tool_loads)
+            return state
         tools, allowed_tool_names, session_tool_grants, tool_contracts = await self._tool_fields(
             tool_epoch,
             catalog.session_tool_grants,
             list_announced=list_announced,
+            tool_loads=tool_loads,
+        )
+        return replace(
+            state,
+            tools=tools,
+            allowed_tool_names=allowed_tool_names,
+            session_tool_grants=session_tool_grants,
+            tool_contracts=tool_contracts,
+            tool_epoch=tool_epoch,
+            tool_loads=tool_loads,
+        )
+
+    async def adopt_tool_changes(
+        self, state: _RequestState, changes: Sequence[ToolChange], *, list_announced: bool
+    ) -> _RequestState:
+        """Return *state* after *changes* the Run persisted itself (Tools ``load_tools`` loaded).
+
+        The loaded Tools join the request Tools on routes that list announced
+        Tools; every other route keeps sending the same Tool list.
+        """
+        tool_epoch = state.tool_epoch
+        if tool_epoch is None or not changes:
+            return state
+        tool_epoch = tool_epoch.with_changes(changes)
+        tools, allowed_tool_names, session_tool_grants, tool_contracts = await self._tool_fields(
+            tool_epoch,
+            state.session_tool_grants,
+            list_announced=list_announced,
+            tool_loads=state.tool_loads,
         )
         return replace(
             state,
@@ -753,13 +798,28 @@ class RequestBuilder:
         live_tool_grants: Sequence[str],
         *,
         list_announced: bool,
+        tool_loads: Mapping[str, ToolChange] | None = None,
     ) -> tuple[list[JsonObject], tuple[str, ...], tuple[str, ...], Mapping[str, ToolContract]]:
-        """Return request Tools, allowlist, grants and contracts of *tool_epoch*."""
+        """Return request Tools, allowlist, grants and contracts of *tool_epoch*.
+
+        An On-demand Tool the Model may load gets its contract from *tool_loads*
+        (the definition a load would return), so a call made without loading
+        it first validates against the same definition.
+        """
         allowed_tool_names = tool_epoch.allowed_names
         allowed = set(allowed_tool_names)
+        loads = tool_loads or {}
         tool_contracts = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.tools.contracts_for_provider_definitions,
-            tool_epoch.definitions(),
+            [
+                *tool_epoch.definitions(),
+                *(
+                    definition
+                    for name in tool_epoch.loadable_names
+                    if (change := loads.get(name)) is not None
+                    and (definition := change.definition) is not None
+                ),
+            ],
         )
         return (
             tool_epoch.request_tools(list_announced=list_announced),
@@ -803,12 +863,22 @@ class RequestBuilder:
             and not await self._dependencies.image_understanding_available()
         ):
             usable.discard(ANALYZE_IMAGE_TOOL_NAME)
+        on_demand = await _CHAT_TRANSFORM_WORKERS.run(
+            partial(
+                on_demand_tool_entries,
+                self._dependencies.tools,
+                agent,
+                offered,
+                session_tool_grants=session_tool_grants,
+            )
+        )
         return LiveToolCatalog(
             usable=frozenset(usable),
             offered=tuple(offered),
             sources=sources,
             session_tool_grants=tuple(session_tool_grants),
             change_notes={name: note for name, note in change_notes.items() if name in usable},
+            on_demand=dict(on_demand),
         )
 
     def _measure_tool_definitions(
@@ -908,11 +978,16 @@ class RequestBuilder:
     async def preview_tool_definitions(
         self, agent: Any, *, session_tool_grants: Sequence[str] = ()
     ) -> list[JsonObject]:
-        """Apply the production Tool-route rules without starting a Run or calling a Model."""
-        tools = await self._dependencies.get_system_prompts().provider_tool_definitions_async(
+        """Apply the production Tool-route rules without starting a Run or calling a Model.
+
+        Every Tool the Agent may use is listed with its definition, so
+        ``load_tools`` is left out.
+        """
+        definitions = await self._dependencies.get_system_prompts().provider_tool_definitions_async(
             agent,
             session_tool_grants=session_tool_grants,
         )
+        tools = [tool for tool in definitions if tool.get("name") != LOAD_TOOLS_TOOL_NAME]
         dialect = edit_dialect(_model_family(self._dependencies, agent))
         if not any(tool.get("name") == ANALYZE_IMAGE_TOOL_NAME for tool in tools):
             return await self._route_tool_definitions(

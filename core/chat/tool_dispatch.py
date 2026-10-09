@@ -42,6 +42,7 @@ from core.tools.availability import (
     agent_tool_settings,
     resolve_tool_access,
 )
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -83,6 +84,9 @@ class ToolDispatchContext:
     # Tools announced as removed in this prompt epoch; calls to them fail with
     # ``tool_removed`` before any hook or handler runs.
     removed_tool_names: Collection[str] = frozenset()
+    # On-demand Tools a ``load_tools`` call may load: registry name -> the
+    # definition it returns (``RequestState.loadable_tools``).
+    loadable_tools: Mapping[str, JsonObject] = field(default_factory=dict)
     change_tracker: ChangeTracker | None = None
     allow_owned_effects: bool = False
     _result_persisted_callbacks: dict[str, list[ToolResultPersistedCallback]] = field(
@@ -103,6 +107,9 @@ class ToolDispatchContext:
     )
     _closed_payload_calls: set[str] = field(
         default_factory=set, init=False, repr=False, compare=False
+    )
+    _tool_loads: list[tuple[str, tuple[str, ...]]] = field(
+        default_factory=list, init=False, repr=False, compare=False
     )
 
     def register_result_persisted(
@@ -179,6 +186,15 @@ class ToolDispatchContext:
             )
             for call_id, fact in facts.items()
         }
+
+    def record_tool_load(self, tool_call_id: str, names: Sequence[str]) -> None:
+        """Keep the Tools a successful ``load_tools`` call loaded, for its Result's batch."""
+        self._tool_loads.append((tool_call_id, tuple(names)))
+
+    @property
+    def tool_loads(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """``(tool_call_id, registry names)`` of each successful ``load_tools`` call."""
+        return tuple(self._tool_loads)
 
     @property
     def delivery_receipts(self) -> tuple[tuple[str, str, str, str], ...]:
@@ -844,6 +860,8 @@ class ToolRound:
             ),
             tool_result_payload_registrar=context.stage_result_payload,
             input_contracts=context.tool_contracts,
+            loadable_tools=context.loadable_tools,
+            tool_load_registrar=context.record_tool_load,
             change_tracker=context.change_tracker,
         )
         # Calls run in the context the round was opened in, never in the
@@ -1164,7 +1182,8 @@ def _dispatch_allowed_tools(
     The file edit Tools (``apply_patch``, ``edit``, ``write``) count as one: a
     route offers one dialect of them, and a call to a sibling it did not offer
     runs as that Tool when the Agent's Tool policy allows it. A restriction that
-    names one of them admits all three.
+    names one of them admits all three. ``load_tools`` stays allowed under a
+    restriction: it grants nothing and loads only Tools the restriction allows.
     """
     if base_allowed_tools is None:
         effective = list(
@@ -1188,7 +1207,12 @@ def _dispatch_allowed_tools(
     if tool_restriction is None:
         return effective
     restriction = {*tool_restriction, *edit_tool_siblings(tool_restriction)}
-    return [tool.name for tool in tool_registry.list_tools(effective) if tool.name in restriction]
+    allowed = [
+        tool.name for tool in tool_registry.list_tools(effective) if tool.name in restriction
+    ]
+    if LOAD_TOOLS_TOOL_NAME in effective:
+        allowed.append(LOAD_TOOLS_TOOL_NAME)
+    return allowed
 
 
 def _agent_workspace(agent: Any, data_root: Path) -> Path:
