@@ -31,7 +31,7 @@ from typing import Any, Literal, cast
 
 from core.chat.messages import ChatMessage, JsonObject
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX, is_tool_change_note
-from core.tools import ToolDefinitionChangeNote, model_tool_name
+from core.tools import ToolDefinitionChangeNote, is_tool_result_envelope, model_tool_name
 from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
 from core.utils.logging import get_logger
 
@@ -73,6 +73,21 @@ _ON_DEMAND_UNSUMMARIZED = (
     "Tool {name} is now available. Load its definition with `{loader}` before you call it."
 )
 _SENTENCE_ENDS = (".", "!", "?", "…")
+# Error codes of the Tool Results of calls that never reached their Tool: refused
+# at dispatch (unknown, not allowed or removed Tool) or never started (Tool calls
+# disabled for the Run's finalization, the Tool iteration limit, a Provider turn
+# that ended unsafely).
+_NOT_RUN_CODES = frozenset(
+    {
+        "tool_not_found",
+        "tool_not_allowed",
+        "tool_removed",
+        "tool_calls_disabled",
+        "tool_iteration_limit",
+        "tool_call_truncated",
+        "tool_call_rejected",
+    }
+)
 _CHANGE_DETAIL = "\nChange: {detail}"
 _DEFINITION = "\nDescription: {description}\nParameters (JSON Schema): {schema}"
 
@@ -708,19 +723,41 @@ def without_other_epoch_tool_changes(
 
 
 def called_tool_names(messages: Iterable[ChatMessage]) -> frozenset[str]:
-    """Return the Tools Assistant turns of the current epoch called and dispatch accepted.
+    """Return the Tools the Session's current Agent called in the current epoch.
 
-    Only calls after the last Compaction checkpoint count; a call rejected
-    before it ran (unknown, not allowed or removed Tool) does not.
+    Only calls after the last Compaction checkpoint and the last Agent
+    Takeover count. A call whose Tool never ran does not: one the Provider
+    turn already rejected, and one whose Tool Result (matched by
+    ``tool_call_id``) reports a refusal at dispatch or a call that was not
+    started (:data:`_NOT_RUN_CODES`). A call without a Tool Result counts.
     """
 
-    called: set[str] = set()
+    called: dict[str, str] = {}
     for message in messages:
-        if message.role == "compaction_checkpoint":
+        if message.role in ("compaction_checkpoint", "agent_takeover"):
             called.clear()
         elif message.role == "assistant":
-            called.update(call.name for call in message.tool_calls or () if call.rejection is None)
-    return frozenset(called)
+            called.update(
+                (call.id, call.name) for call in message.tool_calls or () if call.rejection is None
+            )
+        elif message.role == "tool" and _not_run(message.content):
+            called.pop(str(message.tool_call_id), None)
+    return frozenset(called.values())
+
+
+def _not_run(content: object) -> bool:
+    """Whether Tool Result *content* reports a call that never reached its Tool."""
+
+    if not isinstance(content, str):
+        return False
+    try:
+        envelope = json.loads(content)
+    except ValueError:
+        return False
+    if not isinstance(envelope, dict) or not is_tool_result_envelope(envelope):
+        return False
+    error = envelope.get("error")
+    return isinstance(error, dict) and error.get("code") in _NOT_RUN_CODES
 
 
 def _change_detail(

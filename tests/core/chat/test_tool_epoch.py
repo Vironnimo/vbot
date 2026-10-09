@@ -8,6 +8,11 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.chat._step_outcomes import (
+    TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+    TOOL_ITERATION_LIMIT_FAILURE_CODE,
+    _terminal_tool_failure,
+)
 from core.chat._tool_epoch import (
     LiveToolCatalog,
     ToolChange,
@@ -19,7 +24,9 @@ from core.chat._tool_epoch import (
     without_other_epoch_tool_changes,
 )
 from core.chat.messages import ToolCall, ToolCallRejection
-from core.tools import ToolDefinitionChangeNote
+from core.chat.tool_dispatch import TOOL_REMOVED_ERROR_CODE
+from core.providers.adapter import TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+from core.tools import ToolDefinitionChangeNote, tool_failure, tool_success
 
 JsonObject = dict[str, Any]
 
@@ -337,8 +344,18 @@ def test_a_new_epoch_keeps_listing_the_tools_kept_through_compaction() -> None:
     assert _plan(ToolEpochView(pin=pin), catalog) == []
 
 
-def test_called_tool_names_counts_the_accepted_calls_of_the_current_epoch() -> None:
+def test_called_tool_names_counts_the_calls_of_the_current_agent_whose_tool_ran() -> None:
     rejection = ToolCallRejection(code="unknown_tool", message="Unknown Tool.", fingerprint="f")
+    # The codes of the Results that dispatch and the Run write for calls that never ran.
+    not_run = [
+        "tool_not_found",
+        "tool_not_allowed",
+        TOOL_REMOVED_ERROR_CODE,
+        TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+        TOOL_ITERATION_LIMIT_FAILURE_CODE,
+        _terminal_tool_failure(TERMINAL_OUTCOME_OUTPUT_TRUNCATED)[0],
+        _terminal_tool_failure(None)[0],
+    ]
 
     def calls(*names: str, rejected: str | None = None) -> ChatMessage:
         return ChatMessage.assistant(
@@ -354,14 +371,31 @@ def test_called_tool_names_counts_the_accepted_calls_of_the_current_epoch() -> N
             ],
         )
 
+    def result(name: str, envelope: JsonObject) -> ChatMessage:
+        return ChatMessage.tool(
+            tool_call_id=f"call-{name}", name=name, content=json.dumps(envelope)
+        )
+
+    refused = [f"refused-{index}" for index in range(len(not_run))]
     messages = [
         calls("old"),
         ChatMessage.compaction_checkpoint(
             summary="Summary.", projection=[], compacted_token_count=0
         ),
-        calls("search", "fetch", rejected="fetch"),
+        # The Agent that handed the Session over called this one.
+        calls("previous"),
+        result("previous", tool_success({})),
+        ChatMessage.agent_takeover(from_address="coder", to_address="writer"),
+        calls("search", "fetch", "edit", "pending", rejected="fetch"),
+        result("search", tool_success({})),
+        # Invalid arguments reached the Tool's contract: the Agent uses that Tool.
+        result("edit", tool_failure("invalid_arguments", "Fix the arguments.")),
         ChatMessage.user("Next."),
-        calls("read"),
+        calls(*refused),
+        *(
+            result(name, tool_failure(code, "Not run."))
+            for name, code in zip(refused, not_run, strict=True)
+        ),
     ]
 
-    assert called_tool_names(messages) == frozenset({"search", "read"})
+    assert called_tool_names(messages) == frozenset({"search", "edit", "pending"})
