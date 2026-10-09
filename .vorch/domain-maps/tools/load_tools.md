@@ -31,7 +31,7 @@ Display: one identifier part listing the requested Model-facing names. Tests: `t
 
 | Text | Reason |
 |---|---|
-| `Load the full definitions of Tools listed under "Tools Loaded on Demand" in your instructions, so you can call them.` | Names the job and points at the System Prompt section the names come from, so the Agent does not guess names or search for Tools. |
+| `Load the full definitions of Tools that your instructions list as loadable on demand, so you can call them.` | Names the job and points at the System Prompt list the names come from, so the Agent does not guess names or search for Tools. Does not quote the block heading, which the user can edit. |
 | `Pass every Tool the current task needs in one call.` | One call per task keeps the extra Model turns low; weak Models otherwise load one Tool per call. |
 | `names`: `Names of the Tools to load, exactly as listed.` | Pins the source of valid values to the listed names. |
 | `- <name>: loaded` / `already available; call it directly` / `not available to load` | Batch result: each name's outcome by position, so the Agent knows which calls it can now make and does not reload a listed Tool. |
@@ -41,7 +41,7 @@ Display: one identifier part listing the requested Model-facing names. Tests: `t
 | `Nothing was loaded: the call named no Tool.` / `Nothing was loaded: no Tool named "<name>" can be loaded.` | States that nothing changed and why, with the rejected value. |
 | `Call load_tools again with "names" set to the Tools the task needs from that list, for example {"names": [...]}.` | The next call in copyable form. |
 | `Every Tool you can use is already available; call it directly by name.` | Stops retries when there is nothing to load. |
-| Block `## Tools Loaded on Demand` | The heading the description points to, so the Agent finds the names. |
+| Block `## Tools Loaded on Demand` | A heading the Agent can find the list under again. |
 | Block `You can also use the Tools listed below, but their definitions are not in your Tool list.` | Says the listed Tools are usable, so the Agent does not treat them as unavailable. |
 | Block ``Before you call one of them for the first time, load its definition with `load_tools`.`` | The required next action, and only once per Tool. |
 | Block `Load all Tools a task needs in one call.` | Keeps extra Model turns low. |
