@@ -28,6 +28,7 @@
   let streaming = $state(false);
   let stream;
   let streamAttached = false;
+  let streamSeek = null;
   // The automatic start is requested once per attached source: withdrawing
   // `autoplay` afterwards neither cancels a pending start nor stops playback.
   let autoplayRequested = false;
@@ -117,6 +118,7 @@
       // belongs only to a player that saw the in-progress generation.
       const transient = nextPlayback && !next;
       streamAttached = Boolean(transient);
+      streamSeek = null;
       streaming = Boolean(transient);
       node.pause();
       paused = true;
@@ -223,10 +225,10 @@
       if (media.error) media.load();
       if (streamAttached) {
         streamAttached = false;
-        media.currentTime = 0;
+        media.currentTime = streamSeek ?? 0;
+        streamSeek = null;
         syncTime();
-      }
-      if (media.ended) media.currentTime = 0;
+      } else if (media.ended) media.currentTime = 0;
       await media.play();
     } catch (failure) {
       if (request !== generation) return;
@@ -262,10 +264,18 @@
 
   function seek(event) {
     if (!audio || !duration) return;
-    audio.currentTime = Math.max(
+    const position = Math.max(
       0,
       Math.min(duration, Number(event.currentTarget.value)),
     );
+    if (streamAttached) {
+      // The stream can finish before its artifact or metadata arrives. Keep
+      // the user's selection until the first artifact playback takes over.
+      streamSeek = position;
+      currentTime = position;
+      return;
+    }
+    audio.currentTime = position;
     currentTime = audio.currentTime;
   }
 
