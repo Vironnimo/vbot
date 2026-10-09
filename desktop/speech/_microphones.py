@@ -106,14 +106,23 @@ def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) 
             return [requested_index]
         return matches if len(matches) == 1 else []
 
+    # PortAudio's global Windows default commonly uses the legacy MME mapper.
+    # WASAPI's own default follows the Windows endpoint too, with much smaller
+    # shared-mode buffers. This preference applies only to automatic selection.
+    host_apis = sd.query_hostapis()
     candidates: list[int] = []
+    for host_api in host_apis:
+        if host_api.get("name") == "Windows WASAPI":
+            host_default = host_api.get("default_input_device", -1)
+            if isinstance(host_default, int) and host_default >= 0:
+                candidates.append(host_default)
     try:
         default_input = int(sd.default.device[0])
     except IndexError, TypeError, ValueError:
         default_input = -1
     if default_input >= 0:
         candidates.append(default_input)
-    for host_api in sd.query_hostapis():
+    for host_api in host_apis:
         host_default = host_api.get("default_input_device", -1)
         if isinstance(host_default, int) and host_default >= 0:
             candidates.append(host_default)
@@ -163,15 +172,6 @@ def _capture_format_for_device(sd: Any, device: int) -> CaptureFormat | None:
     return None
 
 
-def _select_capture_format(sd: Any, requested_device: dict[str, Any] | None) -> CaptureFormat:
-    """Select a usable requested or automatic input format."""
-    for device in _candidate_device_indices(sd, requested_device):
-        capture_format = _capture_format_for_device(sd, device)
-        if capture_format is not None:
-            return capture_format
-    raise MicrophoneUnavailableError("No input device supports speech capture")
-
-
 def open_input_stream(
     sd: Any,
     requested_device: dict[str, Any] | None,
@@ -180,28 +180,50 @@ def open_input_stream(
 
     ``requested_device`` is the stored ``{index, name, host_api}`` selection or
     ``None`` for automatic selection. PortAudio chooses the host buffer size;
-    callers read any frame count. Raises :class:`MicrophoneUnavailableError` when no device
-    fits, or the backend's own error when opening fails. The stream counts as
-    open until :func:`close_input_stream`.
+    callers read any frame count. Automatic selection tries its next candidate
+    if a usable format fails to open or start. An explicit device never changes.
+    Raises :class:`MicrophoneUnavailableError` when no device fits, or the last
+    backend error when opening fails. The stream counts as open until
+    :func:`close_input_stream`.
     """
     global _open_stream_count
     with AUDIO_BACKEND_LOCK:
-        capture_format = _select_capture_format(sd, requested_device)
-        stream = sd.InputStream(
-            samplerate=capture_format.sample_rate,
-            channels=CAPTURE_CHANNELS,
-            dtype=capture_format.dtype,
-            blocksize=0,
-            device=capture_format.device,
-        )
-        _open_stream_count += 1
-        try:
-            stream.start()
-        except BaseException:
-            _open_stream_count -= 1
-            _close_quietly(stream)
-            raise
-    return stream, capture_format
+        last_error: Exception | None = None
+        for device in _candidate_device_indices(sd, requested_device):
+            capture_format = _capture_format_for_device(sd, device)
+            if capture_format is None:
+                continue
+            stream = None
+            try:
+                stream = sd.InputStream(
+                    samplerate=capture_format.sample_rate,
+                    channels=CAPTURE_CHANNELS,
+                    dtype=capture_format.dtype,
+                    blocksize=0,
+                    # WASAPI blocking reads poll. PortAudio warns that too-low
+                    # shared-mode latency can distort audio; use the backend's
+                    # robust default, not the global sounddevice preference.
+                    latency="high",
+                    device=capture_format.device,
+                )
+                stream.start()
+            except BaseException as error:
+                if stream is not None:
+                    _close_quietly(stream)
+                if not isinstance(error, Exception):
+                    raise
+                last_error = error
+                logger.debug(
+                    "Microphone candidate could not open (host_api=%s error_type=%s)",
+                    capture_format.host_api,
+                    type(error).__name__,
+                )
+                continue
+            _open_stream_count += 1
+            return stream, capture_format
+    if last_error is not None:
+        raise last_error
+    raise MicrophoneUnavailableError("No input device supports speech capture")
 
 
 def close_input_stream(stream: Any) -> None:

@@ -289,13 +289,18 @@ def test_flush_pads_the_last_partial_frame_and_restarts_timing(harness: Harness)
 # ----------------------------------------------------------------------------- alignment
 
 
-def test_reference_window_leads_each_capture_frame_of_a_delayed_echo(harness: Harness) -> None:
+@pytest.mark.parametrize("mic_block", [960, 3840], ids=["20ms", "80ms"])
+def test_reference_window_leads_each_capture_frame_of_a_delayed_echo(
+    harness: Harness, mic_block: int
+) -> None:
     harness.open()
     echo_delay = RATE * 60 // 1000
     reference = noise(RATE * 2, seed=4)
     mic = lagged(reference, echo_delay)
 
-    output = simulate(harness, reference=reference, mic=mic, jitter=every_third_late)
+    output = simulate(
+        harness, reference=reference, mic=mic, mic_block=mic_block, jitter=every_third_late
+    )
 
     processor = harness.processor
     assert np.array_equal(output, mic)
@@ -557,7 +562,7 @@ def test_clock_reanchors_after_a_gap_and_after_a_persistent_jump() -> None:
     assert placed == BASE + end + 2400 - FRAME
 
 
-MIC_BLOCK = 1920  # the capture's 40 ms blocks
+MIC_BLOCK = 1920  # 40 ms blocks exercise the clock's slower drift-correction limit
 
 
 def deliver_device(

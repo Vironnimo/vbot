@@ -83,6 +83,7 @@ def start_capture() -> Iterator[Callable[..., Running]]:
             stop_event=stop,
             backend=sd,
             reconnect_interval=kwargs.pop("reconnect_interval", 0.05),
+            block_seconds=kwargs.pop("block_seconds", 0.04),
             **kwargs,
         )
         run = Running(capture, stop, statuses)
@@ -171,6 +172,40 @@ def gated_pool(
 
 
 # -- Projections ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rate", [16000, 44100, 48000])
+def test_default_capture_delivers_twenty_ms_blocks_without_losing_samples(rate: int) -> None:
+    sd = FakeSoundDevice(default_samplerate=rate)
+    signal = tone(0.1, rate)
+    sd.feed(signal)
+    stop = threading.Event()
+    capture = AudioCapture(
+        microphone=None,
+        echo_cancellation=False,
+        echo_stages=None,
+        on_status=lambda status: None,
+        stop_event=stop,
+        backend=sd,
+    )
+    subscription = capture.subscribe(max_seconds=1.0)
+
+    capture.start()
+    try:
+        blocks = read_items(subscription, 5)
+        assert all(isinstance(block, AudioBlock) for block in blocks)
+        assert [block.duration for block in blocks if isinstance(block, AudioBlock)] == (
+            pytest.approx([0.02] * 5)
+        )
+        assert np.array_equal(np.concatenate([samples(block) for block in blocks]), signal)
+        assert all(
+            block.recording_rate == rate for block in blocks if isinstance(block, AudioBlock)
+        )
+        assert sd.streams[0].blocksize == 0
+        assert sd.streams[0].requested_latency == "high"
+    finally:
+        stop.set()
+        assert capture.join(5)
 
 
 def test_blocks_carry_the_detection_projection_and_the_recording(
@@ -787,6 +822,14 @@ def _headset() -> FakeSoundDevice:
     return sd
 
 
+def _windows_defaults() -> FakeSoundDevice:
+    """PortAudio's legacy default and the Windows WASAPI default may differ."""
+    return _sound_device(
+        [("Legacy mic", 0), ("Windows default mic", 1)],
+        [("MME", 0), ("Windows WASAPI", 1)],
+    )
+
+
 def _opened_format(sd: FakeSoundDevice, requested: dict[str, Any] | None) -> CaptureFormat:
     stream, capture_format = open_input_stream(sd, requested)
     close_input_stream(stream)
@@ -870,6 +913,30 @@ _STUDIO = {"index": 0, "name": "Studio mic", "host_api": "ASIO"}
         ),
         pytest.param(_headset, None, (1, "Windows WASAPI"), id="automatic-skips-exclusive-wdm-ks"),
         pytest.param(
+            _windows_defaults,
+            None,
+            (1, "Windows WASAPI"),
+            id="automatic-prefers-the-wasapi-system-default",
+        ),
+        pytest.param(
+            _windows_defaults,
+            {"index": 0, "name": "Legacy mic", "host_api": "MME"},
+            (0, "MME"),
+            id="saved-mme-is-never-remapped-to-wasapi",
+        ),
+        pytest.param(
+            lambda: _sound_device([("Default mic", 0), ("Other mic", 0)], [("ALSA", 1)]),
+            None,
+            (0, "ALSA"),
+            id="other-platforms-keep-the-backend-default",
+        ),
+        pytest.param(
+            lambda: _sound_device([("Legacy mic", 0)], [("MME", 0), ("Windows WASAPI", -1)]),
+            None,
+            (0, "MME"),
+            id="missing-wasapi-default-keeps-the-backend-default",
+        ),
+        pytest.param(
             _headset,
             {"index": 0, "name": "Headset", "host_api": "Windows WDM-KS"},
             None,
@@ -891,6 +958,59 @@ def test_open_input_stream_only_uses_a_shared_microphone_matching_its_identity(
     else:
         capture_format = _opened_format(sd, requested)
         assert (capture_format.device, capture_format.host_api) == expected
+
+
+@pytest.mark.parametrize("failure", ["open", "start"])
+@pytest.mark.parametrize("explicit", [False, True], ids=["automatic", "explicit"])
+def test_failed_streams_are_closed_before_automatic_fallback(failure: str, explicit: bool) -> None:
+    sd = _windows_defaults()
+    requested = (
+        {"index": 1, "name": "Windows default mic", "host_api": "Windows WASAPI"}
+        if explicit
+        else None
+    )
+    if failure == "open":
+        sd.open_failures = 1
+    else:
+        sd.start_errors.append(OSError("Device stopped during startup"))
+
+    if explicit:
+        with pytest.raises(OSError):
+            open_input_stream(sd, requested)
+        assert sd.open_attempts == [1]
+    else:
+        stream, capture_format = open_input_stream(sd, requested)
+        try:
+            assert sd.open_attempts == [1, 0]
+            assert (capture_format.device, capture_format.host_api) == (0, "MME")
+            assert all(failed.closed for failed in sd.streams[:-1])
+            if failure == "start":
+                assert sd.events[:4] == [
+                    "stream.open",
+                    "start_failed",
+                    "stream.close",
+                    "stream.open",
+                ]
+            assert refresh_microphone_devices(sd) is False
+        finally:
+            close_input_stream(stream)
+
+    assert all(stream.closed for stream in sd.streams)
+    # Failed opens/starts must not leak the active-stream count.
+    assert refresh_microphone_devices(sd) is True
+
+
+def test_interrupted_stream_start_cleans_up_without_trying_another_microphone() -> None:
+    sd = _windows_defaults()
+    sd.start_errors.append(KeyboardInterrupt())
+
+    with pytest.raises(KeyboardInterrupt):
+        open_input_stream(sd, None)
+
+    assert sd.open_attempts == [1]
+    assert len(sd.streams) == 1
+    assert sd.streams[0].closed
+    assert refresh_microphone_devices(sd) is True
 
 
 def test_the_microphone_list_hides_wdm_ks_devices() -> None:

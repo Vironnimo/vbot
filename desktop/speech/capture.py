@@ -63,7 +63,7 @@ logger = logging.getLogger("vbot.desktop.speech.capture")
 DETECTION_SAMPLE_RATE = 16000
 """Rate of every block's ``pcm16`` projection."""
 
-BLOCK_SECONDS = 0.04
+BLOCK_SECONDS = 0.02
 """Native audio read per blocking call."""
 
 HISTORY_SECONDS = 3.0
@@ -635,12 +635,17 @@ class AudioCapture:
         self._stream = stream
         self._format = capture_format
         self._prepare_stage(capture_format.sample_rate)
+        latency = getattr(stream, "latency", None)
+        latency_ms = round(latency * 1000, 1) if isinstance(latency, (int, float)) else None
         logger.info(
-            "Microphone opened (device=%s, host_api=%s, rate=%s, echo=%s)",
+            "Microphone opened (device=%s host_api=%s rate=%s echo=%s "
+            "reported_latency_ms=%s read_ms=%s)",
             capture_format.name,
             capture_format.host_api,
             capture_format.sample_rate,
             self._stage.state,
+            latency_ms,
+            round(self._block_seconds * 1000, 1),
         )
         self._publish(
             CaptureStatus(
