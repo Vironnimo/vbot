@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
@@ -313,9 +314,11 @@ async def test_waiting_texts_are_newest_first_and_skipped_texts_never_wait(
         _change("old", [_passage("alpha", timestamp="2026-01-01T00:00:00.000000Z")]),
         _change("new", [_passage("beta", timestamp="2026-06-01T00:00:00.000000Z")]),
         _change("newest", [_passage("gamma", timestamp="2026-07-01T00:00:00.000000Z")]),
+        _change("duplicate", [_passage("alpha", timestamp="2026-07-01T00:00:00.000000Z")]),
     )
 
-    assert [text for _key, text in await index.pending_texts(limit=2)] == ["gamma", "beta"]
+    # A repeated text uses its newest Passage; equal dates break ties by hash.
+    assert [text for _key, text in await index.pending_texts(limit=2)] == ["alpha", "gamma"]
     candidates = _candidates("old", "new")
     since = datetime(2026, 3, 1, tzinfo=UTC)
     assert await index.count_pending(candidates) == 2
@@ -323,10 +326,10 @@ async def test_waiting_texts_are_newest_first_and_skipped_texts_never_wait(
 
     assert await index.record_skipped(HEADER, {text_hash("beta"): "context_overflow"}, at=AT)
 
-    assert [text for _key, text in await index.pending_texts(limit=10)] == ["gamma", "alpha"]
+    assert [text for _key, text in await index.pending_texts(limit=10)] == ["alpha", "gamma"]
     assert await index.count_pending(candidates) == 1
     counts = await index.counts()
-    assert (counts.indexed, counts.waiting, counts.skipped) == (0, 2, 1)
+    assert (counts.indexed, counts.waiting, counts.skipped) == (0, 3, 1)
     assert (counts.waiting_texts, counts.waiting_characters) == (2, len("gamma") + len("alpha"))
     # A space the index has left records nothing.
     other = VectorHeader(provider_id="p", model_id="m2", dimension=3)
@@ -334,6 +337,49 @@ async def test_waiting_texts_are_newest_first_and_skipped_texts_never_wait(
         False
     )
     assert (await index.counts()).skipped == 1
+    # Finishing one text removes every queued copy without affecting priority.
+    await index.store_vectors(HEADER, {text_hash("alpha"): VECTORS["alpha"]})
+    assert await index.pending_texts(limit=10) == [(text_hash("gamma"), "gamma")]
+    counts = await index.counts()
+    assert (counts.indexed, counts.waiting, counts.skipped) == (2, 1, 1)
+    assert (counts.waiting_texts, counts.waiting_characters) == (1, len("gamma"))
+    index.close()
+
+
+async def test_queue_reads_do_not_walk_already_indexed_passages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index = PassageIndex(tmp_path)
+    await _index(index, {"done": [_passage("alpha")]})
+    await _apply(index, _change("waiting", [_passage("beta")]))
+    original_read = index.read
+    statements: list[str] = []
+
+    async def recording_read[T](operation: Callable[[sqlite3.Connection], T]) -> T:
+        def record(connection: sqlite3.Connection) -> T:
+            connection.set_trace_callback(statements.append)
+            try:
+                return operation(connection)
+            finally:
+                connection.set_trace_callback(None)
+
+        return await original_read(record)
+
+    monkeypatch.setattr(index, "read", recording_read)
+    assert await index.pending_texts(limit=1) == [(text_hash("beta"), "beta")]
+    assert (await index.counts()).waiting_texts == 1
+    await index.store_vectors(HEADER, {text_hash("beta"): VECTORS["beta"]})
+    assert await index.pending_texts(limit=1) == []
+    assert (await index.counts()).waiting_texts == 0
+
+    def check_plans(connection: sqlite3.Connection) -> None:
+        selections = [statement for statement in statements if "FROM pending_vectors" in statement]
+        assert selections
+        for statement in selections:
+            plan = [str(row[3]) for row in connection.execute("EXPLAIN QUERY PLAN " + statement)]
+            assert not any(re.search(r"\bSCAN (?:p|passages)\b", detail) for detail in plan), plan
+
+    await original_read(check_plans)
     index.close()
 
 

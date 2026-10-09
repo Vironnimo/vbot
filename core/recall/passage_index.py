@@ -385,15 +385,24 @@ class PassageIndex(PassageCatalog):
         """
 
         def select(connection: sqlite3.Connection) -> list[tuple[str, str]]:
-            # With MAX, SQLite takes the bare text column from the newest row.
+            # CROSS JOIN keeps the queue first even when SQLite prefers the
+            # catalog's text-hash index for GROUP BY. Sort only identifiers and
+            # timestamps; carrying every text through that sort makes a full
+            # rebuild expensive. MAX picks the newest row's bare passage_ref.
             rows = connection.execute(
                 """
-                SELECT p.text_hash, p.text, MAX(p.end_timestamp) AS newest
-                FROM pending_vectors AS q JOIN passages AS p ON p.passage_ref = q.passage_ref
-                WHERE p.text_hash NOT IN (SELECT text_hash FROM skipped_texts)
-                GROUP BY p.text_hash
-                ORDER BY newest DESC, p.text_hash
-                LIMIT ?
+                WITH next_texts AS MATERIALIZED (
+                    SELECT p.text_hash, p.passage_ref, MAX(p.end_timestamp) AS newest
+                    FROM pending_vectors AS q
+                    CROSS JOIN passages AS p ON p.passage_ref = q.passage_ref
+                    WHERE p.text_hash NOT IN (SELECT text_hash FROM skipped_texts)
+                    GROUP BY p.text_hash
+                    ORDER BY newest DESC, p.text_hash
+                    LIMIT ?
+                )
+                SELECT n.text_hash, p.text FROM next_texts AS n
+                JOIN passages AS p ON p.passage_ref = n.passage_ref
+                ORDER BY n.newest DESC, n.text_hash
                 """,
                 (limit,),
             ).fetchall()
@@ -907,11 +916,14 @@ def _counts(connection: sqlite3.Connection) -> IndexCounts:
         ).fetchone()[0]
     )
     texts, characters = connection.execute(
-        "SELECT COUNT(*), COALESCE(SUM(characters), 0) FROM ("
-        "  SELECT MAX(length(p.text)) AS characters FROM pending_vectors AS q "
-        "  JOIN passages AS p ON p.passage_ref = q.passage_ref "
+        # Materialize lengths before grouping so the queue-first plan sorts
+        # small integers, not the full text of every waiting Passage.
+        "WITH waiting AS MATERIALIZED ("
+        "  SELECT p.text_hash, length(p.text) AS characters FROM pending_vectors AS q "
+        "  CROSS JOIN passages AS p ON p.passage_ref = q.passage_ref "
         "  WHERE p.text_hash NOT IN (SELECT text_hash FROM skipped_texts) "
-        "  GROUP BY p.text_hash"
+        ") SELECT COUNT(*), COALESCE(SUM(characters), 0) FROM ("
+        "  SELECT MAX(characters) AS characters FROM waiting GROUP BY text_hash"
         ")"
     ).fetchone()
     return IndexCounts(
