@@ -523,6 +523,80 @@ class SkillAuthoringService:
                 archive_id=archive_id,
             )
 
+    def rename(
+        self, target_root: Path, skill_name: str, new_name: str, *, writer: SkillWriter
+    ) -> SkillWriteResult:
+        """Give a Skill of the home another name, keeping its files and history.
+
+        The package folder moves to ``new_name`` and the ``name`` of its
+        ``SKILL.md`` changes with it; every other file stays as it is. The
+        history records one ``rename`` revision under ``new_name``, which carries
+        the Skill's origin, pin and earlier revisions over. Refused when another
+        Skill of the home has ``new_name`` or Windows reserves it. A name that
+        differs only in case renames in place.
+        """
+        with self._write_lock:
+            _check_writer(writer)
+            _validate_skill_name(new_name)
+            if is_reserved_name(new_name):
+                raise SkillAuthoringError(reserved_name_message("Skill name", new_name))
+            source = self._resolved_skill_dir(target_root, skill_name)
+            destination = self._skill_dir(target_root, new_name)
+            if destination.exists() and not _same_entry(source, destination):
+                raise SkillAuthoringError(f"Skill '{new_name}' already exists.")
+            history = SkillHistory(source.parent)
+            self._observe(history, skill_name, source, writer)
+            self._observe(history, new_name, None, writer)
+            current = _read_text_file(source / SKILL_FILENAME, SKILL_FILENAME)
+            front_matter, body, _ = split_skill_document(_normalize_newlines(current))
+            parsed, _ = parse_skill_front_matter(front_matter)
+            fields = {**(parsed if isinstance(parsed, dict) else {}), "name": new_name}
+            # A rename writes no instructions: the document keeps its author.
+            declared = declared_origin(source)
+            document, validation = self._prepare_document(
+                _assemble_document(fields, body),
+                skill_name=new_name,
+                skill_file=destination / SKILL_FILENAME,
+                author="agent" if declared == "agent" else "human",
+                source=None,
+            )
+            source.rename(destination)
+            try:
+                _atomic_write_styled(
+                    destination / SKILL_FILENAME, document, _detect_line_ending(current)
+                )
+            except OSError:
+                destination.rename(source)
+                raise
+            revision: int | None = None
+            try:
+                files, texts = history.changes(skill_name, destination, (SKILL_FILENAME,))
+                revision = history.append(
+                    skill=new_name,
+                    kind="rename",
+                    actor=writer.actor,
+                    files=files,
+                    texts=texts,
+                    session_id=writer.session_id,
+                    run_id=writer.run_id,
+                    run_kind=writer.run_kind,
+                    renamed_from=skill_name,
+                ).id
+            except Exception as error:
+                _LOGGER.warning("Skill history of '%s' not recorded: %s", new_name, error)
+            return SkillWriteResult(
+                name=new_name,
+                operation="rename",
+                path=destination / SKILL_FILENAME,
+                warnings=validation.warnings,
+                changes=(
+                    SkillFileChange(
+                        SKILL_FILENAME, "updated", _normalize_newlines(current), document
+                    ),
+                ),
+                revision=revision,
+            )
+
     def publish(
         self, source_root: Path, target_root: Path, skill_name: str, *, writer: SkillWriter
     ) -> SkillWriteResult:
@@ -1087,6 +1161,10 @@ class SkillAuthoringService:
             if self._is_live(root, target):
                 return replace(entry, holder=target, holder_since=since)
             passed.add(target)
+            # A holder renamed since holds the instructions under its new name.
+            renamed = _current_name(root, target)
+            if renamed is not None and renamed not in passed and self._is_live(root, renamed):
+                return replace(entry, holder=renamed, holder_since=since)
             later = newest.get(target)
             if later is None:
                 break
@@ -1329,6 +1407,22 @@ def _reject_redirect(path: Path) -> None:
         return
     if redirect:
         raise SkillAuthoringError("Refusing to write through a symlink or junction Skill path.")
+
+
+def _current_name(root: Path, former_name: str) -> str | None:
+    """The name a Skill of *root* once named *former_name* has now, if the history knows it."""
+    try:
+        return SkillHistory(root).current_name(former_name)
+    except OSError:
+        return None
+
+
+def _same_entry(first: Path, second: Path) -> bool:
+    """Whether two paths name one directory entry, such as names differing only in case."""
+    try:
+        return first.samefile(second)
+    except OSError:
+        return False
 
 
 def _reject_new_reserved_path(skill_dir: Path, relative_path: str) -> None:
