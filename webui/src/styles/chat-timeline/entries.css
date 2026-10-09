@@ -108,8 +108,7 @@
   max-width: var(--prose-measure);
 }
 
-.messages__content .msg-body-text--user,
-.messages__content .message-block.user {
+.messages__content .msg-user-text {
   max-width: min(75%, var(--prose-measure));
 }
 
@@ -1194,22 +1193,22 @@
   margin: 0;
 }
 
-.msg-body-text--user {
+.msg-user-text {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
 /* A very long user text shows its first 14 lines until the reader asks for
-   more; the fade marks the cut. 1.55 is the bubble's line height, 20px its
-   vertical padding. */
-.msg-body-text--clamped {
+   more; the fade marks the cut. 20px covers the vertical padding of the
+   bubble and its Markdown. */
+.msg-user-text--clamped {
   position: relative;
-  max-height: calc(1.55em * 14 + 20px);
+  max-height: calc(1em * var(--md-line-height, 1.55) * 14 + 20px);
   overflow: hidden;
 }
 
-.msg-body-text--clamped::after {
+.msg-user-text--clamped::after {
   position: absolute;
   right: 0;
   bottom: 0;

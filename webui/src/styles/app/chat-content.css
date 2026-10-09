@@ -205,21 +205,20 @@
   padding-left: 0;
 }
 
-.msg-body-text--user,
-.message-block.user {
+/* The user's text renders as Chat Markdown inside a plain rounded card, in
+   the same type as Assistant prose but kept at full contrast. */
+.msg-user-text {
+  --md-text: var(--text-hi);
   max-width: 75%;
-  padding: 10px 16px;
+  padding: 8px 14px;
   border: 1px solid var(--border-2);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 var(--r-md) var(--r-md) 0;
-  color: var(--text-hi);
+  border-radius: var(--r-md);
   background: var(--surface-2);
-  font-size: var(--fs-body-lg);
-  line-height: 1.55;
+  font-size: var(--md-font-size, var(--fs-body-lg));
+  line-height: var(--md-line-height, 1.55);
 }
 
-.msg.assistant > .msg-content > .msg-body-text,
-.message-block.assistant {
+.msg.assistant > .msg-content > .msg-body-text {
   padding: 2px 0;
   color: var(--md-text, var(--text-hi));
   font-size: var(--md-font-size, var(--fs-body-lg));

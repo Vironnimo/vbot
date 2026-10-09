@@ -64,19 +64,17 @@ describe('ChatTimeline messages', () => {
     expect(measureColumn.querySelector('.msg.user')).toBeTruthy();
   });
 
-  it('renders user text literally and autolinks safe URLs', () => {
+  it('renders user text as Markdown and autolinks safe URLs', () => {
     timeline.render(
       sessionWithMessages([
-        userMessage('**literal** https://example.com/docs.'),
+        userMessage('**bold** https://example.com/docs.\n<b>raw</b>'),
       ]),
     );
 
-    const userBodyText = document.querySelector('.msg.user .msg-body-text');
-    expect(userBodyText.classList.contains('msg-body-text--user')).toBe(true);
-    expect(userBodyText.textContent).toBe(
-      '**literal** https://example.com/docs.',
-    );
-    expect(userBodyText.querySelector('strong')).toBeNull();
+    const userBodyText = document.querySelector('.msg.user .msg-user-text');
+    expect(userBodyText.querySelector('strong').textContent).toBe('bold');
+    expect(userBodyText.querySelector('b')).toBeNull();
+    expect(userBodyText.textContent).toContain('<b>raw</b>');
     const link = userBodyText.querySelector('a');
     expect(link.textContent).toBe('https://example.com/docs');
     expect(link.getAttribute('href')).toBe('https://example.com/docs');
@@ -103,16 +101,16 @@ describe('ChatTimeline messages', () => {
 
       const [short, long] = document.querySelectorAll('.msg.user');
       expect(short.querySelector('.msg-clamp-toggle')).toBeNull();
-      const bubble = long.querySelector('.msg-body-text--user');
+      const bubble = long.querySelector('.msg-user-text');
       const toggle = long.querySelector('.msg-clamp-toggle');
-      expect(bubble.classList.contains('msg-body-text--clamped')).toBe(true);
+      expect(bubble.classList.contains('msg-user-text--clamped')).toBe(true);
       expect(toggle.textContent.trim()).toBe(t('chat.showMore'));
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
 
       toggle.click();
       flushSync();
 
-      expect(bubble.classList.contains('msg-body-text--clamped')).toBe(false);
+      expect(bubble.classList.contains('msg-user-text--clamped')).toBe(false);
       expect(toggle.textContent.trim()).toBe(t('chat.showLess'));
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
     } finally {

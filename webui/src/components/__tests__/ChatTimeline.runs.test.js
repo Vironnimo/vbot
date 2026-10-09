@@ -467,7 +467,7 @@ describe('ChatTimeline Runs', () => {
       const [ordinary, ...steered] = document.querySelectorAll('.msg.user');
       expect(steered).toHaveLength(2);
       const appearance = (message) =>
-        ['.msg-body-text', '.msg-header'].map((selector) => {
+        ['.msg-user-text', '.msg-header'].map((selector) => {
           const style = getComputedStyle(message.querySelector(selector));
           return [
             style.padding,
@@ -478,7 +478,7 @@ describe('ChatTimeline Runs', () => {
             style.lineHeight,
           ];
         });
-      expect(appearance(ordinary)[0][0]).toBe('10px 16px');
+      expect(appearance(ordinary)[0][0]).toBe('8px 14px');
       for (const correction of steered) {
         expect(correction.closest('.assistant-run')).toBeTruthy();
         expect(appearance(correction)).toEqual(appearance(ordinary));

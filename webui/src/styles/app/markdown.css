@@ -3,11 +3,11 @@
    with plain fallbacks; each reading context picks one variant:
 
    - Chat (`.chat-view`, and `.md-chat` for chat-like messages elsewhere, such
-     as Swarm posts): structures an answer in compact 14px prose. Headings
+     as Swarm posts): structures an answer in compact 14.5px prose. Headings
      stay barely above prose size (1.07em from h3 down) and bind to the text
      they introduce; bold text keeps a lighter weight (500) than headings
      (600), so a bold lead-in never reads as one. Spacing has three steps
-     (close 1.35 lines, a 0.75em block gap, the largest gap above a heading);
+     (close 1.4 lines, a 0.75em block gap, the largest gap above a heading);
      prose is dimmed one step so headings and bold stand out.
    - Document (`.md-document`, for Skill instructions, the System Prompt and
      Wiki pages): ordinary Markdown documents. Headings get distinct but
@@ -22,8 +22,8 @@
   --md-measure: var(--prose-measure);
   --md-text: var(--text-body);
   --md-emphasis: var(--text-hi);
-  --md-font-size: var(--fs-body-md);
-  --md-line-height: 1.35;
+  --md-font-size: var(--fs-chat-prose);
+  --md-line-height: 1.4;
   --md-strong-weight: 500;
   --md-paragraph-margin: 0 0 0.75em;
   --md-heading-margin: 1.4em 0 0.15em;
@@ -213,7 +213,7 @@
 
 /* Inline code is a tinted chip without a border or vertical padding, sized
    relative to the prose: Geist Mono's own content area already frames the
-   glyphs, and the chip stays clearly shorter than a 1.35 line, so chips on
+   glyphs, and the chip stays clearly shorter than a 1.4 line, so chips on
    adjacent lines never touch. */
 .msg-markdown code {
   border-radius: var(--r-sm);

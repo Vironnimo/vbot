@@ -1,11 +1,11 @@
 <script>
-  // A user message's text bubble with safe links. A very long text (pasted
-  // logs, files) starts clamped to its first lines under a fading edge, with
-  // Show more/Show less below; shorter texts render in full, so the control
-  // never reveals just a line or two.
-  import { linkifiedTextSegments } from '$lib/markdown.js';
+  // A user message's text bubble, rendered as Chat Markdown like Assistant
+  // prose. A very long text (pasted logs, files) starts clamped to its first
+  // lines under a fading edge, with Show more/Show less below; shorter texts
+  // render in full, so the control never reveals just a line or two.
   import { t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
+  import MarkdownContent from './MarkdownContent.svelte';
 
   // Clamped bubbles show CLAMPED_LINES lines (see the CSS); only texts longer
   // than COLLAPSIBLE_LINES get clamped at all.
@@ -43,21 +43,13 @@
   });
 </script>
 
-<p
+<div
   bind:this={bubble}
-  class="msg-body-text msg-body-text--user"
-  class:msg-body-text--clamped={clamped}
+  class="msg-user-text"
+  class:msg-user-text--clamped={clamped}
 >
-  {#each linkifiedTextSegments(text) as segment, segmentIndex (segmentIndex)}
-    {#if segment.href}
-      <a href={segment.href} target="_blank" rel="noopener noreferrer"
-        >{segment.text}</a
-      >
-    {:else}
-      {segment.text}
-    {/if}
-  {/each}
-</p>
+  <MarkdownContent source={text} class="msg-markdown" />
+</div>
 {#if collapsible}
   <Button
     variant="tertiary"
