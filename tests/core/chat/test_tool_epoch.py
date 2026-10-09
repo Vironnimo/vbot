@@ -8,6 +8,11 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.chat._step_outcomes import (
+    TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+    TOOL_ITERATION_LIMIT_FAILURE_CODE,
+    _terminal_tool_failure,
+)
 from core.chat._tool_epoch import (
     LiveToolCatalog,
     ToolChange,
@@ -19,7 +24,9 @@ from core.chat._tool_epoch import (
     without_other_epoch_tool_changes,
 )
 from core.chat.messages import ToolCall, ToolCallRejection
-from core.tools import ToolDefinitionChangeNote
+from core.chat.tool_dispatch import TOOL_REMOVED_ERROR_CODE
+from core.providers.adapter import TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+from core.tools import ToolDefinitionChangeNote, tool_failure, tool_success
 
 JsonObject = dict[str, Any]
 
@@ -242,21 +249,38 @@ def test_on_demand_tools_are_known_by_name_until_a_silent_load_records_the_defin
     assert view.request_tools(list_announced=True) == [read, search]
     assert _plan(view, catalog) == []
 
+    # Removed and enabled again: the loaded Tool returns with its definition, so a route that
+    # lists announced Tools keeps listing it; the Tool known by name only is announced for
+    # loading again.
+    view = view.with_changes(view.plan(_catalog(read), unlisted_tool_calls=False))
+    assert view.allowed_names == ("read",)
+    assert _plan(view, catalog, unlisted=False) == [
+        ("on_demand", "fetch", False, False),
+        ("added", "search", True, False),
+    ]
+    view = view.with_changes(view.plan(catalog, unlisted_tool_calls=False))
+    assert view.loadable_names == ("fetch",)
+    assert view.request_tools(list_announced=True) == [read, search]
+
 
 def test_a_tool_enabled_mid_epoch_is_announced_for_loading_when_the_agent_loads_it_on_demand() -> (
     None
 ):
-    view = ToolEpochView(pin=ToolEpochPin.start(_catalog(_definition("read"))))
+    read, loader = _definition("read"), _definition("load_tools")
+    view = ToolEpochView(pin=ToolEpochPin.start(_catalog(read)))
     catalog = _catalog(
-        _definition("read"),
+        read,
         _definition("search"),
         _definition("fetch"),
+        loader,
         on_demand={"search": "Search the web", "fetch": ""},
     )
 
     changes = view.plan(catalog, unlisted_tool_calls=False)
 
+    # load_tools arrives with the first Tool to load, ahead of the notes that name it.
     assert [(change.change, change.tool, change.definition) for change in changes] == [
+        ("added", "load_tools", loader),
         ("on_demand", "search", None),
         ("on_demand", "fetch", None),
     ]
@@ -266,9 +290,11 @@ def test_a_tool_enabled_mid_epoch_is_announced_for_loading_when_the_agent_loads_
     assert restored == list(changes)
     view = view.with_changes(changes)
     assert view.loadable_names == ("search", "fetch")
+    assert view.request_tools(list_announced=True) == [read, loader]
     assert _plan(view, catalog) == []
-    # A removal of a Tool known by name only is announced like any other.
-    gone = _catalog(_definition("read"), _definition("search"), on_demand={"search": "Search."})
+    # A removal of a Tool known by name only is announced like any other; load_tools stays
+    # while a usable Tool is on demand.
+    gone = _catalog(read, _definition("search"), loader, on_demand={"search": "Search."})
     assert _plan(view, gone) == [("removed", "fetch", False, False)]
 
 
@@ -300,17 +326,36 @@ def test_a_new_epoch_keeps_listing_the_tools_kept_through_compaction() -> None:
         _definition("read"),
         _definition("search"),
         _definition("fetch"),
+        _definition("load_tools"),
         on_demand={"search": "Search.", "fetch": "Fetch."},
     )
 
     pin = ToolEpochPin.start(catalog, keep=frozenset({"search", "unknown"}))
 
-    assert pin.names == ("read", "search")
+    assert pin.names == ("read", "search", "load_tools")
     assert pin.on_demand == (("fetch", "Fetch."),)
 
+    # With every On-demand Tool kept, nothing is left to load: load_tools is neither listed
+    # nor announced later.
+    pin = ToolEpochPin.start(catalog, keep=frozenset({"search", "fetch"}))
 
-def test_called_tool_names_counts_the_accepted_calls_of_the_current_epoch() -> None:
+    assert pin.names == ("read", "search", "fetch")
+    assert pin.on_demand == ()
+    assert _plan(ToolEpochView(pin=pin), catalog) == []
+
+
+def test_called_tool_names_counts_the_calls_of_the_current_agent_whose_tool_ran() -> None:
     rejection = ToolCallRejection(code="unknown_tool", message="Unknown Tool.", fingerprint="f")
+    # The codes of the Results that dispatch and the Run write for calls that never ran.
+    not_run = [
+        "tool_not_found",
+        "tool_not_allowed",
+        TOOL_REMOVED_ERROR_CODE,
+        TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+        TOOL_ITERATION_LIMIT_FAILURE_CODE,
+        _terminal_tool_failure(TERMINAL_OUTCOME_OUTPUT_TRUNCATED)[0],
+        _terminal_tool_failure(None)[0],
+    ]
 
     def calls(*names: str, rejected: str | None = None) -> ChatMessage:
         return ChatMessage.assistant(
@@ -326,14 +371,31 @@ def test_called_tool_names_counts_the_accepted_calls_of_the_current_epoch() -> N
             ],
         )
 
+    def result(name: str, envelope: JsonObject) -> ChatMessage:
+        return ChatMessage.tool(
+            tool_call_id=f"call-{name}", name=name, content=json.dumps(envelope)
+        )
+
+    refused = [f"refused-{index}" for index in range(len(not_run))]
     messages = [
         calls("old"),
         ChatMessage.compaction_checkpoint(
             summary="Summary.", projection=[], compacted_token_count=0
         ),
-        calls("search", "fetch", rejected="fetch"),
+        # The Agent that handed the Session over called this one.
+        calls("previous"),
+        result("previous", tool_success({})),
+        ChatMessage.agent_takeover(from_address="coder", to_address="writer"),
+        calls("search", "fetch", "edit", "pending", rejected="fetch"),
+        result("search", tool_success({})),
+        # Invalid arguments reached the Tool's contract: the Agent uses that Tool.
+        result("edit", tool_failure("invalid_arguments", "Fix the arguments.")),
         ChatMessage.user("Next."),
-        calls("read"),
+        calls(*refused),
+        *(
+            result(name, tool_failure(code, "Not run."))
+            for name, code in zip(refused, not_run, strict=True)
+        ),
     ]
 
-    assert called_tool_names(messages) == frozenset({"search", "read"})
+    assert called_tool_names(messages) == frozenset({"search", "edit", "pending"})

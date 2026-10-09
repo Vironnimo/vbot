@@ -31,7 +31,7 @@ from typing import Any, Literal, cast
 
 from core.chat.messages import ChatMessage, JsonObject
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX, is_tool_change_note
-from core.tools import ToolDefinitionChangeNote, model_tool_name
+from core.tools import ToolDefinitionChangeNote, is_tool_result_envelope, model_tool_name
 from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
 from core.utils.logging import get_logger
 
@@ -73,6 +73,21 @@ _ON_DEMAND_UNSUMMARIZED = (
     "Tool {name} is now available. Load its definition with `{loader}` before you call it."
 )
 _SENTENCE_ENDS = (".", "!", "?", "…")
+# Error codes of the Tool Results of calls that never reached their Tool: refused
+# at dispatch (unknown, not allowed or removed Tool) or never started (Tool calls
+# disabled for the Run's finalization, the Tool iteration limit, a Provider turn
+# that ended unsafely).
+_NOT_RUN_CODES = frozenset(
+    {
+        "tool_not_found",
+        "tool_not_allowed",
+        "tool_removed",
+        "tool_calls_disabled",
+        "tool_iteration_limit",
+        "tool_call_truncated",
+        "tool_call_rejected",
+    }
+)
 _CHANGE_DETAIL = "\nChange: {detail}"
 _DEFINITION = "\nDescription: {description}\nParameters (JSON Schema): {schema}"
 
@@ -291,11 +306,15 @@ class ToolEpochPin:
 
         The On-demand Tools stay out of the Tool list, except those in *keep*
         (the Tools the Agent called in the epoch a Compaction ended).
+        ``load_tools`` is listed only while at least one Tool stays out.
         """
 
         left_out = {name for name in catalog.on_demand if name not in keep}
         offered = [
-            definition for definition in catalog.offered if definition["name"] not in left_out
+            definition
+            for definition in catalog.offered
+            if definition["name"] not in left_out
+            and (left_out or definition["name"] != LOAD_TOOLS_TOOL_NAME)
         ]
         names = {str(definition["name"]) for definition in offered}
         return cls(
@@ -547,13 +566,20 @@ class ToolEpochView:
         reaches the Model when it is loaded), unless the Agent stopped loading
         it on demand: then it is added with its definition. A Tool that becomes
         usable as an On-demand Tool is announced by name and summary
-        (``on_demand``), for the Model to load.
+        (``on_demand``), for the Model to load, unless the Model already got
+        its definition in this epoch: then it is added with its definition
+        again, so a route that lists announced Tools keeps listing it.
+
+        ``load_tools`` is added only to an epoch that lists or announces an
+        On-demand Tool, ahead of the first ``on_demand`` change that needs it;
+        once known it is removed only when no usable Tool is on demand.
         """
 
         known = self._known
         pinned = set(self.pin.names)
         names = list(dict.fromkeys([*known, *catalog.offered_by_name]))
         planned: list[ToolChange] = []
+        loader: list[ToolChange] = []
         for name in names:
             current = known.get(name)
             offered = catalog.offered_by_name.get(name)
@@ -573,9 +599,10 @@ class ToolEpochView:
                 continue
             if offered is None:
                 continue
+            additions = loader if name == LOAD_TOOLS_TOOL_NAME else planned
             if name in pinned:
                 assert current is not None
-                planned.append(
+                additions.append(
                     ToolChange(
                         change="added",
                         tool=name,
@@ -587,9 +614,9 @@ class ToolEpochView:
                     )
                 )
                 if changed := self._changed(name, current, offered, source, catalog, pinned=True):
-                    planned.append(changed)
+                    additions.append(changed)
                 continue
-            if name in catalog.on_demand:
+            if name in catalog.on_demand and (current is None or current.definition is None):
                 planned.append(
                     ToolChange(
                         change="on_demand",
@@ -599,8 +626,20 @@ class ToolEpochView:
                     )
                 )
                 continue
-            planned.append(self._added(name, offered, source, unlisted_tool_calls))
+            additions.append(self._added(name, offered, source, unlisted_tool_calls))
+        announced = [index for index, change in enumerate(planned) if change.change == "on_demand"]
+        if loader and (announced or self._lists_on_demand_tools):
+            at = announced[0] if announced else len(planned)
+            planned[at:at] = loader
         return tuple(planned)
+
+    @cached_property
+    def _lists_on_demand_tools(self) -> bool:
+        """Whether this epoch's System Prompt or notes named an On-demand Tool."""
+
+        return bool(self.pin.on_demand) or any(
+            change.change == "on_demand" for change in self.changes
+        )
 
     def _added(
         self, name: str, offered: JsonObject, source: str | None, unlisted_tool_calls: bool
@@ -684,19 +723,41 @@ def without_other_epoch_tool_changes(
 
 
 def called_tool_names(messages: Iterable[ChatMessage]) -> frozenset[str]:
-    """Return the Tools Assistant turns of the current epoch called and dispatch accepted.
+    """Return the Tools the Session's current Agent called in the current epoch.
 
-    Only calls after the last Compaction checkpoint count; a call rejected
-    before it ran (unknown, not allowed or removed Tool) does not.
+    Only calls after the last Compaction checkpoint and the last Agent
+    Takeover count. A call whose Tool never ran does not: one the Provider
+    turn already rejected, and one whose Tool Result (matched by
+    ``tool_call_id``) reports a refusal at dispatch or a call that was not
+    started (:data:`_NOT_RUN_CODES`). A call without a Tool Result counts.
     """
 
-    called: set[str] = set()
+    called: dict[str, str] = {}
     for message in messages:
-        if message.role == "compaction_checkpoint":
+        if message.role in ("compaction_checkpoint", "agent_takeover"):
             called.clear()
         elif message.role == "assistant":
-            called.update(call.name for call in message.tool_calls or () if call.rejection is None)
-    return frozenset(called)
+            called.update(
+                (call.id, call.name) for call in message.tool_calls or () if call.rejection is None
+            )
+        elif message.role == "tool" and _not_run(message.content):
+            called.pop(str(message.tool_call_id), None)
+    return frozenset(called.values())
+
+
+def _not_run(content: object) -> bool:
+    """Whether Tool Result *content* reports a call that never reached its Tool."""
+
+    if not isinstance(content, str):
+        return False
+    try:
+        envelope = json.loads(content)
+    except ValueError:
+        return False
+    if not isinstance(envelope, dict) or not is_tool_result_envelope(envelope):
+        return False
+    error = envelope.get("error")
+    return isinstance(error, dict) and error.get("code") in _NOT_RUN_CODES
 
 
 def _change_detail(

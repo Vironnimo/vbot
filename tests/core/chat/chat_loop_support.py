@@ -31,7 +31,7 @@ from core.tools import (
 from core.tools.availability import ToolAccess
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
-from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, loads_tools_on_demand
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tools
 from tests.core.chat.chat_loop_adapter_support import (
     BlockingReasoningStreamingStubAdapter,
     BlockingStreamingStubAdapter,
@@ -579,7 +579,10 @@ class StubPrompts:
                 "parameters": {"type": "object"},
             }
             definitions = [weather, *definitions]
-        if self.tool_registry is not None and loads_tools_on_demand(agent):
+        names = [str(definition["name"]) for definition in definitions]
+        if self.tool_registry is not None and on_demand_tools(
+            agent, names, session_tool_grants=session_tool_grants
+        ):
             definitions = [
                 *definitions,
                 *self.tool_registry.provider_definitions(

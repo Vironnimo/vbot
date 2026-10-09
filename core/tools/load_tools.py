@@ -8,7 +8,7 @@ the prompt epoch (``ToolContext.record_loaded_tools``). Loading changes no
 permission: an On-demand Tool is callable before it is loaded.
 
 The Tool is internal: it is never part of a Tool policy or ``tool.list``, and
-Chat lists it exactly while the Agent loads Tools on demand.
+it is offered only while the Agent has a Tool to load.
 """
 
 from __future__ import annotations
@@ -27,8 +27,11 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolDisplayPart,
+    ToolNotFoundError,
     ToolPromptBlockRegistry,
     ToolRegistry,
+    tool_failure,
+    tool_is_ready,
     tool_success,
 )
 
@@ -80,12 +83,19 @@ _QUOTES = "\"'`"
 _LOADED = "- {name}: loaded"
 _ALREADY_AVAILABLE = "- {name}: already available; call it directly"
 _NOT_LOADABLE = "- {name}: not available to load"
+_UNAVAILABLE = "- {name}: listed, but cannot be used right now; continue without it"
+_UNAVAILABLE_HINT = "- {name}: listed, but cannot be used right now ({hint}); continue without it"
+_UNAVAILABLE_CODE = "tool_unavailable"
+_NOTHING_LOADED = "Nothing was loaded."
 _LOADABLE_LIST = "Tools you can load: {names}."
 _SECTION = "Tool: {name}\nDescription: {description}\nParameters (JSON Schema): {schema}"
 _CALL_LOADED = "Call the loaded Tools by name with normal Tool calls."
 _EMPTY_CALL = "Nothing was loaded: the call named no Tool."
 _NONE_FOUND = "Nothing was loaded: no Tool named {names} can be loaded."
 _ALL_AVAILABLE = "Every Tool you can use is already available; call it directly by name."
+_NONE_LOADABLE = (
+    "No listed Tool can be loaded right now; continue with the Tools you can already call."
+)
 _RETRY = (
     'Call load_tools again with "names" set to the Tools the task needs from that list, '
     "for example {example}."
@@ -109,11 +119,15 @@ def register_load_tools_tool(
             default_text=LOAD_TOOLS_BLOCK_TEXT,
             requires_generated=ON_DEMAND_TOOL_LIST_PRODUCER,
         )
+
+    def load_tools(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return _load_tools(registry, context, arguments)
+
     registry.register(
         LOAD_TOOLS_TOOL_NAME,
         LOAD_TOOLS_DESCRIPTION,
         LOAD_TOOLS_PARAMETERS,
-        _load_tools,
+        load_tools,
         internal=True,
         result_schema=_RESULT_SCHEMA,
         display=ToolDisplay(parts_builder=_display_parts),
@@ -122,8 +136,13 @@ def register_load_tools_tool(
     )
 
 
-def _load_tools(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    """Return the definitions of the requested On-demand Tools as readable text."""
+def _load_tools(registry: ToolRegistry, context: ToolContext, arguments: JsonObject) -> JsonObject:
+    """Return the definitions of the requested On-demand Tools as readable text.
+
+    A listed On-demand Tool that cannot be loaded now (not ready, not offered on
+    this route, or refused by the Run) is reported as such, apart from names
+    that match no listed Tool.
+    """
 
     requested: list[str] = arguments.get("names") or []
     loadable = {
@@ -131,27 +150,36 @@ def _load_tools(context: ToolContext, arguments: JsonObject) -> JsonObject:
         for name, definition in context.loadable_tools.items()
         if context.can_call(name)
     }
+    unavailable = [
+        name
+        for name in dict.fromkeys([*context.loadable_tools, *sorted(context.unloadable_tools)])
+        if name not in loadable
+    ]
     shown = [name for name in (context.offered_tools or ()) if context.can_call(name)]
-    candidates = [*loadable, *(name for name in shown if name not in loadable)]
+    candidates = [*loadable, *unavailable, *(name for name in shown if name not in loadable)]
     if not requested:
-        raise ToolContractError(_refusal(_EMPTY_CALL, loadable))
+        raise ToolContractError(_refusal(_EMPTY_CALL, loadable, unavailable))
 
     lines: list[str] = []
     loaded: list[str] = []
     unknown: list[str] = []
+    usable = False
     seen: set[str] = set()
     for raw in requested:
         name = called_tool_name(raw, candidates)
+        if name in seen:
+            continue
         if name in loadable:
-            if name in seen:
-                continue
             seen.add(name)
             loaded.append(name)
+            usable = True
             lines.append(_LOADED.format(name=model_tool_name(name)))
-        elif name in shown:
-            if name in seen:
-                continue
+        elif name in unavailable:
             seen.add(name)
+            lines.append(_unavailable_line(registry, name))
+        elif name in shown:
+            seen.add(name)
+            usable = True
             lines.append(_ALREADY_AVAILABLE.format(name=model_tool_name(name)))
         elif raw not in unknown:
             unknown.append(raw)
@@ -159,11 +187,13 @@ def _load_tools(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
     if unknown and len(unknown) == len(lines):
         names = _joined(json.dumps(name, ensure_ascii=False) for name in unknown)
-        raise ToolContractError(_refusal(_NONE_FOUND.format(names=names), loadable))
+        raise ToolContractError(_refusal(_NONE_FOUND.format(names=names), loadable, unavailable))
 
     remaining = {name: definition for name, definition in loadable.items() if name not in seen}
     if unknown and remaining:
         lines.append(_loadable_sentence(remaining))
+    if not usable:
+        return tool_failure(_UNAVAILABLE_CODE, "\n".join([_NOTHING_LOADED, *lines]))
     parts = ["\n".join(lines)]
     parts.extend(_section(name, loadable[name]) for name in loaded)
     if loaded:
@@ -183,11 +213,28 @@ def _section(name: str, definition: Mapping[str, Any]) -> str:
     )
 
 
-def _refusal(cause: str, loadable: Mapping[str, Any]) -> str:
+def _unavailable_line(registry: ToolRegistry, name: str) -> str:
+    """Report a listed Tool that cannot be loaded now, with its readiness hint if it has one."""
+
+    try:
+        tool = registry.get(name)
+    except ToolNotFoundError:
+        tool = None
+    hint = (
+        " ".join(tool.readiness_hint.split()).rstrip(".")
+        if tool is not None and tool.readiness_hint and not tool_is_ready(tool)
+        else ""
+    )
+    if hint:
+        return _UNAVAILABLE_HINT.format(name=model_tool_name(name), hint=hint)
+    return _UNAVAILABLE.format(name=model_tool_name(name))
+
+
+def _refusal(cause: str, loadable: Mapping[str, Any], unavailable: Sequence[str]) -> str:
     """Say that nothing was loaded, why, and which call loads what the Agent can load."""
 
     if not loadable:
-        return f"{cause} {_ALL_AVAILABLE}"
+        return f"{cause} {_NONE_LOADABLE if unavailable else _ALL_AVAILABLE}"
     example = json.dumps({"names": _loadable_names(loadable)[:1]}, ensure_ascii=False)
     return f"{cause} {_loadable_sentence(loadable)} {_RETRY.format(example=example)}"
 

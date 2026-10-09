@@ -29,6 +29,7 @@ _FETCH_PARAMETERS = {
     "required": ["url"],
 }
 _ON_DEMAND = ("web_search", "web_fetch")
+_MAPS_HINT = "Requires a Maps connection - set the API key in Settings -> Extensions."
 
 
 def _registry() -> ToolRegistry:
@@ -46,24 +47,43 @@ def _registry() -> ToolRegistry:
             lambda _c, _a: tool_success({}),
             open_input_schema=True,
         )
+    registry.register(
+        "maps",
+        "Find places.",
+        {"type": "object", "properties": {}},
+        lambda _c, _a: tool_success({}),
+        open_input_schema=True,
+        ready=lambda: False,
+        readiness_hint=_MAPS_HINT,
+    )
     return registry
 
 
 async def _load(
-    arguments: Any, *, loadable: tuple[str, ...] = _ON_DEMAND, allowed: tuple[str, ...] = ()
+    arguments: Any,
+    *,
+    loadable: tuple[str, ...] = _ON_DEMAND,
+    unloadable: tuple[str, ...] = (),
+    allowed: tuple[str, ...] = (),
 ) -> JsonObject:
-    """Call load_tools in a request that lists read and load_tools."""
+    """Call load_tools in a request that lists read and load_tools.
+
+    *unloadable* are listed On-demand Tools that cannot be loaded now.
+    """
     registry = _registry()
     names = ["read", LOAD_TOOLS_TOOL_NAME, *_ON_DEMAND]
-    definitions = registry.provider_definitions(names, include_internal=True)
+    definitions = registry.provider_definitions(
+        [name for name in names if name not in unloadable], include_internal=True
+    )
     config = make_execution_config(
-        allowed_tools=list(allowed or names),
+        allowed_tools=list(allowed or [*names, *unloadable]),
         input_contracts=registry.contracts_for_provider_definitions(definitions),
         loadable_tools={
             str(definition["name"]): definition
             for definition in definitions
             if definition["name"] in loadable
         },
+        unloadable_tools=frozenset(unloadable),
     )
     [result] = await ToolExecutor(registry).execute_many(
         [ToolCall(id="call-1", name=LOAD_TOOLS_TOOL_NAME, arguments=arguments)], config
@@ -122,6 +142,29 @@ async def test_each_name_reports_its_outcome_in_call_order() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_listed_tool_that_cannot_be_loaded_now_is_told_apart_from_an_unknown_name() -> None:
+    # web_fetch is listed but not offered on this route; maps is listed but not ready.
+    result = await _load(
+        {"names": ["web_search", "web_fetch", "maps", "nope"]},
+        loadable=("web_search",),
+        unloadable=("web_fetch", "maps"),
+    )
+
+    assert result["ok"] is True
+    assert _text(result) == "\n\n".join(
+        [
+            "- web_search: loaded\n"
+            "- web_fetch: listed, but cannot be used right now; continue without it\n"
+            "- maps: listed, but cannot be used right now (Requires a Maps connection - set the "
+            "API key in Settings -> Extensions); continue without it\n"
+            "- nope: not available to load",
+            _SEARCH_SECTION,
+            _CALL_LOADED,
+        ]
+    )
+
+
+@pytest.mark.asyncio
 async def test_already_available_tools_succeed_with_nothing_to_load() -> None:
     result = await _load({"names": ["read", "web_fetch"]}, loadable=("web_search",))
 
@@ -155,12 +198,14 @@ async def test_tolerated_call_forms_load_the_named_tools(arguments: Any) -> None
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "loadable", "allowed", "message"),
+    ("arguments", "loadable", "unloadable", "allowed", "code", "message"),
     [
         pytest.param(
             {"names": ["nope", "missing"]},
             _ON_DEMAND,
             (),
+            (),
+            "invalid_arguments",
             'Nothing was loaded: no Tool named "nope" or "missing" can be loaded. '
             "Tools you can load: web_fetch, web_search. Call load_tools again with "
             '"names" set to the Tools the task needs from that list, for example '
@@ -170,17 +215,32 @@ async def test_tolerated_call_forms_load_the_named_tools(arguments: Any) -> None
         pytest.param(
             {"names": ["web_fetch"]},
             _ON_DEMAND,
+            (),
             ("read", LOAD_TOOLS_TOOL_NAME, "web_search"),
-            'Nothing was loaded: no Tool named "web_fetch" can be loaded. '
-            "Tools you can load: web_search. Call load_tools again with "
-            '"names" set to the Tools the task needs from that list, for example '
-            '{"names": ["web_search"]}.',
+            "tool_unavailable",
+            "Nothing was loaded.\n"
+            "- web_fetch: listed, but cannot be used right now; continue without it",
             id="not-allowed-in-this-run",
+        ),
+        pytest.param(
+            {"names": ["maps", "nope"]},
+            _ON_DEMAND,
+            ("maps",),
+            (),
+            "tool_unavailable",
+            "Nothing was loaded.\n"
+            "- maps: listed, but cannot be used right now (Requires a Maps connection - set the "
+            "API key in Settings -> Extensions); continue without it\n"
+            "- nope: not available to load\n"
+            "Tools you can load: web_fetch, web_search.",
+            id="not-ready",
         ),
         pytest.param(
             {},
             _ON_DEMAND,
             (),
+            (),
+            "invalid_arguments",
             "Nothing was loaded: the call named no Tool. Tools you can load: web_fetch, "
             'web_search. Call load_tools again with "names" set to the Tools the task needs '
             'from that list, for example {"names": ["web_fetch"]}.',
@@ -190,17 +250,34 @@ async def test_tolerated_call_forms_load_the_named_tools(arguments: Any) -> None
             {"names": ["nope"]},
             (),
             (),
+            (),
+            "invalid_arguments",
             'Nothing was loaded: no Tool named "nope" can be loaded. Every Tool you can use '
             "is already available; call it directly by name.",
             id="nothing-to-load",
         ),
+        pytest.param(
+            {"names": ["nope"]},
+            (),
+            ("web_fetch",),
+            (),
+            "invalid_arguments",
+            'Nothing was loaded: no Tool named "nope" can be loaded. No listed Tool can be '
+            "loaded right now; continue with the Tools you can already call.",
+            id="nothing-loadable-now",
+        ),
     ],
 )
 async def test_a_call_that_loads_nothing_is_refused_with_the_tools_to_load(
-    arguments: Any, loadable: tuple[str, ...], allowed: tuple[str, ...], message: str
+    arguments: Any,
+    loadable: tuple[str, ...],
+    unloadable: tuple[str, ...],
+    allowed: tuple[str, ...],
+    code: str,
+    message: str,
 ) -> None:
-    result = await _load(arguments, loadable=loadable, allowed=allowed)
+    result = await _load(arguments, loadable=loadable, unloadable=unloadable, allowed=allowed)
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["code"] == code
     assert result["error"]["message"] == message

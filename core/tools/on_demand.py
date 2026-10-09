@@ -13,7 +13,11 @@ from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 
 from core.tools._tool_definitions import first_sentence_summary, tool_summary
-from core.tools.availability import ToolAccess, normalize_tool_name_list
+from core.tools.availability import (
+    TOOL_ACCESS_MODE_NONE,
+    ToolAccess,
+    normalize_tool_name_list,
+)
 from core.tools.edit import edit_tool_siblings
 from core.tools.model_names import model_tool_name
 
@@ -71,10 +75,10 @@ def normalize_tool_loading(value: Any) -> dict[str, Any]:
 def loads_tools_on_demand(agent: Any) -> bool:
     """Whether *agent* gets On-demand Tools.
 
-    Only an Agent whose ``tool_loading`` switch is on does. A built-in Agent and
-    an Agent with a fixed Tool set (``ToolAccess.fixed``) never do, whatever
-    their configuration says; an Agent without the setting (a temporary Agent)
-    does not either.
+    Only an Agent whose ``tool_loading`` switch is on does. A built-in Agent, an
+    Agent with a fixed Tool set (``ToolAccess.fixed``) and an Agent whose Tool
+    access is ``none`` never do, whatever their configuration says; an Agent
+    without the setting (a temporary Agent) does not either.
     """
 
     tool_loading = getattr(agent, "tool_loading", None)
@@ -83,7 +87,10 @@ def loads_tools_on_demand(agent: Any) -> bool:
     if getattr(agent, "builtin", None) is not None:
         return False
     tool_access = getattr(agent, "tool_access", None)
-    return not (isinstance(tool_access, ToolAccess) and tool_access.fixed)
+    return not (
+        isinstance(tool_access, ToolAccess)
+        and (tool_access.fixed or tool_access.mode == TOOL_ACCESS_MODE_NONE)
+    )
 
 
 def always_loaded_tools(tool_loading: Mapping[str, Any] | None) -> frozenset[str]:

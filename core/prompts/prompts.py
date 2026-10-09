@@ -107,6 +107,7 @@ from core.tools.on_demand import (
     ON_DEMAND_TOOL_LIST_PRODUCER,
     loads_tools_on_demand,
     on_demand_tool_entries,
+    on_demand_tools,
 )
 from core.tools.tools import ToolDefinitionProfileContext
 from core.utils.logging import get_logger
@@ -1103,21 +1104,21 @@ class SystemPromptManager:
             ready_only=ready_only,
             profile_context=profile_context,
         )
-        if loads_tools_on_demand(agent):
-            definitions = _with_load_tools(
+        return _with_load_tools(
+            agent,
+            apply_agent_target_tool_visibility(
                 definitions,
-                lambda: self._tool_registry.provider_definitions(
-                    [LOAD_TOOLS_TOOL_NAME],
-                    include_internal=True,
-                    ready_only=ready_only,
-                    profile_context=profile_context,
+                agent_id=agent.id,
+                allowed_agents=subagent_allowed_agents(
+                    agent_tool_settings(getattr(agent, "tools", {}))
                 ),
-            )
-        return apply_agent_target_tool_visibility(
-            definitions,
-            agent_id=agent.id,
-            allowed_agents=subagent_allowed_agents(
-                agent_tool_settings(getattr(agent, "tools", {}))
+            ),
+            session_tool_grants,
+            lambda: self._tool_registry.provider_definitions(
+                [LOAD_TOOLS_TOOL_NAME],
+                include_internal=True,
+                ready_only=ready_only,
+                profile_context=profile_context,
             ),
         )
 
@@ -1141,18 +1142,18 @@ class SystemPromptManager:
             session_grants=resolution.session_tool_grants,
             profile_context=profile_context,
         )
-        if loads_tools_on_demand(agent):
-            definitions = _with_load_tools(
+        return _with_load_tools(
+            agent,
+            apply_agent_target_tool_visibility(
                 definitions,
-                lambda: self._tool_registry.prompt_definitions(
-                    [LOAD_TOOLS_TOOL_NAME], include_internal=True, profile_context=profile_context
+                agent_id=agent.id,
+                allowed_agents=subagent_allowed_agents(
+                    agent_tool_settings(getattr(agent, "tools", {}))
                 ),
-            )
-        return apply_agent_target_tool_visibility(
-            definitions,
-            agent_id=agent.id,
-            allowed_agents=subagent_allowed_agents(
-                agent_tool_settings(getattr(agent, "tools", {}))
+            ),
+            session_tool_grants,
+            lambda: self._tool_registry.prompt_definitions(
+                [LOAD_TOOLS_TOOL_NAME], include_internal=True, profile_context=profile_context
             ),
         )
 
@@ -1280,10 +1281,20 @@ def _tool_names(
 
 
 def _with_load_tools(
-    definitions: list[JsonObject], load_tools: Callable[[], list[JsonObject]]
+    agent: PromptAgent,
+    definitions: list[JsonObject],
+    session_tool_grants: Sequence[str],
+    load_tools: Callable[[], list[JsonObject]],
 ) -> list[JsonObject]:
-    """Return *definitions* with the ``load_tools`` definition appended once."""
-    if any(definition.get("name") == LOAD_TOOLS_TOOL_NAME for definition in definitions):
+    """Return *definitions* with ``load_tools`` appended once while one of them is on demand.
+
+    ``load_tools`` belongs to the Agent's Tools exactly while it has a Tool to
+    load, so an Agent whose Tool list keeps every Tool never gets it.
+    """
+    names = [str(definition.get("name")) for definition in definitions]
+    if LOAD_TOOLS_TOOL_NAME in names or not on_demand_tools(
+        agent, names, session_tool_grants=session_tool_grants
+    ):
         return definitions
     return [*definitions, *load_tools()]
 

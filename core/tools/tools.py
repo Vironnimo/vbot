@@ -977,6 +977,7 @@ class ToolExecutor:
                     else None
                 ),
                 loadable_tools=config.loadable_tools,
+                unloadable_tools=frozenset(config.unloadable_tools),
                 tool_load_hook=config.tool_load_registrar,
                 change_tracker=config.change_tracker,
             )

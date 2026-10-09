@@ -11,7 +11,7 @@ from core.memory import MEMORY_PROMPT_MODE_AGENT_USER, MEMORY_PROMPT_MODE_OFF, M
 from core.projects import ProjectStore
 from core.prompts.blocks import BlockDefinition, LayoutEntry
 from core.subagents import SubAgentPromptTarget
-from core.tools import ToolRegistry, model_names, tool_success
+from core.tools import ToolAccess, ToolRegistry, model_names, tool_success
 from core.tools.file_state import FileReadState
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.project import register_project_tool
@@ -458,7 +458,7 @@ def test_on_demand_tools_are_listed_in_their_block_instead_of_the_tool_list(
     definitions = manager.provider_tool_definitions(agent)
     live = manager.build_system_prompt(agent)
 
-    # The Run pins from every definition; load_tools joins them while the switch is on.
+    # The Run pins from every definition; load_tools joins them while a Tool is on demand.
     assert sorted(str(definition["name"]) for definition in definitions) == [
         "fetch",
         "load_tools",
@@ -489,3 +489,15 @@ def test_on_demand_tools_are_listed_in_their_block_instead_of_the_tool_list(
     assert "## Tools Loaded on Demand" not in switched_off
     assert "load_tools" not in switched_off
     assert "- zip: Pack files. Keeps modes." in switched_off
+
+    # With nothing left to load, load_tools is not offered.
+    keeps_all = replace(
+        agent, tool_loading={"on_demand": True, "always_loaded": ["read", "zip", "fetch"]}
+    )
+    no_tools = replace(agent, tool_access=ToolAccess(mode="none"))
+    assert sorted(
+        str(definition["name"]) for definition in manager.provider_tool_definitions(keeps_all)
+    ) == ["fetch", "read", "zip"]
+    assert manager.provider_tool_definitions(no_tools) == []
+    for nothing_to_load in (keeps_all, no_tools):
+        assert "load_tools" not in manager.build_system_prompt(nothing_to_load)
