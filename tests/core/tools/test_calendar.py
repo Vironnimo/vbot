@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 import pytest
 
 from core.calendar import CalendarService
+from core.tools._calendar_arguments import STAND_INS
 from core.tools.calendar import CALENDAR_TOOL_NAME, CALENDAR_TOOL_PARAMETERS
 from tests.core.tools.scheduling_tool_support import CalendarTool, calendar_tool, clock_at
 
@@ -139,6 +141,40 @@ class TestCreate:
             '"location":"Home"}'
         )
 
+    @pytest.mark.parametrize(
+        ("call", "field", "value"),
+        [
+            (
+                {"action": "create", "title": "X", "start": "next tuesday 2pm"},
+                "start",
+                "next tuesday 2pm",
+            ),
+            (
+                {"action": "create", "title": "X", "start": "2030-01-10", "end": "2030-02-30"},
+                "end",
+                "2030-02-30",
+            ),
+            ({"action": "update", "id": "{standup}", "start": "9am"}, "start", "9am"),
+            (
+                {"action": "update", "id": "{standup}_20300109T0900", "end": "half past ten"},
+                "end",
+                "half past ten",
+            ),
+        ],
+    )
+    def test_an_unreadable_time_is_refused_with_the_value_received(
+        self, tool: CalendarTool, call: dict[str, str], field: str, value: str
+    ) -> None:
+        standup = _standup(tool)
+
+        message = tool.refused(
+            {key: text.replace("{standup}", standup) for key, text in call.items()}
+        )
+
+        corrected = json.loads(message.split(" Send: ", 1)[1])
+        assert f'"{value}"' in message.split(" Send: ", 1)[0]
+        assert corrected[field] == STAND_INS[field]
+
     def test_invalid_rule_is_refused(self, tool: CalendarTool) -> None:
         message = tool.refused(
             {
@@ -262,6 +298,12 @@ class TestList:
                 {"time_min": "next tuesday"},
                 'calendar was not run: time_min "next tuesday" is not a date or local date-time. '
                 'Send: {"action":"list","time_min":"<2030-01-10 or 2030-01-10T15:00>"}',
+            ),
+            (
+                {"time_min": "2030-01-10", "time_max": "friday"},
+                'calendar was not run: time_max "friday" is not a date or local date-time. '
+                'Send: {"action":"list","time_min":"2030-01-10",'
+                '"time_max":"<2030-01-10 or 2030-01-10T15:00>"}',
             ),
         ],
     )

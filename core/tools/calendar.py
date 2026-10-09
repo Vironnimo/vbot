@@ -361,6 +361,7 @@ class _CalendarTool:
                     **{name: STAND_INS[name] for name in missing},
                 )
             )
+        _check_event_times(arguments)
         event = self._calendar.create_event(
             title=arguments["title"],
             start=arguments["start"],
@@ -384,6 +385,7 @@ class _CalendarTool:
                     start=STAND_INS["start"],
                 )
             )
+        _check_event_times(arguments)
         parsed = parse_occurrence_id(item_id)
         if parsed is None:
             event = await self._calendar.update_event(item_id, actor="tool", **fields)
@@ -674,14 +676,30 @@ def _bound(arguments: JsonObject, name: str, zone: ZoneInfo) -> datetime | None:
             return datetime.combine(date.fromisoformat(text), time.min, zone).astimezone(UTC)
         moment = datetime.fromisoformat(text)
     except ValueError:
-        raise CalendarCallRefusedError(
-            refusal(
-                f'{name} "{value}" is not a date or local date-time.',
-                arguments,
-                **{name: STAND_INS[name]},
-            )
-        ) from None
+        raise _not_a_time(arguments, name) from None
     return (moment if moment.tzinfo else moment.replace(tzinfo=zone)).astimezone(UTC)
+
+
+def _check_event_times(arguments: JsonObject) -> None:
+    """Refuse a start or end that is neither a date nor a date-time, naming the value."""
+    for name in ("start", "end"):
+        value = arguments.get(name)
+        if not isinstance(value, str):
+            continue
+        try:
+            datetime.fromisoformat(value.strip())
+        except ValueError:
+            raise _not_a_time(arguments, name) from None
+
+
+def _not_a_time(arguments: JsonObject, name: str) -> CalendarCallRefusedError:
+    return CalendarCallRefusedError(
+        refusal(
+            f'{name} "{arguments[name]}" is not a date or local date-time.',
+            arguments,
+            **{name: STAND_INS[name]},
+        )
+    )
 
 
 def _days_after(start: datetime, days: int, zone: ZoneInfo) -> datetime:
