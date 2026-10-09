@@ -544,6 +544,24 @@ export default Object.freeze({
     'By default, available only when the main Model cannot view images. Enabling availability with vision lets this Agent request a second analysis. A configured, available image-understanding Model is required in either case.',
   'toolAccess.imageAlwaysAvailable': 'Available with vision',
   'toolAccess.readiness.unregistered': 'Not registered right now',
+  'toolAccess.onDemand.label': 'Load Tools on demand',
+  'toolAccess.onDemand.description':
+    'Only Tools marked Always loaded are sent with every request. The Agent loads the others when it needs them, which saves context.',
+  'toolAccess.onDemand.help':
+    'The Agent sees the other allowed Tools by name with a one-line summary and loads their full definitions with the load_tools Tool before it first calls one. Requests stay smaller, so more context is left for the conversation. What the Agent may use does not change.\n\nSome Models handle this less reliably. If the Agent misses Tools it should use, mark them Always loaded or turn this off.',
+  'toolAccess.alwaysLoaded.title': 'Always loaded',
+  'toolAccess.alwaysLoaded.summary':
+    '{alwaysLoaded} always loaded, {onDemand} on demand. Use the pin on a Tool to change it.',
+  'toolAccess.alwaysLoaded.reset': 'Reset to default',
+  'toolAccess.alwaysLoaded.resetHint':
+    'Load the default set of Tools with every request again',
+  'toolAccess.alwaysLoaded.toggle': 'Always load {name}',
+  'toolAccess.alwaysLoaded.pinnedHint':
+    'Always loaded: sent with every request. Select to load it on demand.',
+  'toolAccess.alwaysLoaded.unpinnedHint':
+    'Loaded on demand when the Agent needs it. Select to always load it.',
+  'toolAccess.alwaysLoaded.fileEditUnit':
+    'edit, write and apply_patch are always loaded together.',
   'agents.form.idHelp':
     'Used to address this Agent. Use Change ID to rename it and update its references.',
   'agents.form.fallbackModelPlaceholder': 'None',

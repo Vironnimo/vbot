@@ -15,7 +15,7 @@ import {
 import { scheduleAutosave } from '../autosave.js';
 import { t } from '../i18n.js';
 import { shouldApplyReloadNow } from '../resourceInvalidation.js';
-import { normalizeToolAccess } from '../toolAccess.js';
+import { normalizeToolAccess, normalizeToolLoading } from '../toolAccess.js';
 import {
   emptyScanSkills,
   createProjectEditForm,
@@ -615,6 +615,7 @@ export function createProjectsController({
         thinking_effort: '',
         compaction_policy: null,
         tool_access: { mode: 'all' },
+        tool_loading: null,
       }
     );
   }
@@ -624,7 +625,10 @@ export function createProjectsController({
     overrideEditVersions.set(key, overrideEditVersion(agentId, field) + 1);
     state.overrideDrafts = {
       ...state.overrideDrafts,
-      [agentId]: { ...overrideDraft(agentId), [field]: value },
+      [agentId]: {
+        ...overrideDraft(agentId),
+        [field]: field === 'tool_loading' ? normalizeToolLoading(value) : value,
+      },
     };
     state.editError = '';
     flushPendingProjects();
@@ -669,6 +673,9 @@ export function createProjectsController({
     if (field === 'tool_access') {
       return normalizeToolAccess(draft.tool_access);
     }
+    if (field === 'tool_loading') {
+      return normalizeToolLoading(draft.tool_loading);
+    }
     return draft.thinking_effort;
   }
 
@@ -688,6 +695,9 @@ export function createProjectsController({
     }
     if (field === 'tool_access') {
       return draft.tool_access !== null;
+    }
+    if (field === 'tool_loading') {
+      return normalizeToolLoading(draft.tool_loading) !== null;
     }
     return typeof draft.thinking_effort === 'string';
   }
@@ -737,7 +747,7 @@ export function createProjectsController({
         )
       )
         continue;
-      if (isClearedSamplingDraft(agentId, field)) {
+      if (isClearedOverrideDraft(agentId, field)) {
         if (!(await clearMemberOverride(agentId, field))) return false;
         continue;
       }
@@ -750,11 +760,17 @@ export function createProjectsController({
     return true;
   }
 
-  // An emptied sampling box means "no override": saving it clears the override.
-  function isClearedSamplingDraft(agentId, field) {
+  // An emptied sampling box and On-demand Tools switched off without an
+  // explicit Always loaded list mean "no override": saving them clears the
+  // override. Switched off with a list, the override keeps the list.
+  function isClearedOverrideDraft(agentId, field) {
+    const draft = overrideDraft(agentId);
+    if (field === 'tool_loading') {
+      return normalizeToolLoading(draft.tool_loading) === null;
+    }
     return (
       (field === 'temperature' || field === 'top_p') &&
-      String(overrideDraft(agentId)[field] ?? '').trim() === ''
+      String(draft[field] ?? '').trim() === ''
     );
   }
 

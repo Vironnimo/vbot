@@ -1,6 +1,10 @@
 import { asText, isPlainObject } from '../values.js';
 import { normalizeCompactionPolicy } from '../compactionPolicy.js';
-import { normalizeToolAccess, toolCatalogForEditor } from '../toolAccess.js';
+import {
+  normalizeToolAccess,
+  normalizeToolLoading,
+  toolCatalogForEditor,
+} from '../toolAccess.js';
 
 export const emptyScanSkills = () => ({ project: [], bundled: [], global: [] });
 
@@ -642,6 +646,12 @@ function normalizeOverrides(overrides) {
   if (isPlainObject(overrides.tool_access)) {
     normalized.tool_access = normalizeToolAccess(overrides.tool_access);
   }
+  // An override that keeps the switch off still exists.
+  if (isPlainObject(overrides.tool_loading)) {
+    normalized.tool_loading = normalizeToolLoading(overrides.tool_loading) ?? {
+      on_demand: false,
+    };
+  }
   return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
@@ -676,8 +686,8 @@ export function memberFieldIsOverridden(member, field) {
   if (field === 'compaction_policy') {
     return isPlainObject(member?.overrides?.compaction_policy);
   }
-  if (field === 'tool_access') {
-    return isPlainObject(member?.overrides?.tool_access);
+  if (field === 'tool_access' || field === 'tool_loading') {
+    return isPlainObject(member?.overrides?.[field]);
   }
   return member?.effective?.[field]?.source === EFFECTIVE_SOURCE_OVERRIDE;
 }
@@ -713,6 +723,8 @@ export function seedTeamOverrideDraft(member) {
     tool_access: isPlainObject(overrides.tool_access)
       ? normalizeToolAccess(overrides.tool_access)
       : normalizeToolAccess(effective.tool_access?.value),
+    // Like the Agent's own value: null while off without an explicit list.
+    tool_loading: normalizeToolLoading(overrides.tool_loading),
   };
 }
 

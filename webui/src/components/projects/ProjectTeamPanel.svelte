@@ -609,8 +609,20 @@
                       ceiling={projectsState.editForm.allowed_tools}
                       disabled={isOverrideBusy(member.agent_id, 'tool_access')}
                       showReset={memberFieldIsOverridden(member, 'tool_access')}
+                      toolLoadingEditable
+                      toolLoading={overrideDraft(member.agent_id).tool_loading}
+                      toolLoadingDisabled={isOverrideBusy(
+                        member.agent_id,
+                        'tool_loading',
+                      )}
                       onChange={(value) =>
                         updateToolAccessOverride(member.agent_id, value)}
+                      onToolLoadingChange={(value) =>
+                        updateOverrideDraft(
+                          member.agent_id,
+                          'tool_loading',
+                          value,
+                        )}
                       onReset={() =>
                         applyClearOverride(member.agent_id, 'tool_access')}
                       onOpenExtensions={navigateToExtensions}

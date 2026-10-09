@@ -4,14 +4,20 @@ import {
   changeToolAccessMode,
   groupToolCatalog,
   normalizeToolAccess,
+  normalizeToolLoading,
+  resetAlwaysLoadedTools,
   setAnalyzeImageAlwaysAvailable,
   setToolAccessPreference,
+  setToolAlwaysLoaded,
   setToolFamilyPreference,
   setToolAccessState,
   setToolFamilyState,
+  setToolsOnDemand,
   toolAccessIncludes,
   toolAccessPreferenceEnabled,
   toolAccessState,
+  toolIsAlwaysLoaded,
+  toolLoadingUsesDefaultSet,
 } from '../toolAccess.js';
 
 const catalog = [
@@ -385,5 +391,87 @@ describe('explicit Tool opt-in', () => {
         follower,
       ]),
     ).toBe('automatic');
+  });
+});
+
+describe('On-demand Tools', () => {
+  const loadingCatalog = [
+    { name: 'read', loaded_by_default: true },
+    { name: 'edit', loaded_by_default: true },
+    { name: 'write', loaded_by_default: true },
+    { name: 'bash', loaded_by_default: true },
+    { name: 'web_fetch', loaded_by_default: false },
+    { name: 'calendar' },
+  ];
+  const tool = (name) => ({ name });
+  const alwaysLoaded = (value) =>
+    loadingCatalog
+      .filter((entry) => toolIsAlwaysLoaded(value, entry, loadingCatalog))
+      .map((entry) => entry.name);
+
+  it.each([
+    [null, null],
+    ['on', null],
+    [{ on_demand: false }, null],
+    [{ on_demand: true }, { on_demand: true }],
+    [
+      { on_demand: false, always_loaded: [' read ', 'read', '', '*', 'mcp_x'] },
+      { on_demand: false, always_loaded: ['read', 'mcp_x'] },
+    ],
+  ])('normalizes %j to %j', (value, expected) => {
+    expect(normalizeToolLoading(value)).toEqual(expected);
+  });
+
+  it('reads the catalog default set until the first change writes the list', () => {
+    const value = { on_demand: true };
+    expect(toolLoadingUsesDefaultSet(value)).toBe(true);
+    expect(alwaysLoaded(value)).toEqual(['read', 'edit', 'write', 'bash']);
+
+    const pinned = setToolAlwaysLoaded(
+      value,
+      tool('web_fetch'),
+      true,
+      loadingCatalog,
+    );
+    expect(pinned).toEqual({
+      on_demand: true,
+      always_loaded: ['read', 'edit', 'write', 'bash', 'web_fetch'],
+    });
+    expect(
+      setToolAlwaysLoaded(value, tool('bash'), false, loadingCatalog),
+    ).toEqual({ on_demand: true, always_loaded: ['read', 'edit', 'write'] });
+    // An explicit empty list is a choice of its own, not the default set.
+    expect(alwaysLoaded({ on_demand: true, always_loaded: [] })).toEqual([]);
+    expect(resetAlwaysLoadedTools(pinned)).toEqual({ on_demand: true });
+  });
+
+  it('marks and unmarks the file edit Tools the catalog lists as one unit', () => {
+    const value = { on_demand: true, always_loaded: ['bash', 'mcp_x'] };
+    // apply_patch is not in this catalog, so only the listed ones are added.
+    expect(
+      setToolAlwaysLoaded(value, tool('edit'), true, loadingCatalog),
+    ).toEqual({
+      on_demand: true,
+      always_loaded: ['bash', 'mcp_x', 'edit', 'write'],
+    });
+    // One stored member makes all of them always loaded; unmarking removes
+    // all three and keeps names the catalog does not know.
+    const partial = {
+      on_demand: true,
+      always_loaded: ['apply_patch', 'mcp_x'],
+    };
+    expect(alwaysLoaded(partial)).toEqual(['edit', 'write']);
+    expect(
+      setToolAlwaysLoaded(partial, tool('write'), false, loadingCatalog),
+    ).toEqual({ on_demand: true, always_loaded: ['mcp_x'] });
+  });
+
+  it('keeps an explicit list while the switch is off', () => {
+    const custom = { on_demand: true, always_loaded: ['read'] };
+    const off = setToolsOnDemand(custom, false);
+    expect(off).toEqual({ on_demand: false, always_loaded: ['read'] });
+    expect(setToolsOnDemand(off, true)).toEqual(custom);
+    expect(setToolsOnDemand({ on_demand: true }, false)).toBeNull();
+    expect(setToolsOnDemand(null, true)).toEqual({ on_demand: true });
   });
 });

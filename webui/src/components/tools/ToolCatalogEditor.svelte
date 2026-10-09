@@ -7,6 +7,8 @@
   import { floatingHoverCard } from '$lib/tooltip.js';
 
   // Presentation only: each owner supplies its policy projection and mutations.
+  // `rowAction(tool)` renders one compact control at the end of each Tool row,
+  // outside the row's hover card; without it the rows have no action column.
   let {
     items = [],
     disabled = false,
@@ -15,6 +17,7 @@
     toggleLabel = (tool) => tool.name,
     toolbar,
     details,
+    rowAction,
     onOpenExtensions,
   } = $props();
   const catalogId = $props.id();
@@ -104,6 +107,66 @@
   }
 </script>
 
+<!-- The Tool's Checkbox row; the wrapper anchors its hover card. -->
+{#snippet toolRow(tool, status)}
+  <div
+    class="tool-access-chip-wrap"
+    class:is-unavailable={tool.ready === false}
+  >
+    <Checkbox
+      class="s-check-row tool-access-chip"
+      checked={tool.allowed}
+      ariaLabel={toggleLabel(tool)}
+      aria-describedby={status ? `${catalogId}-${tool.name}-status` : undefined}
+      data-tool-name={tool.name}
+      data-tool-access-toggle
+      {disabled}
+      onChange={(next) => onToggle(tool, next)}
+    >
+      <span class="s-check-row__name">{tool.name}</span>
+      {#if status}
+        <span
+          id="{catalogId}-{tool.name}-status"
+          class="s-check-row__state"
+          class:tool-catalog-unavailable={status.unavailable}
+          >{status.text}</span
+        >
+      {/if}
+    </Checkbox>
+    <div class="floating-card tool-access-tip" use:floatingHoverCard>
+      <strong>{tool.name}</strong>
+      {#if tool.description}<p>{tool.description}</p>{/if}
+      <dl class="tool-access-facts">
+        <div>
+          <dt>{t('toolAccess.facts.source')}</dt>
+          <dd>
+            {#if toolExtension(tool)}
+              {t('toolAccess.source.extension')}
+              <code>{toolExtension(tool)}</code>
+            {:else}
+              {t('toolAccess.source.builtIn')}
+            {/if}
+          </dd>
+        </div>
+        <div>
+          <dt>{t('toolAccess.facts.access')}</dt>
+          <dd>{toolAccessFact(tool)}</dd>
+        </div>
+      </dl>
+      {#each tool.notes ?? [] as note, index (`${tool.name}-${index}`)}<p>
+          {note}
+        </p>{/each}
+      {@render details?.(tool)}
+      <ToolReadinessNotice
+        ready={tool.ready}
+        readinessHint={tool.readiness_hint}
+        extension={tool.extension}
+        {onOpenExtensions}
+      />
+    </div>
+  </div>
+{/snippet}
+
 <div class="tool-catalog">
   <div class="tool-catalog-toolbar">
     <div class="tool-catalog-actions">{@render toolbar?.()}</div>
@@ -157,65 +220,14 @@
         <div class="s-check-group__rows">
           {#each group.members as tool (tool.name)}
             {@const status = toolStatus(tool, group)}
-            <div
-              class="tool-access-chip-wrap"
-              class:is-unavailable={tool.ready === false}
-            >
-              <Checkbox
-                class="s-check-row tool-access-chip"
-                checked={tool.allowed}
-                ariaLabel={toggleLabel(tool)}
-                aria-describedby={status
-                  ? `${catalogId}-${tool.name}-status`
-                  : undefined}
-                data-tool-name={tool.name}
-                data-tool-access-toggle
-                {disabled}
-                onChange={(next) => onToggle(tool, next)}
-              >
-                <span class="s-check-row__name">{tool.name}</span>
-                {#if status}
-                  <span
-                    id="{catalogId}-{tool.name}-status"
-                    class="s-check-row__state"
-                    class:tool-catalog-unavailable={status.unavailable}
-                    >{status.text}</span
-                  >
-                {/if}
-              </Checkbox>
-              <div class="floating-card tool-access-tip" use:floatingHoverCard>
-                <strong>{tool.name}</strong>
-                {#if tool.description}<p>{tool.description}</p>{/if}
-                <dl class="tool-access-facts">
-                  <div>
-                    <dt>{t('toolAccess.facts.source')}</dt>
-                    <dd>
-                      {#if toolExtension(tool)}
-                        {t('toolAccess.source.extension')}
-                        <code>{toolExtension(tool)}</code>
-                      {:else}
-                        {t('toolAccess.source.builtIn')}
-                      {/if}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>{t('toolAccess.facts.access')}</dt>
-                    <dd>{toolAccessFact(tool)}</dd>
-                  </div>
-                </dl>
-                {#each tool.notes ?? [] as note, index (`${tool.name}-${index}`)}<p
-                  >
-                    {note}
-                  </p>{/each}
-                {@render details?.(tool)}
-                <ToolReadinessNotice
-                  ready={tool.ready}
-                  readinessHint={tool.readiness_hint}
-                  extension={tool.extension}
-                  {onOpenExtensions}
-                />
+            {#if rowAction}
+              <div class="s-check-item tool-catalog-row">
+                {@render toolRow(tool, status)}
+                {@render rowAction(tool)}
               </div>
-            </div>
+            {:else}
+              {@render toolRow(tool, status)}
+            {/if}
           {/each}
         </div>
       </section>
@@ -278,6 +290,11 @@
      wrapper anchors the row's hover card. */
   .tool-access-chip-wrap {
     min-width: 0;
+  }
+  /* With a row action the shared `.s-check-item` band covers the whole row;
+     the Checkbox keeps the remaining width. */
+  .tool-catalog-row > .tool-access-chip-wrap {
+    flex: 1;
   }
   .tool-access-chip-wrap.is-unavailable .s-check-row__name {
     color: var(--text-med);
