@@ -263,7 +263,7 @@ class TestList:
         envelope, text = tool.call({"action": "list", "time_min": "2030-01-10", "query": "piano"})
 
         assert envelope["data"]["events"] == 3
-        assert "query: piano" in text
+        assert "query" not in text
         assert "Dentist" not in text
 
     def test_a_long_series_lists_its_first_occurrences(self, tool: CalendarTool) -> None:

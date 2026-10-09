@@ -279,8 +279,6 @@ class _CalendarTool:
             "window": _window_text(start, end, zone),
             "timezone": self._calendar.system_timezone_name(),
         }
-        if query:
-            data["query"] = query
         if found:
             data["content"] = "\n\n".join(
                 self._event_block(events[event_id], items) for event_id, items in found.items()
