@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import struct
 import time
 from collections import deque
 from collections.abc import Callable, Coroutine
@@ -194,12 +195,12 @@ class LiveCallEntry:
         if self._closed_published and self._owner is not None:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
 
-    def publish_audio(self, pcm: bytes) -> None:
+    def publish_audio(self, pcm: bytes, *, generation: int = 1, start_samples: int = 0) -> None:
         """Send assistant audio to the attached owner; dropped while none is attached."""
         owner = self._owner
         if owner is None or self._closed_published or not pcm:
             return
-        if not owner.send(pcm):
+        if not owner.send(struct.pack("<II", generation, start_samples) + pcm):
             self._owner_lagged(owner)
 
     # -- lifecycle --------------------------------------------------------
@@ -372,6 +373,8 @@ class LiveCallEntry:
         if previous is not None:
             previous.end(LIVE_SOCKET_CLOSE_REPLACED)
             self._requeue(previous.take_undelivered())
+            if self.call is not None:
+                self.call.reset_playback()
         owner = LiveOwnerStream(
             self, self._limits.owner_queue_limit, self._limits.owner_audio_limit_bytes
         )
@@ -380,6 +383,8 @@ class LiveCallEntry:
         self._owner = owner
         self._owner_attached = True
         self._cancel_timer()
+        if self.call is not None and not self.ended and not self._closed_published:
+            self.call.sync_playback()
         if self.ended or self._closed_published:
             owner.end(LIVE_SOCKET_CLOSE_ENDED)
         return owner
@@ -393,6 +398,8 @@ class LiveCallEntry:
             return
         self._owner = None
         self._requeue(owner.take_undelivered())
+        if self.call is not None:
+            self.call.reset_playback()
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
 
     def receive_audio(self, owner: LiveOwnerStream, pcm: bytes) -> None:
@@ -425,6 +432,21 @@ class LiveCallEntry:
             self._app_context = _app_context(frame)
         elif frame.get("type") == "stay":
             self._mark_active()
+        elif frame.get("type") == "playback":
+            generation = frame.get("generation")
+            played = frame.get("played_samples")
+            enabled = frame.get("enabled")
+            cleared = frame.get("cleared", False)
+            if (
+                type(generation) is int
+                and 0 <= generation <= 0xFFFFFFFF
+                and type(played) is int
+                and 0 <= played <= 0xFFFFFFFF
+                and isinstance(enabled, bool)
+                and isinstance(cleared, bool)
+                and self.call is not None
+            ):
+                self.call.report_playback(generation, played, enabled=enabled, cleared=cleared)
 
     def _deliver(self, frame: JsonObject) -> None:
         owner = self._owner
@@ -459,6 +481,8 @@ class LiveCallEntry:
         self._owner = None
         owner.end(LIVE_SOCKET_CLOSE_LAGGED)
         self._requeue(owner.take_undelivered())
+        if self.call is not None:
+            self.call.reset_playback()
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
 
     def _arm_timer(self, seconds: float, reason: str) -> None:

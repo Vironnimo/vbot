@@ -209,16 +209,17 @@ describe('holding a Live voice call', () => {
     const f = await relayCall();
 
     f.controller.hold('wakeword');
-    expect(f.relay.clear).toHaveBeenCalledOnce();
+    expect(f.relay.setEnabled).toHaveBeenLastCalledWith(false);
     f.socket().handlers.onAudio(new ArrayBuffer(8));
-    expect(f.relay.play).not.toHaveBeenCalled();
+    expect(f.relay.play).toHaveBeenCalledOnce();
     // The disabled microphone track makes the relay send silence.
     expect(f.track.enabled).toBe(false);
 
     f.controller.release('wakeword');
+    expect(f.relay.setEnabled).toHaveBeenLastCalledWith(true);
     const speech = new ArrayBuffer(8);
     f.socket().handlers.onAudio(speech);
-    expect(f.relay.play).toHaveBeenCalledExactlyOnceWith(speech);
+    expect(f.relay.play).toHaveBeenLastCalledWith(speech);
     expect(f.track.enabled).toBe(true);
   });
 

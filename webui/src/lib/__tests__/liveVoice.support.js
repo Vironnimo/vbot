@@ -105,11 +105,14 @@ export function liveFixture(overrides = {}) {
   const relay = {
     play: vi.fn(),
     clear: vi.fn(),
+    setEnabled: vi.fn(),
+    report: vi.fn(),
     close: vi.fn(),
     onFrame: null,
   };
-  const createAudio = vi.fn(async ({ onFrame }) => {
+  const createAudio = vi.fn(async ({ onFrame, onPlayback }) => {
     relay.onFrame = onFrame;
+    relay.onPlayback = onPlayback;
     return relay;
   });
   const mediaDevices = { getUserMedia: vi.fn().mockResolvedValue(microphone) };

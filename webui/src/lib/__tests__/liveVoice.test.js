@@ -256,11 +256,15 @@ describe('Live voice relay media', () => {
     f.relay.onFrame(frame);
     expect(f.socket().sendAudio).toHaveBeenCalledExactlyOnceWith(frame);
 
-    const speech = new ArrayBuffer(8);
+    const speech = {
+      generation: 1,
+      start_samples: 0,
+      buffer: new ArrayBuffer(8),
+    };
     f.socket().handlers.onAudio(speech);
     expect(f.relay.play).toHaveBeenCalledExactlyOnceWith(speech);
-    f.frame({ type: 'playback_clear' });
-    expect(f.relay.clear).toHaveBeenCalledOnce();
+    f.frame({ type: 'playback_clear', generation: 2 });
+    expect(f.relay.clear).toHaveBeenCalledExactlyOnceWith(2);
 
     f.controller.stop();
     expect(f.relay.close).toHaveBeenCalledOnce();
@@ -269,6 +273,56 @@ describe('Live voice relay media', () => {
     expect(f.socket().sendAudio).toHaveBeenCalledOnce();
     expect(f.relay.play).toHaveBeenCalledOnce();
     expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('reports rendered prefixes and resynchronizes relay playback after socket loss', async () => {
+    vi.useFakeTimers();
+    const f = relayFixture();
+    await f.goLive();
+    f.socket().handlers.onOpen();
+    expect(f.socket().sendJson).toHaveBeenCalledWith({
+      type: 'playback',
+      generation: 0,
+      played_samples: 0,
+      enabled: true,
+    });
+    expect(f.relay.setEnabled).toHaveBeenLastCalledWith(true);
+    f.frame({ type: 'playback_clear', generation: 1 });
+    f.relay.onPlayback({ generation: 1, played_samples: 128, enabled: true });
+    expect(f.socket().sendJson).toHaveBeenLastCalledWith({
+      type: 'playback',
+      generation: 1,
+      played_samples: 128,
+      enabled: true,
+    });
+    f.socket().handlers.onClose({}, 'lost');
+    expect(f.relay.setEnabled).toHaveBeenLastCalledWith(false);
+    f.relay.onPlayback({
+      generation: 1,
+      played_samples: 256,
+      enabled: false,
+      cleared: true,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    f.socket().handlers.onOpen();
+    expect(f.socket().sendJson).toHaveBeenLastCalledWith({
+      type: 'playback',
+      generation: 1,
+      played_samples: 256,
+      enabled: true,
+    });
+    expect(f.relay.setEnabled).toHaveBeenLastCalledWith(true);
+    expect(f.relay.report).toHaveBeenCalledTimes(2);
+    f.frame({ type: 'playback_clear', generation: 2 });
+    expect(f.relay.clear).toHaveBeenLastCalledWith(2);
+    f.controller.destroy();
+    f.relay.onPlayback({ generation: 2, played_samples: 128, enabled: true });
+    expect(f.socket().sendJson).toHaveBeenLastCalledWith({
+      type: 'playback',
+      generation: 1,
+      played_samples: 256,
+      enabled: true,
+    });
   });
 
   it('cancels echo of all device output where the microphone supports it', async () => {
@@ -896,13 +950,15 @@ describe('Live voice media and connection failures', () => {
     await f.goLive();
     f.controller.muteSpeaker();
     expect(f.state.speakerMuted).toBe(true);
-    expect(f.relay.clear).toHaveBeenCalledOnce();
+    expect(f.relay.setEnabled).toHaveBeenLastCalledWith(false);
     f.socket().handlers.onAudio(new ArrayBuffer(4));
-    expect(f.relay.play).not.toHaveBeenCalled();
+    // The worklet owns dropping muted frames and the final rendered count.
+    expect(f.relay.play).toHaveBeenCalledOnce();
     expect(f.track.enabled).toBe(true);
     f.controller.muteSpeaker();
+    expect(f.relay.setEnabled).toHaveBeenLastCalledWith(true);
     f.socket().handlers.onAudio(new ArrayBuffer(4));
-    expect(f.relay.play).toHaveBeenCalledOnce();
+    expect(f.relay.play).toHaveBeenCalledTimes(2);
 
     // WebRTC audio plays through the element, which is muted instead.
     const g = liveFixture();

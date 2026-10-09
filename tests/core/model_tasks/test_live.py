@@ -102,6 +102,12 @@ class FakeWire:
             raise self.audio_error
         self.audio.append(pcm)
 
+    async def update_playback(
+        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
+    ) -> list[Any]:
+        self.sent.append(("playback", generation, played_samples, enabled, cleared))
+        return []
+
     async def request_close(self) -> None:
         self.sent.append(("close",))
         if self.confirm_close:
@@ -188,6 +194,7 @@ class FakeHost:
         self.updates: list[dict[str, Any]] = []
         self.audio: list[bytes] = []
         self.executed: list[tuple[Any, Any]] = []
+        self.audio_positions: list[tuple[int, int]] = []
         self.tool_result: Any = {"ok": True}
         self.tool_release = asyncio.Event()
         self.tool_release.set()
@@ -216,8 +223,9 @@ class FakeHost:
     def publish(self, update: dict[str, Any]) -> None:
         self.updates.append(update)
 
-    def publish_audio(self, pcm: bytes) -> None:
+    def publish_audio(self, pcm: bytes, *, generation: int = 1, start_samples: int = 0) -> None:
         self.audio.append(pcm)
+        self.audio_positions.append((generation, start_samples))
 
     def of_type(self, kind: str) -> list[dict[str, Any]]:
         return [update for update in self.updates if update["type"] == kind]
@@ -820,13 +828,25 @@ async def test_relay_audio_flows_only_while_live():
     call.push_audio(b"")
     call.push_audio(b"\x03\x00")
     await _until(lambda: len(wire.audio) == 2)
-    wire.push(WireAudio("item_1", b"\x10\x00"), WirePlaybackClear())
+    wire.push(
+        WireAudio("item_1", b"\x10\x00", generation=2, start_samples=240), WirePlaybackClear(3)
+    )
     await _until(lambda: bool(host.of_type("playback_clear")))
 
     assert call.media == relay_media()
     assert wire.audio == [b"\x02\x00", b"\x03\x00"]
     assert host.audio == [b"\x10\x00"]
-    assert host.of_type("playback_clear") == [{"type": "playback_clear"}]
+    assert host.audio_positions == [(2, 240)]
+    assert host.of_type("playback_clear") == [{"type": "playback_clear", "generation": 3}]
+    call.sync_playback()
+    assert host.of_type("playback_clear")[-1] == {"type": "playback_clear", "generation": 3}
+    call.report_playback(3, 120, enabled=True)
+    call.reset_playback()
+    await _until(lambda: len([sent for sent in wire.sent if sent[0] == "playback"]) == 2)
+    assert [sent for sent in wire.sent if sent[0] == "playback"] == [
+        ("playback", 3, 120, True, False),
+        ("playback", 0, 0, False, True),
+    ]
     await call.close()
     call.push_audio(b"\x04\x00")
     await asyncio.sleep(0.01)

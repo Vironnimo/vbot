@@ -18,10 +18,11 @@ Server to accessor:
 * JSON text: ``{"type": "ui_request", "request_id", "action", "args"}`` - see
   ``server/live/_tools.py`` for ``open`` and ``terminal_view``;
 * JSON text: ``{"type": "heartbeat", "timestamp"}`` while otherwise idle;
-* binary, relay calls only: assistant audio as raw PCM in the call's
-  ``media.audio`` format. Audio is never buffered: it is dropped while no
-  owner is attached, and beyond ``owner_audio_limit_bytes`` waiting for a
-  slow socket.
+* binary, relay calls only: two little-endian uint32 fields, playback generation
+  and source-sample offset, followed by PCM in the call's ``media.audio`` format.
+  No audio waits for an absent owner. Exceeding ``owner_audio_limit_bytes``
+  disconnects a slow owner; reattachment starts a fresh generation. A
+  ``playback_clear`` removes every queued binary frame before being enqueued.
 
 Updates wait for an owner: before it attaches and while it reconnects, they
 are kept in a bounded buffer that drops the oldest caption, activity, action,
@@ -36,6 +37,11 @@ same format (even length, at most 64 KiB each). JSON text frames (at most
 (``chat_session`` is ``{"agent_id", "session_id"}`` or ``null``); the owner
 sends one after it attaches and another whenever that changes.
 ``{"type": "stay"}`` keeps a call the ``idle`` update warned about.
+``{"type": "playback", "generation", "played_samples", "enabled", "cleared"?}``
+reports the AudioWorklet-rendered contiguous prefix in source samples. Generation
+zero is initial readiness; a clear confirms the final old-generation prefix.
+Mute, hold, gaps, and disconnect disable or clear playback rather than counting
+discarded audio. Reports measure rendering, not acoustic output at the speaker.
 Malformed frames and other text frames are ignored.
 
 Close codes: 1000 after the ``closed`` update, 1008 for an unknown or already
@@ -116,16 +122,23 @@ class LiveOwnerStream:
             return False
         if isinstance(frame, bytes):
             if self._audio_bytes + len(frame) > self._audio_limit:
-                # Late speech is worthless; keep the socket and drop the audio.
+                # A gap cannot be called heard. Reattach with a fresh playback
+                # generation instead of silently splicing a spoken answer.
                 if not self._audio_dropped:
                     self._audio_dropped = True
                     _LOGGER.warning(
                         "Live owner socket is slow; dropping assistant audio (call=%s)",
                         self._entry.log_id,
                     )
-                return True
+                return False
             self._audio_bytes += len(frame)
         else:
+            if frame.get("type") == "playback_clear":
+                # Barge-in must not wait behind the speech it is cancelling.
+                self._frames = deque(
+                    queued for queued in self._frames if not isinstance(queued, bytes)
+                )
+                self._audio_bytes = 0
             if self._updates >= self._limit:
                 return False
             self._updates += 1

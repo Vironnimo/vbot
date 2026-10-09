@@ -11,6 +11,7 @@ import {
   createPcmFramer,
   createPlaybackQueue,
   createResampler,
+  createRelayPlayer,
   floatToPcm16,
   pcm16ToFloat,
 } from '../liveAudioWorklet.js';
@@ -49,22 +50,39 @@ describe('relay PCM helpers', () => {
   ])(
     'resamples a stream from %i to %i Hz seamlessly across chunks',
     (fromRate, toRate) => {
-      const whole = createResampler(fromRate, toRate)(ramp(960));
+      const single = createResampler(fromRate, toRate);
+      const whole = [...single(ramp(960)), ...single.flush()];
       const chunked = createResampler(fromRate, toRate);
       const parts = [];
       for (let start = 0; start < 960; start += 128) {
         parts.push(...chunked(ramp(Math.min(128, 960 - start), start)));
       }
+      parts.push(...chunked.flush());
 
       expect(parts.length).toBe(whole.length);
-      expect(parts.length).toBeGreaterThanOrEqual(
-        Math.floor((960 * toRate) / fromRate) - 2,
-      );
+      expect(parts.length).toBe(Math.ceil((960 * toRate) / fromRate));
       parts.forEach((value, index) => {
-        // A linear ramp stays linear: sample n sits at input n * fromRate/toRate.
-        expect(value).toBeCloseTo((index * fromRate) / toRate / 1000, 5);
         expect(whole[index]).toBeCloseTo(value, 6);
       });
+    },
+  );
+
+  it.each([48000, 44100])(
+    'preserves speech frequencies and rejects aliases from %i Hz capture',
+    (fromRate) => {
+      const amplitude = (frequency) => {
+        const input = Float32Array.from({ length: fromRate / 10 }, (_, index) =>
+          Math.sin((2 * Math.PI * frequency * index) / fromRate),
+        );
+        const samples = createResampler(fromRate, 24000)(input).slice(100);
+        return Math.sqrt(
+          samples.reduce((sum, value) => sum + value * value, 0) /
+            samples.length,
+        );
+      };
+      expect(amplitude(1000)).toBeCloseTo(Math.SQRT1_2, 2);
+      expect(amplitude(8000)).toBeCloseTo(Math.SQRT1_2, 2);
+      expect(amplitude(18000)).toBeLessThan(0.001);
     },
   );
 
@@ -98,6 +116,110 @@ describe('relay PCM helpers', () => {
     queue.clear();
     expect(queue.size).toBe(0);
     expect(queue.read(output)).toBe(0);
+  });
+});
+
+describe('relay playback acknowledgments', () => {
+  function playerFixture(outputRate = 24000) {
+    const reports = [];
+    const player = createRelayPlayer({
+      relayRate: 24000,
+      outputRate,
+      onPlayback: (report) => reports.push(report),
+    });
+    const audio = (generation, start_samples, count) =>
+      player.receive({
+        type: 'audio',
+        generation,
+        start_samples,
+        buffer: floatToPcm16(new Float32Array(count).fill(0.5)),
+      });
+    const read = (count) => {
+      const output = new Float32Array(count);
+      player.read(output);
+      return output;
+    };
+    return { player, reports, audio, read };
+  }
+
+  it.each([24000, 48000, 44100])(
+    'counts rendered source samples at a %i Hz device, including the filter tail',
+    (rate) => {
+      const f = playerFixture(rate);
+      f.player.receive({ type: 'clear', generation: 1 });
+      f.audio(1, 0, 2400);
+      expect(f.reports.at(-1).played_samples).toBe(0);
+      f.read(rate / 20);
+      f.player.receive({ type: 'report' });
+      expect(f.reports.at(-1).played_samples).toBe(1200);
+      f.read(rate / 20);
+      expect(f.reports.at(-1).played_samples).toBe(2400);
+      expect(Array.from(f.read(128)).every((sample) => sample === 0)).toBe(
+        true,
+      );
+      expect(f.reports.at(-1).played_samples).toBe(2400);
+      f.audio(1, 2400, 2400);
+      f.read(rate / 10);
+      expect(f.reports.at(-1).played_samples).toBe(4800);
+    },
+  );
+
+  it('reports the final heard prefix before clear and drops old or unsynchronized audio', () => {
+    const f = playerFixture();
+    f.audio(1, 0, 2400);
+    expect(f.read(128).every((sample) => sample === 0)).toBe(true);
+    f.player.receive({ type: 'clear', generation: 1 });
+    f.audio(1, 0, 2400);
+    f.read(128);
+    f.player.receive({ type: 'clear', generation: 2 });
+    expect(f.reports.at(-2)).toEqual({
+      generation: 1,
+      played_samples: 128,
+      enabled: true,
+      cleared: true,
+    });
+    f.audio(1, 2400, 2400);
+    expect(f.read(128).every((sample) => sample === 0)).toBe(true);
+    f.audio(2, 0, 128);
+    f.read(128);
+    expect(f.reports.at(-1)).toEqual({
+      generation: 2,
+      played_samples: 128,
+      enabled: true,
+    });
+  });
+
+  it('never advances over muted, missing or overflowed samples', () => {
+    const f = playerFixture();
+    f.player.receive({ type: 'clear', generation: 1 });
+    f.audio(1, 0, 2400);
+    f.read(128);
+    f.player.receive({ type: 'enabled', enabled: false });
+    expect(f.reports.at(-1)).toEqual({
+      generation: 1,
+      played_samples: 128,
+      enabled: false,
+      cleared: true,
+    });
+    f.audio(1, 2400, 2400);
+    f.player.receive({ type: 'enabled', enabled: true });
+    f.audio(1, 4800, 2400);
+    expect(f.read(128).every((sample) => sample === 0)).toBe(true);
+    f.player.receive({ type: 'clear', generation: 2 });
+    f.audio(2, 10, 2400);
+    expect(f.reports.at(-1)).toMatchObject({
+      generation: 2,
+      played_samples: 0,
+      cleared: true,
+    });
+    f.player.receive({ type: 'clear', generation: 3 });
+    f.audio(3, 0, 24000 * 61);
+    expect(f.reports.at(-1)).toMatchObject({
+      generation: 3,
+      played_samples: 0,
+      cleared: true,
+    });
+    expect(f.read(128).every((sample) => sample === 0)).toBe(true);
   });
 });
 
@@ -176,10 +298,12 @@ describe('relay audio engine', () => {
   it('captures microphone frames and plays relayed audio at 24 kHz', async () => {
     const f = audioFixture();
     const onFrame = vi.fn();
+    const onPlayback = vi.fn();
 
     const relay = await createRelayAudio({
       microphone,
       onFrame,
+      onPlayback,
       AudioContextClass: f.FakeContext,
       AudioWorkletNodeClass: f.FakeNode,
       workletUrl: 'https://app.test/liveAudioWorklet.js',
@@ -210,19 +334,40 @@ describe('relay audio engine', () => {
     expect(onFrame).toHaveBeenCalledExactlyOnceWith(frame);
 
     const speech = new ArrayBuffer(8);
-    relay.play(speech);
-    relay.play(new ArrayBuffer(1));
-    relay.clear();
+    relay.play({ generation: 1, start_samples: 0, buffer: speech });
+    relay.play({ buffer: new ArrayBuffer(1) });
+    relay.clear(2);
+    relay.setEnabled(false);
+    relay.report();
+    const report = {
+      generation: 1,
+      played_samples: 2,
+      enabled: false,
+      cleared: true,
+    };
+    player.port.onmessage({ data: report });
+    expect(onPlayback).toHaveBeenCalledExactlyOnceWith(report);
     expect(player.port.posted).toEqual([
-      { message: speech, transfer: [speech] },
-      { message: { type: 'clear' }, transfer: undefined },
+      {
+        message: {
+          type: 'audio',
+          generation: 1,
+          start_samples: 0,
+          buffer: speech,
+        },
+        transfer: [speech],
+      },
+      { message: { type: 'clear', generation: 2 }, transfer: undefined },
+      { message: { type: 'enabled', enabled: false }, transfer: undefined },
+      { message: { type: 'report' }, transfer: undefined },
     ]);
 
     relay.close();
     relay.close();
-    relay.play(new ArrayBuffer(8));
-    expect(player.port.posted).toHaveLength(2);
+    relay.play({ generation: 2, start_samples: 0, buffer: new ArrayBuffer(8) });
+    expect(player.port.posted).toHaveLength(4);
     expect(capture.port.onmessage).toBeNull();
+    expect(player.port.onmessage).toBeNull();
     expect(capture.disconnect).toHaveBeenCalledOnce();
     expect(context.close).toHaveBeenCalledOnce();
   });

@@ -243,10 +243,11 @@ export function createLiveVoice({
 
   const silenced = (call) => isHeld(call) || state.speakerMuted;
 
-  // WebRTC plays through the audio element; relay audio is dropped on arrival
-  // while held or silenced (see attachSocket).
+  // Relay mute clears inside the worklet, which reports exactly what rendered
+  // before the clear. WebRTC plays through the audio element.
   function applyOutput(call) {
     const muted = silenced(call);
+    call.relay?.setEnabled(!muted && call.socket !== null);
     if (!audio || call.outputMuted === muted) return;
     call.outputMuted = muted;
     audio.muted = muted;
@@ -375,16 +376,25 @@ export function createLiveVoice({
           call.socketLostAt = null;
           call.socketHeardAt = now();
           sendContext(call);
+          if (call.relay) {
+            call.socket.sendJson({
+              type: 'playback',
+              ...call.playback,
+              enabled: !silenced(call),
+            });
+            applyOutput(call);
+            call.relay.report();
+          }
         },
         onEvent: (frame) => {
           if (!owns()) return;
           call.socketHeardAt = now();
           handleFrame(frame, call);
         },
-        onAudio: (pcm) => {
+        onAudio: (frame) => {
           if (!owns()) return;
           call.socketHeardAt = now();
-          if (!call.closing && !silenced(call)) call.relay?.play(pcm);
+          if (!call.closing) call.relay?.play(frame);
         },
         onClose: (_event, outcome) => {
           if (owns()) socketLost(call, outcome);
@@ -434,6 +444,7 @@ export function createLiveVoice({
   // newer owner socket replaced this one.
   function socketLost(call, outcome = 'lost') {
     call.socket = null;
+    call.relay?.setEnabled(false);
     if (call.closing || outcome === 'ended') {
       applyClosed(call, {});
       return;
@@ -626,7 +637,7 @@ export function createLiveVoice({
         break;
       case 'playback_clear':
         // The user talks over the assistant: drop its queued speech at once.
-        call.relay?.clear();
+        call.relay?.clear(frame.generation);
         break;
       case 'action':
         applyAction(frame);
@@ -715,6 +726,12 @@ export function createLiveVoice({
       relay = await createAudio({
         microphone: call.microphone,
         onFrame: (pcm) => sendAudio(call, pcm),
+        onPlayback: (report) => {
+          if (!isCurrent(call) || call.closing) return;
+          const { generation, played_samples, enabled } = report;
+          call.playback = { generation, played_samples, enabled };
+          call.socket?.sendJson({ type: 'playback', ...report });
+        },
       });
     } catch (error) {
       throw failure(isText(error?.code) ? error.code : 'audio_unsupported');
@@ -724,6 +741,7 @@ export function createLiveVoice({
       return null;
     }
     call.relay = relay;
+    applyOutput(call);
     return api.startLiveCall({
       media: MEDIA_RELAY,
       wakePhrases: currentWakePhrases(),
@@ -777,6 +795,7 @@ export function createLiveVoice({
       channel: null,
       socket: null,
       relay: null,
+      playback: { generation: 0, played_samples: 0, enabled: true },
       timers: new Set(),
       requests: new Set(),
       startupTimer: null,
@@ -887,7 +906,6 @@ export function createLiveVoice({
     const call = current;
     if (!call || call.closing) return;
     state.speakerMuted = muted === true;
-    if (state.speakerMuted) call.relay?.clear();
     applyOutput(call);
   }
 
@@ -910,7 +928,6 @@ export function createLiveVoice({
     if (!wasHeld) {
       state.held = true;
       applyMicrophone(call);
-      call.relay?.clear();
       applyOutput(call);
     }
     return true;

@@ -393,16 +393,29 @@ describe('openLiveCallSocket()', () => {
     }
     const onEvent = vi.fn();
     const onAudio = vi.fn();
+    const onError = vi.fn();
     const connection = openLiveCallSocket(
       'call-1',
-      { onEvent, onAudio },
+      { onEvent, onAudio, onError },
       { WebSocket: AudioSocket, baseUrl: BASE_URL },
     );
     expect(connection.socket.binaryType).toBe('arraybuffer');
 
-    const speech = new ArrayBuffer(4);
+    const speech = new ArrayBuffer(12);
+    const header = new DataView(speech);
+    header.setUint32(0, 7, true);
+    header.setUint32(4, 2400, true);
+    header.setInt16(8, 1000, true);
     connection.socket.emit('message', { data: speech });
-    expect(onAudio).toHaveBeenCalledExactlyOnceWith(speech, expect.any(Object));
+    expect(onAudio).toHaveBeenCalledExactlyOnceWith(
+      { generation: 7, start_samples: 2400, buffer: speech.slice(8) },
+      expect.any(Object),
+    );
+    for (const length of [0, 8, 9, 11]) {
+      connection.socket.emit('message', { data: new ArrayBuffer(length) });
+    }
+    expect(onAudio).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledTimes(4);
     expect(onEvent).not.toHaveBeenCalled();
 
     const frame = new ArrayBuffer(2);

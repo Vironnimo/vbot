@@ -65,12 +65,13 @@ async function resumeContext(context, timeoutMs) {
 
 // Starts capture and playback for `microphone` (a MediaStream). `onFrame`
 // receives each captured PCM frame (an ArrayBuffer in RELAY_AUDIO_FORMAT,
-// 40 ms). `play` takes relayed PCM in the same format. Resolves to
-// `{play(buffer), clear(), close()}`; rejects with a RelayAudioError coded
-// `audio_unsupported` or `playback_blocked`.
+// 40 ms). `play` takes {generation, start_samples, buffer}. `onPlayback`
+// receives the worklet's rendered source prefix, including clear/mute state.
+// Rejects with a RelayAudioError coded `audio_unsupported` or `playback_blocked`.
 export async function createRelayAudio({
   microphone,
   onFrame,
+  onPlayback = () => {},
   AudioContextClass = globalThis.AudioContext,
   AudioWorkletNodeClass = globalThis.AudioWorkletNode,
   workletUrl = WORKLET_URL,
@@ -118,6 +119,7 @@ export async function createRelayAudio({
     capture.port.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) onFrame(event.data);
     };
+    player.port.onmessage = (event) => onPlayback(event.data);
     source.connect(capture);
     // The capture node outputs silence; its connection keeps it rendering.
     capture.connect(context.destination);
@@ -127,18 +129,26 @@ export async function createRelayAudio({
     const audioContext = context;
     let closed = false;
     return {
-      play(buffer) {
+      play(frame) {
+        const buffer = frame?.buffer;
         if (closed || !(buffer instanceof ArrayBuffer) || buffer.byteLength < 2)
           return;
-        player.port.postMessage(buffer, [buffer]);
+        player.port.postMessage({ type: 'audio', ...frame }, [buffer]);
       },
-      clear() {
-        if (!closed) player.port.postMessage({ type: 'clear' });
+      clear(generation) {
+        if (!closed) player.port.postMessage({ type: 'clear', generation });
+      },
+      setEnabled(enabled) {
+        if (!closed) player.port.postMessage({ type: 'enabled', enabled });
+      },
+      report() {
+        if (!closed) player.port.postMessage({ type: 'report' });
       },
       close() {
         if (closed) return;
         closed = true;
         capture.port.onmessage = null;
+        player.port.onmessage = null;
         for (const node of [source, capture, player]) {
           try {
             node.disconnect();
