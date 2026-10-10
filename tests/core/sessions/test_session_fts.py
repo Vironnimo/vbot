@@ -42,6 +42,13 @@ def _meta(connection: sqlite3.Connection, key: str) -> str | None:
     return None if row is None else str(row[0])
 
 
+def _damaged_index_error() -> sqlite3.DatabaseError:
+    """The error SQLite raises for damaged index storage: it names no index."""
+    error = sqlite3.DatabaseError("database disk image is malformed")
+    error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT_VTAB
+    return error
+
+
 def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -494,8 +501,13 @@ def test_session_delete_and_history_edit_remove_exactly_their_indexed_rows(
         sessions.close()
 
 
+@pytest.mark.parametrize(
+    "error",
+    [sqlite3.OperationalError("fts5: simulated index write failure"), _damaged_index_error()],
+    ids=["index", "damaged-index"],
+)
 def test_failed_fts_delete_detaches_the_index_and_still_deletes_the_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: sqlite3.Error
 ) -> None:
     from core.sessions import _store_fts as store_module
 
@@ -510,7 +522,7 @@ def test_failed_fts_delete_detaches_the_index_and_still_deletes_the_session(
     def fail_once(connection: sqlite3.Connection, keys_sql: str, params: Any) -> None:
         if not failures:
             failures.append(keys_sql)
-            raise sqlite3.OperationalError("fts5: simulated index write failure")
+            raise error
         real_forget(connection, keys_sql, params)
 
     monkeypatch.setattr(store_module, "fts_forget", fail_once)
@@ -532,11 +544,15 @@ def test_failed_fts_delete_detaches_the_index_and_still_deletes_the_session(
 
 @pytest.mark.parametrize(
     ("error", "detached"),
-    [("fts5: simulated index failure", True), ("simulated failure elsewhere", False)],
-    ids=["index", "other"],
+    [
+        (sqlite3.OperationalError("fts5: simulated index failure"), True),
+        (_damaged_index_error(), True),
+        (sqlite3.OperationalError("simulated failure elsewhere"), False),
+    ],
+    ids=["index", "damaged-index", "other"],
 )
 def test_a_failed_fts_search_scans_instead_and_detaches_only_a_failed_index(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: str, detached: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: sqlite3.Error, detached: bool
 ) -> None:
     from core.sessions import _store_search as search_module
 
@@ -546,7 +562,7 @@ def test_a_failed_fts_search_scans_instead_and_detaches_only_a_failed_index(
     sessions.create(address.agent_id, session_id=address.session_id).append(message)
 
     def fail(*_args: object, **_kwargs: object) -> Any:
-        raise sqlite3.OperationalError(error)
+        raise error
 
     monkeypatch.setattr(search_module, "_fts_candidates", fail)
     try:
@@ -554,13 +570,13 @@ def test_a_failed_fts_search_scans_instead_and_detaches_only_a_failed_index(
 
         assert (result.method, result.fallback_reason) == ("scan", "fts_error")
         assert [hit.message_id for hit in result.hits] == [message.id]
-        # Only an error that names the index detaches it; any other error
-        # falls back for this search alone.
+        # Only an error of the index detaches it; any other error falls back
+        # for this search alone.
         assert sessions.fts_health().state == ("unavailable" if detached else "healthy")
         with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection:
             assert _meta(connection, "fts_stale") == ("1" if detached else None)
             reason = _meta(connection, FTS_DEGRADED_REASON_KEY)
-        assert reason == (error if detached else "")
+        assert reason == (str(error) if detached else "")
     finally:
         sessions.close()
 

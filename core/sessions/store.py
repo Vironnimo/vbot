@@ -71,6 +71,22 @@ ACTIVITY_WRITE_PATIENCE_S = 0.5
 _FTS_ERROR_MARKERS = ("fts",)
 
 
+def _is_fts_failure(exc: BaseException) -> bool:
+    """Whether a failed statement failed in the derived search index.
+
+    The search indexes are the store's only virtual tables, so a corrupt
+    virtual table is always theirs, even though SQLite reports it as a
+    malformed database image.
+    """
+    cause = exc if isinstance(exc, sqlite3.Error) else exc.__cause__
+    if not isinstance(cause, sqlite3.Error):
+        return False
+    if getattr(cause, "sqlite_errorcode", None) == sqlite3.SQLITE_CORRUPT_VTAB:
+        return True
+    message = str(cause).lower()
+    return any(marker in message for marker in _FTS_ERROR_MARKERS)
+
+
 class SessionStore:
     """The canonical Session database, served by the shared database kernel.
 
@@ -126,16 +142,13 @@ class SessionStore:
             try:
                 return self._database.write(func, patience_s=patience_s)
             except (sqlite3.Error, DatabaseError) as exc:
-                cause = exc if isinstance(exc, sqlite3.Error) else exc.__cause__
-                message = str(cause).lower() if isinstance(cause, sqlite3.Error) else ""
-                if not fts_retried and any(marker in message for marker in _FTS_ERROR_MARKERS):
-                    # The derived search index failed, not canonical storage:
-                    # detach it and retry the write without it.
-                    fts_retried = True
-                    with suppress(Exception):
-                        self._database.write(_store_fts._detach_fts, patience_s=patience_s)
-                    continue
-                raise
+                if fts_retried or not _is_fts_failure(exc):
+                    raise
+                # The derived search index failed, not canonical storage:
+                # detach it and retry the write without it.
+                fts_retried = True
+                with suppress(Exception):
+                    self._database.write(_store_fts._detach_fts, patience_s=patience_s)
 
     def close(self) -> None:
         self._database.close()
@@ -1077,7 +1090,7 @@ class SessionStore:
         try:
             return select(use_fts=True)
         except sqlite3.Error as exc:
-            if any(marker in str(exc).lower() for marker in _FTS_ERROR_MARKERS):
+            if _is_fts_failure(exc):
                 error_message = str(exc)
                 with suppress(Exception):
                     self._execute_write(
