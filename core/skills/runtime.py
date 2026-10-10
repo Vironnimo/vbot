@@ -14,7 +14,6 @@ from core.agents import Agent, AgentStore
 from core.extensions import ExtensionRegistry
 from core.projects import (
     Project,
-    ProjectError,
     ProjectNotFoundError,
     ProjectStore,
     effective_project_allowed_skills,
@@ -35,6 +34,7 @@ from core.skills.skills import (
     WILDCARD_ALLOWLIST,
     SkillMetadata,
     SkillRegistry,
+    SkillScan,
     find_skill_package_dir,
     load_project_skill_registry,
     project_skill_origin,
@@ -622,8 +622,10 @@ class SkillRuntime:
         """
         environment = self._skill_environment(self._storage.load_environment())
         policy = self._policy.load()
+        scan = SkillScan()
         projects = [
-            self._projects.refresh_sources(project.project_id) for project in self._projects.list()
+            self._projects.refresh_sources(project.project_id, skill_scan=scan)
+            for project in self._projects.list()
         ]
         project_disabled = {
             project.project_id: frozenset(project.skills_project_disabled) for project in projects
@@ -636,7 +638,7 @@ class SkillRuntime:
         merged_origins: list[str | None] = []
 
         def add_root(source: _ManagerSource) -> None:
-            registry = SkillRegistry.load(source.root, environment=environment)
+            registry = SkillRegistry.load(source.root, environment=environment, scan=scan)
             for skill in registry.list_all():
                 raw_entries.append((skill, source, registry.warnings_for(skill.name), True))
             for diagnostic in registry.invalid_diagnostics():
@@ -655,6 +657,7 @@ class SkillRuntime:
             extra_dirs=merged_roots[1:],
             environment=environment,
             origins=merged_origins,
+            scan=scan,
         )
         global_root = self.global_skills_dir.resolve()
         records = self._home_records(agents)
@@ -684,7 +687,7 @@ class SkillRuntime:
             shared_receivers = owner_shared.get(skill.name, frozenset())
             entry_id = self._manager_entry_id(root, skill.path, owner_id)
             if loadable:
-                package_ids.setdefault(skill.path.resolve(), entry_id)
+                package_ids.setdefault(skill.path, entry_id)
             editable_scope = (
                 (
                     f"agent:{owner_id}"
@@ -724,8 +727,15 @@ class SkillRuntime:
                     **_record_fields(record),
                 }
             )
+        projects_by_id = {project.project_id: project for project in projects}
+        bundles = {
+            project.project_id: self._build_project_skill_bundle(
+                project.project_id, project=project, scan=scan
+            )
+            for project in projects
+        }
         project_pools = [
-            self._project_skill_access(project, package_ids)
+            self._project_skill_access(project, package_ids, bundles[project.project_id])
             for project in sorted(
                 projects,
                 key=lambda project: (project.display_name.casefold(), project.project_id),
@@ -734,10 +744,13 @@ class SkillRuntime:
         return {
             "skills": skills,
             "archived": self._archived_entries(agents),
-            "agents": [self._agent_skill_access(agent, package_ids) for agent in agents],
-            "projects": [pool for pool in project_pools if pool is not None],
+            "agents": [
+                self._agent_skill_access(agent, package_ids, projects_by_id, bundles, scan)
+                for agent in agents
+            ],
+            "projects": project_pools,
             "policy_diagnostics": self._policy.validation_diagnostics(),
-            "stale_shared": self._stale_shared_entries(policy),
+            "stale_shared": self._stale_shared_entries(policy, scan=scan),
         }
 
     def _writable_homes(self, agents: list[Agent]) -> list[tuple[str, Path]]:
@@ -765,7 +778,14 @@ class SkillRuntime:
             )
         return entries
 
-    def _agent_skill_access(self, agent: Agent, package_ids: dict[Path, str]) -> dict[str, Any]:
+    def _agent_skill_access(
+        self,
+        agent: Agent,
+        package_ids: dict[Path, str],
+        projects: dict[str, Project],
+        bundles: dict[str, _ProjectSkillBundle],
+        scan: SkillScan,
+    ) -> dict[str, Any]:
         """Project one Identity Agent's effective Skill grants for the manager.
 
         Uses the registry a new Session of the Agent resolves (its default Project
@@ -779,23 +799,23 @@ class SkillRuntime:
         requirements, including Skill dependencies under this Agent's grants, are met.
         """
         root_project_id = agent.root_project_id
-        project_id = (
-            root_project_id
-            if root_project_id is not None and self._projects.exists(root_project_id)
-            else None
+        project = projects.get(root_project_id) if root_project_id is not None else None
+        project_id = project.project_id if project is not None else None
+        registry = self._build_agent_skill_registry(
+            project_id,
+            agent.id,
+            frozenset(agent.excluded_skills),
+            project=project,
+            project_bundle=bundles.get(project_id) if project_id is not None else None,
+            scan=scan,
         )
-        try:
-            registry = self.skills_for(project_id, agent.id)
-        except ProjectError:
-            # The default Project vanished between the existence probe and the scan.
-            registry = self.skills_for(None, agent.id)
         home = self.agent_skills_dir(agent.id).resolve()
         wildcard = WILDCARD_ALLOWLIST in agent.allowed_skills
         selected = set(agent.allowed_skills)
         excluded = set(agent.excluded_skills)
         skills: list[dict[str, Any]] = []
         for skill in registry.list_all():
-            path = skill.path.resolve()
+            path = skill.path
             own = path.is_relative_to(home)
             if own and skill.name not in excluded:
                 grant = "own"
@@ -828,20 +848,15 @@ class SkillRuntime:
         }
 
     def _project_skill_access(
-        self, project: Project, package_ids: dict[Path, str]
-    ) -> dict[str, Any] | None:
+        self, project: Project, package_ids: dict[Path, str], bundle: _ProjectSkillBundle
+    ) -> dict[str, Any]:
         """Project one Project's Skill pool and which Skills it activates."""
-        try:
-            pool = self.project_skill_pool(project.project_id)
-            names = self.project_skill_names(project.project_id)
-        except ProjectError:
-            # The Project was removed while the inventory was being assembled.
-            return None
-        active = set(effective_project_allowed_skills(project, names))
+        pool = self._classify_project_skills(bundle)
+        active = set(effective_project_allowed_skills(project, bundle.names))
         entries = [
             {
                 "name": skill.name,
-                "package_id": package_ids.get(skill.path.resolve()),
+                "package_id": package_ids.get(skill.path),
                 "source": source,
                 "active": skill.name in active,
             }
@@ -857,13 +872,15 @@ class SkillRuntime:
             "skills": sorted(entries, key=lambda entry: str(entry["name"])),
         }
 
-    def _stale_shared_entries(self, policy: Any) -> list[dict[str, Any]]:
+    def _stale_shared_entries(
+        self, policy: Any, *, scan: SkillScan | None = None
+    ) -> list[dict[str, Any]]:
         """Report shared policy entries whose owner or package no longer exists."""
         environment = self._skill_environment(self._storage.load_environment())
         stale: list[dict[str, Any]] = []
         for owner_id, skills in sorted(policy.shared.items()):
             names = (
-                scan_skill_names(self.agent_skills_dir(owner_id), environment)
+                scan_skill_names(self.agent_skills_dir(owner_id), environment, scan=scan)
                 if skills and self._agents.exists(owner_id)
                 else frozenset()
             )
@@ -884,6 +901,10 @@ class SkillRuntime:
         group is sorted by name.
         """
         bundle = self._project_skill_bundle(project_id)
+        return self._classify_project_skills(bundle)
+
+    @staticmethod
+    def _classify_project_skills(bundle: _ProjectSkillBundle) -> dict[str, list[SkillMetadata]]:
         pool: dict[str, list[SkillMetadata]] = {"project": [], "global": [], "bundled": []}
         for skill in bundle.registry.list_all():
             if skill.name in bundle.names:
@@ -971,7 +992,12 @@ class SkillRuntime:
         project_id: str | None,
         agent_id: str,
         exclusions: frozenset[str] = frozenset(),
+        *,
+        project: Project | None = None,
+        project_bundle: _ProjectSkillBundle | None = None,
+        scan: SkillScan | None = None,
     ) -> SkillRegistry:
+        scan = scan or SkillScan()
         settings = self._storage.load_settings()
         environment = self._skill_environment(self._storage.load_environment())
         agent_root = self.agent_skills_dir(agent_id)
@@ -981,13 +1007,13 @@ class SkillRuntime:
         origins: list[str | None] = [SKILL_ORIGIN_AGENT]
         project_allowed_names: set[str] = set()
         if project_id is not None:
-            project = self._projects.refresh_sources(project_id)
+            project = project or self._projects.refresh_sources(project_id, skill_scan=scan)
             roots.extend(project.skill_roots)
             origins.extend([project_skill_origin(project.display_name)] * len(project.skill_roots))
             project_allowed_names.update(
                 effective_project_allowed_skills(
                     project,
-                    self._project_skill_bundle(project_id).names,
+                    (project_bundle or self._project_skill_bundle(project_id)).names,
                 )
             )
         # Shared layer (own > project > shared > global > bundled): every other
@@ -997,7 +1023,7 @@ class SkillRuntime:
         # indistinguishably among "Your own skills", and they are NOT added to
         # ``always_allowed``: they pass through the receiver's ``allowed_skills``
         # filter exactly like global skills.
-        shared_package_dirs = self._shared_package_dirs(agent_id)
+        shared_package_dirs = self._shared_package_dirs(agent_id, scan=scan)
         roots.extend(shared_package_dirs)
         origins.extend(SKILL_ORIGIN_AGENT for _ in shared_package_dirs)
         roots.extend(scan_roots)
@@ -1010,7 +1036,7 @@ class SkillRuntime:
         # that Project's effective Skill set: those exact Project-granted names also
         # bypass the Identity Agent's unrelated personal allowlist and its exclusions
         # while this project-scoped registry is active.
-        agent_own_names = scan_skill_names(agent_root, environment)
+        agent_own_names = scan_skill_names(agent_root, environment, scan=scan)
         return SkillRegistry.load(
             roots[0],
             extra_dirs=roots[1:],
@@ -1019,6 +1045,7 @@ class SkillRuntime:
             origins=origins,
             excluded_packages=self._disabled_packages(global_roots),
             allowlist_exclusions=exclusions,
+            scan=scan,
         )
 
     def _receives_shared_skills(self, receiver_agent_id: str) -> bool:
@@ -1145,7 +1172,9 @@ class SkillRuntime:
         self.invalidate_agent_skills(None)
         return result
 
-    def _shared_package_dirs(self, receiver_agent_id: str) -> list[Path]:
+    def _shared_package_dirs(
+        self, receiver_agent_id: str, *, scan: SkillScan | None = None
+    ) -> list[Path]:
         """Resolve every owner's shared private Skill packages for one receiver.
 
         Deterministic order — sorted by owner id, then skill name — so first-found
@@ -1178,7 +1207,9 @@ class SkillRuntime:
                 if receiver_agent_id not in receivers:
                     continue
                 if owner_registry is None:
-                    owner_registry = SkillRegistry.load(owner_root, environment=environment)
+                    owner_registry = SkillRegistry.load(
+                        owner_root, environment=environment, scan=scan
+                    )
                 entry = ("skill", owner_id, name)
                 try:
                     package_dir = owner_registry.get(name).path.parent
@@ -1206,8 +1237,11 @@ class SkillRuntime:
                 if generation == self._cache_generation:
                     return self._project_skills.setdefault(project_id, bundle)
 
-    def _build_project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
-        project = self._projects.refresh_sources(project_id)
+    def _build_project_skill_bundle(
+        self, project_id: str, *, project: Project | None = None, scan: SkillScan | None = None
+    ) -> _ProjectSkillBundle:
+        scan = scan or SkillScan()
+        project = project or self._projects.refresh_sources(project_id, skill_scan=scan)
         settings = self._storage.load_settings()
         global_roots = self._global_roots(settings)
         scan_roots = [root.root for root in global_roots]
@@ -1219,10 +1253,11 @@ class SkillRuntime:
             project_origin=project_skill_origin(project.display_name),
             bundled_origins=_origin_layers(scan_roots),
             excluded_packages=self._disabled_packages(global_roots),
+            scan=scan,
         )
         # A Project's own Skills are turned off by the Project itself
         # (``skills_project_disabled``), never by the Skill Policy.
-        names = scan_project_skill_names(project.skill_roots, environment)
+        names = scan_project_skill_names(project.skill_roots, environment, scan=scan)
         return _ProjectSkillBundle(registry=registry, names=names)
 
 

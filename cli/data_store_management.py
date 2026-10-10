@@ -47,15 +47,17 @@ _LOCAL_ONLY_MESSAGE = (
 _FAILED_STATES = frozenset({"unavailable", "maintenance"})
 
 
-def data_store_status(instance: ServerInstance) -> CommandResult:
+def data_store_status(instance: ServerInstance, *, verify_search: bool = False) -> CommandResult:
     """Show data-store health from the running server, or read it locally when stopped."""
-    payload = rpc_call(instance, "data_store.status", {})
+    payload = rpc_call(
+        instance, "data_store.status", {"verify_search": True} if verify_search else {}
+    )
     if payload.ok:
         return _json_result(instance, payload.data)
     health = probe_health(instance)
     if health.reachable or instance.host not in _LOOPBACK_HOSTS:
         return payload.to_command_result()
-    projection = _local_status(instance.data_dir)
+    projection = _local_status(instance.data_dir, verify_search=verify_search)
     projection["source"] = "local"
     projection["data_dir"] = instance.data_dir.as_posix()
     return CommandResult(
@@ -485,10 +487,15 @@ def _verify_restored(restored: Iterable[str], specs: dict[str, DatabaseSpec]) ->
             database.close()
 
 
-def _local_status(data_dir: Path) -> dict[str, Any]:
+def _local_status(data_dir: Path, *, verify_search: bool = False) -> dict[str, Any]:
     from core.database import data_store_status as read_status
 
-    return read_status(data_dir, specs=_specs_by_name(data_dir).values())
+    specs = _specs_by_name(data_dir)
+    if verify_search:
+        from core.sessions._store_schema import session_database_spec
+
+        specs["sessions"] = session_database_spec(data_dir / "sessions.db", verify_search=True)
+    return read_status(data_dir, specs=specs.values())
 
 
 def _specs_by_name(data_dir: Path) -> dict[str, DatabaseSpec]:

@@ -184,6 +184,7 @@ class Runtime:
     def _clear_service_references(self) -> None:
         """Initialize or release every service reference in one lifecycle-owned place."""
         self._skill_reload_generation = object()
+        self._skill_reload_required = False
         self._extension_host_factory: ExtensionHostFactory | None = None
         self._started: bool = False
         self._started_at: datetime | None = None
@@ -947,12 +948,14 @@ class Runtime:
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
         owner = self._skill_operations()
+        self._skill_reload_required = True
         generation = self._skill_reload_generation = object()
         self._apply_reloaded_skills(owner.load_global_registry(), generation=generation)
 
-    async def reload_skills_async(self) -> None:
-        """Reload Skills without scanning their files on the Event Loop."""
+    async def reload_skills_async(self, *, only_if_changed: bool = False) -> None:
+        """Read Skills off the loop; an editor refresh can preserve unchanged scopes."""
         owner = self._skill_operations()
+        self._skill_reload_required |= not only_if_changed
         generation = self._skill_reload_generation = object()
         credential_snapshot = self._fallback_environment
         skills = await _RUNTIME_WORKERS.run(owner.load_global_registry)
@@ -962,12 +965,21 @@ class Runtime:
             environment = dict(self._fallback_environment)
             environment.update(os.environ)
             skills.reload_environment(environment)
+        # A later editor refresh inherits any explicit reload it superseded:
+        # unchanged global metadata must not swallow that cache invalidation.
+        if (
+            not self._skill_reload_required
+            and self._skills is not None
+            and self._skills.same_catalog(skills)
+        ):
+            return
         self._apply_reloaded_skills(skills, generation=generation)
 
     def _apply_reloaded_skills(self, skills: SkillRegistry, *, generation: object) -> None:
         """Install a fully built Skill registry and refresh its loop-owned consumers."""
         if not self._started or generation is not self._skill_reload_generation:
             return
+        self._skill_reload_required = False
         self._skills = skills
         self._skill_operations().replace_registry(skills)
         invalid_skill_count = len(self._skills.invalid_diagnostics())

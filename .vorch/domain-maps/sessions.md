@@ -27,7 +27,7 @@ The public `core.sessions` package routes stable imports to the Session service 
 - `owned` - temporary bindings, delivery receipts and owned Runs.
 - `values` - Session row columns, the metadata facade, scope and value validation.
 - `fts` - disposable index lifecycle; `search` - bounded search.
-- `schema` - the kernel spec (`session_database_spec`: the DDL from `schema.py`, the FTS readiness hook, snapshot facts and status health).
+- `schema` - the kernel spec (`session_database_spec`: the DDL from `schema.py`, the FTS readiness hook, snapshot facts and status health). `health` keeps cheap index status separate from the last explicit coverage check (`sessions/search.md`).
 
 Do not open independent runtime connections or commit within a helper; entries, metadata, revisions, prompt state, Stream drafts, receipts and FTS effects must share the caller's transaction. Helpers return typed records or summary dicts rather than raw rows, so `ChatSessionManager` does not decode storage columns. Read helpers that reconstruct Messages or decode JSON columns (summaries, temporary bindings) select rows inside the read transaction and return a decoder; `store.py` (`_read_decoded`) runs it after the transaction ends, because a rollback-journal store serves reads on the serialized writer.
 

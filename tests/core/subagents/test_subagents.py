@@ -23,6 +23,7 @@ from core.sessions import (
     SESSION_WORKING_PROJECT_META_KEY,
     SUBAGENT_PARENT_META_KEY,
     SUBAGENT_TAKEN_OVER_AT_META_KEY,
+    SessionAddress,
 )
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
@@ -498,9 +499,12 @@ async def test_inspect_reports_the_work_a_subagent_still_runs(harness: SubAgentH
 
 
 @pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
+@pytest.mark.parametrize("historical_children", [0, 1_000], ids=["small-tree", "large-tree"])
 async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
     harness: SubAgentHarness,
     user_stop: bool,
+    historical_children: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     harness.storage.settings = {"max_subagent_depth": 3}
     harness.loop.hold("outer")
@@ -510,6 +514,33 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
     inner = await harness.spawn("inner", session=outer_session)
     inner_session = harness.subagent_session(inner["id"])
     outer_run, inner_run = harness.manager.active_runs()
+    # Keep the active Runs real, but project old children from memory instead
+    # of creating a thousand persisted Sessions just to exercise traversal.
+    old_sessions = [address("parent", f"old-child-{index}") for index in range(historical_children)]
+    old_addresses = set(old_sessions)
+    session_children = harness.sessions.subagent_children
+    session_metadata = harness.sessions.get_metadata
+
+    def children_with_history(parent: SessionAddress) -> list[SessionAddress]:
+        if parent in old_addresses:
+            return []
+        children = session_children(parent)
+        return [*old_sessions, *children] if parent == outer_session else children
+
+    def metadata_with_history(target: SessionAddress) -> dict[str, Any]:
+        if target not in old_addresses:
+            return session_metadata(target)
+        return {
+            SUBAGENT_PARENT_META_KEY: {
+                "id": f"sub_{target.session_id}",
+                "agent_id": outer_session.agent_id,
+                "session_id": outer_session.session_id,
+                "project_id": outer_session.project_id,
+            },
+        }
+
+    monkeypatch.setattr(harness.sessions, "subagent_children", children_with_history)
+    monkeypatch.setattr(harness.sessions, "get_metadata", metadata_with_history)
     cleanup_entered, release_cleanup = asyncio.Event(), asyncio.Event()
 
     async def cleanup() -> None:

@@ -76,6 +76,7 @@ _NO_EFFECTS: dict[str, Any] = {
     "keep_awake_reloads": 0,
     "timezone_reloads": 0,
     "speech_preloads": [],
+    "transcription_binding_changes": 0,
     "embedding_binding_changes": 0,
     "retention_changes": 0,
     "commands_changed": False,
@@ -179,6 +180,23 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {"speech_preloads": [["text_to_speech"]]},
             id="speech-binding",
         ),
+        *[
+            pytest.param(
+                {"model_tasks": {"speech_to_text": {"target": "local/parakeet"}}},
+                {"model_tasks": {"speech_to_text": binding}} if binding else {},
+                (),
+                {
+                    "transcription_binding_changes": 1,
+                    "speech_preloads": [["speech_to_text"]],
+                },
+                id=f"stt-{name}",
+            )
+            for name, binding in (
+                ("local-switch", {"target": "local/nemotron3.5-asr"}),
+                ("provider-switch", {"target": "openrouter/whisper"}),
+                ("clear", None),
+            )
+        ],
         # A new embedding binding is indexed for without waiting for the backoff.
         pytest.param(
             {},
@@ -208,6 +226,7 @@ def test_settings_changes_refresh_only_their_live_services(
     keep_awake_reload = Mock()
     timezone_reload = Mock()
     speech_preload = Mock()
+    transcription_change = Mock()
     binding_change = Mock()
     retention_change = Mock()
     monkeypatch.setattr(shared_runtime, "reload_extensions", extension_reload)
@@ -217,6 +236,9 @@ def test_settings_changes_refresh_only_their_live_services(
     monkeypatch.setattr(shared_runtime, "reload_keep_awake", keep_awake_reload)
     monkeypatch.setattr(shared_runtime, "reload_timezone", timezone_reload)
     monkeypatch.setattr(shared_runtime.speech, "preload_configured", speech_preload)
+    monkeypatch.setattr(
+        shared_runtime.speech, "transcription_binding_changed", transcription_change
+    )
     monkeypatch.setattr(shared_runtime.recall, "embedding_binding_changed", binding_change)
     monkeypatch.setattr(shared_runtime.archive, "retention_changed", retention_change)
 
@@ -232,6 +254,7 @@ def test_settings_changes_refresh_only_their_live_services(
         "keep_awake_reloads": keep_awake_reload.call_count,
         "timezone_reloads": timezone_reload.call_count,
         "speech_preloads": [list(call.args[0]) for call in speech_preload.call_args_list],
+        "transcription_binding_changes": transcription_change.call_count,
         "embedding_binding_changes": binding_change.call_count,
         "retention_changes": retention_change.call_count,
         "commands_changed": effects.commands_changed,

@@ -3,6 +3,8 @@ filters enforced on the results, and the result text."""
 
 from __future__ import annotations
 
+import builtins
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -189,11 +191,22 @@ async def test_query_operators_pass_through_unchanged(tmp_path: Path) -> None:
     ids=["markup-and-page-age", "plain-comparisons"],
 )
 async def test_result_markup_is_stripped_and_plain_text_kept(
-    tmp_path: Path, results: list[dict[str, Any]], content: str
+    tmp_path: Path, results: list[dict[str, Any]], content: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    loop_thread = threading.get_ident()
+    parser_import_threads = []
+    original_import = builtins.__import__
+
+    def import_off_loop(name, *args, **kwargs):
+        if name == "bs4":
+            parser_import_threads.append(threading.get_ident())
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_off_loop)
     data, _ = await _search_brave(tmp_path, {"query": "vbot"}, results)
 
     assert data["content"] == content
+    assert parser_import_threads and loop_thread not in parser_import_threads
 
 
 @pytest.mark.asyncio

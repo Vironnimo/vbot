@@ -104,12 +104,11 @@ from server._streams import (
 )
 from server._terminal_socket import serve_terminal_socket
 from server.events import SERVER_STOPPING_EVENT
-from server.file_delivery import PREVIEW_URL_PREFIX
+from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.methods import dispatch_rpc
 from server.rpc.model_methods import start_installation_catalog_restore
-from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
 from server.rpc.skill_methods import install_skill_upload
 
 JsonObject = dict[str, Any]

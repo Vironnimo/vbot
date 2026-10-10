@@ -5,9 +5,10 @@
 // during component initialization, because it registers its lifecycle with
 // the creating component.
 
-import { onDestroy, onMount } from 'svelte';
+import { onDestroy, untrack } from 'svelte';
 
 import { getLocalSetupStatus, installLocalSetup } from '$lib/api.js';
+import { createViewVisibility } from '$lib/viewVisibility.svelte.js';
 
 const POLL_INTERVAL_MS = 1500;
 const RESTART_TIMEOUT_MS = 90_000;
@@ -15,6 +16,7 @@ const RESTART_TIMEOUT_MS = 90_000;
 /**
  * @param {object} params
  * @param {() => string} params.getTarget - The local target id.
+ * @param {() => boolean} [params.getActive] - Whether the owning view is shown.
  * @param {() => unknown} [params.onReady] - Called, and awaited, whenever a
  *   status reports `ready`.
  * @param {((target: string) => Promise<{state: string, error?: string}>) | null} [params.restart]
@@ -23,6 +25,7 @@ const RESTART_TIMEOUT_MS = 90_000;
  */
 export function createLocalSetupJob({
   getTarget,
+  getActive = () => true,
   onReady = () => {},
   restart = null,
 }) {
@@ -37,9 +40,15 @@ export function createLocalSetupJob({
   let timer = null;
   let requestId = 0;
   let destroyed = false;
+  const visibility = createViewVisibility(getActive);
 
-  onMount(() => {
-    void refresh();
+  $effect(() => {
+    const visible = visibility.visible;
+    untrack(() => {
+      requestId += 1;
+      clearTimeout(timer);
+      if (visible) void refresh();
+    });
   });
 
   onDestroy(() => {
@@ -50,12 +59,14 @@ export function createLocalSetupJob({
 
   function scheduleRefresh() {
     clearTimeout(timer);
-    if (!destroyed) {
+    if (!destroyed && visibility.visible) {
       timer = setTimeout(() => void refresh(), POLL_INTERVAL_MS);
     }
   }
 
   async function refresh() {
+    if (!visibility.visible || acting) return;
+    clearTimeout(timer);
     const current = ++requestId;
     try {
       const next = await getLocalSetupStatus(getTarget());
@@ -74,6 +85,7 @@ export function createLocalSetupJob({
       // The server is expected to be unreachable while it restarts.
       if (!restartStartedAt) error = 'connection';
     }
+    if (destroyed || current !== requestId) return;
     if (
       restartStartedAt &&
       Date.now() - restartStartedAt > RESTART_TIMEOUT_MS

@@ -77,6 +77,8 @@ class ArchiveEntryRef:
 class ArchiveEntry:
     """One archive entry row with its trees and its number of member Sessions.
 
+    ``session_count`` counts every member; ``review_fork_count`` the members that
+    are review forks of another member (``ArchiveMember.review_fork``).
     ``project_id`` and ``agent_id`` are ``""`` when the entry has no such scope.
     ``facts`` is the open facts object; writers merge into it and keep unknown keys.
     """
@@ -96,6 +98,7 @@ class ArchiveEntry:
     facts: Mapping[str, Any]
     trees: tuple[ArchiveTree, ...]
     session_count: int
+    review_fork_count: int
 
     @property
     def ref(self) -> ArchiveEntryRef:

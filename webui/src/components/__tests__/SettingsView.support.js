@@ -28,6 +28,7 @@ vi.mock('$lib/api.js', () =>
       rpcMock('task_model.update', { model_tasks: modelTasks }),
     getLocalSetupStatus: (target) =>
       rpcMock('task_model.local_setup_status', { target }),
+    getLocalSpeechMemory: () => rpcMock('speech.local_memory_status'),
     installLocalSetup: (target) =>
       rpcMock('task_model.local_setup_install', { target }),
   }),
@@ -709,6 +710,10 @@ export function createSettingsRpcMock(options = {}) {
 
     if (method === 'task_model.local_setup_status') {
       return localSetupStatus(params.target);
+    }
+
+    if (method === 'speech.local_memory_status') {
+      return { models: [] };
     }
 
     if (method === 'task_model.local_setup_install') {

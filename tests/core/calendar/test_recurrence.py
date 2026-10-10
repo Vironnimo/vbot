@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -79,24 +79,91 @@ def test_timed_rule_keeps_its_wall_clock_time_across_dst(service: CalendarServic
     assert [item.start_utc.hour for item in occurrences] == [7, 8, 8]
 
 
+@pytest.mark.parametrize(
+    ("zone", "start", "minutes", "rule", "expected"),
+    [
+        pytest.param(
+            "Europe/Berlin",
+            "2026-03-28T02:30",
+            30,
+            "FREQ=DAILY;COUNT=3",
+            [
+                ("2026-03-28T02:30:00", "2026-03-28T01:30:00+00:00"),
+                ("2026-03-29T02:30:00", "2026-03-29T01:30:00+00:00"),
+                ("2026-03-30T02:30:00", "2026-03-30T00:30:00+00:00"),
+            ],
+            id="daily",
+        ),
+        pytest.param(
+            "Europe/Berlin",
+            "2026-03-29T02:00",
+            15,
+            "FREQ=DAILY;BYHOUR=2,3;BYMINUTE=0,30;COUNT=4",
+            [
+                ("2026-03-29T02:00:00", "2026-03-29T01:00:00+00:00"),
+                ("2026-03-29T03:00:00", "2026-03-29T01:00:00+00:00"),
+                ("2026-03-29T02:30:00", "2026-03-29T01:30:00+00:00"),
+                ("2026-03-29T03:30:00", "2026-03-29T01:30:00+00:00"),
+            ],
+            id="one-hour-gap",
+        ),
+        pytest.param(
+            "Australia/Lord_Howe",
+            "2026-10-04T02:00",
+            5,
+            "FREQ=DAILY;BYHOUR=2;BYMINUTE=0,15,30,45;COUNT=4",
+            [
+                ("2026-10-04T02:00:00", "2026-10-03T15:30:00+00:00"),
+                ("2026-10-04T02:30:00", "2026-10-03T15:30:00+00:00"),
+                ("2026-10-04T02:15:00", "2026-10-03T15:45:00+00:00"),
+                ("2026-10-04T02:45:00", "2026-10-03T15:45:00+00:00"),
+            ],
+            id="half-hour-gap",
+        ),
+        pytest.param(
+            "Pacific/Apia",
+            "2011-12-30T00:00",
+            15,
+            "FREQ=DAILY;BYHOUR=0,12;COUNT=4",
+            [
+                ("2011-12-30T00:00:00", "2011-12-30T10:00:00+00:00"),
+                ("2011-12-31T00:00:00", "2011-12-30T10:00:00+00:00"),
+                ("2011-12-30T12:00:00", "2011-12-30T22:00:00+00:00"),
+                ("2011-12-31T12:00:00", "2011-12-30T22:00:00+00:00"),
+            ],
+            id="skipped-date",
+        ),
+    ],
+)
 def test_start_the_clocks_skip_moves_forward_and_keeps_its_length(
-    service: CalendarService,
+    tmp_path: Path,
+    zone: str,
+    start: str,
+    minutes: int,
+    rule: str,
+    expected: list[tuple[str, str]],
 ) -> None:
-    service.create_event(
-        title="Daily", start="2026-03-28T02:30", end="2026-03-28T03:00", rrule="FREQ=DAILY;COUNT=3"
+    service = CalendarService(tmp_path, tz=zone)
+    duration = timedelta(minutes=minutes)
+    event = service.create_event(
+        title="Daily",
+        start=start,
+        end=(datetime.fromisoformat(start) + duration).isoformat(),
+        rrule=rule,
     )
-    window_start, window_end = service.parse_window("2026-03-28", "2026-03-31")
+    first = datetime.fromisoformat(expected[0][1])
+    last = datetime.fromisoformat(expected[-1][1])
+    window = service.occurrences_in_window(first, last + duration)
+    lazy = list(service.iter_occurrences(event, first))
 
-    spans = [
-        (item.start_utc, item.end_utc)
-        for item in service.occurrences_in_window(window_start, window_end)
-    ]
-
-    assert spans == [
-        (datetime(2026, 3, 28, 1, 30, tzinfo=UTC), datetime(2026, 3, 28, 2, 0, tzinfo=UTC)),
-        (datetime(2026, 3, 29, 1, 30, tzinfo=UTC), datetime(2026, 3, 29, 2, 0, tzinfo=UTC)),
-        (datetime(2026, 3, 30, 0, 30, tzinfo=UTC), datetime(2026, 3, 30, 1, 0, tzinfo=UTC)),
-    ]
+    for occurrences in (window, lazy):
+        assert [
+            (item.original_start, item.start_utc.isoformat()) for item in occurrences
+        ] == expected
+        assert [item.id for item in occurrences] == [
+            occurrence_id(event.id, original) for original, _ in expected
+        ]
+        assert all(item.end_utc - item.start_utc == duration for item in occurrences)
 
 
 @pytest.mark.parametrize(

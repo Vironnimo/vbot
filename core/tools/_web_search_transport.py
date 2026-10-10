@@ -7,11 +7,11 @@ from collections.abc import Collection, Mapping
 from typing import Any, Literal
 
 import httpx
-from bs4 import BeautifulSoup
 
 from core.tools._web_search_common import (
     _normalize_text,
 )
+from core.tools.tools import run_tool_worker
 from core.utils.http_status import HttpRequestFailure, is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
 from core.utils.retry import MAX_RETRIES, sleep_for_retry
@@ -208,7 +208,7 @@ async def _request_bounded(
                 if retryable and attempt < MAX_RETRIES:
                     await sleep_for_retry(attempt, parse_retry_after(response.headers))
                     continue
-                detail = _extract_error_detail(response)
+                detail = await run_tool_worker(_extract_error_detail, response)
                 _LOGGER.warning(
                     "%s web search request failed: HTTP %s: %s",
                     provider_label,
@@ -308,6 +308,8 @@ def _extract_error_detail(response: httpx.Response) -> str:
 
     text = response.text
     if "<" in text and ">" in text:
+        from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(text, "html.parser")
         title = soup.title.get_text(" ", strip=True) if soup.title else ""
         text = title or soup.get_text(" ", strip=True)

@@ -44,6 +44,7 @@ def _state(data_dir: Path, sessions: ChatSessionManager) -> SimpleNamespace:
 
     return SimpleNamespace(
         runtime=SimpleNamespace(
+            chat_sessions=sessions,
             canonical_databases=lambda: (sessions.database,),
             snapshot_barrier=SnapshotBarrier(),
             storage=SimpleNamespace(data_dir=data_dir),
@@ -81,6 +82,13 @@ async def test_status_snapshot_and_incident_acknowledgement_are_operator_safe(
     monkeypatch.setattr(snapshots_module, "verify_database_file", counted_verify)
 
     status = await rpc_result(state, "data_store.status")
+    assert status["databases"]["sessions"]["details"]["fts"]["last_coverage_check"] is None
+    checked = await rpc_result(state, "data_store.status", verify_search=True)
+    evidence = checked["databases"]["sessions"]["details"]["fts"]["last_coverage_check"]
+    assert evidence["state"] == "healthy"
+    assert evidence["checked_at"]
+    refreshed = await rpc_result(state, "data_store.status")
+    assert refreshed["databases"]["sessions"]["details"]["fts"]["last_coverage_check"] == evidence
     created = await rpc_result(state, "data_store.snapshot_create", reason="manual")
     write_incident(
         tmp_path,
@@ -169,6 +177,7 @@ async def test_unregister_releases_an_extension_database(
         ("data_store.unregister", {}, "params.name must be a non-empty string"),
         ("data_store.unregister", {"name": _EXTENSION, "force": True}, "force"),
         ("data_store.snapshot_create", {"reason": "nightly"}, "params.reason must be one of"),
+        ("data_store.status", {"verify_search": "yes"}, "params.verify_search"),
     ],
 )
 async def test_data_store_refusals_keep_every_database_registered(

@@ -374,6 +374,8 @@ async def test_review_forks_join_their_session_entry_and_go_before_it_on_purge(
         (review, True),
         (nested, True),
     ]
+    entry = _entry(manager, ref.entry_id)
+    assert (entry.session_count, entry.review_fork_count) == (3, 2)
     # The review forks keep their ids, so the entry still takes a new Session id.
     assert ledger.holds_one_session(ref.entry_key)
     deleted: list[str] = []

@@ -82,6 +82,7 @@ async def test_list_pages_entries_newest_first_with_their_retention(tmp_path: Pa
         "origin": "operation",
         "purge_at": _purge_at(state, entries["agent"]),
         "session_count": 1,
+        "review_fork_count": 0,
         "restorable": True,
         "not_restorable_reason": None,
         "may_hold_user_folders": False,
@@ -139,7 +140,9 @@ async def test_show_returns_sessions_files_details_and_the_restore_check(tmp_pat
     result = await rpc_result(state, "archive.show", entry_id=entry_id)
 
     assert result["entry"]["entry_id"] == entry_id
-    assert [session["agent_id"] for session in result["sessions"]] == ["coder"]
+    assert [(session["agent_id"], session["review_fork"]) for session in result["sessions"]] == [
+        ("coder", False)
+    ]
     assert result["session_count"] == 1
     assert result["files"] == {
         "state": "present",

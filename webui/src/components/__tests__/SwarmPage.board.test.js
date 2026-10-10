@@ -270,11 +270,6 @@ describe('Swarm Board posts', () => {
       roster.compareDocumentPosition(board()) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    button(t('swarm.tabs.usage')).click();
-    await tick();
-    expect(document.querySelector('.swarm-identity dd').textContent).toBe(
-      'swr-a',
-    );
   });
 
   it('calls a Board empty only once its posts arrived, with what it waits for', async () => {

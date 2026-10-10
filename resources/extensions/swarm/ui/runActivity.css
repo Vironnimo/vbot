@@ -1,31 +1,71 @@
-/* The Activity tab (RunActivity.svelte). */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .context-usage {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-med);
-  font-size: var(--fs-label-sm);
-  font-variant-numeric: tabular-nums;
-  background: transparent;
-  border: 0;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .history {
+/* The Activity tab (RunActivity.svelte): the participant chips, then the
+   inspected participant's activity. Its header stays at the top of the view
+   while the timeline scrolls: one row, or two on a narrow view where Resume
+   participant moves below the name. */
+.swarm-page .activity-view {
+  container: swarm-activity / inline-size;
+  display: grid;
+  gap: 16px;
   min-width: 0;
-  padding: 12px;
-  border-left: 2px solid var(--border-2);
-  background: var(--surface-2);
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .history {
-  margin-top: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+/* The page's scroller insets its content by --page-inset-top; the header
+   sticks above that inset, at the scroller's top edge. */
+.swarm-page .activity-head {
+  position: sticky;
+  top: calc(-1 * var(--page-inset-top, 0px));
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: 'avatar name context close';
+  align-items: center;
+  gap: 8px 12px;
+  padding-block: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .history
-  > .section-head {
-  flex-wrap: wrap;
-  margin-bottom: 16px;
+.swarm-page .activity-head:has(.activity-head__resume) {
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas: 'avatar name context resume close';
+}
+.swarm-page .activity-head > .participant-avatar {
+  grid-area: avatar;
+}
+.swarm-page .activity-head__name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swarm-page .activity-head__context {
+  grid-area: context;
+  display: flex;
+}
+.swarm-page .activity-head__resume {
+  grid-area: resume;
+  justify-self: start;
+}
+.swarm-page .activity-head__close {
+  grid-area: close;
+}
+.swarm-page .activity-older {
+  justify-self: center;
+}
+.swarm-page .history {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* Why the participant stopped lines up with the timeline's text, as Chat's
+   composer does. */
+.swarm-page .activity-stop {
+  margin-inline: var(--chat-msg-gutter);
+}
+@container swarm-activity (max-width: 520px) {
+  .swarm-page .activity-head:has(.activity-head__resume) {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'avatar name context close'
+      '. resume resume resume';
+  }
 }

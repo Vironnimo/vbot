@@ -66,15 +66,31 @@ export default Object.freeze({
   'swarm.participant.state.failed': 'Failed',
   'swarm.participant.state.cancelled': 'Cancelled',
   'swarm.participant.state.interrupted': 'Interrupted',
-  'swarm.activity': 'activity',
-  'swarm.context': 'Context',
+  'swarm.activity.empty': 'Choose a participant',
+  'swarm.activity.emptyHint':
+    'Their messages and Tool calls show here, live while they work.',
+  'swarm.activity.stop.network':
+    'The last Run stopped because the connection to the Provider failed.',
+  'swarm.activity.stop.timeout':
+    'The last Run stopped because the Provider stopped responding.',
+  'swarm.activity.stop.provider':
+    'The last Run stopped because the Provider returned an error.',
+  'swarm.activity.stop.internal':
+    'The last Run stopped because of an internal error. Check the application logs for details.',
+  'swarm.activity.stop.shutdown':
+    'The last Run stopped because vBot shut down.',
+  'swarm.activity.stop.restart': 'The last Run stopped because vBot restarted.',
+  'swarm.activity.stop.interrupted': 'The last Run was interrupted.',
+  'swarm.activity.stop.failed':
+    'The last Run failed. Check the application logs for details.',
+  'swarm.activity.stop.notStarted':
+    'A new Run could not start. Check the application logs for details.',
   'swarm.resumeParticipant': 'Resume participant',
   'swarm.loadOlderMessages': 'Load older messages',
   'swarm.noActivity': 'No retained activity yet.',
-  'swarm.usage': 'Usage',
-  'swarm.id': 'Swarm ID',
   'swarm.usage.tokensUsed': 'Tokens used',
-  'swarm.usage.toolCalls': 'Tool Calls',
+  'swarm.usage.toolCalls': 'Tool calls',
+  'swarm.usage.table': 'Usage by participant and Model',
   'swarm.usage.participant': 'Participant',
   'swarm.usage.model': 'Model',
   'swarm.usage.runs': 'Runs',
@@ -127,14 +143,10 @@ export default Object.freeze({
   'swarm.references.deletedPage': '{title} (deleted)',
   'swarm.hostUnavailable':
     'The Swarm page could not connect. Reopen Swarms to try again.',
-  'swarm.usage.unavailable': 'Unavailable',
   'swarm.participantCount.one': '1 participant',
   'swarm.participantCount': '{count} participants',
   'swarm.profile': 'Swarm',
   'swarm.participants': 'Participants',
-  'swarm.usage.billion': 'mrd',
-  'swarm.usage.million': 'mio',
-  'swarm.usage.thousand': 'k',
   'swarm.profile.editorLabel': 'Swarm editor',
   'swarm.profile.new': 'New Swarm',
   'swarm.profile.newHelp':

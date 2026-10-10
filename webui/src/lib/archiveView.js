@@ -198,6 +198,26 @@ export function sessionCountText(count) {
     : t('archive.row.sessions', { count });
 }
 
+export function reflectionCountText(count) {
+  if (!Number.isInteger(count) || count < 1) return '';
+  return count === 1
+    ? t('archive.row.oneReflection')
+    : t('archive.row.reflections', { count });
+}
+
+// An entry's Sessions and its Reflections: the review forks that followed one
+// of its Sessions into the entry (`review_fork_count`) count as that Session's
+// Reflections, not as Sessions of their own.
+export function archiveMemberCounts(entry) {
+  const total = Number.isInteger(entry?.session_count)
+    ? entry.session_count
+    : 0;
+  const reflections = Number.isInteger(entry?.review_fork_count)
+    ? Math.min(Math.max(entry.review_fork_count, 0), total)
+    : 0;
+  return { sessions: total - reflections, reflections };
+}
+
 // Where an entry belonged: a Session's Agent and Project, an Extension
 // group's Extension; Agents and Projects are their own scope.
 export function archiveScopeText(entry, { agentNames, projectNames }) {
@@ -213,15 +233,18 @@ export function archiveScopeText(entry, { agentNames, projectNames }) {
   });
 }
 
-// One row's facts: what it is, where it belonged, its Sessions, when it was
-// archived and what happens next (automatic deletion or an operation).
+// One row's facts: what it is, where it belonged, its Sessions and
+// Reflections, when it was archived and what happens next (automatic deletion
+// or an operation).
 export function archiveRow(entry, { retentionDays, agentNames, projectNames }) {
+  const members = archiveMemberCounts(entry);
   const row = {
     id: text(entry?.entry_id),
     label: text(entry?.label) || text(entry?.subject_id),
     kind: archiveKindLabel(entry?.kind),
     scope: archiveScopeText(entry, { agentNames, projectNames }),
-    sessions: sessionCountText(entry?.session_count),
+    sessions: sessionCountText(members.sessions),
+    reflections: reflectionCountText(members.reflections),
     archived: t('archive.row.archivedAt', {
       date: formatDay(entry?.archived_at),
     }),

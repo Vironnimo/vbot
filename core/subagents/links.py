@@ -23,9 +23,7 @@ from core.sessions import (
 if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 
-# Bounds every walk, so a corrupted link chain or an unexpectedly wide tree
-# cannot stall a Tool call.
-_MAX_TREE_SIZE = 1_000
+# Ancestor lookup is used to enforce the configured nesting limit.
 _MAX_CHAIN_LENGTH = 64
 _TITLE_KEYS = ("title", "auto_title")
 
@@ -62,19 +60,27 @@ def children(sessions: ChatSessionManager, parent: SessionAddress) -> list[SubAg
     return [link for link in links if link is not None and link.parent == parent]
 
 
-def descendants(sessions: ChatSessionManager, root: SessionAddress) -> list[SubAgentLink]:
-    """Return every Sub-Agent below *root*, breadth first, each child after its Parent."""
+def descendants(
+    sessions: ChatSessionManager, root: SessionAddress, *, limit: int | None = None
+) -> list[SubAgentLink]:
+    """Walk the complete subtree breadth first, optionally limiting a display projection.
+
+    Control operations need every descendant regardless of historical tree size.
+    A visited set prevents corrupt cycles and duplicate links from repeating work.
+    """
     found: list[SubAgentLink] = []
     seen = {root}
     pending = deque([root])
-    while pending and len(found) < _MAX_TREE_SIZE:
+    while pending and (limit is None or len(found) < limit):
         for link in children(sessions, pending.popleft()):
             if link.session in seen:
                 continue
             seen.add(link.session)
             found.append(link)
+            if limit is not None and len(found) >= limit:
+                return found
             pending.append(link.session)
-    return found[:_MAX_TREE_SIZE]
+    return found
 
 
 def ancestors(sessions: ChatSessionManager, address: SessionAddress) -> list[SessionAddress]:

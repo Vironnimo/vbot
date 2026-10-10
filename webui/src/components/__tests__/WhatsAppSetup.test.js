@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import WhatsAppSetup from '../settings/WhatsAppSetup.svelte';
 import { getWhatsAppStatus, setupWhatsApp, pairWhatsApp } from '$lib/api.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock(
   'svelte',
@@ -123,5 +124,70 @@ describe('WhatsApp setup', () => {
     const count = getWhatsAppStatus.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10000);
     expect(getWhatsAppStatus).toHaveBeenCalledTimes(count);
+  });
+
+  it('pauses hidden setup reads and preserves an installation until the visible view refreshes', async () => {
+    getWhatsAppStatus.mockResolvedValue({
+      installed: false,
+      state: 'disconnected',
+    });
+    const props = reactiveProps({ channelId: 'wa', active: false });
+    component = mount(WhatsAppSetup, { target: document.body, props });
+    await settle();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(getWhatsAppStatus).not.toHaveBeenCalled();
+    props.active = true;
+    await settle();
+    expect(getWhatsAppStatus).toHaveBeenCalledOnce();
+    let finishInstall;
+    setupWhatsApp.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishInstall = resolve;
+      }),
+    );
+    click('Install WhatsApp support');
+    props.active = false;
+    await settle();
+    finishInstall({ installed: false, setup: 'installing' });
+    await settle();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(getWhatsAppStatus).toHaveBeenCalledOnce();
+    expect(setupWhatsApp).toHaveBeenCalledOnce();
+
+    let finishOldRead;
+    getWhatsAppStatus.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishOldRead = resolve;
+      }),
+    );
+    props.active = true;
+    await settle();
+    expect(getWhatsAppStatus).toHaveBeenCalledTimes(2);
+    const hidden = vi.spyOn(document, 'hidden', 'get');
+    try {
+      hidden.mockReturnValue(true);
+      document.dispatchEvent(new Event('visibilitychange'));
+      await settle();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(getWhatsAppStatus).toHaveBeenCalledTimes(2);
+      getWhatsAppStatus.mockResolvedValue({
+        installed: true,
+        state: 'connected',
+      });
+      hidden.mockReturnValue(false);
+      document.dispatchEvent(new Event('visibilitychange'));
+      await settle();
+      expect(getWhatsAppStatus).toHaveBeenCalledTimes(3);
+      finishOldRead({
+        installed: true,
+        state: 'pairing',
+        qr_image: 'data:image/png;base64,cXI=',
+      });
+      await settle();
+      expect(document.querySelector('img')).toBeNull();
+      expect(document.body.textContent).toContain('WhatsApp connected');
+    } finally {
+      hidden.mockRestore();
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
+import { t } from '../../../../webui/src/lib/i18n.js';
 import { modelIdParts } from '../../../../webui/src/lib/modelSelection.js';
 export const requestId = () =>
   crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -140,26 +140,3 @@ export const canStop = (state) =>
 
 export const resumableParticipantState = (state) =>
   ['idle', 'failed', 'cancelled', 'interrupted'].includes(state);
-
-export function usageCount(value) {
-  if (!Number.isFinite(value)) return t('swarm.usage.unavailable');
-  const units = [
-    [1e9, t('swarm.usage.billion')],
-    [1e6, t('swarm.usage.million')],
-    [1e3, t('swarm.usage.thousand')],
-  ];
-  const [scale, suffix] = units.find(([scale]) => Math.abs(value) >= scale) ?? [
-    1,
-    '',
-  ];
-  const number = new Intl.NumberFormat(activeLocaleTag(), {
-    maximumFractionDigits: scale === 1 ? 0 : 1,
-  }).format(value / scale);
-  return suffix ? `${number} ${suffix}` : number;
-}
-
-// Input plus output tokens of a Statistics Totals record; its counts include
-// their estimated parts.
-export function tokensUsed(counts) {
-  return usageCount(counts?.input_tokens + counts?.output_tokens);
-}

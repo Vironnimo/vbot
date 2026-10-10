@@ -69,6 +69,29 @@ describe('archive view rules', () => {
   );
 
   it.each([
+    ['an entry without review forks', { session_count: 2 }, 2, 0],
+    [
+      'a Session entry with the review forks that followed it',
+      { kind: 'session', session_count: 3, review_fork_count: 2 },
+      1,
+      2,
+    ],
+  ])(
+    'counts the Sessions and Reflections of %s',
+    (_name, fields, sessions, reflections) => {
+      const row = archiveRow(entry(fields), { retentionDays: 30, ...NAMES });
+      expect(row.sessions).toBe(
+        sessions === 1
+          ? t('archive.row.oneSession')
+          : t('archive.row.sessions', { count: sessions }),
+      );
+      expect(row.reflections).toBe(
+        reflections ? t('archive.row.reflections', { count: reflections }) : '',
+      );
+    },
+  );
+
+  it.each([
     [
       'older files',
       { kind: 'files', may_hold_user_folders: true },

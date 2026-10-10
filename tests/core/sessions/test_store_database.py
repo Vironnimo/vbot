@@ -296,11 +296,24 @@ def test_search_index_health_is_reported_as_owner_details(tmp_path: Path) -> Non
     manager = ChatSessionManager(tmp_path)
     try:
         manager.create("coder", session_id="indexed").append(ChatMessage.user("searchable"))
+        with manager.database.read() as connection:
+            # Normal status must not read history or enumerate the index.
+            connection.set_authorizer(
+                lambda action, table, *_args: (
+                    sqlite3.SQLITE_DENY
+                    if action == sqlite3.SQLITE_READ
+                    and table in {"entries", "entries_fts_docsize", "entries_fts_trigram_docsize"}
+                    else sqlite3.SQLITE_OK
+                )
+            )
         healthy = manager.database.health()
+        with manager.database.read() as connection:
+            connection.set_authorizer(None)
     finally:
         manager.close()
     assert healthy.state == "healthy"
     assert healthy.details["fts"]["state"] == "healthy"
+    assert healthy.details["fts"]["last_coverage_check"] is None
 
     with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection:
         connection.execute(
@@ -314,3 +327,48 @@ def test_search_index_health_is_reported_as_owner_details(tmp_path: Path) -> Non
     assert member["state"] == "degraded"
     assert member["reason"].startswith("Session search: ")
     assert member["details"]["fts"]["state"] == "degraded"
+
+
+def test_explicit_search_coverage_checks_retain_evidence_without_writes(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    try:
+        manager.create("coder", session_id="indexed").append(ChatMessage.user("searchable"))
+        with manager.database.read() as connection:
+            rows = connection.execute("SELECT id, sz FROM entries_fts_docsize").fetchall()
+        manager.database.write(
+            lambda connection: connection.execute("DELETE FROM entries_fts_docsize")
+        )
+        # An out-of-band damaged index is invisible to lifecycle markers until
+        # explicitly checked; ordinary status must not pretend it verified it.
+        assert manager.database.health().state == "healthy"
+        assert manager.fts_health().state == "degraded"
+        unhealthy = manager.database.health()
+        evidence = unhealthy.details["fts"]["last_coverage_check"]
+        assert unhealthy.state == "degraded"
+        assert evidence["state"] == "degraded"
+        assert evidence["checked_at"]
+        assert evidence["generation"] == unhealthy.details["fts"]["generation"]
+        assert manager.database.health().details["fts"]["last_coverage_check"] == evidence
+        manager.database.write(
+            lambda connection: connection.executemany(
+                "INSERT INTO entries_fts_docsize (id, sz) VALUES (?, ?)", rows
+            )
+        )
+        assert manager.fts_health().state == "healthy"
+        recovered = manager.database.health()
+        assert recovered.state == "healthy"
+        assert recovered.details["fts"]["last_coverage_check"]["state"] == "healthy"
+    finally:
+        manager.close()
+    # Offline status has no evidence from a previous process. The explicit
+    # offline check is read-only, including its observation timestamp.
+    path = tmp_path / "sessions.db"
+    original = path.read_bytes()
+    fast = data_store_status(tmp_path, specs=(session_database_spec(path),))
+    checked = data_store_status(tmp_path, specs=(session_database_spec(path, verify_search=True),))
+    assert fast["databases"]["sessions"]["details"]["fts"]["last_coverage_check"] is None
+    assert (
+        checked["databases"]["sessions"]["details"]["fts"]["last_coverage_check"]["state"]
+        == "healthy"
+    )
+    assert path.read_bytes() == original

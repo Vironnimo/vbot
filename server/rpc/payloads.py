@@ -16,6 +16,7 @@ from core.providers.providers import (
 from core.providers.wire_observations import EXCLUSIVE_GROUP_SEPARATOR
 from core.runs import QueuedRunItem, Run
 from core.tools import tool_is_ready
+from server.file_delivery import FILE_PREVIEW_WORKERS
 
 JsonObject = dict[str, Any]
 _FILE_URL_PATTERN = re.compile(r"/api/files/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
@@ -59,7 +60,7 @@ def verified_file_urls(urls: list[str], delivery: Any) -> list[str]:
     ]
 
 
-def _run_response(
+async def _run_response(
     run: Run,
     *,
     final_message: ChatMessage | None = None,
@@ -77,16 +78,18 @@ def _run_response(
         "iteration_count": run.iteration_count,
         "controls": run.controls(),
         "controls_sequence": run.last_sequence,
-        "events": [
-            remove_opaque_provider_metadata(event.to_dict(), file_delivery=file_delivery)
-            for event in events
-        ],
+        "events": [event.to_dict() for event in events],
     }
     if final_message is not None:
-        response["message"] = _visible_message(final_message, file_delivery=file_delivery)
+        response["message"] = final_message.to_dict()
     if sse_url is not None:
         response["sse_url"] = sse_url
-    return response
+    # Read Run-owned fields before yielding; a worker projects this snapshot,
+    # never a Run that can finish or admit more events while projection waits.
+    return cast(
+        JsonObject,
+        await remove_opaque_provider_metadata_async(response, file_delivery=file_delivery),
+    )
 
 
 def _queued_response(item: QueuedRunItem, session_id: str) -> JsonObject:
@@ -459,6 +462,36 @@ def _invalid_skill_response(diagnostic: Any) -> JsonObject:
         "valid": False,
         "warnings": list(diagnostic.warnings),
     }
+
+
+async def remove_opaque_provider_metadata_async(
+    value: Any, *, file_delivery: Any | None = None
+) -> Any:
+    """Project public payloads without doing file I/O on the Event Loop.
+
+    Most live events have no file references, so they stay on the direct path.
+    A reference needs stat/sniffing on the existing file-delivery worker pool.
+    Awaiting one projection at a time preserves each stream's event ordering.
+    """
+    if file_delivery is not None and _contains_file_references(value):
+        return await FILE_PREVIEW_WORKERS.run(
+            remove_opaque_provider_metadata, value, file_delivery=file_delivery
+        )
+    return remove_opaque_provider_metadata(value, file_delivery=file_delivery)
+
+
+def _contains_file_references(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            (
+                key in {"output_files", "image_files", "media_files"}
+                and isinstance(item, list)
+                and bool(item)
+            )
+            or _contains_file_references(item)
+            for key, item in value.items()
+        )
+    return isinstance(value, list) and any(_contains_file_references(item) for item in value)
 
 
 def remove_opaque_provider_metadata(value: Any, *, file_delivery: Any | None = None) -> Any:

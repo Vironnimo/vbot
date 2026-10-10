@@ -345,6 +345,7 @@ def test_preparation_and_preload_load_only_the_bound_local_engine(
 ) -> None:
     executor = LocalSpeechExecutor(engines=[])
     executor.prepare = MagicMock(return_value="loading")  # type: ignore[method-assign]
+    executor.retain_transcription_model = MagicMock()  # type: ignore[method-assign]
     service = SpeechService(
         _SttModelTasks(target, options, task_type),
         cast(Any, object()),
@@ -362,6 +363,12 @@ def test_preparation_and_preload_load_only_the_bound_local_engine(
             )
         else:
             executor.prepare.assert_not_called()
+        service.transcription_binding_changed()
+        executor.retain_transcription_model.assert_called_once_with(
+            target.removeprefix("local/")
+            if task_type == TASK_SPEECH_TO_TEXT and target and target.startswith("local/")
+            else None
+        )
     finally:
         executor.close()
 

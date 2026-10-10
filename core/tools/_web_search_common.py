@@ -8,7 +8,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import idna
-from bs4 import BeautifulSoup
 
 _DOMAIN_LABEL_PATTERN = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)\Z")
 
@@ -163,4 +162,6 @@ def _clean_snippet(raw: Any) -> str:
         return ""
     if "<" not in text:
         return html.unescape(text).strip()
+    from bs4 import BeautifulSoup
+
     return BeautifulSoup(text, "html.parser").get_text().strip()

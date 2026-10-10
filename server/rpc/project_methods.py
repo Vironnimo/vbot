@@ -284,13 +284,12 @@ async def _show_project(state: Any, params: JsonObject) -> JsonObject:
     # next resolve's effective skills — reflect the current repo together: a skill
     # newly added under .opencode/skills surfaces here just like a newly added repo
     # agent does. Runs never call project.show, so per-run caching is unaffected.
-    # A show is also the moment to pick up hand-edited *global* skills: the global
-    # registry is loaded once at startup with no filesystem watcher, so reload it
-    # from disk here — otherwise a skill dropped into the global skills folder never
-    # appears in the editor's opt-in pool. Guarded so a minimal runtime degrades.
+    # Read global sources too so hand-edited Skills reach the opt-in pool. An
+    # unchanged global catalog leaves unrelated Project/Agent registries intact;
+    # only this Project needs its repository Skills refreshed on every open.
     reload_skills = getattr(state.runtime, "reload_skills_async", None)
     if callable(reload_skills):
-        await reload_skills()
+        await reload_skills(only_if_changed=True)
     _invalidate_project_caches(state, project_id)
     return await _PROJECT_WORKERS.run(_project_show_response, state, project)
 

@@ -6,10 +6,18 @@ import {
   loadHistory,
   TERMINAL_RUN_EVENTS,
 } from '../../../../webui/src/lib/chatState.js';
-import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
-import { formatTokenUsageTooltip } from '../../../../webui/src/lib/tokenUsageTooltip.js';
-import { SvelteSet } from 'svelte/reactivity';
 import { untrack } from 'svelte';
+
+// Why an interrupted Run stopped, as its summary's completion reason names
+// it; another reason counts as a plain interruption.
+const INTERRUPTION_REASONS = new Set([
+  'network',
+  'timeout',
+  'provider',
+  'internal',
+  'shutdown',
+  'process_restart',
+]);
 
 export function createSwarmPageActivity(host) {
   let history = $state(null);
@@ -18,9 +26,12 @@ export function createSwarmPageActivity(host) {
     ensureSessionState(createChatState(), 'swarm', 'activity'),
   );
   let reasoningOpen = $state({});
-  let inspectedParticipant = null;
+  // The participant whose Activity shows or loads; its header shows before
+  // its History arrives.
+  let inspectedParticipant = $state.raw(null);
   let inspectionRequest = null;
-  const settledRuns = new SvelteSet();
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, never rendered
+  const settledRuns = new Set();
   let flushTimer = null;
   let pendingEvents = [];
   // Activity reads History and follows its participant's Run only while its
@@ -44,7 +55,8 @@ export function createSwarmPageActivity(host) {
     projection.runEvents = [];
     projection.streamingRunEvents = [];
     projection.streamingPhase = 0;
-    projection.seenStreamingEventKeys = new SvelteSet();
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, as in Chat's own state
+    projection.seenStreamingEventKeys = new Set();
     projection.currentRun = null;
     projection.status = 'idle';
   }
@@ -145,40 +157,55 @@ export function createSwarmPageActivity(host) {
     history ? visibleTimelineItemsForRender(projection) : [],
   );
 
+  // The inspected participant as the Run lists it now.
   const selectedParticipant = $derived(
-    host.model.selectedSwarm?.participants?.find(
-      (item) => item.id === history?.participant.id,
-    ),
+    inspectedParticipant &&
+      (host.model.selectedSwarm?.participants?.find(
+        (item) => item.id === inspectedParticipant.id,
+      ) ??
+        inspectedParticipant),
   );
 
   const contextWindow = $derived(
     host.model.catalog.models?.find(
-      (model) => model.id === history?.participant.model,
+      (model) => model.id === selectedParticipant?.model,
     )?.context_window,
   );
 
-  const contextRatio = $derived(
-    Number.isFinite(contextWindow) &&
-      contextWindow > 0 &&
-      Number.isFinite(history?.data.context_usage?.tokens)
-      ? Math.min(1, history.data.context_usage.tokens / contextWindow)
-      : 0,
-  );
-
-  const contextTokens = $derived(
-    Number.isFinite(history?.data.context_usage?.tokens)
-      ? `${new Intl.NumberFormat(activeLocaleTag()).format(history.data.context_usage.tokens)}${contextWindow ? ` / ${new Intl.NumberFormat(activeLocaleTag()).format(contextWindow)}` : ''}`
-      : t('swarm.usage.unavailable'),
-  );
-
-  const activityContextTooltip = $derived(
-    formatTokenUsageTooltip(
-      history?.data.context_usage,
-      history?.data.usage,
-      history?.data.session_usage,
-      contextWindow,
-    ),
-  );
+  // Why the inspected participant stopped when it failed or was interrupted
+  // and its loaded History does not say so itself. Its lifecycle Run
+  // decides, since a participant also counts as failed after an interrupted
+  // Run: the completion reason of an interrupted Run ('interrupted' when
+  // unnamed), 'failed' for a failed Run whose error is not the last entry,
+  // and for a Run that ended otherwise 'not_started' (its next Run could not
+  // start) or 'interrupted'. Null while History has not caught up with the
+  // Run.
+  const stopReason = $derived.by(() => {
+    const participant = selectedParticipant;
+    if (
+      !history ||
+      !participant ||
+      participant.run_active ||
+      !['failed', 'interrupted'].includes(participant.state)
+    )
+      return null;
+    const runId = participant.lifecycle_run_id;
+    const run = runId ? projection.historyRuns[runId] : undefined;
+    if (run?.status === 'running' || (!run && historyLoading)) return null;
+    if (run?.status === 'interrupted') {
+      const reason = activityTimeline.findLast(
+        (item) => item.type === 'assistant_run' && item.runId === runId,
+      )?.runSummaryMessage?.completion_reason;
+      return INTERRUPTION_REASONS.has(reason) ? reason : 'interrupted';
+    }
+    if (run?.status === 'failed') {
+      const last = activityTimeline.at(-1);
+      return last?.type === 'message' && last.message.role === 'error'
+        ? null
+        : 'failed';
+    }
+    return participant.state === 'failed' ? 'not_started' : 'interrupted';
+  });
 
   async function reconcileActivity(
     request,
@@ -431,7 +458,8 @@ export function createSwarmPageActivity(host) {
     projection.status = 'running';
     let key = null;
     const buffered = [];
-    const sequences = new SvelteSet();
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, never rendered
+    const sequences = new Set();
     let replayThrough = Infinity;
     let replayCaughtUp = false;
     const receive = (id, event) => {
@@ -563,14 +591,11 @@ export function createSwarmPageActivity(host) {
     get selectedParticipant() {
       return selectedParticipant;
     },
-    get contextRatio() {
-      return contextRatio;
+    get contextWindow() {
+      return contextWindow;
     },
-    get contextTokens() {
-      return contextTokens;
-    },
-    get activityContextTooltip() {
-      return activityContextTooltip;
+    get stopReason() {
+      return stopReason;
     },
     loadEarlierActivity,
     inspectParticipant,
