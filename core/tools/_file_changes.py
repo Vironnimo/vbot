@@ -402,7 +402,11 @@ def _guard_failure(
     label = batch.shown(path)
     never = reason is StaleReason.NEVER_READ
     code = "file_not_read" if never else "file_modified_since_read"
-    why = "this Session has not read it" if never else "it changed after this Session last read it"
+    why = (
+        f"was not read with {model_tool_name('read')} in this conversation"
+        if never
+        else "it changed after this Session last read it"
+    )
     lead = f"{label} already exists and {why}, so it was not replaced."
     text = _text(snapshot)
     payload = snapshot.payload or b""

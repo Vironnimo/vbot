@@ -511,6 +511,7 @@ file; the result shows the changed region.
 |---|---|
 | `Edit, create, delete or move files with a patch.` | Names all four effects, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
+| `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
 
 ## Verification
 

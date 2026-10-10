@@ -32,7 +32,7 @@ from core.tools.arguments import optional_int, split_text_lines
 from core.tools.contracts import ToolContractError
 from core.tools.edit import offered_edit_tool
 from core.tools.file_state import FileReadState, os_error_reason
-from core.tools.model_names import SHELL_MODEL_NAME
+from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.read_extract import (
     ExtractionError,
     ExtractionLimitExceededError,
@@ -82,7 +82,6 @@ READ_TOOL_PARAMETERS: JsonObject = {
         "path": {
             "type": "string",
             "minLength": 1,
-            "description": "File or directory, relative to the working directory or absolute.",
         },
         "offset": {
             "type": "integer",
@@ -288,7 +287,7 @@ def make_read_handler(
                     f"pattern selects text lines, but {label} is a binary file. "
                     "Read it without pattern.",
                 )
-            return _read_binary_notice(label)
+            return _read_binary_notice(context, label)
         try:
             if filtering:
                 with resolved.open("r", encoding="utf-8", errors="replace", newline="") as text:
@@ -422,16 +421,15 @@ def _looks_binary(raw: bytes) -> bool:
     return b"\x00" in raw[:_BINARY_DETECTION_BYTES]
 
 
-def _read_binary_notice(label: str) -> JsonObject:
-    """Return a short notice for a binary file instead of decoding it to garbage."""
-    return tool_success(
-        {
-            "content": (
-                f"[{label} is a binary file, so it is not shown as text. If "
-                f"{SHELL_MODEL_NAME} is available, a command for this file type can inspect it.]"
-            )
-        }
-    )
+def _read_binary_notice(context: ToolContext, label: str) -> JsonObject:
+    """Return a short notice for a binary file instead of decoding it to garbage.
+
+    The notice points to the shell only when the Agent has it.
+    """
+    notice = f"{label} is a binary file, so it is not shown as text."
+    if context.offers(BASH_TOOL_NAME):
+        notice += f" A {SHELL_MODEL_NAME} command for this file type can inspect it."
+    return tool_success({"content": f"[{notice}]"})
 
 
 def _read_video(label: str, media_type: str) -> JsonObject:

@@ -84,7 +84,8 @@ _MOVED = re.compile(r"Moved (.+) to (.+)\.")
 _UPDATED = re.compile(r"Updated (.+?)(?: and moved it to (.+))?:")
 _GUARDED = re.compile(
     r"(?:Failed: |Error \(\w+\): )?(.+) already exists and (?:this Session has not read it|"
-    r"it changed after this Session last read it), so it was not replaced\."
+    r"was not read with read in this conversation|it changed after this Session last read it), "
+    r"so it was not replaced\."
 )
 _STALE = re.compile(r"(.+) changed after this Session last read it; the change used its")
 _EXCERPT_LEADS = (

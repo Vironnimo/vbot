@@ -38,16 +38,13 @@ def test_edit_and_write_are_available_exactly_when_apply_patch_is() -> None:
 
 def test_edit_and_write_have_minimal_definitions() -> None:
     assert EDIT_TOOL_DESCRIPTION == (
-        "Replace text in a file. Calls for different files never need each other finished "
-        "first; send them in the same response."
+        "Replace text in a file. Calls that change different files never need each other "
+        "finished first; send them in the same response."
     )
     assert EDIT_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {
-            "path": {
-                "type": "string",
-                "description": "File to change.",
-            },
+            "path": {"type": "string"},
             "edits": {
                 "type": "array",
                 "description": "All changes to this file.",
@@ -59,10 +56,7 @@ def test_edit_and_write_have_minimal_definitions() -> None:
                             "description": "Text to replace. Without replace_all, it must "
                             "occur exactly once.",
                         },
-                        "new_string": {
-                            "type": "string",
-                            "description": "Replacement text.",
-                        },
+                        "new_string": {"type": "string"},
                         "replace_all": {
                             "type": "boolean",
                             "description": "Replace every occurrence. Omit to replace one.",
@@ -80,10 +74,7 @@ def test_edit_and_write_have_minimal_definitions() -> None:
     assert WRITE_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {
-            "path": {
-                "type": "string",
-                "description": "File to write.",
-            },
+            "path": {"type": "string"},
             "content": {"type": "string", "description": "Complete file content."},
         },
         "required": ["path", "content"],
@@ -388,7 +379,8 @@ NUL = (
             "write",
             {"path": "a.txt", "content": "new\n"},
             "file_not_read",
-            "a.txt already exists and this Session has not read it, so it was not replaced. Its "
+            "a.txt already exists and was not read with read in this conversation, so it was "
+            "not replaced. Its "
             "current content follows and now counts as read: send the same call again to replace "
             "it, or call edit to change only part of it.\n1| one\n2| two\n3| one\n"
             "No file was changed.",

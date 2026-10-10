@@ -672,7 +672,7 @@ def test_failed_add_blocks_dependent_update_but_not_other_file(tmp_path):
         "*** Add File: independent.txt\n+done",
     )
     assert text(result).startswith("1 of 3 changes applied; 2 did not.")
-    assert "\nFailed: file.txt already exists and this Session has not read it" in text(result)
+    assert "\nFailed: file.txt already exists and was not read with read" in text(result)
     assert text(result).endswith(
         "Skipped: file.txt was not tried because an earlier change to file.txt in this patch "
         "did not complete. Resend it together with that change."

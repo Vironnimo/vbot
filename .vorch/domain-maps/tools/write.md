@@ -47,6 +47,6 @@ definitions` estimate).
 |---|---|
 | `Create a file or replace all of its content.` | Names both effects; replacing part of a file belongs to `edit`, whose name says so. |
 | `To replace an existing file, read it first.` | Without it, 2 of 4 eval runs that replaced a file failed their first `write` with `file_not_read`, with it 0 of 4 (agent-eval 2026-10-04); reads of a file about to be created occurred with and without it. |
-| `path`: `File to write.` | Role; both path forms are accepted, so no format text is needed. |
+| `path`: no text | The name says the role; both path forms are accepted (review 2026-10-10). |
 | `content`: `Complete file content.` | Says the value is the whole file, so an Agent does not send a fragment or a diff. |
 | `write replaces the whole file and has no old_string. To replace text inside a file, call edit with path and edits.` | Edit-shaped calls sent to `write` name the Tool that takes them instead of failing on unknown parameters. |

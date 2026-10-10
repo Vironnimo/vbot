@@ -137,11 +137,9 @@ def failure(result: dict[str, Any], code: str) -> str:
     return str(result["error"]["message"])
 
 
-def binary_notice(label: str) -> str:
-    return (
-        f"[{label} is a binary file, so it is not shown as text. If {SHELL_MODEL_NAME} is "
-        "available, a command for this file type can inspect it.]"
-    )
+def binary_notice(label: str, *, shell: bool = True) -> str:
+    inspect = f" A {SHELL_MODEL_NAME} command for this file type can inspect it." if shell else ""
+    return f"[{label} is a binary file, so it is not shown as text.{inspect}]"
 
 
 def docx_bytes(body_xml: str) -> bytes:

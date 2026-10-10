@@ -90,7 +90,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
 ## Agent-facing text
 
 Texts are minimal by user decision (2026-10-04): the boundary between `edit` and
-`write` comes from the names, details belong in results and errors. About 151
+`write` comes from the names, details belong in results and errors. About 143
 tokens (`python -m scripts.tool_lab definitions` estimate, mostly schema); `write`
 adds about 68, against about 53 for `apply_patch`. A sentence stays only when a
 fresh Agent would often make a failing call without it; occasional extra
@@ -101,12 +101,11 @@ where every form a Model sends is accepted (relative and absolute paths).
 | Text | Reason |
 |---|---|
 | `Replace text in a file.` | Names the effect; what to do with a whole file comes from `write`'s name and the `content` refusal. |
-| `Calls for different files never need each other finished first; send them in the same response.` | Batching changes is a user requirement. Without it, 3 of 8 multi-file eval runs sent the calls for a second file in a later response (a new file before the edit that imports it, a definition before its callers), reading the System Prompt's hold-back rule as a dependency; one round trip each (agent-eval 2026-10-05). |
-| `path`: `File to change.` | Role; both path forms are accepted, so no format text is needed. |
+| `Calls that change different files never need each other finished first; send them in the same response.` | Batching changes is a user requirement. "Calls that change" covers `write` calls too, which the eval failure (a new file before the edit that imports it) involved; the former "Calls for different files" read as `edit` calls only (review 2026-10-10). Without it, 3 of 8 multi-file eval runs sent the calls for a second file in a later response (a new file before the edit that imports it, a definition before its callers), reading the System Prompt's hold-back rule as a dependency; one round trip each (agent-eval 2026-10-05). |
 | `edits`: `All changes to this file.` | Puts every change to the file into one call instead of one call per change. Later edits that build on earlier ones and items naming another file fail with the fix. |
 | `edits[].old_string`: `Text to replace. Without replace_all, it must occur exactly once.` | A repeated `old_string` is the common failing edit; the rule prevents it before the first call. The `replace_all` condition keeps a literal reader from padding an `old_string` it means to replace everywhere. |
-| `edits[].new_string`: `Replacement text.` | Role; `""` deleting is trained behavior. |
 | `edits[].replace_all`: `Replace every occurrence. Omit to replace one.` | Weak Models fill every field; a filled `replace_all: true` changes text the Agent did not mean (F3). |
+| `path`, `edits[].new_string`: no text | The names say the role, both path forms are accepted, and `""` deleting is trained behavior (review 2026-10-10). |
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |

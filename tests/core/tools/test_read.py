@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -59,10 +60,6 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     assert "additionalProperties" not in parameters
     assert set(parameters["properties"]) == {"path", "offset", "limit"}
     assert parameters["properties"]["offset"]["type"] == "integer"
-    assert all(
-        isinstance(property_schema.get("description"), str) and property_schema["description"]
-        for property_schema in parameters["properties"].values()
-    )
     assert "description" not in parameters["properties"]
 
     ranged_display = registry.display_for_call(
@@ -667,9 +664,14 @@ async def test_text_binary_and_video_reads_never_load_the_whole_file(
 
     text = content(await read(tmp_path, {"path": "large.txt", "limit": 1}))
     binary = content(await read(tmp_path, {"path": "data.bin"}))
+    without_shell = replace(make_context(tmp_path), offered_tools={"read"})
+    binary_without_shell = content(
+        await read(tmp_path, {"path": "data.bin"}, context=without_shell)
+    )
     video = content(await read(tmp_path, {"path": "clip.mp4"}))
 
     assert text.startswith("1| first")
     assert text.endswith("[Showing lines 1-1 of 2. Use offset=2 to continue.]")
     assert binary == binary_notice("data.bin")
+    assert binary_without_shell == binary_notice("data.bin", shell=False)
     assert video.startswith("[clip.mp4 is a video")

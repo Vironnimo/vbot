@@ -53,16 +53,13 @@ _REPLACE_TOOLS = frozenset({EDIT_TOOL_NAME, WRITE_TOOL_NAME})
 EditDialect = Literal["patch", "replace"]
 
 EDIT_TOOL_DESCRIPTION = (
-    "Replace text in a file. Calls for different files never need each other finished "
-    "first; send them in the same response."
+    "Replace text in a file. Calls that change different files never need each other "
+    "finished first; send them in the same response."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "path": {
-            "type": "string",
-            "description": "File to change.",
-        },
+        "path": {"type": "string"},
         "edits": {
             "type": "array",
             "description": "All changes to this file.",
@@ -75,10 +72,7 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
                             "Text to replace. Without replace_all, it must occur exactly once."
                         ),
                     },
-                    "new_string": {
-                        "type": "string",
-                        "description": "Replacement text.",
-                    },
+                    "new_string": {"type": "string"},
                     "replace_all": {
                         "type": "boolean",
                         "description": "Replace every occurrence. Omit to replace one.",
@@ -97,10 +91,7 @@ WRITE_TOOL_DESCRIPTION = (
 WRITE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "path": {
-            "type": "string",
-            "description": "File to write.",
-        },
+        "path": {"type": "string"},
         "content": {"type": "string", "description": "Complete file content."},
     },
     "required": ["path", "content"],
