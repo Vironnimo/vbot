@@ -1,7 +1,8 @@
 /* Rules the page's areas share: the page and workspace layout, list rows
    (the sidebar's and the Wiki's), section heads, panels, dialog copy and
    tables. Each area's own rules live in the stylesheet its component
-   imports. */
+   imports. Markdown (`.msg-markdown`) keeps the app's own code block and
+   table styling, so the preformatted text and table rules skip it. */
 body {
   margin: 0;
   background: var(--bg);
@@ -84,10 +85,10 @@ body {
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .history
-  pre,
+  pre:where(:not(.msg-markdown *)),
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .panel
-  pre,
+  pre:where(:not(.msg-markdown *)),
 .swarm-page-modal-copy > pre {
   overflow: auto;
   max-height: 420px;
@@ -104,27 +105,32 @@ body {
   gap: 16px;
   padding: 0 18px 18px;
 }
-/* Every table on the page: the Usage table and Markdown tables in posts,
-   activity and the Wiki. */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) table {
+/* The page's own tables (Usage); Markdown tables in posts, activity and the
+   Wiki look as they do in Chat. */
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  table:where(:not(.msg-markdown *)) {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-body-sm);
   font-variant-numeric: tabular-nums;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) th,
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) td {
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  th:where(:not(.msg-markdown *)),
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  td:where(:not(.msg-markdown *)) {
   padding: 9px 8px;
   text-align: left;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) th {
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  th:where(:not(.msg-markdown *)) {
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
   font-weight: 500;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) td {
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  td:where(:not(.msg-markdown *)) {
   color: var(--text-hi);
 }
 @media (max-width: 640px) {
