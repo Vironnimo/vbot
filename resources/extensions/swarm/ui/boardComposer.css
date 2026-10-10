@@ -1,14 +1,71 @@
-/* The dialog that posts to the Board (BoardComposer.svelte). */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .post-options {
-  display: grid;
-  align-items: end;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+/* The dialog that posts to the Board (BoardComposer.svelte). It renders
+   outside the page, so its rules are not scoped to `.swarm-page`. A long
+   draft scrolls inside the body while the header and footer stay. */
+.modal.board-composer-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(600px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
 }
-@media (max-width: 640px) {
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .post-options {
-    grid-template-columns: 1fr;
-  }
+.modal.board-composer-dialog .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+/* The post a reply answers: a removable chip. */
+.board-composer__reply {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0 2px 0 10px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+.board-composer__reply > svg {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+.board-composer__reply-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-composer .board-composer__reply-remove.btn-icon {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+}
+.board-composer__reply-remove svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+/* The participants to address, by name beside their identity colour. */
+.board-composer__recipients {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 2px 12px;
+}
+.board-composer__recipients .checkbox {
+  min-height: 32px;
+}
+.board-composer__recipients .participant-avatar {
+  min-width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+}
+.board-composer__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

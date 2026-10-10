@@ -39,9 +39,11 @@ export function createSwarmPageBoard(host) {
 
   let composeOpen = $state(false);
 
-  let postRecipients = $state('');
+  // The participants the post addresses, by participant id.
+  let recipients = $state({});
 
-  let replyTo = $state('');
+  // The post the composer replies to: its id, number and tooltip.
+  let replyTarget = $state(null);
 
   let posting = $state(false);
   let postMutation = null;
@@ -113,6 +115,8 @@ export function createSwarmPageBoard(host) {
     references.clear();
     folding = {};
     opened = {};
+    recipients = {};
+    replyTarget = null;
     selectedDiscussion = swarm.main_discussion_id;
     discussions = [];
     clearBoard();
@@ -348,21 +352,36 @@ export function createSwarmPageBoard(host) {
     }
   }
 
+  // Opens the composer for a new post, or with `post` for a reply to it.
+  function compose(post = null) {
+    replyTarget = post
+      ? {
+          id: post.id,
+          sequence: post.sequence,
+          preview: {
+            title:
+              post.author?.kind === 'user'
+                ? t('swarm.board.you')
+                : (post.author_name ?? post.author?.name ?? ''),
+            text: opening(post.text),
+          },
+        }
+      : null;
+    composeOpen = true;
+  }
+
   async function post() {
     if (posting || !host.selectedSwarm || !postText.trim()) return;
+    // In roster order, so a retry sends the same request.
+    const addressed = (host.selectedSwarm.participants ?? [])
+      .filter((participant) => recipients[participant.id])
+      .map((participant) => participant.id);
     const payload = {
       swarm_id: host.selectedSwarm.id,
       discussion_id: selectedDiscussion,
       text: postText,
-      ...(replyTo.trim() ? { reply_to: replyTo.trim() } : {}),
-      ...(postRecipients.trim()
-        ? {
-            recipients: postRecipients
-              .split(',')
-              .map((item) => item.trim())
-              .filter(Boolean),
-          }
-        : {}),
+      ...(replyTarget ? { reply_to: replyTarget.id } : {}),
+      ...(addressed.length ? { recipients: addressed } : {}),
     };
     const fingerprint = JSON.stringify(payload);
     if (postMutation?.fingerprint !== fingerprint)
@@ -376,8 +395,8 @@ export function createSwarmPageBoard(host) {
       });
       postMutation = null;
       postText = '';
-      postRecipients = '';
-      replyTo = '';
+      recipients = {};
+      replyTarget = null;
       composeOpen = false;
       await host.refresh();
       host.showResumeFailures(result);
@@ -757,17 +776,17 @@ export function createSwarmPageBoard(host) {
     set postText(value) {
       postText = value;
     },
-    get postRecipients() {
-      return postRecipients;
+    // Whether the post addresses participant `id`; `address` changes it.
+    addresses: (id) => recipients[id] === true,
+    address(id, chosen) {
+      if (chosen) recipients[id] = true;
+      else delete recipients[id];
     },
-    set postRecipients(value) {
-      postRecipients = value;
+    get replyTarget() {
+      return replyTarget;
     },
-    get replyTo() {
-      return replyTo;
-    },
-    set replyTo(value) {
-      replyTo = value;
+    clearReply() {
+      replyTarget = null;
     },
     get posting() {
       return posting;
@@ -781,6 +800,7 @@ export function createSwarmPageBoard(host) {
     jumpToNewest,
     chooseDiscussion,
     openDiscussion,
+    compose,
     post,
     contentLinks,
     postBody,

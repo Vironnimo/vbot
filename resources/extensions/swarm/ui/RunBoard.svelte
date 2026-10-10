@@ -153,7 +153,7 @@
     <Button
       variant="secondary"
       class="board-write"
-      onClick={() => (board.composeOpen = true)}
+      onClick={() => board.compose()}
     >
       <SwarmIcon kind="edit" />{t('swarm.board.openComposer')}
     </Button>
@@ -268,6 +268,17 @@
                   >#{post.sequence}</span
                 >{/if}
               {@render postTimeTag(post)}
+              {#if post.sequence != null}<Button
+                  variant="tertiary"
+                  icon
+                  class="post-reply"
+                  ariaLabel={t('swarm.board.replyTo', {
+                    reference: `#${post.sequence}`,
+                  })}
+                  tooltip={t('swarm.board.reply')}
+                  onClick={() => board.compose(post)}
+                  >{@render replyIcon()}</Button
+                >{/if}
             </div>
             {#if post.reply_sequence != null || post.recipients?.length}
               <p class="post-context">

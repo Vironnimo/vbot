@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
-  flushSync,
   tick,
   unmount,
   swarm,
@@ -20,7 +19,7 @@ import { t } from '../../lib/i18n.js';
 import { formatMoment } from '../../lib/timeText.js';
 
 const WRITE_POST = t('swarm.board.openComposer');
-const POST = t('swarm.board.submit');
+const POST = t('swarm.compose.submit');
 
 const board = () => document.querySelector('.board');
 // Picks a discussion by its title in the Board's discussion picker.
@@ -1078,48 +1077,87 @@ describe('Swarm Board composer', () => {
     expect(saved.size).toBe(2);
   });
 
-  it('posts a Board reply with explicit public recipients', async () => {
-    const { bridge, operation } = createBridge();
+  // Post #5 by Alpha, which the composer tests reply to.
+  const parent = {
+    id: 'pst-parent',
+    sequence: 5,
+    discussion_id: 'dsc-main',
+    author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
+    text: 'Parent finding',
+  };
+  const REPLY = t('swarm.board.replyTo', { reference: '#5' });
+  const dialog = () => document.querySelector('[role="dialog"]');
+  // The composer's checkbox that addresses the participant `name`.
+  const recipient = (name) =>
+    [...dialog().querySelectorAll('[role="checkbox"]')].find(
+      (box) => box.querySelector('.board-composer__name').textContent === name,
+    );
+
+  // Opens the composer from post #5's Reply action.
+  async function replyToParent(bridge) {
     await openSwarm(bridge);
+    await vi.waitFor(() => expect(button(REPLY)).toBeDefined());
+    button(REPLY).click();
     await tick();
-    flushSync();
+  }
+
+  it('replies to a post and addresses participants by name', async () => {
+    const { bridge, operation } = createBridge();
+    boardPosts(operation, [parent]);
+    await replyToParent(bridge);
+    expect(dialog().querySelector('.board-composer__reply').textContent).toBe(
+      t('swarm.board.inReplyTo', { reference: '#5' }),
+    );
+    await vi.waitFor(() =>
+      expect(document.activeElement?.id).toBe('swarm-post'),
+    );
+    expect(
+      [...dialog().querySelectorAll('.board-composer__name')].map(
+        (name) => name.textContent,
+      ),
+    ).toEqual(['Alpha', 'Beta']);
+    fill('swarm-post', 'Finding');
+    recipient('Beta').click();
+    recipient('Alpha').click();
+    await tick();
+    expect(recipient('Beta').getAttribute('aria-checked')).toBe('true');
+    button(POST).click();
+    await vi.waitFor(() =>
+      expect(callsTo(operation, 'board.post')).toHaveLength(1),
+    );
+    // Recipients go in roster order, whatever the order they were chosen in.
+    expect(callsTo(operation, 'board.post')[0][1]).toEqual({
+      swarm_id: 'swr-a',
+      discussion_id: 'dsc-main',
+      text: 'Finding',
+      reply_to: 'pst-parent',
+      recipients: ['prt-a', 'prt-b'],
+      request_id: expect.any(String),
+    });
+    await vi.waitFor(() => expect(dialog()).toBeNull());
+    // Write post starts a new post, not a reply, addressing nobody.
     button(WRITE_POST).click();
     await tick();
-    const textarea = document.querySelector('textarea');
-    textarea.value = 'Finding';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    const options = document.querySelectorAll('.post-options input');
-    options[0].value = 'pst-parent';
-    options[0].dispatchEvent(new Event('input', { bubbles: true }));
-    options[1].value = 'prt-a, prt-b';
-    options[1].dispatchEvent(new Event('input', { bubbles: true }));
-    await tick();
-    button(POST).click();
-    await tick();
-    await tick();
-    expect(operation).toHaveBeenCalledWith(
-      'board.post',
-      expect.objectContaining({
-        swarm_id: 'swr-a',
-        discussion_id: 'dsc-main',
-        text: 'Finding',
-        reply_to: 'pst-parent',
-        recipients: ['prt-a', 'prt-b'],
-        request_id: expect.any(String),
-      }),
-    );
+    expect(dialog().querySelector('.board-composer__reply')).toBeNull();
+    expect(recipient('Alpha').getAttribute('aria-checked')).toBe('false');
   });
 
-  it.each(['swarm-post', 'swarm-reply', 'swarm-pings'])(
-    'gives a changed %s draft a new request id after failure',
-    async (field) => {
+  it.each([
+    ['text', () => fill('swarm-post', 'changed-draft')],
+    [
+      'reply',
+      () => button(t('swarm.compose.removeReply', { reference: '#5' })).click(),
+    ],
+    ['recipients', () => recipient('Beta').click()],
+  ])(
+    'gives a draft with a changed %s a new request id after failure',
+    async (_, change) => {
       const { bridge, operation } = createBridge();
+      boardPosts(operation, [parent]);
       overrideOperations(operation, {
         'board.post': () => Promise.reject(new Error('post-failed-sentinel')),
       });
-      await openSwarm(bridge);
-      button(WRITE_POST).click();
-      await tick();
+      await replyToParent(bridge);
       fill('swarm-post', 'initial-post');
       await tick();
       button(POST).click();
@@ -1127,7 +1165,7 @@ describe('Swarm Board composer', () => {
         expect(callsTo(operation, 'board.post')).toHaveLength(1),
       );
       await tick();
-      fill(field, field === 'swarm-reply' ? '#1' : 'changed-draft');
+      change();
       await tick();
       button(POST).click();
       await vi.waitFor(() =>

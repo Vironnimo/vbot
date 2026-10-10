@@ -161,6 +161,28 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* Reply shows while the pointer or focus is on the post, and always on touch
+   screens. */
+.swarm-page .post-reply.btn-icon {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin: -2px -6px -2px auto;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.swarm-page .post-reply .post-icon {
+  width: 16px;
+  height: 16px;
+}
+.swarm-page .board-post:is(:hover, :focus-within) .post-reply {
+  opacity: 1;
+}
+@media (hover: none), (pointer: coarse) {
+  .swarm-page .post-reply.btn-icon {
+    opacity: 1;
+  }
+}
 /* "In reply to #12 · To Samir": muted, with the reply target as a link. */
 .swarm-page .post-context {
   display: flex;

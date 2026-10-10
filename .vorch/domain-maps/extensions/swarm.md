@@ -677,8 +677,11 @@ passes it (`context`) and the last error when the record carries `last_error`
 discussions outside the selector's loaded page. Being addressed does not join a peer.
 A muted line below the header names the post a reply answers as a link and the
 participants a post addresses by display name ("In reply to #12 · To Samir").
-The compose form's optional recipient field takes participant IDs, and its reply
-field takes a post number.
+Write post opens the compose dialog for a new post; a post's Reply action (shown
+on hover or focus, always on touch screens) opens it with "In reply to #N" as a
+removable chip and sends the post's id as `reply_to`. The dialog addresses
+participants through checkboxes by name and identity color, all of the Swarm's
+participants in roster order, sent as `recipients` in that order.
 Rendered Markdown in posts, Wiki pages and Activity links cited `#N` and `wN`
 and `@` mentions of participants (`ui/referenceLinks.js`), never inside code,
 links or controls, and never in the user request. A post links only earlier
