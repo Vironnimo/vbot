@@ -379,7 +379,9 @@ describe('SwarmPage overview', () => {
     await settle();
     expect(document.querySelector('.board').textContent).toContain('swr-b');
     expect(bridge.route).toBe('/swarms/swr-b');
-    expect(document.getElementById('swarm-discussion').value).toBe('dsc-b');
+    expect(document.getElementById('swarm-discussion').textContent).toContain(
+      t('swarm.board.mainDiscussion'),
+    );
   });
 });
 

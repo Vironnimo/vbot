@@ -1,166 +1,108 @@
-/* The Board tab: toolbar, context, participants and posts (RunBoard.svelte). */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .board {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
+/* The Board tab: toolbar, goal, participants and posts (RunBoard.svelte). */
+/* The tab's rows never widen it: one-line paths and code give way inside
+   their rows. */
+.swarm-page .board-panel {
+  grid-template-columns: minmax(0, 1fr);
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .board
-  > li {
-  min-width: 0;
-  padding: 12px;
-  border-left: 2px solid var(--border-2);
-  background: var(--surface-2);
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .board
-  .post-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .board
-  time,
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .board
-  small {
-  color: var(--text-med);
-  font-size: var(--fs-label-sm);
-  font-variant-numeric: tabular-nums;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .post-header {
-  align-items: center;
-  flex-wrap: wrap;
-  border-bottom: 1px solid var(--border-2);
-  padding-bottom: 10px;
-  margin-bottom: 10px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .post-header
-  strong {
-  font-size: var(--fs-body-md);
-  color: var(--text-hi);
-  overflow-wrap: anywhere;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .post-author {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .board
-  time {
-  white-space: nowrap;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .post-meta {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .post-number {
-  color: var(--text-med);
-  font: 600 var(--fs-label-sm) var(--font-ui);
-  font-variant-numeric: tabular-nums;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .board
-  .msg-markdown {
-  overflow-wrap: anywhere;
-  overflow-x: auto;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .discussion-announcement
-  p {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  margin: 7px 0 0;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .discussion-announcement {
-  display: grid;
-  justify-items: start;
-  gap: 8px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .discussion-announcement
-  button {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  text-align: left;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participant-pane {
-  display: grid;
-  gap: 10px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participant-pane
-  small,
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .run-indicator {
-  display: block;
-  color: var(--text-med);
-  font-size: var(--fs-label-sm);
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .run-indicator {
-  color: var(--amber);
-}
+/* One row: the discussion picker and Write post. */
 .swarm-page .board-toolbar {
-  justify-content: start;
-  align-items: end;
-  flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
-.swarm-page .board-toolbar .form-field {
-  flex: 0 1 280px;
+.swarm-page .board-discussion {
+  flex: 0 1 320px;
   min-width: 0;
 }
-.swarm-page .board-context {
+.swarm-page .board-write {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* The goal: a framed card folded to its first line, beside the working
+   directory. */
+.swarm-page .board-goal {
   display: flex;
   flex-wrap: wrap;
   align-items: start;
-  gap: 8px 24px;
-  padding-block: 10px;
-  border-block: 1px solid var(--border);
+  gap: 4px 24px;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
 }
 .swarm-page .swarm-goal-post {
-  flex: 1 1 240px;
+  flex: 1 1 320px;
   min-width: 0;
+  border-radius: var(--r-md);
 }
-.swarm-page .swarm-goal-post summary {
+.swarm-page .swarm-goal-post > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
   cursor: pointer;
-  color: var(--text-med);
+  color: var(--text-hi);
   font-size: var(--fs-body-sm);
 }
-.swarm-page .swarm-goal-post summary:hover {
-  color: var(--text-hi);
+.swarm-page .swarm-goal-post[open] > summary {
+  margin-bottom: 6px;
 }
+.swarm-page .board-goal__title {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.swarm-page .board-goal__preview {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-med);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swarm-page .swarm-goal-post[open] .board-goal__preview {
+  display: none;
+}
+/* One line: the path gives way before its last segment, which stays whole
+   while it fits; the tooltip holds the full path. */
 .swarm-page .board-directory {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
   max-width: 100%;
   color: var(--text-med);
-  font: var(--fs-mono-xs) var(--font-mono);
 }
-.swarm-page .board-directory svg {
+.swarm-page .board-directory > svg {
   flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--text-lo);
 }
-.swarm-page .board-directory span {
-  overflow-wrap: anywhere;
+.swarm-page .board-directory__path {
+  display: flex;
+  min-width: 0;
+  font: var(--fs-mono-xs) / 1.4 var(--font-mono);
+  white-space: nowrap;
+}
+.swarm-page .board-directory__head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.swarm-page .board-directory__tail {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.swarm-page .board-directory .board-directory__copy {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
 }
 .swarm-page .participant-pane {
+  display: grid;
   gap: 7px;
 }
 .swarm-page .participant-count {
@@ -168,12 +110,17 @@
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
+/* Posts are calm cards on the neutral surface; the author's identity colour
+   shows in the avatar and a thin left edge. */
+.swarm-page .board {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
 .swarm-page .board > li {
-  border-left: 2px solid
-    color-mix(in srgb, var(--participant-color) 55%, var(--border));
-  border-radius: var(--r-sm);
-  background: color-mix(in srgb, var(--participant-color) 5%, var(--bg));
-  padding: 14px 16px;
+  min-width: 0;
   overflow-anchor: auto;
   /* Posts away from the view skip rendering. Until a post first renders, it
      counts as a short post: too low an estimate only renders a few more posts
@@ -181,17 +128,144 @@
   content-visibility: auto;
   contain-intrinsic-size: auto 320px;
 }
+.swarm-page .board-post {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px 14px 14px;
+  border-left: 2px solid
+    color-mix(in srgb, var(--participant-color) 70%, transparent);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.swarm-page .post-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+}
+.swarm-page .post-author {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swarm-page .post-number,
+.swarm-page .board time {
+  flex-shrink: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Reply shows while the pointer or focus is on the post, and always on touch
+   screens. */
+.swarm-page .post-reply.btn-icon {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin: -2px -6px -2px auto;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.swarm-page .post-reply .post-icon {
+  width: 16px;
+  height: 16px;
+}
+.swarm-page .board-post:is(:hover, :focus-within) .post-reply {
+  opacity: 1;
+}
+@media (hover: none), (pointer: coarse) {
+  .swarm-page .post-reply.btn-icon {
+    opacity: 1;
+  }
+}
+/* "In reply to #12 · To Samir": muted, with the reply target as a link. */
+.swarm-page .post-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+.swarm-page .post-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+.swarm-page :is(.post-context, .board-event) a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.swarm-page :is(.post-context, .board-event) a:hover {
+  opacity: 0.8;
+}
+/* Wide tables and long words stay inside the post; code blocks scroll on
+   their own. */
+.swarm-page .post-body {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-wrap: anywhere;
+}
+/* A long post shows its first 12 lines until the reader opens it; the fade
+   marks the cut. */
+.swarm-page .post-body--folded {
+  max-height: calc(var(--fs-chat-prose) * 1.4 * 12 + 4px);
+  overflow-y: hidden;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 4.5em), transparent);
+}
+.swarm-page .post-fold.btn-tertiary {
+  justify-self: start;
+  margin: -4px 0 -6px -8px;
+}
+/* A discussion announcement is an event between the posts, not a post. */
+.swarm-page .board-event {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-height: 32px;
+  padding: 2px 16px;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+.swarm-page .board > .board-event {
+  contain-intrinsic-size: auto 36px;
+}
+.swarm-page .board-event p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.swarm-page .board-event .participant-avatar {
+  min-width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+}
 /* While the discussion's newest posts are not loaded, the way back stays in
-   view. */
+   view: at the scroller's top edge, above its --page-inset-top as Activity's
+   header sticks, or below what the Run shell makes stick above the panels
+   (`--swarm-run-sticky-top`, the offset it sets). */
 .swarm-page .board-newer {
   position: sticky;
-  top: 0;
+  top: var(--swarm-run-sticky-top, calc(-1 * var(--page-inset-top, 0px)));
   z-index: 1;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   padding-block: 8px;
   background: var(--bg);
+}
+/* A post or the goal that focus or a reveal scrolls to stays clear of what
+   sticks above the panels; a reveal adds the newer-posts bar. */
+.swarm-page .board > li,
+.swarm-page .swarm-goal-post {
+  scroll-margin-top: var(--swarm-run-sticky-top, 0px);
 }
 .swarm-page .board > li[data-revealed],
 .swarm-page .swarm-goal-post[data-revealed] {
@@ -213,24 +287,14 @@
     box-shadow: 0 0 0 2px var(--accent);
   }
 }
-.swarm-page .board .post-header {
-  border-bottom-color: color-mix(
-    in srgb,
-    var(--participant-color) 14%,
-    transparent
-  );
-}
-.swarm-page .board .participant-avatar {
-  min-width: 26px;
-  height: 26px;
-  border-color: color-mix(in srgb, var(--participant-color) 35%, transparent);
-  background: transparent;
-}
 @media (max-width: 640px) {
-  .swarm-page .board-toolbar .form-field {
+  .swarm-page .board-discussion {
     flex-grow: 1;
   }
-  .swarm-page .board > li {
-    padding: 12px;
+  .swarm-page .board-post {
+    padding: 10px 12px 12px 10px;
+  }
+  .swarm-page .board-event {
+    padding-inline: 12px;
   }
 }

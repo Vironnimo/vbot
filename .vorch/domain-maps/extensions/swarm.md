@@ -306,6 +306,9 @@ earlier posts. `after` and `before` exclude each other, `message_id` and `cursor
 The page uses `after` to put new posts on top instead of re-reading the newest
 page (see the page refresh paragraph below), and both to show a revealed post
 among its neighbours. Its Board reads ask for 50 posts per page.
+The management `board.list` returns each discussion's id, `sequence` (its `dN`
+number), title and member count, the main discussion first
+(`test_swarm_store_board.py`).
 Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
 typography, including fenced-code Copy actions. Raw HTML stays escaped and links
 open through the same host bridge handler as Activity. Discussion announcements
@@ -667,49 +670,91 @@ Swarm keeps no participant error text: a `last_error` would need the error or
 completion reason in the Extension run-finished callback, a stored column and
 its reset when the next Run starts (`SwarmPage.activity.test.js`).
 
-Board reads retain each post's saved UTC timestamp. The page formats it in the
-host-provided timezone with the WebUI's shared cached formatter
-(`formatAbsoluteTime`) and separates the author/time header from the body.
+Board reads retain each post's saved UTC timestamp. A post's header shows the
+author's avatar and name (the user's own posts show a person icon and "You"),
+the muted post number `#N` and a short time in the host-provided timezone: the
+time for a post from today, the date for an older one, with its year outside the
+current one; the time's tooltip gives the absolute and relative moment
+(`formatMoment`).
 Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
 stable across page remounts (`SwarmPage.board.test.js`) and does not change saved posts.
-The header shows the snapshot Swarm name and state. The Board holds the single
-collapsible user request and working directory. Compact participant buttons show
-names, identity colors and execution dots; Model/status/pending details are in
-hover/focus tooltips. The roster filters by each participant's current
+The header shows the snapshot Swarm name and state. The Board's toolbar is one
+row: the discussion picker (a searchable dropdown of the discussions' titles with
+their numbers `dN`, the main discussion named "Main discussion", and "Load more
+discussions" in its footer) and Write post. Below it a framed Goal card folds the
+user request to its first line beside the working directory, which stays on one
+line (the path gives way before its last segment; the tooltip holds it whole) with
+a Copy action. An empty Board says "No posts yet" only once its posts arrived,
+adding that participants are reading the goal while the Run works, or pointing to
+Resume when the Run needs attention. Participant chips are outlined
+buttons with an unframed avatar (initials on a soft tint of the identity color),
+the name and, unless the participant is idle, a state dot. A chip's accessible
+name gives name, state and pending messages; its tooltip is a details card with the
+Model (provider path muted), state, pending messages and context use when the
+caller passes it (`context`); participant records carry no failure reason, which
+Activity shows from History
+(`ParticipantChip.svelte`, `participantCard` in `pagePresentation.js`). The roster filters by each participant's current
 `discussion_ids` from the Store snapshot, including join/leave invalidations and
 discussions outside the selector's loaded page. Being addressed does not join a peer.
-Posts list their addressed participants by display name ("To: ..."); the compose
-form's optional recipient field takes participant IDs. Each post header shows the
-post number (`#N`) beside its time, a reply shows its target's number as a link, and the
-compose form's reply field takes a post number.
+A muted line below the header names the post a reply answers as a link and the
+participants a post addresses by display name ("In reply to #12 · To Samir").
+Write post opens the compose dialog for a new post; a post's Reply action (shown
+on hover or focus, always on touch screens) opens it with "In reply to #N" as a
+removable chip and sends the post's id as `reply_to`. The dialog addresses
+participants through checkboxes by name and identity color, all of the Swarm's
+participants in roster order, sent as `recipients` in that order.
 Rendered Markdown in posts, Wiki pages and Activity links cited `#N` and `wN`
-(`ui/referenceLinks.js`), never inside code, links or controls, and never in the
-user request. A post links only earlier posts; elsewhere a number links up to the
-newest post or page, which `swarms.get` reports as `newest_post_sequence` and
-`newest_wiki_page_number` for the page only. A link gets its tooltip on its first
-hover or focus, which loads the post's author and opening, or the page's title and
-opening. Linking walks only the rendered Markdown added to the page, skips code,
-links and controls as whole subtrees and ignores its own insertions.
-A post link shows the post on the Board, centered and focused; `#0` opens the
-user request. A post the Board does not show takes two round trips: the post by
-number, which names its discussion, then up to a page of posts ending with it
-(`before`) and up to a page of newer ones (`after`), read together while the
-discussion selector lists the discussion. These replace the shown posts. While
-the discussion's newest posts are not loaded, a sticky bar above the posts offers
-"Load newer messages" and "Jump to newest", and new posts are not put on top.
-A short way scrolls smoothly; a long one jumps and keeps the post centered for up
-to 12 frames while the posts around it render (`SwarmPage.board.test.js`,
-`SwarmPage.wiki.test.js`, `test_swarm_operations.py`).
+and `@` mentions of participants (`ui/referenceLinks.js`), never inside code,
+links or controls, never a number in double quotes (a value, as in a Tool
+call's arguments: `"message_id": "#0"`), and never in the user request. A post links only earlier
+posts; elsewhere a number links up to the newest post or page, which
+`swarms.get` reports as `newest_post_sequence` and `newest_wiki_page_number` for
+the page only. A mention matches as the Store addresses: `@` and a display name
+or participant id in any case, not inside a word, the longest name first. These
+links, Markdown links to `#post/N` or `#wiki/wN` and a reply's target get their
+tooltip on first hover or focus: the post's author and opening, the page's title
+and opening, or the participant's details card. A mention opens the
+participant's Activity, as its chip does. Linking walks only the rendered
+Markdown added to the page, skips code, links and controls as whole subtrees and
+ignores its own insertions.
+A post link shows the post on the Board, focused and centered in the room below
+what sticks at the top, and a post taller than that room shows from its top just
+below it. The newer-posts bar (see below) sticks at the scroller's top edge, above
+its `--page-inset-top` as Activity's header does; when the Run shell makes
+something stick above the panels, it sets `--swarm-run-sticky-top`, the offset
+below that inset at which the bar sticks and which a reveal or focus keeps a post
+or the goal clear of. `#0` opens the user request. A post the Board does not show
+takes two round trips: the post by number, which names its discussion, then up
+to a page of posts ending with it (`before`) and up to a page of newer ones
+(`after`), read together while the discussion selector lists the discussion.
+These replace the shown posts. A Board that was off screen under another tab
+may have missed changes, so a reveal from there reads the posts around the post
+and the discussion list anew even when the Board holds the post, and `#0` loads
+the Board's newest page. While the discussion's newest posts are not loaded, a
+sticky bar above the posts offers "Load newer posts" and "Jump to newest", and
+new posts are not put on top. A short way scrolls smoothly; a long one jumps and
+keeps the post in place for up to 12 frames while the posts around it render,
+but stops as soon as the reader scrolls, touches, or presses a key or a pointer
+button (`SwarmPage.board.test.js`, `SwarmPage.wiki.test.js`,
+`test_swarm_operations.py`).
 Board posts use `content-visibility: auto`, so only posts near the view are laid
 out and painted. `contain-intrinsic-size: auto 320px` deliberately underestimates
 a post (seeded posts averaged about 1,450 px): a low estimate only renders a few
 more posts near the view, and scroll anchoring keeps the view in place when
 posts render or earlier pages load (checked in Chrome, 2026-10-10). Queries for
 roles or accessible names over many loaded posts force their layout: a Playwright
-`getByRole` over 809 posts took 3.6 s instead of 0.2 s.
-Post backgrounds and left borders share the stable author color
-(`SwarmPage.board.test.js`, `test_swarm_store_board.py`).
+`getByRole` over 809 posts took 3.6 s instead of 0.2 s. With all 809 posts
+loaded, scrolling through them and typing in the compose dialog ran without long
+tasks (Chrome, 2026-10-11).
+Posts are calm cards on the neutral surface: the author's stable identity color
+shows only in the avatar and a thin left edge. A discussion announcement is a
+compact event row whose title link opens that discussion. A post longer than 16
+lines folds to its first 12 under a fade, with Show more and Show less; a
+revealed post, or one that focus reaches into, opens whole. A post body is
+measured only once it is laid out (`ResizeObserver`), so folding costs nothing
+for posts away from the view (`SwarmPage.board.test.js`,
+`test_swarm_store_board.py`).
 The Usage tab shows the Run's tokens used, tool calls and Runs as Statistics-style
 tiles, then a `DataTable` with one row per participant and Model. Tokens used are
 input plus output tokens, estimated parts included; the group usage report keeps
@@ -773,7 +818,7 @@ so an unsaved draft of the deleted profile is discarded, not saved again
 
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_bundled_management.py` and `tests/cli/test_extensions_operations.py`.
 
-Private UI routing: `ui/SwarmPage.svelte` is the page root: it creates the page model, provides the navigation layer registry, lays out the sidebar, banners and the shown view, and mounts the dialogs beside `main` (the shared Modal renders in place). Shell components receive the page model: `SwarmSidebar.svelte`, `RunStartForm.svelte`, `RunView.svelte` (Run header, lifecycle actions, tabs, and the Wiki panel kept mounted per Swarm), `CommunicationDialog.svelte`, `RunSnapshotDialog.svelte`, `RunDeleteDialog.svelte` and `SwarmDeleteDialog.svelte` (deletes a saved profile). The tab components `RunBoard.svelte` (with `BoardComposer.svelte`), `RunActivity.svelte` and `RunUsage.svelte` receive their area object plus the page model for cross-area state and actions; `ParticipantChip.svelte` and `ParticipantAvatar.svelte` serve Board and Activity, and `SwarmIcon.svelte` draws the action icons. `pageModel.svelte.js` (`createSwarmPageModel`) retains the cross-area state - profile and Run lists, selection, tab and route, start form, lifecycle, deletion, communication settings, refresh dispatch and bridge lifetime - and exposes the areas as `model.board` (`pageBoard.svelte.js`: posts, paging, discussions, reveal, composer, content links), `model.activity` (`pageActivity.svelte.js`: participant History/replay subscriptions and context projection) and `model.usage` (`pageUsage.svelte.js`: the group usage report and its throttled reloads), each created with a small host interface from the model. `pagePresentation.js` holds display-only count/avatar helpers. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the Board area decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; its section components `ProfileParticipants.svelte`, `ProfileInstructions.svelte` and `ProfileAccess.svelte` edit the bound draft, `DeliverySettings.svelte` edits a delivery value for any caller, and `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Stylesheets are global within the page bundle and scoped by selector to the page root and to dialog content (`swarm-page-modal-copy`, `swarm-page-communication`): `swarmPage.css` holds the rules the areas share (page layout, list rows of the sidebar and the Wiki, section heads, panels, dialog copy, and every table, Markdown tables included) and loads before the area stylesheets, which each component imports after its dependencies (`swarmSidebar.css`, `runStartForm.css`, `runView.css`, `runBoard.css`, `participantChip.css`, `boardComposer.css`, `runActivity.css`, `runUsage.css`, `communicationDialog.css`); `profileEditor.css` scopes the editor's own classes under `.swarm-profile-editor`, and the editor's dialogs use the shared Modal styles.
+Private UI routing: `ui/SwarmPage.svelte` is the page root: it creates the page model, provides the navigation layer registry, lays out the sidebar, banners and the shown view, and mounts the dialogs beside `main` (the shared Modal renders in place). Shell components receive the page model: `SwarmSidebar.svelte`, `RunStartForm.svelte`, `RunView.svelte` (Run header, lifecycle actions, tabs, and the Wiki panel kept mounted per Swarm), `CommunicationDialog.svelte`, `RunSnapshotDialog.svelte`, `RunDeleteDialog.svelte` and `SwarmDeleteDialog.svelte` (deletes a saved profile). The tab components `RunBoard.svelte` (with `BoardComposer.svelte`), `RunActivity.svelte` and `RunUsage.svelte` receive their area object plus the page model for cross-area state and actions; `ParticipantChip.svelte` and `ParticipantAvatar.svelte` serve Board and Activity, and `SwarmIcon.svelte` draws the action icons. `pageModel.svelte.js` (`createSwarmPageModel`) retains the cross-area state - profile and Run lists, selection, tab and route, start form, lifecycle, deletion, communication settings, refresh dispatch and bridge lifetime - and exposes the areas as `model.board` (`pageBoard.svelte.js`: posts, paging, discussions, reveal, composer, content links), `model.activity` (`pageActivity.svelte.js`: participant History/replay subscriptions and context projection) and `model.usage` (`pageUsage.svelte.js`: the group usage report and its throttled reloads), each created with a small host interface from the model. `pagePresentation.js` holds display-only count/avatar helpers. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the Board area decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; its section components `ProfileParticipants.svelte`, `ProfileInstructions.svelte` and `ProfileAccess.svelte` edit the bound draft, `DeliverySettings.svelte` edits a delivery value for any caller, and `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Stylesheets are global within the page bundle and scoped by selector to the page root and to dialog content (`swarm-page-modal-copy`, `swarm-page-communication`): `swarmPage.css` holds the rules the areas share (page layout, list rows of the sidebar and the Wiki, section heads, panels and dialog copy; tables are `DataTable`'s or, in Markdown, styled as in Chat) and loads before the area stylesheets, which each component imports after its dependencies (`swarmSidebar.css`, `runStartForm.css`, `runView.css`, `runBoard.css`, `participantChip.css`, `boardComposer.css`, `runActivity.css`, `runUsage.css`, `communicationDialog.css`); `profileEditor.css` scopes the editor's own classes under `.swarm-profile-editor`, and the editor's dialogs use the shared Modal styles.
 
 Page route (the page's place in the app history, `webui/app-shell.md` -> Navigation): `''` is the start page (Run form), `/swarms/<id>` the Board, `/swarms/<id>/<tab>` the Wiki, Participants and Usage tabs, and `/profiles/<id>` and `/profiles/new` the profile editor. Opening a Swarm, a profile or the start page pushes the target route and shows the route the host sends back. A tab switches at once and pushes the route it shows; this also applies to revealing a post, Wiki links and inspecting a participant. Deleting the shown Swarm or profile, saving a new profile, and a route the page cannot show replace the route with what the page shows; corrections wait until the newest route is shown. Showing another record closes the dialogs of the current record. Filters, search, the selected Wiki page, participant inspection and the editor's open disclosures are not part of the route. The page root provides the client's layer registry, so its dialogs (compose, settings, profile snapshot, delete confirmations, the profile editor's leave dialogs) close on Back/Forward before the route changes (`SwarmPage.test.js`).
 

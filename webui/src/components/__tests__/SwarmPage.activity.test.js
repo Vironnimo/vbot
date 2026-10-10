@@ -318,7 +318,7 @@ describe('Swarm participant Activity', () => {
       bridge.invalidate();
       await vi.waitFor(() =>
         expect(pending()).toMatch(
-          new RegExp(`running.*${remaining}\\s+pending`),
+          new RegExp(`running.*${remaining}\\s+pending`, 'i'),
         ),
       );
     }

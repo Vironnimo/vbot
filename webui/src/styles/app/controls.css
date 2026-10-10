@@ -273,6 +273,14 @@
   opacity: 0.7;
 }
 
+/* A growing field (TextArea `autoGrow`) fits its text and scrolls past its
+   max-height; dragging its size would fight the fit. */
+.text-area--grow {
+  max-height: 50vh;
+  overflow-y: auto;
+  resize: none;
+}
+
 .text-area--inset {
   min-height: 150px;
   padding: 12px 14px;

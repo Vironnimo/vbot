@@ -296,7 +296,12 @@ async def test_human_board_reads_and_posts_need_no_participant_or_receipt(
 
     discussions = await store.list_human_discussions(swarm_id)
     assert discussions.entries == (
-        {"id": started["main_discussion_id"], "title": "Main", "member_count": 2},
+        {
+            "id": started["main_discussion_id"],
+            "sequence": 1,
+            "title": "Main",
+            "member_count": 2,
+        },
     )
     posted = await store.post_human(
         swarm_id,

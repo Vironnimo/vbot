@@ -11,10 +11,13 @@
 //   `tooltip` prop and the Dropdown `triggerTooltip` prop) in the one shared
 //   `#app-tooltip` element. `content` is either a string (a label or short
 //   hint) or an object:
-//     { text, title, legend: [{ icon, label }], rows: [{ label, value, mono }],
+//     { text, title, legend: [{ icon, label }],
+//       rows: [{ label, value, lead, mono, tone }],
 //       mono, placement, selectable, whenTruncated, alignTo }
 //   `title` and `rows` render a compact details card (a heading and aligned
-//   label/value pairs, e.g. a Session's Agent and last activity); `legend`
+//   label/value pairs, e.g. a Session's Agent and last activity); a row's
+//   `lead` is muted text before its value (a Model id's provider path, as
+//   `ModelId` shows it); `legend`
 //   lines below the title name the icons the anchor shows, each drawn from
 //   an icon spec `{ viewBox, attrs, shapes: [[tag, attrs], ...] }`; `mono` sets
 //   code-like values (paths, commands, ids) in the mono face. `placement`
