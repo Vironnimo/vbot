@@ -123,7 +123,7 @@ def script_busy_listener(
         status=server_management.psutil.CONN_LISTEN,
         laddr=SimpleNamespace(ip=instance.host, port=instance.port),
     )
-    monkeypatch.setattr(server_management.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
     monkeypatch.setattr(server_management.psutil, "net_connections", lambda kind: [listener])
     return timeouts
 
@@ -715,7 +715,7 @@ def test_cooperative_shutdown_requires_control_record_for_listener_pid(
         posts.append({"url": url, **kwargs})
         return SimpleNamespace(status_code=202)
 
-    monkeypatch.setattr(server_management.httpx, "post", post)
+    monkeypatch.setattr(httpx, "post", post)
 
     assert (
         server_management._request_cooperative_shutdown(instance, process, initiator="update")

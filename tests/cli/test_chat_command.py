@@ -10,9 +10,9 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
-from cli import rpc_client
 from tests.cli.cli_test_support import FakeRpc, RunCli
 
 RUN_ID = "run-1"
@@ -118,7 +118,7 @@ class FakeRunStream:
 @pytest.fixture
 def run_stream(monkeypatch: pytest.MonkeyPatch) -> FakeRunStream:
     fake = FakeRunStream()
-    monkeypatch.setattr(rpc_client.httpx, "stream", fake.stream)
+    monkeypatch.setattr(httpx, "stream", fake.stream)
     return fake
 
 

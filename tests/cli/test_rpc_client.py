@@ -21,7 +21,7 @@ def _capture_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captured.update(url=url, json=json, timeout=timeout, trust_env=trust_env)
         return httpx.Response(200, json={"ok": True, "result": {}})
 
-    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "post", fake_post)
     return captured
 
 
@@ -88,7 +88,7 @@ def test_transport_failure_reports_delivery_state_without_replay_or_secret(
         # Exception text can contain request data and must never be rendered.
         raise error_type("sk-test-secret", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "post", fake_post)
     result = rpc_client.rpc_call(instance, "provider.set_key", {"value": "sk-test-secret"})
 
     assert not result.ok
@@ -135,7 +135,7 @@ def test_malformed_response_preserves_applied_mutation_and_reports_uncertainty(
         saved.append(kwargs["json"]["params"])
         return response
 
-    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "post", fake_post)
     result = rpc_client.rpc_call(make_instance(tmp_path), "agent.create", {"id": "demo"})
 
     assert saved == [{"id": "demo"}]
@@ -157,7 +157,7 @@ def test_server_error_code_and_message_are_preserved(
             json={"ok": False, "error": {"code": "test_code", "message": "test sentinel"}},
         )
 
-    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "post", fake_post)
     result = rpc_client.rpc_call(make_instance(tmp_path), "agent.update", {})
 
     assert not result.ok

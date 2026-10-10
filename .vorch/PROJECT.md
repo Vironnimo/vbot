@@ -21,7 +21,7 @@ cli/           <- CLI accessor. Server lifecycle locally; all other domains via 
 desktop/       <- pywebview shell. Imports nothing from the project - HTTP only.
 ```
 
-Bare map references resolve under `.vorch/domain-maps/`. Each `core/<module>/` folder's main file is its public API (soft limit: 1000 lines/file). Exceptions: `core/debug` uses an `__init__.py` facade (`debug.md`); independent utilities in `core/utils` use leaf imports.
+Bare map references resolve under `.vorch/domain-maps/`. Each `core/<module>/` folder's main file is its public API (soft limit: 1000 lines/file). Exceptions: `core/debug` uses an `__init__.py` facade (`debug.md`); independent utilities in `core/utils` use leaf imports. A package `__init__.py` that re-exports a large stack loads its exports on first access (`_EXPORT_MODULES` plus a module `__getattr__`, as in `core/channels`, `core/chat`, `core/providers` and `core/sessions`), because Python runs a package's `__init__` before any of its submodules: an eager one makes importing one constant import the whole package, which once cost `vbot --help` over a second.
 
 Split oversized source files into focused internal units behind the owning module and its public contract: a large file costs context and tokens on every inspection and edit, and cohesion alone does not justify keeping a multi-thousand-line file. Avoid arbitrary chunks, method-binding tables, or compressed formatting that merely obscure the same context.
 

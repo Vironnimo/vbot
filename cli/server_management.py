@@ -13,7 +13,6 @@ from contextlib import suppress
 from functools import partial
 from typing import Any, Literal
 
-import httpx
 import psutil  # type: ignore[import-untyped]
 
 from cli._server_target import (
@@ -533,6 +532,8 @@ def _request_cooperative_shutdown(
     timeout_seconds: float = DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS,
 ) -> bool:
     """Ask the exact listener process to enter its application shutdown path."""
+
+    import httpx
 
     control = read_server_control(instance.data_dir, instance.port)
     if control is None or control.pid != process.pid:

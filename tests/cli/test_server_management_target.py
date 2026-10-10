@@ -221,7 +221,7 @@ def test_probe_health_classifies_only_the_exact_health_answer_as_vbot(
     get: Callable[..., httpx.Response],
     expected: HealthProbeResult,
 ) -> None:
-    monkeypatch.setattr(server_management.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
 
     assert probe_health(instance) == expected
 
@@ -288,7 +288,7 @@ def test_probe_health_patiently_tells_a_busy_listener_from_an_absent_server(
         )
         for offset in ([] if listener_offset is None else [listener_offset])
     ]
-    monkeypatch.setattr(server_management.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
     monkeypatch.setattr(server_management.psutil, "net_connections", lambda kind: table)
 
     assert probe_health_patiently(instance) == expected
@@ -312,7 +312,7 @@ def test_probe_webui_classifies_the_root_answer(
     get: Callable[..., httpx.Response],
     expected: WebUIProbeResult,
 ) -> None:
-    monkeypatch.setattr(server_management.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
 
     assert probe_webui(instance) == expected
 
@@ -339,7 +339,7 @@ def test_probes_request_the_wildcard_target_directly_on_loopback_without_proxies
         captured.append({"url": url, "timeout": timeout, "trust_env": trust_env})
         return response
 
-    monkeypatch.setattr(server_management.httpx, "get", fake_get)
+    monkeypatch.setattr(httpx, "get", fake_get)
 
     probe(instance)
 

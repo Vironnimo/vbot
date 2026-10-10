@@ -12,7 +12,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, TypedDict
 
-from core.settings import SettingsValidationError, load_runtime_settings_json
+# core.settings loads lazily inside the functions that read settings.json, so
+# light callers (the CLI parser reads DEFAULT_HOST) skip its import chain.
 
 VBOT_ROOT = Path(__file__).resolve().parents[2]
 _WORKTREE_FILE = VBOT_ROOT / ".vbot-worktree"
@@ -256,6 +257,8 @@ class Config:
 
     def _load_settings_json(self) -> None:
         """Load key-value pairs, falling back to defaults for an invalid file."""
+        from core.settings import SettingsValidationError, load_runtime_settings_json
+
         try:
             data, ignored = load_runtime_settings_json(self._settings_path)
         except SettingsValidationError as exc:
@@ -376,6 +379,8 @@ def resolve_server_bind(
 
 def _load_settings_for_port(config: Config) -> dict[str, Any]:
     """Load settings.json directly so ambient environment cannot affect ports."""
+
+    from core.settings import SettingsValidationError, load_runtime_settings_json
 
     settings_path = config.data_dir / "settings.json"
     try:

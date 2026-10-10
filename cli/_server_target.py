@@ -7,13 +7,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-import httpx
 import psutil  # type: ignore[import-untyped]
 
 from core.utils.config import DEFAULT_HOST, Config, resolve_port
 from core.utils.logging import resolve_daily_log_path
+
+if TYPE_CHECKING:
+    # httpx loads on the first request, so commands that never reach a server
+    # (help, parse errors) skip its import.
+    import httpx
 
 DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5
 
@@ -140,6 +144,8 @@ def probe_health(
 ) -> HealthProbeResult:
     """Probe `/health` and classify only the exact vBot health response as vBot."""
 
+    import httpx
+
     try:
         response = httpx.get(
             _probe_url(instance, HEALTH_PATH),
@@ -179,6 +185,8 @@ def probe_health_patiently(instance: ServerInstance) -> HealthProbeResult:
 def health_result(response: httpx.Response) -> HealthProbeResult:
     """Classify one `/health` response; only the exact vBot body counts as vBot."""
 
+    import httpx
+
     if response.status_code != httpx.codes.OK:
         return HealthProbeResult(reachable=True, is_vbot=False, status_code=response.status_code)
 
@@ -200,6 +208,8 @@ def probe_webui(
     timeout_seconds: float = DEFAULT_PROBE_TIMEOUT_SECONDS,
 ) -> WebUIProbeResult:
     """Probe `/` separately from API health to classify WebUI availability."""
+
+    import httpx
 
     try:
         response = httpx.get(
