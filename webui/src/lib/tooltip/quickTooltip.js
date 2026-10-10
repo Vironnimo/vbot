@@ -43,6 +43,7 @@ function normalizeRows(rows) {
     .map((row) => ({
       label: normalizeText(row?.label),
       value: normalizeText(row?.value),
+      lead: normalizeText(row?.lead),
       mono: row?.mono === true,
       tone: ROW_TONES.has(row?.tone) ? row.tone : '',
     }))
@@ -189,7 +190,11 @@ function renderContent(element, content) {
       if (row.label) {
         list.append(textBlock('dt', 'app-tooltip__label', row.label));
       }
-      list.append(textBlock('dd', valueClass, row.value));
+      const value = textBlock('dd', valueClass, row.value);
+      if (row.lead) {
+        value.prepend(textBlock('span', 'app-tooltip__lead', row.lead));
+      }
+      list.append(value);
     }
     blocks.push(list);
   }

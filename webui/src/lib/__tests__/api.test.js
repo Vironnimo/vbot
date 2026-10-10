@@ -637,6 +637,8 @@ describe('RPC wrappers', () => {
       (o) => api.setSkillPinned('agent:main', 'deploy', true, o),
       { scope: 'agent:main', name: 'deploy', pinned: true },
     ],
+    ['skill.inventory', (o) => api.skillInventory(o), { include_usage: false }],
+    ['skill.usage', (o) => api.skillUsage(o), {}],
     [
       'skill.history',
       (o) => api.skillHistory('global', 'deploy', 50, o),

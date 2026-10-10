@@ -128,6 +128,7 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("subagents")
 _FOLLOW_UP_PLACEHOLDER = "<message>"
+_TREE_DISPLAY_LIMIT = 1_000
 
 
 def _subagent_count(count: int) -> str:
@@ -712,7 +713,7 @@ class SubAgentCoordinator:
     async def _list(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         runtime, caller = self._runtime, _caller(context)
         sessions = runtime.chat_sessions
-        tree = await sessions.run_async(descendants, sessions, caller)
+        tree = await sessions.run_async(descendants, sessions, caller, limit=_TREE_DISPLAY_LIMIT)
         subagent_id = optional_text(arguments, "id")
         if subagent_id is not None:
             selected = [link for link in tree if link.id == subagent_id]
@@ -774,7 +775,9 @@ class SubAgentCoordinator:
         sessions = runtime.chat_sessions
         subagent_id = optional_text(arguments, "id")
         if subagent_id is None:
-            tree = await sessions.run_async(descendants, sessions, caller)
+            tree = await sessions.run_async(
+                descendants, sessions, caller, limit=_TREE_DISPLAY_LIMIT
+            )
             working = [link for link in tree if is_working(runtime, link.session)]
             example = working[0].id if working else tree[0].id if tree else "<id>"
             return tool_failure(

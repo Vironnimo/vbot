@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -172,6 +172,18 @@ _DAILY = {
             ["2030-01-11T09:00", "2030-01-12T09:00"],
             id="several",
         ),
+        pytest.param(
+            {
+                "title": "Spring gap",
+                "start": "2026-03-29T02:00",
+                "end": "2026-03-29T02:15",
+                "rrule": "FREQ=DAILY;BYHOUR=2,3;BYMINUTE=0,30;COUNT=4",
+            },
+            "start",
+            "2026-03-29T03:02",
+            ["2026-03-29T02:00", "2026-03-29T03:00"],
+            id="gap-shifted-and-ordinary-occurrences-share-a-due-time",
+        ),
     ],
 )
 async def test_an_occurrence_missed_while_vbot_was_off_starts_late_while_its_window_is_open(
@@ -182,6 +194,7 @@ async def test_an_occurrence_missed_while_vbot_was_off_starts_late_while_its_win
     back_at: str,
     fired: list[str],
 ) -> None:
+    services.clock.now = min(services.clock.now, _local(event["start"]) - timedelta(days=7))
     created = services.calendar.create_event(**event)
     job = await _event_job(services, created.id, event_time)
     services.clock.now = _local(back_at)

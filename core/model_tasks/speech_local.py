@@ -25,7 +25,7 @@ import wave
 from collections.abc import Callable, Container, Generator, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager, nullcontext, suppress
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from threading import Lock, Timer
@@ -335,15 +335,24 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
 @dataclass
 class _EngineState:
     workers: BoundedWorkerPool
+    lifecycle_lock: Lock = field(default_factory=Lock)
     engine: LocalTranscriptionEngine | LocalSynthesisEngine | None = None
     key: tuple[Any, ...] | None = None
     pending: int = 0
     preparing: asyncio.Task[None] | None = None
     preparing_key: tuple[Any, ...] | None = None
+    preparation_generation: int = 0
+    retired: bool = False
+    releasing: asyncio.Task[None] | None = None
 
-    def unload(self) -> None:
-        engine, self.engine = self.engine, None
-        self.key = None
+    def unload(self, *, only_if_retired: bool = False) -> None:
+        with self.lifecycle_lock:
+            if only_if_retired and (not self.retired or self.pending != 1):
+                return
+            engine, self.engine = self.engine, None
+            self.key = None
+        # Detachment is atomic with reselection/prepare; process-tree cleanup
+        # may block, so it stays outside the lock and on the engine's worker.
         if engine is not None:
             engine.close()
 
@@ -625,6 +634,7 @@ class LocalSpeechExecutor:
             raise
         finally:
             state.pending -= 1
+            self._release_retired_when_idle(state)
         result = request.result()
         assert result is not None  # Only a cancelled request ends without a result.
         return result
@@ -668,7 +678,7 @@ class LocalSpeechExecutor:
         """
         state = self._states.get(local_id)
         definition = self._definitions.get(local_id)
-        if state is None or definition is None:
+        if state is None or definition is None or state.retired:
             return "unavailable"
         try:
             _definition, merged, key = self._request(
@@ -676,40 +686,45 @@ class LocalSpeechExecutor:
             )
         except LocalSpeechError:
             return "unavailable"
-        if state.engine is not None and state.key == key:
-            return "loaded"
-        if (
-            state.preparing is not None
-            and not state.preparing.done()
-            and state.preparing_key == key
-        ):
-            return "loading"
-        state.preparing_key = key
-        state.preparing = asyncio.get_running_loop().create_task(
-            self._prepare_in_worker(state, local_id, merged),
-            name=f"local-speech-prepare:{local_id}",
-        )
+        with state.lifecycle_lock:
+            if state.engine is not None and state.key == key:
+                return "loaded"
+            if (
+                state.preparing is not None
+                and not state.preparing.done()
+                and state.preparing_key == key
+            ):
+                return "loading"
+            state.preparing_key = key
+            state.preparing = asyncio.get_running_loop().create_task(
+                self._prepare_in_worker(state, local_id, merged, state.preparation_generation),
+                name=f"local-speech-prepare:{local_id}",
+            )
         return "loading"
 
     async def _prepare_in_worker(
-        self, state: _EngineState, local_id: str, options: dict[str, Any]
+        self, state: _EngineState, local_id: str, options: dict[str, Any], generation: int
     ) -> None:
         state.pending += 1
         try:
-            await state.workers.run(self._prepare, local_id, options)
+            await state.workers.run(self._prepare, local_id, options, generation)
         except LocalSpeechError:
             pass  # Logged by the worker; the next transcription reports it to its caller.
         except Exception:
             _LOGGER.error("Local speech preload failed (engine=%s)", local_id, exc_info=True)
         finally:
             state.pending -= 1
+            self._release_retired_when_idle(state)
 
-    def _prepare(self, local_id: str, options: dict[str, Any]) -> None:
+    def _prepare(self, local_id: str, options: dict[str, Any], generation: int) -> None:
+        state = self._states[local_id]
+        # Binding changes obsolete queued preloads, never an admitted request.
+        if state.retired or generation != state.preparation_generation:
+            return
         definition = self._definitions[local_id]
         definition, options, key = self._request(
             local_id, options, definition.descriptor.task_types[0]
         )
-        state = self._states[local_id]
         if key != state.key:
             state.unload()
         try:
@@ -777,8 +792,10 @@ class LocalSpeechExecutor:
                 progress.update("loading")
             _LOGGER.debug("Loading local %s model (engine=%s)", task, local_id)
             started = monotonic()
-            state.engine = definition.create(self._engine_options(local_id, options))
-            state.key = key
+            engine = definition.create(self._engine_options(local_id, options))
+            with state.lifecycle_lock:
+                state.engine = engine
+                state.key = key
             _LOGGER.info(
                 "Loaded local %s model (engine=%s seconds=%.1f)",
                 task,
@@ -878,6 +895,55 @@ class LocalSpeechExecutor:
                 raise
             raise failure from error
 
+    def retain_transcription_model(self, local_id: str | None) -> None:
+        """Keep the selected STT model warm and retire others after accepted work.
+
+        A Provider or cleared binding passes ``None``. This changes residency,
+        not request admission; already accepted transcriptions retain their
+        binding. TTS-capable engines keep their independent lifecycle. Loop only.
+        """
+        if self._closed:
+            return
+        for name, definition in self._definitions.items():
+            if definition.descriptor.task_types != (TASK_SPEECH_TO_TEXT,):
+                continue
+            state = self._states[name]
+            with state.lifecycle_lock:
+                if name != local_id and not state.retired:
+                    state.preparation_generation += 1
+                    state.preparing_key = None
+                state.retired = name != local_id
+            self._release_retired_when_idle(state)
+
+    def _release_retired_when_idle(self, state: _EngineState) -> None:
+        if (
+            self._closed
+            or not state.retired
+            or state.pending
+            or state.engine is None
+            or (state.releasing is not None and not state.releasing.done())
+        ):
+            return
+        state.releasing = asyncio.get_running_loop().create_task(
+            self._release_retired(state), name="local-speech-release"
+        )
+
+    async def _release_retired(self, state: _EngineState) -> None:
+        state.pending += 1
+        try:
+            await state.workers.run(self._unload_retired, state)
+        except Exception:
+            _LOGGER.error("Retired local speech model cleanup failed", exc_info=True)
+        finally:
+            state.pending -= 1
+            state.releasing = None
+            self._release_retired_when_idle(state)
+
+    def _unload_retired(self, state: _EngineState) -> None:
+        # Reselection or another accepted recording may precede worker admission.
+        # That request's completion schedules cleanup again if still needed.
+        state.unload(only_if_retired=True)
+
     def memory_status(self) -> dict[str, Any]:
         """Read all engine identities without importing ML packages or loading models."""
         return {
@@ -918,6 +984,8 @@ class LocalSpeechExecutor:
         for state in self._states.values():
             if state.preparing is not None:
                 state.preparing.cancel()
+            if state.releasing is not None:
+                state.releasing.cancel()
             state.workers.shutdown()
             state.unload()
 
@@ -944,7 +1012,12 @@ class LocalSpeechExecutor:
         # Killing a process tree blocks, so it must not run on the Event Loop.
         await asyncio.to_thread(self._waiting.close)
         await asyncio.gather(
-            *(state.preparing for state in self._states.values() if state.preparing is not None),
+            *(
+                task
+                for state in self._states.values()
+                for task in (state.preparing, state.releasing)
+                if task is not None
+            ),
             return_exceptions=True,
         )
         try:

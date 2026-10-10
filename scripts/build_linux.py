@@ -30,7 +30,7 @@ from scripts.package_build import (
     INVENTORY_NAME,
     PYTHON_VERSION,
     BuildError,
-    remove_bytecode_caches,
+    compile_bytecode,
     sign_archive,
     verify_release_source,
     write_archive,
@@ -226,8 +226,8 @@ def build(args: argparse.Namespace) -> Path:
     bootstrap = runtime / "vbot"
     shutil.copyfile(source / "scripts" / "linux" / "vbot", bootstrap)
     bootstrap.chmod(0o755)
+    compile_bytecode(version_root, runtime / "bin" / "python3")
     check_runtime(runtime)
-    remove_bytecode_caches(version_root)
     shutil.copy2(bootstrap, package / "vbot")
     manifest = write_manifest(
         version_root,

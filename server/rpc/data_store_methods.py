@@ -39,9 +39,14 @@ def _status(runtime: Any, data_dir: Path) -> JsonObject:
 
 
 async def _data_store_status(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "data_store.status")
+    _reject_unsupported(params, {"verify_search"}, "data_store.status")
+    verify_search = params.get("verify_search", False)
+    if not isinstance(verify_search, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.verify_search must be a boolean")
     try:
         runtime, data_dir = _runtime(state)
+        if verify_search:
+            await runtime.chat_sessions.run_async(runtime.chat_sessions.fts_health)
         return await _DATA_STORE_WORKERS.run(_status, runtime, data_dir)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

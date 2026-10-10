@@ -12,6 +12,7 @@ import {
   skillInstructionBody,
   skillSourceLabel,
 } from '../skillsView.js';
+import { withSkillUsage } from '../skillRecords.js';
 const rpcMock = vi.fn();
 vi.mock(
   'svelte',
@@ -191,7 +192,7 @@ async function settle() {
   }
 }
 
-let component, inventory, archived, agents, projects;
+let component, inventory, archived, agents, projects, usage;
 const onToast = vi.fn();
 const refreshState = new SvelteMap();
 function notifySkillsChanged() {
@@ -207,6 +208,7 @@ const snapshot = () => ({
 });
 function defaultRpc(method, params) {
   if (method === 'skill.inventory') return snapshot();
+  if (method === 'skill.usage') return { usage };
   if (method === 'skill.inspect')
     return {
       id: params.id,
@@ -219,6 +221,7 @@ beforeEach(() => {
   refreshState.set('token', 0);
   document.body.innerHTML = '';
   inventory = base();
+  usage = [];
   archived = [];
   agents = baseAgents();
   projects = baseProjects();
@@ -1113,9 +1116,15 @@ describe('Skills manager', () => {
       changed_by: 'human',
       changed_at: '2026-09-30T08:00:00.000000Z',
       pinned: false,
-      uses: 3,
-      last_used_at: '2026-10-01T08:00:00.000000Z',
     });
+    usage = [
+      {
+        agent_id: 'main',
+        name: 'deploy',
+        uses: 3,
+        last_used_at: '2026-10-01T08:00:00.000000Z',
+      },
+    ];
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'skill.set_pinned')
         inventory = inventory.map((item) =>
@@ -1158,7 +1167,10 @@ describe('Skills manager', () => {
     choose('bundled');
     await settle();
     expect(button('Pin teach')).toBeUndefined();
-    expect(document.querySelector('.skills-page-facts')).toBeNull();
+    expect(document.querySelector('[data-fact="created"]')).toBeNull();
+    expect(document.querySelector('[data-fact="used"]').textContent).toContain(
+      t('skills.facts.neverUsed'),
+    );
   });
 
   it('lists an editable Skill history and reverts a revision together with the later one it needs', async () => {
@@ -1622,6 +1634,58 @@ describe('Skills manager', () => {
       ),
     );
   });
+  it('shows the catalog before usage and ignores superseded usage, retaining the list on failure', async () => {
+    const pending = [];
+    rpcMock.mockImplementation(async (method, params) =>
+      method === 'skill.usage'
+        ? new Promise((resolve, reject) => pending.push({ resolve, reject }))
+        : defaultRpc(method, params),
+    );
+    await render();
+    expect(rows()).toHaveLength(4);
+    expect(calls('skill.inventory')).toEqual([{ include_usage: false }]);
+    choose('private');
+    await settle();
+    expect(document.querySelector('[data-fact="used"]')).toBeNull();
+
+    notifySkillsChanged();
+    await settle();
+    expect(pending).toHaveLength(2);
+    const use = (uses) => ({
+      usage: [
+        {
+          agent_id: 'main',
+          name: 'deploy',
+          uses,
+          last_used_at: '2026-10-01T08:00:00.000000Z',
+        },
+      ],
+    });
+    pending[0].resolve(use(99));
+    await settle();
+    expect(document.querySelector('[data-fact="used"]')).toBeNull();
+    pending[1].reject(new Error('usage-sentinel'));
+    await settle();
+    expect(document.querySelector('[role="alert"]').textContent).toContain(
+      t('skills.usageError'),
+    );
+    expect(document.querySelector('[data-fact="used"]')).toBeNull();
+    expect(button('Edit instructions').disabled).toBe(false);
+    click(button('Back to All skills'));
+    await settle();
+    expect(rows()).toHaveLength(4);
+    click(button('Retry'));
+    await settle();
+    pending[2].resolve(use(3));
+    await settle();
+    expect(calls('skill.inventory')).toHaveLength(2);
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    choose('private');
+    await settle();
+    expect(document.querySelector('[data-fact="used"]').textContent).toContain(
+      '3 sessions',
+    );
+  });
   it('keeps the inventory visible after refresh failure and supports retry', async () => {
     await render();
     rpcMock.mockImplementation(async (method) => {
@@ -1658,6 +1722,51 @@ describe('Skills manager', () => {
 });
 
 describe('skill projections', () => {
+  it('assigns use to owners and shared receivers before global packages', () => {
+    const packages = [
+      entry('owned', 'deploy', { shared_with: ['reviewer', 'receiver'] }),
+      entry('other-owner', 'deploy', { owner_id: 'reviewer' }),
+      entry('global', 'deploy', { owner_id: null }),
+      entry('bundled', 'deploy', { owner_id: null }),
+      entry('unused', 'teach', { owner_id: null }),
+    ];
+    const counted = withSkillUsage(packages, [
+      {
+        agent_id: 'main',
+        name: 'deploy',
+        uses: 2,
+        last_used_at: '2026-10-01T00:00:00Z',
+      },
+      {
+        agent_id: 'receiver',
+        name: 'deploy',
+        uses: 3,
+        last_used_at: '2026-10-03T00:00:00Z',
+      },
+      {
+        agent_id: 'reviewer',
+        name: 'deploy',
+        uses: 7,
+        last_used_at: '2026-10-02T00:00:00Z',
+      },
+      {
+        agent_id: 'outsider',
+        name: 'deploy',
+        uses: 9,
+        last_used_at: '2026-10-04T00:00:00Z',
+      },
+    ]);
+    expect(
+      counted.map(({ uses, last_used_at }) => [uses, last_used_at]),
+    ).toEqual([
+      [5, '2026-10-03T00:00:00Z'],
+      [7, '2026-10-02T00:00:00Z'],
+      [9, '2026-10-04T00:00:00Z'],
+      [9, '2026-10-04T00:00:00Z'],
+      [0, null],
+    ]);
+    expect(packages.every((item) => !('uses' in item))).toBe(true);
+  });
   it('combines owner words, scope and diagnostics without mistaking sharing for ownership', () => {
     const entries = base();
     expect(

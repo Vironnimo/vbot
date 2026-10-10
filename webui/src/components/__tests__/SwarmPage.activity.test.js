@@ -18,6 +18,12 @@ import { t } from '../../lib/i18n.js';
 
 const RESUME_PARTICIPANT = t('swarm.resumeParticipant');
 const LOAD_OLDER = t('swarm.loadOlderMessages');
+const PICK_PARTICIPANT = t('swarm.activity.empty');
+
+// The compact context figures beside the inspected participant's name.
+const contextFigures = () =>
+  document.querySelector('.activity-head .context-ring__figures')
+    ?.textContent ?? '';
 
 describe('Swarm participant Activity', () => {
   it('opens participant Activity from the Board and detaches its Run silently when leaving', async () => {
@@ -37,6 +43,11 @@ describe('Swarm participant Activity', () => {
     expect(
       document.querySelector('[role="tab"][aria-selected="true"]').textContent,
     ).toContain(t('swarm.tabs.activity'));
+    const panel = document.getElementById('swarm-run-panel-participants');
+    expect(panel.getAttribute('role')).toBe('tabpanel');
+    expect(panel.getAttribute('aria-labelledby')).toBe(
+      'swarm-run-tab-participants',
+    );
     expect(bridge.subscribeRun).toHaveBeenCalledWith('swr-a', 'run-live-test');
     bridge.emitRun('subscription-live-test', {
       type: 'model_step_usage',
@@ -44,10 +55,7 @@ describe('Swarm participant Activity', () => {
       sequence: 1,
       payload: { context_usage: { tokens: 2468, estimated: true } },
     });
-    await tick();
-    expect(document.querySelector('.context-usage').textContent).toContain(
-      '2,468',
-    );
+    await vi.waitFor(() => expect(contextFigures()).toBe('2.5K / 128K · 2%'));
     button(t('swarm.newRun')).click();
     await tick();
     expect(bridge.unsubscribeRun).toHaveBeenCalledWith(
@@ -114,7 +122,124 @@ describe('Swarm participant Activity', () => {
     );
   });
 
-  it('shows canonical context and resumes only the selected failed, cancelled or interrupted participant', async () => {
+  it('asks for a participant only while none is inspected and shows a chosen one while its History loads', async () => {
+    const { bridge } = createBridge();
+    let finish;
+    bridge.readHistory.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await openSwarm(bridge);
+    button(t('swarm.tabs.activity')).click();
+    await tick();
+    const asking = () => document.body.textContent.includes(PICK_PARTICIPANT);
+    expect(asking()).toBe(true);
+    button('Alpha').click();
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(asking()).toBe(false);
+    expect(
+      document.querySelector('.activity-head__name').textContent.trim(),
+    ).toBe('Alpha');
+    expect(
+      document.querySelector('.activity-view [role="status"]').textContent,
+    ).toBe(t('common.loading'));
+    finish({
+      messages: [
+        {
+          id: 'msg-loaded',
+          role: 'user',
+          content: 'loaded-sentinel',
+          timestamp: '2026-09-08T09:00:00+00:00',
+        },
+      ],
+    });
+    await vi.waitFor(() => expect(historyText()).toContain('loaded-sentinel'));
+    expect(document.querySelector('.activity-view [role="status"]')).toBeNull();
+    button(t('common.close')).click();
+    await tick();
+    expect(asking()).toBe(true);
+  });
+
+  it('says why a stopped participant stopped unless its timeline ends with the error', async () => {
+    const entry = (runId, id, role, fields) => ({
+      history_run_id: runId,
+      id,
+      role,
+      timestamp: '2026-09-08T09:00:00+00:00',
+      ...fields,
+    });
+    const summary = (runId, status, fields = {}) =>
+      entry(runId, `summary-${runId}`, 'run_summary', {
+        run_id: runId,
+        status,
+        ...fields,
+      });
+    const histories = {
+      'prt-a': {
+        runs: [{ run_id: 'run-net', status: 'interrupted', complete: true }],
+        messages: [
+          entry('run-net', 'out-net', 'assistant', { content: 'partial' }),
+          summary('run-net', 'interrupted', { completion_reason: 'network' }),
+        ],
+      },
+      'prt-b': {
+        runs: [{ run_id: 'run-ok', status: 'completed', complete: true }],
+        messages: [
+          entry('run-ok', 'out-ok', 'assistant', { content: 'done' }),
+          summary('run-ok', 'completed'),
+        ],
+      },
+      'prt-c': {
+        runs: [{ run_id: 'run-err', status: 'failed', complete: true }],
+        messages: [
+          entry('run-err', 'out-err', 'assistant', { content: 'trying' }),
+          entry('run-err', 'error-err', 'error', {
+            content: 'test-owned Provider failure',
+            error_kind: 'provider_error',
+          }),
+          summary('run-err', 'failed'),
+        ],
+      },
+    };
+    const { bridge } = createBridge(profile, {
+      ...structuredClone(swarm),
+      participants: [
+        // An interrupted Run leaves its participant failed.
+        ['prt-a', 'Alpha', 'failed', 'run-net'],
+        ['prt-b', 'Beta', 'failed', 'run-ok'],
+        ['prt-c', 'Gamma', 'failed', 'run-err'],
+      ].map(([id, display_name, state, lifecycle_run_id]) => ({
+        ...swarm.participants[0],
+        id,
+        display_name,
+        state,
+        lifecycle_run_id,
+        run_active: false,
+      })),
+    });
+    bridge.readHistory.mockImplementation((_swarm, participant) =>
+      Promise.resolve(structuredClone(histories[participant])),
+    );
+    await openSwarm(bridge);
+    const notice = () =>
+      document.querySelector('.activity-stop')?.textContent.trim() ?? null;
+    for (const [name, reason] of [
+      ['Alpha', t('swarm.activity.stop.network')],
+      ['Beta', t('swarm.activity.stop.notStarted')],
+    ]) {
+      button(name).click();
+      await vi.waitFor(() => expect(notice()).toBe(reason));
+    }
+    button('Gamma').click();
+    await vi.waitFor(() =>
+      expect(historyText()).toContain('test-owned Provider failure'),
+    );
+    expect(notice()).toBeNull();
+  });
+
+  it('shows the context use and resumes only the selected failed, cancelled or interrupted participant', async () => {
     const stopped = [
       ['prt-b', 'Beta', 'failed', 850],
       ['prt-c', 'Gamma', 'cancelled', 851],
@@ -128,6 +253,7 @@ describe('Swarm participant Activity', () => {
           ...swarm.participants[1],
           id,
           display_name,
+          model: 'demo/model',
           state,
           run_active: false,
         })),
@@ -148,11 +274,11 @@ describe('Swarm participant Activity', () => {
       }),
     );
     await openSwarm(bridge);
-    const context = () =>
-      document.querySelector('.context-usage')?.textContent ?? '';
     for (const [id, name, , count] of stopped) {
       button(name).click();
-      await vi.waitFor(() => expect(context()).toContain(`Context: ${count}`));
+      await vi.waitFor(() =>
+        expect(contextFigures()).toMatch(new RegExp(`^${count} / 128K`)),
+      );
       button(RESUME_PARTICIPANT).click();
       await vi.waitFor(() =>
         expect(operation).toHaveBeenCalledWith(
@@ -162,7 +288,7 @@ describe('Swarm participant Activity', () => {
       );
     }
     button('Alpha').click();
-    await vi.waitFor(() => expect(context()).toContain('120 / 128,000'));
+    await vi.waitFor(() => expect(contextFigures()).toBe('120 / 128K · <1%'));
     expect(button(RESUME_PARTICIPANT)).toBeUndefined();
   });
 
@@ -192,7 +318,7 @@ describe('Swarm participant Activity', () => {
       bridge.invalidate();
       await vi.waitFor(() =>
         expect(pending()).toMatch(
-          new RegExp(`running.*${remaining}\\s+pending`),
+          new RegExp(`running.*${remaining}\\s+pending`, 'i'),
         ),
       );
     }

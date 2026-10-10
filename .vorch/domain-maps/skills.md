@@ -127,6 +127,8 @@ Bundled skills:
 
 Scoped Project/Agent scans publish only if no invalidation or credential refresh occurred during I/O; cache access and publication are synchronized without holding the lock during scans (`test_runtime_skill_cache_races.py`). Global and scoped scans share the same global root ordering and origin rules.
 
+`SkillScan` shares source discovery and parsed metadata within one operation, never across refreshes. Inventory uses one scan for Project Source discovery, packages, dependencies, every Agent/Project projection and stale shares, so all projections use its fresh source reads rather than cached runtime registries. Scoped registry builds also reuse reads for their name sets and shared packages. See `skills/manager.md` for inventory refresh and Project-opening behavior.
+
 Manager availability evaluates each source package's own requirements, including
 same-name packages shadowed in the merged dependency pool. Cross-source Skill
 dependencies use that merged pool; required and optional missing diagnostics stay

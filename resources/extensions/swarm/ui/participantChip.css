@@ -1,74 +1,82 @@
 /* Participant chips, their avatars and the rows that hold them
-   (ParticipantChip.svelte, ParticipantAvatar.svelte). */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+   (ParticipantChip.svelte, ParticipantAvatar.svelte). An avatar is an
+   unframed tile: a participant's initials in its identity colour on a soft
+   tint of it, or a person for the user. */
+:where(
+    .swarm-page,
+    .swarm-page-modal-copy,
+    .swarm-page-communication,
+    .board-composer
+  )
   .participant-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  min-width: 32px;
-  height: 32px;
+  min-width: 28px;
+  height: 28px;
   padding-inline: 4px;
   box-sizing: border-box;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   color: var(--participant-color);
-  background: var(--bg);
-  border: 1px solid currentColor;
-  font: 600 var(--fs-label-sm) var(--font-ui);
+  background: color-mix(in srgb, var(--participant-color) 14%, transparent);
+  font: 600 var(--fs-label-sm) / 1 var(--font-ui);
   white-space: nowrap;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participant-row
-  strong {
-  color: var(--text-hi);
-  font-weight: 600;
+:where(
+    .swarm-page,
+    .swarm-page-modal-copy,
+    .swarm-page-communication,
+    .board-composer
+  )
+  .participant-avatar
+  svg {
+  width: 16px;
+  height: 16px;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .participant-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participant-row
-  button {
-  text-align: left;
+/* A chip is an outlined button; the inspected participant's chip takes the
+   selected surface. */
+.swarm-page .participant-chip.btn-tertiary {
+  justify-content: flex-start;
   min-width: 0;
   max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-.swarm-page .participant-row {
-  gap: 4px 6px;
-}
-.swarm-page .participant-chip {
   min-height: 32px;
-  padding: 3px 7px 3px 3px;
-  gap: 7px;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  background: color-mix(in srgb, var(--participant-color) 4%, var(--bg));
+  padding: 2px 10px 2px 2px;
+  gap: 8px;
+  border-color: var(--border-2);
+  color: var(--text-hi);
+  text-align: left;
 }
-.swarm-page .participant-chip[aria-pressed='true'],
-.swarm-page .participant-chip:hover {
-  background: color-mix(in srgb, var(--participant-color) 10%, var(--bg));
-  border-color: color-mix(in srgb, var(--participant-color) 24%, transparent);
+.swarm-page .participant-chip.btn-tertiary:hover {
+  border-color: var(--border-2);
+  background: var(--surface-2);
 }
-.swarm-page .participant-chip strong {
-  font-size: var(--fs-body-sm);
-  font-weight: 500;
+.swarm-page .participant-chip.btn-tertiary[aria-pressed='true'] {
+  border-color: var(--text-faint);
+  background: var(--selected-surface);
 }
 .swarm-page .participant-chip .participant-avatar {
-  min-width: 22px;
-  height: 22px;
-  padding-inline: 3px;
-  font-size: var(--fs-label-sm);
-  border: 0;
-  background: transparent;
+  min-width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
 }
+.swarm-page .participant-chip__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* An idle participant shows no dot; the details card says every state in
+   words. */
 .swarm-page .participant-status {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   flex-shrink: 0;
   border-radius: 50%;
   background: var(--text-med);
@@ -85,7 +93,8 @@
   background: var(--amber);
 }
 @media (max-width: 640px) {
-  .swarm-page .participant-chip {
+  .swarm-page .participant-chip.btn-tertiary {
     min-height: 40px;
+    padding-block: 6px;
   }
 }

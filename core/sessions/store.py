@@ -27,6 +27,7 @@ from core.sessions import (
     _store_values,
 )
 from core.sessions._archive_types import ArchiveEntryRef
+from core.sessions._store_health import SessionHealth
 from core.sessions._store_schema import session_database_spec
 from core.sessions._types import (
     JsonObject,
@@ -99,7 +100,8 @@ class SessionStore:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self._database = open_database(session_database_spec(self.path))
+        self._health = SessionHealth()
+        self._database = open_database(session_database_spec(self.path, health=self._health))
 
     @property
     def database(self) -> Database:
@@ -1031,14 +1033,13 @@ class SessionStore:
 
     def fts_health(self) -> FtsHealth:
         """Return operator-facing FTS state with explicit canonical coverage checks."""
-        try:
-            return self._read(
+        return self._health.check(
+            lambda: self._read(
                 lambda connection: _store_fts._fts_health_from_connection(
                     connection, verify_coverage=True
                 )
             )
-        except Exception as exc:
-            return FtsHealth(state="unavailable", reason=f"FTS health check failed: {exc}")
+        )
 
     def is_fts_available(self) -> bool:
         """Return cheap marker-backed availability; rebuild verification owns coverage scans."""

@@ -132,6 +132,7 @@ export {
   deleteSkill,
   inspectSkill,
   skillInventory,
+  skillUsage,
   setSkillDisabled,
   setSkillPinned,
   skillHistory,

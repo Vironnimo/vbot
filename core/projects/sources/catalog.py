@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.projects.sources._reading import SourceError, is_dir_strict, is_file_strict
 from core.projects.sources.profile import AgentProfile, SourceSelection
 from core.utils.file_status import is_link_status
+
+if TYPE_CHECKING:
+    from core.skills.skills import SkillScan
 
 type SourceKind = Literal["agents", "skills", "instructions"]
 
@@ -107,7 +110,10 @@ class DetectedSource:
 
 
 def detect_sources(
-    root: Path, *, adapters: dict[str, AgentAdapter] | None = None
+    root: Path,
+    *,
+    adapters: dict[str, AgentAdapter] | None = None,
+    skill_scan: SkillScan | None = None,
 ) -> list[DetectedSource]:
     from core.skills import scan_skill_names
 
@@ -133,7 +139,9 @@ def detect_sources(
                 agents = tuple(adapters[definition.ecosystem].scan(root))
             elif definition.kind == "skills":
                 skill_names = frozenset(
-                    name for relative in paths for name in scan_skill_names(root / relative)
+                    name
+                    for relative in paths
+                    for name in scan_skill_names(root / relative, scan=skill_scan)
                 )
             detected.append(DetectedSource(definition, agents, skill_names, tuple(paths)))
         except (OSError, SourceError) as error:

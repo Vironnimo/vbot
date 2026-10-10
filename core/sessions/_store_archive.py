@@ -52,11 +52,21 @@ from core.utils.timestamps import utc_now_timestamp
 # the Channel conversation the original address still routes.
 _CHANNEL_ROUTING_KEYS = ("source_channel_id", "platform", "platform_conv_id", "last_reply_target")
 
+# Whether the member ``s`` of the entry row ``m`` is a review fork of another member:
+# it followed that member into the entry and keeps its own Session id on restore.
+_MEMBER_REVIEW_FORK = (
+    "EXISTS (SELECT 1 FROM sessions AS p JOIN archive_entry_sessions AS pm "
+    "ON pm.session_key = p.session_key AND pm.entry_key = m.entry_key "
+    f"WHERE {_store_values._review_fork_of('s', 'p')})"
+)
 _ENTRY_COLUMNS = (
     "e.entry_key, e.entry_id, e.kind, e.state, e.subject_id, e.project_id, e.agent_id, "
     "e.owner_name, e.archived_at, e.retention_start, e.origin, e.cleanup_pending, e.facts_json, "
     "(SELECT COUNT(*) FROM archive_entry_sessions AS m WHERE m.entry_key = e.entry_key) "
-    "AS session_count"
+    "AS session_count, "
+    "(SELECT COUNT(*) FROM archive_entry_sessions AS m "
+    "JOIN sessions AS s ON s.session_key = m.session_key "
+    f"WHERE m.entry_key = e.entry_key AND {_MEMBER_REVIEW_FORK}) AS review_fork_count"
 )
 
 _NoTrees: Callable[[str], Sequence[ArchiveTree]] = lambda _entry_id: ()  # noqa: E731
@@ -175,6 +185,7 @@ def _entries(
             facts=_facts(row),
             trees=tuple(trees[int(row["entry_key"])]),
             session_count=int(row["session_count"]),
+            review_fork_count=int(row["review_fork_count"]),
         )
         for row in rows
     )
@@ -468,15 +479,6 @@ def begin_restore(
     restored = entry_by_key(connection, entry.entry_key)
     assert restored is not None
     return restored
-
-
-# Whether the member ``s`` of the entry row ``m`` is a review fork of another member:
-# it followed that member into the entry and keeps its own Session id on restore.
-_MEMBER_REVIEW_FORK = (
-    "EXISTS (SELECT 1 FROM sessions AS p JOIN archive_entry_sessions AS pm "
-    "ON pm.session_key = p.session_key AND pm.entry_key = m.entry_key "
-    f"WHERE {_store_values._review_fork_of('s', 'p')})"
-)
 
 
 def _member_rows(connection: sqlite3.Connection, entry_key: int) -> list[sqlite3.Row]:

@@ -27,15 +27,23 @@ def _capture_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return captured
 
 
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("provider.set_key", {"value": "k"}),
+        ("data_store.status", {}),
+        ("data_store.status", {"verify_search": False}),
+    ],
+)
 def test_rpc_call_posts_to_an_ipv6_safe_url_with_a_bounded_timeout_and_no_proxies(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, params: dict[str, Any]
 ) -> None:
     captured = _capture_request(monkeypatch)
 
-    rpc_client.rpc_call(make_instance(tmp_path, host="::1"), "provider.set_key", {"value": "k"})
+    rpc_client.rpc_call(make_instance(tmp_path, host="::1"), method, params)
 
     assert captured["url"] == "http://[::1]:8420/api/rpc"
-    assert captured["json"] == {"method": "provider.set_key", "params": {"value": "k"}}
+    assert captured["json"] == {"method": method, "params": params}
     assert captured["timeout"] == rpc_client.RPC_TIMEOUT_SECONDS
     # RPC bodies carry secrets (e.g. provider.set_key) over a plaintext loopback call, so the
     # transport must never honor ambient HTTP_PROXY/.netrc that could divert them off-host.
@@ -46,15 +54,19 @@ def test_rpc_call_posts_to_an_ipv6_safe_url_with_a_bounded_timeout_and_no_proxie
 
 
 @pytest.mark.parametrize(
-    "method",
-    ["model.refresh_db", "data_store.snapshot_create"],
+    ("method", "params"),
+    [
+        ("model.refresh_db", {}),
+        ("data_store.snapshot_create", {}),
+        ("data_store.status", {"verify_search": True}),
+    ],
 )
 def test_rpc_call_uses_unbounded_read_timeout_for_long_running_method(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, params: dict[str, Any]
 ) -> None:
     captured = _capture_request(monkeypatch)
 
-    rpc_client.rpc_call(make_instance(tmp_path), method, {})
+    rpc_client.rpc_call(make_instance(tmp_path), method, params)
 
     timeout = captured["timeout"]
     assert isinstance(timeout, httpx.Timeout)

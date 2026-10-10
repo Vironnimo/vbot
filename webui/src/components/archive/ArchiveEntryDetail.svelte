@@ -11,6 +11,7 @@
   import {
     archiveDeletionText,
     archiveKindLabel,
+    archiveMemberCounts,
     canRestoreAs,
     isPurgeable,
     missingScopeEntryId,
@@ -58,9 +59,16 @@
   let restoreAs = $derived(canRestoreAs(entry, restoreCheck));
   let trees = $derived(detail?.files?.trees ?? []);
   let userFolders = $derived(trees.filter((tree) => tree.user_folder));
-  let sessions = $derived(detail?.sessions ?? []);
+  // Review forks that followed a Session into the entry show as Reflections.
+  let members = $derived(detail?.sessions ?? []);
+  let memberCounts = $derived(archiveMemberCounts(entry));
+  let sessions = $derived(members.filter((member) => !member.review_fork));
+  let reflections = $derived(members.filter((member) => member.review_fork));
   let moreSessions = $derived(
-    Math.max(0, (detail?.session_count ?? 0) - sessions.length),
+    Math.max(0, memberCounts.sessions - sessions.length),
+  );
+  let moreReflections = $derived(
+    Math.max(0, memberCounts.reflections - reflections.length),
   );
   let deletionText = $derived(
     entry ? archiveDeletionText(entry, retentionDays, userFolders) : '',
@@ -76,6 +84,44 @@
     element?.focus();
   }
 </script>
+
+{#snippet memberSection(headingId, title, count, items, moreText, itemTitle)}
+  <section class="s-section" aria-labelledby={headingId}>
+    <div class="s-section__head">
+      <h3 id={headingId} class="s-section__title">{title}</h3>
+      <span class="archive-detail__count">{count}</span>
+    </div>
+    <ul class="s-group archive-items">
+      {#each items as session (session.session_id + session.agent_id + (session.project_id ?? ''))}
+        <li class="archive-item">
+          <span class="archive-item__main">
+            <span class="archive-item__title">{itemTitle(session)}</span>
+            {#if entry.kind !== 'session'}
+              <span class="archive-item__sub archive-fact__code"
+                >{formatAgentAddress(
+                  session.agent_id,
+                  session.project_id,
+                )}</span
+              >
+            {/if}
+          </span>
+          {#if session.last_activity_at || session.created_at}
+            <span class="archive-item__aside"
+              >{t('archive.detail.lastActivity', {
+                moment: formatMoment(
+                  session.last_activity_at || session.created_at,
+                ),
+              })}</span
+            >
+          {/if}
+        </li>
+      {/each}
+      {#if moreText}
+        <li class="archive-item archive-item--more">{moreText}</li>
+      {/if}
+    </ul>
+  </section>
+{/snippet}
 
 <section
   class="archive-detail"
@@ -296,47 +342,34 @@
       </section>
 
       {#if sessions.length > 0}
-        <section class="s-section" aria-labelledby="archive-detail-sessions">
-          <div class="s-section__head">
-            <h3 id="archive-detail-sessions" class="s-section__title">
-              {t('archive.detail.sessions')}
-            </h3>
-            <span class="archive-detail__count">{detail.session_count}</span>
-          </div>
-          <ul class="s-group archive-items">
-            {#each sessions as session (session.session_id + session.agent_id + (session.project_id ?? ''))}
-              <li class="archive-item">
-                <span class="archive-item__main">
-                  <span class="archive-item__title"
-                    >{session.title || session.session_id}</span
-                  >
-                  {#if entry.kind !== 'session'}
-                    <span class="archive-item__sub archive-fact__code"
-                      >{formatAgentAddress(
-                        session.agent_id,
-                        session.project_id,
-                      )}</span
-                    >
-                  {/if}
-                </span>
-                {#if session.last_activity_at || session.created_at}
-                  <span class="archive-item__aside"
-                    >{t('archive.detail.lastActivity', {
-                      moment: formatMoment(
-                        session.last_activity_at || session.created_at,
-                      ),
-                    })}</span
-                  >
-                {/if}
-              </li>
-            {/each}
-            {#if moreSessions > 0}
-              <li class="archive-item archive-item--more">
-                {t('archive.detail.moreSessions', { count: moreSessions })}
-              </li>
-            {/if}
-          </ul>
-        </section>
+        {@render memberSection(
+          'archive-detail-sessions',
+          t('archive.detail.sessions'),
+          memberCounts.sessions,
+          sessions,
+          moreSessions > 0
+            ? t('archive.detail.moreSessions', { count: moreSessions })
+            : '',
+          (session) => session.title || session.session_id,
+        )}
+      {/if}
+
+      {#if reflections.length > 0}
+        <!-- In a Session's entry every Reflection is that Session's; elsewhere
+             its title names the Session it reflected on. -->
+        {@render memberSection(
+          'archive-detail-reflections',
+          t('archive.detail.reflections'),
+          memberCounts.reflections,
+          reflections,
+          moreReflections > 0
+            ? t('archive.detail.moreReflections', { count: moreReflections })
+            : '',
+          (reflection) =>
+            entry.kind === 'session'
+              ? t('archive.detail.reflection')
+              : reflection.title || reflection.session_id,
+        )}
       {/if}
 
       {#if trees.length > 0}

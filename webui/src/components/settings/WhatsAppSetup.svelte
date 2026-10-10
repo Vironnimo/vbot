@@ -1,14 +1,21 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import { getWhatsAppStatus, setupWhatsApp, pairWhatsApp } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
   import Banner from '../ui/Banner.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
+  import { createViewVisibility } from '$lib/viewVisibility.svelte.js';
 
   // `hideWhenConnected` lets the Channel row drop a finished setup from its
   // collapsed view; errors and unfinished steps always show.
-  let { channelId, onChanged = () => {}, hideWhenConnected = false } = $props();
+  let {
+    channelId,
+    onChanged = () => {},
+    hideWhenConnected = false,
+    active = true,
+  } = $props();
+  const visibility = createViewVisibility(() => active);
   let status = $state(null);
   let error = $state('');
   let busy = $state(false);
@@ -18,9 +25,12 @@
 
   function schedule() {
     clearTimeout(timer);
-    if (!disposed && !busy) timer = setTimeout(refresh, 3000);
+    if (!disposed && visibility.visible && !busy)
+      timer = setTimeout(refresh, 3000);
   }
   async function refresh() {
+    if (!visibility.visible || busy) return;
+    clearTimeout(timer);
     const request = ++revision;
     try {
       const next = await getWhatsAppStatus(channelId);
@@ -31,7 +41,7 @@
     } catch (failure) {
       if (!disposed && request === revision) error = failure.message;
     } finally {
-      schedule();
+      if (request === revision) schedule();
     }
   }
   async function act(action, reset = false) {
@@ -63,8 +73,13 @@
     Boolean(failure) || (status !== null && !(hideWhenConnected && connected)),
   );
 
-  onMount(() => {
-    refresh();
+  $effect(() => {
+    const visible = visibility.visible;
+    untrack(() => {
+      ++revision;
+      clearTimeout(timer);
+      if (visible) void refresh();
+    });
   });
   onDestroy(() => {
     disposed = true;

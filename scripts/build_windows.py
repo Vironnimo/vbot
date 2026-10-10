@@ -24,6 +24,7 @@ from scripts.package_build import (
     INVENTORY_NAME,
     PYTHON_VERSION,
     BuildError,
+    compile_bytecode,
     remove_bytecode_caches,
     sign_archive,
     verify_release_source,
@@ -235,6 +236,7 @@ def build(args: argparse.Namespace) -> Path:
         runtime, version_root / "runtime", app_source=source, shape=args.shape, cache=runtime_cache
     )
     compile_hosts(source, version_root / "runtime", version=args.version)
+    compile_bytecode(version_root, version_root / "runtime" / "vBot.Python.exe")
     for filename in ("vBot.exe", "vBot.GUI.exe"):
         shutil.copy2(version_root / "runtime" / filename, package / filename)
     manifest = write_manifest(

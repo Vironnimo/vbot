@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -25,6 +26,7 @@ from core.database import (
 from core.database.marker import begin_maintenance, read_maintenance
 from core.database.recovery import incident_path
 from core.sessions import ChatSessionManager, SessionAddress
+from tests.cli.cli_test_support import FakeRpc, RunCli
 from tests.core.database.database_test_support import notes_spec
 
 _EXTENSION = "ext.demo.notes"
@@ -109,8 +111,8 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
     instance = _instance(tmp_path)
     calls: list[tuple[str, object]] = []
 
-    def status(resolved: ServerInstance) -> CommandResult:
-        calls.append(("status", resolved))
+    def status(resolved: ServerInstance, *, verify_search: bool = False) -> CommandResult:
+        calls.append(("status", (resolved, verify_search)))
         return CommandResult(ok=True, message="status", instance=resolved)
 
     def create(resolved: ServerInstance, reason: str) -> CommandResult:
@@ -193,7 +195,7 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
             config_backup_restore_fn=config_restore,
         ).ok
     assert calls == [
-        ("status", instance),
+        ("status", (instance, False)),
         ("create", "update"),
         ("restore", ("s-1", True, ("sessions",), False, False)),
         ("restore", ("s-1", False, (), True, False)),
@@ -206,19 +208,20 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
     ]
 
 
-def test_status_rpc_is_rendered_without_database_content(tmp_path: Path, monkeypatch) -> None:
-    instance = _instance(tmp_path)
+@pytest.mark.parametrize("verify_search", [False, True])
+def test_status_rpc_is_rendered_without_database_content(
+    rpc: FakeRpc, run_cli: RunCli, verify_search: bool
+) -> None:
+    payload = {"state": "healthy", "databases": {"sessions": {"database_id": "db-1"}}}
+    rpc.reply("data_store.status", payload)
 
-    class Payload:
-        ok = True
-        data = {"state": "healthy", "databases": {"sessions": {"database_id": "db-1"}}}
+    code, output, _stderr = run_cli(
+        "data-store", "status", *(["--verify-search"] if verify_search else []), "--output", "plain"
+    )
 
-    monkeypatch.setattr(data_store_management, "rpc_call", lambda *_args: Payload())
-
-    result = data_store_management.data_store_status(instance)
-
-    assert result.ok is True
-    assert '"database_id": "db-1"' in result.message
+    assert code == 0
+    assert json.loads(output) == payload
+    assert rpc.calls == [("data_store.status", {"verify_search": True} if verify_search else {})]
 
 
 def test_verify_reports_the_snapshot_from_its_verified_read(tmp_path: Path, monkeypatch) -> None:
@@ -313,6 +316,31 @@ def test_local_status_reports_invalid_recovery_evidence_without_changing_it(
     assert "recovery incident" in str(payload["reason"])
     assert payload["incidents"] == []
     assert evidence.read_text(encoding="utf-8") == "[]"
+
+
+def test_local_search_verification_is_opt_in_and_read_only(tmp_path: Path, monkeypatch) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    try:
+        sessions.create("agent", session_id="check").append(ChatMessage.user("stored history"))
+    finally:
+        sessions.close()
+    database_path = tmp_path / "sessions.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("INSERT INTO entries_fts(entries_fts) VALUES('delete-all')")
+    before = database_path.read_bytes()
+    _stopped_server(monkeypatch, instance)
+
+    quick = json.loads(data_store_management.data_store_status(instance).message)
+    verified = json.loads(
+        data_store_management.data_store_status(instance, verify_search=True).message
+    )
+
+    assert quick["source"] == verified["source"] == "local"
+    assert quick["databases"]["sessions"]["state"] == "healthy"
+    assert verified["databases"]["sessions"]["state"] == "degraded"
+    assert database_path.read_bytes() == before
 
 
 # A busy server runs too: it must be started again, never left stopped. The server

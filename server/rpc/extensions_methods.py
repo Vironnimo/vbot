@@ -9,11 +9,11 @@ from core.extensions import ExtensionRecord, ExtensionRegistrationIdentity, Sett
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
+from server.file_delivery import FILE_PREVIEW_WORKERS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
 from server.rpc.payloads import history_message, projected_file_urls
 from server.rpc.validation import _reject_unsupported
 

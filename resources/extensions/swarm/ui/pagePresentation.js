@@ -1,4 +1,5 @@
-import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
+import { t } from '../../../../webui/src/lib/i18n.js';
+import { modelIdParts } from '../../../../webui/src/lib/modelSelection.js';
 export const requestId = () =>
   crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 
@@ -26,14 +27,65 @@ export function participantState(participant) {
   return participant.run_active ? 'running' : participant.state;
 }
 
-export function participantDetails(participant) {
+const PARTICIPANT_STATES = {
+  idle: () => t('swarm.participant.state.idle'),
+  running: () => t('swarm.participant.state.running'),
+  failed: () => t('swarm.participant.state.failed'),
+  cancelled: () => t('swarm.participant.state.cancelled'),
+  interrupted: () => t('swarm.participant.state.interrupted'),
+};
+const STATE_TONES = {
+  running: 'warning',
+  cancelled: 'warning',
+  failed: 'danger',
+  interrupted: 'danger',
+};
+
+// The participant's state in words; a state this page does not know shows as
+// stored.
+export function participantStateLabel(participant) {
   const state = participantState(participant);
-  return [
-    participant.display_name,
-    participant.model,
-    state,
-    `${participant.pending_count ?? 0} ${t('swarm.pending')}`,
-  ].join(' · ');
+  return Object.hasOwn(PARTICIPANT_STATES, state)
+    ? PARTICIPANT_STATES[state]()
+    : String(state ?? '');
+}
+
+// A participant chip's accessible name: name, state and pending messages.
+export function participantLabel(participant) {
+  const count = participant.pending_count ?? 0;
+  return t('swarm.participant.label', {
+    name: participant.display_name,
+    state: participantStateLabel(participant),
+    pending:
+      count === 1
+        ? t('swarm.participant.pending.one')
+        : t('swarm.participant.pending', { count }),
+  });
+}
+
+// A participant's details card: its name, Model (the provider path muted, as
+// ModelId shows it), state and pending messages.
+export function participantCard(participant) {
+  const { lead, name } = modelIdParts(participant.model);
+  const count = participant.pending_count ?? 0;
+  const messages =
+    count === 0
+      ? t('swarm.participant.messages.none')
+      : count === 1
+        ? t('swarm.participant.messages.one')
+        : t('swarm.participant.messages', { count });
+  return {
+    title: participant.display_name,
+    rows: [
+      { label: t('swarm.participant.model'), lead, value: name },
+      {
+        label: t('swarm.participant.status'),
+        value: participantStateLabel(participant),
+        tone: STATE_TONES[participantState(participant)] ?? '',
+      },
+      { label: t('swarm.participant.queue'), value: messages },
+    ],
+  };
 }
 
 export const participantTotal = (profile) =>
@@ -86,26 +138,3 @@ export const canStop = (state) =>
 
 export const resumableParticipantState = (state) =>
   ['idle', 'failed', 'cancelled', 'interrupted'].includes(state);
-
-export function usageCount(value) {
-  if (!Number.isFinite(value)) return t('swarm.usage.unavailable');
-  const units = [
-    [1e9, t('swarm.usage.billion')],
-    [1e6, t('swarm.usage.million')],
-    [1e3, t('swarm.usage.thousand')],
-  ];
-  const [scale, suffix] = units.find(([scale]) => Math.abs(value) >= scale) ?? [
-    1,
-    '',
-  ];
-  const number = new Intl.NumberFormat(activeLocaleTag(), {
-    maximumFractionDigits: scale === 1 ? 0 : 1,
-  }).format(value / scale);
-  return suffix ? `${number} ${suffix}` : number;
-}
-
-// Input plus output tokens of a Statistics Totals record; its counts include
-// their estimated parts.
-export function tokensUsed(counts) {
-  return usageCount(counts?.input_tokens + counts?.output_tokens);
-}

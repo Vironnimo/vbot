@@ -116,8 +116,15 @@ Unspecified load-option names mean every option participates in cache identity.
 Each engine has its own cached model and bounded worker, serializing its loading,
 inference and unloading outside the Event Loop. Other engines remain independent:
 STT can be unloaded while TTS is busy. Changing load options replaces only that
-engine's model; switching bindings or using a Provider does not evict other models.
-Runtime shutdown closes all engines. A cancelled STT or TTS request that is still
+engine's model. After a server STT binding change, `SpeechService.transcription_binding_changed`
+passes the selected local id (or none for a Provider or removed binding) to
+`LocalSpeechExecutor.retain_transcription_model`. Unselected STT-only engines unload
+on their own worker once accepted work finishes; changing the binding never cancels
+an active transcription or load. Queued obsolete preloads are skipped, including
+after the same engine is selected again. Reselection withdraws pending cleanup;
+the currently selected engine stays warm without an idle timer. TTS-capable engines
+keep their independent residency. Leaving a UI view or disabling `preload` is not
+removal of the STT binding. Runtime shutdown closes all engines. A cancelled STT or TTS request that is still
 queued never starts (`LocalSpeechExecutor._run`); a running one starts no further
 engine call (STT: no further chunk), and its caller waits until the running call has
 finished, so the engine is never reported idle while it works. A worker child (managed

@@ -4,7 +4,9 @@ bot checks or script-only pages become failures."""
 
 from __future__ import annotations
 
+import builtins
 import json
+import threading
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -125,6 +127,16 @@ def _serve(
 async def test_page_facts_survive_main_content_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    loop_thread = threading.get_ident()
+    parser_import_threads = []
+    original_import = builtins.__import__
+
+    def import_off_loop(name, *args, **kwargs):
+        if name == "core.tools._web_fetch_html":
+            parser_import_threads.append(threading.get_ident())
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_off_loop)
     html = """<head><base href="https://example.com/docs/"><title>Reference</title></head>
     <body><nav><a href="/">Navigation</a></nav><main>
     <div class="thread-container">Thread fact</div><div id="download-container">Download fact</div>
@@ -148,6 +160,7 @@ async def test_page_facts_survive_main_content_selection(
     page = assert_success_envelope(
         await registry.dispatch(context, {"ref": main["ref"], "scope": "page"})
     )
+    assert parser_import_threads and loop_thread not in parser_import_threads
 
     for expected in (
         "Thread fact",

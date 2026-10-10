@@ -7,8 +7,9 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
+from threading import get_ident
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -683,23 +684,52 @@ async def test_history_rejects_an_unknown_cursor_or_an_oversized_page(
 
 
 @pytest.mark.asyncio
-async def test_history_includes_the_active_run_descriptor(history: _History) -> None:
+async def test_history_includes_the_active_run_descriptor(
+    history: _History, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     session = history.session()
     started = asyncio.Event()
     release = asyncio.Event()
+    image = tmp_path / "active.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
 
-    async def execute(_run: Any) -> str:
+    async def execute(run: Any) -> str:
+        run.emit(
+            "tool_call_result",
+            {"display": {"media_files": [{"path": str(image), "kind": "image"}]}},
+        )
         started.set()
         await release.wait()
         return "done"
 
     active_run = await history.state.chat_runs.start(session.address, execute)
     await started.wait()
+    loop = asyncio.get_running_loop()
+    event_loop_thread = get_ident()
+    project_message = history.state.file_delivery.project_message
+    projected = False
+
+    async def finish_run() -> None:
+        release.set()
+        await active_run.wait()
+
+    def checked_projection(value: dict[str, Any]) -> dict[str, Any]:
+        nonlocal projected
+        if value.get("media_files"):
+            assert get_ident() != event_loop_thread
+            # The Run ends while the worker projects its earlier snapshot;
+            # neither its lifecycle nor newly emitted events may enter it.
+            asyncio.run_coroutine_threadsafe(finish_run(), loop).result(timeout=1)
+            projected = True
+        return cast(dict[str, Any], project_message(value))
+
+    monkeypatch.setattr(history.state.file_delivery, "project_message", checked_projection)
     try:
         result = await history.read()
     finally:
         release.set()
         await active_run.wait()
+    assert projected
 
     descriptor = result["active_run"]
     assert descriptor["run_id"] == active_run.id
@@ -707,7 +737,10 @@ async def test_history_includes_the_active_run_descriptor(history: _History) -> 
     assert descriptor["session_id"] == "session-one"
     assert descriptor["status"] == "running"
     assert descriptor["sse_url"] == f"/api/runs/{active_run.id}/events"
-    assert [event["type"] for event in descriptor["events"]] == ["run_started"]
+    assert [event["type"] for event in descriptor["events"]] == ["run_started", "tool_call_result"]
+    assert descriptor["events"][1]["payload"]["display"]["media"][0]["url"].startswith(
+        "/api/files/"
+    )
 
 
 @pytest.mark.asyncio

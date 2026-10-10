@@ -25,6 +25,7 @@
     metadata = null,
     tts = false,
     taskSurfaceBusy = false,
+    active = true,
     onReady = () => {},
   } = $props();
   let destroyed = false;
@@ -37,6 +38,7 @@
   let previewController = null;
   const job = createLocalSetupJob({
     getTarget: () => target,
+    getActive: () => active,
     onReady: () => onReady(),
     restart: (setupTarget) =>
       restartAfterLocalSpeechSetup({ target: setupTarget }),

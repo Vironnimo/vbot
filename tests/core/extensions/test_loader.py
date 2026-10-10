@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sys
 import types
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -89,24 +90,41 @@ def test_missing_or_unreadable_roots_yield_no_records(
     assert str(root) in caplog.text
 
 
-def test_earlier_roots_shadow_bundled_copies_even_when_disabled(tmp_path: Path) -> None:
+@pytest.mark.parametrize("blocked", ["disabled", "file", "package", "entry"])
+def test_earlier_roots_shadow_bundled_copies_even_when_disabled(
+    tmp_path: Path, deny_access: Callable[[Path], None], blocked: str
+) -> None:
     data_dir, extra, bundled = tmp_path / "extensions", tmp_path / "extra", tmp_path / "bundled"
     marker = tmp_path / "marker.txt"
     write_extension(data_dir, "from_data", marker_source(marker, "from_data"))
-    write_extension(data_dir, "gated", marker_source(marker, "gated"))
+    if blocked in {"package", "entry"}:
+        gated = write_package(data_dir, "gated", marker_source(marker, "gated"))
+        denied = gated if blocked == "package" else gated / "__init__.py"
+        gated_entry = gated / "__init__.py"
+    else:
+        gated_entry = write_extension(data_dir, "gated", marker_source(marker, "gated"))
+        denied = gated_entry
     write_extension(extra, "from_extra", marker_source(marker, "from_extra"))
     write_extension(bundled, "bundled_only", marker_source(marker, "bundled_only"))
     # Bundled copies of claimed names would raise if they were ever imported.
     for name in ("from_data", "gated", "from_extra"):
         write_extension(bundled, name, _RAISES_ON_IMPORT)
 
-    registry = ExtensionRegistry.load(data_dir, [extra], disabled={"gated"}, bundled_dir=bundled)
+    if blocked != "disabled":
+        deny_access(denied)
+    registry = ExtensionRegistry.load(
+        data_dir,
+        [extra],
+        disabled={"gated"} if blocked == "disabled" else set(),
+        bundled_dir=bundled,
+    )
     fire_run_start(registry)
 
     # Exactly one copy of each name runs; disabling a name never activates another copy.
     assert marker_lines(marker) == ["from_data", "from_extra", "bundled_only"]
-    assert record(registry, "gated").status == "disabled"
-    assert record(registry, "gated").entry_path == data_dir / "gated.py"
+    assert record(registry, "gated").status == ("disabled" if blocked == "disabled" else "failed")
+    assert record(registry, "gated").entry_path == gated_entry
+    assert "gated" in (registry.installed_names() or ())
     assert record(registry, "from_extra").entry_path == extra / "from_extra.py"
     assert record(registry, "bundled_only").status == "loaded"
     overridden = {
@@ -116,7 +134,7 @@ def test_earlier_roots_shadow_bundled_copies_even_when_disabled(tmp_path: Path) 
     }
     assert overridden == {
         "from_data": (bundled / "from_data.py", str(data_dir / "from_data.py")),
-        "gated": (bundled / "gated.py", str(data_dir / "gated.py")),
+        "gated": (bundled / "gated.py", str(gated_entry)),
         "from_extra": (bundled / "from_extra.py", str(extra / "from_extra.py")),
     }
 

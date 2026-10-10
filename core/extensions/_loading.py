@@ -21,6 +21,7 @@ from core.extensions._declarations import (
     ExtensionManifest,
     ExtensionRecord,
 )
+from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("extensions")
@@ -47,6 +48,7 @@ class _DiscoveredExtension:
     name: str
     root_path: Path
     entry_path: Path
+    error: str | None = None
 
 
 def _discover_extension_paths(extensions_dir: Path) -> list[_DiscoveredExtension] | None:
@@ -54,32 +56,43 @@ def _discover_extension_paths(extensions_dir: Path) -> list[_DiscoveredExtension
 
     A missing or unreadable root proves nothing about which Extensions exist.
     """
-    if not extensions_dir.is_dir():
-        return None
-
     discovered: list[_DiscoveredExtension] = []
     try:
+        if not is_dir_strict(extensions_dir):
+            return None
         entries = list(extensions_dir.iterdir())
     except OSError as exc:
         _LOGGER.warning("Skipping unreadable Extension directory %s: %s", extensions_dir, exc)
         return None
 
     for entry in entries:
-        if entry.is_file() and entry.suffix == ".py" and entry.stem != "__init__":
-            discovered.append(_DiscoveredExtension(entry.stem, entry, entry))
+        try:
+            if is_file_strict(entry):
+                if entry.suffix == ".py" and entry.stem != "__init__":
+                    discovered.append(_DiscoveredExtension(entry.stem, entry, entry))
+                continue
+            if not is_dir_strict(entry):
+                continue
+        except OSError as exc:
+            # The root listed this name, but its kind is unavailable. Reserve
+            # both possible identities of a .py entry (module or directory),
+            # so neither an owner cleanup nor a later root can replace it.
+            names = {entry.name}
+            if entry.suffix == ".py" and entry.stem != "__init__":
+                names.add(entry.stem)
+            discovered.extend(
+                _DiscoveredExtension(name, entry, entry, str(exc)) for name in sorted(names)
+            )
             continue
-
-        if not entry.is_dir():
-            continue
-
-        init_entry = entry / "__init__.py"
-        if init_entry.is_file():
-            discovered.append(_DiscoveredExtension(entry.name, entry, init_entry))
-            continue
-
-        extension_entry = entry / "extension.py"
-        if extension_entry.is_file():
-            discovered.append(_DiscoveredExtension(entry.name, entry, extension_entry))
+        for entry_path in (entry / "__init__.py", entry / "extension.py"):
+            try:
+                found = is_file_strict(entry_path)
+            except OSError as exc:
+                discovered.append(_DiscoveredExtension(entry.name, entry, entry_path, str(exc)))
+                break
+            if found:
+                discovered.append(_DiscoveredExtension(entry.name, entry, entry_path))
+                break
 
     return sorted(discovered, key=lambda item: item.name)
 
@@ -111,8 +124,17 @@ def _register_extension(
             status="disabled",
         )
 
+    if discovered.error is not None:
+        _LOGGER.warning(
+            "Extension discovery failed (extension=%s path=%s error=%s)",
+            name,
+            discovered.entry_path,
+            discovered.error,
+        )
+        return _failed_record(discovered, f"discovery failed: {discovered.error}")
+
     manifest: ExtensionManifest | None = None
-    if discovered.root_path.is_dir():
+    if discovered.root_path != discovered.entry_path:
         try:
             manifest = _load_manifest(discovered.root_path)
         except _ManifestError as exc:

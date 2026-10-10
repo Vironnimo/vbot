@@ -378,6 +378,8 @@ async def test_install_preview_writes_and_refreshes_nothing(tmp_path: Path) -> N
             False,
         ),
         ("skill.inventory", {"scope": "global"}, "invalid_request", "", False),
+        ("skill.inventory", {"include_usage": "no"}, "invalid_request", "", False),
+        ("skill.usage", {"scope": "global"}, "invalid_request", "", False),
         ("skill.history", {"scope": "global", "limit": 0}, "invalid_request", "limit", False),
         ("skill.history", {"scope": "global", "since": 1}, "invalid_request", "since", False),
         (
@@ -670,6 +672,82 @@ async def test_inventory_adds_each_packages_skill_use(tmp_path: Path) -> None:
         (4, "2026-09-02T10:00:00.000000Z"),
         (0, None),
     ]
+    # Annotation never mutates the shared scan or a later metadata-only read.
+    assert all("uses" not in entry for entry in state.runtime.inventory["skills"])
+    usage = await rpc_result(state, "skill.usage")
+    assert usage == {
+        "usage": [
+            {
+                "agent_id": "builder",
+                "name": "deploy",
+                "uses": 2,
+                "last_used_at": "2026-09-01T10:00:00.000000Z",
+            },
+            {
+                "agent_id": "main",
+                "name": "deploy",
+                "uses": 4,
+                "last_used_at": "2026-09-02T10:00:00.000000Z",
+            },
+            {
+                "agent_id": "reviewer",
+                "name": "deploy",
+                "uses": 1,
+                "last_used_at": "2026-09-03T10:00:00.000000Z",
+            },
+        ]
+    }
+
+    async def usage_not_requested() -> dict[tuple[str, str], SkillUse]:
+        pytest.fail("metadata-only inventory must not read Statistics")
+
+    state.statistics_service.skill_usage_async = usage_not_requested
+    listed = await rpc_result(state, "skill.inventory", include_usage=False)
+    assert all("uses" not in entry for entry in listed["skills"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalidate", [False, True])
+async def test_inventory_joins_only_concurrent_reads_of_unchanged_state(
+    tmp_path: Path, invalidate: bool
+) -> None:
+    state = _state(tmp_path)
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    scans = 0
+
+    def inventory() -> JsonObject:
+        nonlocal scans
+        scans += 1
+        if scans == 1:
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(5), "test did not release the catalog scan"
+        return {"skills": [{"name": "deploy", "scan": scans}]}
+
+    state.runtime.skill_inventory = inventory
+    first = asyncio.create_task(rpc_result(state, "skill.inventory", include_usage=False))
+    readers = [first]
+    try:
+        await started.wait()
+        if invalidate:
+            state.event_bus.publish("resource_changed", {"kind": "skills"})
+        second = asyncio.create_task(rpc_result(state, "skill.inventory", include_usage=False))
+        readers.append(second)
+        await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.sleep(0)
+        assert not first.done()
+        release.set()
+        result = await second
+        assert result["skills"][0]["scan"] == (2 if invalidate else 1)
+        assert scans == (2 if invalidate else 1)
+        # A completed read is not a cache: a later visit sees hand edits too.
+        await rpc_result(state, "skill.inventory", include_usage=False)
+        assert scans == (3 if invalidate else 2)
+    finally:
+        release.set()
+        await asyncio.gather(*readers, return_exceptions=True)
 
 
 @pytest.mark.asyncio
