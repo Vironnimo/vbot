@@ -43,6 +43,23 @@ _INHERITED_CURRENT = (
     f"JOIN entries AS e ON {_store_lineage.segment_admits('e', 'l')} "
     "WHERE l.session_key IN (SELECT session_key FROM eligible)"
 )
+# The same membership for one entry ``e``: its eligible owner still shows it,
+# or a lineage segment of an eligible Session admits it. FTS hits are checked
+# this way, each by its key, instead of enumerating every current entry. Only
+# entries of the few Sessions that eligible ones inherit from
+# (``eligible_ancestors``) reach the lineage check; its ``+`` keeps that probe
+# on the owner's segments (``session_lineage_by_ancestor``) instead of one
+# index seek per eligible Session.
+_ELIGIBLE_ANCESTORS = (
+    "eligible_ancestors (session_key) AS MATERIALIZED (SELECT DISTINCT l.ancestor_key "
+    "FROM session_lineage AS l WHERE l.session_key IN (SELECT session_key FROM eligible))"
+)
+_IS_CURRENT = (
+    f"((e.session_key IN (SELECT session_key FROM eligible) AND {_store_lineage.own_current('e')}) "
+    "OR (e.session_key IN (SELECT session_key FROM eligible_ancestors) AND EXISTS ("
+    f"SELECT 1 FROM session_lineage AS l WHERE {_store_lineage.segment_admits('e', 'l')} "
+    "AND +l.session_key IN (SELECT session_key FROM eligible))))"
+)
 # The Session a hit is reported for (see the module docstring).
 _REPORTED_SESSION = (
     "COALESCE("
@@ -70,6 +87,20 @@ class _Filter:
         return (
             f"{_OWN_CURRENT}{where} UNION {_INHERITED_CURRENT}{where}",
             [*self.entry_params, *self.entry_params],
+        )
+
+    def hit_check(self) -> tuple[str, str, list[Any]]:
+        """Whether the entry ``e`` is one of :meth:`current_entries`.
+
+        Returns the ``WITH`` clause its statement starts with (bound by
+        ``eligible_params``), the predicate on ``e`` and the predicate's
+        parameters.
+        """
+        where = f"{self.entry_sql} AND " if self.entry_sql else ""
+        return (
+            f"{self.eligible_sql}, {_ELIGIBLE_ANCESTORS}",
+            f"{where}{_IS_CURRENT}",
+            [*self.entry_params],
         )
 
 
@@ -231,25 +262,29 @@ def _fts_candidates(
 
     One full ``MATCH`` scan ranks every hit, so bm25 statistics stay those of
     the whole index; rank order breaks ties by key here and by recency when
-    the candidates are checked.
+    the candidates are checked. Only the hits are checked for being current in
+    an eligible Session, each by its key, so the cost follows the hits and not
+    the size of the store.
     """
     budget = _store_values._SEARCH_CANDIDATE_LIMIT + 1
-    current_sql, current_params = search_filter.current_entries()
+    with_sql, current_sql, current_params = search_filter.hit_check()
     if order == "relevance":
         return connection.execute(
-            f"WITH {search_filter.eligible_sql}, "
+            f"WITH {with_sql}, "
             f"ranked (k, rank) AS MATERIALIZED (SELECT rowid, bm25({fts_table}) FROM {fts_table} "
-            f"WHERE {fts_table} MATCH ? AND +rowid IN (SELECT entry_key FROM ({current_sql}))) "
+            f"WHERE {fts_table} MATCH ? AND EXISTS (SELECT 1 FROM entries AS e "
+            f"WHERE e.entry_key = {fts_table}.rowid AND {current_sql})) "
             "SELECT k, rank FROM ranked ORDER BY rank, k LIMIT ?",
             (*search_filter.eligible_params, expression, *current_params, budget),
         )
     direction = "ASC" if order == "oldest" else "DESC"
     return connection.execute(
-        f"WITH {search_filter.eligible_sql} "
-        f"SELECT c.entry_key, 0.0 FROM ({current_sql}) AS c "
-        f"WHERE c.entry_key IN (SELECT rowid FROM {fts_table} WHERE {fts_table} MATCH ?) "
-        f"ORDER BY c.created_at {direction}, c.entry_key {direction} LIMIT ?",
-        (*search_filter.eligible_params, *current_params, expression, budget),
+        f"WITH {with_sql} "
+        "SELECT e.entry_key, 0.0 FROM entries AS e "
+        f"WHERE e.entry_key IN (SELECT rowid FROM {fts_table} WHERE {fts_table} MATCH ?) "
+        f"AND {current_sql} "
+        f"ORDER BY e.created_at {direction}, e.entry_key {direction} LIMIT ?",
+        (*search_filter.eligible_params, expression, *current_params, budget),
     )
 
 
