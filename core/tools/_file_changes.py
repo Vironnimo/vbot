@@ -603,7 +603,8 @@ def run_operations(
     }
     groups = [operations] if atomic else [[operation] for operation in operations]
     with ExitStack() as locks:
-        for path in sorted(all_paths, key=str):
+        # Order by the same platform path identity used by FileReadState locks.
+        for path in sorted(all_paths):
             locks.enter_context(state.lock_path(path))
         for number, group in enumerate(groups, 1):
             # Occurrences are ordered by earlier changes of the same Update only.

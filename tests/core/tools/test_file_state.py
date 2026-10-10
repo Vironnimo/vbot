@@ -67,7 +67,18 @@ def test_eviction_caps_tracked_files(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert registry.check_stale("session-1", files[2]) is None
 
 
-def test_path_locks_serialize_one_path_but_not_different_paths(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "same_name",
+    [
+        "a.txt",
+        pytest.param(
+            "A.txt", marks=pytest.mark.skipif(os.name != "nt", reason="Windows path aliases")
+        ),
+    ],
+)
+def test_path_locks_serialize_one_path_but_not_different_paths(
+    tmp_path: Path, same_name: str
+) -> None:
     registry = FileReadState()
     other_entered = threading.Event()
     same_started = threading.Event()
@@ -80,7 +91,8 @@ def test_path_locks_serialize_one_path_but_not_different_paths(tmp_path: Path) -
             entered.set()
 
     other = threading.Thread(target=enter, args=(tmp_path / "b.txt", None, other_entered))
-    same = threading.Thread(target=enter, args=(tmp_path / "a.txt", same_started, same_entered))
+    # Neither target exists yet: resolve() cannot canonicalize its on-disk casing.
+    same = threading.Thread(target=enter, args=(tmp_path / same_name, same_started, same_entered))
     with registry.lock_path(tmp_path / "a.txt"):
         other.start()
         assert other_entered.wait(timeout=1)

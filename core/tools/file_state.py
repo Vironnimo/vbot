@@ -83,7 +83,7 @@ class FileReadState:
     def __init__(self) -> None:
         self._stamps: dict[tuple[str, str], tuple[float, int]] = {}
         self._stamps_lock = threading.Lock()
-        self._path_locks: dict[str, _PathLockEntry] = {}
+        self._path_locks: dict[Path, _PathLockEntry] = {}
         self._path_locks_lock = threading.Lock()
 
     def record_read(self, session_id: str, resolved: Path) -> None:
@@ -151,7 +151,8 @@ class FileReadState:
         Entries are reference-counted and removed after the final waiter leaves,
         so a long-lived Runtime does not retain every path ever mutated.
         """
-        key = str(resolved)
+        # Path equality includes Windows case aliases, even before a file exists.
+        key = resolved
         with self._path_locks_lock:
             entry = self._path_locks.get(key)
             if entry is None:
