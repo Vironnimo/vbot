@@ -119,6 +119,12 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     )
     assert [post["text"] for post in newer["entries"]] == ["operator note"]
     assert newer["has_more"] is False and "cursor" not in newer
+    # A page revealing a post ends with it.
+    window = await operations.invoke(
+        "board.read",
+        {"swarm_id": board.swarm["id"], "before": page["entries"][-1]["sequence"] + 1},
+    )
+    assert window["entries"] == page["entries"]
     saved = await operations.invoke(
         "profiles.save", {"profile": profile["profile"], "expected_revision": 1}
     )

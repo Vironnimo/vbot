@@ -225,6 +225,7 @@ def _read_human_posts(
     cursor: str | None,
     limit: int,
     after: int | None = None,
+    before: int | None = None,
 ) -> Page:
     with db._read() as connection:
         if connection.execute("SELECT 1 FROM swarms WHERE id=?", (swarm_id,)).fetchone() is None:
@@ -245,7 +246,9 @@ def _read_human_posts(
         _discussion(connection, swarm_id, discussion_id)
         if after is not None:
             return _human_posts_after(connection, swarm_id, discussion_id, after, limit)
-        return _human_post_page(db, connection, swarm_id, discussion_id, cursor, limit)
+        return _human_post_page(
+            db, connection, swarm_id, discussion_id, cursor, limit, before_sequence=before
+        )
 
 
 def _human_rows(
@@ -355,10 +358,15 @@ def _human_post_page(
     discussion_id: str,
     cursor: str | None,
     limit: int,
+    *,
+    before_sequence: int | None = None,
 ) -> Page:
     high_water = _post_high_water(connection, swarm_id, discussion_id)
     scope = f"human:{swarm_id}:{discussion_id}"
-    if cursor:
+    if before_sequence is not None:
+        # The page ends just below a known post number; its cursor continues from there.
+        offset, high_water = 0, min(high_water, before_sequence - 1)
+    elif cursor:
         offset, frozen_high_water = db._cursor(cursor, "human_posts", scope, high_water)
         if frozen_high_water is None:
             raise SwarmStoreError("invalid_cursor")

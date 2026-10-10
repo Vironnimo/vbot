@@ -30,6 +30,46 @@ function selectDiscussion(id) {
 function boardPosts(operation, entries) {
   overrideOperations(operation, { 'board.read': () => ({ entries }) });
 }
+// Answers Board reads like the Store over `posts`, ordered by number: a
+// cited post, or a discussion's page of posts, oldest first, below a cursor
+// or post number or after a post number.
+function boardStore(posts) {
+  return (args) => {
+    if (args.message_id)
+      return {
+        entries: posts.filter(
+          (post) => `#${post.sequence}` === args.message_id,
+        ),
+        has_more: false,
+      };
+    const own = posts.filter(
+      (post) => post.discussion_id === args.discussion_id,
+    );
+    if ('after' in args) {
+      const newer = own.filter((post) => post.sequence > args.after);
+      return {
+        entries: newer.slice(0, args.limit),
+        has_more: newer.length > args.limit,
+      };
+    }
+    const below = args.cursor ?? (args.before ? args.before - 1 : Infinity);
+    const earlier = own.filter((post) => post.sequence <= below);
+    const entries = earlier.slice(-args.limit);
+    const more = earlier.length > entries.length;
+    return {
+      entries,
+      has_more: more,
+      cursor: more ? entries[0].sequence - 1 : null,
+    };
+  };
+}
+const numbers = () =>
+  [...document.querySelectorAll('.board > li')].map((item) =>
+    Number(item.dataset.postNumber),
+  );
+// The post numbers from `first` down to `last`.
+const countDown = (first, last) =>
+  Array.from({ length: first - last + 1 }, (_, index) => first - index);
 
 describe('Swarm Board posts', () => {
   it('renders Board Markdown and opens links through the host', async () => {
@@ -372,13 +412,7 @@ describe('Swarm Board posts', () => {
       newest_wiki_page_number: 2,
     });
     overrideOperations(operation, {
-      'board.read': (args) => ({
-        entries:
-          args.message_id === '#3' || args.discussion_id === 'dsc-findings'
-            ? [finding]
-            : [baseline, citing],
-        has_more: false,
-      }),
+      'board.read': boardStore([finding, baseline, citing]),
       wiki: () => ({
         title: 'Benchmarks',
         content: 'Median latency by build.',
@@ -444,6 +478,7 @@ describe('Swarm Board posts', () => {
       ).toBe(''),
     );
 
+    const reads = callsTo(operation, 'board.read').length;
     link('#3').click();
     await vi.waitFor(() =>
       expect(document.activeElement.dataset.postNumber).toBe('3'),
@@ -451,7 +486,88 @@ describe('Swarm Board posts', () => {
     expect(document.querySelector('#swarm-discussion').value).toBe(
       'dsc-findings',
     );
+    // The cited post names its discussion; its surroundings come together.
+    const findings = { discussion_id: 'dsc-findings', limit: 50 };
+    expect(callsTo(operation, 'board.read').slice(reads)).toEqual(
+      [
+        { message_id: '#3' },
+        { ...findings, before: 4 },
+        { ...findings, after: 3 },
+      ].map((bounds) => ['board.read', { swarm_id: swarm.id, ...bounds }]),
+    );
     expect(callsTo(operation, 'link.open')).toHaveLength(0);
+  });
+
+  it('reveals a post beyond the loaded pages among its neighbours and returns to the newest posts', async () => {
+    const posts = [];
+    const add = (sequence, text = `message-${sequence}`) =>
+      posts.push({
+        id: `pst-${sequence}`,
+        sequence,
+        discussion_id: 'dsc-main',
+        author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
+        text,
+      });
+    for (let sequence = 1; sequence < 200; sequence++) add(sequence);
+    add(200, 'Builds on #60.');
+    const { bridge, operation } = createBridge(undefined, {
+      ...structuredClone(swarm),
+      goal_post_sequence: 0,
+      newest_post_sequence: 200,
+    });
+    overrideOperations(operation, { 'board.read': boardStore(posts) });
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(numbers()).toEqual(countDown(200, 151)));
+    const reads = () => callsTo(operation, 'board.read');
+    const read = (bounds) => [
+      'board.read',
+      { swarm_id: swarm.id, discussion_id: 'dsc-main', limit: 50, ...bounds },
+    ];
+    const before = reads().length;
+    document.querySelector('.board a[data-swarm-reference]').click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.dataset.postNumber).toBe('60'),
+    );
+    expect(numbers()).toEqual(countDown(110, 11));
+    expect(reads().slice(before)).toEqual([
+      ['board.read', { swarm_id: swarm.id, message_id: '#60' }],
+      read({ before: 61 }),
+      read({ after: 60 }),
+    ]);
+
+    // New posts wait while the newest posts are not shown.
+    add(201);
+    const shown = reads().length;
+    const gets = callsTo(operation, 'swarms.get').length;
+    bridge.invalidate({ resource: 'posts', ids: [swarm.id], revision: 2 });
+    await vi.waitFor(() =>
+      expect(callsTo(operation, 'swarms.get').length).toBeGreaterThan(gets),
+    );
+    await settle();
+    expect(reads()).toHaveLength(shown);
+
+    button(t('swarm.board.newer')).click();
+    await vi.waitFor(() => expect(numbers()[0]).toBe(160));
+    expect(reads().at(-1)).toEqual(read({ after: 110 }));
+    button(t('swarm.board.newest')).click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.dataset.postNumber).toBe('201'),
+    );
+    expect(numbers()).toEqual(countDown(201, 152));
+    expect(reads().at(-1)).toEqual(read({}));
+    expect(button(t('swarm.board.newer'))).toBeUndefined();
+    // A post rendered again links its citations again.
+    expect(
+      document.querySelector(
+        '.board > li[data-post-number="200"] a[data-swarm-reference]',
+      )?.textContent,
+    ).toBe('#60');
+
+    add(202);
+    bridge.invalidate({ resource: 'posts', ids: [swarm.id], revision: 3 });
+    await vi.waitFor(() => expect(numbers()[0]).toBe(202));
+    expect(reads().at(-1)).toEqual(read({ after: 201 }));
   });
 });
 
