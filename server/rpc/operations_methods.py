@@ -16,6 +16,7 @@ from core.utils.log_viewer import LogViewer
 from core.utils.logging import get_logger
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
 from core.utils.workers import BoundedWorkerPool
+from server.file_delivery import FILE_PREVIEW_WORKERS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
@@ -32,7 +33,6 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.prompts")
 _PROMPT_RPC_WORKERS = BoundedWorkerPool(name="prompt-rpc", max_workers=1)
-FILE_PREVIEW_WORKERS = BoundedWorkerPool(name="file-preview", max_workers=2)
 
 
 async def _open_file_preview(state: Any, params: JsonObject) -> JsonObject:

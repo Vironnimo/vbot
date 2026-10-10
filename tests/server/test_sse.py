@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
+from threading import get_ident
 from typing import Any, cast, override
 
 import pytest
@@ -18,6 +19,7 @@ from core.performance.performance import reset_for_tests
 from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool
+from server import _streams
 from server._streams import _sse_run_events
 from server.app import create_app
 from server.file_delivery import FileDelivery
@@ -250,11 +252,26 @@ def test_sse_endpoint_replays_a_finished_run_ending_after_the_requested_sequence
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ending", ["close", "cancel", "shutdown", "already_stopping"])
-async def test_sse_stream_close_removes_run_subscriber(ending: str) -> None:
+@pytest.mark.parametrize(
+    "ending",
+    [
+        "close",
+        "cancel",
+        "projection_cancel",
+        "projection_shutdown",
+        "verification_shutdown",
+        "shutdown",
+        "already_stopping",
+    ],
+)
+async def test_sse_stream_close_removes_run_subscriber(
+    ending: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
     shutdown = asyncio.Event()
-    stream = _sse_run_events(run, shutdown_event=shutdown)
+    stream = _sse_run_events(
+        run, shutdown_event=shutdown, include_file_urls=ending == "verification_shutdown"
+    )
     if ending == "already_stopping":
         shutdown.set()
         with pytest.raises(StopAsyncIteration):
@@ -278,6 +295,32 @@ async def test_sse_stream_close_removes_run_subscriber(ending: str) -> None:
         assert "event: visible" in rendered_event
         assert run.subscriber_count == 1
         await stream.aclose()
+    elif ending in {"projection_cancel", "projection_shutdown", "verification_shutdown"}:
+        projecting = asyncio.Event()
+        release_projection = asyncio.Event()
+
+        async def paused_projection(value: Any, *args: Any, **kwargs: Any) -> Any:
+            projecting.set()
+            await release_projection.wait()
+            return [] if ending == "verification_shutdown" else value
+
+        if ending == "verification_shutdown":
+            monkeypatch.setattr(_streams.FILE_PREVIEW_WORKERS, "run", paused_projection)
+        else:
+            monkeypatch.setattr(
+                _streams, "remove_opaque_provider_metadata_async", paused_projection
+            )
+        run.emit("visible", {"url": "/api/files/token.signature"})
+        await projecting.wait()
+        if ending == "projection_cancel":
+            next_event.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await next_event
+        else:
+            shutdown.set()
+            release_projection.set()
+            with pytest.raises(StopAsyncIteration):
+                await asyncio.wait_for(next_event, timeout=1)
     elif ending == "cancel":
         next_event.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -316,7 +359,7 @@ async def test_sse_stream_emits_heartbeat_while_run_is_quiet(tmp_path: Path) -> 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("include_file_urls", [False, True])
 async def test_sse_projects_assistant_file_references_to_signed_urls(
-    tmp_path: Path, include_file_urls: bool
+    tmp_path: Path, include_file_urls: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     image = tmp_path / "sse.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
@@ -331,12 +374,35 @@ async def test_sse_projects_assistant_file_references_to_signed_urls(
         ],
     )
     run = Run(run_id="run-file", agent_id="coder", session_id="session-one")
-    run.emit(ASSISTANT_OUTPUT_EVENT, {"message": message.to_dict()})
+    run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "Here is an image"})
+    run.emit(
+        ASSISTANT_OUTPUT_EVENT,
+        {
+            "message": message.to_dict(),
+            "display": {"media_files": [{"path": str(image), "kind": "image"}]},
+        },
+    )
     delivery = FileDelivery(secret=b"sse-secret")
+    event_loop_thread = get_ident()
+    project_message = delivery.project_message
+    projection_threads: list[int] = []
+
+    def checked_projection(value: dict[str, Any]) -> dict[str, Any]:
+        if value.get("output_files") or value.get("media_files") or "content_delta" in value:
+            projection_threads.append(get_ident())
+        return project_message(value)
+
+    monkeypatch.setattr(delivery, "project_message", checked_projection)
     stream = _sse_run_events(run, file_delivery=delivery, include_file_urls=include_file_urls)
 
+    delta = await anext(stream)
     event = await anext(stream)
     await stream.aclose()
+
+    assert _parse_sse(delta)[0]["event"] == ASSISTANT_OUTPUT_DELTA_EVENT
+    assert projection_threads[0] == event_loop_thread
+    assert len(projection_threads) == 3
+    assert all(thread != event_loop_thread for thread in projection_threads[1:])
 
     assert "output_files" not in event
     assert str(image) not in event

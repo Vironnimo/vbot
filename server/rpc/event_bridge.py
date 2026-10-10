@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
+from contextlib import aclosing
 from typing import Any
 
 from core.runs import (
@@ -56,7 +57,10 @@ from server.events import (
     RUN_OUTPUT_SERVER_EVENT,
     RUN_STARTED_SERVER_EVENT,
 )
-from server.rpc.payloads import remove_opaque_provider_metadata
+from server.rpc.payloads import (
+    remove_opaque_provider_metadata,
+    remove_opaque_provider_metadata_async,
+)
 
 JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger("vbot.server.rpc.event_bridge")
@@ -232,35 +236,51 @@ async def _publish_run_events(
 ) -> None:
     # A review Run carries the Session it examines; stamping it needs no read.
     source_session_id = run.source_session_id or ""
-    async for event in run.subscribe():
-        if event.type in RUN_DELTA_EVENT_TYPES:
-            continue
-        summary = _server_event_from_run_event(
-            event,
-            file_delivery=file_delivery,
-            source_session_id=source_session_id,
-        )
-        event_bus.publish(summary["type"], summary["payload"])
-        if event.type in RUN_TERMINAL_EVENT_TYPES:
-            event_bus.publish(
-                RESOURCE_CHANGED_EVENT,
-                {"kind": RESOURCE_KIND_DEBUG_TRACES},
-            )
-            # The terminal Run event above already carries the completion
-            # facts; the scope names the Session and Run so accessors refresh
-            # only the Session list rows it can affect.
-            event_bus.publish(
-                RESOURCE_CHANGED_EVENT,
-                {
-                    "kind": RESOURCE_KIND_SESSIONS,
-                    "scope": session_resource_scope(
-                        run.project_id, run.agent_id, run.session_id, run_id=run.id
-                    ),
-                },
-            )
+    after_sequence = 0
+    while True:
+        previous_sequence = after_sequence
+        latest_sequence = run.last_sequence
+        async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
+            async for event in events:
+                if event.type in RUN_DELTA_EVENT_TYPES:
+                    after_sequence = event.sequence
+                    continue
+                summary = await _server_event_from_run_event(
+                    event,
+                    file_delivery=file_delivery,
+                    source_session_id=source_session_id,
+                )
+                event_bus.publish(summary["type"], summary["payload"])
+                after_sequence = event.sequence
+                if event.type not in RUN_TERMINAL_EVENT_TYPES:
+                    continue
+                event_bus.publish(
+                    RESOURCE_CHANGED_EVENT,
+                    {"kind": RESOURCE_KIND_DEBUG_TRACES},
+                )
+                # The terminal summary carries the completion facts; refresh
+                # only the Session list rows this Run can affect.
+                event_bus.publish(
+                    RESOURCE_CHANGED_EVENT,
+                    {
+                        "kind": RESOURCE_KIND_SESSIONS,
+                        "scope": session_resource_scope(
+                            run.project_id, run.agent_id, run.session_id, run_id=run.id
+                        ),
+                    },
+                )
+                return
+        # File projection can lag behind deltas or terminal retention compaction.
+        # Resume at the retained replay head after eviction, just as SSE does,
+        # so the terminal summary and its invalidations are never abandoned.
+        if run.last_sequence <= after_sequence or (
+            after_sequence == previous_sequence and run.last_sequence <= latest_sequence
+        ):
+            _LOGGER.warning("Run event bridge ended without a terminal event: %s", run.id)
+            return
 
 
-def _server_event_from_run_event(
+async def _server_event_from_run_event(
     event: RunEvent,
     *,
     file_delivery: Any | None = None,
@@ -283,7 +303,7 @@ def _server_event_from_run_event(
     if not event.contributes_to_agent_activity:
         payload[RUN_AGENT_ACTIVITY_FIELD] = False
     if event.type in RUN_OUTPUT_EVENT_TYPES or event.type == RUN_STARTED_EVENT:
-        payload["output"] = remove_opaque_provider_metadata(
+        payload["output"] = await remove_opaque_provider_metadata_async(
             event.payload,
             file_delivery=file_delivery,
         )
