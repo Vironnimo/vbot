@@ -868,11 +868,19 @@ def _add_data_store_parsers(
     )
     commands = data_store_parser.add_subparsers(dest="command", required=True)
 
-    _add_command_parser(
+    status_parser = _add_command_parser(
         commands,
         "status",
         DATA_STORE_HELP["status"],
         example="data-store status",
+    )
+    status_parser.add_argument(
+        "--verify-search",
+        action="store_true",
+        help=(
+            "Check the Session search indexes against the stored entries. "
+            "Omit for current status and the last coverage check; large histories take longer."
+        ),
     )
 
     snapshot_parser = commands.add_parser(
