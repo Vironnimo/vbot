@@ -63,7 +63,7 @@ def _pause_first_global_scan(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("newer_reload", ["sync", "async"])
+@pytest.mark.parametrize("newer_reload", ["sync", "async", "editor"])
 async def test_older_skill_scan_cannot_overwrite_newer_policy(
     config: Config, monkeypatch: pytest.MonkeyPatch, newer_reload: str
 ) -> None:
@@ -78,7 +78,7 @@ async def test_older_skill_scan_cannot_overwrite_newer_policy(
         if newer_reload == "sync":
             runtime.reload_skills()
         else:
-            await runtime.reload_skills_async()
+            await runtime.reload_skills_async(only_if_changed=newer_reload == "editor")
         latest = runtime.skills
         with pytest.raises(KeyError):
             latest.get(RELOADED_SKILL_NAME)
@@ -90,6 +90,38 @@ async def test_older_skill_scan_cannot_overwrite_newer_policy(
     finally:
         release.set()
         await asyncio.gather(older, return_exceptions=True)
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_unchanged_editor_scan_preserves_a_pending_explicit_reload(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    write_skill(runtime.agent_skills_dir("main"), "private", "Before fixture.")
+    previous = runtime.skills_for(None, "main")
+    entered, release = _pause_first_global_scan(runtime, monkeypatch)
+    pending = asyncio.create_task(runtime.reload_skills_async())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        path = runtime.agent_skills_dir("main") / "private" / "SKILL.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace("Before fixture", "After fixture"),
+            encoding="utf-8",
+        )
+        # The global catalog did not change, but the explicit full refresh must
+        # still invalidate the previously cached private registry.
+        await runtime.reload_skills_async(only_if_changed=True)
+        current = runtime.skills_for(None, "main")
+        assert current is not previous
+        assert current.get("private").description == "After fixture."
+        release.set()
+        await pending
+        assert runtime.skills_for(None, "main") is current
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
         await runtime.aclose()
 
 

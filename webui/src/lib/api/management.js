@@ -148,7 +148,11 @@ export function inspectSkill(id, options = {}) {
 }
 
 export function skillInventory(options = {}) {
-  return rpc('skill.inventory', {}, options);
+  return rpc('skill.inventory', { include_usage: false }, options);
+}
+
+export function skillUsage(options = {}) {
+  return rpc('skill.usage', {}, options);
 }
 
 // Turns one Skill package off or on again by its inventory id; a

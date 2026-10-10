@@ -26,6 +26,7 @@ Skill use from Statistics.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
@@ -43,7 +44,7 @@ from core.skills import (
 )
 from core.statistics import SkillUse
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 from server.events import RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
@@ -451,12 +452,17 @@ async def _skill_inspect(state: Any, params: JsonObject) -> JsonObject:
 async def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
     """Return every Skill from every source with status/share/owner annotations.
 
-    Each entry also carries ``uses`` and ``last_used_at`` from Statistics; when
-    Statistics cannot answer, the entries carry neither.
+    Usage is included by default for existing callers. Interactive catalogs can
+    omit it and request ``skill.usage`` separately, without waiting for Statistics.
     """
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "skill.inventory does not accept params")
-    inventory = cast(JsonObject, await _SKILL_READ_WORKERS.run(state.runtime.skill_inventory))
+    _reject_unknown(params, {"include_usage"}, "skill.inventory")
+    include_usage = _required_bool(params, "include_usage") if "include_usage" in params else True
+    inventory = await _inventory_read(state)
+    if not include_usage:
+        return inventory
+    # The scan is shared by concurrent readers, but usage annotations belong to
+    # this response and must not leak into a reader that omitted Statistics.
+    inventory = {**inventory, "skills": [dict(entry) for entry in inventory["skills"]]}
     try:
         usage = await statistics_service(state).skill_usage_async()
     except Exception as exc:  # Skill use only annotates the inventory.
@@ -464,6 +470,50 @@ async def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
     else:
         _annotate_usage(inventory, usage)
     return inventory
+
+
+async def _inventory_read(state: Any) -> JsonObject:
+    """Join a concurrent scan until a server event invalidates its snapshot.
+
+    Results are never cached after completion: opening the catalog again still
+    sees filesystem edits. A cancelled caller leaves other readers' scan intact.
+    """
+    sequence = state.event_bus.last_sequence
+    flight = getattr(state, "_skill_inventory_flight", None)
+    if flight is None or flight[0] != sequence or flight[1].done():
+        task = asyncio.create_task(
+            _SKILL_READ_WORKERS.run(state.runtime.skill_inventory), name="skill-inventory"
+        )
+        state._skill_inventory_flight = (sequence, task)
+
+        def finished(completed: asyncio.Task[JsonObject]) -> None:
+            current = getattr(state, "_skill_inventory_flight", None)
+            if current is not None and current[1] is completed:
+                state._skill_inventory_flight = None
+
+        task.add_done_callback(finished)
+    else:
+        task = flight[1]
+    # Inventory reads may record initial Skill history. Keep cancellation within
+    # the worker's settle-before-cancelling contract, including the last reader.
+    return cast(JsonObject, await settle_before_cancelling(task))
+
+
+async def _skill_usage(state: Any, params: JsonObject) -> JsonObject:
+    """Return Statistics' per-Agent Skill use without scanning Skill packages."""
+    _reject_unknown(params, set(), "skill.usage")
+    usage = await statistics_service(state).skill_usage_async()
+    return {
+        "usage": [
+            {
+                "agent_id": agent_id,
+                "name": name,
+                "uses": use.count,
+                "last_used_at": use.last_activated,
+            }
+            for (agent_id, name), use in sorted(usage.items())
+        ]
+    }
 
 
 def _annotate_usage(inventory: JsonObject, usage: Mapping[tuple[str, str], SkillUse]) -> None:
@@ -624,6 +674,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "skill.restore": _serialized_skill_mutation(_skill_restore),
         "skill.purge": _serialized_skill_mutation(_skill_purge),
         "skill.inventory": _skill_inventory,
+        "skill.usage": _skill_usage,
         "skill.inspect": _skill_inspect,
         "skill.set_disabled": serialized_mutation(
             _skill_set_disabled, lock_attribute="_skill_mutation_lock"

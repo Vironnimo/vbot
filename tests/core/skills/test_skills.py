@@ -13,6 +13,7 @@ from core.skills.skills import (
     SKILL_ORIGIN_BUNDLED,
     SKILL_ORIGIN_GLOBAL,
     SkillRegistry,
+    SkillScan,
     find_skill_package_dir,
     format_skill_catalog_entries,
     load_project_skill_registry,
@@ -474,6 +475,24 @@ def test_roots_load_in_order_with_origins_and_first_found_name_wins(tmp_path: Pa
         later_root_duplicate.resolve(),
     }
     assert all("Duplicate skill name 'shared' rejected" in item.warnings[-1] for item in invalid)
+
+    # Aliases can supply different fallback names and diagnostics even though
+    # their SKILL.md resolves to the same file. Equal basenames under different
+    # parents still need their own path in the invalid-frontmatter diagnostic.
+    unnamed = write_skill(tmp_path, "unnamed", "---\n- fixture\n---\nFixture body.\n")
+    scan = SkillScan()
+    for relative in ("alias-one", "alias-two", "other/alias-one"):
+        alias = tmp_path / relative
+        alias.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            alias.symlink_to(unnamed.parent, target_is_directory=True)
+        except OSError, NotImplementedError:
+            pytest.skip("Directory symlinks are unavailable")
+        fresh = SkillRegistry.load(alias)
+        reused = SkillRegistry.load(alias, scan=scan)
+        assert [skill.name for skill in reused.list_all()] == [alias.name]
+        assert reused.list_all() == fresh.list_all()
+        assert reused.diagnostics() == fresh.diagnostics()
 
 
 def test_metadata_diagnostic_is_logged_once_per_process_with_its_path(
