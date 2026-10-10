@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import io
 import json
 import os
 import sys
@@ -452,6 +454,32 @@ def test_settings_changes_are_read_after_every_kind_of_write(tmp_path: Path) -> 
 
     storage.settings_path.unlink()
     assert storage.load_settings() == {}
+
+
+def test_a_settings_file_that_cannot_be_read_keeps_the_last_loaded_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A passing read failure is no file version: it never turns into cached defaults."""
+    storage = StorageManager(tmp_path)
+    path = storage.settings_path
+    _write_raw(storage, '{"format_version": 1, "port": 8421}')
+    _age(path, seconds=120)
+    assert storage.load_settings() == {"port": 8421}
+    _write_raw(storage, '{"format_version": 1, "port": 8422}')
+    _age(path)
+    real_open = io.open
+
+    def held_by_another_program(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        # The file can still be checked, as when a backup or virus scanner holds it.
+        if isinstance(file, (str, os.PathLike)) and Path(file) == path and "r" in mode:
+            raise PermissionError(errno.EACCES, "The file is used by another process", file)
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", held_by_another_program)
+    assert storage.load_settings() == {"port": 8421}
+
+    monkeypatch.undo()
+    assert storage.load_settings() == {"port": 8422}
 
 
 def test_recently_written_settings_are_reread_even_with_an_identical_stamp(

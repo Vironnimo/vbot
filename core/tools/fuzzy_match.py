@@ -11,7 +11,7 @@ matched span.
 Strategies, in order; the first that finds any match wins (its own ambiguity is
 terminal — it does not fall through to a looser strategy):
 
-1. ``exact`` — literal substring match.
+1. ``exact`` — literal substring match that does not split a CRLF pair.
 2. ``normalized`` — match after collapsing CR/CRLF to LF and mapping a few
    visually-equivalent Unicode characters (curly quotes, non-breaking space,
    en-dash) to ASCII, on both sides. Character-level, so it also matches a
@@ -166,6 +166,13 @@ def replace_fuzzy(
             if typographic and name == "normalized"
             else matcher(content, old_string)
         )
+        # A span never starts or ends inside a CRLF pair: an old text starting
+        # with LF would leave the CR behind. The normalized step takes the pair.
+        matches = [
+            (start, end)
+            for start, end in matches
+            if not _inside_crlf(content, start) and not _inside_crlf(content, end)
+        ]
         if whole_lines:
             matches = [
                 (start, end)
@@ -520,6 +527,11 @@ def _to_line_ending(text_lf: str, file_ending: str | None) -> str:
     if file_ending is None or file_ending == "\n":
         return text_lf
     return text_lf.replace("\n", file_ending)
+
+
+def _inside_crlf(content: str, offset: int) -> bool:
+    """Whether ``offset`` falls between the CR and the LF of one line break."""
+    return 0 < offset < len(content) and content[offset - 1 : offset + 1] == "\r\n"
 
 
 def _line_number_at(content: str, offset: int) -> int:

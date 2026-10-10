@@ -116,6 +116,8 @@ class StorageManager:
         self._settings_diagnostic_signature: tuple[str, ...] | None = None
         # Usable Settings of the last loaded file version as JSON, with its stat stamp.
         self._settings_cache: tuple[tuple[int, int, int], str] | None = None
+        # The last loaded Settings as JSON, served while the file cannot be read.
+        self._settings_last_loaded: str | None = None
         self.temporary_files = TemporaryFileManager(self.data_dir)
         self._prompt_fragments = PromptFragmentStore(
             data_dir=self.data_dir,
@@ -275,7 +277,10 @@ class StorageManager:
 
         An unchanged file version is served from memory: its stat stamp (taken
         before reading) matches and the file is older than the racy window.
-        Every call returns an independent copy.
+        A file that cannot be read, such as one another program holds open, is
+        no file version: the last loaded Settings stay in use (defaults before
+        the first load) and the next call reads again. Every call returns an
+        independent copy.
         """
 
         with self._settings_lock:
@@ -284,9 +289,14 @@ class StorageManager:
             if stamp is not None and cached is not None and cached[0] == stamp:
                 return cast(dict[str, Any], json.loads(cached[1]))
             settings = self._load_usable_settings()
+            if settings is None:
+                last = self._settings_last_loaded
+                return {} if last is None else cast(dict[str, Any], json.loads(last))
+            encoded = json.dumps(settings)
+            self._settings_last_loaded = encoded
             self._settings_cache = None
             if stamp is not None and time.time_ns() - stamp[0] >= _SETTINGS_RACY_WINDOW_NS:
-                self._settings_cache = (stamp, json.dumps(settings))
+                self._settings_cache = (stamp, encoded)
             return settings
 
     def _settings_stamp(self) -> tuple[int, int, int] | None:
@@ -296,11 +306,21 @@ class StorageManager:
             return None
         return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
 
-    def _load_usable_settings(self) -> dict[str, Any]:
-        """Read and validate ``settings.json``, logging each new degradation once."""
+    def _load_usable_settings(self) -> dict[str, Any] | None:
+        """Read and validate ``settings.json``, logging each new degradation once.
+
+        Returns ``None`` when the file exists but cannot be read.
+        """
         try:
             settings, ignored = load_runtime_settings_json(self.settings_path)
         except SettingsValidationError as exc:
+            if isinstance(exc.__cause__, OSError):
+                self._warn_settings_degradation(
+                    (str(exc),),
+                    "Cannot read settings file %s; keeping the last loaded Settings: %s",
+                    exc,
+                )
+                return None
             self._warn_settings_degradation(
                 (str(exc),),
                 "Ignoring invalid settings file %s and using defaults: %s",
