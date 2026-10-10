@@ -1,11 +1,15 @@
 """Server SSE frame benchmarks.
 
-A completed Run holding the benchmark's events is replayed through the real
-``server._streams._sse_run_events`` generator, which the Run event SSE route
-streams: per event it awaits the Run subscription in a task, projects the
-payload with ``remove_opaque_provider_metadata`` (through ``FileDelivery``) and
-serializes the frame. Replaying a completed Run keeps every operation identical;
-a live subscriber runs the same per-event code.
+A Run holding the benchmark's events, followed by its terminal event, is
+replayed through the real ``server._streams._sse_run_events`` generator, which
+the Run event SSE route streams: per event it awaits the Run subscription in a
+task, projects the payload with ``remove_opaque_provider_metadata`` (through
+``FileDelivery``) and serializes the frame. Replaying keeps every operation
+identical; a live subscriber runs the same per-event code.
+
+The Run publishes its terminal event without settling: a settled Run keeps only
+its ending for replay (``FINISHED_RUN_REPLAY_LIMIT`` in ``core/runs/run.py``),
+so it would replay one frame instead of the benchmark's events.
 """
 
 from __future__ import annotations
@@ -13,7 +17,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, TOOL_CALL_RESULT_EVENT, Run
+from core.runs import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
+    RUN_COMPLETED_EVENT,
+    TOOL_CALL_RESULT_EVENT,
+    Run,
+)
 from core.tools import tool_success
 from scripts.perf_bench_suite.fixtures import AGENT_ID, TextFactory
 from scripts.perf_bench_suite.runner import BenchContext, Benchmark, Prepared
@@ -70,14 +79,15 @@ def _replay_setup(
         events = build_events()
         delivery = FileDelivery(secret=b"perf-bench-file-delivery")
 
-        async def completed_run() -> Run:
+        async def run_with_events() -> Run:
             run = Run(run_id="run-sse", agent_id=AGENT_ID, session_id="perf-session")
             for event_type, payload in events:
                 run.emit(event_type, payload)
-            run.mark_completed(None)
+            # The terminal event ends every replay; settling would drop the rest.
+            run.emit(RUN_COMPLETED_EVENT, {"status": "completed"})
             return run
 
-        run = context.run(completed_run())
+        run = context.run(run_with_events())
 
         async def frames() -> tuple[int, int]:
             count = 0
