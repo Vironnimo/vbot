@@ -53,6 +53,10 @@ export function createSwarmPageBoard(host) {
 
   let boardAtNewest = $state(true);
 
+  // Whether `posts` holds a loaded page, so an empty Board reads as empty
+  // only once its posts arrived.
+  let loaded = $state(false);
+
   let boardVersion = 0;
 
   // The full load in flight, which a read of new posts waits for.
@@ -68,7 +72,23 @@ export function createSwarmPageBoard(host) {
   // Tooltip content for "#N" and "wN" links, by "post:N" and "page:N".
   const references = new SvelteMap();
 
-  const discussionOptions = $derived(discussions);
+  // The discussion picker's options: each discussion's title, the main one
+  // named as such, with its number ("d2") beside it.
+  const discussionOptions = $derived(
+    discussions.map((discussion) => ({
+      value: discussion.id,
+      label:
+        discussion.id === host.selectedSwarm?.main_discussion_id
+          ? t('swarm.board.mainDiscussion')
+          : (discussion.title ?? discussion.name ?? discussion.id),
+      secondaryLabel:
+        discussion.sequence != null ? `d${discussion.sequence}` : '',
+    })),
+  );
+  const discussionTitle = $derived(
+    discussionOptions.find((option) => option.value === selectedDiscussion)
+      ?.label ?? '',
+  );
   const discussionParticipants = $derived(
     (host.selectedSwarm?.participants ?? []).filter((participant) =>
       participant.discussion_ids?.includes(selectedDiscussion),
@@ -138,6 +158,7 @@ export function createSwarmPageBoard(host) {
     posts = [];
     boardCursor = null;
     boardAtNewest = true;
+    loaded = false;
   }
 
   const shows = (swarm, discussionId) =>
@@ -176,15 +197,16 @@ export function createSwarmPageBoard(host) {
       if (boardLoading === load) boardLoading = null;
     }
     if (!boardCurrent(version, swarm, discussionId)) return;
-    const loaded = [...page(result)].reverse();
+    const entries = [...page(result)].reverse();
     if (cursor) {
       if (!shows(swarm, discussionId)) return;
       const oldest = posts.at(-1)?.sequence ?? Infinity;
-      posts = [...posts, ...loaded.filter((post) => post.sequence < oldest)];
+      posts = [...posts, ...entries.filter((post) => post.sequence < oldest)];
     } else {
-      posts = loaded;
+      posts = entries;
       boardShown = { swarmId: swarm.id, discussionId };
       boardAtNewest = true;
+      loaded = true;
     }
     boardCursor = result.cursor ?? null;
   }
@@ -210,6 +232,7 @@ export function createSwarmPageBoard(host) {
     boardShown = { swarmId: swarm.id, discussionId };
     boardCursor = earlier.cursor ?? null;
     boardAtNewest = !newer.has_more;
+    loaded = true;
     return true;
   }
 
@@ -597,8 +620,14 @@ export function createSwarmPageBoard(host) {
     get boardAtNewest() {
       return boardAtNewest;
     },
+    get loaded() {
+      return loaded;
+    },
     get discussionOptions() {
       return discussionOptions;
+    },
+    get discussionTitle() {
+      return discussionTitle;
     },
     get selectedDiscussion() {
       return selectedDiscussion;

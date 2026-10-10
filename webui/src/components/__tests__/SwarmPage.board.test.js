@@ -21,10 +21,14 @@ const WRITE_POST = t('swarm.board.openComposer');
 const POST = t('swarm.board.submit');
 
 const board = () => document.querySelector('.board');
-function selectDiscussion(id) {
-  const dropdown = document.getElementById('swarm-discussion');
-  dropdown.value = id;
-  dropdown.dispatchEvent(new Event('change', { bubbles: true }));
+// Picks a discussion by its title in the Board's discussion picker.
+async function selectDiscussion(title) {
+  document.getElementById('swarm-discussion').click();
+  await tick();
+  [...document.querySelectorAll('[role="option"]')]
+    .find((option) => option.textContent.trim().startsWith(title))
+    .click();
+  await tick();
 }
 // Replies to Board reads of the main discussion with the given posts.
 function boardPosts(operation, entries) {
@@ -209,13 +213,28 @@ describe('Swarm Board posts', () => {
     expect(head.textContent).not.toContain(prompt);
     expect(head.textContent).not.toContain('swr-a');
     expect(head.querySelector('.chip')).not.toBeNull();
-    expect(
-      document.querySelector('.swarm-goal-post .msg-markdown').textContent,
-    ).toContain('second line');
+    const panel = document.getElementById('swarm-run-panel-board');
+    expect(panel.getAttribute('role')).toBe('tabpanel');
+    expect(panel.getAttribute('aria-labelledby')).toBe('swarm-run-tab-board');
+    // The goal folds to its first line and opens to the whole prompt.
+    const goal = document.querySelector('.swarm-goal-post');
     expect(document.querySelectorAll('.swarm-goal-post')).toHaveLength(1);
-    expect(document.querySelector('.board-directory').textContent).toContain(
+    expect(goal.open).toBe(false);
+    expect(goal.querySelector('summary').textContent).toBe(
+      t('swarm.board.goal') + prompt.split('\n')[0].trim(),
+    );
+    expect(goal.querySelector('.msg-markdown').textContent).toContain(
+      'second line',
+    );
+    // The working directory is one line with a Copy action.
+    expect(document.querySelector('.board-directory__path').textContent).toBe(
       'C:/work',
     );
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    onTestFinished(() => vi.unstubAllGlobals());
+    button(t('swarm.board.copyDirectory')).click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('C:/work'));
     expect(document.querySelector('.post-header strong').textContent).toBe(
       'Alpha',
     );
@@ -234,6 +253,34 @@ describe('Swarm Board posts', () => {
     await tick();
     expect(document.querySelector('.swarm-identity dd').textContent).toBe(
       'swr-a',
+    );
+  });
+
+  it('calls a Board empty only once its posts arrived, with what it waits for', async () => {
+    const { bridge, operation } = createBridge();
+    let state = 'running';
+    let finish;
+    overrideOperations(operation, {
+      'swarms.get': () => ({ swarm: { ...structuredClone(swarm), state } }),
+      'board.read': () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    const empty = () => document.querySelector('.board-panel .empty-state');
+    expect(empty()).toBeNull();
+    finish({ entries: [], has_more: false });
+    await vi.waitFor(() =>
+      expect(empty()?.textContent).toContain(t('swarm.board.empty')),
+    );
+    expect(empty().textContent).toContain(t('swarm.board.emptyWorking'));
+    state = 'needs_attention';
+    bridge.invalidate();
+    await vi.waitFor(() =>
+      expect(empty().textContent).toContain(t('swarm.board.emptyAttention')),
     );
   });
 
@@ -479,8 +526,8 @@ describe('Swarm Board posts', () => {
     await vi.waitFor(() =>
       expect(document.activeElement.dataset.postNumber).toBe('3'),
     );
-    expect(document.querySelector('#swarm-discussion').value).toBe(
-      'dsc-findings',
+    expect(document.querySelector('#swarm-discussion').textContent).toContain(
+      'Findings',
     );
     // The cited post names its discussion; its surroundings come together.
     const findings = { discussion_id: 'dsc-findings', limit: 50 };
@@ -583,6 +630,40 @@ describe('Swarm Board posts', () => {
 });
 
 describe('Swarm Board discussions', () => {
+  it('names discussions by title and number in the picker', async () => {
+    const { bridge, operation } = createBridge();
+    overrideOperations(operation, {
+      'board.list': () => ({
+        entries: [
+          { id: 'dsc-main', sequence: 1, title: 'Main', member_count: 2 },
+          { id: 'dsc-findings', sequence: 2, title: 'Findings' },
+        ],
+      }),
+    });
+    await render(bridge);
+    button('Investigate').click();
+    const picker = () => document.getElementById('swarm-discussion');
+    await vi.waitFor(() =>
+      expect(picker()?.textContent).toContain('Main discussion'),
+    );
+    expect(picker().getAttribute('aria-label')).toBe(
+      t('swarm.board.discussionPicker', { title: 'Main discussion' }),
+    );
+    picker().click();
+    await tick();
+    expect(
+      [...document.querySelectorAll('[role="option"]')].map((option) => [
+        option.querySelector('.searchable-dropdown__option-label').textContent,
+        option
+          .querySelector('.searchable-dropdown__option-meta')
+          .textContent.trim(),
+      ]),
+    ).toEqual([
+      ['Main discussion', 'd1'],
+      ['Findings', 'd2'],
+    ]);
+  });
+
   it('reads a newly selected discussion without posting and ignores a late previous read', async () => {
     const { bridge, operation } = createBridge();
     let finishMain;
@@ -605,7 +686,7 @@ describe('Swarm Board discussions', () => {
     await render(bridge);
     button('Investigate').click();
     await vi.waitFor(() => expect(finishMain).toBeTypeOf('function'));
-    selectDiscussion('dsc-findings');
+    await selectDiscussion('Findings');
     await vi.waitFor(() =>
       expect(board().textContent).toContain('new-discussion-sentinel'),
     );
@@ -690,16 +771,19 @@ describe('Swarm Board discussions', () => {
       discussion_id: 'dsc-unlisted',
       limit: 50,
     });
-    expect(
-      [...document.querySelectorAll('select')].some(
-        (select) => select.value === 'dsc-unlisted',
-      ),
-    ).toBe(true);
+    const picker = document.getElementById('swarm-discussion');
+    expect(picker.textContent).toContain('topic-sentinel');
+    // Further discussions load from the picker's footer, without repeating
+    // the one already listed.
+    picker.click();
+    await tick();
     const moreDiscussions = t('swarm.board.moreDiscussions');
     button(moreDiscussions).click();
     await vi.waitFor(() => expect(button(moreDiscussions)).toBeUndefined());
     expect(
-      document.querySelectorAll('option[value="dsc-unlisted"]'),
+      [...document.querySelectorAll('[role="option"]')].filter((option) =>
+        option.textContent.includes('topic-sentinel'),
+      ),
     ).toHaveLength(1);
   });
 
@@ -768,7 +852,7 @@ describe('Swarm Board discussions', () => {
       ['Pending', '3 messages'],
       ['Last error', 'Provider quota exhausted'],
     ]);
-    selectDiscussion('dsc-findings');
+    await selectDiscussion('Findings');
     await vi.waitFor(() => expect(names()).toEqual(['Beta']));
     participants[0].discussion_ids.push('dsc-findings');
     bridge.invalidate();
@@ -780,7 +864,7 @@ describe('Swarm Board discussions', () => {
     bridge.invalidate();
     await vi.waitFor(() => expect(names()).toEqual([]));
     expect(document.querySelector('.participant-pane .muted')).not.toBeNull();
-    selectDiscussion('dsc-main');
+    await selectDiscussion('Main discussion');
     await vi.waitFor(() => expect(names()).toEqual(['Alpha', 'Beta']));
   });
 });

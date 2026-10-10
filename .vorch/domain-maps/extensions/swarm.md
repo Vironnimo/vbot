@@ -655,8 +655,15 @@ host-provided timezone with the WebUI's shared cached formatter
 Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
 stable across page remounts (`SwarmPage.board.test.js`) and does not change saved posts.
-The header shows the snapshot Swarm name and state. The Board holds the single
-collapsible user request and working directory. Participant chips are outlined
+The header shows the snapshot Swarm name and state. The Board's toolbar is one
+row: the discussion picker (a searchable dropdown of the discussions' titles with
+their numbers `dN`, the main discussion named "Main discussion", and "Load more
+discussions" in its footer) and Write post. Below it a framed Goal card folds the
+user request to its first line beside the working directory, which stays on one
+line (the path gives way before its last segment; the tooltip holds it whole) with
+a Copy action. An empty Board says "No posts yet" only once its posts arrived,
+adding that participants are reading the goal while the Run works, or pointing to
+Resume when the Run needs attention. Participant chips are outlined
 buttons with an unframed avatar (initials on a soft tint of the identity color),
 the name and, unless the participant is idle, a state dot. A chip's accessible
 name gives name, state and pending messages; its tooltip is a details card with the
