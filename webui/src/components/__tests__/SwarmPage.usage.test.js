@@ -15,14 +15,22 @@ import {
 import { t } from '../../lib/i18n.js';
 
 const USAGE = t('swarm.tabs.usage');
-const UNAVAILABLE = t('swarm.usage.unavailable');
+const DASH = '—';
 
 const summary = () =>
   [...document.querySelectorAll('.usage-summary dd')].map((el) =>
     el.textContent.trim(),
   );
-const tableRows = () => [...document.querySelectorAll('.table-wrap tbody tr')];
-const cells = (row) => [...row.cells].map((cell) => cell.textContent.trim());
+const tableRows = () => [...document.querySelectorAll('.usage-table tbody tr')];
+// A row's participant name (also the one a later Model row keeps for screen
+// readers), Model, tokens, tool calls and Runs.
+const cells = (row) => {
+  const [participant, ...rest] = row.cells;
+  return [
+    participant.querySelector('.usage-participant__name').textContent.trim(),
+    ...rest.map((cell) => cell.textContent.trim()),
+  ];
+};
 
 async function openUsage(bridge) {
   await openSwarm(bridge);
@@ -51,6 +59,7 @@ function uniformReport(value, participantId = null) {
   return {
     participant_id: participantId,
     activity: {
+      runs: { total: value },
       totals: counts,
       models: [{ model: 'demo/model', runs: value, ...counts }],
       tool_calls: value,
@@ -61,13 +70,21 @@ function uniformReport(value, participantId = null) {
 describe('Swarm Usage', () => {
   it('renders canonical per-participant Model usage and tool-call totals', async () => {
     const { bridge, operation } = createBridge();
+    editUsage(operation, (usage) => {
+      usage.activity.runs = { total: 2, completed: 2 };
+    });
     await openUsage(bridge);
-    expect(summary()).toEqual(['65', '4']);
+    const panel = document.querySelector('#swarm-run-panel-usage');
+    expect(panel.getAttribute('role')).toBe('tabpanel');
+    expect(panel.getAttribute('aria-labelledby')).toBe('swarm-run-tab-usage');
+    // The tab's name is not repeated, and the Swarm's id is not part of it.
+    expect(panel.querySelector('h2, h3')).toBeNull();
+    expect(panel.textContent).not.toContain('swr-a');
+    expect(summary()).toEqual(['65', '4', '2']);
     expect(tableRows().map(cells)).toEqual([
       ['Alpha', 'demo/model', '65', '4', '1'],
       ['Beta', 'demo/fallback', '65', '0', '1'],
     ]);
-    expect(document.body.textContent).toContain(t('swarm.usage.toolCalls'));
     expect(operation).toHaveBeenCalledWith('swarms.usage', {
       swarm_id: 'swr-a',
     });
@@ -89,24 +106,20 @@ describe('Swarm Usage', () => {
     const rows = tableRows();
     expect(rows.map(cells)).toEqual([
       ['Alpha', 'demo/model', '65', '4', '1'],
-      ['demo/second', '65', '1'],
-      ['Beta', 'demo/fallback', UNAVAILABLE, '7', UNAVAILABLE],
+      ['Alpha', 'demo/second', '65', '', '1'],
+      ['Beta', 'demo/fallback', DASH, '7', DASH],
     ]);
-    expect(rows[0].cells[0].rowSpan).toBe(2);
-    expect(rows[0].cells[3].rowSpan).toBe(2);
+    // Only the participant's first row shows its name.
+    expect(
+      rows.map((row) =>
+        Boolean(row.querySelector('.usage-participant__name--repeat')),
+      ),
+    ).toEqual([false, true, false]);
   });
 
-  it('formats Usage counts consistently across the summary and participant rows', async () => {
-    const formats = [
-      [0, '0'],
-      [999, '999'],
-      [1000, '1 k'],
-      [12523, '12.5 k'],
-      [1000000, '1 mio'],
-      [11512523, '11.5 mio'],
-      [1250000000, '1.3 mrd'],
-    ];
-    const participants = formats.map(([value]) => ({
+  it('shows token counts compact with the exact count on focus and other counts in full', async () => {
+    const values = [0, 999, 12523, 11512523, 1250000000];
+    const participants = values.map((value) => ({
       ...swarm.participants[0],
       id: `prt-${value}`,
       display_name: `Peer ${value}`,
@@ -119,33 +132,39 @@ describe('Swarm Usage', () => {
       'swarms.usage': () => ({
         usage: {
           ...uniformReport(12523),
-          participants: formats.map(([value]) =>
+          participants: values.map((value) =>
             uniformReport(value, `prt-${value}`),
           ),
         },
       }),
     });
     await openUsage(bridge);
-    expect(summary()).toEqual(['12.5 k', '12.5 k']);
-    expect(tableRows().map((row) => cells(row).slice(2))).toEqual(
-      formats.map(([, expected]) => [expected, expected, expected]),
+    expect(summary()).toEqual(['12.5K', '12,523', '12,523']);
+    expect(tableRows().map((row) => cells(row).slice(2))).toEqual([
+      ['0', '0', '0'],
+      ['999', '999', '999'],
+      ['12.5K', '12,523', '12,523'],
+      ['11.5M', '11,512,523', '11,512,523'],
+      ['1.3B', '1,250,000,000', '1,250,000,000'],
+    ]);
+    document.querySelector('.usage-summary dd [tabindex="0"]').focus();
+    await vi.waitFor(() =>
+      expect(document.querySelector('#app-tooltip')?.textContent).toBe(
+        '12,523',
+      ),
     );
   });
 
-  it('preserves unavailable totals and tool counts', async () => {
+  it('marks unknown totals and counts with a dash', async () => {
     const { bridge, operation } = createBridge();
     editUsage(operation, (usage) => {
       for (const report of [usage, ...usage.participants])
         report.activity = null;
     });
     await openUsage(bridge);
-    expect(summary()).toEqual([UNAVAILABLE, UNAVAILABLE]);
+    expect(summary()).toEqual([DASH, DASH, DASH]);
     for (const row of tableRows())
-      expect(cells(row).slice(2)).toEqual([
-        UNAVAILABLE,
-        UNAVAILABLE,
-        UNAVAILABLE,
-      ]);
+      expect(cells(row).slice(2)).toEqual([DASH, DASH, DASH]);
   });
 });
 

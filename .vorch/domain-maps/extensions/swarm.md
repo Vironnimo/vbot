@@ -645,6 +645,27 @@ page in flight, and one dropped by a newer full load is covered or replaced by
 it, because that load started after the change.
 Evidence: `SwarmPage.activity.test.js`, `SwarmPage.board.test.js`,
 `SwarmPage.usage.test.js` and `test_swarm_store_board.py`.
+The Activity tab lists the Run's participants as the Board's chips, the inspected
+one pressed; until one is chosen, and only once the participants are loaded, it
+asks to choose one. A chosen participant's header (avatar, name, the shared
+context ring with its figures, Resume participant when resumable, close) shows at
+once, with a loading banner until its History arrives, and sticks to the top of
+the page's scroller while the timeline scrolls (its `top` offsets the scroller's
+`--page-inset-top`); in an Activity narrower than 520px Resume participant moves
+to a second row. A participant's Activity opens at its newest entries.
+Below the timeline a banner says why a failed or interrupted participant
+stopped when its timeline does not (`stopReason` in `pageActivity.svelte.js`).
+The lifecycle Run's History status decides, not the participant state: core
+reports an interrupted Run to its owner as an error, so a participant whose Run
+lost the Provider connection is `failed`. An interrupted Run names its summary's
+completion reason (network, timeout, provider, internal, shutdown, process
+restart); a failed Run gets a generic line unless its error entry ends the
+timeline; a lifecycle Run that ended otherwise means the next Run could not
+start (a failed Resume admission keeps the old lifecycle Run and records no
+error, so after an earlier failed Run the banner shows that Run's reason). The
+Swarm keeps no participant error text: a `last_error` would need the error or
+completion reason in the Extension run-finished callback, a stored column and
+its reset when the next Run starts (`SwarmPage.activity.test.js`).
 
 Board reads retain each post's saved UTC timestamp. The page formats it in the
 host-provided timezone with the WebUI's shared cached formatter
@@ -687,16 +708,21 @@ more posts near the view, and scroll anchoring keeps the view in place when
 posts render or earlier pages load (checked in Chrome, 2026-10-10). Queries for
 roles or accessible names over many loaded posts force their layout: a Playwright
 `getByRole` over 809 posts took 3.6 s instead of 0.2 s.
-Post backgrounds and left borders share the stable author color. The Swarm id
-stays under Usage (`SwarmPage.board.test.js`, `test_swarm_store_board.py`).
-Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
-and at most one locale-formatted decimal (`SwarmPage.usage.test.js`).
-The Usage page shows input plus output tokens, estimated parts included, as
-"Tokens used" at total and Model-row scope; the group usage report keeps the
-estimated parts as separate fields (`statistics/group-usage.md`). Tool Calls come
-from each participant's report activity and span its Model rows once, including
-participants without Model usage (`pageUsage.svelte.js`, `RunUsage.svelte`,
-`SwarmPage.usage.test.js`).
+Post backgrounds and left borders share the stable author color
+(`SwarmPage.board.test.js`, `test_swarm_store_board.py`).
+The Usage tab shows the Run's tokens used, tool calls and Runs as Statistics-style
+tiles, then a `DataTable` with one row per participant and Model. Tokens used are
+input plus output tokens, estimated parts included; the group usage report keeps
+the estimated parts as separate fields (`statistics/group-usage.md`). Token counts
+use Statistics' compact `formatTokens` with the exact count on hover or focus;
+tool calls and Runs are exact, and unknown counts show a dash. The table keeps the
+Run's participant order and does not sort, so a participant's Model rows stay
+together: only the first shows its name (later rows keep it for screen readers)
+and its tool calls, which come from its report activity, not from a Model. A
+participant without Model usage gets one row with its configured Model. In a
+Usage tab narrower than 520px the Model moves below the participant's name, so no
+column is cut off. Usage has no heading and leaves out the Swarm id
+(`pageUsage.svelte.js`, `RunUsage.svelte`, `SwarmPage.usage.test.js`).
 
 Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the
