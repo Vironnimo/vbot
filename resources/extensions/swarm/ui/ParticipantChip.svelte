@@ -12,10 +12,8 @@
   // A participant of the Board's discussion or of the Activity list: its
   // avatar, name and, unless it is idle, a state dot. Its tooltip is the
   // participant's details card. `selected` marks the inspected participant;
-  // undefined omits the pressed state. `context` is the participant's context
-  // use as display text, when the caller knows it. `onInspect` receives the
-  // participant.
-  let { participant, selected = undefined, context = '', onInspect } = $props();
+  // undefined omits the pressed state. `onInspect` receives the participant.
+  let { participant, selected = undefined, onInspect } = $props();
 
   let state = $derived(participantState(participant));
 </script>
@@ -24,7 +22,7 @@
   variant="tertiary"
   class="participant-chip"
   style={`--participant-color: ${participantColor(participant.id)}`}
-  tooltip={() => participantCard(participant, { context })}
+  tooltip={() => participantCard(participant)}
   ariaLabel={participantLabel(participant)}
   aria-pressed={selected}
   onClick={() => onInspect(participant)}

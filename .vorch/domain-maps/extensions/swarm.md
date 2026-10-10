@@ -691,9 +691,8 @@ Resume when the Run needs attention. Participant chips are outlined
 buttons with an unframed avatar (initials on a soft tint of the identity color),
 the name and, unless the participant is idle, a state dot. A chip's accessible
 name gives name, state and pending messages; its tooltip is a details card with the
-Model (provider path muted), state, pending messages and context use when the
-caller passes it (`context`); participant records carry no failure reason, which
-Activity shows from History
+Model (provider path muted), state and pending messages; participant records carry
+neither context use nor a failure reason, which Activity shows from History
 (`ParticipantChip.svelte`, `participantCard` in `pagePresentation.js`). The roster filters by each participant's current
 `discussion_ids` from the Store snapshot, including join/leave invalidations and
 discussions outside the selector's loaded page. Being addressed does not join a peer.
