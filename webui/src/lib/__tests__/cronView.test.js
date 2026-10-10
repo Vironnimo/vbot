@@ -170,6 +170,28 @@ describe('cron form payloads and history projection', () => {
     expect(cronFormFingerprint(form)).not.toBe(baseline);
   });
 
+  it('treats a draft differing from the saved job only by payload normalization as saved', () => {
+    const job = {
+      id: 'job-1',
+      agent_id: 'main',
+      name: 'Report',
+      prompt: 'Summarize the day.',
+      schedule_type: 'interval',
+      interval_seconds: 3600,
+      remaining_runs: 2,
+      status: 'active',
+    };
+    const saved = cronFormFingerprint(createCronFormValues(job, 'UTC'));
+    const draft = createCronFormValues(job, 'UTC');
+    draft.prompt = 'Summarize the day. \n';
+    draft.name = ' Report';
+    draft.repeat = '02';
+    expect(cronFormFingerprint(draft)).toBe(saved);
+
+    draft.repeat = 'two';
+    expect(cronFormFingerprint(draft)).not.toBe(saved);
+  });
+
   it.each([
     ['a Project job', 'builder', 'vbot', 'builder@vbot'],
     ['an Identity job', 'researcher', null, 'researcher'],

@@ -429,21 +429,33 @@ export function visibleCronJobs(jobs, systemTimezone = 'UTC') {
   return normalizeCronJobs(jobs, systemTimezone);
 }
 
+// Values are compared as the payloads normalize them, so a draft that differs
+// from the saved job only in surrounding whitespace or the spelling of its
+// repeat count counts as saved; otherwise it would stay unsaved after every
+// successful write.
 export function cronFormFingerprint(formValues) {
   const values = formValues ?? {};
   return JSON.stringify({
-    agent_id: asText(values.agent_id),
-    name: asText(values.name),
-    prompt: asText(values.prompt),
+    agent_id: requiredText(values.agent_id),
+    name: requiredText(values.name),
+    prompt: requiredText(values.prompt),
     schedule_type: normalizeScheduleType(values.schedule_type),
-    cron_expression: asText(values.cron_expression),
+    cron_expression: requiredText(values.cron_expression),
     interval_seconds: cronIntervalSeconds(values),
-    run_at: asText(values.run_at),
-    event_id: asText(values.event_id),
+    run_at: requiredText(values.run_at),
+    event_id: requiredText(values.event_id),
     event_time: eventTimeText(values),
-    repeat: asText(values.repeat),
-    session_id: asText(values.session_id),
+    repeat: repeatFingerprint(values.repeat),
+    session_id: requiredText(values.session_id),
   });
+}
+
+// A valid repeat count compares by its number; invalid input stays as typed,
+// so it remains a change that validation reports.
+function repeatFingerprint(value) {
+  const text = requiredText(value);
+  const count = positiveInteger(text);
+  return count > 0 ? String(count) : text;
 }
 
 export function buildCreateCronPayload(formValues) {
