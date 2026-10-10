@@ -252,7 +252,33 @@ def _serve_until(cause: str) -> Callable[[Any], None]:
 def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cause: str, stop_fields: str
 ) -> None:
-    _patch_serving(monkeypatch, _serve_until(cause))
+    clock = [100.0]
+
+    def create_app(**kwargs: Any) -> dict[str, Any]:
+        clock[0] += 2.0
+        return _fake_create_app(**kwargs)
+
+    def serve(server: Any) -> None:
+        clock[0] += 3.0
+        _serve_until(cause)(server)
+
+    def collect() -> None:
+        clock[0] += 1.0
+
+    _patch_serving(monkeypatch, serve)
+    monkeypatch.setattr(server_main, "create_app", create_app)
+    monkeypatch.setattr(server_main, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(server_main.gc, "collect", collect)
+    monkeypatch.setattr(
+        server_main,
+        "time",
+        SimpleNamespace(time=lambda: 1_000.0, strftime=server_main.time.strftime),
+    )
+    monkeypatch.setattr(
+        server_main,
+        "psutil",
+        SimpleNamespace(Process=lambda: SimpleNamespace(create_time=lambda: 995.0)),
+    )
     data_dir = tmp_path / "data"
     # Supervisors such as the generated systemd unit do not restart for these statuses.
     exit_code = {
@@ -280,6 +306,9 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
         assert len(started) == 1
         assert "(version=1.2.3 revision=aaaaaaaa branch=main " in started[0]
         assert " mode=verification " in started[0] and started[0].endswith(" tools=3)")
+        # Readiness includes the heap preparation; the phases account for the
+        # whole startup, distinguishing interpreter/import cost from app work.
+        assert " startup=11.0s pre_main=5.000s setup=2.000s app=4.000s " in started[0]
     assert len(stopped) == 1
     assert stop_fields in stopped[0]
     assert " uptime=" in stopped[0]

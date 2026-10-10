@@ -122,13 +122,68 @@ HASH_WORKERS = 16
 
 
 def remove_bytecode_caches(root: Path) -> None:
-    """Drop bytecode a build step wrote; packaged hosts never write or need it."""
+    """Drop inherited caches before producing the package's own bytecode."""
     for directory in root.rglob("__pycache__"):
         if directory.is_dir():
             shutil.rmtree(directory)
     for suffix in ("*.pyc", "*.pyo"):
         for path in root.rglob(suffix):
             path.unlink()
+
+
+_COMPILE_BYTECODE = """
+import pathlib, py_compile, sys
+
+root = pathlib.Path(sys.argv[1])
+if sys.implementation.name != "cpython" or ".".join(map(str, sys.version_info[:2])) != sys.argv[2]:
+    raise SystemExit("bytecode compilation requires the package's supported CPython runtime")
+# Resources can contain scripts for a different Python, notably Skills. Only
+# bundled Extensions are imported into the server's interpreter.
+app_roots = ("core", "cli", "server", "desktop", "resources/extensions")
+roots = [root / "app" / name for name in app_roots]
+roots += [root / "runtime" / "Lib", root / "runtime" / "lib" / ("python" + sys.argv[2])]
+for base in roots:
+    if not base.is_dir():
+        continue
+    for path in sorted(base.rglob("*.py")):
+        if {"test", "tests", "__pycache__"}.intersection(path.relative_to(base).parts[:-1]):
+            continue
+        # The signed release inventory verifies both sources and caches. Hash
+        # caches survive extraction/relocation; unchecked mode avoids rereading
+        # every source at startup. Never inherit unchecked caches from inputs.
+        py_compile.compile(
+            str(path), dfile=path.relative_to(root).as_posix(), doraise=True,
+            optimize=0, invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+        )
+"""
+
+
+def compile_bytecode(version_root: Path, interpreter: Path) -> None:
+    """Build deterministic caches with the exact runtime that will load them.
+
+    Call before the release inventory is written. ``-B`` suppresses incidental
+    import caches, not these explicit compilations; runtime hosts keep ``-B``.
+    """
+    remove_bytecode_caches(version_root)
+    result = subprocess.run(
+        [
+            str(interpreter),
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            _COMPILE_BYTECODE,
+            str(version_root.resolve()),
+            PYTHON_VERSION,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=subprocess_creation_flags(),
+    )
+    if result.returncode:
+        raise BuildError(f"packaged bytecode compilation failed:\n{result.stdout}\n{result.stderr}")
 
 
 def file_hashes(version_root: Path) -> dict[str, str]:

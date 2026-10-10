@@ -23,9 +23,6 @@ from core.tools._web_fetch_arguments import (
     OUTPUTS,
     normalize_web_fetch_arguments,
 )
-from core.tools._web_fetch_html import (
-    extract_views,
-)
 from core.tools._web_fetch_pages import (
     DEFAULT_MAX_CHARS,
     MAX_CHARS,
@@ -371,6 +368,9 @@ def _shape_success(
                 "source": "direct-markdown" if "markdown" in media_type else "direct",
             }
         )
+
+    # HTML codecs are only needed here, already inside the Tool worker.
+    from core.tools._web_fetch_html import extract_views
 
     main, page, metadata, warnings = extract_views(
         raw_body,
