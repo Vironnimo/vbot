@@ -113,6 +113,7 @@ def _list_human_discussions(
             [
                 {
                     "id": row["id"],
+                    "sequence": row["sequence"],
                     "title": row["title"],
                     "member_count": row["member_count"],
                 }

@@ -306,6 +306,9 @@ earlier posts. `after` and `before` exclude each other, `message_id` and `cursor
 The page uses `after` to put new posts on top instead of re-reading the newest
 page (see the page refresh paragraph below), and both to show a revealed post
 among its neighbours. Its Board reads ask for 50 posts per page.
+The management `board.list` returns each discussion's id, `sequence` (its `dN`
+number), title and member count, the main discussion first
+(`test_swarm_store_board.py`).
 Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
 typography, including fenced-code Copy actions. Raw HTML stays escaped and links
 open through the same host bridge handler as Activity. Discussion announcements
