@@ -1,5 +1,6 @@
-import { SvelteDate, SvelteMap } from 'svelte/reactivity';
-import { t, activeLocaleTag, init } from '../../../../webui/src/lib/i18n.js';
+import { SvelteMap } from 'svelte/reactivity';
+import { t, init } from '../../../../webui/src/lib/i18n.js';
+import { formatAbsoluteTime } from '../../../../webui/src/lib/timeText.js';
 import {
   canStop,
   participantState,
@@ -21,6 +22,13 @@ import { referenceLinks } from './referenceLinks.js';
 // Background changes reload the Usage report at most this often; the last
 // change of a burst is always followed by a reload.
 const USAGE_REFRESH_INTERVAL_MS = 10_000;
+
+// Posts per Board read: the newest page, an earlier or newer page, new posts,
+// and each side of a revealed post. The Store also caps a page's text.
+const BOARD_PAGE = 50;
+
+// The most animation frames a revealed post is kept centered after a jump.
+const RECENTER_FRAMES = 12;
 
 export function createSwarmPageModel(host) {
   // Exists from the start, so the page root can hand its layer registry to
@@ -96,8 +104,6 @@ export function createSwarmPageModel(host) {
 
   let pending = $state('');
 
-  let context = $state({ locale: 'en', timezone: 'UTC', theme: {} });
-
   let profileEditor = $state(null);
 
   let editorKey = $state(0);
@@ -112,16 +118,25 @@ export function createSwarmPageModel(host) {
 
   let swarmsRequest = 0;
 
-  // `board` holds the newest posts of `boardShown` (a Swarm and discussion)
-  // with any earlier pages below them. Each full load of the newest page
-  // counts up `boardVersion`; an earlier page or newer posts read for an older
-  // version are dropped, since the newer full load includes them.
+  // `board` holds posts of `boardShown` (a Swarm and discussion), newest
+  // first: its newest page with any earlier pages below, or the posts around a
+  // revealed post with any earlier and newer pages. `boardAtNewest` tells
+  // whether the discussion's newest posts are loaded; only then do new posts
+  // go on top. Each full load (the newest page or a revealed post's
+  // surroundings) counts up `boardVersion`; an earlier page or newer posts
+  // read for an older version are dropped, since the newer full load
+  // includes or replaces them.
   let boardShown = null;
+
+  let boardAtNewest = $state(true);
 
   let boardVersion = 0;
 
-  // The full load in flight, which a read of newer posts waits for.
+  // The full load in flight, which a read of new posts waits for.
   let boardLoading = null;
+
+  // The requested newer page in flight, which a read of new posts waits for.
+  let boardNewerLoading = null;
 
   let discussionsRequest = 0;
 
@@ -383,14 +398,8 @@ export function createSwarmPageModel(host) {
     { id: 'usage', label: t('swarm.tabs.usage') },
   ]);
 
-  const date = (value) =>
-    value
-      ? new Intl.DateTimeFormat(activeLocaleTag(), {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-          timeZone: context.timezone || 'UTC',
-        }).format(new SvelteDate(value))
-      : '';
+  // In the host's timezone, which `applyContext` makes the application zone.
+  const date = (value) => formatAbsoluteTime(value);
 
   const discussionOptions = $derived(discussions);
   const discussionParticipants = $derived(
@@ -446,7 +455,6 @@ export function createSwarmPageModel(host) {
   );
 
   function applyContext(next) {
-    context = next;
     setApplicationTimeZone(next.timezone);
     document.documentElement.lang = init(next.locale);
     for (const [name, value] of Object.entries(next.theme ?? {}))
@@ -674,6 +682,7 @@ export function createSwarmPageModel(host) {
     boardShown = null;
     board = [];
     boardCursor = null;
+    boardAtNewest = true;
   }
 
   const shows = (swarm, discussionId) =>
@@ -686,6 +695,14 @@ export function createSwarmPageModel(host) {
     selectedSwarm?.id === swarm.id &&
     selectedDiscussion === discussionId;
 
+  const readPosts = (swarm, discussionId, bounds = {}) =>
+    call('board.read', {
+      swarm_id: swarm.id,
+      discussion_id: discussionId,
+      limit: BOARD_PAGE,
+      ...bounds,
+    });
+
   // Loads the discussion's newest page, or with `cursor` the earlier page
   // below the posts the Board shows.
   async function loadBoard(
@@ -695,12 +712,7 @@ export function createSwarmPageModel(host) {
   ) {
     if (!swarm) return;
     const version = cursor ? boardVersion : ++boardVersion;
-    const load = call('board.read', {
-      swarm_id: swarm.id,
-      discussion_id: discussionId,
-      limit: 100,
-      ...(cursor ? { cursor } : {}),
-    });
+    const load = readPosts(swarm, discussionId, cursor ? { cursor } : {});
     if (!cursor) boardLoading = load;
     let result;
     try {
@@ -717,34 +729,109 @@ export function createSwarmPageModel(host) {
     } else {
       board = posts;
       boardShown = { swarmId: swarm.id, discussionId };
+      boardAtNewest = true;
     }
     boardCursor = result.cursor ?? null;
   }
 
-  // Puts the selected discussion's posts newer than the Board's newest on top.
-  // A Board that does not show the discussion yet loads its newest page.
+  // Shows the post numbered `number` of a discussion with up to a page of
+  // earlier posts below it and up to a page of newer ones above, read
+  // together. Returns whether the Board shows them.
+  async function loadAround(swarm, discussionId, number) {
+    const version = ++boardVersion;
+    const load = Promise.all([
+      readPosts(swarm, discussionId, { before: number + 1 }),
+      readPosts(swarm, discussionId, { after: number }),
+    ]);
+    boardLoading = load;
+    let earlier, newer;
+    try {
+      [earlier, newer] = await load;
+    } finally {
+      if (boardLoading === load) boardLoading = null;
+    }
+    if (!boardCurrent(version, swarm, discussionId)) return false;
+    board = [...page(newer)].reverse().concat([...page(earlier)].reverse());
+    boardShown = { swarmId: swarm.id, discussionId };
+    boardCursor = earlier.cursor ?? null;
+    boardAtNewest = !newer.has_more;
+    return true;
+  }
+
+  // Puts newer posts of `result`, oldest first, on top of the Board.
+  function putNewer(result) {
+    const newest = board[0]?.sequence ?? 0;
+    board = [
+      ...page(result)
+        .filter((post) => post.sequence > newest)
+        .reverse(),
+      ...board,
+    ];
+  }
+
+  // Puts the selected discussion's posts newer than the Board's newest on top
+  // while the Board shows the discussion's newest posts. A Board that does
+  // not show the discussion yet loads its newest page.
   async function loadNewPosts(swarm) {
     const discussionId = selectedDiscussion;
-    // A full load in flight may have read before the newest posts.
+    // A load in flight may have read before the newest posts.
     await boardLoading?.catch(() => {});
+    await boardNewerLoading?.catch(() => {});
     if (!shows(swarm, discussionId)) return loadBoard(swarm, discussionId);
+    // The newer posts the Board does not show come with "Load newer
+    // messages" or "Jump to newest".
+    if (!boardAtNewest) return;
     const version = boardVersion;
     for (;;) {
-      const result = await call('board.read', {
-        swarm_id: swarm.id,
-        discussion_id: discussionId,
+      const result = await readPosts(swarm, discussionId, {
         after: board[0]?.sequence ?? 0,
-        limit: 100,
       });
       if (!boardCurrent(version, swarm, discussionId)) return;
-      const posts = page(result);
-      const newest = board[0]?.sequence ?? 0;
-      board = [
-        ...posts.filter((post) => post.sequence > newest).reverse(),
-        ...board,
-      ];
-      if (!result.has_more || !posts.length) return;
+      putNewer(result);
+      if (!result.has_more || !page(result).length) return;
     }
+  }
+
+  // Puts the next page of newer posts on top of a Board that does not show
+  // the discussion's newest posts.
+  async function loadNewerPosts() {
+    const swarm = selectedSwarm;
+    const discussionId = selectedDiscussion;
+    if (!swarm || boardAtNewest || !shows(swarm, discussionId)) return;
+    const version = boardVersion;
+    const load = readPosts(swarm, discussionId, {
+      after: board[0]?.sequence ?? 0,
+    });
+    boardNewerLoading = load;
+    let result;
+    try {
+      result = await load;
+    } catch (cause) {
+      if (boardCurrent(version, swarm, discussionId)) error = cause.message;
+      return;
+    } finally {
+      if (boardNewerLoading === load) boardNewerLoading = null;
+    }
+    if (!boardCurrent(version, swarm, discussionId)) return;
+    putNewer(result);
+    boardAtNewest = !result.has_more;
+  }
+
+  // Replaces the shown posts with the discussion's newest page and shows its
+  // newest post.
+  async function jumpToNewest() {
+    const swarm = selectedSwarm;
+    if (!swarm) return;
+    const version = boardVersion + 1;
+    try {
+      await loadBoard(swarm, selectedDiscussion);
+    } catch (cause) {
+      if (!disposed && version === boardVersion) error = cause.message;
+      return;
+    }
+    if (disposed || version !== boardVersion) return;
+    await tick();
+    revealElement(document.querySelector('.board > li'));
   }
 
   async function chooseDiscussion(id) {
@@ -1171,15 +1258,36 @@ export function createSwarmPageModel(host) {
     };
   }
 
-  // Show a cited post on the Board: open its discussion and load earlier
-  // pages until it appears.
+  // Lists the discussion `discussionId` in the selector, reading its pages
+  // until they name it.
+  async function listDiscussion(swarm, discussionId, current) {
+    if (!discussions.length) await loadDiscussions(swarm);
+    while (
+      !discussions.some((item) => item.id === discussionId) &&
+      discussionCursor &&
+      current()
+    ) {
+      const cursor = discussionCursor;
+      await loadDiscussions(swarm, cursor);
+      if (discussionCursor === cursor) break;
+    }
+    if (current() && !discussions.some((item) => item.id === discussionId))
+      discussions = [...discussions, { id: discussionId }];
+  }
+
+  // Shows a cited post on the Board, focused in the middle of the view. A post
+  // the Board does not show yet takes two round trips: its discussion, then
+  // the post with the posts around it.
   async function revealPost(number) {
     const swarm = selectedSwarm;
     if (!swarm) return;
     const request = ++revealRequest;
     const current = () =>
       !disposed && request === revealRequest && selectedSwarm?.id === swarm.id;
-    // A step to the Board, which loads only what the post needs below.
+    const shown = () =>
+      shows(swarm, selectedDiscussion) &&
+      board.some((item) => item.sequence === number);
+    // A step to the Board, which loads only what the post needs.
     activeTab = 'board';
     syncRoute({ step: true });
     if (number === swarm.goal_post_sequence) {
@@ -1187,64 +1295,82 @@ export function createSwarmPageModel(host) {
       const goal = document.querySelector('.swarm-goal-post');
       if (goal && current()) {
         goal.open = true;
-        revealElement(goal);
+        revealElement(goal, current);
       }
       return;
     }
-    const [post] = page(
-      await call('board.read', {
-        swarm_id: swarm.id,
-        message_id: `#${number}`,
-      }),
-    );
-    if (!post || !current()) return;
-    const discussionId = post.discussion_id;
-    if (selectedDiscussion !== discussionId || !board.length) {
-      if (!discussions.length) await loadDiscussions(swarm);
-      while (
-        !discussions.some((item) => item.id === discussionId) &&
-        discussionCursor &&
-        current()
-      ) {
-        const cursor = discussionCursor;
-        await loadDiscussions(swarm, cursor);
-        if (discussionCursor === cursor) break;
+    if (!shown()) {
+      const [post] = page(
+        await call('board.read', {
+          swarm_id: swarm.id,
+          message_id: `#${number}`,
+        }),
+      );
+      if (!post || !current()) return;
+      const discussionId = post.discussion_id;
+      if (!shown()) {
+        if (selectedDiscussion !== discussionId) {
+          selectedDiscussion = discussionId;
+          clearBoard();
+        }
+        const [around] = await Promise.all([
+          loadAround(swarm, discussionId, number),
+          listDiscussion(swarm, discussionId, current),
+        ]);
+        if (!around) return;
       }
-      if (!current()) return;
-      if (!discussions.some((item) => item.id === discussionId))
-        discussions = [...discussions, { id: discussionId }];
-      await chooseDiscussion(discussionId);
-    }
-    while (
-      current() &&
-      selectedDiscussion === discussionId &&
-      boardCursor &&
-      !board.some((item) => item.sequence === number)
-    ) {
-      const cursor = boardCursor;
-      await loadBoard(swarm, discussionId, cursor);
-      if (boardCursor === cursor) break;
     }
     if (!current()) return;
     await tick();
     revealElement(
       document.querySelector(`.board > li[data-post-number="${number}"]`),
+      current,
     );
   }
 
-  function revealElement(element) {
+  // Scrolls `element` to the middle of the view, then focuses and highlights
+  // it. A short way scrolls smoothly; a long one jumps, since smooth
+  // scrolling would render every post on the way.
+  function revealElement(element, current = () => !disposed) {
     if (!element) return;
     const reduced = window.matchMedia?.(
       '(prefers-reduced-motion: reduce)',
     )?.matches;
+    const box = element.getBoundingClientRect();
+    const near =
+      Math.abs(box.top + box.height / 2 - window.innerHeight / 2) <
+      window.innerHeight;
     element.scrollIntoView?.({
       block: 'center',
-      behavior: reduced ? 'auto' : 'smooth',
+      behavior: near && !reduced ? 'smooth' : 'auto',
     });
+    if (!near) recenter(element, current);
     element.tabIndex = -1;
     element.focus({ preventScroll: true });
     element.dataset.revealed = '';
     setTimeout(() => delete element.dataset.revealed, 2000);
+  }
+
+  // Posts away from the view render only near it (`content-visibility`), so
+  // a jump places `element` by estimated heights of the posts on the way.
+  // Keeps it centered while posts coming into view replace their estimates:
+  // until it stays put for two frames, for at most RECENTER_FRAMES frames.
+  function recenter(element, current) {
+    let frames = RECENTER_FRAMES;
+    let still = 0;
+    let top = element.getBoundingClientRect().top;
+    const step = () => {
+      if (!current() || !element.isConnected || frames-- <= 0) return;
+      if (element.getBoundingClientRect().top === top) {
+        if (++still === 2) return;
+      } else {
+        still = 0;
+        element.scrollIntoView?.({ block: 'center', behavior: 'auto' });
+        top = element.getBoundingClientRect().top;
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 
   function openContentLink(event) {
@@ -1343,6 +1469,9 @@ export function createSwarmPageModel(host) {
     },
     get boardCursor() {
       return boardCursor;
+    },
+    get boardAtNewest() {
+      return boardAtNewest;
     },
     get selectedDiscussion() {
       return selectedDiscussion;
@@ -1494,6 +1623,8 @@ export function createSwarmPageModel(host) {
     loadMoreSwarms,
     loadDiscussions,
     loadBoard,
+    loadNewerPosts,
+    jumpToNewest,
     chooseDiscussion,
     openDiscussion,
     saveProfile,

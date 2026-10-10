@@ -397,7 +397,15 @@
               {#if model.board.length === 0}<EmptyState
                   density="compact"
                   title={t('swarm.board.empty')}
-                />{:else}<ol class="board" use:model.contentLinks>
+                />{:else}{#if !model.boardAtNewest}<div class="board-newer">
+                    <Button variant="secondary" onClick={model.loadNewerPosts}
+                      >{t('swarm.board.newer')}</Button
+                    >
+                    <Button variant="secondary" onClick={model.jumpToNewest}
+                      >{t('swarm.board.newest')}</Button
+                    >
+                  </div>{/if}
+                <ol class="board" use:model.contentLinks>
                   {#each model.board as post (post.id)}<li
                       data-post-number={post.sequence}
                       style:--participant-color={post.author?.kind ===

@@ -40,6 +40,12 @@ _HUMAN_REPLY_SEQUENCE = (
     "(SELECT q.sequence FROM posts q WHERE q.id=posts.reply_to) AS reply_sequence"
 )
 
+# A human Board page holds whole posts with at most this many UTF-8 bytes of
+# text; its first post always fits. The page asks for about 50 posts, so the
+# bound only shortens pages of long posts. Unlike the Tool's pages, human pages
+# do not follow the delivery settings, which budget what Agents read.
+HUMAN_PAGE_BYTES = 256 * 1024
+
 
 def _list_discussions(
     db: SwarmDatabase, swarm_id: str, participant_id: str, cursor: str | None, limit: int
@@ -219,6 +225,7 @@ def _read_human_posts(
     cursor: str | None,
     limit: int,
     after: int | None = None,
+    before: int | None = None,
 ) -> Page:
     with db._read() as connection:
         if connection.execute("SELECT 1 FROM swarms WHERE id=?", (swarm_id,)).fetchone() is None:
@@ -239,7 +246,48 @@ def _read_human_posts(
         _discussion(connection, swarm_id, discussion_id)
         if after is not None:
             return _human_posts_after(connection, swarm_id, discussion_id, after, limit)
-        return _human_post_page(db, connection, swarm_id, discussion_id, cursor, limit)
+        return _human_post_page(
+            db, connection, swarm_id, discussion_id, cursor, limit, before_sequence=before
+        )
+
+
+def _human_rows(
+    connection: sqlite3.Connection,
+    swarm_id: str,
+    discussion_id: str,
+    condition: str,
+    parameters: tuple[int, ...],
+    order: str,
+    limit: int,
+    offset: int = 0,
+) -> tuple[list[sqlite3.Row], bool]:
+    """The discussion's posts matching ``condition`` that fit one human page, in
+    ``order`` of their numbers, and whether more posts follow them.
+
+    Sizes come from the record headers first (``octet_length`` reads no text), so
+    only the posts the page returns are read in full.
+    """
+    sizes = connection.execute(
+        "SELECT sequence,octet_length(text) AS size FROM posts INDEXED BY posts_discussion_page "
+        f"WHERE swarm_id=? AND discussion_id=? AND {condition} "
+        f"ORDER BY sequence {order} LIMIT ? OFFSET ?",
+        (swarm_id, discussion_id, *parameters, limit + 1, offset),
+    ).fetchall()
+    count = total = 0
+    for row in sizes[:limit]:
+        if count and total + row["size"] > HUMAN_PAGE_BYTES:
+            break
+        count += 1
+        total += row["size"]
+    if not count:
+        return [], False
+    low, high = sorted((sizes[0]["sequence"], sizes[count - 1]["sequence"]))
+    rows = connection.execute(
+        f"SELECT {POST_COLUMNS},{_HUMAN_REPLY_SEQUENCE} FROM posts INDEXED BY posts_discussion_page "
+        f"WHERE swarm_id=? AND discussion_id=? AND sequence BETWEEN ? AND ? ORDER BY sequence {order}",
+        (swarm_id, discussion_id, low, high),
+    ).fetchall()
+    return rows, len(sizes) > count
 
 
 def _human_posts_after(
@@ -250,18 +298,10 @@ def _human_posts_after(
     An open page appends what changed instead of reading its newest page again; with
     ``has_more`` it repeats the read after the last returned post.
     """
-    rows = connection.execute(
-        f"SELECT {POST_COLUMNS},{_HUMAN_REPLY_SEQUENCE} FROM posts INDEXED BY posts_discussion_page "
-        "WHERE swarm_id=? AND discussion_id=? AND sequence>? ORDER BY sequence LIMIT ?",
-        (swarm_id, discussion_id, after, limit + 1),
-    ).fetchall()
-    batch_chars = _load(
-        connection.execute(
-            "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
-        ).fetchone()[0]
-    )["batch_chars"]
-    selected = _budgeted_rows(rows, limit, batch_chars)
-    return Page(tuple(_human_posts(connection, selected)), len(rows) > len(selected), None)
+    rows, more = _human_rows(
+        connection, swarm_id, discussion_id, "sequence>?", (after,), "ASC", limit
+    )
+    return Page(tuple(_human_posts(connection, rows)), more, None)
 
 
 def _post_page(
@@ -318,32 +358,33 @@ def _human_post_page(
     discussion_id: str,
     cursor: str | None,
     limit: int,
+    *,
+    before_sequence: int | None = None,
 ) -> Page:
     high_water = _post_high_water(connection, swarm_id, discussion_id)
     scope = f"human:{swarm_id}:{discussion_id}"
-    if cursor:
+    if before_sequence is not None:
+        # The page ends just below a known post number; its cursor continues from there.
+        offset, high_water = 0, min(high_water, before_sequence - 1)
+    elif cursor:
         offset, frozen_high_water = db._cursor(cursor, "human_posts", scope, high_water)
         if frozen_high_water is None:
             raise SwarmStoreError("invalid_cursor")
         high_water = frozen_high_water
     else:
         offset = 0
-    batch_chars = _load(
-        connection.execute(
-            "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
-        ).fetchone()[0]
-    )["batch_chars"]
-    rows = connection.execute(
-        f"SELECT {POST_COLUMNS},{_HUMAN_REPLY_SEQUENCE} FROM posts INDEXED BY posts_discussion_page "
-        "WHERE swarm_id=? AND discussion_id=? AND sequence>0 AND sequence<=? "
-        "ORDER BY sequence DESC LIMIT ? OFFSET ?",
-        (swarm_id, discussion_id, high_water, limit + 1, offset),
-    ).fetchall()
-    selected = _budgeted_rows(rows, limit, batch_chars)
-    values = _human_posts(connection, list(reversed(selected)))
-    more = len(rows) > len(selected)
+    rows, more = _human_rows(
+        connection,
+        swarm_id,
+        discussion_id,
+        "sequence>0 AND sequence<=?",
+        (high_water,),
+        "DESC",
+        limit,
+        offset,
+    )
     return Page(
-        tuple(values),
+        tuple(_human_posts(connection, list(reversed(rows)))),
         more,
-        db._make_cursor("human_posts", scope, high_water, offset + len(selected)) if more else None,
+        db._make_cursor("human_posts", scope, high_water, offset + len(rows)) if more else None,
     )

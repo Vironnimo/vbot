@@ -4,8 +4,22 @@ import { tooltip } from '../../../../webui/src/lib/tooltip.js';
 // Markdown shows them as links, but never inside code, existing links or
 // controls, and never as part of a longer word ("abc#4", "w3c", "a/w3").
 const REFERENCE = /(?<![\w#/&])(?:#(\d+)|w(\d+))(?!\w)/g;
+// Text without this cannot hold a reference.
+const CANDIDATE = /[#w]\d/;
 const SKIPPED = 'a, code, pre, kbd, samp, button, summary, textarea';
 const MARKDOWN = '.msg-markdown';
+const LINK = 'a[data-swarm-reference]';
+
+// Visits the text that may hold a reference and leaves out what SKIPPED
+// matches, with everything inside it.
+const candidateText = (item) =>
+  item.nodeType === Node.TEXT_NODE
+    ? CANDIDATE.test(item.data)
+      ? NodeFilter.FILTER_ACCEPT
+      : NodeFilter.FILTER_SKIP
+    : item.matches(SKIPPED)
+      ? NodeFilter.FILTER_REJECT
+      : NodeFilter.FILTER_SKIP;
 
 /**
  * Link post and Wiki page numbers in the Markdown inside `node` while it is
@@ -14,27 +28,17 @@ const MARKDOWN = '.msg-markdown';
  * `target(kind, number, text)` returns the link's href, or null when the
  * number names nothing; `kind` is 'post' or 'page' and `text` is the text node
  * holding the number. `describe(kind, number)` resolves to the link's tooltip
- * content; `loading(reference)` is the content shown until then.
+ * content; `loading(reference)` is the content shown until then. A link gets
+ * its tooltip when the pointer or focus first reaches it.
  */
 export function referenceLinks(node, { target, describe, loading }) {
   const hints = new Map();
 
-  function createLink(reference, href, kind, number) {
+  function createLink(reference, href, kind) {
     const link = document.createElement('a');
     link.href = href;
     link.textContent = reference;
     link.dataset.swarmReference = kind;
-    const hint = tooltip(link, loading(reference));
-    hints.set(link, hint);
-    const load = () => {
-      link.removeEventListener('pointerenter', load);
-      link.removeEventListener('focusin', load);
-      void describe(kind, number).then((content) => {
-        if (hints.get(link) === hint) hint.update(content);
-      });
-    };
-    link.addEventListener('pointerenter', load);
-    link.addEventListener('focusin', load);
     return link;
   }
 
@@ -49,7 +53,7 @@ export function referenceLinks(node, { target, describe, loading }) {
       if (!href) continue;
       fragment ??= document.createDocumentFragment();
       fragment.append(value.slice(end, match.index));
-      fragment.append(createLink(match[0], href, kind, number));
+      fragment.append(createLink(match[0], href, kind));
       end = match.index + match[0].length;
     }
     if (!fragment) return;
@@ -57,41 +61,79 @@ export function referenceLinks(node, { target, describe, loading }) {
     text.replaceWith(fragment);
   }
 
-  function decorate(scope) {
-    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+  // Links the references in the rendered Markdown that `root` is part of or
+  // holds.
+  function decorate(root) {
     const texts = [];
-    for (let text = walker.nextNode(); text; text = walker.nextNode())
+    if (root.nodeType === Node.TEXT_NODE) {
+      const parent = root.parentElement;
       if (
-        text.parentElement?.closest(MARKDOWN) &&
-        !text.parentElement.closest(SKIPPED)
+        CANDIDATE.test(root.data) &&
+        parent?.closest(MARKDOWN) &&
+        !parent.closest(SKIPPED)
       )
-        texts.push(text);
+        texts.push(root);
+    } else if (root.nodeType === Node.ELEMENT_NODE) {
+      const scopes = root.closest(MARKDOWN)
+        ? [root]
+        : root.querySelectorAll(MARKDOWN);
+      for (const scope of scopes) {
+        if (scope.closest(SKIPPED)) continue;
+        const walker = document.createTreeWalker(
+          scope,
+          NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+          candidateText,
+        );
+        for (let text = walker.nextNode(); text; text = walker.nextNode())
+          texts.push(text);
+      }
+    }
     for (const text of texts) linkText(text);
   }
 
-  function release() {
-    // Re-rendered Markdown drops its links; a moved post keeps them.
+  // Re-rendered Markdown drops its links; a moved post keeps them.
+  function release(removed) {
+    if (!hints.size || removed.nodeType !== Node.ELEMENT_NODE) return;
     for (const [link, hint] of hints)
-      if (!node.contains(link)) {
+      if (removed.contains(link) && !node.contains(link)) {
         hint.destroy();
         hints.delete(link);
       }
   }
 
+  // Runs before the link's own listeners, so its tooltip handles this first
+  // hover or focus.
+  function prepare(event) {
+    const link = event.target.closest?.(LINK);
+    if (!link || hints.has(link)) return;
+    const reference = link.textContent;
+    const hint = tooltip(link, loading(reference));
+    hints.set(link, hint);
+    void describe(link.dataset.swarmReference, Number(reference.slice(1))).then(
+      (content) => {
+        if (hints.get(link) === hint) hint.update(content);
+      },
+    );
+  }
+
   const observer = new MutationObserver((records) => {
-    release();
-    for (const record of records)
-      for (const added of record.addedNodes) {
-        const scope =
-          added.nodeType === Node.TEXT_NODE ? added.parentElement : added;
-        if (scope instanceof Element && node.contains(scope)) decorate(scope);
-      }
+    for (const record of records) {
+      for (const removed of record.removedNodes) release(removed);
+      for (const added of record.addedNodes)
+        if (added.isConnected && node.contains(added)) decorate(added);
+    }
+    // The links just inserted are no Markdown to decorate.
+    observer.takeRecords();
   });
   decorate(node);
   observer.observe(node, { childList: true, subtree: true });
+  node.addEventListener('pointerover', prepare, true);
+  node.addEventListener('focusin', prepare, true);
   return {
     destroy() {
       observer.disconnect();
+      node.removeEventListener('pointerover', prepare, true);
+      node.removeEventListener('focusin', prepare, true);
       for (const hint of hints.values()) hint.destroy();
       hints.clear();
     },

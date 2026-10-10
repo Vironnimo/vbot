@@ -530,19 +530,31 @@ class SwarmStore:
         cursor: str | None = None,
         limit: int = 20,
         after: int | None = None,
+        before: int | None = None,
     ) -> Page:
         """Read public Board history without participant membership or receipts.
 
-        With ``after`` (a post number), read only the discussion's posts numbered
-        above it, oldest first; ``has_more`` means the read repeats after the last
-        returned post.
+        A page holds whole posts, at most ``limit`` and ``HUMAN_PAGE_BYTES`` of
+        text, independently of the delivery settings. With ``after`` (a post
+        number), read only the discussion's posts numbered above it, oldest first;
+        ``has_more`` means the read repeats after the last returned post. With
+        ``before`` (a post number), the page ends just below that post, and its
+        cursor continues with earlier ones.
         """
         if message_id is not None and (
-            discussion_id is not None or cursor is not None or limit != 20 or after is not None
+            discussion_id is not None
+            or cursor is not None
+            or limit != 20
+            or after is not None
+            or before is not None
         ):
             raise SwarmStoreError("invalid_arguments", field="message_id")
         if after is not None and (type(after) is not int or after < 0 or cursor is not None):
             raise SwarmStoreError("invalid_arguments", field="after")
+        if before is not None and (
+            type(before) is not int or before < 1 or cursor is not None or after is not None
+        ):
+            raise SwarmStoreError("invalid_arguments", field="before")
         return await self._run(
             _read_human_posts,
             swarm_id,
@@ -551,6 +563,7 @@ class SwarmStore:
             cursor,
             _limit(limit),
             after,
+            before,
         )
 
     async def post(

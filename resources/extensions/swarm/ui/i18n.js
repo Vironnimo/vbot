@@ -31,6 +31,8 @@ export default Object.freeze({
   'swarm.board.reply': 'Reply to {id}',
   'swarm.board.addressed': 'To: {names}',
   'swarm.board.more': 'Load earlier messages',
+  'swarm.board.newer': 'Load newer messages',
+  'swarm.board.newest': 'Jump to newest',
   'swarm.activity': 'activity',
   'swarm.context': 'Context',
   'swarm.resumeParticipant': 'Resume participant',

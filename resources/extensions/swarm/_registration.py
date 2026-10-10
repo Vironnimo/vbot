@@ -129,7 +129,8 @@ def register(api: ExtensionAPI) -> None:
         "board.list": "List a Swarm's discussions with pagination.",
         "board.read": (
             "Read Board posts or one exact message; follow the returned cursor for older "
-            "posts, or pass after to read only newer ones."
+            "posts, pass after to read only newer ones, or before to read those just "
+            "below a post."
         ),
         "board.post": (
             "Post to the Board; reuse request_id only for the same content and recipients."

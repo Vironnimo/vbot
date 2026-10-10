@@ -846,7 +846,7 @@ class SwarmExtension:
     async def _board_read(self, arguments: Json) -> Json:
         _exact(
             arguments,
-            {"swarm_id", "discussion_id", "message_id", "cursor", "limit", "after"},
+            {"swarm_id", "discussion_id", "message_id", "cursor", "limit", "after", "before"},
             required={"swarm_id"},
         )
         kwargs = {key: value for key, value in arguments.items() if key != "swarm_id"}

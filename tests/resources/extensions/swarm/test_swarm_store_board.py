@@ -9,6 +9,7 @@ import json
 import pytest
 
 from core.sessions import SessionAddress, TemporarySessionBinding
+from resources.extensions.swarm._store_reads import HUMAN_PAGE_BYTES
 from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
 from tests.resources.extensions.swarm.swarm_test_support import _profile, _swarm
 
@@ -326,10 +327,36 @@ async def test_human_board_reads_and_posts_need_no_participant_or_receipt(
     assert newer.has_more and newer.cursor is None
     rest = await store.read_human_posts(swarm_id, after=newer.entries[-1]["sequence"], limit=2)
     assert [post["text"] for post in rest.entries] == ["later 2"] and not rest.has_more
+    # A page of the posts below a number ends just there; its cursor continues
+    # with earlier posts.
+    below = await store.read_human_posts(swarm_id, before=rest.entries[0]["sequence"], limit=2)
+    assert [post["text"] for post in below.entries] == ["later 0", "later 1"]
+    earlier = await store.read_human_posts(swarm_id, cursor=below.cursor, limit=2)
+    assert [post["text"] for post in earlier.entries] == ["Please compare findings"]
+    assert not earlier.has_more
+    # Pages hold whole posts up to their own text budget, however little the
+    # delivery settings let Agents read at once.
+    fitting = HUMAN_PAGE_BYTES // 16_000
+    for index in range(fitting + 2):
+        await store.post_human(
+            swarm_id, text=f"{index:02d}" + "x" * 15_998, request_id=f"long-{index}"
+        )
+    page = await store.read_human_posts(swarm_id, limit=50)
+    assert [post["text"][:2] for post in page.entries] == [
+        f"{index:02d}" for index in range(2, fitting + 2)
+    ]
+    assert page.has_more
+    rest = await store.read_human_posts(swarm_id, cursor=page.cursor, limit=50)
+    assert [post["text"][:2] for post in rest.entries] == ["Pl", "la", "la", "la", "00", "01"]
+    assert not rest.has_more
     for arguments in (
         {"after": -1},
         {"after": 0, "cursor": newer.entries[0]["id"]},
         {"after": 0, "message_id": posted["post_id"]},
+        {"before": 0},
+        {"before": 2, "cursor": page.cursor},
+        {"before": 2, "after": 0},
+        {"before": 2, "message_id": posted["post_id"]},
     ):
         with pytest.raises(SwarmStoreError) as invalid:
             await store.read_human_posts(swarm_id, **arguments)

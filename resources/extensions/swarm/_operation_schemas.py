@@ -183,6 +183,14 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
                     "first. When has_more is true, repeat with the last returned post's number."
                 ),
             },
+            "before": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Post number; read the page of the discussion's posts that ends just "
+                    "below it. Its cursor continues with earlier posts."
+                ),
+            },
         },
         "required": ["swarm_id"],
         "additionalProperties": False,
