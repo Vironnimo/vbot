@@ -656,9 +656,13 @@ Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
 stable across page remounts (`SwarmPage.board.test.js`) and does not change saved posts.
 The header shows the snapshot Swarm name and state. The Board holds the single
-collapsible user request and working directory. Compact participant buttons show
-names, identity colors and execution dots; Model/status/pending details are in
-hover/focus tooltips. The roster filters by each participant's current
+collapsible user request and working directory. Participant chips are outlined
+buttons with an unframed avatar (initials on a soft tint of the identity color),
+the name and, unless the participant is idle, a state dot. A chip's accessible
+name gives name, state and pending messages; its tooltip is a details card with the
+Model (provider path muted), state, pending messages, context use when the caller
+passes it (`context`) and the last error when the record carries `last_error`
+(`ParticipantChip.svelte`, `participantCard` in `pagePresentation.js`). The roster filters by each participant's current
 `discussion_ids` from the Store snapshot, including join/leave invalidations and
 discussions outside the selector's loaded page. Being addressed does not join a peer.
 Posts list their addressed participants by display name ("To: ..."); the compose

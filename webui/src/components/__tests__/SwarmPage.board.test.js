@@ -305,10 +305,6 @@ describe('Swarm Board posts', () => {
       );
       const activityChip = activityAvatar.closest('button');
       expect(activityChip.getAttribute('aria-pressed')).toBe('true');
-      expect(activityChip.textContent).not.toContain(participants[0].model);
-      expect(activityChip.getAttribute('aria-label')).toContain(
-        participants[0].model,
-      );
       expect(activityChip.querySelector('.participant-status')).not.toBeNull();
       fixtureState.mounted = await unmount(fixtureState.mounted);
       document.body.innerHTML = '';
@@ -720,16 +716,58 @@ describe('Swarm Board discussions', () => {
     await render(bridge);
     button('Investigate').click();
     const names = () =>
-      [...document.querySelectorAll('.participant-chip strong')].map(
+      [...document.querySelectorAll('.participant-chip__name')].map(
         (node) => node.textContent,
       );
     await vi.waitFor(() => expect(names()).toEqual(['Alpha', 'Beta']));
-    const chip = document.querySelector('.participant-chip');
-    expect(chip.textContent).not.toContain('demo/model');
-    expect(chip.getAttribute('aria-label')).toContain('demo/model');
-    expect(document.querySelector('.participant-status').dataset.state).toBe(
+    // A chip names the participant, its state and pending messages; only a
+    // participant that is not idle shows a state dot.
+    const [alpha, beta] = document.querySelectorAll('.participant-chip');
+    expect(alpha.getAttribute('aria-label')).toBe(
+      'Alpha, Running, 0 pending messages',
+    );
+    expect(alpha.querySelector('.participant-status').dataset.state).toBe(
       'running',
     );
+    expect(beta.querySelector('.participant-status')).toBeNull();
+    // Its details card adds the Model, its provider path muted, and the last
+    // error when one is known.
+    const card = () => document.querySelector('#app-tooltip');
+    const rows = () =>
+      [...card().querySelectorAll('dt')].map((label) => [
+        label.textContent,
+        label.nextElementSibling.textContent,
+      ]);
+    alpha.focus();
+    await vi.waitFor(() => expect(card()?.textContent).toContain('Alpha'));
+    expect(card().querySelector('.app-tooltip__title').textContent).toBe(
+      'Alpha',
+    );
+    expect(rows()).toEqual([
+      ['Model', 'demo/model'],
+      ['State', 'Running'],
+      ['Pending', 'None'],
+    ]);
+    expect(card().querySelector('.app-tooltip__lead').textContent).toBe(
+      'demo/',
+    );
+    participants[1].state = 'failed';
+    participants[1].pending_count = 3;
+    participants[1].last_error = 'Provider quota exhausted';
+    bridge.invalidate();
+    await vi.waitFor(() =>
+      expect(beta.getAttribute('aria-label')).toBe(
+        'Beta, Failed, 3 pending messages',
+      ),
+    );
+    beta.focus();
+    await vi.waitFor(() => expect(card()?.textContent).toContain('Beta'));
+    expect(rows()).toEqual([
+      ['Model', 'demo/fallback'],
+      ['State', 'Failed'],
+      ['Pending', '3 messages'],
+      ['Last error', 'Provider quota exhausted'],
+    ]);
     selectDiscussion('dsc-findings');
     await vi.waitFor(() => expect(names()).toEqual(['Beta']));
     participants[0].discussion_ids.push('dsc-findings');
