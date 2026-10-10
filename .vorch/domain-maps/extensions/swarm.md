@@ -743,9 +743,21 @@ subscription failures remain retryable on a later invalidation. Coverage:
 `pageRefresh.test.js`, `SwarmPage.streaming.test.js`, `SwarmPage.activity.test.js`
 and `SwarmPage.wiki.test.js`.
 
-WikiPanel.svelte shows each page's number in the list and page header and opens
-`#wiki/w3` links by number. List rows show only number and title (no excerpt);
-their tooltip names the latest revision and its author. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and only `wiki` changes of its Swarm (or a full refresh) reload the Wiki. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. The editor ends with the shared save state (`webui/autosave.md`), whose Save action also creates a new page. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
+WikiPanel.svelte owns the Wiki tab's state and requests (free page drafts, bounded
+content loading, search, version history and restore); `WikiIndex.svelte` (search,
+deleted-pages switch, page list), `WikiPage.svelte` (page header, actions, version
+history, Markdown) and `WikiEditor.svelte` (title and Markdown source with the save
+state) render it. The panel is a size container: from 680px wide it shows the list
+beside the page, narrower one of them with an "All pages" button back to the list.
+It shows each page's number in the list and page header and opens `#wiki/w3` links
+by number. List rows show number, title and the relative time of the latest change
+(no excerpt); their tooltip names the latest revision, its author and the exact time.
+A leading level-one heading that repeats the page title is not rendered twice.
+Search runs 300 ms after typing stops or at once on Enter; refreshes reload at least
+as many pages as are loaded, so they never take back "Load more". History lists
+versions newest first and marks the current one; an older revision shows a banner to
+restore it or go back to the current one, and only the current revision of a page
+that is not deleted can be edited. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and only `wiki` changes of its Swarm (or a full refresh) reload the Wiki. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly, and Cancel returns to the page shown before. The editor ends with the shared save state (`webui/autosave.md`), whose Save action also creates a new page. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
 
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are
@@ -753,9 +765,9 @@ removed. Board discussion and Wiki pages cover shared deliberation and retained
 results. The generation 1 schema has no decision tables.
 No saved profile instructions, Swarm snapshots, or Session history are rewritten.
 
-Wiki search uses explicit button callbacks and an input Enter handler because the
-isolated page sandbox blocks native form submission. The page does not require
-`allow-forms`.
+Wiki search uses an input Enter handler and the debounced input callback instead of
+a form because the isolated page sandbox blocks native form submission. The page
+does not require `allow-forms`.
 
 Swarm Activity retains one shared Chat event projection, compresses deltas and
 flushes live updates in 33 ms batches. Initial replay is buffered through the

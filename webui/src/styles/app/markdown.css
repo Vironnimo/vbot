@@ -113,6 +113,50 @@
   margin-bottom: 0.2em;
 }
 
+/* A task list item ("- [x] done") shows a read-only box in the app's
+   Checkbox style in place of its bullet, so its text lines up with the other
+   items. The visually hidden disabled checkbox before the box carries the
+   state for assistive technology. */
+.msg-markdown li.md-task {
+  list-style: none;
+}
+
+.msg-markdown .md-task__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.msg-markdown .md-task__box {
+  display: inline-grid;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  margin-inline: -1.4em 0.4em;
+  place-items: center;
+  border: 1.5px solid color-mix(in srgb, var(--text-lo) 70%, transparent);
+  border-radius: 4px;
+  background: var(--field-surface);
+  vertical-align: -0.15em;
+}
+
+.msg-markdown .md-task__input:checked + .md-task__box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.msg-markdown .md-task__box svg {
+  width: 0.75em;
+  height: 0.75em;
+  stroke: var(--on-accent);
+  stroke-width: 2.2;
+}
+
 .msg-markdown blockquote {
   margin: var(--md-block-margin, 0.5em 0);
   padding: 0 0 0 12px;

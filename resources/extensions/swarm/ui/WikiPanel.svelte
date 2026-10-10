@@ -1,65 +1,74 @@
 <script>
-  import { onMount, onDestroy, untrack } from 'svelte';
+  // The Swarm's Wiki tab: the page list beside the open page, or one of them
+  // at a time when the panel is narrow. It owns the list, the open page, its
+  // history, the edit draft and every Wiki request; WikiIndex, WikiPage and
+  // WikiEditor show them.
+  import { onMount, onDestroy, tick, untrack } from 'svelte';
   import { t } from '../../../../webui/src/lib/i18n.js';
-  import { isImeComposing } from '../../../../webui/src/lib/keyboard.js';
   import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
-  import FormField from '../../../../webui/src/components/ui/FormField.svelte';
-  import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
-  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
+  import Button from '../../../../webui/src/components/ui/Button.svelte';
+  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
   import { requestId } from './pagePresentation.js';
   import { createPageRefresh, swarmChanged } from './pageRefresh.js';
+  import WikiEditor from './WikiEditor.svelte';
+  import WikiIndex from './WikiIndex.svelte';
+  import WikiPage from './WikiPage.svelte';
 
-  let {
-    swarmId,
-    client,
-    contentLinks,
-    initialPageId = null,
-    active = true,
-  } = $props();
+  let { swarmId, client, contentLinks, active = true } = $props();
+
+  // Typing searches once the input rests this long; Enter searches at once.
+  const SEARCH_DELAY_MS = 300;
+  // Relative times ("5 minutes ago") follow the clock at this pace.
+  const CLOCK_MS = 60_000;
+
   let loaded = $state(false);
-  let activated = false;
-  let entries = $state([]),
-    next = $state(null),
-    query = $state(''),
-    includeDeleted = $state(false);
-  let selected = $state(null),
-    title = $state(''),
-    content = $state('');
-  let editing = $state(false),
-    error = $state(''),
-    saving = $state(false);
-  let history = $state([]),
-    historyNext = $state(null),
-    historyOpen = $state(false);
+  let entries = $state.raw([]);
+  let next = $state.raw(null);
+  let query = $state('');
+  let shownQuery = $state('');
+  let includeDeleted = $state(false);
+  let listError = $state('');
+  let selected = $state.raw(null);
+  let title = $state('');
+  let content = $state('');
+  let editing = $state(false);
+  let error = $state('');
+  let titleError = $state('');
+  let saving = $state(false);
+  let history = $state.raw([]);
+  let historyNext = $state.raw(null);
+  let historyOpen = $state(false);
   let pendingTransition = $state.raw(null);
   let baseline = $state('');
+  // Which pane a narrow panel shows: the list, or the open page or editor.
+  let view = $state('list');
+  let now = $state(Date.now());
+  let indexPane = $state(null);
+  let index = $state(null);
+  let pageView = $state(null);
+  let editor = $state(null);
   let readGeneration = 0,
     listGeneration = 0,
     historyGeneration = 0,
     disposed = false;
   let retryMutation = null;
+  let searchTimer = null;
+  // The page shown before New page, which Cancel returns to.
+  let beforeNewPage = null;
+
   const snapshot = () =>
     JSON.stringify({ page: selected?.page_id, title, content });
   const hasChanges = () => editing && snapshot() !== baseline;
   // Participants refer to a page by its number, as in "w3" or a "#wiki/w3" link.
   const pageRef = (page) => (page?.number != null ? `w${page.number}` : null);
-  // The list shows number and title; the tooltip adds the latest revision.
-  const pageTooltip = (page) => ({
-    title: page.title,
-    rows: [
-      {
-        label: t('swarm.wiki.revisionLabel'),
-        value: page.revision,
-      },
-      { label: t('swarm.wiki.author'), value: page.author?.name },
-    ],
-    placement: 'right',
-  });
+  const showsOlderRevision = () =>
+    selected != null && selected.revision !== selected.current_revision;
+  // The list is hidden while a narrow panel shows a page.
+  const indexVisible = () => (indexPane?.getClientRects().length ?? 0) > 0;
+  const wikiEmpty = $derived(
+    loaded && !entries.length && !shownQuery && !listError,
+  );
   const call = (args) =>
     client.operation('wiki', { swarm_id: swarmId, ...args });
   const autosave = createDebouncedAutosave({
@@ -71,30 +80,34 @@
   const backgroundRefresh = createPageRefresh(async (changes) => {
     if (!active || !swarmChanged(changes, swarmId, 'wiki')) return;
     const selection = readGeneration;
-    await refresh();
-    if (
-      !active ||
-      selection !== readGeneration ||
-      !selected ||
-      editing ||
-      historyOpen
-    )
-      return;
+    await refresh({ keep: true });
+    if (!active || selection !== readGeneration || !selected || editing) return;
     const current = entries.find((entry) => entry.page_id === selected.page_id);
-    if (!current || current.revision !== selected.current_revision)
-      await readPage(selected.page_id, undefined, { background: true });
+    if (current && current.revision === selected.current_revision) return;
+    const read = await readPage(
+      selected.page_id,
+      showsOlderRevision() ? selected.revision : undefined,
+      { background: true },
+    );
+    if (read && historyOpen) await loadHistory({ keep: true });
   });
+
   $effect(() => {
     if (active)
       untrack(() => {
+        now = Date.now();
         void backgroundRefresh.run();
-        if (!activated && initialPageId) void readPage(initialPageId);
-        activated = true;
       });
     else
       untrack(() => {
-        if (!hasChanges()) editing = false;
+        cancelSearch();
+        if (!hasChanges() && editing) closeEditor();
       });
+  });
+  $effect(() => {
+    if (!active) return;
+    const clock = setInterval(() => (now = Date.now()), CLOCK_MS);
+    return () => clearInterval(clock);
   });
   $effect(() => {
     if (active && editing)
@@ -119,29 +132,81 @@
     listGeneration += 1;
     historyGeneration += 1;
     autosave.cancelPendingTimer();
+    cancelSearch();
   });
 
-  async function refresh(continuation = null) {
+  // Loads the list for the shown search. `keep` reloads at least as many
+  // pages as are loaded now, so a refresh never takes back "Load more".
+  async function refresh({ keep = false } = {}) {
     const generation = ++listGeneration;
+    const wanted = keep ? entries.length : 0;
     try {
-      const result = await call(
-        continuation ?? {
-          action: 'list',
-          ...(query.trim() ? { query: query.trim() } : {}),
-          include_deleted: includeDeleted,
-        },
-      );
+      let result = await call({
+        action: 'list',
+        ...(shownQuery ? { query: shownQuery } : {}),
+        include_deleted: includeDeleted,
+      });
+      let list = result.entries;
+      while (result.next_call && list.length < wanted) {
+        if (disposed || generation !== listGeneration) return;
+        result = await call(result.next_call.arguments);
+        list = [...list, ...result.entries];
+      }
       if (disposed || generation !== listGeneration) return;
       loaded = true;
-      entries = continuation ? [...entries, ...result.entries] : result.entries;
+      listError = '';
+      entries = list;
       next = result.next_call?.arguments ?? null;
+      now = Date.now();
     } catch (cause) {
-      if (!disposed && generation === listGeneration) error = cause.message;
+      if (!disposed && generation === listGeneration) listError = cause.message;
     }
   }
+  async function loadMore() {
+    if (!next) return;
+    const generation = ++listGeneration;
+    try {
+      const result = await call(next);
+      if (disposed || generation !== listGeneration) return;
+      listError = '';
+      entries = [...entries, ...result.entries];
+      next = result.next_call?.arguments ?? null;
+      // The button may be gone; continue with the first page it loaded.
+      const first = result.entries[0]?.page_id;
+      await tick();
+      if (first) index?.focusPage(first);
+    } catch (cause) {
+      if (!disposed && generation === listGeneration) listError = cause.message;
+    }
+  }
+  function cancelSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+  function search() {
+    cancelSearch();
+    shownQuery = query.trim();
+    return refresh();
+  }
+  function changeQuery(value) {
+    query = value;
+    cancelSearch();
+    if (value.trim() === shownQuery) return;
+    // Clearing the field shows all pages again at once.
+    if (!value.trim()) void search();
+    else searchTimer = setTimeout(search, SEARCH_DELAY_MS);
+  }
+  function changeIncludeDeleted(value) {
+    includeDeleted = value;
+    void refresh();
+  }
+
+  // Reads page `id` (a page id or "w3") at `revision`, or its current
+  // revision, following continuations until the whole content arrived. A
+  // background read gives way to a newer read and to an edit draft.
   async function readPage(id, revision, { background = false } = {}) {
     const generation = ++readGeneration;
-    error = '';
+    if (!background) error = '';
     try {
       let result = await call({
         action: 'read',
@@ -152,23 +217,27 @@
       let body = result.content;
       while (result.next_call) {
         result = await call(result.next_call.arguments);
-        if (disposed || generation !== readGeneration) return;
+        if (disposed || generation !== readGeneration) return false;
         body += result.content;
       }
-      if (disposed || generation !== readGeneration) return;
+      if (disposed || generation !== readGeneration) return false;
       if (
         background &&
-        (!active || editing || historyOpen || selected?.page_id !== id)
+        (!active || editing || selected?.page_id !== page.page_id)
       )
-        return;
+        return false;
       selected = page;
       title = page.title;
       content = body;
       editing = false;
+      titleError = '';
       baseline = snapshot();
       retryMutation = null;
+      now = Date.now();
+      return true;
     } catch (cause) {
       if (!disposed && generation === readGeneration) error = cause.message;
+      return false;
     }
   }
   export async function requestTransition(action) {
@@ -182,38 +251,120 @@
     pendingTransition = null;
     return action();
   }
-  export function openPage(id) {
-    return requestTransition(() => {
-      if (
-        (selected?.page_id === id || pageRef(selected) === id) &&
-        !historyOpen
-      ) {
-        editing = false;
-        return;
+  // Shows page `id`. A page opened from the list keeps focus on its row
+  // while the list stays in view; otherwise focus moves to the page title.
+  async function showPage(id, { fromList = false } = {}) {
+    const same =
+      selected && (selected.page_id === id || pageRef(selected) === id);
+    if (same && !showsOlderRevision()) {
+      if (editing) closeEditor();
+    } else {
+      if (!same) {
+        historyGeneration += 1;
+        historyOpen = false;
+        history = [];
+        historyNext = null;
       }
-      historyOpen = false;
-      history = [];
-      return readPage(id);
+      if (!(await readPage(id)) && error === '') return;
+    }
+    view = 'page';
+    await tick();
+    if (!fromList || !indexVisible()) pageView?.focusTitle();
+  }
+  /** Opens page `id` (a page id or "w3"), as a `#wiki/w3` link does. */
+  export function openPage(id) {
+    return requestTransition(() => showPage(id));
+  }
+  function openFromList(id) {
+    return requestTransition(() => showPage(id, { fromList: true }));
+  }
+  function backToList() {
+    return requestTransition(async () => {
+      if (editing) closeEditor();
+      view = 'list';
+      await tick();
+      index?.focusPage(selected?.page_id);
     });
   }
   function createPage() {
-    return requestTransition(() => {
+    return requestTransition(async () => {
       readGeneration += 1;
+      historyGeneration += 1;
+      beforeNewPage = selected
+        ? { page: selected, title, content, history, historyNext, historyOpen }
+        : null;
       selected = null;
       title = '';
       content = '';
+      history = [];
+      historyNext = null;
+      historyOpen = false;
       baseline = snapshot();
       editing = true;
       error = '';
-      historyOpen = false;
+      titleError = '';
       retryMutation = null;
+      view = 'page';
+      await tick();
+      editor?.focusTitle();
+    });
+  }
+  // Leaves the editor without saving. A new page returns to the page shown
+  // before it, or to the list.
+  function closeEditor() {
+    editing = false;
+    titleError = '';
+    if (selected) return;
+    const previous = beforeNewPage;
+    beforeNewPage = null;
+    if (!previous) {
+      title = '';
+      content = '';
+      view = 'list';
+      return;
+    }
+    selected = previous.page;
+    title = previous.title;
+    content = previous.content;
+    history = previous.history;
+    historyNext = previous.historyNext;
+    historyOpen = previous.historyOpen;
+    baseline = snapshot();
+  }
+  function cancelNewPage() {
+    return requestTransition(async () => {
+      closeEditor();
+      await tick();
+      if (view === 'list') index?.focusPage(selected?.page_id);
+      else pageView?.focusTitle();
+    });
+  }
+  async function startEdit() {
+    if (!selected || selected.deleted || showsOlderRevision()) return;
+    historyGeneration += 1;
+    historyOpen = false;
+    editing = true;
+    titleError = '';
+    baseline = snapshot();
+    await tick();
+    editor?.focusContent();
+  }
+  function finishEditing() {
+    return requestTransition(async () => {
+      editing = false;
+      await tick();
+      pageView?.focusEdit();
     });
   }
   async function persist(reason) {
     if (!hasChanges() && selected) return true;
     if (!selected && reason !== 'manual') return false;
     if (!title.trim()) {
-      error = t('swarm.wiki.titleRequired');
+      titleError = t('swarm.wiki.titleRequired');
+      if (reason === 'manual') {
+        await tick();
+        editor?.focusTitle();
+      }
       return false;
     }
     const payload = selected
@@ -240,7 +391,8 @@
         content: payload.content,
       });
       retryMutation = null;
-      void refresh();
+      beforeNewPage = null;
+      void refresh({ keep: true });
       return true;
     } catch (cause) {
       if (!disposed) error = cause.message;
@@ -249,27 +401,63 @@
       saving = false;
     }
   }
-  async function loadHistory(continuation = null) {
-    if (!selected) return;
+  // Loads the open page's versions, newest first: the first page of them,
+  // the next one (`more`), or as many as are loaded now (`keep`).
+  async function loadHistory({ more = false, keep = false } = {}) {
+    if (!selected || (more && !historyNext)) return false;
     const id = selected.page_id;
     const generation = ++historyGeneration;
+    const wanted = keep ? history.length : 0;
     try {
-      const result = await call(
-        continuation ?? { action: 'history', page_id: id },
+      let result = await call(
+        more ? historyNext : { action: 'history', page_id: id },
       );
+      let list = more ? [...history, ...result.entries] : result.entries;
+      while (!more && result.next_call && list.length < wanted) {
+        if (disposed || generation !== historyGeneration) return false;
+        result = await call(result.next_call.arguments);
+        list = [...list, ...result.entries];
+      }
       if (
         disposed ||
         selected?.page_id !== id ||
-        generation !== historyGeneration
+        generation !== historyGeneration ||
+        (keep && !historyOpen)
       )
-        return;
-      history = continuation ? [...history, ...result.entries] : result.entries;
+        return false;
+      history = list;
       historyNext = result.next_call?.arguments ?? null;
       historyOpen = true;
+      now = Date.now();
+      if (more && result.entries[0]) {
+        await tick();
+        pageView?.focusVersion(result.entries[0].revision);
+      }
+      return true;
     } catch (cause) {
-      if (!disposed) error = cause.message;
+      if (!disposed && generation === historyGeneration) error = cause.message;
+      return false;
     }
   }
+  function toggleHistory() {
+    if (!historyOpen) return loadHistory();
+    historyGeneration += 1;
+    historyOpen = false;
+  }
+  function showRevision(revision) {
+    if (!selected || revision === selected.revision) return;
+    return readPage(
+      selected.page_id,
+      revision === selected.current_revision ? undefined : revision,
+    );
+  }
+  async function backToCurrent() {
+    if (selected && (await readPage(selected.page_id))) {
+      await tick();
+      pageView?.focusTitle();
+    }
+  }
+  // Deletes the open page, or restores the shown revision as the newest.
   async function changePage(action) {
     if (!selected) return;
     const page = selected;
@@ -284,303 +472,226 @@
         request_id: requestId(),
       });
       await readPage(page.page_id);
-      historyOpen = false;
-      await refresh();
+      if (historyOpen) await loadHistory();
+      await refresh({ keep: true });
+      await tick();
+      pageView?.focusTitle();
     } catch (cause) {
       if (!disposed) error = cause.message;
     } finally {
       saving = false;
     }
   }
+  async function saveAndContinue() {
+    if (await autosave.participant.runSave('manual', { force: true })) {
+      const action = pendingTransition;
+      pendingTransition = null;
+      await requestTransition(action);
+    }
+  }
   function discardAndContinue() {
     autosave.cancelPendingTimer();
-    editing = false;
+    const saved = JSON.parse(baseline);
+    title = saved.title;
+    content = saved.content;
     error = '';
+    closeEditor();
+    // The draft may have met a newer revision; show the current one.
+    if (selected)
+      void readPage(selected.page_id, undefined, { background: true });
     const action = pendingTransition;
     pendingTransition = null;
     action?.();
   }
 </script>
 
+{#snippet newPageAction()}
+  <Button variant="secondary" onClick={createPage}>{t('swarm.wiki.new')}</Button
+  >
+{/snippet}
+
 {#if active}
   <div
-    class="wiki-panel"
+    class="panel wiki-panel"
+    data-view={view}
     role="tabpanel"
-    tabindex="0"
     aria-label={t('swarm.wiki.title')}
   >
-    <div class="wiki-toolbar">
-      <h3>{t('swarm.wiki.title')}</h3>
-      <Button variant="secondary" onClick={createPage}
-        >{t('swarm.wiki.new')}</Button
-      >
-    </div>
-    {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
-    {#if pendingTransition}<Banner variant="warn">
-        {t('swarm.wiki.unsaved')}
-        <Button
-          variant="tertiary"
-          onClick={async () => {
-            if (await autosave.participant.runSave('manual', { force: true })) {
-              const action = pendingTransition;
-              pendingTransition = null;
-              await requestTransition(action);
-            }
-          }}>{t('common.save')}</Button
-        >
-        <Button variant="tertiary" onClick={discardAndContinue}
-          >{t('swarm.wiki.discard')}</Button
-        >
-      </Banner>{/if}
-    <div class="wiki-columns">
-      <aside class="wiki-index">
-        <form
-          onsubmit={(event) => {
-            event.preventDefault();
-            void refresh();
+    <div class="wiki-layout">
+      <div class="wiki-index" bind:this={indexPane}>
+        <WikiIndex
+          bind:this={index}
+          {entries}
+          {loaded}
+          more={Boolean(next)}
+          {query}
+          {shownQuery}
+          {includeDeleted}
+          error={listError}
+          selectedId={selected?.page_id ?? null}
+          {now}
+          onQuery={changeQuery}
+          onSearch={search}
+          onClearSearch={() => {
+            query = '';
+            void search();
           }}
+          onIncludeDeleted={changeIncludeDeleted}
+          onOpen={openFromList}
+          onLoadMore={loadMore}
+          onCreate={createPage}
+          onRetry={() => refresh({ keep: true })}
+        />
+      </div>
+      <div class="wiki-content">
+        <Button variant="tertiary" class="wiki-back" onClick={backToList}
+          ><svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg
+          >{t('swarm.wiki.allPages')}</Button
         >
-          <FormField controlId="wiki-search" label={t('swarm.wiki.search')}>
-            <TextField
-              id="wiki-search"
-              onkeydown={(event) => {
-                if (event.key === 'Enter' && !isImeComposing(event)) {
-                  event.preventDefault();
-                  void refresh();
-                }
-              }}
-              value={query}
-              onInput={(value) => (query = value)}
-            />
-          </FormField>
-          <Button onClick={() => refresh()} variant="tertiary"
-            >{t('common.search')}</Button
-          >
-        </form>
-        <label
-          ><input
-            type="checkbox"
-            bind:checked={includeDeleted}
-            onchange={() => void refresh()}
-          />
-          {t('swarm.wiki.showDeleted')}</label
-        >
-        <nav class="wiki-pages" aria-label={t('swarm.wiki.pages')}>
-          {#each entries as page (page.page_id)}
-            <button
-              class="secondary-list__item wiki-page-link"
-              class:active={selected?.page_id === page.page_id}
-              aria-current={selected?.page_id === page.page_id
-                ? 'page'
-                : undefined}
-              use:tooltip={pageTooltip(page)}
-              onclick={() => openPage(page.page_id)}
-            >
-              {#if page.number != null}<span class="wiki-number"
-                  >{pageRef(page)}</span
-                >{/if}<span class="wiki-page-title">{page.title}</span>
-              {#if page.deleted}<small>{t('swarm.wiki.deleted')}</small>{/if}
-            </button>
-          {/each}
-        </nav>
-        {#if !loaded && !error}<p role="status">
-            {t('common.loading')}
-          </p>
-        {:else if loaded && !entries.length}<p>
-            {t('swarm.wiki.empty')}
-          </p>{/if}
-        {#if next}<Button variant="tertiary" onClick={() => refresh(next)}
-            >{t('swarm.wiki.loadMore')}</Button
-          >{/if}
-      </aside>
-      <article class="wiki-content">
-        {#if editing}
-          <FormField controlId="wiki-title" label={t('swarm.wiki.pageTitle')}
-            ><TextField
-              id="wiki-title"
-              value={title}
-              onInput={(value) => (title = value)}
-            /></FormField
-          >
-          <FormField controlId="wiki-content" label={t('swarm.wiki.content')}
-            ><TextArea
-              id="wiki-content"
-              value={content}
-              onInput={(value) => (content = value)}
-              rows={20}
-            /></FormField
-          >
-          <div class="wiki-toolbar">
-            <Button
-              variant="tertiary"
-              onClick={() =>
-                requestTransition(() => {
-                  editing = false;
-                })}>{t('swarm.wiki.preview')}</Button
-            >
-            <!-- An existing page autosaves; a new page is created only by
-                 this Save action. -->
-            <SaveStatus
-              {saving}
-              pending={hasChanges()}
-              onClick={() => autosave.participant.runSave('manual')}
-            />
-          </div>
-        {:else if selected}
-          <h3>
-            {#if selected.number != null}<span class="wiki-number"
-                >{pageRef(selected)}</span
-              >{/if}{selected.title}
-          </h3>
-          <p class="wiki-meta">
-            {t('swarm.wiki.revision', {
-              revision: selected.revision,
-              author: selected.author?.name,
-            })}
-          </p>
-          <TextField
-            ariaLabel={t('swarm.wiki.reference')}
-            value={selected.link}
-            readonly
-          />
-          <div class="wiki-toolbar">
-            {#if !selected.deleted && selected.revision === selected.current_revision}<Button
-                variant="secondary"
-                onClick={() => {
-                  editing = true;
-                  baseline = snapshot();
-                }}>{t('common.edit')}</Button
-              >{/if}
-            <Button variant="tertiary" onClick={() => loadHistory()}
-              >{t('swarm.wiki.history')}</Button
-            >
-            {#if selected.deleted || selected.revision !== selected.current_revision}<Button
-                variant="secondary"
-                disabled={saving}
-                onClick={() => changePage('restore')}
-                >{t('swarm.wiki.restore')}</Button
+        {#if pendingTransition}<Banner
+            variant="warn"
+            role="alert"
+            class="wiki-notice"
+            ><p>{t('swarm.wiki.unsaved')}</p>
+            <div class="wiki-notice__actions">
+              <Button variant="secondary" onClick={saveAndContinue}
+                >{t('common.save')}</Button
+              ><Button variant="tertiary" onClick={discardAndContinue}
+                >{t('swarm.wiki.discard')}</Button
               >
-            {:else}<Button
-                variant="tertiary"
-                disabled={saving}
-                onClick={() => changePage('delete')}
-                >{t('swarm.wiki.delete')}</Button
-              >{/if}
-          </div>
-          {#if historyOpen}<div class="wiki-history">
-              {#each history as version (version.revision)}<Button
-                  variant="tertiary"
-                  onClick={() => readPage(selected.page_id, version.revision)}
-                  >{t('swarm.wiki.revision', {
-                    revision: version.revision,
-                    author: version.author.name,
-                  })}{version.deleted
-                    ? ` (${t('swarm.wiki.deleted')})`
-                    : ''}</Button
-                >{/each}
-              {#if historyNext}<Button
-                  variant="tertiary"
-                  onClick={() => loadHistory(historyNext)}
-                  >{t('swarm.wiki.loadMore')}</Button
-                >{/if}
-            </div>{/if}
-          {#if selected.deleted}<Banner>{t('swarm.wiki.deletedHelp')}</Banner
-            >{/if}
-          <div use:contentLinks>
-            <MarkdownContent
-              source={content}
-              class="msg-markdown md-document"
-            />
-          </div>
-        {:else}<p>
-            {t('swarm.wiki.choose')}
-          </p>{/if}
-      </article>
+            </div></Banner
+          >{/if}
+        {#if error}<Banner variant="error" role="alert"><p>{error}</p></Banner
+          >{/if}
+        {#if editing}
+          <WikiEditor
+            bind:this={editor}
+            page={selected}
+            {title}
+            {content}
+            {titleError}
+            {saving}
+            pending={hasChanges()}
+            onTitle={(value) => {
+              title = value;
+              titleError = '';
+            }}
+            onContent={(value) => (content = value)}
+            onDone={finishEditing}
+            onCancel={cancelNewPage}
+            onSave={() => autosave.participant.runSave('manual')}
+          />
+        {:else if selected}
+          <WikiPage
+            bind:this={pageView}
+            page={selected}
+            {content}
+            {history}
+            historyMore={Boolean(historyNext)}
+            {historyOpen}
+            busy={saving}
+            {now}
+            {contentLinks}
+            onEdit={startEdit}
+            onToggleHistory={toggleHistory}
+            onShowRevision={showRevision}
+            onLoadMoreHistory={() => loadHistory({ more: true })}
+            onBackToCurrent={backToCurrent}
+            onRestore={() => changePage('restore')}
+            onDelete={() => changePage('delete')}
+          />
+        {:else}
+          <EmptyState
+            class="wiki-content__empty"
+            title={wikiEmpty ? t('swarm.wiki.empty') : t('swarm.wiki.choose')}
+            description={t('swarm.wiki.about')}
+            actions={wikiEmpty ? newPageAction : undefined}
+          >
+            {#snippet icon()}<svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                ><path d="M6 3h9l4 4v14H6ZM14 3v5h5M9 12h7M9 16h7" /></svg
+              >{/snippet}
+          </EmptyState>
+        {/if}
+      </div>
     </div>
   </div>
 {/if}
 
 <style>
+  /* The panel is the query container: it shows the list beside the page
+     when it has room for both, and one of them at a time otherwise. */
   .wiki-panel {
-    padding: 1rem;
+    container: wiki / inline-size;
     min-width: 0;
   }
-  .wiki-toolbar {
-    display: flex;
-    gap: 0.75rem;
-    align-items: center;
-    flex-wrap: wrap;
-    margin-bottom: 1rem;
-  }
-  .wiki-toolbar h3 {
-    margin: 0;
-    margin-right: auto;
-  }
-  .wiki-columns {
+  .wiki-layout {
     display: grid;
-    grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
-    gap: 1.5rem;
-  }
-  .wiki-index {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  /* Rows follow the shared secondary-list geometry: number column, one-line
-     title; revision and author live in the row tooltip. */
-  .wiki-pages {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .wiki-page-link {
-    display: flex;
-    align-items: baseline;
-    gap: 0.6rem;
-    padding: 8px 10px;
-    text-align: left;
-    font: inherit;
-    cursor: pointer;
-  }
-  .wiki-number {
-    color: var(--text-med);
-    font: 600 var(--fs-label-sm) var(--font-ui);
-    font-variant-numeric: tabular-nums;
-    margin-right: 0.5rem;
-  }
-  .wiki-page-link .wiki-number {
-    flex-shrink: 0;
-    min-width: 3.5ch;
-    margin-right: 0;
-  }
-  .wiki-page-title {
-    flex: 1;
     min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
   }
-  .wiki-page-link small {
-    flex-shrink: 0;
-    font-size: var(--fs-label-sm);
-  }
-  .wiki-page-link small,
-  .wiki-meta {
-    color: var(--text-med);
-  }
+  .wiki-index,
   .wiki-content {
     min-width: 0;
-    overflow-wrap: anywhere;
   }
-  .wiki-history {
+  .wiki-content {
+    display: grid;
+    align-content: start;
+    gap: var(--space-md);
+  }
+  .wiki-panel[data-view='page'] .wiki-index,
+  .wiki-panel[data-view='list'] .wiki-content {
+    display: none;
+  }
+  .wiki-content :global(.wiki-back) {
+    justify-self: start;
+    margin-inline-start: calc(-1 * var(--space-sm));
+    padding-inline: var(--space-sm) var(--space-md);
+    color: var(--text-med);
+  }
+  .wiki-content :global(.wiki-notice) {
+    flex-wrap: wrap;
+  }
+  .wiki-notice__actions {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    margin: 1rem 0;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
   }
-  @media (max-width: 700px) {
-    .wiki-columns {
-      grid-template-columns: 1fr;
+  .wiki-content :global(.wiki-content__empty) {
+    min-height: 240px;
+  }
+  @container wiki (min-width: 680px) {
+    .wiki-layout {
+      grid-template-columns: 232px minmax(0, 1fr);
+    }
+    .wiki-panel[data-view] .wiki-index {
+      display: block;
+      padding-inline-end: var(--space-lg);
+      border-inline-end: 1px solid var(--border);
+    }
+    .wiki-panel[data-view] .wiki-content {
+      display: grid;
+      padding-inline-start: var(--space-xl);
+    }
+    .wiki-content :global(.wiki-back) {
+      display: none;
+    }
+    /* The reading pane already says the Wiki is empty. */
+    .wiki-index :global(.wiki-index__empty--wiki) {
+      display: none;
     }
   }
 </style>

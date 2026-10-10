@@ -39,6 +39,18 @@ describe('renderMarkdown()', () => {
       [],
     ],
     [
+      'GFM task list items as read-only check boxes',
+      '- [ ] open\n- [x] done\n- [ ]no space\n\n[ ] outside a list',
+      [
+        '<li class="md-task"><input class="md-task__input" type="checkbox" disabled><span class="md-task__box" aria-hidden="true"></span>open</li>',
+        '<li class="md-task"><input class="md-task__input" type="checkbox" disabled checked><span class="md-task__box" aria-hidden="true"><svg',
+        '</span>done</li>',
+        '<li>[ ]no space</li>',
+        '<p>[ ] outside a list</p>',
+      ],
+      [],
+    ],
+    [
       'https links with target and rel attributes',
       '[text](https://example.com)',
       [
