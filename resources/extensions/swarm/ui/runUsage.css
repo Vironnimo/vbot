@@ -54,11 +54,6 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* The page's table rules (swarmPage.css) add a header border that would
-   double DataTable's header line. */
-.swarm-page .usage-table th.data-table__cell {
-  border-bottom: 0;
-}
 /* A participant's further Models read as part of its first row. */
 .swarm-page
   .usage-table
