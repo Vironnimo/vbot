@@ -3,6 +3,7 @@
 import base64
 import io
 import math
+import threading
 from typing import Any
 
 import pytest
@@ -19,6 +20,7 @@ from core.utils.tokens import (
     estimate_request_input_tokens,
     estimate_structured_tokens,
     estimate_tokens,
+    prewarm_estimation_encoding,
 )
 
 
@@ -31,15 +33,21 @@ class _DeterministicEncoding:
         return list(range(token_count))
 
 
+def _forget_estimation_encoding() -> None:
+    # A Runtime an earlier test started may still be loading it on its prewarm thread.
+    with token_utils._ENCODING_LOCK:
+        token_utils._estimation_encoding.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _stub_tiktoken_encoding(monkeypatch: pytest.MonkeyPatch):
     encoding = _DeterministicEncoding()
     monkeypatch.setattr(token_utils.tiktoken, "get_encoding", lambda _name: encoding)
-    token_utils._load_estimation_encoding.cache_clear()
+    _forget_estimation_encoding()
     token_utils._COUNT_CACHE.clear()
     token_utils._IMAGE_CACHE.clear()
     yield
-    token_utils._load_estimation_encoding.cache_clear()
+    _forget_estimation_encoding()
     token_utils._COUNT_CACHE.clear()
     token_utils._IMAGE_CACHE.clear()
 
@@ -68,7 +76,7 @@ def test_estimation_encoding_is_fixed_and_cached(monkeypatch: pytest.MonkeyPatch
         return encoding
 
     monkeypatch.setattr(token_utils.tiktoken, "get_encoding", load_encoding)
-    token_utils._load_estimation_encoding.cache_clear()
+    _forget_estimation_encoding()
 
     first, _ = estimate_tokens("first")
     second, _ = estimate_tokens("second")
@@ -76,6 +84,45 @@ def test_estimation_encoding_is_fixed_and_cached(monkeypatch: pytest.MonkeyPatch
     assert first > 0
     assert second > 0
     assert calls == [TOKEN_ESTIMATE_ENCODING]
+
+
+def test_startup_prewarm_loads_the_encoding_once_while_counts_wait(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Counts that arrive during the startup load wait for it instead of loading again."""
+    loads: list[str] = []
+    loading = threading.Event()
+    release = threading.Event()
+
+    class Encoding:
+        def encode_ordinary(self, text: str) -> list[int]:
+            return [0] * 100
+
+    def slow_load(_name: str) -> Encoding:
+        loads.append(threading.current_thread().name)
+        loading.set()
+        release.wait(timeout=5)
+        return Encoding()
+
+    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", slow_load)
+    _forget_estimation_encoding()
+    prewarm_estimation_encoding()
+    assert loading.wait(timeout=5)
+    counts: list[int] = []
+    threads = [
+        threading.Thread(target=lambda text=text: counts.append(estimate_tokens(text)[0]))
+        for text in ("one", "two", "three")
+    ]
+    for thread in threads:
+        thread.start()
+    release.set()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert loads == ["vbot-tokenizer-prewarm"]
+    assert counts == [100, 100, 100]
+    prewarm_estimation_encoding()
+    assert loads == ["vbot-tokenizer-prewarm"]
 
 
 def test_estimate_tokens_uses_character_fallback_when_encoding_is_unavailable(
@@ -87,13 +134,14 @@ def test_estimate_tokens_uses_character_fallback_when_encoding_is_unavailable(
         raise OSError("offline")
 
     monkeypatch.setattr(token_utils.tiktoken, "get_encoding", fail_to_load)
-    token_utils._load_estimation_encoding.cache_clear()
+    _forget_estimation_encoding()
 
     count, is_estimate = estimate_tokens("x" * 5)
+    estimate_tokens("y" * 5)
 
     assert count == math.ceil(5 / FALLBACK_CHARS_PER_TOKEN)
     assert is_estimate is True
-    assert "Token estimation encoding unavailable" in caplog.text
+    assert caplog.text.count("Token estimation encoding unavailable") == 1
 
 
 def test_estimate_message_tokens_counts_structured_tool_call_payloads():

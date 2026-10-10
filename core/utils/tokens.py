@@ -21,7 +21,7 @@ import warnings
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
-from threading import RLock
+from threading import Lock, RLock, Thread
 from typing import Any
 
 import tiktoken
@@ -51,12 +51,16 @@ MESSAGE_TOKEN_ESTIMATE_FIELDS = (
 NATIVE_MEDIA_TOKEN_RESERVE = 4096
 
 # Cache only digests and scalar results, never transcripts, base64 or pixels.
-_COUNT_CACHE_SIZE = 4096
+# A Run start counts every item of its request again; a long Session's request
+# has ~2,800 items, so 4096 entries thrashed as soon as two such Sessions took
+# turns. 65536 entries hold about twenty of them at ~185 bytes each (12 MB).
+_COUNT_CACHE_SIZE = 65536
 _IMAGE_CACHE_SIZE = 256
 _IMAGE_HEADER_BYTES = 256 * 1024
 _COUNT_CACHE: OrderedDict[bytes, int] = OrderedDict()
 _IMAGE_CACHE: OrderedDict[bytes, tuple[int, int] | None] = OrderedDict()
 _CACHE_LOCK = RLock()
+_ENCODING_LOCK = Lock()
 
 # Replayable reasoning metadata mixes compact identifiers with large opaque
 # continuity blobs (signatures, encrypted thinking state). Providers bill such
@@ -146,14 +150,31 @@ def _model_name(model_id: str | None) -> str:
     return (model_id or "").lower().rsplit("/", 1)[-1].split(":", 1)[0]
 
 
-@lru_cache(maxsize=1)
+def prewarm_estimation_encoding() -> None:
+    """Load the estimation encoding on a daemon thread, at Runtime start.
+
+    Loading parses o200k_base: 200-270 ms and about 66 MB. Warming at startup
+    keeps the first Run's request count, and any count on the Event Loop, from
+    paying it. A count that arrives while the thread still loads waits for that
+    load instead of loading again.
+    """
+    if _estimation_encoding.cache_info().currsize:
+        return
+    Thread(target=_load_estimation_encoding, name="vbot-tokenizer-prewarm", daemon=True).start()
+
+
 def _load_estimation_encoding() -> tiktoken.Encoding | None:
     """One instance per process, shared across Agents and Sessions.
 
-    tiktoken's registry serializes first construction, including concurrent
-    misses in this wrapper's LRU cache.
+    The first call loads it (normally ``prewarm_estimation_encoding``); a caller
+    that arrives meanwhile waits for that load, so a failure is logged once.
     """
+    with _ENCODING_LOCK:
+        return _estimation_encoding()
 
+
+@lru_cache(maxsize=1)
+def _estimation_encoding() -> tiktoken.Encoding | None:
     try:
         return tiktoken.get_encoding(TOKEN_ESTIMATE_ENCODING)
     except (OSError, ValueError) as exc:

@@ -103,7 +103,7 @@ def _transform(
         replay_policy=adapter.reasoning_replay_policy(MODEL_ID),
         reasoning_scope_model=AGENT_MODEL,
     )
-    _request_content_resolution_inputs(prepared.effective_messages, messages)
+    _request_content_resolution_inputs(prepared.effective_messages)
     return limit_request_images(prepared.messages, budget=None)
 
 

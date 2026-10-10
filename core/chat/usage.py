@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -27,8 +27,8 @@ from core.providers.adapter import estimate_wire_request_input_tokens
 from core.utils.tokens import estimate_request_input_tokens
 
 JsonObject = dict[str, Any]
-# A Run estimates the same request before sending it, when observing its Usage,
-# for Compaction and often again as the next request; a few entries cover that.
+# Whole-request counts by digest, for a request that is neither the newest
+# counted one nor a continuation of it (an earlier request counted again).
 _ESTIMATE_MEMO_SIZE = 4
 
 
@@ -113,9 +113,36 @@ class _Anchor:
         return cls(key, request, input_tokens, output_tokens, estimate)
 
 
+@dataclass(frozen=True)
+class _CountedRequest:
+    """The newest counted request, so that the next request counts only what changed.
+
+    It references the request's messages, which the Run's live request shares,
+    and never copies them. ``fields`` holds each message's top-level keys and
+    values to notice a change in place; ``digests`` its content digest.
+    ``window`` is where the newest window starts (``_opens_window``) and
+    ``window_tokens`` the wire count of the request from there, with its System
+    Prompt and without Tools; ``calls`` maps each Tool-call id to the first
+    message calling it.
+    """
+
+    key: str
+    adapter: Any
+    model_id: str
+    messages: tuple[Mapping[str, Any], ...]
+    fields: tuple[tuple[Any, ...], ...]
+    digests: tuple[bytes, ...]
+    system: tuple[int, ...]
+    calls: Mapping[str, int]
+    request: str
+    tokens: int
+    window: int | None
+    window_tokens: int
+
+
 @dataclass
 class RequestContextUsage:
-    """A Session's Context accounting for one Run, without content or pixels.
+    """A Session's Context accounting for one Run.
 
     The anchor is the newest measured request with its uncorrected local
     estimate; local estimation error in the unchanged part cancels out. It
@@ -123,13 +150,18 @@ class RequestContextUsage:
     Assistant step persists (``resume``) and holds while the route, prompt
     scope, System Prompt and Tool catalog stay the same; Compaction ends it.
     Measured input is never scaled; only estimated parts are corrected. Every
-    measured request also teaches the calibration. Wire estimates are memoized
-    by the request's digests, so an identical request is estimated once.
+    measured request also teaches the calibration.
+
+    Counting keeps digests and counts plus references to the newest counted
+    request's messages, never copies or pixels of its own: an identical request
+    is counted once, and a continuation counts only its newest window
+    (``_count``).
     """
 
     calibration: InputEstimateCalibration | None = None
     _anchor: _Anchor | None = None
     _estimates: OrderedDict[tuple[str, str], int] = field(default_factory=OrderedDict, repr=False)
+    _counted: _CountedRequest | None = field(default=None, repr=False)
 
     @classmethod
     def resume(
@@ -193,13 +225,8 @@ class RequestContextUsage:
     ) -> RequestContextEstimate:
         """Count one request once for its send, measured response and Context consumers."""
         key = _context_key(messages, target, tools, scope)
-        request = _context_digest(messages)
-        return RequestContextEstimate(
-            target.model_reference,
-            key,
-            request,
-            self._estimate(key, request, target, messages, tools),
-        )
+        request, tokens = self._count(key, target, messages, tools)
+        return RequestContextEstimate(target.model_reference, key, request, tokens)
 
     def observe_prepared(self, usage: Mapping[str, Any], prepared: RequestContextEstimate) -> None:
         """Anchor on the response to an exactly prepared request; blocking calibration write."""
@@ -275,35 +302,239 @@ class RequestContextUsage:
     ) -> int:
         """The corrected local estimate of a whole request, ignoring the anchor."""
         key = _context_key(messages, target, tools, "")
-        estimate = self._estimate(key, _context_digest(messages), target, messages, tools)
+        _request, estimate = self._count(key, target, messages, tools)
         return round(estimate * self.factor(target))
 
-    def _estimate(
+    def _count(
         self,
         key: str,
-        request: str,
         target: ContextTarget,
         messages: Sequence[Mapping[str, Any]],
         tools: Sequence[Mapping[str, Any]],
-    ) -> int:
-        """Uncorrected wire estimate, reused for identical requests.
+    ) -> tuple[str, int]:
+        """The request digest and uncorrected wire count, from the newest counted request.
 
         The context key covers the route, prompt scope, Tool catalog and System
-        Prompt, the request digest every message; only digests and counts are
-        retained.
+        Prompt. Messages the newest counted request holds unchanged keep their
+        digests; only the others are digested.
+
+        A request that keeps the newest counted request up to that request's
+        newest window start (``_opens_window``) counts as the counted request
+        plus the change of the window count; windows count with the System
+        Prompt and without Tools (``_window``). This equals the whole-request
+        wire estimate: each wire estimator sums independent per-item counts,
+        list framing that grows by one per item, and a part fixed by the System
+        Prompt and Tools; from a window start on, each wire renders the request
+        apart from what precedes it while no Tool-call id repeats
+        (``_window_calls``). Any other request is counted whole. Two rare cases
+        can differ from a whole count: a wire id derived from a digest that
+        collides with another id, and a request over the Gemini wire's image
+        cap, which a whole count refuses; Chat limits a request's images to its
+        route's cap before counting.
         """
-        memo_key = (key, request)
-        cached = self._estimates.get(memo_key)
-        if cached is not None:
-            self._estimates.move_to_end(memo_key)
-            return cached
-        estimated = estimate_wire_request_input_tokens(
-            target.adapter, messages, model_id=target.model_id, tools=tools
+        request = list(messages)
+        counted = self._counted
+        shared = 0 if counted is None else _shared_prefix(counted, request)
+        same_route = (
+            counted is not None
+            and counted.key == key
+            and counted.adapter is target.adapter
+            and counted.model_id == target.model_id
         )
-        self._estimates[memo_key] = estimated
+        if counted is not None and same_route and shared == len(request) == len(counted.messages):
+            return counted.request, counted.tokens
+
+        new = request[shared:]
+        fields = (() if counted is None else counted.fields[:shared]) + tuple(map(_fields, new))
+        digests = (() if counted is None else counted.digests[:shared]) + tuple(
+            map(_message_digest, new)
+        )
+        system = (
+            () if counted is None else tuple(i for i in counted.system if i < shared)
+        ) + tuple(
+            shared + index for index, message in enumerate(new) if message.get("role") == "system"
+        )
+        digest = hashlib.sha256(b"".join(digests)).hexdigest()
+        counts = None
+        if (
+            counted is not None
+            and same_route
+            and counted.window is not None
+            and counted.window < shared
+        ):
+            counts = _count_from_window(counted, request, system, target)
+        if counts is None:
+            counts = self._count_whole(key, digest, request, system, target, tools)
+        tokens, calls, window, window_tokens = counts
+        self._remember(key, digest, tokens)
+        self._counted = _CountedRequest(
+            key,
+            target.adapter,
+            target.model_id,
+            tuple(request),
+            fields,
+            digests,
+            system,
+            calls,
+            digest,
+            tokens,
+            window,
+            window_tokens,
+        )
+        return digest, tokens
+
+    def _count_whole(
+        self,
+        key: str,
+        digest: str,
+        request: list[Mapping[str, Any]],
+        system: tuple[int, ...],
+        target: ContextTarget,
+        tools: Sequence[Mapping[str, Any]],
+    ) -> tuple[int, dict[str, int], int | None, int]:
+        """Count a whole request and its newest window."""
+        tokens = self._estimates.get((key, digest))
+        if tokens is None:
+            tokens = _wire_count(target, request, tools)
+        window = _newest_window(request, 0)
+        window_tokens = 0
+        if window is not None:
+            window_tokens = _wire_count(target, _window(request, window, system))
+        return tokens, _call_indices(request), window, window_tokens
+
+    def _remember(self, key: str, digest: str, tokens: int) -> None:
+        memo_key = (key, digest)
+        self._estimates[memo_key] = tokens
+        self._estimates.move_to_end(memo_key)
         while len(self._estimates) > _ESTIMATE_MEMO_SIZE:
             self._estimates.popitem(last=False)
-        return estimated
+
+
+def _count_from_window(
+    counted: _CountedRequest,
+    request: list[Mapping[str, Any]],
+    system: tuple[int, ...],
+    target: ContextTarget,
+) -> tuple[int, dict[str, int], int | None, int] | None:
+    """Count ``request`` by the change of the counted request's newest window, if exact."""
+    assert counted.window is not None
+    window = counted.window
+    calls = _window_calls(request, window, counted.calls)
+    if calls is None:
+        return None
+    window_tokens = _wire_count(target, _window(request, window, system))
+    tokens = counted.tokens + window_tokens - counted.window_tokens
+    newest = _newest_window(request, window + 1)
+    if newest is not None:
+        window = newest
+        window_tokens = _wire_count(target, _window(request, window, system))
+    return tokens, calls, window, window_tokens
+
+
+def _wire_count(
+    target: ContextTarget,
+    messages: list[Mapping[str, Any]],
+    tools: Sequence[Mapping[str, Any]] = (),
+) -> int:
+    return estimate_wire_request_input_tokens(
+        target.adapter, messages, model_id=target.model_id, tools=tools
+    )
+
+
+def _opens_window(message: Mapping[str, Any]) -> bool:
+    """Whether every wire renders the request from ``message`` on apart from what precedes it.
+
+    A user message and an Assistant message with Tool Calls each render at
+    least one wire item, end the Tool Result batch before them (Messages
+    grouping, Tool media moved behind the batch) and start a new Tool-call
+    correlation.
+    """
+    role = message.get("role")
+    if role == "user":
+        return True
+    calls = message.get("tool_calls")
+    return (
+        role == "assistant"
+        and isinstance(calls, (list, tuple))
+        and any(isinstance(call, Mapping) for call in calls)
+    )
+
+
+def _newest_window(request: list[Mapping[str, Any]], start: int) -> int | None:
+    """The index of the last window-opening message at or after ``start``."""
+    for index in range(len(request) - 1, start - 1, -1):
+        if _opens_window(request[index]):
+            return index
+    return None
+
+
+def _window(
+    request: list[Mapping[str, Any]], start: int, system: tuple[int, ...]
+) -> list[Mapping[str, Any]]:
+    """The request from ``start`` on, after the System Prompt messages before it."""
+    return [*(request[index] for index in system if index < start), *request[start:]]
+
+
+def _tool_call_ids(message: Mapping[str, Any]) -> Iterator[str]:
+    calls = message.get("tool_calls")
+    if message.get("role") != "assistant" or not isinstance(calls, (list, tuple)):
+        return
+    for call in calls:
+        if isinstance(call, Mapping) and isinstance(call.get("id"), str):
+            yield call["id"]
+
+
+def _call_indices(request: list[Mapping[str, Any]]) -> dict[str, int]:
+    """Each Tool-call id with the index of the first message calling it."""
+    calls: dict[str, int] = {}
+    for index, message in enumerate(request):
+        for call_id in _tool_call_ids(message):
+            calls.setdefault(call_id, index)
+    return calls
+
+
+def _window_calls(
+    request: list[Mapping[str, Any]], start: int, calls: Mapping[str, int]
+) -> dict[str, int] | None:
+    """The Tool-call ids of ``request`` if it counts apart from ``start``, else ``None``.
+
+    Wires normalize Tool-call ids across the whole request, and Gemini names a
+    Tool Result after its call wherever that is. So the window counts apart only
+    when it repeats no Tool-call id and answers no call made before it.
+    """
+    merged = {call_id: index for call_id, index in calls.items() if index < start}
+    for index in range(start, len(request)):
+        message = request[index]
+        if message.get("role") == "tool":
+            answered = message.get("tool_call_id")
+            if isinstance(answered, str) and merged.get(answered, start) < start:
+                return None
+            continue
+        for call_id in _tool_call_ids(message):
+            if call_id in merged:
+                return None
+            merged[call_id] = index
+    return merged
+
+
+def _shared_prefix(counted: _CountedRequest, request: list[Mapping[str, Any]]) -> int:
+    """How many leading messages of ``request`` the counted request holds, unchanged."""
+    limit = min(len(counted.messages), len(request))
+    for index in range(limit):
+        message = request[index]
+        if message is not counted.messages[index] or _fields(message) != counted.fields[index]:
+            return index
+    return limit
+
+
+def _fields(message: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (*message, *message.values())
+
+
+def _message_digest(message: Mapping[str, Any]) -> bytes:
+    return hashlib.sha256(
+        json.dumps(message, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()
+    ).digest()
 
 
 def _context_key(
