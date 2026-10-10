@@ -47,7 +47,7 @@ Desktop settings section `dictation` (`desktop/settings.py`):
 
 `ClipboardTextInserter.insert(text, target_window)`:
 
-- Reads the current clipboard text, writes the transcript as clipboard text, then pastes with a synthetic Ctrl+V (`SendInput`) only when the target still has the focus, the target is reachable (not elevated while the Desktop is not; an unknown elevation counts as elevated), and every modifier is released within `MODIFIER_RELEASE_TIMEOUT_SECONDS` (2 s; Ctrl+V must not become another shortcut). Otherwise the text stays in the clipboard (`inserted_to_clipboard`).
+- Checks the target's focus and reachability (not elevated while the Desktop is not; an unknown elevation counts as elevated), then waits up to `MODIFIER_RELEASE_TIMEOUT_SECONDS` (2 s) for every modifier to be released. Only after that wait does it read the current clipboard text and publish the transcript, so a copy during the wait cannot replace what Ctrl+V pastes. It rechecks the original target's focus immediately before the synthetic Ctrl+V (`SendInput`); a failed check leaves the text in the clipboard (`inserted_to_clipboard`).
 - After a paste the previous clipboard text returns after `CLIPBOARD_RESTORE_DELAY_SECONDS` (0.8 s, timer `vbot-dictation-clipboard`) unless the clipboard changed meanwhile (`GetClipboardSequenceNumber`). Clipboard content other than text is not restored.
 - The raw transcript is inserted as returned (stripped); there is no post-processing.
 

@@ -75,61 +75,95 @@ class Scheduler:
 
 
 class Clock:
-    def __init__(self) -> None:
+    def __init__(self, on_wait: Callable[[], None] | None = None) -> None:
         self.now = 0.0
+        self.on_wait = on_wait
 
     def __call__(self) -> float:
         return self.now
 
     def sleep(self, seconds: float) -> None:
         self.now += seconds
+        if self.on_wait is not None:
+            action, self.on_wait = self.on_wait, None
+            action()
 
 
-def _inserter(host: FakeHost, scheduler: Scheduler) -> ClipboardTextInserter:
-    clock = Clock()
+def _inserter(
+    host: FakeHost, scheduler: Scheduler, *, on_wait: Callable[[], None] | None = None
+) -> ClipboardTextInserter:
+    clock = Clock(on_wait)
     return ClipboardTextInserter(host, clock=clock, sleep=clock.sleep, schedule=scheduler)
 
 
-@pytest.mark.parametrize("copied_meanwhile", [False, True])
+@pytest.mark.parametrize("copied_at", ["never", "while-waiting", "after-paste"])
 def test_a_paste_restores_the_previous_text_unless_something_new_was_copied(
-    copied_meanwhile: bool,
+    copied_at: str,
 ) -> None:
     host, scheduler = FakeHost(modifier_polls=3), Scheduler()
 
-    assert _inserter(host, scheduler).insert("Hallo Welt", TARGET) == INSERT_PASTED
+    def copy_during_wait() -> None:
+        if copied_at == "while-waiting":
+            host.write_clipboard_text("copied by the user")
+
+    assert (
+        _inserter(host, scheduler, on_wait=copy_during_wait).insert("Hallo Welt", TARGET)
+        == INSERT_PASTED
+    )
     assert host.events == ["paste:Hallo Welt"]
-    if copied_meanwhile:
+    if copied_at == "after-paste":
         host.write_clipboard_text("copied by the user")
     scheduler.run()
 
-    assert host.clipboard == ("copied by the user" if copied_meanwhile else "previous")
+    assert host.clipboard == ("previous" if copied_at == "never" else "copied by the user")
 
 
 @pytest.mark.parametrize(
-    "setup",
+    ("setup", "during_wait"),
     [
-        lambda host: setattr(host, "foreground", 9),
-        lambda host: setattr(host, "foreground", 0),
-        lambda host: setattr(host, "reachable", False),
-        lambda host: setattr(host, "paste_accepted", False),
-        lambda host: setattr(
-            host, "modifier_polls", round(MODIFIER_RELEASE_TIMEOUT_SECONDS / 0.02) + 5
+        (lambda host: setattr(host, "foreground", 9), False),
+        (lambda host: setattr(host, "foreground", 0), False),
+        (lambda host: setattr(host, "reachable", False), False),
+        (lambda host: setattr(host, "paste_accepted", False), False),
+        (
+            lambda host: setattr(
+                host, "modifier_polls", round(MODIFIER_RELEASE_TIMEOUT_SECONDS / 0.02) + 5
+            ),
+            False,
         ),
+        (lambda host: setattr(host, "foreground", 9), True),
+        (lambda host: setattr(host, "foreground", 0), True),
     ],
-    ids=["focus-moved", "no-focus", "elevated", "paste-refused", "modifier-held"],
+    ids=[
+        "focus-moved",
+        "no-focus",
+        "elevated",
+        "paste-refused",
+        "modifier-held",
+        "focus-moved-during-wait",
+        "focus-lost-during-wait",
+    ],
 )
 def test_without_a_safe_paste_the_text_stays_in_the_clipboard(
     setup: Callable[[FakeHost], None],
+    during_wait: bool,
 ) -> None:
     host, scheduler = FakeHost(), Scheduler()
-    setup(host)
+    if during_wait:
+        host.modifier_polls = 1
+    else:
+        setup(host)
 
-    outcome = _inserter(host, scheduler).insert("Hallo Welt", TARGET)
+    outcome = _inserter(
+        host, scheduler, on_wait=(lambda: setup(host)) if during_wait else None
+    ).insert("Hallo Welt", TARGET)
 
     assert outcome == INSERT_CLIPBOARD
     assert host.clipboard == "Hallo Welt"
     assert scheduler.pending == []
     assert host.pastes <= 1  # only a refused paste was attempted
+    if during_wait:
+        assert host.pastes == 0
 
 
 def test_a_clipboard_that_cannot_be_written_fails_the_insert() -> None:
