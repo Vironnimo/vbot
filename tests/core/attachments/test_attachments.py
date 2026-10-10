@@ -28,23 +28,35 @@ from core.storage.layout import DataDirectoryLayout
 
 _OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
 _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_OOXML_FORMATS = (
+    ("docx", "wordprocessingml.document", "word/document.xml"),
+    ("xlsx", "spreadsheetml.sheet", "xl/workbook.xml"),
+    ("pptx", "presentationml.presentation", "ppt/presentation.xml"),
+)
 
 
 def _build_ooxml_payload(
-    content_types_xml: bytes, *, compression: int = zipfile.ZIP_DEFLATED
+    content_types_xml: bytes,
+    *,
+    compression: int = zipfile.ZIP_DEFLATED,
+    parts: tuple[str, ...] = ("word/document.xml",),
 ) -> bytes:
-    """Build a minimal ZIP carrying one ``[Content_Types].xml`` entry."""
+    """Build a minimal ZIP with a manifest and its declared main document parts."""
     buffer = io.BytesIO()
     # A fixed timestamp keeps the bytes, and the test ids derived from them, identical
     # across collections; xdist workers collect independently and must agree.
     entry = zipfile.ZipInfo("[Content_Types].xml", date_time=(2020, 1, 1, 0, 0, 0))
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr(entry, content_types_xml, compress_type=compression)
+        for part in parts:
+            archive.writestr(zipfile.ZipInfo(part, date_time=(2020, 1, 1, 0, 0, 0)), b"<document/>")
     return buffer.getvalue()
 
 
 _DOCX_CONTENT_TYPES = (
-    b'<?xml version="1.0"?><Types><Override '
+    b'<?xml version="1.0"?>'
+    b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    b'<Override PartName="/word/document.xml" '
     b'ContentType="application/vnd.openxmlformats-officedocument.'
     b'wordprocessingml.document.main+xml"/></Types>'
 )
@@ -79,6 +91,11 @@ _DOCX_CONTENT_TYPES = (
         # An oversized manifest is refused even when it carries the docx marker.
         ("report.docx", _build_ooxml_payload(_DOCX_CONTENT_TYPES), _DOCX_MEDIA_TYPE),
         (
+            "report.bin",
+            _build_ooxml_payload(_DOCX_CONTENT_TYPES.decode().encode("utf-16")),
+            _DOCX_MEDIA_TYPE,
+        ),
+        (
             "bomb.docx",
             _build_ooxml_payload(
                 b"wordprocessingml.document" + b" " * (_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
@@ -105,6 +122,12 @@ def test_sniff_media_type_classifies_by_content(
         "lzma",
         "zstandard",
         "oversized",
+        "malformed_xml",
+        "unknown_encoding",
+        "doctype",
+        "missing_part",
+        "embedded_only",
+        "ambiguous_main",
     ],
 )
 def test_store_rejects_unreadable_ooxml_as_unsupported_type(
@@ -116,7 +139,31 @@ def test_store_rejects_unreadable_ooxml_as_unsupported_type(
         "lzma": zipfile.ZIP_LZMA,
         "zstandard": zipfile.ZIP_ZSTANDARD,
     }.get(damage, zipfile.ZIP_DEFLATED)
-    payload = bytearray(_build_ooxml_payload(_DOCX_CONTENT_TYPES))
+    manifest = _DOCX_CONTENT_TYPES
+    parts: tuple[str, ...] = ("word/document.xml",)
+    if damage == "malformed_xml":
+        manifest = manifest.removesuffix(b"</Types>")
+    elif damage == "unknown_encoding":
+        manifest = manifest.replace(b'"1.0"?>', b'"1.0" encoding="unknown"?>')
+    elif damage == "doctype":
+        manifest = manifest.replace(
+            b"?><Types", b'?><!DOCTYPE Types [<!ENTITY example "expanded">]><Types'
+        )
+    elif damage == "missing_part":
+        parts = ()
+    elif damage == "embedded_only":
+        manifest = manifest.replace(
+            b'Override PartName="/word/document.xml"', b'Default Extension="docx"'
+        ).replace(b".main+xml", b"")
+    elif damage == "ambiguous_main":
+        manifest = manifest.replace(
+            b"</Types>",
+            b'<Override PartName="/xl/workbook.xml" ContentType="'
+            b'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            b"</Types>",
+        )
+        parts += ("xl/workbook.xml",)
+    payload = bytearray(_build_ooxml_payload(manifest, parts=parts))
     central_header = payload.index(b"PK\x01\x02")
     if damage == "encrypted":
         payload[6] |= 1
@@ -160,17 +207,28 @@ def test_store_rejects_unreadable_ooxml_as_unsupported_type(
             (
                 f"report.{extension}",
                 _build_ooxml_payload(
-                    _DOCX_CONTENT_TYPES.replace(b"wordprocessingml.document", subtype.encode()),
+                    _DOCX_CONTENT_TYPES.replace(b"wordprocessingml.document", subtype.encode())
+                    .replace(b"word/document.xml", part.encode())
+                    .replace(
+                        b"</Types>",
+                        (
+                            f'<Default Extension="{embedded_extension}" '
+                            f'ContentType="{_OOXML_PREFIX}{embedded_subtype}"/></Types>'
+                        ).encode()
+                        if embedded_extension
+                        else b"</Types>",
+                    ),
                     compression=compression,
+                    parts=(part,),
                 ),
                 _OOXML_PREFIX + subtype,
                 f".{extension}",
             )
-            for extension, subtype in [
-                ("docx", "wordprocessingml.document"),
-                ("xlsx", "spreadsheetml.sheet"),
-                ("pptx", "presentationml.presentation"),
-            ]
+            for extension, subtype, part in _OOXML_FORMATS
+            for embedded_extension, embedded_subtype, _embedded_part in (
+                ("", "", ""),
+                *(item for item in _OOXML_FORMATS if item[0] != extension),
+            )
             for compression in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
         ],
     ],
