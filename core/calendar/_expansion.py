@@ -155,18 +155,30 @@ def has_key(rule: rrule, key: str, zone: ZoneInfo | None) -> bool:
 
 
 def _rule_occurrences(series: _Series, after: datetime) -> Iterator[EventOccurrence]:
-    """The occurrences at their original times that end after ``after``, in order."""
+    """The occurrences at their original times that end after ``after``, in UTC order.
+
+    Resolving a gap can move an earlier local start past the next one. Keep a
+    bounded heap until the advancing local start proves nothing earlier can
+    follow: UTC offsets are strictly between -24 and +24 hours. This also
+    covers non-hour transitions and skipped dates without exhausting a rule.
+    """
     assert series.rule is not None
     event = series.event
     low = _local(series, after) - series.length - _MARGIN
+    pending: list[tuple[datetime, str, EventOccurrence]] = []
     for moment in series.rule.xafter(low, inc=True):
+        earliest_following = moment.replace(tzinfo=UTC) - _MARGIN
+        while pending and pending[0][0] <= earliest_following:
+            yield heapq.heappop(pending)[2]
         key = occurrence_key(moment, all_day=series.zone is None)
         override = event.overrides.get(key)
         if key in event.exdates or (override is not None and "start" in override):
             continue
         item = _occurrence(series, moment, override)
         if item.end_utc > after:
-            yield item
+            heapq.heappush(pending, (item.start_utc, item.id, item))
+    while pending:
+        yield heapq.heappop(pending)[2]
 
 
 def _moved_occurrences(series: _Series) -> list[EventOccurrence]:
