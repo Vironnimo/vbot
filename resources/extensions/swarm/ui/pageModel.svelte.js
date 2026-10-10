@@ -149,6 +149,9 @@ export function createSwarmPageModel(host) {
       await tick();
       await wikiPanel?.openPage(id);
     },
+    // A mention shows the participant's Activity, as its chip does.
+    inspectParticipant: (participant) =>
+      activity.inspectParticipant(participant),
     refresh,
     showResumeFailures,
   });

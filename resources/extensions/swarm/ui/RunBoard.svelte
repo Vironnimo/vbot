@@ -1,6 +1,11 @@
 <script>
   import { participantColor } from './pagePresentation.js';
-  import { t } from '../../../../webui/src/lib/i18n.js';
+  import { activeLocaleTag, t } from '../../../../webui/src/lib/i18n.js';
+  import { formatMoment } from '../../../../webui/src/lib/timeText.js';
+  import {
+    dateKeyInApplicationZone,
+    formatDateTimeInApplicationZone,
+  } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
   import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
@@ -17,6 +22,9 @@
   // children of `ol.board`, which carries the content links, inside the
   // page's scroller.
   let { board, model } = $props();
+
+  // Marks where a link goes in a translated sentence.
+  const GAP = '\u0000';
 
   let swarm = $derived(model.selectedSwarm);
   let directory = $derived(swarm.effective_configuration?.cwd ?? '');
@@ -45,9 +53,82 @@
         ? t('swarm.board.emptyAttention')
         : '',
   );
+
+  // A post's time: the time for a post from today, the date for an older one
+  // (with its year outside the current one). The tooltip gives the moment.
+  function postTime(value) {
+    const day = value ? dateKeyInApplicationZone(value) : '';
+    if (!day) return '';
+    const today = dateKeyInApplicationZone(Date.now());
+    return formatDateTimeInApplicationZone(
+      value,
+      activeLocaleTag(),
+      day === today
+        ? { hour: 'numeric', minute: '2-digit' }
+        : {
+            month: 'short',
+            day: 'numeric',
+            ...(day.slice(0, 4) === today.slice(0, 4)
+              ? {}
+              : { year: 'numeric' }),
+          },
+    );
+  }
+
+  const authorName = (post) =>
+    post.author?.kind === 'user'
+      ? t('swarm.board.you')
+      : (post.author_name ?? post.author?.name ?? t('swarm.participant'));
+
+  let names = null;
+  let namesLocale = '';
+  // The participants a post addresses, by name.
+  function recipientNames(post) {
+    const locale = activeLocaleTag();
+    if (namesLocale !== locale) {
+      names = new Intl.ListFormat(locale, { type: 'conjunction' });
+      namesLocale = locale;
+    }
+    return names.format(
+      post.recipients.map(
+        (id) =>
+          swarm.participants?.find((participant) => participant.id === id)
+            ?.display_name ?? id,
+      ),
+    );
+  }
+
+  // A post's own text opens when focus reaches into it, such as a link in
+  // its folded part, or reaches the post itself, as a revealed post's does.
+  function focusPost(event, post) {
+    if (
+      board.folds(post.id) &&
+      (event.target.matches('[data-post-number]') ||
+        event.target.closest('.post-body'))
+    )
+      board.expand(post.id);
+  }
 </script>
 
-<section
+{#snippet replyIcon()}<svg
+    class="post-icon"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    ><path d="m9 17-5-5 5-5" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" /></svg
+  >{/snippet}
+
+{#snippet postTimeTag(post)}{#if post.created_at}<time
+      datetime={post.created_at}
+      use:tooltip={() => formatMoment(post.created_at)}
+      >{postTime(post.created_at)}</time
+    >{/if}{/snippet}
+
+<div
   class="panel board-panel"
   role="tabpanel"
   id="swarm-run-panel-board"
@@ -69,7 +150,11 @@
         board.loadDiscussions(swarm, board.discussionCursor)}
       onValueChange={(value) => board.chooseDiscussion(value)}
     />
-    <Button variant="secondary" onClick={() => (board.composeOpen = true)}>
+    <Button
+      variant="secondary"
+      class="board-write"
+      onClick={() => (board.composeOpen = true)}
+    >
       <SwarmIcon kind="edit" />{t('swarm.board.openComposer')}
     </Button>
   </div>
@@ -139,76 +224,96 @@
         >
       </div>{/if}
     <ol class="board" use:board.contentLinks>
-      {#each board.posts as post (post.id)}<li
-          data-post-number={post.sequence}
-          style:--participant-color={post.author?.kind === 'participant' &&
-          post.author?.id
-            ? participantColor(post.author.id)
-            : 'var(--text-med)'}
-        >
-          <div class="post-header">
-            <div class="post-author">
+      {#each board.posts as post (post.id)}{#if post.discussion_announcement}
+          {@const opened = t('swarm.board.discussionOpened', {
+            name: authorName(post),
+            title: GAP,
+          }).split(GAP)}
+          <li
+            class="board-event discussion-announcement"
+            data-post-number={post.sequence}
+          >
+            <ParticipantAvatar
+              id={post.author?.id}
+              name={post.author?.name}
+              kind={post.author?.kind}
+            />
+            <p>
+              {opened[0]}<a
+                href="#discussion/{encodeURIComponent(
+                  post.discussion_announcement.discussion_id,
+                )}">{post.discussion_announcement.title}</a
+              >{opened[1]}
+            </p>
+            {@render postTimeTag(post)}
+          </li>
+        {:else}
+          <li
+            class="board-post"
+            data-post-number={post.sequence}
+            style:--participant-color={post.author?.kind === 'participant' &&
+            post.author?.id
+              ? participantColor(post.author.id)
+              : 'var(--text-lo)'}
+            onfocusin={(event) => focusPost(event, post)}
+          >
+            <div class="post-header">
               <ParticipantAvatar
                 id={post.author?.id}
                 name={post.author?.name}
                 kind={post.author?.kind}
               />
-              <strong
-                >{post.author_name ??
-                  post.author?.name ??
-                  t('swarm.participant')}</strong
-              >
-            </div>
-            <span class="post-meta"
-              >{#if post.sequence != null}<span class="post-number"
+              <span class="post-author">{authorName(post)}</span>
+              {#if post.sequence != null}<span class="post-number"
                   >#{post.sequence}</span
-                >{/if}<time datetime={post.created_at}
-                >{model.date(post.created_at)}</time
-              ></span
-            >
-          </div>
-          {#if post.discussion_announcement}
-            <div class="discussion-announcement">
-              <p>
-                {t('swarm.board.discussionOpened', {
-                  name: post.author.name,
-                })}
-              </p>
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  board.openDiscussion(post.discussion_announcement)}
-              >
-                {post.discussion_announcement.title}
-              </Button>
+                >{/if}
+              {@render postTimeTag(post)}
             </div>
-          {:else}<MarkdownContent
-              source={post.text}
-              class="msg-markdown md-chat"
-            />{/if}
-          {#if post.reply_sequence != null}<small
-              ><a href="#post/{post.reply_sequence}"
-                >{t('swarm.board.reply', {
-                  id: `#${post.reply_sequence}`,
-                })}</a
-              ></small
-            >{:else if post.reply_to}<small
-              >{t('swarm.board.reply', {
-                id: post.reply_to,
-              })}</small
-            >{/if}{#if post.recipients?.length}<small
-              >{t('swarm.board.addressed', {
-                names: post.recipients
-                  .map(
-                    (id) =>
-                      model.selectedSwarm?.participants?.find(
-                        (participant) => participant.id === id,
-                      )?.display_name ?? id,
-                  )
-                  .join(', '),
-              })}</small
-            >{/if}
-        </li>{/each}
+            {#if post.reply_sequence != null || post.recipients?.length}
+              <p class="post-context">
+                {#if post.reply_sequence != null}
+                  {@const reply = t('swarm.board.inReplyTo', {
+                    reference: GAP,
+                  }).split(GAP)}
+                  {@render replyIcon()}<span
+                    >{reply[0]}<a href="#post/{post.reply_sequence}"
+                      >#{post.reply_sequence}</a
+                    >{reply[1]}</span
+                  >
+                {/if}
+                {#if post.recipients?.length}{#if post.reply_sequence != null}<span
+                      class="post-context__gap"
+                      aria-hidden="true">·</span
+                    >{/if}<span
+                    >{t('swarm.board.addressed', {
+                      names: recipientNames(post),
+                    })}</span
+                  >{/if}
+              </p>
+            {/if}
+            <div
+              class="post-body"
+              class:post-body--folded={board.folds(post.id) &&
+                !board.opened(post.id)}
+              use:board.postBody={post.id}
+            >
+              <MarkdownContent
+                source={post.text}
+                class="msg-markdown md-chat"
+              />
+            </div>
+            {#if board.folds(post.id)}<Button
+                variant="tertiary"
+                class="post-fold"
+                aria-expanded={board.opened(post.id)}
+                onClick={(event) =>
+                  board.toggleExpanded(post.id, event.currentTarget)}
+                >{board.opened(post.id)
+                  ? t('swarm.board.showLess')
+                  : t('swarm.board.showMore')}</Button
+              >{/if}
+          </li>
+        {/if}{/each}
     </ol>
     {#if board.boardCursor}<Button
         variant="secondary"
@@ -219,4 +324,4 @@
             board.boardCursor,
           )}>{t('swarm.board.more')}</Button
       >{/if}{/if}
-</section>
+</div>

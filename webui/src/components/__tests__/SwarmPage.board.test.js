@@ -13,23 +13,22 @@ import {
   fill,
   render,
   openSwarm,
+  choose,
   fixtureState,
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
+import { formatMoment } from '../../lib/timeText.js';
 
 const WRITE_POST = t('swarm.board.openComposer');
 const POST = t('swarm.board.submit');
 
 const board = () => document.querySelector('.board');
 // Picks a discussion by its title in the Board's discussion picker.
-async function selectDiscussion(title) {
-  document.getElementById('swarm-discussion').click();
-  await tick();
-  [...document.querySelectorAll('[role="option"]')]
-    .find((option) => option.textContent.trim().startsWith(title))
-    .click();
-  await tick();
-}
+const selectDiscussion = (title) => choose('swarm-discussion', title);
+const tooltipText = () =>
+  document.querySelector('#app-tooltip')?.textContent ?? '';
+const tooltipTitle = () =>
+  document.querySelector('#app-tooltip .app-tooltip__title')?.textContent;
 // Replies to Board reads of the main discussion with the given posts.
 function boardPosts(operation, entries) {
   overrideOperations(operation, { 'board.read': () => ({ entries }) });
@@ -183,18 +182,25 @@ describe('Swarm Board posts', () => {
 
   it('renders complete prompt, timestamped author headers and participants above posts', async () => {
     const prompt = 'test-owned long prompt '.repeat(15) + '\nsecond line';
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-09-08T12:00Z') });
+    onTestFinished(() => vi.useRealTimers());
     const { bridge, operation } = createBridge();
+    const post = (sequence, created, author) => ({
+      id: `post-${sequence}`,
+      sequence,
+      author,
+      text: `test-owned board text ${sequence}`,
+      created_at: created,
+    });
+    const alpha = { id: 'prt-a', kind: 'participant', name: 'Alpha' };
     overrideOperations(operation, {
       'swarms.get': () => ({ swarm: { ...structuredClone(swarm), prompt } }),
       'board.read': () => ({
         entries: [
-          {
-            id: 'post-time',
-            sequence: 7,
-            author: { name: 'Alpha' },
-            text: 'test-owned board text',
-            created_at: '2026-09-08T09:15:00+00:00',
-          },
+          post(5, '2025-12-30T09:15:00+00:00', alpha),
+          post(6, '2026-09-01T09:15:00+00:00', alpha),
+          post(7, '2026-09-08T09:15:00+00:00', alpha),
+          post(8, '2026-09-08T09:20:00+00:00', { kind: 'user', name: 'User' }),
         ],
       }),
     });
@@ -235,15 +241,31 @@ describe('Swarm Board posts', () => {
     onTestFinished(() => vi.unstubAllGlobals());
     button(t('swarm.board.copyDirectory')).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('C:/work'));
-    expect(document.querySelector('.post-header strong').textContent).toBe(
-      'Alpha',
+    // A header names the author, the post number participants cite it by
+    // and its time: today's posts by their time, older ones by their date.
+    const header = (number) =>
+      document.querySelector(`.board > li[data-post-number="${number}"]`);
+    expect(
+      [5, 6, 7, 8].map((number) => [
+        header(number).querySelector('.post-author').textContent,
+        header(number).querySelector('.post-number').textContent,
+        header(number).querySelector('time').textContent,
+      ]),
+    ).toEqual([
+      ['Alpha', '#5', 'Dec 30, 2025'],
+      ['Alpha', '#6', 'Sep 1'],
+      ['Alpha', '#7', '11:15 AM'],
+      [t('swarm.board.you'), '#8', '11:20 AM'],
+    ]);
+    // The user's own posts show a person, not initials.
+    expect(header(8).querySelector('.participant-avatar svg')).not.toBeNull();
+    const time = header(7).querySelector('time');
+    expect(time.dateTime).toBe('2026-09-08T09:15:00+00:00');
+    time.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(tooltipText()).toBe(formatMoment('2026-09-08T09:15:00+00:00')),
     );
-    // The post number is the reference participants use for this post.
-    expect(document.querySelector('.post-number').textContent).toBe('#7');
-    expect(document.querySelector('.board time').dateTime).toBe(
-      '2026-09-08T09:15:00+00:00',
-    );
-    expect(document.querySelector('.board time').textContent).toMatch(/11:15/);
+    expect(tooltipText()).toContain('Sep 8, 2026, 11:15 AM');
     const roster = document.querySelector('.participant-pane');
     expect(
       roster.compareDocumentPosition(board()) &
@@ -324,12 +346,14 @@ describe('Swarm Board posts', () => {
         const postAvatar = post.querySelector('.participant-avatar');
         expect(postAvatar.textContent.trim()).toBe(index === 0 ? 'P9' : 'P10');
         expect(postAvatar.getAttribute('aria-hidden')).toBe('true');
-        expect(post.querySelector('strong').textContent).toBe(
+        expect(post.querySelector('.post-author').textContent).toBe(
           participant.display_name,
         );
         // Addressed participants appear by name, not by id.
-        expect(post.textContent.includes('To: Participant 10')).toBe(
-          index === 0,
+        expect(post.querySelector('.post-context')?.textContent.trim()).toBe(
+          index === 0
+            ? t('swarm.board.addressed', { names: 'Participant 10' })
+            : undefined,
         );
         const color = postAvatar.style.getPropertyValue('--participant-color');
         expect(color).toBe(
@@ -444,7 +468,8 @@ describe('Swarm Board posts', () => {
       7,
       'dsc-main',
       'Alpha',
-      'Agrees with #5 and w2 after #3; not #7, #99, w3, `#5` or abc#5.',
+      'Agrees with #5 and w2 after #3; not #7, #99, w3, `#5` or abc#5. ' +
+        'See [the benchmarks](#wiki/w2).',
       { reply_to: 'pst-5', reply_sequence: 5 },
     );
     const { bridge, operation } = createBridge(undefined, {
@@ -483,22 +508,25 @@ describe('Swarm Board posts', () => {
       document.querySelector('.swarm-goal-post a[data-swarm-reference]'),
     ).toBeNull();
 
-    const tooltipText = () =>
-      document.querySelector('#app-tooltip')?.textContent ?? '';
     const link = (text) =>
-      [...document.querySelectorAll('a[data-swarm-reference]')].find(
+      [...document.querySelectorAll('.board a')].find(
         (item) => item.textContent === text,
       );
+    // A reference's tooltip leads with the author or the page title.
     link('#5').focus();
     await vi.waitFor(() =>
       expect(tooltipText()).toContain('Baseline measured.'),
     );
-    expect(tooltipText()).toContain('#5 · Beta');
+    expect(tooltipTitle()).toBe('Beta');
     link('w2').focus();
     await vi.waitFor(() =>
       expect(tooltipText()).toContain('Median latency by build.'),
     );
-    expect(tooltipText()).toContain('w2 · Benchmarks');
+    expect(tooltipTitle()).toBe('Benchmarks');
+    // So does a Markdown link to a page.
+    link('#5').focus();
+    link('the benchmarks').focus();
+    await vi.waitFor(() => expect(tooltipTitle()).toBe('Benchmarks'));
     expect(operation).toHaveBeenCalledWith('wiki', {
       swarm_id: swarm.id,
       action: 'read',
@@ -511,9 +539,14 @@ describe('Swarm Board posts', () => {
       expect.objectContaining({ message_id: '#5' }),
     );
 
-    document
-      .querySelector('.board a[href="#post/5"]:not([data-swarm-reference])')
-      .click();
+    // The reply's meta line links the post it answers.
+    const replyLink = document.querySelector(
+      '.board > li[data-post-number="7"] .post-context a',
+    );
+    expect(replyLink.closest('.post-context').textContent.trim()).toBe(
+      t('swarm.board.inReplyTo', { reference: '#5' }),
+    );
+    replyLink.click();
     await vi.waitFor(() =>
       expect(
         document.querySelector('.board > li[data-post-number="5"]').dataset
@@ -539,6 +572,123 @@ describe('Swarm Board posts', () => {
       ].map((bounds) => ['board.read', { swarm_id: swarm.id, ...bounds }]),
     );
     expect(callsTo(operation, 'link.open')).toHaveLength(0);
+  });
+
+  it('links participant mentions to their details card and Activity', async () => {
+    const { bridge, operation } = createBridge();
+    boardPosts(operation, [
+      {
+        id: 'pst-mention',
+        sequence: 4,
+        author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
+        text: 'Thanks @beta and @prt-a; not @Alpha2, me@Beta or `@Beta`.',
+      },
+    ]);
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(board()?.querySelector('a[data-swarm-reference]')).toBeTruthy(),
+    );
+    // As the Store reads mentions: "@" before a display name or id in any
+    // case, never inside a longer word or code.
+    const mentions = [
+      ...board().querySelectorAll('a[data-swarm-reference="participant"]'),
+    ];
+    expect(
+      mentions.map((link) => [link.textContent, link.getAttribute('href')]),
+    ).toEqual([
+      ['@beta', '#participant/prt-b'],
+      ['@prt-a', '#participant/prt-a'],
+    ]);
+    mentions[0].focus();
+    await vi.waitFor(() => expect(tooltipTitle()).toBe('Beta'));
+    expect(tooltipText()).toContain('demo/fallback');
+    mentions[0].click();
+    await vi.waitFor(() =>
+      expect(bridge.readHistory).toHaveBeenCalledWith(
+        swarm.id,
+        'prt-b',
+        expect.anything(),
+      ),
+    );
+    expect(callsTo(operation, 'link.open')).toHaveLength(0);
+  });
+
+  it('folds a long post to its first lines until the reader opens it', async () => {
+    // A body reports its whole text's height once it is laid out: post 2's
+    // runs far past the fold.
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback) {
+          this.callback = callback;
+        }
+        observe(target) {
+          queueMicrotask(() =>
+            this.callback([{ target, contentRect: { height: 1 } }]),
+          );
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const height = vi
+      .spyOn(Element.prototype, 'scrollHeight', 'get')
+      .mockImplementation(function () {
+        return this.closest('[data-post-number="2"]') ? 2000 : 100;
+      });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      height.mockRestore();
+    });
+    const { bridge, operation } = createBridge(undefined, {
+      ...structuredClone(swarm),
+      newest_post_sequence: 3,
+    });
+    const author = { id: 'prt-a', kind: 'participant', name: 'Alpha' };
+    overrideOperations(operation, {
+      'board.read': boardStore(
+        [
+          { id: 'pst-1', sequence: 1, text: 'short-sentinel' },
+          { id: 'pst-2', sequence: 2, text: 'long-sentinel' },
+          { id: 'pst-3', sequence: 3, text: 'Builds on #2.' },
+        ].map((post) => ({ ...post, discussion_id: 'dsc-main', author })),
+      ),
+    });
+    await render(bridge);
+    button('Investigate').click();
+    const post = (number) =>
+      document.querySelector(`.board > li[data-post-number="${number}"]`);
+    await vi.waitFor(() =>
+      expect(post(2)?.querySelector('.post-fold')).toBeTruthy(),
+    );
+    const folded = () =>
+      post(2)
+        .querySelector('.post-body')
+        .classList.contains('post-body--folded');
+    const fold = post(2).querySelector('.post-fold');
+    expect(folded()).toBe(true);
+    expect([fold.textContent, fold.getAttribute('aria-expanded')]).toEqual([
+      t('swarm.board.showMore'),
+      'false',
+    ]);
+    expect(post(1).querySelector('.post-fold')).toBeNull();
+    fold.click();
+    await tick();
+    expect(folded()).toBe(false);
+    expect([fold.textContent, fold.getAttribute('aria-expanded')]).toEqual([
+      t('swarm.board.showLess'),
+      'true',
+    ]);
+    fold.click();
+    await tick();
+    expect(folded()).toBe(true);
+    // A revealed post shows whole.
+    post(3).querySelector('a[data-swarm-reference]').click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.dataset.postNumber).toBe('2'),
+    );
+    expect(folded()).toBe(false);
   });
 
   it('reveals a post beyond the loaded pages among its neighbours and returns to the newest posts', async () => {
@@ -754,14 +904,17 @@ describe('Swarm Board discussions', () => {
     button('Investigate').click();
     await vi.waitFor(() =>
       expect(
-        document.querySelector('.discussion-announcement button'),
+        document.querySelector('.discussion-announcement a'),
       ).not.toBeNull(),
     );
     expect(board().textContent).toContain(ordinaryText);
     expect(board().textContent).not.toContain('stored-body-sentinel');
     expect(board().querySelector('img')).toBeNull();
-    const target = document.querySelector('.discussion-announcement button');
+    const target = document.querySelector('.discussion-announcement a');
     expect(target.textContent.trim()).toBe(title);
+    expect(target.closest('p').textContent.trim()).toBe(
+      t('swarm.board.discussionOpened', { name: 'Alpha', title }),
+    );
     target.click();
     await vi.waitFor(() =>
       expect(board().textContent).toContain('opening-sentinel'),

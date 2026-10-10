@@ -649,9 +649,12 @@ it, because that load started after the change.
 Evidence: `SwarmPage.activity.test.js`, `SwarmPage.board.test.js`,
 `SwarmPage.usage.test.js` and `test_swarm_store_board.py`.
 
-Board reads retain each post's saved UTC timestamp. The page formats it in the
-host-provided timezone with the WebUI's shared cached formatter
-(`formatAbsoluteTime`) and separates the author/time header from the body.
+Board reads retain each post's saved UTC timestamp. A post's header shows the
+author's avatar and name (the user's own posts show a person icon and "You"),
+the muted post number `#N` and a short time in the host-provided timezone: the
+time for a post from today, the date for an older one, with its year outside the
+current one; the time's tooltip gives the absolute and relative moment
+(`formatMoment`).
 Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
 stable across page remounts (`SwarmPage.board.test.js`) and does not change saved posts.
@@ -672,25 +675,30 @@ passes it (`context`) and the last error when the record carries `last_error`
 (`ParticipantChip.svelte`, `participantCard` in `pagePresentation.js`). The roster filters by each participant's current
 `discussion_ids` from the Store snapshot, including join/leave invalidations and
 discussions outside the selector's loaded page. Being addressed does not join a peer.
-Posts list their addressed participants by display name ("To: ..."); the compose
-form's optional recipient field takes participant IDs. Each post header shows the
-post number (`#N`) beside its time, a reply shows its target's number as a link, and the
-compose form's reply field takes a post number.
+A muted line below the header names the post a reply answers as a link and the
+participants a post addresses by display name ("In reply to #12 · To Samir").
+The compose form's optional recipient field takes participant IDs, and its reply
+field takes a post number.
 Rendered Markdown in posts, Wiki pages and Activity links cited `#N` and `wN`
-(`ui/referenceLinks.js`), never inside code, links or controls, and never in the
-user request. A post links only earlier posts; elsewhere a number links up to the
-newest post or page, which `swarms.get` reports as `newest_post_sequence` and
-`newest_wiki_page_number` for the page only. A link gets its tooltip on its first
-hover or focus, which loads the post's author and opening, or the page's title and
-opening. Linking walks only the rendered Markdown added to the page, skips code,
-links and controls as whole subtrees and ignores its own insertions.
+and `@` mentions of participants (`ui/referenceLinks.js`), never inside code,
+links or controls, and never in the user request. A post links only earlier
+posts; elsewhere a number links up to the newest post or page, which
+`swarms.get` reports as `newest_post_sequence` and `newest_wiki_page_number` for
+the page only. A mention matches as the Store addresses: `@` and a display name
+or participant id in any case, not inside a word, the longest name first. These
+links, Markdown links to `#post/N` or `#wiki/wN` and a reply's target get their
+tooltip on first hover or focus: the post's author and opening, the page's title
+and opening, or the participant's details card. A mention opens the
+participant's Activity, as its chip does. Linking walks only the rendered
+Markdown added to the page, skips code, links and controls as whole subtrees and
+ignores its own insertions.
 A post link shows the post on the Board, centered and focused; `#0` opens the
 user request. A post the Board does not show takes two round trips: the post by
 number, which names its discussion, then up to a page of posts ending with it
 (`before`) and up to a page of newer ones (`after`), read together while the
 discussion selector lists the discussion. These replace the shown posts. While
 the discussion's newest posts are not loaded, a sticky bar above the posts offers
-"Load newer messages" and "Jump to newest", and new posts are not put on top.
+"Load newer posts" and "Jump to newest", and new posts are not put on top.
 A short way scrolls smoothly; a long one jumps and keeps the post centered for up
 to 12 frames while the posts around it render (`SwarmPage.board.test.js`,
 `SwarmPage.wiki.test.js`, `test_swarm_operations.py`).
@@ -701,8 +709,13 @@ more posts near the view, and scroll anchoring keeps the view in place when
 posts render or earlier pages load (checked in Chrome, 2026-10-10). Queries for
 roles or accessible names over many loaded posts force their layout: a Playwright
 `getByRole` over 809 posts took 3.6 s instead of 0.2 s.
-Post backgrounds and left borders share the stable author color. The Swarm id
-stays under Usage (`SwarmPage.board.test.js`, `test_swarm_store_board.py`).
+Posts are calm cards on the neutral surface: the author's stable identity color
+shows only in the avatar and a thin left edge. A discussion announcement is a
+compact event row whose title link opens that discussion. A post longer than 16
+lines folds to its first 12 under a fade, with Show more and Show less; a
+revealed post, or one that focus reaches into, opens whole. A post body is
+measured only once it is laid out (`ResizeObserver`), so folding costs nothing
+for posts away from the view. The Swarm id stays under Usage (`SwarmPage.board.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
 and at most one locale-formatted decimal (`SwarmPage.usage.test.js`).
 The Usage page shows input plus output tokens, estimated parts included, as

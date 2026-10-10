@@ -1,7 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { tick } from 'svelte';
 import { t } from '../../../../webui/src/lib/i18n.js';
-import { page, requestId } from './pagePresentation.js';
+import { page, participantCard, requestId } from './pagePresentation.js';
 import { swarmChanged } from './pageRefresh.js';
 import { referenceLinks } from './referenceLinks.js';
 
@@ -12,13 +12,18 @@ const BOARD_PAGE = 50;
 // The most animation frames a revealed post is kept centered after a jump.
 const RECENTER_FRAMES = 12;
 
+// A post longer than this many lines folds to its first lines (see the CSS)
+// until the reader opens it; a shorter one shows in full, so Show more never
+// reveals just a line or two.
+const COLLAPSIBLE_LINES = 16;
+
 // The selected Swarm's Board: the selected discussion's posts and their
 // paging, the discussions, the post composer, and the links in rendered
-// Markdown, which reveal cited posts on the Board. `host` is the page model's
-// side: `call`, `client`, the shown `selectedSwarm` and its
-// `selectionRequest`, `disposed`, the page `error`, and the page steps
-// `navigate`, `stepToBoard`, `openWikiPage`, `refresh` and
-// `showResumeFailures`.
+// Markdown, which reveal cited posts on the Board, and the folding of long
+// posts. `host` is the page model's side: `call`, `client`, the shown
+// `selectedSwarm` and its `selectionRequest`, `disposed`, the page `error`,
+// and the page steps `navigate`, `stepToBoard`, `openWikiPage`,
+// `inspectParticipant`, `refresh` and `showResumeFailures`.
 export function createSwarmPageBoard(host) {
   let posts = $state([]);
 
@@ -72,6 +77,14 @@ export function createSwarmPageBoard(host) {
   // Tooltip content for "#N" and "wN" links, by "post:N" and "page:N".
   const references = new SvelteMap();
 
+  // By post id: whether a post folds, and whether the reader opened it.
+  let folding = $state({});
+  let opened = $state({});
+
+  // Measures the post bodies as they are laid out (`postBody`).
+  let bodies = null;
+  const bodyPosts = new WeakMap();
+
   // The discussion picker's options: each discussion's title, the main one
   // named as such, with its number ("d2") beside it.
   const discussionOptions = $derived(
@@ -98,6 +111,8 @@ export function createSwarmPageBoard(host) {
   // Starts another Swarm's Board at its main discussion, nothing loaded yet.
   function reset(swarm) {
     references.clear();
+    folding = {};
+    opened = {};
     selectedDiscussion = swarm.main_discussion_id;
     discussions = [];
     clearBoard();
@@ -378,9 +393,10 @@ export function createSwarmPageBoard(host) {
     const numbers = linked
       ? referenceLinks(node, {
           target: referenceTarget,
+          participants: () => host.selectedSwarm?.participants ?? [],
           describe: describeReference,
-          loading: (reference) => ({
-            title: reference,
+          loading: (kind, number) => ({
+            title: kind === 'post' ? `#${number}` : `w${number}`,
             text: t('swarm.references.loading'),
           }),
         })
@@ -409,7 +425,16 @@ export function createSwarmPageBoard(host) {
     return newest != null && number <= newest ? `#post/${number}` : null;
   }
 
+  // A participant's details card, read when it shows; a post's author and
+  // opening, or a page's title and opening, read once.
   function describeReference(kind, number) {
+    if (kind === 'participant')
+      return () => {
+        const participant = host.selectedSwarm?.participants?.find(
+          (item) => item.id === number,
+        );
+        return participant ? participantCard(participant) : '';
+      };
     const key = `${kind}:${number}`;
     if (!references.has(key))
       references.set(
@@ -443,7 +468,10 @@ export function createSwarmPageBoard(host) {
         }),
       )[0];
     return {
-      title: `#${number} · ${post.author?.name ?? t('swarm.participant')}`,
+      title:
+        post.author?.kind === 'user'
+          ? t('swarm.board.you')
+          : (post.author?.name ?? t('swarm.participant')),
       text: opening(post.text),
     };
   }
@@ -457,11 +485,8 @@ export function createSwarmPageBoard(host) {
     });
     return {
       title: result.deleted
-        ? t('swarm.references.deletedPage', {
-            reference: `w${number}`,
-            title: result.title,
-          })
-        : `w${number} · ${result.title}`,
+        ? t('swarm.references.deletedPage', { title: result.title })
+        : result.title,
       text: opening(result.content),
     };
   }
@@ -530,11 +555,63 @@ export function createSwarmPageBoard(host) {
       }
     }
     if (!current()) return;
+    // A revealed post shows whole.
+    const revealed = posts.find((item) => item.sequence === number);
+    if (revealed) opened[revealed.id] = true;
     await tick();
     revealElement(
       document.querySelector(`.board > li[data-post-number="${number}"]`),
       current,
     );
+  }
+
+  // Folds a post body that runs past COLLAPSIBLE_LINES lines while it is laid
+  // out. Posts away from the view are not laid out (`content-visibility`), so
+  // a body is measured only once it comes near the view, before it is
+  // painted.
+  function postBody(node, id) {
+    bodyPosts.set(node, id);
+    if (typeof ResizeObserver !== 'function') return {};
+    bodies ??= new ResizeObserver((entries) => {
+      for (const entry of entries)
+        if (entry.contentRect.height > 0) measureBody(entry.target);
+    });
+    bodies.observe(node);
+    return {
+      update(next) {
+        bodyPosts.set(node, next);
+      },
+      destroy() {
+        bodies?.unobserve(node);
+      },
+    };
+  }
+
+  function measureBody(node) {
+    const id = bodyPosts.get(node);
+    if (id === undefined) return;
+    const lineHeight =
+      parseFloat(
+        getComputedStyle(node.querySelector('.msg-markdown') ?? node)
+          .lineHeight,
+      ) || 20;
+    // A folded body keeps its whole text's scroll height.
+    const folds = node.scrollHeight > lineHeight * COLLAPSIBLE_LINES;
+    if (folds) folding[id] = true;
+    else if (folding[id]) delete folding[id];
+  }
+
+  // Opens a folded post, or folds it again. A post folded again keeps its
+  // Show more in view.
+  async function toggleExpanded(id, control) {
+    if (!opened[id]) {
+      opened[id] = true;
+      return;
+    }
+    delete opened[id];
+    await tick();
+    if (control?.isConnected && control.getBoundingClientRect().top < 0)
+      control.scrollIntoView?.({ block: 'nearest' });
   }
 
   // Scrolls `element` to the middle of the view, then focuses and highlights
@@ -586,7 +663,8 @@ export function createSwarmPageBoard(host) {
     const link = event.target.closest('a[href]');
     if (!link) return;
     event.preventDefault();
-    const post = /^#post\/(\d+)$/.exec(link.getAttribute('href') ?? '');
+    const href = link.getAttribute('href') ?? '';
+    const post = /^#post\/(\d+)$/.exec(href);
     if (post) {
       void Promise.resolve(
         host.navigate(() => revealPost(Number(post[1]))),
@@ -595,9 +673,35 @@ export function createSwarmPageBoard(host) {
       });
       return;
     }
-    const wiki = /^#wiki\/([^/]+)$/.exec(link.getAttribute('href') ?? '');
+    const wiki = /^#wiki\/([^/]+)$/.exec(href);
     if (wiki) {
       void host.navigate(() => host.openWikiPage(wiki[1]));
+      return;
+    }
+    // A mention shows the participant's Activity, as its chip does.
+    const mention = /^#participant\/(.+)$/.exec(href);
+    if (mention) {
+      const participant = host.selectedSwarm?.participants?.find(
+        (item) => encodeURIComponent(item.id) === mention[1],
+      );
+      if (participant)
+        void Promise.resolve(
+          host.navigate(() => host.inspectParticipant(participant)),
+        ).catch((cause) => {
+          if (!host.disposed) host.error = cause.message;
+        });
+      return;
+    }
+    // A discussion announcement opens the discussion it announces.
+    const discussion = /^#discussion\/(.+)$/.exec(href);
+    if (discussion) {
+      const announced = posts.find(
+        (item) =>
+          encodeURIComponent(
+            item.discussion_announcement?.discussion_id ?? '',
+          ) === discussion[1],
+      )?.discussion_announcement;
+      if (announced) void openDiscussion(announced);
       return;
     }
     const url = link.href;
@@ -638,6 +742,9 @@ export function createSwarmPageBoard(host) {
     get discussionParticipants() {
       return discussionParticipants;
     },
+    // Whether post `id` folds, and whether the reader opened it.
+    folds: (id) => folding[id] === true,
+    opened: (id) => opened[id] === true,
     get composeOpen() {
       return composeOpen;
     },
@@ -676,5 +783,10 @@ export function createSwarmPageBoard(host) {
     openDiscussion,
     post,
     contentLinks,
+    postBody,
+    toggleExpanded,
+    expand(id) {
+      opened[id] = true;
+    },
   };
 }
