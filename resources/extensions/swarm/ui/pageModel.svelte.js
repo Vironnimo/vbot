@@ -22,6 +22,10 @@ import { referenceLinks } from './referenceLinks.js';
 // change of a burst is always followed by a reload.
 const USAGE_REFRESH_INTERVAL_MS = 10_000;
 
+// Posts per Board read: the newest page, an earlier page and new posts. The
+// Store also caps a page's text.
+const BOARD_PAGE = 50;
+
 export function createSwarmPageModel(host) {
   // Exists from the start, so the page root can hand its layer registry to
   // the page's dialogs before any of them mounts.
@@ -698,7 +702,7 @@ export function createSwarmPageModel(host) {
     const load = call('board.read', {
       swarm_id: swarm.id,
       discussion_id: discussionId,
-      limit: 100,
+      limit: BOARD_PAGE,
       ...(cursor ? { cursor } : {}),
     });
     if (!cursor) boardLoading = load;
@@ -734,7 +738,7 @@ export function createSwarmPageModel(host) {
         swarm_id: swarm.id,
         discussion_id: discussionId,
         after: board[0]?.sequence ?? 0,
-        limit: 100,
+        limit: BOARD_PAGE,
       });
       if (!boardCurrent(version, swarm, discussionId)) return;
       const posts = page(result);

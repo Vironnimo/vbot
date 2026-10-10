@@ -148,9 +148,8 @@ DATABASE_NAME = "swarm"
 #   batch of one participant (``_store_delivery._prepare_automatic_delivery``),
 #   excluding acknowledged batches retained for receipt recovery.
 # - ``posts_discussion_page``: the Post pages of one Discussion
-#   (``_store_reads._post_page``, ``_human_post_page`` and ``_human_posts_after``,
-#   which name it with ``INDEXED BY`` so SQLite does not walk the whole Swarm's
-#   Posts by sequence)
+#   (``_store_reads._post_page`` and ``_human_rows``, which name it with
+#   ``INDEXED BY`` so SQLite does not walk the whole Swarm's Posts by sequence)
 #   and its Post high-water mark (``_store_records._post_high_water``).
 # - ``discussions_one_main``: enforces one main Discussion per Swarm and serves
 #   the main-Discussion lookup (``_store_records._main``).

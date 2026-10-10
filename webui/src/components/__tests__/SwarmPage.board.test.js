@@ -321,7 +321,7 @@ describe('Swarm Board posts', () => {
     expect(operation).toHaveBeenCalledWith('board.read', {
       swarm_id: swarm.id,
       discussion_id: swarm.main_discussion_id,
-      limit: 100,
+      limit: 50,
       cursor: 'older-page',
     });
     expect(button(more)).toBeUndefined();
@@ -339,7 +339,7 @@ describe('Swarm Board posts', () => {
           swarm_id: swarm.id,
           discussion_id: swarm.main_discussion_id,
           after,
-          limit: 100,
+          limit: 50,
         },
       ]),
     );
@@ -485,7 +485,7 @@ describe('Swarm Board discussions', () => {
     expect(operation).toHaveBeenCalledWith('board.read', {
       swarm_id: 'swr-a',
       discussion_id: 'dsc-findings',
-      limit: 100,
+      limit: 50,
     });
     finishMain({
       entries: [
@@ -561,7 +561,7 @@ describe('Swarm Board discussions', () => {
     expect(operation).toHaveBeenCalledWith('board.read', {
       swarm_id: 'swr-a',
       discussion_id: 'dsc-unlisted',
-      limit: 100,
+      limit: 50,
     });
     expect(
       [...document.querySelectorAll('select')].some(

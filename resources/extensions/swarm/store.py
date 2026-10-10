@@ -533,9 +533,10 @@ class SwarmStore:
     ) -> Page:
         """Read public Board history without participant membership or receipts.
 
-        With ``after`` (a post number), read only the discussion's posts numbered
-        above it, oldest first; ``has_more`` means the read repeats after the last
-        returned post.
+        A page holds whole posts, at most ``limit`` and ``HUMAN_PAGE_BYTES`` of
+        text, independently of the delivery settings. With ``after`` (a post
+        number), read only the discussion's posts numbered above it, oldest first;
+        ``has_more`` means the read repeats after the last returned post.
         """
         if message_id is not None and (
             discussion_id is not None or cursor is not None or limit != 20 or after is not None
