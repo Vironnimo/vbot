@@ -6,8 +6,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
-from bs4 import BeautifulSoup
-
 from core.tools._web_search_common import (
     _build_search_query,
     _clean_snippet,
@@ -18,6 +16,7 @@ from core.tools._web_search_transport import (
     _request_bounded,
     _request_json,
 )
+from core.tools.tools import run_tool_worker
 from core.utils.http_status import HttpRequestFailure
 from core.utils.logging import get_logger
 
@@ -130,6 +129,8 @@ def _decode_duckduckgo_url(raw_href: Any) -> str:
 
 def _parse_duckduckgo_results(html_text: str) -> tuple[list[dict[str, str]], bool]:
     """Read DDG result nodes once, keeping each snippet with its preceding link."""
+    from bs4 import BeautifulSoup
+
     soup = BeautifulSoup(html_text, "html.parser")
     results: list[dict[str, str]] = []
     current: dict[str, str] | None = None
@@ -252,7 +253,7 @@ async def _search_brave(
             raw_results = web_payload.get("results")
 
     results = _restrict_results_to_domains(
-        _standardize_results(raw_results), domains, count, exclude
+        await run_tool_worker(_standardize_results, raw_results), domains, count, exclude
     )
     normalized_payload: dict[str, Any] = {"results": results}
     if recency:
@@ -330,7 +331,7 @@ async def _search_searxng(
 
     raw_results = payload.get("results") if isinstance(payload, dict) else None
     results = _restrict_results_to_domains(
-        _standardize_searxng_results(raw_results), domains, count, exclude
+        await run_tool_worker(_standardize_searxng_results, raw_results), domains, count, exclude
     )
     normalized_payload: dict[str, Any] = {"results": results}
     if recency:
@@ -380,7 +381,7 @@ async def _search_duckduckgo(
         )
 
     html_text = response.text
-    parsed, challenge = _parse_duckduckgo_results(html_text)
+    parsed, challenge = await run_tool_worker(_parse_duckduckgo_results, html_text)
     if not parsed and challenge:
         _LOGGER.warning("DuckDuckGo web search returned a bot-detection challenge")
         return None, HttpRequestFailure(
@@ -494,7 +495,7 @@ async def _search_exa(
 
     raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
     results = _restrict_results_to_domains(
-        _standardize_exa_results(raw_results), domains, count, exclude
+        await run_tool_worker(_standardize_exa_results, raw_results), domains, count, exclude
     )
     envelope: dict[str, Any] = {"results": results}
     if recency:
@@ -618,7 +619,9 @@ async def _search_firecrawl(
         )
 
     results = _restrict_results_to_domains(
-        _standardize_firecrawl_results(_resolve_firecrawl_items(response_payload)),
+        await run_tool_worker(
+            _standardize_firecrawl_results, _resolve_firecrawl_items(response_payload)
+        ),
         domains,
         count,
         exclude,
@@ -708,7 +711,10 @@ async def _search_serper(
         if len(organic) < _SERPER_PAGE_SIZE:
             break
     results = _restrict_results_to_domains(
-        _standardize_serper_results(collected[:count]), domains, count, exclude
+        await run_tool_worker(_standardize_serper_results, collected[:count]),
+        domains,
+        count,
+        exclude,
     )
     envelope: dict[str, Any] = {"results": results}
     if recency:
@@ -789,7 +795,7 @@ async def _search_tavily(
 
     raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
     results = _restrict_results_to_domains(
-        _standardize_tavily_results(raw_results), domains, count, exclude
+        await run_tool_worker(_standardize_tavily_results, raw_results), domains, count, exclude
     )
     envelope: dict[str, Any] = {"results": results}
     if recency:
@@ -861,7 +867,10 @@ async def _search_perplexity(
 
     raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
     results = _restrict_results_to_domains(
-        _standardize_perplexity_results(raw_results), domains, count, exclude
+        await run_tool_worker(_standardize_perplexity_results, raw_results),
+        domains,
+        count,
+        exclude,
     )
     envelope: dict[str, Any] = {"results": results}
     if recency:

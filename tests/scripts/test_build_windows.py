@@ -123,6 +123,18 @@ def pip_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     return commands
 
 
+@pytest.fixture
+def packaged_bytecode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use real CPython for fixtures whose native hosts are only placeholder bytes."""
+    from scripts.package_build import compile_bytecode
+
+    def compile_with_test_runtime(root: Path, interpreter: Path) -> None:
+        assert interpreter == root / "runtime" / "vBot.Python.exe"
+        compile_bytecode(root, Path(sys.executable))
+
+    monkeypatch.setattr(build_windows, "compile_bytecode", compile_with_test_runtime)
+
+
 def test_only_the_root_bootstraps_are_compiled_as_stable_hosts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -324,9 +336,10 @@ def test_runtime_cache_reuses_a_runtime_only_for_the_same_inputs(
 
 
 def test_build_writes_complete_hashed_manifest_and_rooted_archive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packaged_bytecode: None
 ) -> None:
     source = _source(tmp_path)
+    (source / "core/__init__.py").write_text("value = 42\n", encoding="utf-8")
     runtime = _runtime(tmp_path)
 
     def fake_compile(
@@ -388,6 +401,7 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
     assert "release.json" in names
     assert "app/core/included.txt" in names
     assert "runtime/vBot.Server.exe" in names
+    assert any(name.startswith("app/core/__pycache__/") and name.endswith(".pyc") for name in names)
     assert all(not name.startswith("versions/") for name in names)
 
 
@@ -415,7 +429,7 @@ def test_release_build_fails_closed_without_signing_key(
 
 
 def test_release_archive_signature_covers_raw_sha256(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packaged_bytecode: None
 ) -> None:
     monkeypatch.setattr(
         native_hosts, "compile_host", lambda *args, **kwargs: args[1].write_bytes(b"exe")

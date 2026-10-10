@@ -94,6 +94,8 @@ def main(argv: list[str] | None = None) -> None:
     Exits with ``STARTUP_FAILED_EXIT_CODE`` when the application failed to start and
     with ``SHUTDOWN_FAILED_EXIT_CODE`` after a stop whose Runtime shutdown failed.
     """
+    main_entered_at = time.time()
+    setup_started = perf_counter()
     if uvicorn is None:
         raise RuntimeError("uvicorn is required to start the server") from _UVICORN_IMPORT_ERROR
     args = parse_args(argv)
@@ -117,6 +119,8 @@ def main(argv: list[str] | None = None) -> None:
             mode=safe_startup_mode or "normal",
             # Durations need the wall-clock creation time, not the record's identity.
             process_created=psutil.Process().create_time(),
+            main_entered_at=main_entered_at,
+            setup_started=setup_started,
         )
         log_manager: LogManager | None = None
         server_holder: dict[str, Any] = {}
@@ -201,6 +205,7 @@ def main(argv: list[str] | None = None) -> None:
 
             server.handle_exit = handle_exit  # type: ignore[method-assign]
             server_holder["server"] = server
+            lifecycle.starting_app()
             server.run()
         finally:
             if log_manager is not None:
@@ -230,11 +235,17 @@ class _ServerLifecycle:
         server_bind: ServerBind,
         mode: str,
         process_created: float,
+        main_entered_at: float,
+        setup_started: float,
     ) -> None:
         self._config = config
         self._server_bind = server_bind
         self._mode = mode
         self._process_created = process_created
+        # Before main includes interpreter startup and the full import graph.
+        # Later phases use a monotonic clock, including the final heap freeze.
+        self._startup_phases = {"pre_main": max(0.0, main_entered_at - process_created)}
+        self._phase_started = setup_started
         self._stop_cause: dict[str, str] | None = None
         self._ready = False
         self._stopped = False
@@ -246,8 +257,15 @@ class _ServerLifecycle:
         if self._stop_cause is None:
             self._stop_cause = {"reason": reason, **details}
 
+    def starting_app(self) -> None:
+        """Separate entrypoint setup from uvicorn and application readiness."""
+        now = perf_counter()
+        self._startup_phases["setup"] = now - self._phase_started
+        self._phase_started = now
+
     def started(self, runtime: Any) -> None:
         self._ready = True
+        self._startup_phases["app"] = perf_counter() - self._phase_started
         build = runtime.build
         fields: dict[str, object] = {"version": self._config.get("VBOT_VERSION") or build.version}
         if build.revision is not None:
@@ -264,8 +282,9 @@ class _ServerLifecycle:
             pid=os.getpid(),
             listen=f"{self._server_bind['listen_host']}:{self._server_bind['listen_port']}",
             data_dir=self._config.data_dir,
-            startup=f"{time.time() - self._process_created:.1f}s",
+            startup=f"{sum(self._startup_phases.values()):.1f}s",
         )
+        fields.update({phase: f"{seconds:.3f}s" for phase, seconds in self._startup_phases.items()})
         _LOGGER.info(
             "Server started (%s %s)", _format_fields(fields), runtime.startup_summary.describe()
         )
