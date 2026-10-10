@@ -56,13 +56,12 @@ afterEach(() => {
 describe('App controller', () => {
   it('projects server events into run state and scoped invalidations', async () => {
     const { controller, state } = setup();
-    const hello = { type: 'connection_ready', active_runs: [] };
+    const listed = { run_id: 'run-listed', agent_id: 'alpha' };
+    const hello = { type: 'connection_ready', active_runs: [listed] };
+    const started = { type: 'run_started', payload: { run_id: 'run-one' } };
 
     await controller.handleServerEvent(hello);
-    await controller.handleServerEvent({
-      type: 'run_started',
-      payload: { run_id: 'run-one' },
-    });
+    await controller.handleServerEvent(started);
     await controller.handleServerEvent(
       resourceChanged('queue', {
         agent_id: 'alpha',
@@ -71,7 +70,13 @@ describe('App controller', () => {
     );
 
     expect(state.connectionSnapshot).toBe(hello);
-    expect(state.runServerEvents).toHaveLength(1);
+    // Run events go to the feed, not into reactive App state.
+    expect(controller.runEvents.read(0).events).toEqual([started]);
+    expect(controller.runEvents.activeRuns.map((run) => run.run_id)).toEqual([
+      'run-listed',
+      'run-one',
+    ]);
+    expect(state).not.toHaveProperty('runServerEvents');
     expect(state.commandStatuses).toEqual({});
     expect(state.queueInvalidation).toEqual({
       agentId: 'alpha',
@@ -151,53 +156,6 @@ describe('App controller', () => {
       nextSessionId: '',
     });
     expect(state.sessionDeletion).not.toBe(first);
-  });
-
-  it('keeps the active Run list current beyond the bounded event window', async () => {
-    const { controller, state } = setup();
-    const lifecycle = (type, runId, extra = {}) => ({
-      type,
-      payload: {
-        run_id: runId,
-        agent_id: 'beta',
-        project_id: null,
-        session_id: `session-${runId}`,
-        run_kind: 'chat',
-        run_event_type: type,
-        run_event_sequence: 1,
-        run_event_timestamp: '2026-09-22T10:00:00+00:00',
-        ...extra,
-      },
-    });
-
-    await controller.handleServerEvent({
-      type: 'connection_ready',
-      active_runs: [{ run_id: 'listed', agent_id: 'beta', session_id: 's' }],
-    });
-    await controller.handleServerEvent(lifecycle('run_started', 'new'));
-    await controller.handleServerEvent(lifecycle('run_completed', 'listed'));
-    // The listed Run's terminal event leaves the bounded window...
-    for (let index = 0; index < 500; index += 1) {
-      await controller.handleServerEvent(lifecycle('run_output', 'new'));
-    }
-
-    // ...but the active list still reflects it; the new Run is running.
-    expect(state.runServerEvents).toHaveLength(500);
-    expect(state.activeRuns).toEqual([
-      {
-        run_id: 'new',
-        agent_id: 'beta',
-        project_id: null,
-        session_id: 'session-new',
-        run_kind: 'chat',
-        status: 'running',
-        started_at: '2026-09-22T10:00:00+00:00',
-      },
-    ]);
-
-    const hello = { type: 'connection_ready', active_runs: [] };
-    await controller.handleServerEvent(hello);
-    expect(state.activeRuns).toEqual([]);
   });
 
   it('keeps the latest command status per terminal in a bounded map', async () => {

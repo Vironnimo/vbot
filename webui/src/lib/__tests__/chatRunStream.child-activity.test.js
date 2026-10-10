@@ -34,17 +34,17 @@ describe('Sub-Agent row statuses', () => {
   it('tracks the latest named Tool of a child Run and clears the Session entry when a new Run starts', () => {
     const harness = makeStreamHarness();
 
-    harness.stream.handleServerEvents(toolStarted('  ', 2));
+    harness.stream.handleServerEvent(toolStarted('  ', 2));
     expect(harness.subAgentRunStatuses).toEqual({});
 
-    harness.stream.handleServerEvents(toolStarted('read', 3));
-    harness.stream.handleServerEvents(toolStarted('bash', 5));
+    harness.stream.handleServerEvent(toolStarted('read', 3));
+    harness.stream.handleServerEvent(toolStarted('bash', 5));
     expect(harness.subAgentRunStatuses).toMatchObject({
       [runTool]: 'bash',
       [sessionTool]: 'bash',
     });
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_started', 1, {
         ...child,
         run_id: 'run-child-8',
@@ -62,7 +62,7 @@ describe('Sub-Agent row statuses', () => {
   it('projects interrupted Run status and duration', () => {
     const harness = makeStreamHarness();
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_interrupted', 3, {
         run_id: 'run-interrupted-1',
         agent_id: 'worker',
@@ -84,7 +84,7 @@ describe('Sub-Agent row statuses', () => {
   it('projects an explicit Parent-Agent cancellation onto the exact child row', () => {
     const harness = makeStreamHarness();
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('subagent_status_changed', 4, {
         run_id: 'parent-run-two',
         agent_id: 'parent',
@@ -202,7 +202,7 @@ describe('Sub-Agent rows without a run id', () => {
           return;
         }
         const fields = type.startsWith('run_') ? payload : { output: payload };
-        harness.stream.handleServerEvents(
+        harness.stream.handleServerEvent(
           serverRunEvent(type, sequence, {
             ...identity,
             run_event_timestamp: STARTED_AT,
@@ -213,7 +213,7 @@ describe('Sub-Agent rows without a run id', () => {
       const row = spawnRow(result);
       const statuses = harness.subAgentRunStatuses;
 
-      harness.stream.handleServerEvents(
+      harness.stream.handleServerEvent(
         serverRunEvent('run_started', 1, {
           ...identity,
           run_event_timestamp: STARTED_AT,
@@ -275,7 +275,7 @@ describe('Sub-Agent rows without a run id', () => {
     });
     const row = spawnRow({ agent_id: 'builder@vbot', project_id: 'vbot' });
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('subagent_status_changed', 4, {
         run_id: 'run-parent',
         agent_id: 'lead',
@@ -330,7 +330,7 @@ describe('reflection review tracking', () => {
     const onReflectionFinished = vi.fn();
     const harness = makeStreamHarness({ onReflectionFinished });
 
-    harness.stream.handleServerEvents(reflectionServerEvent('run_started'));
+    harness.stream.handleServerEvent(reflectionServerEvent('run_started'));
 
     expect(sourceReflectionTasks(harness)).toEqual({
       'run-refl-1': {
@@ -341,7 +341,7 @@ describe('reflection review tracking', () => {
       },
     });
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       reflectionServerEvent('run_completed', {
         run_event_sequence: 2,
         run_event_timestamp: '2026-08-24T10:05:00.000Z',
@@ -357,7 +357,7 @@ describe('reflection review tracking', () => {
     expect(onReflectionFinished).toHaveBeenCalledExactlyOnceWith(
       harness.chatState.sessions[`alpha::${SOURCE_SESSION_ID}`],
     );
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       reflectionServerEvent('run_completed', { run_event_sequence: 3 }),
     );
     expect(onReflectionFinished).toHaveBeenCalledOnce();
@@ -366,7 +366,7 @@ describe('reflection review tracking', () => {
   it('ignores non-reflection runs and reflection events without source provenance', () => {
     const harness = makeStreamHarness();
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_started', 1, {
         run_id: 'run-user',
         agent_id: 'alpha',
@@ -375,7 +375,7 @@ describe('reflection review tracking', () => {
         run_event_timestamp: '2026-08-24T10:00:00.000Z',
       }),
     );
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       reflectionServerEvent('run_started', { source_session_id: '' }),
     );
 

@@ -482,6 +482,29 @@ describe('Queue', () => {
     ]);
   });
 
+  it('reads the Queue after a Run ends only where it is shown or holds items', async () => {
+    const { chatState, controller, listQueue } = setupController({
+      isDisplayedSession: (agentId, sessionId) =>
+        agentId === 'alpha' && sessionId === 'shown',
+    });
+    const shown = ensureSessionState(chatState, 'alpha', 'shown');
+    const holding = ensureSessionState(chatState, 'alpha', 'holding');
+    holding.queue = [{ id: 'next', content: 'Next' }];
+    const background = ensureSessionState(chatState, 'worker', 'background');
+
+    await Promise.all(
+      [shown, holding, background].map((sessionState) =>
+        controller.refreshSessionQueue(sessionState),
+      ),
+    );
+
+    expect(listQueue.mock.calls).toEqual([
+      ['alpha', 'shown'],
+      ['alpha', 'holding'],
+    ]);
+    expect(background.queue).toEqual([]);
+  });
+
   it('authoritatively replaces held Queue projections from a connection snapshot', () => {
     const { chatState, controller, onRestartQueueDiscarded } =
       setupController();

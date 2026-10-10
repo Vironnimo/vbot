@@ -13,7 +13,8 @@ import {
   selectedAgent,
   setAgents,
 } from '../chatState.js';
-import { setupController } from './chatState.support.js';
+import { createRunEventFeed } from '../runEventFeed.svelte.js';
+import { runServerEvent, setupController } from './chatState.support.js';
 
 describe('Session state', () => {
   it('tracks selected agent and per-agent current session state', () => {
@@ -194,6 +195,109 @@ describe('Queue projection', () => {
       { id: 'message-one', role: 'user', content: 'Hi' },
     ]);
     expect(sessionState.queue).toHaveLength(1);
+  });
+});
+
+describe("App's Run event feed", () => {
+  const started = (runId, agentId, sessionId, fields = {}) =>
+    runServerEvent('run_started', {
+      run_id: runId,
+      agent_id: agentId,
+      session_id: sessionId,
+      ...fields,
+    });
+
+  it('hands each new event to the Run stream once, in feed order', () => {
+    const runEvents = createRunEventFeed();
+    const { controller, runStream } = setupController({ runEvents });
+    const events = ['one', 'two', 'three'].map((runId) =>
+      started(runId, 'worker', runId),
+    );
+
+    runEvents.append(events[0]);
+    controller.handleRunEvents();
+    // Several events can arrive between two calls.
+    runEvents.append(events[1]);
+    runEvents.append(events[2]);
+    controller.handleRunEvents();
+    controller.handleRunEvents();
+
+    expect(runStream.handleServerEvent.mock.calls).toEqual(
+      events.map((event) => [event]),
+    );
+  });
+
+  it("defers events while hidden, except the displayed Session's Run starts", () => {
+    const runEvents = createRunEventFeed();
+    const { controller, runStream } = setupController({
+      runEvents,
+      isDisplayedSession: (agentId, sessionId) =>
+        agentId === 'builder@vbot' && sessionId === 'shown',
+    });
+    const background = started('run-background', 'worker', 'other');
+    const shownStart = started('run-shown', 'builder', 'shown', {
+      project_id: 'vbot',
+    });
+    const shownOutput = runServerEvent('run_output', {
+      run_id: 'run-shown',
+      agent_id: 'builder',
+      project_id: 'vbot',
+      session_id: 'shown',
+      run_event_sequence: 2,
+    });
+    [background, shownStart, shownOutput].forEach((event) =>
+      runEvents.append(event),
+    );
+
+    controller.handleRunEvents({ deferred: true });
+    expect(runStream.handleServerEvent.mock.calls).toEqual([[shownStart]]);
+
+    controller.handleRunEvents();
+    expect(runStream.handleServerEvent.mock.calls).toEqual([
+      [shownStart],
+      [background],
+      [shownOutput],
+    ]);
+  });
+
+  it('starts again from current state once deferred events left the feed', async () => {
+    const runEvents = createRunEventFeed({ capacity: 2 });
+    const listSessionActivity = vi.fn(async () => ({ agents: [] }));
+    const loadReflectionRuns = vi.fn(async () => ({ reflection_runs: [] }));
+    const { chatState, controller, listQueue, runStream } = setupController({
+      runEvents,
+      isDisplayedSession: (agentId, sessionId) =>
+        agentId === 'alpha' && sessionId === 'shown',
+      operationOverrides: { listSessionActivity, loadReflectionRuns },
+    });
+    controller.syncAgentActivity(['alpha'], 'full');
+    await vi.waitFor(() => expect(listSessionActivity).toHaveBeenCalledOnce());
+    ensureSessionState(chatState, 'alpha', 'shown');
+    ensureSessionState(chatState, 'worker', 'quiet');
+    const events = ['one', 'two', 'three'].map((runId) =>
+      started(runId, 'worker', runId),
+    );
+    events.forEach((event) => runEvents.append(event));
+
+    controller.handleRunEvents();
+
+    // The events still held apply in order; current state covers the lost one.
+    expect(runStream.handleServerEvent.mock.calls).toEqual([
+      [events[1]],
+      [events[2]],
+    ]);
+    expect(runStream.applyConnectionSnapshot).toHaveBeenCalledExactlyOnceWith({
+      active_runs: runEvents.activeRuns,
+    });
+    expect(listQueue).toHaveBeenCalledExactlyOnceWith('alpha', 'shown');
+    expect(loadReflectionRuns).toHaveBeenCalledExactlyOnceWith({
+      agent_id: 'alpha',
+      session_id: 'shown',
+    });
+    await vi.waitFor(() =>
+      expect(listSessionActivity).toHaveBeenCalledTimes(2),
+    );
+    expect(listSessionActivity).toHaveBeenLastCalledWith(['alpha']);
   });
 });
 

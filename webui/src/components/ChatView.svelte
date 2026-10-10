@@ -108,16 +108,14 @@
     // nextSessionId, agentAddress }`).
     onSessionDeleted = () => {},
     siblingSessionDeletion = null,
-    runServerEvent = null,
-    runServerEvents = [],
+    // App's Run event feed (`runEventFeed.svelte.js`): every Run server event
+    // in arrival order, read from this Chat's own position, and the Runs
+    // active now.
+    runEvents = null,
     // App's bounded live map of handed-off shell command statuses by terminal
     // id (`command_status_changed`); the controller re-applies the whole map.
     commandStatuses = {},
     connectionSnapshot = null,
-    // App's live list of the Runs active now (the snapshot's list advanced by
-    // later lifecycle events). An owner mounted after the app connected starts
-    // from it instead of replaying the retained snapshot and event window.
-    activeRuns = null,
     // Bumped by App when Session-list continuity is uncertain (replay gap or
     // server restart): activity, the drawer, and the Parent Session link
     // re-read everything. It deliberately does NOT switch the viewed
@@ -652,8 +650,15 @@
     }
   });
 
+  // A shown Chat applies each Run event as it arrives. A hidden one wakes only
+  // for Run starts; the controller applies the rest when it is shown again.
   $effect(() => {
-    chatController.handleServerEvents(runServerEvent, runServerEvents);
+    if (!runEvents) {
+      return;
+    }
+    const deferred = !active;
+    void (deferred ? runEvents.runStarts : runEvents.end);
+    untrack(() => chatController.handleRunEvents({ deferred }));
   });
 
   $effect(() => {
@@ -675,9 +680,7 @@
 
   $effect(() => {
     const entries = sessionInvalidations;
-    untrack(() =>
-      chatController.applySessionInvalidations(entries, runServerEvents),
-    );
+    untrack(() => chatController.applySessionInvalidations(entries));
   });
 
   // A read acknowledgement tells every connected app, including the vBot tray,
@@ -772,8 +775,8 @@
   const runStream = createChatRunStream({
     chatState,
     subscribeRunEvents,
-    syncSessionQueue: (sessionState) =>
-      chatController.syncSessionQueue(sessionState),
+    refreshSessionQueue: (sessionState) =>
+      chatController.refreshSessionQueue(sessionState),
     reconcileRunSession: (sessionState, expectedRunId) =>
       chatController.reconcileRunSession(sessionState, expectedRunId),
     isDisplayedSession: target.isDisplayedSession,
@@ -787,6 +790,7 @@
     chatState,
     preserveSessionSelection: untrack(() => preserveSessionSelection),
     runStream,
+    runEvents: untrack(() => runEvents),
     isDisplayedSession: target.isDisplayedSession,
     shouldLoadCurrentHistory: () =>
       !navigation.viewingSessionId && !target.projectAgentActive,
@@ -808,15 +812,8 @@
     },
   });
   // Before the snapshot/event effects run: a fresh owner adopts the current
-  // Run state instead of replaying App's retained buffers.
-  untrack(() =>
-    chatController.startFromServerState({
-      connectionSnapshot,
-      activeRuns,
-      runServerEvent,
-      runServerEvents,
-    }),
-  );
+  // Run state instead of replaying the events already in App's feed.
+  untrack(() => chatController.startFromServerState(connectionSnapshot));
 
   $effect(() => {
     chatController.reconcileSubAgentRows(activeTimelineItems, {

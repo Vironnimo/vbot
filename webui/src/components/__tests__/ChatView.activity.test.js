@@ -36,6 +36,7 @@ import {
   waitForText,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
+import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
 
 const beta = (currentSessionId) =>
   createAgent({
@@ -55,7 +56,7 @@ describe('ChatView Agent activity', () => {
       rpcMock.mockImplementation(createChatRpcMock({ agents }));
       await chat.mountChat({ sharedAgents: agents });
 
-      testRunStreamRefs[0].handleServerEvents(
+      testRunStreamRefs[0].handleServerEvent(
         runServerEvent('run_started', {
           sequence: 1,
           run_id: 'run-beta',
@@ -162,18 +163,17 @@ describe('ChatView Agent activity', () => {
           },
         ],
       });
-      await chat.mountChat({
-        sharedAgents: agents,
-        runServerEvents: [
-          runServerEvent('run_completed', {
-            sequence: 2,
-            run_id: 'run-beta',
-            agent_id: 'beta',
-            session_id: 'session-beta',
-            status: 'completed',
-          }),
-        ],
-      });
+      const runEvents = createRunEventFeed();
+      runEvents.append(
+        runServerEvent('run_completed', {
+          sequence: 2,
+          run_id: 'run-beta',
+          agent_id: 'beta',
+          session_id: 'session-beta',
+          status: 'completed',
+        }),
+      );
+      await chat.mountChat({ sharedAgents: agents, runEvents });
 
       const betaSession = () =>
         testChatStateRefs[0].sessions['beta::session-beta'];
@@ -263,14 +263,14 @@ describe('ChatView Agent activity', () => {
         agent_id: 'alpha',
         session_id: 'session-1',
       };
-      testRunStreamRefs[0].handleServerEvents(
+      testRunStreamRefs[0].handleServerEvent(
         runServerEvent('run_started', {
           ...run,
           sequence: 1,
           output: { status: 'running' },
         }),
       );
-      testRunStreamRefs[0].handleServerEvents(
+      testRunStreamRefs[0].handleServerEvent(
         runServerEvent('run_completed', {
           ...run,
           sequence: 2,
@@ -316,14 +316,14 @@ describe('ChatView Agent activity', () => {
           agent_id: 'alpha',
           session_id: 'session-1',
         };
-        testRunStreamRefs[0].handleServerEvents(
+        testRunStreamRefs[0].handleServerEvent(
           runServerEvent('run_started', {
             ...run,
             sequence: 1,
             output: { status: 'running' },
           }),
         );
-        testRunStreamRefs[0].handleServerEvents(
+        testRunStreamRefs[0].handleServerEvent(
           runServerEvent('run_completed', {
             ...run,
             sequence: 2,

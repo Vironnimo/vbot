@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   agentActivityStatus,
   ensureSessionState,
+  loadHistory,
   resetStaleRun,
   startRun,
   visibleTimelineItemsForRender,
@@ -33,7 +34,7 @@ describe('live Run events of the displayed Session', () => {
       });
       session.contextUsage = { tokens: 100, estimated: false };
 
-      harness.stream.handleServerEvents(
+      harness.stream.handleServerEvent(
         serverRunEvent(type, 8, {
           ...displayed,
           run_id: 'old',
@@ -75,7 +76,7 @@ describe('live Run events of the displayed Session', () => {
       });
 
       const changeStats = { files: 1, added: 2, removed: 0, paths: ['a.txt'] };
-      harness.stream.handleServerEvents(
+      harness.stream.handleServerEvent(
         serverRunEvent(type, 1, {
           ...displayed,
           run_id: 'run',
@@ -106,7 +107,7 @@ describe('live Run events of the displayed Session', () => {
     const harness = makeStreamHarness();
     const run = { ...displayed, run_id: 'run-ordered-terminal' };
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_started', 1, {
         ...run,
         status: 'running',
@@ -119,7 +120,7 @@ describe('live Run events of the displayed Session', () => {
       sequence: 2,
       payload: { content_delta: 'Final answer' },
     });
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_completed', 4, { ...run, status: 'completed' }),
     );
 
@@ -151,6 +152,45 @@ describe('live Run events of the displayed Session', () => {
     expect(
       visibleTimelineItemsForRender(sessionState)[0].outputs[0].content,
     ).toBe('Final answer');
+  });
+
+  it('ignores late mirrored events of a Run its History holds whole', () => {
+    vi.useFakeTimers();
+    const harness = makeStreamHarness();
+    const run = { ...displayed, run_id: 'run-reconciled' };
+    const answer = { id: 'answer', role: 'assistant', content: 'Done' };
+    harness.stream.applyConnectionSnapshot({
+      active_runs: [activeRun(run.run_id)],
+    });
+    harness.sse(
+      { ...run, type: 'run_started', sequence: 1, payload: {} },
+      { ...run, type: 'assistant_output', sequence: 2, payload: { answer } },
+      {
+        ...run,
+        type: 'run_completed',
+        sequence: 3,
+        payload: { status: 'completed' },
+      },
+    );
+    const sessionState = harness.displayedSession();
+    loadHistory(sessionState, [{ ...answer, history_run_id: run.run_id }], {
+      runs: [{ run_id: run.run_id, complete: true }],
+    });
+    const { status, runEvents } = sessionState;
+
+    // A Chat shown again applies the WebSocket mirrors it deferred.
+    harness.ws(
+      serverRunEvent('run_started', 1, { ...run, status: 'running' }),
+      serverRunEvent('assistant_output', 2, { ...run, output: { answer } }),
+      serverRunEvent('run_completed', 3, { ...run, status: 'completed' }),
+    );
+    vi.advanceTimersByTime(5_000);
+
+    expect(sessionState.status).toBe(status);
+    expect(sessionState.runEvents).toBe(runEvents);
+    expect(harness.subscriptions).toHaveLength(1);
+    expect(harness.reportStreamDiagnostic).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it.each([false, true])(
@@ -192,7 +232,7 @@ describe('live Run events of the displayed Session', () => {
 
       const predecessor = harness.subscriptions[0];
       if (successor) {
-        harness.stream.handleServerEvents(
+        harness.stream.handleServerEvent(
           serverRunEvent('run_started', 1, {
             ...displayed,
             run_id: 'successor',
@@ -267,7 +307,7 @@ describe('live Run events of the displayed Session', () => {
       vi.useFakeTimers();
       const harness = makeStreamHarness();
       const runId = 'run-chunks';
-      harness.stream.handleServerEvents(
+      harness.stream.handleServerEvent(
         serverRunEvent('run_started', 1, {
           ...displayed,
           run_id: runId,
@@ -349,9 +389,8 @@ describe('live Run events of the displayed Session', () => {
       // Leaving the Session closes its SSE; the WebSocket mirrors stable events.
       isDisplayed = false;
       harness.stream.closeSubscriptionsExcept('alpha::other');
-      harness.stream.handleServerEvents(
-        null,
-        stable.map(([sequence, type, output]) =>
+      harness.ws(
+        ...stable.map(([sequence, type, output]) =>
           serverRunEvent(type, sequence, { ...identity, output }),
         ),
       );
@@ -431,7 +470,7 @@ describe('live Run events of the displayed Session', () => {
             payload: startedPayload,
           });
         } else {
-          harness.stream.handleServerEvents(
+          harness.stream.handleServerEvent(
             serverRunEvent('run_started', 1, {
               ...displayed,
               run_id: runId,
@@ -443,7 +482,7 @@ describe('live Run events of the displayed Session', () => {
 
         expect(sessionState.queue.map((item) => item.id)).toEqual(remaining);
         // The Queue read is the terminal-event backstop only.
-        expect(harness.syncSessionQueue).not.toHaveBeenCalled();
+        expect(harness.refreshSessionQueue).not.toHaveBeenCalled();
       },
     );
   });
@@ -512,7 +551,7 @@ describe('live Run events of the displayed Session', () => {
       expect(sessionState.status).toBe('cancelled');
       expect(sessionState.currentRun?.status).toBe('cancelled');
       expect(close).toHaveBeenCalledOnce();
-      expect(harness.syncSessionQueue).toHaveBeenCalledOnce();
+      expect(harness.refreshSessionQueue).toHaveBeenCalledOnce();
       expect(
         visibleTimelineItemsForRender(sessionState)[0].tools[0].status,
       ).toBe('cancelled');
@@ -750,7 +789,7 @@ describe('connection snapshots', () => {
       displayedSessionId: sessionId,
     });
 
-    viaEvent.stream.handleServerEvents(
+    viaEvent.stream.handleServerEvent(
       serverRunEvent('run_started', 1, {
         ...identity,
         run_id: runId,
@@ -820,7 +859,7 @@ describe('Runs excluded from Agent activity', () => {
       estimated_delta_tokens: 515,
     };
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_started', 1, {
         ...run,
         output: { status: 'running' },
@@ -833,7 +872,7 @@ describe('Runs excluded from Agent activity', () => {
       'idle',
     );
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_completed', 2, {
         ...run,
         status: 'completed',
@@ -860,20 +899,20 @@ describe('Runs of Sessions that are not displayed', () => {
       run_kind: 'subagent',
     };
 
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_started', 1, {
         ...child,
         run_event_timestamp: '2026-08-05T18:03:00.000Z',
         status: 'running',
       }),
     );
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('assistant_output', 6, {
         ...child,
         output: { message: { role: 'assistant', content: 'Child result' } },
       }),
     );
-    harness.stream.handleServerEvents(
+    harness.stream.handleServerEvent(
       serverRunEvent('run_completed', 8, { ...child, status: 'completed' }),
     );
 
@@ -896,7 +935,7 @@ describe('Runs of Sessions that are not displayed', () => {
     // canonical History, so the finished Run's events are released.
     expect(childSession.runEvents).toEqual([]);
     expect(harness.reconcileRunSession).not.toHaveBeenCalled();
-    expect(harness.syncSessionQueue).toHaveBeenCalledWith(childSession);
+    expect(harness.refreshSessionQueue).toHaveBeenCalledWith(childSession);
     expect(harness.subAgentRunStatuses).toMatchObject({
       'run:child-run': 'completed',
       'runStarted:child-run': '2026-08-05T18:03:00.000Z',
@@ -904,10 +943,10 @@ describe('Runs of Sessions that are not displayed', () => {
       'sessionStarted:worker::child-session': '2026-08-05T18:03:00.000Z',
     });
 
-    // A late re-delivery (here through an owner whose dedup window no longer
-    // holds the event) cannot revive the finished Run or re-grow its events.
+    // A late re-delivery of its start cannot revive the finished Run or
+    // re-grow its events.
     const lateOwner = makeStreamHarness({ chatState: harness.chatState });
-    lateOwner.stream.handleServerEvents(
+    lateOwner.stream.handleServerEvent(
       serverRunEvent('run_started', 1, { ...child, status: 'running' }),
     );
     expect(childSession.status).toBe('completed');
@@ -930,11 +969,11 @@ describe('Runs of Sessions that are not displayed', () => {
       session_id: 'background',
     };
 
-    harness.stream.handleServerEvents(null, [
+    harness.ws(
       serverRunEvent('run_started', 1, run),
       serverRunEvent('tool_call_started', 2, run),
       serverRunEvent('run_completed', 3, { ...run, status: 'completed' }),
-    ]);
+    );
 
     expect(background.status).toBe('completed');
     expect(background.runEvents.map((event) => event.sequence)).toEqual([
@@ -956,7 +995,7 @@ describe('Runs of Sessions that are not displayed', () => {
       session_id: 'background',
     });
 
-    harness.stream.handleServerEvents(null, [
+    harness.ws(
       serverRunEvent('run_started', 1, run('first')),
       serverRunEvent('run_started', 1, run('second')),
       serverRunEvent('tool_call_started', 2, run('second')),
@@ -964,7 +1003,7 @@ describe('Runs of Sessions that are not displayed', () => {
         ...run('first'),
         status: 'completed',
       }),
-    ]);
+    );
 
     const background = ensureSessionState(
       harness.chatState,
@@ -984,46 +1023,5 @@ describe('Runs of Sessions that are not displayed', () => {
       ['second', 1],
       ['second', 2],
     ]);
-  });
-});
-
-describe('retained server event window', () => {
-  it('handles every new event as the window grows and slides past what it saw', () => {
-    const harness = makeStreamHarness();
-    const background = ensureSessionState(
-      harness.chatState,
-      'alpha',
-      'background',
-    );
-    background.historyLoaded = true;
-    const run = (runId) => ({
-      run_id: runId,
-      agent_id: 'alpha',
-      session_id: 'background',
-    });
-    const first = [
-      serverRunEvent('run_started', 1, run('first')),
-      serverRunEvent('tool_call_started', 2, run('first')),
-      serverRunEvent('run_completed', 3, {
-        ...run('first'),
-        status: 'completed',
-      }),
-    ];
-    const second = serverRunEvent('run_started', 1, run('second'));
-    const sequences = () =>
-      background.runEvents.map((event) => `${event.run_id}:${event.sequence}`);
-
-    harness.stream.handleServerEvents(null, first.slice(0, 1));
-    // Several events can arrive between two applications of the window.
-    harness.stream.handleServerEvents(null, first);
-    expect(sequences()).toEqual(['first:1', 'first:2', 'first:3']);
-    expect(background.status).toBe('completed');
-
-    // A window that dropped every event seen so far is visited in full.
-    harness.stream.handleServerEvents(null, [second]);
-    expect(background.currentRun).toMatchObject({
-      runId: 'second',
-      status: 'running',
-    });
   });
 });

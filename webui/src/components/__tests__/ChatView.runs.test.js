@@ -30,6 +30,7 @@ import {
   sessionListButton,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
+import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
 import { t } from '../../lib/i18n.js';
 
 const alphaProps = () => ({
@@ -361,18 +362,16 @@ describe('ChatView Runs', () => {
 
     it('attaches to SSE when a Run starts for the displayed Session', async () => {
       rpcMock.mockImplementation(createChatRpcMock());
-      await chat.mountChat(
-        {
-          ...alphaProps(),
-          runServerEvent: runServerEvent('run_started', {
-            sequence: 1,
-            run_id: 'pushed-run',
-            agent_id: 'alpha',
-            session_id: 'session-1',
-            status: 'running',
-          }),
-        },
-        { ready: null },
+      const runEvents = createRunEventFeed();
+      await chat.mountChat({ ...alphaProps(), runEvents });
+      runEvents.append(
+        runServerEvent('run_started', {
+          sequence: 1,
+          run_id: 'pushed-run',
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          status: 'running',
+        }),
       );
 
       await waitForCondition(

@@ -10,18 +10,17 @@ const RUN_SERVER_EVENT_TYPES = new Set([
   'run_interrupted',
 ]);
 
-export function normalizedRunServerEvents(singleEvent, events) {
-  const normalizedEvents = Array.isArray(events) ? events.filter(Boolean) : [];
-  if (singleEvent) {
-    normalizedEvents.push(singleEvent);
-  }
-  return normalizedEvents;
-}
-
+// The Run event a WebSocket Run server event mirrors, addressed like Session
+// state; null for an event that names no Run event, Run or sequence.
 export function runEventFromServerEvent(serverEvent) {
   const payload = serverEvent?.payload ?? {};
   const runEventType = payload.run_event_type;
-  if (!RUN_SERVER_EVENT_TYPES.has(serverEvent?.type) || !runEventType) {
+  if (
+    !RUN_SERVER_EVENT_TYPES.has(serverEvent?.type) ||
+    !runEventType ||
+    !payload.run_id ||
+    (payload.run_event_sequence !== 0 && !payload.run_event_sequence)
+  ) {
     return null;
   }
 
@@ -71,15 +70,4 @@ export function runEventFromServerEvent(serverEvent) {
     timestamp: payload.run_event_timestamp,
     payload: runPayload,
   };
-}
-
-export function runServerEventKey(serverEvent) {
-  const payload = serverEvent?.payload;
-  if (
-    !payload?.run_id ||
-    (payload.run_event_sequence !== 0 && !payload.run_event_sequence)
-  ) {
-    return '';
-  }
-  return `${payload.run_id}:${payload.run_event_sequence}:${serverEvent.type}`;
 }

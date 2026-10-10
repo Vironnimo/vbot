@@ -19,6 +19,7 @@ import {
   renameComposerAgent,
   resetComposerMemory,
 } from '../../lib/composerMemory.js';
+import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
 import ChatWorkspace from '../ChatWorkspace.svelte';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -491,7 +492,7 @@ describe('ChatWorkspace', () => {
     }
   });
 
-  it('starts a newly opened Chat area from the current Run state, not stale App buffers', async () => {
+  it('starts a newly opened Chat area from the current Run state, not stale App events', async () => {
     const agents = [
       createAgent(),
       createAgent({ id: 'beta', name: 'Beta', current_session_id: 'b-1' }),
@@ -514,32 +515,23 @@ describe('ChatWorkspace', () => {
       },
     });
     const betaRun = { run_id: 'R1', agent_id: 'beta', session_id: 'b-1' };
-    const props = reactiveProps({
-      // App connected while Beta's Run was active.
-      connectionSnapshot: {
-        type: 'connection_ready',
-        replay_status: 'fresh',
-        active_runs: [betaRun],
-        queues: [],
-      },
-      activeRuns: [betaRun],
-      runServerEvents: [],
-    });
+    // App connected while Beta's Run was active.
+    const connectionSnapshot = {
+      type: 'connection_ready',
+      replay_status: 'fresh',
+      active_runs: [betaRun],
+      queues: [],
+    };
+    const runEvents = createRunEventFeed({ capacity: 2 });
+    runEvents.resetActiveRuns(connectionSnapshot.active_runs);
     harness.mount(
       {
         target: document.body,
         props: {
           sharedAgents: agents,
           sharedSelectedAgentId: 'alpha',
-          get connectionSnapshot() {
-            return props.connectionSnapshot;
-          },
-          get activeRuns() {
-            return props.activeRuns;
-          },
-          get runServerEvents() {
-            return props.runServerEvents;
-          },
+          connectionSnapshot,
+          runEvents,
         },
       },
       ChatWorkspace,
@@ -551,15 +543,13 @@ describe('ChatWorkspace', () => {
       );
     await waitForCondition(() => pillLabels(0).includes('Beta: Running'));
 
-    // Beta's Run ends; later traffic pushes its terminal event out of App's
-    // bounded window, and Gamma's Run starts outside the retained window.
-    props.runServerEvents = [lifecycle('run_completed', 'R1', 'beta', 'b-1')];
-    props.activeRuns = [];
+    // Beta's Run ends; Gamma's starts, and later traffic pushes both events
+    // out of App's feed.
+    runEvents.append(lifecycle('run_completed', 'R1', 'beta', 'b-1'));
     await waitForCondition(() => !pillLabels(0).includes('Beta: Running'));
-    props.runServerEvents = [];
-    props.activeRuns = [
-      { run_id: 'R2', agent_id: 'gamma', session_id: 'g-1', status: 'running' },
-    ];
+    runEvents.append(lifecycle('run_started', 'R2', 'gamma', 'g-1'));
+    runEvents.append(lifecycle('run_output', 'R2', 'gamma', 'g-1'));
+    runEvents.append(lifecycle('run_output', 'R2', 'gamma', 'g-1'));
 
     action(0, 'Split view');
     await waitForCondition(() => pillLabels(1).includes('Gamma: Running'));

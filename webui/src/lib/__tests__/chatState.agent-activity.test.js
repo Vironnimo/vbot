@@ -10,7 +10,12 @@ import {
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
-import { deferred, setupController } from './chatState.support.js';
+import { createRunEventFeed } from '../runEventFeed.svelte.js';
+import {
+  deferred,
+  runServerEvent,
+  setupController,
+} from './chatState.support.js';
 
 describe('Agent roster', () => {
   it.each(['resolve', 'reject'])(
@@ -466,13 +471,16 @@ describe('scoped completion activity', () => {
 
   const entry = (id, scope) => ({ id, scope });
 
-  function activitySetup(rows = {}) {
+  function activitySetup(rows = {}, options = {}) {
     const listSessionActivity = vi.fn(async (addresses) =>
       activityResponse(addresses, rows),
     );
     return {
       listSessionActivity,
-      ...setupController({ operationOverrides: { listSessionActivity } }),
+      ...setupController({
+        ...options,
+        operationOverrides: { listSessionActivity },
+      }),
     };
   }
 
@@ -505,10 +513,14 @@ describe('scoped completion activity', () => {
   it('applies terminal and read facts it already holds without reading', async () => {
     vi.useFakeTimers();
     try {
-      const { chatState, controller, listSessionActivity } = activitySetup();
+      const runEvents = createRunEventFeed();
+      const { chatState, controller, listSessionActivity } = activitySetup(
+        {},
+        { runEvents },
+      );
       controller.syncAgentActivity(['alpha'], 'full');
       await vi.runAllTimersAsync();
-      controller.applySessionInvalidations([], []);
+      controller.applySessionInvalidations([]);
       listSessionActivity.mockClear();
       const sessionState = ensureSessionState(chatState, 'alpha', 'one');
       sessionState.latestCompletionRunId = 'run-one';
@@ -520,23 +532,21 @@ describe('scoped completion activity', () => {
         session_id: 'one',
         run_id: 'run-one',
       };
-      const runServerEvents = [
-        { type: 'run_completed', payload: { run_id: 'run-one' } },
-      ];
+      runEvents.append({
+        type: 'run_completed',
+        payload: { run_id: 'run-one' },
+      });
 
-      controller.applySessionInvalidations(
-        [
-          entry(1, terminalScope),
-          entry(2, { agent_id: 'alpha', session_id: 'one' }),
-          entry(3, {
-            project_id: null,
-            agent_id: 'alpha',
-            session_id: 'one',
-            read_run_id: 'run-one',
-          }),
-        ],
-        runServerEvents,
-      );
+      controller.applySessionInvalidations([
+        entry(1, terminalScope),
+        entry(2, { agent_id: 'alpha', session_id: 'one' }),
+        entry(3, {
+          project_id: null,
+          agent_id: 'alpha',
+          session_id: 'one',
+          read_run_id: 'run-one',
+        }),
+      ]);
       await vi.runAllTimersAsync();
 
       expect(listSessionActivity).not.toHaveBeenCalled();
@@ -558,7 +568,7 @@ describe('scoped completion activity', () => {
       await vi.runAllTimersAsync();
       listSessionActivity.mockClear();
 
-      controller.applySessionInvalidations([entry(7, null)], []);
+      controller.applySessionInvalidations([entry(7, null)]);
       await vi.runAllTimersAsync();
 
       expect(listSessionActivity).not.toHaveBeenCalled();
@@ -576,7 +586,7 @@ describe('scoped completion activity', () => {
       });
       controller.syncAgentActivity(['alpha', 'beta', 'gamma'], 'full');
       await vi.runAllTimersAsync();
-      controller.applySessionInvalidations([], []);
+      controller.applySessionInvalidations([]);
       listSessionActivity.mockClear();
       const held = ensureSessionState(chatState, 'alpha', 'one');
       held.latestCompletionRunId = 'run-newer';
@@ -584,21 +594,18 @@ describe('scoped completion activity', () => {
       held.unreadRunId = 'run-newer';
       held.unreadRunAt = '2026-07-20T12:00:00+00:00';
 
-      controller.applySessionInvalidations(
-        [
-          // The terminal event left the retained window: read Beta.
-          entry(1, { agent_id: 'beta', session_id: 'two', run_id: 'run-two' }),
-          // A read of another Run than the held one: read Alpha.
-          entry(2, {
-            agent_id: 'alpha',
-            session_id: 'one',
-            read_run_id: 'run-old',
-          }),
-          // Not displayed here: nothing to read.
-          entry(3, { agent_id: 'delta', session_id: 'x', run_id: 'run-x' }),
-        ],
-        [],
-      );
+      controller.applySessionInvalidations([
+        // App's feed no longer holds the terminal event: read Beta.
+        entry(1, { agent_id: 'beta', session_id: 'two', run_id: 'run-two' }),
+        // A read of another Run than the held one: read Alpha.
+        entry(2, {
+          agent_id: 'alpha',
+          session_id: 'one',
+          read_run_id: 'run-old',
+        }),
+        // Not displayed here: nothing to read.
+        entry(3, { agent_id: 'delta', session_id: 'x', run_id: 'run-x' }),
+      ]);
       expect(listSessionActivity).not.toHaveBeenCalled();
       await vi.runAllTimersAsync();
 
@@ -621,18 +628,14 @@ describe('scoped completion activity', () => {
       const { controller, listSessionActivity } = activitySetup();
       controller.syncAgentActivity(['alpha', 'beta'], 'full');
       await vi.runAllTimersAsync();
-      controller.applySessionInvalidations([entry(1, null)], []);
+      controller.applySessionInvalidations([entry(1, null)]);
       listSessionActivity.mockClear();
 
-      controller.applySessionInvalidations(
-        [entry(1, null), entry(2, null)],
-        [],
-      );
+      controller.applySessionInvalidations([entry(1, null), entry(2, null)]);
       await vi.runAllTimersAsync();
-      controller.applySessionInvalidations(
-        [entry(9, { agent_id: 'alpha', session_id: 'one' })],
-        [],
-      );
+      controller.applySessionInvalidations([
+        entry(9, { agent_id: 'alpha', session_id: 'one' }),
+      ]);
       await vi.runAllTimersAsync();
 
       expect(listSessionActivity.mock.calls).toEqual([
@@ -646,26 +649,89 @@ describe('scoped completion activity', () => {
 
   it('drops the unread marker of a deleted Session', () => {
     const { chatState, controller } = activitySetup();
-    controller.applySessionInvalidations([], []);
+    controller.applySessionInvalidations([]);
     const sessionState = ensureSessionState(chatState, 'builder@vbot', 'gone');
     sessionState.latestCompletionRunId = 'run-one';
     sessionState.hasUnreadCompletion = true;
     sessionState.unreadRunId = 'run-one';
 
-    controller.applySessionInvalidations(
-      [
-        entry(1, {
-          agent_id: 'builder',
-          project_id: 'vbot',
-          deleted_session_id: 'gone',
-          next_session_id: 'next',
-        }),
-      ],
-      [],
-    );
+    controller.applySessionInvalidations([
+      entry(1, {
+        agent_id: 'builder',
+        project_id: 'vbot',
+        deleted_session_id: 'gone',
+        next_session_id: 'next',
+      }),
+    ]);
 
     expect(sessionState.hasUnreadCompletion).toBe(false);
     expect(sessionState.latestCompletionRunId).toBe('');
+  });
+
+  it.each([
+    {
+      fact: 'a deletion',
+      scope: { agent_id: 'worker', deleted_session_id: 'gone' },
+      applied: true,
+    },
+    {
+      fact: 'a read acknowledgement',
+      scope: { agent_id: 'worker', session_id: 'one', read_run_id: 'run-one' },
+      applied: true,
+    },
+    {
+      fact: 'a finished Run of a displayed Agent',
+      scope: { agent_id: 'alpha', session_id: 'one', run_id: 'run-one' },
+      applied: true,
+    },
+    {
+      fact: 'a finished Run of another Agent',
+      scope: { agent_id: 'worker', session_id: 'one', run_id: 'run-one' },
+      applied: false,
+    },
+  ])(
+    'applies deferred Run events before $fact only where it matters',
+    async ({ scope, applied }) => {
+      vi.useFakeTimers();
+      try {
+        const runEvents = createRunEventFeed();
+        const { controller, runStream } = activitySetup({}, { runEvents });
+        controller.syncAgentActivity(['alpha'], 'full');
+        await vi.runAllTimersAsync();
+        controller.applySessionInvalidations([]);
+        const terminal = runServerEvent('run_completed', {
+          run_id: 'run-one',
+          agent_id: 'worker',
+          session_id: 'one',
+        });
+        runEvents.append(terminal);
+        controller.handleRunEvents({ deferred: true });
+
+        controller.applySessionInvalidations([entry(1, scope)]);
+
+        expect(runStream.handleServerEvent.mock.calls).toEqual(
+          applied ? [[terminal]] : [],
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('applies deferred Run events before reading activity', async () => {
+    const runEvents = createRunEventFeed();
+    const { controller, listSessionActivity, runStream } = activitySetup(
+      {},
+      { runEvents },
+    );
+    runEvents.append(runServerEvent('run_completed', { run_id: 'run-one' }));
+    controller.handleRunEvents({ deferred: true });
+
+    await controller.refreshAgentActivity(['alpha']);
+
+    const [applied] = runStream.handleServerEvent.mock.invocationCallOrder;
+    const [read] = listSessionActivity.mock.invocationCallOrder;
+    expect(applied).toBeLessThan(read);
   });
 
   it('keeps a completion that arrived while the read was in flight', async () => {

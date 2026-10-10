@@ -8,6 +8,7 @@ import {
 // Chat controller over fake operations and a fake Run stream.
 export function setupController({
   operationOverrides = {},
+  runEvents = null,
   isDisplayedSession = () => false,
   shouldLoadCurrentHistory = () => true,
   onSessionCreated = () => {},
@@ -19,7 +20,7 @@ export function setupController({
     closeSubscriptionFor: vi.fn(),
     closeSubscriptions: vi.fn(),
     closeSubscriptionsExcept: vi.fn(),
-    handleServerEvents: vi.fn(),
+    handleServerEvent: vi.fn(),
     mergeRunResponse: vi.fn(),
     subscribeToRun: vi.fn(),
   };
@@ -32,6 +33,7 @@ export function setupController({
   const controller = createChatController({
     chatState,
     runStream,
+    runEvents,
     operations: {
       listQueue,
       loadReflectionRuns: vi.fn().mockResolvedValue({ reflection_runs: [] }),
@@ -63,6 +65,19 @@ export function deferred() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+// A WebSocket Run server event as App's feed holds it.
+export function runServerEvent(type, payload) {
+  return {
+    type,
+    payload: {
+      project_id: null,
+      run_event_type: type,
+      run_event_sequence: 1,
+      ...payload,
+    },
+  };
 }
 
 // A Reflection Run row as History and reflection reads report it.

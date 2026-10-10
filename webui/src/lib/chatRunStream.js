@@ -1,12 +1,7 @@
 import { createRunActivityProjection } from './chatRunStream/activity.js';
-import {
-  normalizedRunServerEvents,
-  runEventFromServerEvent,
-  runServerEventKey,
-} from './chatRunStream/serverEvents.js';
+import { runEventFromServerEvent } from './chatRunStream/serverEvents.js';
 import { formatAgentAddress } from './agentAddress.js';
 import { reconnectBackoffDelay } from './backoff.js';
-import { createBoundedKeySet } from './clientCaches.js';
 import { t } from './i18n.js';
 import {
   TERMINAL_RUN_EVENTS,
@@ -28,11 +23,6 @@ const SSE_HEARTBEAT_TIMEOUT_MS = 25_000;
 const SSE_RECOVERY_RETRY_DELAY_MS = 5_000;
 const RUN_EVENT_GAP_TIMEOUT_MS = 2_000;
 const TERMINAL_RECONCILIATION_DELAY_MS = 1_000;
-// Dedup only has to cover events that can still be re-delivered through
-// App.svelte's bounded `runServerEvents` list (500 entries), so the cap just
-// needs to comfortably exceed that window; everything older can be forgotten
-// without risking a duplicate (handoff3 B10).
-const MAX_HANDLED_RUN_SERVER_EVENT_KEYS = 2000;
 const MAX_PENDING_ORDERED_RUN_EVENTS = 1024;
 const RUN_EVENT_FLUSH_DELAY_MS = 33;
 const DELAYED_RUN_EVENT_TYPES = new Set([
@@ -49,7 +39,9 @@ function defaultStreamDiagnostic(diagnostic) {
 export function createChatRunStream({
   chatState,
   subscribeRunEvents,
-  syncSessionQueue,
+  // Reads a Session's Queue again after its Run ended; the owner decides
+  // whether anything shows that Queue.
+  refreshSessionQueue,
   reconcileRunSession = async () => false,
   isDisplayedSession,
   updateSubAgentRunStatuses,
@@ -72,9 +64,6 @@ export function createChatRunStream({
   const pendingRunEventFlushes = {};
   const orderedRunEventBuffers = {};
   let destroyed = false;
-  const handledRunServerEventKeys = createBoundedKeySet(
-    MAX_HANDLED_RUN_SERVER_EVENT_KEYS,
-  );
 
   function reportDiagnostic(diagnostic) {
     try {
@@ -509,8 +498,8 @@ export function createChatRunStream({
     ) {
       // The started run is now executing, so its queued-item handle is no
       // longer "pending" — drop it locally. The terminal-event
-      // `syncSessionQueue` call below still re-fetches the server list, so
-      // the projection stays consistent if the local removal races.
+      // `refreshSessionQueue` call below still re-fetches the server list, so
+      // a shown projection stays consistent if the local removal races.
       removeQueuedMessage(sessionState, event.payload.queue_item_id);
     }
     const terminal = TERMINAL_RUN_EVENTS.has(event.type);
@@ -532,7 +521,7 @@ export function createChatRunStream({
       clearPendingReconnect(sessionState.key);
       closeRunSubscription(sessionState.key);
       sessionState.streamError = '';
-      void syncSessionQueue(sessionState);
+      void refreshSessionQueue(sessionState);
     }
     // Without a displayed timeline or loaded History, a finished Run's events
     // have no reader: opening the Session loads canonical History. Release
@@ -673,59 +662,9 @@ export function createChatRunStream({
     };
   }
 
-  // The App hands its whole retained window of recent Run server events over
-  // again whenever one arrives. The window only grows at its end and drops its
-  // oldest events, so a call resumes after the last event this owner visited
-  // instead of re-keying the whole window; a window that no longer holds that
-  // event is visited in full, and the handled keys still suppress repeats.
-  let lastVisitedServerEvent = null;
-
-  function visitServerEvents(singleEvent, events, visit) {
-    for (const serverEvent of normalizedRunServerEvents(
-      null,
-      unvisitedServerEvents(events),
-    )) {
-      lastVisitedServerEvent = serverEvent;
-      visit(serverEvent, runServerEventKey(serverEvent));
-    }
-    if (singleEvent) {
-      visit(singleEvent, runServerEventKey(singleEvent));
-    }
-  }
-
-  function unvisitedServerEvents(events) {
-    if (!Array.isArray(events) || !lastVisitedServerEvent) {
-      return events;
-    }
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      if (events[index] === lastVisitedServerEvent) {
-        return events.slice(index + 1);
-      }
-    }
-    return events;
-  }
-
-  function handleServerEvents(singleEvent, events) {
-    visitServerEvents(singleEvent, events, (serverEvent, eventKey) => {
-      if (!eventKey || handledRunServerEventKeys.has(eventKey)) {
-        return;
-      }
-      handledRunServerEventKeys.add(eventKey);
-      handleRunServerEvent(serverEvent);
-    });
-  }
-
-  // Mark retained events as already reflected (by a current-state snapshot)
-  // so a later `handleServerEvents` over the same window ignores them.
-  function skipServerEvents(singleEvent, events) {
-    visitServerEvents(singleEvent, events, (_serverEvent, eventKey) => {
-      if (eventKey) {
-        handledRunServerEventKeys.add(eventKey);
-      }
-    });
-  }
-
-  function handleRunServerEvent(serverEvent) {
+  // Apply one Run server event from the App's feed. The owner hands each event
+  // over once, in feed order.
+  function handleServerEvent(serverEvent) {
     const event = runEventFromServerEvent(serverEvent);
     if (!event?.agent_id || !event?.session_id) {
       return;
@@ -747,10 +686,22 @@ export function createChatRunStream({
     // reduce those stable events directly in WebSocket order. Opening such a
     // Session later reloads its durable History rather than relying on this
     // transient projection.
+    const orderedBuffer =
+      orderedRunEventBuffers[runBufferKey(sessionState.key, event.run_id)];
+    // A mirrored event of a displayed Run that History already holds whole
+    // adds nothing. It can arrive that late when a hidden Chat applies its
+    // deferred events; a fresh ordered buffer would then wait for sequences
+    // the reconciled projection no longer holds.
+    if (
+      displayed &&
+      !orderedBuffer &&
+      sessionState.historyRuns?.[event.run_id]?.complete === true
+    ) {
+      return;
+    }
     if (
       event.type !== 'run_started' &&
-      (sessionState.currentRun?.runId === event.run_id ||
-        orderedRunEventBuffers[runBufferKey(sessionState.key, event.run_id)]) &&
+      (sessionState.currentRun?.runId === event.run_id || orderedBuffer) &&
       displayed
     ) {
       let terminalAppended = false;
@@ -1036,9 +987,8 @@ export function createChatRunStream({
     closeSubscriptionFor,
     closeSubscriptions,
     closeSubscriptionsExcept,
-    handleServerEvents,
+    handleServerEvent,
     mergeRunResponse,
-    skipServerEvents,
     subscribeToRun,
   };
 }

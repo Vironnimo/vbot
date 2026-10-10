@@ -28,9 +28,9 @@ import {
   RESOURCE_KIND_DATA_STORE,
   tokenKeysForKind,
 } from './resourceInvalidation.js';
+import { createRunEventFeed } from './runEventFeed.svelte.js';
 import { appendSessionInvalidation } from './sessionInvalidation.js';
 
-const MAX_RUN_SERVER_EVENTS = 500;
 // The live statuses of handed-off shell commands, oldest evicted first.
 // ChatView re-applies the whole map, so no per-event bookkeeping is needed.
 const MAX_COMMAND_STATUSES = 200;
@@ -47,52 +47,6 @@ const RUN_SERVER_EVENT_TYPES = new Set([
   'run_failed',
   'run_interrupted',
 ]);
-const TERMINAL_RUN_SERVER_EVENT_TYPES = new Set([
-  'run_completed',
-  'run_cancelled',
-  'run_failed',
-  'run_interrupted',
-]);
-
-// The Runs active now: the latest `connection_ready.active_runs`, plus Runs
-// started since, minus Runs that ended since. The bounded event window cannot
-// provide this for a Chat owner mounted later, because the terminal event of a
-// Run the snapshot listed may already have left the window.
-function nextActiveRuns(activeRuns, serverEvent) {
-  const payload = serverEvent.payload ?? {};
-  const runId = payload.run_id;
-  if (!runId) {
-    return activeRuns;
-  }
-  const known = activeRuns.some((run) => run?.run_id === runId);
-  if (serverEvent.type === 'run_started' && !known) {
-    return [...activeRuns, activeRunFromStartedEvent(payload)];
-  }
-  if (TERMINAL_RUN_SERVER_EVENT_TYPES.has(serverEvent.type) && known) {
-    return activeRuns.filter((run) => run?.run_id !== runId);
-  }
-  return activeRuns;
-}
-
-// Same shape as a `connection_ready.active_runs` entry; the stream derives the
-// SSE URL and fills controls/iterations from the Run's own events.
-function activeRunFromStartedEvent(payload) {
-  return {
-    run_id: payload.run_id,
-    agent_id: payload.agent_id,
-    project_id: payload.project_id ?? null,
-    session_id: payload.session_id,
-    run_kind: payload.run_kind,
-    status: 'running',
-    started_at: payload.run_event_timestamp,
-    ...(payload.contributes_to_agent_activity === false
-      ? { contributes_to_agent_activity: false }
-      : {}),
-    ...(payload.source_session_id
-      ? { source_session_id: payload.source_session_id }
-      : {}),
-  };
-}
 
 // A `session.delete` names the archived Session and its landing in the
 // `sessions` scope. Every event yields a fresh object so a repeated deletion
@@ -116,7 +70,6 @@ function sessionDeletionFromScope(scope) {
 
 export function createAppControllerState() {
   return {
-    activeRuns: [],
     archiveRefreshToken: 0,
     calendarRefreshToken: 0,
     channelsRefreshToken: 0,
@@ -140,7 +93,6 @@ export function createAppControllerState() {
     // Handed-off shell command status by terminal id, from
     // `command_status_changed` (bounded, newest last).
     commandStatuses: {},
-    runServerEvents: [],
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
     sessionDeletion: null,
@@ -177,6 +129,9 @@ export function createAppController({
   restoredNoticeDurationMs = SERVER_RESTORED_NOTICE_DURATION_MS,
 }) {
   let sessionInvalidationSequence = state.sessionInvalidations?.at(-1)?.id ?? 0;
+  // Run events bypass `state`: copying a window of them into reactive state
+  // on every event made each one cost the whole window.
+  const runEvents = createRunEventFeed();
   let unavailableNoticeTimer = null;
   let restoredNoticeTimer = null;
   function clearConnectionTimers() {
@@ -245,9 +200,7 @@ export function createAppController({
     }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
       state.connectionSnapshot = event;
-      state.activeRuns = Array.isArray(event.active_runs)
-        ? event.active_runs
-        : [];
+      runEvents.resetActiveRuns(event.active_runs);
       const refreshOwners = [
         onLoadDataStoreStatus,
         onLoadBackgroundActivity,
@@ -281,10 +234,7 @@ export function createAppController({
       return;
     }
     if (RUN_SERVER_EVENT_TYPES.has(event.type)) {
-      state.runServerEvents = [...state.runServerEvents, event].slice(
-        -MAX_RUN_SERVER_EVENTS,
-      );
-      state.activeRuns = nextActiveRuns(state.activeRuns, event);
+      runEvents.append(event);
       return;
     }
     if (event.type === 'command_status_changed') {
@@ -422,5 +372,7 @@ export function createAppController({
     destroy,
     handleConnectionStatusChange,
     handleServerEvent,
+    // The Run event feed every Chat owner reads (`runEventFeed.svelte.js`).
+    runEvents,
   };
 }

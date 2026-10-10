@@ -14,6 +14,7 @@ import {
   rpcCalls,
   rpcMock,
   runEventSource,
+  runServerEvent,
   runningRun,
   selectedAgentName,
   sendComposerMessage,
@@ -26,6 +27,7 @@ import {
   waitForText,
   sessionListButton,
 } from './ChatView.support.js';
+import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const alphaProps = () => ({
@@ -96,6 +98,62 @@ describe('ChatView', () => {
       expect(document.body.textContent).toContain('Hello');
       expect(testChatStateRefs).toHaveLength(1);
       expect(loads()).toEqual(loadsBefore);
+    });
+
+    it('applies Run events while hidden only to start the displayed Session, the rest when shown', async () => {
+      rpcMock.mockImplementation(createChatRpcMock());
+      const runEvents = createRunEventFeed();
+      const props = reactiveProps({ active: true, runEvents, ...alphaProps() });
+      await chat.mountChat(props);
+      const background = { agent_id: 'beta', session_id: 'beta-session' };
+      const backgroundSession = () =>
+        testChatStateRefs[0].sessions['beta::beta-session'];
+
+      props.active = false;
+      flushSync();
+      runEvents.append(
+        runServerEvent('run_started', {
+          sequence: 1,
+          run_id: 'run-background',
+          ...background,
+          status: 'running',
+        }),
+      );
+      runEvents.append(
+        runServerEvent('run_completed', {
+          sequence: 2,
+          run_id: 'run-background',
+          ...background,
+          status: 'completed',
+        }),
+      );
+      runEvents.append(
+        runServerEvent('run_started', {
+          sequence: 1,
+          run_id: 'run-displayed',
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          status: 'running',
+        }),
+      );
+      flushSync();
+
+      // The displayed Session streams its new Run; the rest waits.
+      expect(subscribeRunEventsMock).toHaveBeenCalledExactlyOnceWith(
+        '/api/runs/run-displayed/events',
+        expect.any(Object),
+        { afterSequence: 1 },
+      );
+      expect(backgroundSession()).toBeUndefined();
+
+      props.active = true;
+      flushSync();
+
+      expect(backgroundSession()).toMatchObject({
+        status: 'completed',
+        unreadRunId: 'run-background',
+      });
+      expect(subscribeRunEventsMock).toHaveBeenCalledOnce();
     });
 
     it('loads the History of an Agent selected elsewhere before Chat was first shown', async () => {
@@ -289,7 +347,7 @@ describe('ChatView', () => {
         project_id: null,
         session_id: 'session-1',
       };
-      testRunStreamRefs[0].handleServerEvents({
+      testRunStreamRefs[0].handleServerEvent({
         type: 'run_started',
         payload: {
           ...run,
@@ -298,7 +356,7 @@ describe('ChatView', () => {
           output: { status: 'running' },
         },
       });
-      testRunStreamRefs[0].handleServerEvents({
+      testRunStreamRefs[0].handleServerEvent({
         type: 'run_output',
         payload: {
           ...run,
