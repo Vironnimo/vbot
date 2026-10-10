@@ -467,8 +467,8 @@ describe('Swarm Board posts', () => {
       7,
       'dsc-main',
       'Alpha',
-      'Agrees with #5 and w2 after #3; not #7, #99, w3, `#5` or abc#5. ' +
-        'See [the benchmarks](#wiki/w2).',
+      'Agrees with #5 and w2 after "the fix in #3"; not #7, #99, w3, `#5`, ' +
+        '"#5" or abc#5. See [the benchmarks](#wiki/w2).',
       { reply_to: 'pst-5', reply_sequence: 5 },
     );
     const { bridge, operation } = createBridge(undefined, {
@@ -497,7 +497,8 @@ describe('Swarm Board posts', () => {
           '.board > li[data-post-number="7"] a[data-swarm-reference]',
         ),
       ].map((link) => [link.textContent, link.getAttribute('href')]);
-    // A post cites only earlier posts and existing pages, outside code.
+    // A post cites only earlier posts and existing pages, outside code and
+    // quoted values.
     expect(references()).toEqual([
       ['#5', '#post/5'],
       ['w2', '#wiki/w2'],

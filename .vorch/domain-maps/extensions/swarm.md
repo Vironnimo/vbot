@@ -684,7 +684,8 @@ participants through checkboxes by name and identity color, all of the Swarm's
 participants in roster order, sent as `recipients` in that order.
 Rendered Markdown in posts, Wiki pages and Activity links cited `#N` and `wN`
 and `@` mentions of participants (`ui/referenceLinks.js`), never inside code,
-links or controls, and never in the user request. A post links only earlier
+links or controls, never a number in double quotes (a value, as in a Tool
+call's arguments: `"message_id": "#0"`), and never in the user request. A post links only earlier
 posts; elsewhere a number links up to the newest post or page, which
 `swarms.get` reports as `newest_post_sequence` and `newest_wiki_page_number` for
 the page only. A mention matches as the Store addresses: `@` and a display name

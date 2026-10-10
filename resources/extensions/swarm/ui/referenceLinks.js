@@ -2,9 +2,10 @@ import { tooltip } from '../../../../webui/src/lib/tooltip.js';
 
 // Participants cite a Board post as "#46" and a Wiki page as "w7", and address
 // a participant as "@Name". Rendered Markdown shows them as links, but never
-// inside code, existing links or controls, and never as part of a longer word
-// ("abc#4", "w3c", "a/w3", "me@Ella").
-const REFERENCE = /(?<![\w#/&])(?:#(\d+)|w(\d+))(?!\w)/g;
+// inside code, existing links or controls, never as part of a longer word
+// ("abc#4", "w3c", "a/w3", "me@Ella"), and never as a value in double quotes,
+// as in a Tool call's arguments ('"message_id": "#0"').
+const REFERENCE = /(?<![\w#/&])(?:#(\d+)|w(\d+))(?!\w)(?<!"[#w]\d+(?="))/g;
 // Text without this cannot hold a reference or a mention.
 const CANDIDATE = /[#w]\d|@/;
 const SKIPPED = 'a, code, pre, kbd, samp, button, summary, textarea';
