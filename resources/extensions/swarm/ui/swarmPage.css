@@ -613,6 +613,11 @@ body {
   background: color-mix(in srgb, var(--participant-color) 5%, var(--bg));
   padding: 14px 16px;
   overflow-anchor: auto;
+  /* Posts away from the view skip rendering. Until a post first renders, it
+     counts as a short post: too low an estimate only renders a few more posts
+     near the view, and scroll anchoring keeps the view in place as they grow. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
 }
 /* While the discussion's newest posts are not loaded, the way back stays in
    view. */

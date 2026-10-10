@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   flushSync,
   tick,
@@ -525,9 +525,24 @@ describe('Swarm Board posts', () => {
       { swarm_id: swarm.id, discussion_id: 'dsc-main', limit: 50, ...bounds },
     ];
     const before = reads().length;
+    // Far from the view, as rendered posts would place it.
+    const box = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ top: 20 * window.innerHeight, height: 300 });
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    onTestFinished(() => {
+      box.mockRestore();
+      delete Element.prototype.scrollIntoView;
+    });
     document.querySelector('.board a[data-swarm-reference]').click();
     await vi.waitFor(() =>
       expect(document.activeElement.dataset.postNumber).toBe('60'),
+    );
+    // A long way jumps: smooth scrolling would render every post on the way.
+    expect(scroll).toHaveBeenCalledWith({ block: 'center', behavior: 'auto' });
+    expect(scroll).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: 'smooth' }),
     );
     expect(numbers()).toEqual(countDown(110, 11));
     expect(reads().slice(before)).toEqual([

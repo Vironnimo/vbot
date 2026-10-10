@@ -26,6 +26,9 @@ const USAGE_REFRESH_INTERVAL_MS = 10_000;
 // and each side of a revealed post. The Store also caps a page's text.
 const BOARD_PAGE = 50;
 
+// The most animation frames a revealed post is kept centered after a jump.
+const RECENTER_FRAMES = 12;
+
 export function createSwarmPageModel(host) {
   // Exists from the start, so the page root can hand its layer registry to
   // the page's dialogs before any of them mounts.
@@ -1300,7 +1303,7 @@ export function createSwarmPageModel(host) {
       const goal = document.querySelector('.swarm-goal-post');
       if (goal && current()) {
         goal.open = true;
-        revealElement(goal);
+        revealElement(goal, current);
       }
       return;
     }
@@ -1329,22 +1332,53 @@ export function createSwarmPageModel(host) {
     await tick();
     revealElement(
       document.querySelector(`.board > li[data-post-number="${number}"]`),
+      current,
     );
   }
 
-  function revealElement(element) {
+  // Scrolls `element` to the middle of the view, then focuses and highlights
+  // it. A short way scrolls smoothly; a long one jumps, since smooth
+  // scrolling would render every post on the way.
+  function revealElement(element, current = () => !disposed) {
     if (!element) return;
     const reduced = window.matchMedia?.(
       '(prefers-reduced-motion: reduce)',
     )?.matches;
+    const box = element.getBoundingClientRect();
+    const near =
+      Math.abs(box.top + box.height / 2 - window.innerHeight / 2) <
+      window.innerHeight;
     element.scrollIntoView?.({
       block: 'center',
-      behavior: reduced ? 'auto' : 'smooth',
+      behavior: near && !reduced ? 'smooth' : 'auto',
     });
+    if (!near) recenter(element, current);
     element.tabIndex = -1;
     element.focus({ preventScroll: true });
     element.dataset.revealed = '';
     setTimeout(() => delete element.dataset.revealed, 2000);
+  }
+
+  // Posts away from the view render only near it (`content-visibility`), so
+  // a jump places `element` by estimated heights of the posts on the way.
+  // Keeps it centered while posts coming into view replace their estimates:
+  // until it stays put for two frames, for at most RECENTER_FRAMES frames.
+  function recenter(element, current) {
+    let frames = RECENTER_FRAMES;
+    let still = 0;
+    let top = element.getBoundingClientRect().top;
+    const step = () => {
+      if (!current() || !element.isConnected || frames-- <= 0) return;
+      if (element.getBoundingClientRect().top === top) {
+        if (++still === 2) return;
+      } else {
+        still = 0;
+        element.scrollIntoView?.({ block: 'center', behavior: 'auto' });
+        top = element.getBoundingClientRect().top;
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 
   function openContentLink(event) {
