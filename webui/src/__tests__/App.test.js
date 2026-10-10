@@ -20,6 +20,7 @@ import {
   rpcMock,
   runServerEvent,
   selectedAgentName,
+  sendConnectionReady,
   settingsPanelButton,
   sidebarNavButton,
   subscribeRunEventsMock,
@@ -201,6 +202,8 @@ describe('App', () => {
     const agentReads = () =>
       rpcMock.mock.calls.filter(([method]) => method === 'agent.list').length;
     const readsBefore = agentReads();
+    // Chat and the app shell each read the roster once when they mount.
+    expect(readsBefore).toBe(2);
 
     // The event carries no Agent data.
     await handlers.onEvent({
@@ -227,6 +230,7 @@ describe('App', () => {
       }),
     );
     const handlers = mountApp();
+    sendConnectionReady();
     const calls = (method) =>
       rpcMock.mock.calls.filter(([name]) => name === method).length;
     const counts = () => [
@@ -237,7 +241,7 @@ describe('App', () => {
       expect(calls('extensions.pages')).toBe(1);
       expect(calls('extensions.operation')).toBeGreaterThan(0);
     });
-    // Startup reads (mount, first page catalog) end; nothing polls afterwards.
+    // Startup reads end; nothing polls afterwards.
     let settled;
     await waitForCondition(() => {
       const current = counts().join();
@@ -245,6 +249,9 @@ describe('App', () => {
       settled = current;
       expect(stable).toBe(true);
     });
+    // Each surface read once when it mounted; the first page catalog asks
+    // none of them to read again.
+    expect([...counts(), calls('extensions.list')]).toEqual([1, 1, 1]);
     const [requests, status] = counts();
     const extensionsChanged = (scope) =>
       handlers.onEvent({
@@ -472,6 +479,7 @@ describe('App', () => {
       }),
     );
     mountApp();
+    sendConnectionReady();
 
     await waitForCondition(() => {
       expect(sidebarNavButton('Fixture page')).toBeTruthy();

@@ -103,6 +103,16 @@ export function resetAppHarness() {
   rpcMock.mockImplementation(createAppRpcMock());
 }
 
+// The mounted App's first `connection_ready`. The reads that follow every
+// connection, such as the Extension page catalog, start on it.
+export function sendConnectionReady() {
+  return subscribeServerEventsMock.mock.calls[0][0].onEvent({
+    type: 'connection_ready',
+    replay_status: 'fresh',
+    active_runs: [],
+  });
+}
+
 export async function cleanupAppHarness(mountedComponent) {
   if (mountedComponent) {
     await unmount(mountedComponent);

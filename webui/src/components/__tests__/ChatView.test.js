@@ -593,10 +593,11 @@ describe('ChatView', () => {
       rpcMock.mockImplementation(createChatRpcMock({ commandItems }));
       await chat.mountChat(alphaProps());
       // The catalog is requested for the active Agent address, so the server
-      // returns that Agent's effective (Project-scoped) Skills.
-      expect(rpcCalls('chat.commands')).toContainEqual(
+      // returns that Agent's effective (Project-scoped) Skills. The roster
+      // read names that Agent first, so no catalog for no Agent precedes it.
+      expect(rpcCalls('chat.commands')).toEqual([
         expect.objectContaining({ agent_id: 'alpha' }),
-      );
+      ]);
 
       const input = document.querySelector('.msg-input');
       setInputValue(input, text);
