@@ -122,28 +122,31 @@ async def test_a_file_name_glob_in_pattern_lists_matching_files(project: Path, a
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "named"),
+    ("arguments", "listed"),
     [
         ({"pattern": r".*\.[pP][yY]$", "output": "files"}, "src/app.py"),
-        ({"pattern": r"\.(py|ts)$", "output": "files"}, "src/app.py, src/view.ts"),
+        ({"pattern": r"\.(py|ts)$", "output": "files"}, "src/app.py\nsrc/view.ts"),
         # A bare file name, as DeepSeek sent it to find a file (agent-eval 2026-10-10).
         ({"pattern": "app.py", "output": "files"}, "src/app.py"),
         ({"pattern": "src/view"}, "src/view.ts"),
         ({"pattern": r"load\.ts$", "output": "files"}, None),
     ],
 )
-async def test_a_content_search_without_matches_names_files_whose_names_match(
-    project: Path, arguments: dict, named: str | None
+async def test_a_content_search_without_matches_lists_files_whose_names_match(
+    project: Path, arguments: dict, listed: str | None
 ):
     result = await dispatch(project, arguments)
-    assert result["data"]["content"] == ""
-    if named is None:
+    if listed is None:
+        assert result["data"]["content"] == ""
         assert "note" not in result["data"]
-    else:
-        assert result["data"]["note"] == (
-            f"pattern searches file contents, not file names; these file names match it: "
-            f'{named}. To list files by name, omit pattern and pass glob, such as "*.py".'
-        )
+        return
+    assert result["data"]["content"] == listed
+    assert result["data"]["note"] == (
+        "No file contents match pattern, so the files whose names match it were listed."
+    )
+    # Content matches keep the search a content search.
+    contents = await dispatch(project, {**arguments, "pattern": arguments["pattern"] + "|load"})
+    assert "note" not in contents["data"] and "matching line" in contents["data"]["summary"]
 
 
 @pytest.mark.asyncio

@@ -107,13 +107,15 @@ Modes:
   no match, the handler lists the searched files (same paths, globs and flags)
   and matches their names and shown paths against the patterns
   (`_names_matching`, ripgrep with the query's matching flags). When some match,
-  the `note` names up to 10 of them and says that `pattern` searches contents
-  and `glob` lists by name: `pattern searches file contents, not file names;
-  these file names match it: src/app.py. To list files by name, ...`. This
-  replaced a hint shown only for regexes ending in a file extension (`\.py$`):
-  DeepSeek V4.1 Flash sent `pattern: "app.py"` with `output: files` to find a
-  file in 6 of 6 eval runs and got only `No matches` (agent-eval 2026-10-10).
-  Coverage: `test_search_files_arguments.py::test_a_content_search_without_matches_names_files_whose_names_match`.
+  the call answers as a file listing of them (`Found 1 file, newest first.`,
+  paged like a listing) with the `note` `No file contents match pattern, so the
+  files whose names match it were listed.` An incomplete search (timeout,
+  stopped Run) keeps its empty result. This replaced a hint shown only for
+  regexes ending in a file extension (`\.py$`): DeepSeek V4.1 Flash sent
+  `pattern: "app.py"` with `output: files` to find a file in 6 of 6 eval runs
+  and got only `No matches`; a note naming the matching files did not change
+  its next call either (agent-eval 2026-10-10). Coverage:
+  `test_search_files_arguments.py::test_a_content_search_without_matches_lists_files_whose_names_match`.
 
 The owner normalizer repairs common encodings and wrappers. It also accepts field
 names from other search Tools and command-line habits when their meaning is exact
@@ -401,7 +403,7 @@ blank placeholders, so no sentence has to warn about them.
 |---|---|
 | `Search file contents with a regular expression, or find files and directories by name.` | Names every job of the single Tool so Agents pick it for name and content discovery (F1). "find ... by name" matches how Agents phrase the task: with "list files and directories", 6 of 12 directory-name trials went to the shell first, with "find ... by name" 2 of 12 (first-use probe, 2026-10). |
 | `Use this instead of grep, rg, find, or ls in the shell.` | Agents otherwise fall back to the shell for search (F1). Names only Unix commands Models know from training; shell-specific cmdlet names stay out. |
-| pattern: `Regular expression (ripgrep syntax) for file contents. Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). "for file contents" keeps name regexes such as `\.py$` out of `pattern`; a content search that finds nothing names the files whose names match and points to `glob` (first-use probe, 2026-10; agent-eval 2026-10-10). |
+| pattern: `Regular expression (ripgrep syntax) for file contents. Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). "for file contents" keeps name regexes such as `\.py$` out of `pattern`; a content search that finds nothing lists the files whose names match (first-use probe, 2026-10; agent-eval 2026-10-10). |
 | path: `Files or directories to search. Omit for the working directory.` | Weak Models filled `path` with guesses (F2); a relative miss names the working directory in the error. |
 | glob: `Case-insensitive name filters such as *.py; a leading ! excludes.` | Without "Case-insensitive", Agents asked to ignore extension case wrote `*.[pP][yY]`, `--iglob`, several globs or a shell command (first-use probe, 2026-10). Exclusion is the one other glob rule Agents need before the call; a `!` value passed as `path` is applied as an exclusion with a note (F3). |
 | output: `files lists matching files; count counts matching lines per file, every match with "--count-matches" in args. Omit for matching lines.` | Names the shapes in Agent terms (F2). Agents asked for occurrences per file did not find `--count-matches` (first-use probe, 2026-10). Agents sent `output: "content"` in 1769 calls (Sessions, 2026-09). |
