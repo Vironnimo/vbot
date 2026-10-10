@@ -120,6 +120,24 @@
   line-height: 1.35;
 }
 
+.app-tooltip__legend {
+  display: grid;
+  gap: 3px;
+  color: var(--text-med);
+}
+
+.app-tooltip__legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-tooltip__legend-item > svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
 .app-tooltip__rows {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -164,10 +182,13 @@
 }
 
 .app-tooltip__title + .app-tooltip__rows,
-.app-tooltip__title + .app-tooltip__text {
+.app-tooltip__title + .app-tooltip__legend,
+.app-tooltip__title + .app-tooltip__text,
+.app-tooltip__legend + .app-tooltip__text {
   margin-top: 5px;
 }
 
+.app-tooltip__legend + .app-tooltip__rows,
 .app-tooltip__text + .app-tooltip__rows {
   margin-top: 7px;
   padding-top: 7px;

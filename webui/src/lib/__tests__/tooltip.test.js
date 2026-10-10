@@ -156,11 +156,22 @@ describe('tooltip action', () => {
     });
   });
 
-  it('renders details as a title, free text and aligned label/value rows', () => {
+  it('renders details as a title, icon legend, free text and aligned label/value rows', () => {
     const plain = button('Plain');
     const plainAction = tooltip(plain, 'Plain label');
     action = tooltip(node, {
       title: 'Fix login redirect',
+      legend: [
+        {
+          label: 'Started by a Schedule',
+          icon: {
+            viewBox: '0 0 14 14',
+            attrs: { fill: 'none' },
+            shapes: [['circle', { cx: '7', cy: '7', r: '4' }]],
+          },
+        },
+        { label: '' },
+      ],
       text: 'Reviews the auth flow.',
       rows: [
         { label: 'Agent', value: 'Alpha' },
@@ -175,9 +186,17 @@ describe('tooltip action', () => {
     expect(element.classList.contains('app-tooltip--rich')).toBe(true);
     expect([...element.children].map((child) => child.className)).toEqual([
       'app-tooltip__title',
+      'app-tooltip__legend',
       'app-tooltip__text',
       'app-tooltip__rows',
     ]);
+    const legend = element.querySelector('.app-tooltip__legend');
+    expect(legend.textContent).toBe('Started by a Schedule');
+    const icon = legend.querySelector('svg');
+    expect(icon.namespaceURI).toBe('http://www.w3.org/2000/svg');
+    expect(icon.getAttribute('viewBox')).toBe('0 0 14 14');
+    expect(icon.getAttribute('aria-hidden')).toBe('true');
+    expect(icon.querySelector('circle').getAttribute('r')).toBe('4');
     expect(
       [...element.querySelectorAll('dt')].map((term) => term.textContent),
     ).toEqual(['Agent', 'Parent', 'Exit code']);

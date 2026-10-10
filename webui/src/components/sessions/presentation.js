@@ -5,6 +5,7 @@ import {
   sessionDisplayName,
   sessionParentReference,
 } from '$lib/sessionListView.js';
+import { sessionKindIcon } from './kindIcons.js';
 
 export const autofocusRename = (node) => {
   node.focus();
@@ -56,15 +57,18 @@ export function sessionHoverDetails(
     );
   }
 
-  // The row shows one marker, hidden while the row is hovered or focused, so
-  // the card names the kinds its origin rows do not.
-  const kindText = sessionKinds(session)
-    .filter(({ kind }) => kind !== 'fork' && kind !== 'subagent')
-    .map(({ label }) => label)
-    .join(' · ');
+  // The row's marker gives way to its "..." button while the row is hovered
+  // or focused, so the card shows that icon with its meaning, and the other
+  // kinds its origin rows do not already name.
+  const legend = sessionKinds(session)
+    .filter(
+      ({ kind }, index) =>
+        index === 0 || (kind !== 'fork' && kind !== 'subagent'),
+    )
+    .map((kind) => ({ icon: sessionKindIcon(kind), label: kind.label }));
   return {
     title: session.display_name || sessionDisplayName(session),
-    ...(kindText ? { text: kindText } : {}),
+    ...(legend.length > 0 ? { legend } : {}),
     rows,
     placement: 'right',
   };

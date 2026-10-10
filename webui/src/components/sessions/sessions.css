@@ -132,10 +132,12 @@
   height: 14px;
 }
 
+/* The count sits on the trigger's corner but inside the header, which clips
+   at the drawer edge; a ring in the drawer surface sets it off the icon. */
 .session-drawer__filter-count {
   position: absolute;
-  top: -5px;
-  right: -5px;
+  top: -1px;
+  right: -1px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -149,6 +151,7 @@
   font-size: 9px;
   font-weight: 600;
   line-height: 1;
+  box-shadow: 0 0 0 1.5px var(--surface);
 }
 
 .session-drawer__filter-menu {
@@ -183,7 +186,6 @@
 
 .session-row__agent {
   width: 100%;
-  margin-top: 2px;
   color: var(--text-med);
   font-family: var(--font-ui);
   font-size: var(--fs-label-sm);
@@ -258,7 +260,7 @@
   width: 100%;
   border: 0;
   border-radius: inherit;
-  padding: 5px 8px 5px 18px;
+  padding: 4px 8px;
   text-align: left;
   background: transparent;
   color: var(--text-hi);
@@ -277,7 +279,7 @@
 .session-row__marker,
 .btn-tertiary.btn-icon.session-row__menu-trigger {
   position: absolute;
-  top: 1px;
+  top: 0;
   right: 3px;
   height: 24px;
 }
@@ -398,7 +400,7 @@
   min-width: 0;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 6px;
   padding-right: var(--session-row-trail);
   transition: padding-right 120ms ease;
 }
@@ -417,15 +419,12 @@
   mask-image: var(--session-row-fade);
 }
 
-/* Every title starts at the same edge; the status dot sits in the gutter
-   before it. */
+/* Only a running or unread row spends room on its status dot, right before
+   the title; every other title starts at the row's edge. */
 .session-row__status {
-  position: absolute;
-  top: 50%;
-  left: -12px;
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
-  transform: translateY(-50%);
 }
 
 @media (prefers-reduced-motion: reduce) {

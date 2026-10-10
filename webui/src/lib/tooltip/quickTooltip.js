@@ -20,6 +20,7 @@ const TOOLTIP_ID = 'app-tooltip';
 const EMPTY_CONTENT = Object.freeze({
   text: '',
   title: '',
+  legend: [],
   rows: [],
   mono: false,
   placement: 'top',
@@ -48,6 +49,31 @@ function normalizeRows(rows) {
     .filter((row) => row.value);
 }
 
+function normalizeIcon(icon) {
+  if (!icon || typeof icon !== 'object' || !Array.isArray(icon.shapes)) {
+    return null;
+  }
+  return {
+    viewBox: normalizeText(icon.viewBox),
+    attrs: { ...icon.attrs },
+    shapes: icon.shapes
+      .filter((shape) => Array.isArray(shape) && typeof shape[0] === 'string')
+      .map(([tag, attrs]) => [tag, { ...attrs }]),
+  };
+}
+
+function normalizeLegend(legend) {
+  if (!Array.isArray(legend)) {
+    return [];
+  }
+  return legend
+    .map((entry) => ({
+      label: normalizeText(entry?.label),
+      icon: normalizeIcon(entry?.icon),
+    }))
+    .filter((entry) => entry.label);
+}
+
 /**
  * A string is a plain label; an object may carry structure and options; a
  * function returns either and is called each time the tooltip shows, so
@@ -64,6 +90,7 @@ export function normalizeTooltipContent(value) {
   return {
     text: normalizeText(value.text),
     title: normalizeText(value.title),
+    legend: normalizeLegend(value.legend),
     rows: normalizeRows(value.rows),
     mono: value.mono === true,
     placement:
@@ -77,7 +104,12 @@ export function normalizeTooltipContent(value) {
 }
 
 function isEmpty(content) {
-  return !content.text && !content.title && content.rows.length === 0;
+  return (
+    !content.text &&
+    !content.title &&
+    content.legend.length === 0 &&
+    content.rows.length === 0
+  );
 }
 
 function contentKey(content) {
@@ -91,11 +123,45 @@ function textBlock(tag, className, text) {
   return element;
 }
 
-// Title, then the free text, then the label/value rows.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgElement(tag, attrs) {
+  const element = document.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attrs)) {
+    element.setAttribute(name, String(value));
+  }
+  return element;
+}
+
+function iconElement(icon) {
+  const svg = svgElement('svg', {
+    ...icon.attrs,
+    viewBox: icon.viewBox,
+    'aria-hidden': 'true',
+  });
+  svg.append(...icon.shapes.map(([tag, attrs]) => svgElement(tag, attrs)));
+  return svg;
+}
+
+// Title, then the legend, the free text and the label/value rows.
 function renderContent(element, content) {
   const blocks = [];
   if (content.title) {
     blocks.push(textBlock('div', 'app-tooltip__title', content.title));
+  }
+  if (content.legend.length > 0) {
+    const legend = document.createElement('div');
+    legend.className = 'app-tooltip__legend';
+    for (const entry of content.legend) {
+      const item = document.createElement('div');
+      item.className = 'app-tooltip__legend-item';
+      if (entry.icon) {
+        item.append(iconElement(entry.icon));
+      }
+      item.append(textBlock('span', '', entry.label));
+      legend.append(item);
+    }
+    blocks.push(legend);
   }
   if (content.text) {
     blocks.push(
@@ -130,7 +196,9 @@ function renderContent(element, content) {
   element.replaceChildren(...blocks);
   element.classList.toggle(
     'app-tooltip--rich',
-    Boolean(content.title) || content.rows.length > 0,
+    Boolean(content.title) ||
+      content.legend.length > 0 ||
+      content.rows.length > 0,
   );
   element.dataset.selectable = String(content.selectable);
 }

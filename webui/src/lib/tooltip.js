@@ -11,10 +11,12 @@
 //   `tooltip` prop and the Dropdown `triggerTooltip` prop) in the one shared
 //   `#app-tooltip` element. `content` is either a string (a label or short
 //   hint) or an object:
-//     { text, title, rows: [{ label, value, mono }], mono,
-//       placement, selectable, whenTruncated, alignTo }
+//     { text, title, legend: [{ icon, label }], rows: [{ label, value, mono }],
+//       mono, placement, selectable, whenTruncated, alignTo }
 //   `title` and `rows` render a compact details card (a heading and aligned
-//   label/value pairs, e.g. a Session's Agent and last activity); `mono` sets
+//   label/value pairs, e.g. a Session's Agent and last activity); `legend`
+//   lines below the title name the icons the anchor shows, each drawn from
+//   an icon spec `{ viewBox, attrs, shapes: [[tag, attrs], ...] }`; `mono` sets
 //   code-like values (paths, commands, ids) in the mono face. `placement`
 //   ('top' default, 'right', 'bottom', 'left') is the preferred side;
 //   'pointer' sticks the bubble to the cursor below it while the pointer
