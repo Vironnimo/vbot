@@ -160,6 +160,11 @@
   grid-column: 1 / -1;
 }
 
+/* Muted text before a value, like ModelId's provider path. */
+.app-tooltip__lead {
+  color: var(--text-lo);
+}
+
 /* A row value may carry the state it reports (a failure, an exit code). */
 .app-tooltip__value--success {
   color: var(--green);

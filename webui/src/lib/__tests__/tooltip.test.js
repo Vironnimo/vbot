@@ -176,6 +176,7 @@ describe('tooltip action', () => {
       rows: [
         { label: 'Agent', value: 'Alpha' },
         { label: 'Parent', value: 'alpha/session-1', mono: true },
+        { label: 'Model', lead: 'openrouter/acme/', value: 'fast-1' },
         { label: 'Exit code', value: '1', tone: 'danger' },
         { label: 'Source channel', value: '' },
       ],
@@ -199,15 +200,16 @@ describe('tooltip action', () => {
     expect(icon.querySelector('circle').getAttribute('r')).toBe('4');
     expect(
       [...element.querySelectorAll('dt')].map((term) => term.textContent),
-    ).toEqual(['Agent', 'Parent', 'Exit code']);
-    expect(
-      element.querySelectorAll('dd')[1].classList.contains('app-tooltip__mono'),
-    ).toBe(true);
-    expect(
-      element
-        .querySelectorAll('dd')[2]
-        .classList.contains('app-tooltip__value--danger'),
-    ).toBe(true);
+    ).toEqual(['Agent', 'Parent', 'Model', 'Exit code']);
+    const values = element.querySelectorAll('dd');
+    expect(values[1].classList.contains('app-tooltip__mono')).toBe(true);
+    expect(values[2].textContent).toBe('openrouter/acme/fast-1');
+    expect(values[2].querySelector('.app-tooltip__lead').textContent).toBe(
+      'openrouter/acme/',
+    );
+    expect(values[3].classList.contains('app-tooltip__value--danger')).toBe(
+      true,
+    );
 
     node.dispatchEvent(new Event('pointerleave'));
     hover(plain);
