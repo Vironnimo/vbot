@@ -717,25 +717,52 @@ describe('Swarm Board posts', () => {
       { swarm_id: swarm.id, discussion_id: 'dsc-main', limit: 50, ...bounds },
     ];
     const before = reads().length;
-    // Far from the view, as rendered posts would place it.
+    // The post lies far from the view, where the posts' estimated heights
+    // place it. Once rendered, it is taller than the view, and the posts
+    // rendering around it move it every frame.
+    let moves = 0;
     const box = vi
       .spyOn(Element.prototype, 'getBoundingClientRect')
-      .mockReturnValue({ top: 20 * window.innerHeight, height: 300 });
+      .mockImplementation(function () {
+        if (this.matches('.board-newer')) return { top: 0, height: 48 };
+        const top = 20 * window.innerHeight + 40 * moves;
+        return { top, height: moves ? 3 * window.innerHeight : 300 };
+      });
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;
     onTestFinished(() => {
       box.mockRestore();
       delete Element.prototype.scrollIntoView;
     });
+    const frames = [];
+    vi.stubGlobal('requestAnimationFrame', (callback) => frames.push(callback));
+    const frame = () => {
+      moves += 1;
+      for (const callback of frames.splice(0)) callback();
+    };
     document.querySelector('.board a[data-swarm-reference]').click();
     await vi.waitFor(() =>
       expect(document.activeElement.dataset.postNumber).toBe('60'),
     );
     // A long way jumps: smooth scrolling would render every post on the way.
-    expect(scroll).toHaveBeenCalledWith({ block: 'center', behavior: 'auto' });
-    expect(scroll).not.toHaveBeenCalledWith(
-      expect.objectContaining({ behavior: 'smooth' }),
-    );
+    expect(scroll.mock.calls).toEqual([
+      [{ block: 'center', behavior: 'auto' }],
+    ]);
+    // Rendered taller than the view, the post shows from its top, below the
+    // newer-posts bar.
+    frame();
+    expect(scroll).toHaveBeenLastCalledWith({
+      block: 'start',
+      behavior: 'auto',
+    });
+    expect(document.activeElement.style.scrollMarginTop).toBe('56px');
+    // Once the reader scrolls, the post stays where the reader puts it.
+    window.dispatchEvent(new Event('wheel'));
+    frame();
+    frame();
+    expect(scroll).toHaveBeenCalledTimes(2);
+    expect(frames).toEqual([]);
+    vi.unstubAllGlobals();
     expect(numbers()).toEqual(countDown(110, 11));
     expect(reads().slice(before)).toEqual([
       ['board.read', { swarm_id: swarm.id, message_id: '#60' }],
@@ -775,6 +802,47 @@ describe('Swarm Board posts', () => {
     bridge.invalidate({ resource: 'posts', ids: [swarm.id], revision: 3 });
     await vi.waitFor(() => expect(numbers()[0]).toBe(202));
     expect(reads().at(-1)).toEqual(read({ after: 201 }));
+  });
+
+  it('reads a Board that was off screen anew to reveal a post', async () => {
+    const posts = [1, 2].map((sequence) => ({
+      id: `pst-${sequence}`,
+      sequence,
+      discussion_id: 'dsc-main',
+      author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
+      text: `message-${sequence}`,
+    }));
+    const { bridge, operation } = createBridge(undefined, {
+      ...structuredClone(swarm),
+      newest_post_sequence: 3,
+    });
+    overrideOperations(operation, { 'board.read': boardStore(posts) });
+    bridge.readHistory.mockResolvedValue({
+      status: 'completed',
+      messages: [
+        {
+          id: 'msg-cite',
+          role: 'assistant',
+          content: 'Builds on #1.',
+          timestamp: '2026-09-08T09:00:00+00:00',
+        },
+      ],
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(numbers()).toEqual([2, 1]));
+    // Activity shows; the Board, off screen, misses a new post.
+    button('Alpha').click();
+    const cite = () => document.querySelector('.history a[href="#post/1"]');
+    await vi.waitFor(() => expect(cite()).not.toBeNull());
+    posts.push({ ...posts[0], id: 'pst-3', sequence: 3, text: 'message-3' });
+    const lists = callsTo(operation, 'board.list').length;
+    cite().click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.dataset.postNumber).toBe('1'),
+    );
+    expect(numbers()).toEqual([3, 2, 1]);
+    expect(callsTo(operation, 'board.list').length).toBeGreaterThan(lists);
   });
 });
 

@@ -695,23 +695,33 @@ and opening, or the participant's details card. A mention opens the
 participant's Activity, as its chip does. Linking walks only the rendered
 Markdown added to the page, skips code, links and controls as whole subtrees and
 ignores its own insertions.
-A post link shows the post on the Board, centered and focused; `#0` opens the
-user request. A post the Board does not show takes two round trips: the post by
-number, which names its discussion, then up to a page of posts ending with it
-(`before`) and up to a page of newer ones (`after`), read together while the
-discussion selector lists the discussion. These replace the shown posts. While
-the discussion's newest posts are not loaded, a sticky bar above the posts offers
-"Load newer posts" and "Jump to newest", and new posts are not put on top.
-A short way scrolls smoothly; a long one jumps and keeps the post centered for up
-to 12 frames while the posts around it render (`SwarmPage.board.test.js`,
-`SwarmPage.wiki.test.js`, `test_swarm_operations.py`).
+A post link shows the post on the Board, focused and centered in the room below
+what sticks at the top: the newer-posts bar (see below) and what the Run shell
+makes stick above the panels, whose height it sets as `--swarm-run-sticky-top`
+(the bar sticks below it). A post taller than that room shows from its top, just
+below them. `#0` opens the user request. A post the Board does not show
+takes two round trips: the post by number, which names its discussion, then up
+to a page of posts ending with it (`before`) and up to a page of newer ones
+(`after`), read together while the discussion selector lists the discussion.
+These replace the shown posts. A Board that was off screen under another tab
+may have missed changes, so a reveal from there reads the posts around the post
+and the discussion list anew even when the Board holds the post, and `#0` loads
+the Board's newest page. While the discussion's newest posts are not loaded, a
+sticky bar above the posts offers "Load newer posts" and "Jump to newest", and
+new posts are not put on top. A short way scrolls smoothly; a long one jumps and
+keeps the post in place for up to 12 frames while the posts around it render,
+but stops as soon as the reader scrolls, touches, or presses a key or a pointer
+button (`SwarmPage.board.test.js`, `SwarmPage.wiki.test.js`,
+`test_swarm_operations.py`).
 Board posts use `content-visibility: auto`, so only posts near the view are laid
 out and painted. `contain-intrinsic-size: auto 320px` deliberately underestimates
 a post (seeded posts averaged about 1,450 px): a low estimate only renders a few
 more posts near the view, and scroll anchoring keeps the view in place when
 posts render or earlier pages load (checked in Chrome, 2026-10-10). Queries for
 roles or accessible names over many loaded posts force their layout: a Playwright
-`getByRole` over 809 posts took 3.6 s instead of 0.2 s.
+`getByRole` over 809 posts took 3.6 s instead of 0.2 s. With all 809 posts
+loaded, scrolling through them and typing in the compose dialog ran without long
+tasks (Chrome, 2026-10-11).
 Posts are calm cards on the neutral surface: the author's stable identity color
 shows only in the avatar and a thin left edge. A discussion announcement is a
 compact event row whose title link opens that discussion. A post longer than 16

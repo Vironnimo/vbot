@@ -133,6 +133,7 @@
   role="tabpanel"
   id="swarm-run-panel-board"
   aria-labelledby="swarm-run-tab-board"
+  use:board.panel
 >
   <div class="board-toolbar">
     <SearchableDropdown

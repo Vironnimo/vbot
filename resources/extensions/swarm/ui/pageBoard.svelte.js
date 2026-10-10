@@ -9,8 +9,11 @@ import { referenceLinks } from './referenceLinks.js';
 // and each side of a revealed post. The Store also caps a page's text.
 const BOARD_PAGE = 50;
 
-// The most animation frames a revealed post is kept centered after a jump.
+// The most animation frames a revealed post is kept in place after a jump.
 const RECENTER_FRAMES = 12;
+
+// Input by which the reader takes over the scrolling from a reveal.
+const READER_INPUT = ['wheel', 'touchstart', 'keydown', 'pointerdown'];
 
 // A post longer than this many lines folds to its first lines (see the CSS)
 // until the reader opens it; a shorter one shows in full, so Show more never
@@ -75,6 +78,10 @@ export function createSwarmPageBoard(host) {
   let discussionsRequest = 0;
 
   let revealRequest = 0;
+
+  // Board panels on screen (`panel`). Only the visible tab loads changes, so a
+  // Board off screen may miss posts and discussions.
+  let panels = 0;
 
   // Tooltip content for "#N" and "wN" links, by "post:N" and "page:N".
   const references = new SvelteMap();
@@ -247,7 +254,15 @@ export function createSwarmPageBoard(host) {
       if (boardLoading === load) boardLoading = null;
     }
     if (!boardCurrent(version, swarm, discussionId)) return false;
-    posts = [...page(newer)].reverse().concat([...page(earlier)].reverse());
+    // The two reads meet at `number`; a post in both would be listed twice.
+    posts = page(newer)
+      .filter((post) => post.sequence > number)
+      .reverse()
+      .concat(
+        page(earlier)
+          .filter((post) => post.sequence <= number)
+          .reverse(),
+      );
     boardShown = { swarmId: swarm.id, discussionId };
     boardCursor = earlier.cursor ?? null;
     boardAtNewest = !newer.has_more;
@@ -511,9 +526,9 @@ export function createSwarmPageBoard(host) {
   }
 
   // Lists the discussion `discussionId` in the selector, reading its pages
-  // until they name it.
-  async function listDiscussion(swarm, discussionId, current) {
-    if (!discussions.length) await loadDiscussions(swarm);
+  // until they name it; with `reread`, from a fresh first page.
+  async function listDiscussion(swarm, discussionId, current, reread) {
+    if (reread || !discussions.length) await loadDiscussions(swarm);
     while (
       !discussions.some((item) => item.id === discussionId) &&
       discussionCursor &&
@@ -527,9 +542,10 @@ export function createSwarmPageBoard(host) {
       discussions = [...discussions, { id: discussionId }];
   }
 
-  // Shows a cited post on the Board, focused in the middle of the view. A post
-  // the Board does not show yet takes two round trips: its discussion, then
-  // the post with the posts around it.
+  // Shows a cited post on the Board, focused in the view. A post the Board
+  // does not show yet takes two round trips: its discussion, then the post
+  // with the posts around it. A Board that was off screen reads what it shows
+  // anew, as a step to the Board tab does.
   async function revealPost(number) {
     const swarm = host.selectedSwarm;
     if (!swarm) return;
@@ -538,12 +554,14 @@ export function createSwarmPageBoard(host) {
       !host.disposed &&
       request === revealRequest &&
       host.selectedSwarm?.id === swarm.id;
-    const shown = () =>
+    const fresh = panels > 0;
+    const held = () =>
       shows(swarm, selectedDiscussion) &&
       posts.some((item) => item.sequence === number);
     // A step to the Board, which loads only what the post needs.
     host.stepToBoard();
     if (number === swarm.goal_post_sequence) {
+      if (!fresh) await reload(swarm, null);
       await tick();
       const goal = document.querySelector('.swarm-goal-post');
       if (goal && current()) {
@@ -552,23 +570,28 @@ export function createSwarmPageBoard(host) {
       }
       return;
     }
-    if (!shown()) {
-      const [post] = page(
-        await host.call('board.read', {
-          swarm_id: swarm.id,
-          message_id: `#${number}`,
-        }),
-      );
-      if (!post || !current()) return;
-      const discussionId = post.discussion_id;
-      if (!shown()) {
+    if (!fresh || !held()) {
+      // A post the Board holds is in the selected discussion; another one
+      // names its discussion when read by number.
+      let discussionId = selectedDiscussion;
+      if (!held()) {
+        const [post] = page(
+          await host.call('board.read', {
+            swarm_id: swarm.id,
+            message_id: `#${number}`,
+          }),
+        );
+        if (!post || !current()) return;
+        discussionId = post.discussion_id;
+      }
+      if (!fresh || !held()) {
         if (selectedDiscussion !== discussionId) {
           selectedDiscussion = discussionId;
           clearBoard();
         }
         const [around] = await Promise.all([
           loadAround(swarm, discussionId, number),
-          listDiscussion(swarm, discussionId, current),
+          listDiscussion(swarm, discussionId, current, !fresh),
         ]);
         if (!around) return;
       }
@@ -633,7 +656,7 @@ export function createSwarmPageBoard(host) {
       control.scrollIntoView?.({ block: 'nearest' });
   }
 
-  // Scrolls `element` to the middle of the view, then focuses and highlights
+  // Scrolls `element` into view (see `place`), then focuses and highlights
   // it. A short way scrolls smoothly; a long one jumps, since smooth
   // scrolling would render every post on the way.
   function revealElement(element, current = () => !host.disposed) {
@@ -641,37 +664,93 @@ export function createSwarmPageBoard(host) {
     const reduced = window.matchMedia?.(
       '(prefers-reduced-motion: reduce)',
     )?.matches;
+    const view = viewOf(element);
     const box = element.getBoundingClientRect();
     const near =
-      Math.abs(box.top + box.height / 2 - window.innerHeight / 2) <
-      window.innerHeight;
+      Math.abs(box.top + box.height / 2 - (view.top + view.bottom) / 2) <
+      view.bottom - view.top;
     element.scrollIntoView?.({
-      block: 'center',
+      block: place(element, box, view),
       behavior: near && !reduced ? 'smooth' : 'auto',
     });
-    if (!near) recenter(element, current);
+    if (!near) recenter(element, current, view);
     element.tabIndex = -1;
     element.focus({ preventScroll: true });
     element.dataset.revealed = '';
     setTimeout(() => delete element.dataset.revealed, 2000);
   }
 
+  // The part of the window that the scroller holding `element` shows, and
+  // the scroller's top padding, below which sticky bars stick.
+  function viewOf(element) {
+    let scroller = element.parentElement;
+    while (
+      scroller &&
+      scroller !== document.body &&
+      !/^(auto|scroll)$/.test(getComputedStyle(scroller).overflowY)
+    )
+      scroller = scroller.parentElement;
+    const own = scroller && scroller !== document.body;
+    const box = own
+      ? scroller.getBoundingClientRect()
+      : { top: 0, bottom: window.innerHeight };
+    return {
+      top: Math.max(box.top, 0),
+      bottom: Math.min(box.bottom, window.innerHeight),
+      inset: own ? parseFloat(getComputedStyle(scroller).paddingTop) || 0 : 0,
+    };
+  }
+
+  // Where a reveal puts `element`, whose box is `box`: in the middle of the
+  // room below what sticks at the top of the view, or with its top just
+  // below it when it is taller than that room. Below the scroller's top
+  // padding stick the Run shell's parts (the stylesheet's scroll margin) and,
+  // above posts, the newer-posts bar. Returns the `scrollIntoView` block.
+  function place(element, box, view) {
+    element.style.scrollMarginTop = '';
+    const shell = parseFloat(getComputedStyle(element).scrollMarginTop) || 0;
+    const bar = element.matches('.board > li')
+      ? (document.querySelector('.board-newer')?.getBoundingClientRect()
+          .height ?? 0)
+      : 0;
+    const stuck = shell + bar;
+    const tall = box.height > view.bottom - view.top - view.inset - stuck;
+    const margin = view.inset + stuck + (tall && stuck ? 8 : 0);
+    element.style.scrollMarginTop = margin ? `${margin}px` : '';
+    return tall ? 'start' : 'center';
+  }
+
   // Posts away from the view render only near it (`content-visibility`), so
-  // a jump places `element` by estimated heights of the posts on the way.
-  // Keeps it centered while posts coming into view replace their estimates:
-  // until it stays put for two frames, for at most RECENTER_FRAMES frames.
-  function recenter(element, current) {
+  // a jump places `element` by estimated heights of the posts on the way,
+  // its own included. Keeps it in place while posts coming into view replace
+  // their estimates: until it stays put for two frames, for at most
+  // RECENTER_FRAMES frames, and never once the reader scrolls, touches, or
+  // presses a key or a pointer button.
+  function recenter(element, current, view) {
     let frames = RECENTER_FRAMES;
     let still = 0;
-    let top = element.getBoundingClientRect().top;
+    let box = element.getBoundingClientRect();
+    let taken = false;
+    const take = () => (taken = true);
+    for (const type of READER_INPUT)
+      window.addEventListener(type, take, { capture: true, passive: true });
+    const finish = () => {
+      for (const type of READER_INPUT)
+        window.removeEventListener(type, take, { capture: true });
+    };
     const step = () => {
-      if (!current() || !element.isConnected || frames-- <= 0) return;
-      if (element.getBoundingClientRect().top === top) {
-        if (++still === 2) return;
+      if (taken || !current() || !element.isConnected || frames-- <= 0)
+        return finish();
+      const next = element.getBoundingClientRect();
+      if (next.top === box.top && next.height === box.height) {
+        if (++still === 2) return finish();
       } else {
         still = 0;
-        element.scrollIntoView?.({ block: 'center', behavior: 'auto' });
-        top = element.getBoundingClientRect().top;
+        element.scrollIntoView?.({
+          block: place(element, next, view),
+          behavior: 'auto',
+        });
+        box = element.getBoundingClientRect();
       }
       requestAnimationFrame(step);
     };
@@ -803,6 +882,15 @@ export function createSwarmPageBoard(host) {
     compose,
     post,
     contentLinks,
+    // Marks the Board panel on screen while it is mounted.
+    panel() {
+      panels += 1;
+      return {
+        destroy() {
+          panels -= 1;
+        },
+      };
+    },
     postBody,
     toggleExpanded,
     expand(id) {

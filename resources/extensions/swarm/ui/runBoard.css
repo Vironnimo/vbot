@@ -248,16 +248,23 @@
   border-radius: var(--r-sm);
 }
 /* While the discussion's newest posts are not loaded, the way back stays in
-   view. */
+   view, below what the Run shell makes stick above the panels
+   (`--swarm-run-sticky-top`, its height). */
 .swarm-page .board-newer {
   position: sticky;
-  top: 0;
+  top: var(--swarm-run-sticky-top, 0px);
   z-index: 1;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   padding-block: 8px;
   background: var(--bg);
+}
+/* A post or the goal that focus or a reveal scrolls to stays clear of what
+   sticks above the panels; a reveal adds the newer-posts bar. */
+.swarm-page .board > li,
+.swarm-page .swarm-goal-post {
+  scroll-margin-top: var(--swarm-run-sticky-top, 0px);
 }
 .swarm-page .board > li[data-revealed],
 .swarm-page .swarm-goal-post[data-revealed] {
