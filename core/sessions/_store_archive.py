@@ -328,7 +328,11 @@ def finish_cleanup(connection: sqlite3.Connection, entry_key: int) -> None:
 def archive_session(
     connection: sqlite3.Connection, address: SessionAddress, facts: Mapping[str, Any] | None
 ) -> ArchiveEntryRef:
-    """Archive one live Session generation as its own ``session`` entry."""
+    """Archive one live Session generation as its own ``session`` entry.
+
+    Its idle live review forks join the entry (``_store_mutations.review_forks``),
+    so they leave, return and are purged with it.
+    """
     state = _store_values._require_live(connection, address)
     _store_values._reject_owner_managed_mutation(connection, state)
     now = utc_now_timestamp()
@@ -344,9 +348,18 @@ def archive_session(
         retention_start=now,
         facts=facts,
     )
+    session_key = int(state["session_key"])
+    keys = [
+        session_key,
+        *(
+            int(row["session_key"])
+            for row in _store_mutations.review_forks(connection, session_key, idle=True)
+        ),
+    ]
     connection.execute(
-        "INSERT INTO archive_entry_sessions (session_key, entry_key) VALUES (?, ?)",
-        (state["session_key"], ref.entry_key),
+        "INSERT INTO archive_entry_sessions (session_key, entry_key) "
+        "SELECT value, ? FROM json_each(?)",
+        (ref.entry_key, _store_values._key_list(keys)),
     )
     _archive_members(connection, ref.entry_key, now)
     return ref
@@ -457,10 +470,20 @@ def begin_restore(
     return restored
 
 
+# Whether the member ``s`` of the entry row ``m`` is a review fork of another member:
+# it followed that member into the entry and keeps its own Session id on restore.
+_MEMBER_REVIEW_FORK = (
+    "EXISTS (SELECT 1 FROM sessions AS p JOIN archive_entry_sessions AS pm "
+    "ON pm.session_key = p.session_key AND pm.entry_key = m.entry_key "
+    f"WHERE {_store_values._review_fork_of('s', 'p')})"
+)
+
+
 def _member_rows(connection: sqlite3.Connection, entry_key: int) -> list[sqlite3.Row]:
     return list(
         connection.execute(
-            "SELECT s.session_key, s.project_id, s.agent_id, s.session_id FROM archive_entry_sessions AS m "
+            "SELECT s.session_key, s.project_id, s.agent_id, s.session_id, "
+            f"{_MEMBER_REVIEW_FORK} AS review_fork FROM archive_entry_sessions AS m "
             "JOIN sessions AS s ON s.session_key = m.session_key WHERE m.entry_key = ? "
             "ORDER BY m.session_key",
             (entry_key,),
@@ -489,9 +512,12 @@ def _restore_targets(
     agent_id: str | None,
     session_id: str | None,
 ) -> tuple[list[tuple[int, SessionAddress]], tuple[SessionAddress, ...]]:
-    """Each member's key with its restored address, and the addresses a live Session holds."""
+    """Each member's key with its restored address, and the addresses a live Session holds.
+
+    A new ``session_id`` names the entry's one Session; its review forks keep theirs.
+    """
     members = _member_rows(connection, entry_key)
-    if session_id is not None and len(members) != 1:
+    if session_id is not None and sum(not member["review_fork"] for member in members) != 1:
         raise ChatSessionError(
             "only an entry of one Session can be restored under a new Session id"
         )
@@ -502,7 +528,9 @@ def _restore_targets(
             if project_id is None
             else project_id or None,
             agent_id=str(member["agent_id"]) if agent_id is None else agent_id,
-            session_id=str(member["session_id"]) if session_id is None else session_id,
+            session_id=str(member["session_id"])
+            if session_id is None or member["review_fork"]
+            else session_id,
         )
         targets.append((int(member["session_key"]), target))
     seen: set[SessionAddress] = set()
@@ -540,12 +568,12 @@ def commit_restore(
     """Make every member of a ``restoring`` entry live again; return their addresses.
 
     A given ``project_id``, ``agent_id`` or ``session_id`` replaces that part of
-    every member's address (a new ``session_id`` only for a single member). A
-    live Session at any resulting address refuses the whole restore with
-    :class:`ArchiveAddressTakenError`. ``strip_channel_keys`` drops the Channel
-    routing of the members. The membership goes and the entry becomes
-    ``restored``. Members an Extension manages refuse it with
-    :class:`ArchiveMembersManagedError`.
+    every member's address (a new ``session_id`` only that of the entry's one
+    Session; its review forks keep theirs). A live Session at any resulting
+    address refuses the whole restore with :class:`ArchiveAddressTakenError`.
+    ``strip_channel_keys`` drops the Channel routing of the members. The
+    membership goes and the entry becomes ``restored``. Members an Extension
+    manages refuse it with :class:`ArchiveMembersManagedError`.
     """
     row = _require_state(connection, entry_key, ARCHIVE_STATE_RESTORING)
     owned = connection.execute(
@@ -763,7 +791,8 @@ def members(
     """The first ``limit`` member Sessions of an entry (all for ``None``), in archive order."""
     rows = connection.execute(
         "SELECT s.project_id, s.agent_id, s.session_id, s.generation_id, s.title, s.auto_title, "
-        "s.created_at, s.last_activity_at FROM archive_entry_sessions AS m "
+        f"s.created_at, s.last_activity_at, {_MEMBER_REVIEW_FORK} AS review_fork "
+        "FROM archive_entry_sessions AS m "
         "JOIN sessions AS s ON s.session_key = m.session_key WHERE m.entry_key = ? "
         "ORDER BY m.session_key LIMIT ?",
         (entry_key, -1 if limit is None else limit),
@@ -775,9 +804,21 @@ def members(
             title=row["title"] or row["auto_title"],
             created_at=str(row["created_at"]),
             last_activity_at=str(row["last_activity_at"]),
+            review_fork=bool(row["review_fork"]),
         )
         for row in rows
     )
+
+
+def holds_one_session(connection: sqlite3.Connection, entry_key: int) -> bool:
+    """Whether the entry holds exactly one Session besides its review forks."""
+    rows = connection.execute(
+        "SELECT 1 FROM archive_entry_sessions AS m "
+        "JOIN sessions AS s ON s.session_key = m.session_key "
+        f"WHERE m.entry_key = ? AND NOT {_MEMBER_REVIEW_FORK} LIMIT 2",
+        (entry_key,),
+    ).fetchall()
+    return len(rows) == 1
 
 
 def is_recorded(connection: sqlite3.Connection, directory: str) -> bool:

@@ -248,6 +248,7 @@ def _entry_payload(listing: ArchiveListing) -> JsonObject:
         "restorable": listing.restorable,
         "not_restorable_reason": listing.not_restorable_reason,
         "may_hold_user_folders": listing.may_hold_user_folders,
+        "accepts_target_id": listing.accepts_target_id,
     }
 
 

@@ -269,6 +269,16 @@ class SessionArchiveLedger:
             lambda connection: _store_archive.members(connection, entry_key, limit)
         )
 
+    def holds_one_session(self, entry_key: int) -> bool:
+        """Whether the entry holds one Session besides the review forks that followed it.
+
+        Only such an entry can be restored under a new Session id
+        (:meth:`commit_restore`).
+        """
+        return self._store._read(
+            lambda connection: _store_archive.holds_one_session(connection, entry_key)
+        )
+
     def unsettled(self) -> tuple[ArchiveEntry, ...]:
         """Entries an interrupted operation left in a transient state or with pending cleanup."""
         return self._store._read(_store_archive.unsettled)

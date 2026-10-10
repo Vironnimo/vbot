@@ -235,18 +235,25 @@ class ArchiveService:
     async def archive_session(
         self, address: SessionAddress, *, actor: str = "rpc"
     ) -> SessionArchiveOutcome:
-        """Move one live Session into a new entry.
+        """Move one live Session with its live review forks into a new entry.
 
-        For an Identity Agent whose current Session it was, the current Session
-        moves to the most recently active remaining one; with none left the
-        pointer is cleared and ``next_session_id`` is ``None``.
-        Refuses with :class:`ArchiveSubjectInUseError` while a live automation
-        runs in the Session and with ``RunAdmissionBlockedError`` while it has Runs.
+        For an Identity Agent whose current Session it was, or one of those
+        review forks, the current Session moves to the most recently active
+        remaining one; with none left the pointer is cleared and
+        ``next_session_id`` is ``None``. Refuses with
+        :class:`ArchiveSubjectInUseError` while a live automation runs in the
+        Session or a review fork and with ``RunAdmissionBlockedError`` while one
+        of them has Runs, such as a review that is still running.
         """
         services = self._services
         sessions = services.sessions
-        async with services.runs.session_admission_guard(address):
-            references = services.automation.session_references(address)
+        members = (address, *await sessions.run_async(sessions.review_forks, address))
+        async with services.runs.session_admission_guard(*members):
+            references = [
+                reference
+                for member in members
+                for reference in services.automation.session_references(member)
+            ]
             if references:
                 raise ArchiveSubjectInUseError(
                     ARCHIVE_KIND_SESSION,
@@ -255,18 +262,20 @@ class ArchiveService:
                     [reference.to_dict() for reference in references],
                 )
             await sessions.get_async(address)
-            was_current = False
+            removed_current: str | None = None
             if address.project_id is None:
-                was_current = await sessions.run_async(
-                    lambda: (
-                        services.agents.get(address.agent_id).current_session_id
-                        == address.session_id
-                    )
+                current = await sessions.run_async(
+                    lambda: services.agents.get(address.agent_id).current_session_id
                 )
-            await services.terminals.close_scope(
-                TerminalOwner(address.project_id, address.agent_id, address.session_id)
-            )
-            # Archiving the row and moving the current pointer is one unit for data snapshots.
+                removed_current = next(
+                    (member.session_id for member in members if member.session_id == current),
+                    None,
+                )
+            for member in members:
+                await services.terminals.close_scope(
+                    TerminalOwner(member.project_id, member.agent_id, member.session_id)
+                )
+            # Archiving the rows and moving the current pointer is one unit for data snapshots.
             async with services.snapshot_barrier.compound_mutation_async():
                 ref = await sessions.archive(address)
                 next_session_id = None
@@ -274,22 +283,26 @@ class ArchiveService:
                     agent = await sessions.run_async(
                         services.agents.reset_current_after_session_removed,
                         address.agent_id,
-                        address.session_id,
+                        removed_current or address.session_id,
                     )
                     next_session_id = agent.current_session_id or None
+            # Review forks carry a reflection Run kind, which keeps them out of Recall.
             await services.remove_session_from_recall(
                 address.agent_id, address.session_id, address.project_id
             )
         _LOGGER.info(
             "Archive entry created (entry=%s kind=session subject=%s agent=%s project=%s "
-            "sessions=1 actor=%s)",
+            "sessions=%d actor=%s)",
             ref.entry_id,
             address.session_id,
             address.agent_id,
             address.project_id or "-",
+            len(members),
             actor,
         )
-        return SessionArchiveOutcome(ref.entry_id, address, next_session_id, was_current)
+        return SessionArchiveOutcome(
+            ref.entry_id, address, next_session_id, removed_current is not None
+        )
 
     # -- Restore -----------------------------------------------------------------
 
@@ -346,11 +359,12 @@ class ArchiveService:
             self._services.sessions.archive_ledger.members, entry.entry_key, limit=None
         )
         renamed = target != entry.subject_id
+        # A new Session id names the entry's Session; its review forks keep theirs.
         addresses = [
             SessionAddress(
                 member.address.project_id,
                 member.address.agent_id,
-                target if renamed else member.address.session_id,
+                target if renamed and not member.review_fork else member.address.session_id,
             )
             for member in members
         ]

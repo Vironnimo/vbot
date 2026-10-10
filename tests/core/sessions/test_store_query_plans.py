@@ -32,6 +32,7 @@ from core.sessions import (
     _store_archive,
     _store_archive_backfill,
     _store_history,
+    _store_mutations,
     _store_owned,
     _store_queries,
     _store_search,
@@ -278,6 +279,8 @@ def _session_reads(address: SessionAddress, anchor: str) -> dict[str, Callable[[
         "run_messages": lambda r: _store_history.run_messages(r, address, "run-two"),
         "run_records": lambda r: _store_history.run_records(r, address, None),
         "descriptor_sources": lambda r: _store_queries.descriptor_sources(r, [address])(),
+        "reflection_runs": lambda r: _store_history.reflection_runs(r, address),
+        "review_forks": lambda r: _store_mutations.review_fork_addresses(r, address),
     }
 
 
@@ -549,6 +552,7 @@ def test_archive_entry_reads_and_transitions_use_their_indexes(manager) -> None:
     for session_id in ("one", "two"):
         manager.create("agent", session_id=session_id, project_id="project")
     manager.create("agent", session_id="identity")
+    live = manager.create("agent", session_id="live").address
     entry = ledger.begin(
         "project",
         subject_id="project",
@@ -620,6 +624,16 @@ def test_archive_entry_reads_and_transitions_use_their_indexes(manager) -> None:
             )
         )
         assert any("archive_entry_sessions_by_entry" in detail for detail in purge), purge
+
+        def archive_session(recorder: sqlite3.Connection) -> None:
+            ref = _store_archive.archive_session(recorder, live, None)
+            _store_archive.members(recorder, ref.entry_key, None)
+            _store_archive.holds_one_session(recorder, ref.entry_key)
+            _store_archive.taken_addresses(recorder, ref.entry_key, session_id="renamed")
+
+        # Review forks are found from their source, and members from each other.
+        archived = plans(archive_session)
+        assert any("sessions_by_fork_parent" in detail for detail in archived), archived
         # Startup repair reads archived rows through the archived-address index only.
         repair = plans(
             _store_archive_backfill.adopt_unrecorded_archived_rows,

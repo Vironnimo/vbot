@@ -500,10 +500,55 @@ def delete_session(connection: sqlite3.Connection, session_key: int) -> None:
     _store_prompts.delete_unreferenced_blobs(connection, blob_keys)
 
 
+def review_forks(
+    connection: sqlite3.Connection, session_key: int, *, idle: bool = False
+) -> list[sqlite3.Row]:
+    """The live review forks that follow one Session, oldest first.
+
+    A review fork of a review fork follows too. Rows carry ``session_key`` and
+    the address columns. With ``idle``, a fork with a running Run is left out
+    with what follows it: archive and delete leave a review in flight live and
+    whole, and only an admission guard that missed it lets one through.
+    """
+    running = (
+        " AND NOT EXISTS (SELECT 1 FROM runs AS r "
+        "WHERE r.session_key = f.session_key AND r.status = 'running')"
+        if idle
+        else ""
+    )
+    return list(
+        connection.execute(
+            "WITH RECURSIVE followers (session_key) AS (SELECT ? UNION "
+            "SELECT f.session_key FROM followers AS t "
+            "JOIN sessions AS p ON p.session_key = t.session_key "
+            f"JOIN sessions AS f ON {_store_values._review_fork_of('f', 'p')} "
+            f"WHERE f.state = 'live'{running}) "
+            "SELECT s.session_key, s.project_id, s.agent_id, s.session_id "
+            "FROM followers AS t JOIN sessions AS s ON s.session_key = t.session_key "
+            "WHERE s.session_key <> ? ORDER BY s.session_key",
+            (session_key, session_key),
+        )
+    )
+
+
+def review_fork_addresses(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> tuple[SessionAddress, ...]:
+    """The addresses of one live Session's live review forks, oldest first."""
+    state = _store_values._require_live(connection, address)
+    return tuple(
+        _store_values._address(row) for row in review_forks(connection, int(state["session_key"]))
+    )
+
+
 def delete(connection: sqlite3.Connection, address: SessionAddress) -> None:
+    """Delete one live Session after its idle live review forks, newest first."""
     state = _store_values._require_live(connection, address)
     _store_values._reject_owner_managed_mutation(connection, state)
-    delete_session(connection, int(state["session_key"]))
+    session_key = int(state["session_key"])
+    for row in reversed(review_forks(connection, session_key, idle=True)):
+        delete_session(connection, int(row["session_key"]))
+    delete_session(connection, session_key)
 
 
 # -- Identity Agent scope changes ----------------------------------------------

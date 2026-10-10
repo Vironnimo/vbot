@@ -103,6 +103,7 @@ def listing(
         reason,
         _retention.purge_at(entry, retention_days),
         _retention.may_hold_user_folders(entry),
+        _restore.accepts_target_id(services, entry),
     )
 
 

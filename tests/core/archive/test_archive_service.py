@@ -25,6 +25,7 @@ from core.archive import (
     _purge,
 )
 from core.chat import ChatSessionError
+from core.runs import RunAdmissionBlockedError, RunKind
 from core.sessions import (
     ARCHIVE_KIND_FILES,
     ARCHIVE_TREE_FILES,
@@ -280,30 +281,42 @@ async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_ent
 
 
 @pytest.mark.asyncio
-async def test_a_session_archive_moves_the_current_pointer_and_restore_as_avoids_a_taken_address(
-    world: ArchiveWorld,
+@pytest.mark.parametrize("current", ["session", "review-fork"])
+async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_pointer(
+    world: ArchiveWorld, current: str
 ) -> None:
     coder = agent_with_session(world, "coder")
-    current = SessionAddress(None, "coder", coder.current_session_id)
+    session = SessionAddress(None, "coder", coder.current_session_id)
     world.sessions.create("coder", session_id="other")
-    world.sessions.set_title(current, "Planning")
+    world.sessions.set_title(session, "Planning")
+    review = (await world.sessions.fork(session, run_kind=RunKind.MEMORY_REFLECTION)).address
+    if current == "review-fork":
+        world.agents.update("coder", current_session_id=review.session_id)
+    # A review still in flight keeps its Session from leaving.
+    async with world.runs.session_admission_guard(review):
+        with pytest.raises(RunAdmissionBlockedError):
+            await world.service.archive_session(session)
 
-    archived = await world.service.archive_session(current)
+    archived = await world.service.archive_session(session)
 
     assert (archived.was_current, archived.next_session_id) == (True, "other")
     assert world.agents.get("coder").current_session_id == "other"
-    assert not world.sessions.exists(current)
-    assert world.recall_removals == [(None, "coder", current.session_id)]
+    assert not world.sessions.exists(session) and not world.sessions.exists(review)
+    assert world.recall_removals == [(None, "coder", session.session_id)]
+    assert (await world.service.show(archived.entry_id)).listing.accepts_target_id
     # Channel routing started a new Session at the archived address meanwhile.
-    world.sessions.create("coder", session_id=current.session_id)
+    world.sessions.create("coder", session_id=session.session_id)
     with pytest.raises(ArchiveRestoreConflictError) as taken:
         await world.service.restore(archived.entry_id)
     assert [conflict.code for conflict in taken.value.conflicts] == ["session_address_taken"]
 
     restored = await world.service.restore(archived.entry_id, target_id="planning-old")
 
-    assert restored.addresses == (SessionAddress(None, "coder", "planning-old"),)
-    assert world.sessions.get_metadata(restored.addresses[0])["title"] == "Planning"
+    # The new id names the Session; its review fork keeps its own and follows it again.
+    renamed = SessionAddress(None, "coder", "planning-old")
+    assert restored.addresses == (renamed, review)
+    assert world.sessions.get_metadata(renamed)["title"] == "Planning"
+    assert world.sessions.review_forks(renamed) == (review,)
 
 
 async def _newer_agent_payload(world: ArchiveWorld, tmp_path: Path) -> tuple[str, str | None]:

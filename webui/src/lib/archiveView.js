@@ -391,15 +391,15 @@ export function missingScopeEntryId(problem) {
   return problem?.code === 'scope_missing' ? text(problem.entry_id) : '';
 }
 
-// Whether "Restore as" can help: the kind takes a new id and every blocker is
-// a taken id or Session address.
+// Whether "Restore as" can help: the server says the entry takes a new id
+// (`accepts_target_id`) and every blocker is a taken id or Session address.
 export function canRestoreAs(entry, restoreCheck) {
-  const kind = entry?.kind;
-  const takesNewId =
-    kind === 'agent' ||
-    kind === 'project' ||
-    (kind === 'session' && entry?.session_count === 1);
-  if (!takesNewId || entry?.state !== ARCHIVE_STATE_ARCHIVED) return false;
+  if (
+    entry?.accepts_target_id !== true ||
+    entry?.state !== ARCHIVE_STATE_ARCHIVED
+  ) {
+    return false;
+  }
   const blockers = Array.isArray(restoreCheck?.blockers)
     ? restoreCheck.blockers
     : [];

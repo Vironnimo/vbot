@@ -115,6 +115,9 @@ _RECALL_REFLECTION_RUN_KINDS = (
     "memory_reflection",
     "skill_reflection",
 )
+_REFLECTION_RUN_KINDS_SQL = (
+    "(" + ", ".join(f"'{kind}'" for kind in _RECALL_REFLECTION_RUN_KINDS) + ")"
+)
 _RECALL_USER_FACING_RUN_KINDS = ("user", "channel", "cron", "calendar")
 # Summary values a Session list may add on request, by name.
 _SUMMARY_METADATA_COLUMNS = {
@@ -497,6 +500,22 @@ def _json_object(value: JsonObject, name: str) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     except (TypeError, ValueError) as exc:
         raise ChatSessionError(f"{name} must be JSON-serializable") from exc
+
+
+def _review_fork_of(fork: str, source: str) -> str:
+    """SQL: the Session aliased ``fork`` is a review fork of the one aliased ``source``.
+
+    A review fork is a direct fork in its source's scope that carries a reflection
+    Run kind; ``ReflectionService.run_review`` records the kind in the fork's
+    creating write. The live ones follow their source's lifecycle
+    (``_store_mutations.review_forks``).
+    """
+    return (
+        f"{fork}.fork_parent_key = {source}.session_key "
+        f"AND {fork}.project_id = {source}.project_id AND {fork}.agent_id = {source}.agent_id "
+        f"AND EXISTS (SELECT 1 FROM session_run_kinds AS k WHERE k.session_key = {fork}.session_key "
+        f"AND k.run_kind IN {_REFLECTION_RUN_KINDS_SQL})"
+    )
 
 
 def _key_list(keys: Sequence[int]) -> str:

@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
+from core.runs import RunKind
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_OWNER_GROUP,
@@ -28,6 +29,7 @@ from core.sessions import (
     ChatSessionManager,
     SessionAddress,
 )
+from tests.core.sessions.history_fixtures import admit_run
 
 
 def _states(manager: ChatSessionManager) -> dict[str, str]:
@@ -246,6 +248,8 @@ async def test_restore_rolls_back_whole_when_an_address_is_taken(
         ("coder", "two", "live"),
     ]
     assert _entry(manager, ref.entry_id).session_count == 2
+    # Two Sessions of their own take no new Session id.
+    assert not ledger.holds_one_session(ref.entry_key)
     restored = ledger.commit_restore(ref.entry_key, agent_id="coder-old")
     assert restored == (
         SessionAddress(None, "coder-old", "one"),
@@ -334,6 +338,65 @@ async def test_purge_deletes_members_and_materializes_their_history_into_descend
     ledger.begin_restore(other_entry.entry_id, {})
     (archived_address,) = ledger.commit_restore(other_entry.entry_key)
     assert _texts(manager, archived_address) == ["shared"]
+
+
+@pytest.mark.asyncio
+async def test_review_forks_join_their_session_entry_and_go_before_it_on_purge(
+    manager: ChatSessionManager,
+) -> None:
+    ledger = manager.archive_ledger
+    source = manager.create("coder", session_id="source", project_id="app")
+    source.append(ChatMessage.user("shared"))
+
+    async def fork(
+        parent: SessionAddress, run_kind: RunKind | None = None, agent_id: str | None = None
+    ) -> SessionAddress:
+        forked = await manager.fork(
+            parent, target_agent_id=agent_id, target_project_id="app", run_kind=run_kind
+        )
+        return forked.address
+
+    review = await fork(source.address, RunKind.MEMORY_REFLECTION)
+    manager.get(review).append(ChatMessage.user("reviewed"))
+    nested = await fork(review, RunKind.SKILL_REFLECTION)
+    # User forks, also of a review fork, a fork for another Agent and a review
+    # still running stay live and keep their history.
+    user_forks = [await fork(source.address), await fork(review)]
+    elsewhere = await fork(source.address, RunKind.MEMORY_REFLECTION, "other")
+    running = await fork(source.address, RunKind.REFLECTION)
+    await admit_run(manager, running, RunKind.REFLECTION)
+    assert manager.review_forks(source.address) == (review, nested, running)
+
+    ref = await manager.archive(source.address)
+
+    assert [(member.address, member.review_fork) for member in ledger.members(ref.entry_key)] == [
+        (source.address, False),
+        (review, True),
+        (nested, True),
+    ]
+    # The review forks keep their ids, so the entry still takes a new Session id.
+    assert ledger.holds_one_session(ref.entry_key)
+    deleted: list[str] = []
+    ledger.begin_purge(ref.entry_id)
+    while True:
+        before = set(_states(manager))
+        if not ledger.purge_next_session(ref.entry_key):
+            break
+        deleted.extend(before - set(_states(manager)))
+    ledger.finish_purge(ref.entry_key)
+
+    # Each review fork goes while its source still holds what they share, so
+    # only the Sessions that stay receive copies.
+    assert deleted == [nested.session_id, review.session_id, "source"]
+    assert [_texts(manager, address) for address in (*user_forks, elsewhere, running)] == [
+        ["shared"],
+        ["shared", "reviewed"],
+        ["shared"],
+        ["shared"],
+    ]
+    with sqlite3.connect(manager._store.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM entries").fetchone() == (5,)
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 @pytest.mark.asyncio
