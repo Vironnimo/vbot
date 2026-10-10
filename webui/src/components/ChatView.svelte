@@ -716,7 +716,9 @@
   // fresh object per signal, so this re-fires even for a repeat scope). Only
   // sessions we actually hold are synced — the queue RPC keys on the bare agent
   // id, so match the scope's bare agent id + session id against each held
-  // session. The viewed conversation is never switched.
+  // session — and of those only where this Chat shows the Queue or still holds
+  // items; any other reads its Queue when opened. The viewed conversation is
+  // never switched.
   $effect(() => {
     chatController.applyQueueInvalidation(queueInvalidation);
   });

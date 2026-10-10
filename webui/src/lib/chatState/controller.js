@@ -212,8 +212,9 @@ export function createChatController({
     return version;
   }
 
-  // Reads a Session's Queue after its Run ended, where the Queue is shown or
-  // still holds items. Any other Session reads its Queue when opened.
+  // Reads a Session's Queue again after its Run ended or another window
+  // changed it, where the Queue is shown or still holds items. Any other
+  // Session reads its Queue when opened.
   async function refreshSessionQueue(sessionState) {
     if (
       isDisplayedSession(sessionState?.agentId, sessionState?.sessionId) ||
@@ -1088,7 +1089,7 @@ export function createChatController({
         sessionState.sessionId === scope.sessionId &&
         agentId === scope.agentId
       ) {
-        void syncSessionQueue(sessionState);
+        void refreshSessionQueue(sessionState);
       }
     }
     return true;
