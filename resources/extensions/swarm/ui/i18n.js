@@ -115,15 +115,11 @@ export default Object.freeze({
   'swarm.references.deletedPage': '{reference} · {title} (deleted)',
   'swarm.hostUnavailable':
     'The Swarm page could not connect. Reopen Swarms to try again.',
-  'swarm.usage.unavailable': 'Unavailable',
   'swarm.pending': 'pending',
   'swarm.participantCount.one': '1 participant',
   'swarm.participantCount': '{count} participants',
   'swarm.profile': 'Swarm',
   'swarm.participants': 'Participants',
-  'swarm.usage.billion': 'mrd',
-  'swarm.usage.million': 'mio',
-  'swarm.usage.thousand': 'k',
   'swarm.profile.editorLabel': 'Swarm editor',
   'swarm.profile.new': 'New Swarm',
   'swarm.profile.newHelp':
