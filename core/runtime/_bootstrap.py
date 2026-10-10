@@ -29,7 +29,12 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService
-from core.database import DatabaseError, canonical_database_path, retire_core_databases
+from core.database import (
+    DatabaseError,
+    canonical_database_path,
+    remove_interrupted_staging,
+    retire_core_databases,
+)
 from core.extensions import ExtensionRegistry
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
@@ -159,6 +164,13 @@ def bootstrap(runtime: Runtime) -> None:
         runtime.logger = runtime._open_log_manager().get_logger("core")
         runtime.logger.debug("Runtime startup initiated")
         runtime._storage.temporary_files.start()
+        try:
+            remove_interrupted_staging(runtime._storage.data_dir)
+        except DatabaseError as exc:
+            runtime.logger.warning(
+                "Staging left by interrupted data-store operations stays until the next start: %s",
+                exc,
+            )
         if runtime.safe_startup_mode is None:
             # Not in an update's verification start: its rollback needs every
             # database still registered as the pre-update snapshot recorded it.

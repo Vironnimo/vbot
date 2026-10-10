@@ -52,6 +52,7 @@ from core.database._documents import (
     verify_documents,
 )
 from core.database._files import fsync_dir, fsync_file
+from core.database._staging import remove_staging_locked, snapshot_staging_path
 from core.database.errors import (
     DatabaseCorruptError,
     DatabaseSchemaMismatchError,
@@ -61,6 +62,7 @@ from core.database.marker import (
     acquire_operation_lock,
     describe_missing_databases,
     missing_database_reason,
+    operation_lock,
     read_marker,
     require_no_maintenance,
     valid_database_id,
@@ -90,7 +92,6 @@ _LOGGER = logging.getLogger("vbot.database")
 SNAPSHOT_ROOT_NAME = "snapshots"
 SNAPSHOT_MANIFEST_NAME = "manifest.json"
 SNAPSHOT_HEALTH_FILE_NAME = "health.json"
-SNAPSHOT_PARTIAL_SUFFIX = ".partial"
 SNAPSHOT_KEEP_COUNT = 5
 #: Retention's byte budget. It never prunes below :data:`SNAPSHOT_KEEP_MINIMUM`
 #: snapshots, so a Session history that outgrows the budget still keeps a fallback.
@@ -823,6 +824,9 @@ def create_data_snapshot(
         marker = read_marker(data_dir)
         if marker is None or not marker.databases:
             return None
+        # Under the lock every staging is a killed attempt's: its space comes
+        # back before a verified snapshot has to make room.
+        remove_staging_locked(data_dir, snapshot_root=root)
         missing = describe_missing_databases(data_dir, marker)
         if missing is not None:
             _record_snapshot_health(data_dir, "degraded", reason=missing)
@@ -843,7 +847,7 @@ def create_data_snapshot(
             _record_snapshot_health(data_dir, "degraded", reason="snapshot capacity probe failed")
             return None
         snapshot_id = _new_snapshot_id()
-        partial = staging = root / f".{snapshot_id}.{os.getpid()}{SNAPSHOT_PARTIAL_SUFFIX}"
+        partial = staging = snapshot_staging_path(root, snapshot_id)
         partial.mkdir(parents=False, exist_ok=False)
         documents: dict[str, DocumentMember] | None = None
 
@@ -950,6 +954,18 @@ def create_data_snapshot(
             with suppress(OSError):
                 remove_tree(partial, within=root)
         lock.release()
+
+
+def remove_interrupted_staging(data_dir: Path) -> None:
+    """Remove the staging that killed snapshots, restores and database creations left.
+
+    Every Runtime start calls it, so such copies never outlast the next start;
+    every snapshot does the same before it makes room. Raises
+    ``DatabaseUnavailableError`` while the operation lock is busy or unavailable.
+    """
+    data_dir = Path(data_dir)
+    with operation_lock(data_dir):
+        remove_staging_locked(data_dir, snapshot_root=snapshot_root(data_dir))
 
 
 def _make_room(data_dir: Path, needed: int) -> bool:
