@@ -65,6 +65,28 @@ describe('App selection', () => {
     },
   );
 
+  it.each([
+    ['alone', null, [{ id: 'alpha' }]],
+    [
+      'after a child published a roster',
+      [{ id: 'renamed' }],
+      [{ id: 'renamed' }],
+    ],
+  ])(
+    'seeds the mount roster %s with one read and no refresh token',
+    async (_case, published, expected) => {
+      const response = deferred();
+      listAgents.mockReturnValueOnce(response.promise);
+      const seeding = selection.seedAgentsFromServer();
+      if (published) selection.syncAgents(published);
+      response.resolve({ agents: [{ id: 'alpha' }] });
+      await seeding;
+      expect(selection.agents).toEqual(expected);
+      expect(listAgents).toHaveBeenCalledTimes(1);
+      expect(selection.agentsRefreshToken).toBe(0);
+    },
+  );
+
   it('tells each subscribed surface of an Agent rename before the selection follows', () => {
     listAgents.mockResolvedValue({ agents: [] });
     selection.syncAgents([{ id: 'alpha' }]);

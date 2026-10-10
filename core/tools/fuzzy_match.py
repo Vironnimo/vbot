@@ -15,7 +15,9 @@ terminal — it does not fall through to a looser strategy):
 2. ``normalized`` — match after collapsing CR/CRLF to LF and mapping a few
    visually-equivalent Unicode characters (curly quotes, non-breaking space,
    en-dash) to ASCII, on both sides. Character-level, so it also matches a
-   fragment within a line.
+   fragment within a line. In a CRLF file it first searches the old text with
+   CRLF line breaks, which finds the same spans without mapping every
+   character when the normalized text holds no further match.
 3. ``line_trimmed`` — match whole lines after stripping each line's leading and
    trailing whitespace (plus the same Unicode mapping). The replacement is
    re-indented in the file's own style (tabs or its level width), so a
@@ -38,6 +40,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import cache
 from heapq import heappush, heapreplace
 from os.path import commonprefix
 
@@ -90,13 +93,13 @@ _LINE_ENDINGS = ("\r\n", "\n", "\r")
 _LINE_BREAK_RE = TEXT_LINE_BREAK
 _HORIZONTAL_WHITESPACE_RE = re.compile(r"[ \t]+")
 _UNICODE_TRANSLATION = str.maketrans(_UNICODE_NORMALIZATION)
+_UNICODE_GLYPHS = "[" + "".join(re.escape(char) for char in _UNICODE_NORMALIZATION) + "]"
+_TYPOGRAPHIC_GLYPHS = "[" + "".join(re.escape(char) for char in _TYPOGRAPHIC_NORMALIZATION) + "]"
+_UNICODE_GLYPH_RE = re.compile(_UNICODE_GLYPHS)
+_TYPOGRAPHIC_GLYPH_RE = re.compile(_TYPOGRAPHIC_GLYPHS)
 # What ``_normalize_with_spans`` changes: a CRLF or CR line ending, or a mapped glyph.
-_UNICODE_SPECIAL_RE = re.compile(
-    "\r\n?|[" + "".join(re.escape(char) for char in _UNICODE_NORMALIZATION) + "]"
-)
-_TYPOGRAPHIC_SPECIAL_RE = re.compile(
-    "\r\n?|[" + "".join(re.escape(char) for char in _TYPOGRAPHIC_NORMALIZATION) + "]"
-)
+_UNICODE_SPECIAL_RE = re.compile("\r\n?|" + _UNICODE_GLYPHS)
+_TYPOGRAPHIC_SPECIAL_RE = re.compile("\r\n?|" + _TYPOGRAPHIC_GLYPHS)
 
 
 @dataclass(frozen=True)
@@ -175,10 +178,7 @@ def replace_fuzzy(
         ]
         if whole_lines:
             matches = [
-                (start, end)
-                for start, end in matches
-                if (start == 0 or content[start - 1] in "\n\r")
-                and (end == len(content) or content[end] in "\n\r")
+                (start, end) for start, end in matches if _on_line_boundaries(content, start, end)
             ]
         if at_eof:
             matches = [
@@ -532,6 +532,13 @@ def _inside_crlf(content: str, offset: int) -> bool:
     return 0 < offset < len(content) and content[offset - 1 : offset + 1] == "\r\n"
 
 
+def _on_line_boundaries(content: str, start: int, end: int) -> bool:
+    """Whether ``content[start:end]`` starts at a line start and ends at a line end."""
+    return (start == 0 or content[start - 1] in "\n\r") and (
+        end == len(content) or content[end] in "\n\r"
+    )
+
+
 def _line_number_at(content: str, offset: int) -> int:
     """1-based line number at ``offset``, counting every read-rendered break."""
     return len(_LINE_BREAK_RE.findall(content[:offset])) + 1
@@ -579,6 +586,33 @@ def _normalize_text(text: str) -> str:
     return _normalize_newlines(text).translate(_UNICODE_TRANSLATION)
 
 
+def _folded(text: str, *, typographic: bool) -> str:
+    """Return the text ``_normalize_with_spans`` produces, without its span map."""
+    mapping = _TYPOGRAPHIC_NORMALIZATION if typographic else _UNICODE_NORMALIZATION
+    glyphs = _TYPOGRAPHIC_GLYPH_RE if typographic else _UNICODE_GLYPH_RE
+    return glyphs.sub(lambda found: mapping[found.group()], _normalize_newlines(text))
+
+
+def _found_with_crlf(content: str, pattern: str, *, typographic: bool) -> list[tuple[int, int]]:
+    """Return the normalized matches of ``pattern`` as a literal search finds them.
+
+    In a file with CRLF line breaks, the old text with CRLF line breaks finds
+    its occurrences without mapping every character of the file. Each one is
+    also a normalized match; when the normalized text holds no more matches
+    than that, they are all of them. An empty result leaves the decision to
+    the full normalized search.
+    """
+    if "\r\n" not in content:
+        return []
+    found = _find_all(content, _normalize_newlines(pattern).replace("\n", "\r\n"))
+    if not found:
+        return []
+    folded = _find_all(
+        _folded(content, typographic=typographic), _folded(pattern, typographic=typographic)
+    )
+    return found if len(folded) == len(found) else []
+
+
 def _match_exact(content: str, pattern: str) -> list[tuple[int, int]]:
     return _find_all(content, pattern)
 
@@ -589,9 +623,16 @@ def _match_normalized(
     normalized_pattern = _normalize_with_spans(pattern, typographic=typographic)[0]
     if not normalized_pattern:
         return []
+    matches: list[tuple[int, int]] = [
+        (start, end)
+        for start, end in _found_with_crlf(content, pattern, typographic=typographic)
+        if not whole_lines or _on_line_boundaries(content, start, end)
+    ]
+    if matches:
+        return matches
     normalized_content, spans = _normalize_with_spans(content, typographic=typographic)
 
-    matches: list[tuple[int, int]] = []
+    matches = []
     pattern_length = len(normalized_pattern)
     start = 0
     while True:
@@ -764,7 +805,9 @@ def _apply_replacements(
     after_spans: list[tuple[int, int]] = []
     offset_shift = 0
     cursor = 0
-    file_unit = _indent_unit([_meaningful_indents(content)]) if reindent else None
+    # Finding the file's indentation unit reads every line; only a replacement
+    # whose indentation changes asks for it.
+    file_unit = cache(lambda: _indent_unit([_meaningful_indents(content)]))
     for start, end in sorted(matches):
         if reindent:
             replacement_lf = _reindent_replacement(
@@ -802,7 +845,10 @@ def _split_lines_preserving_endings(text: str) -> list[tuple[str, str]]:
 
 
 def _reindent_replacement(
-    file_region: str, old_string_lf: str, replacement_text: str, file_unit: str | None
+    file_region: str,
+    old_string_lf: str,
+    replacement_text: str,
+    file_unit: Callable[[], str | None],
 ) -> str:
     """Rewrite the replacement's indentation in the file's own indentation style.
 
@@ -814,7 +860,8 @@ def _reindent_replacement(
     deeper line, is converted level by level between the model's and the file's
     indentation units; when no consistent conversion exists, the model's base
     indent is anchored onto the file's, keeping the relative nesting the model
-    intended.
+    intended. ``file_unit`` gives the file's indentation unit when a conversion
+    needs it.
     """
     if not replacement_text:
         return replacement_text
@@ -843,7 +890,7 @@ def _reindent_replacement(
     replacement_indents = [
         _leading_whitespace(line) for line, _ending in replacement_lines if line.strip()
     ]
-    convert = _level_converter(pairs, (old_indents, replacement_indents), file_unit)
+    convert = _level_converter(pairs, (old_indents, replacement_indents), file_unit())
     base_model, base_file = pairs[0]
 
     out_parts: list[str] = []

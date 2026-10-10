@@ -22,6 +22,7 @@ import {
   rpcMock,
   selectPersonalAgent,
   selectedAgentName,
+  sendConnectionReady,
   settingsPanelButton,
   sidebarNavButton,
   viewSessionButton,
@@ -336,6 +337,7 @@ describe('App navigation', () => {
     );
     window.history.replaceState(null, '', `#${FIXTURE_EXTENSION_ROUTE}`);
     mountApp();
+    sendConnectionReady();
 
     // Startup cannot know the route yet; the link stays in the URL meanwhile.
     expect(window.location.hash).toBe(`#${FIXTURE_EXTENSION_ROUTE}`);

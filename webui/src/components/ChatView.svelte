@@ -759,8 +759,12 @@
   // Reload command/skill suggestions whenever the active address, the
   // Project its Skills come from (the Session's, or the one a draft chose) or
   // the live command catalog changes. The token does not disturb the draft or
-  // active selection.
+  // active selection. The mount's roster read decides the first address, so
+  // nothing loads before it ends.
   $effect(() => {
+    if (chatState.loadingAgents) {
+      return;
+    }
     const { agentAddress } = target.activeAddressing();
     const scope = sessionSettings.readScope();
     const commandsKey = `${commandsRefreshToken}:${agentAddress}:${JSON.stringify(scope)}`;

@@ -3,7 +3,8 @@
 ripgrep selects the files (ignore rules, hidden files, globs, types, binary
 detection) and matches them. A search runs in phases: a parallel counting or
 listing pass over the requested roots, then, for line results, a ``--json`` pass
-over only the files of the requested page.
+over only the files of the requested page. Results that name the paths ignore
+files excluded get them from a ``--debug`` walk (``ignored_scan``).
 """
 
 from __future__ import annotations
@@ -63,6 +64,8 @@ _DEBUG_MESSAGE_BYTES = 1024 * 1024
 # Defaults that differ from ripgrep's own; later args items override them.
 DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
 ALWAYS_EXCLUDED = "!.git"
+# Arguments that select files by type; --type-add and --type-clear only define types.
+_FILE_TYPE_FILTERS = ("--type=", "--type-not=")
 
 
 class SearchBoundError(RuntimeError):
@@ -442,10 +445,11 @@ def count_scan(
             "--null",
             "--stats",
         ]
+    # No --debug: only a result without entries names the paths ignore files excluded,
+    # and ignored_scan walks for them then.
     arguments = [
         *_base_arguments(query, scope),
         *selector,
-        "--debug",
         *_pattern_arguments(patterns),
         "--",
         *scope.paths,
@@ -453,7 +457,6 @@ def count_scan(
     data, outcome, stopped_by = _collect(binary, arguments, scope, context, budget, terminator)
     result = _judge(outcome, scope, cwd)
     result.stopped_by = stopped_by
-    result.ignored = _walk_paths(outcome.ignored, scope)
     if query.mode == "files_without_match":
         result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
     else:
@@ -473,22 +476,62 @@ def list_scan(
 ) -> ScanResult:
     """List the files ripgrep would search, in one parallel pass.
 
-    For ``directories``, only the excluding globs apply, since the others select
+    The result names the paths ignore files excluded (``ignored``). For
+    ``directories``, only the excluding globs apply, since the others select
     directory names, and the result also names every path ripgrep skipped.
     """
     if directories:
         excluding = [glob for glob in query.globs if glob.startswith("!")]
         selection = [*DEFAULT_ARGUMENTS, *query.rg_args, *rg_globs(excluding, scope.prefixes)]
+        report = True
     else:
         selection = _base_arguments(query, scope)
-    arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
+        # --debug reports every file a file type leaves out, which costs several times
+        # the listing; with types, ignored_scan walks once more without them instead.
+        report = _without_file_types(selection) == selection
+    debug = ["--debug"] if report else []
+    arguments = [*selection, *debug, "--files", "--null", "--", *scope.paths]
     data, outcome, stopped_by = _collect(binary, arguments, scope, context, budget, b"\0")
     result = _judge(outcome, scope, cwd)
     result.stopped_by = stopped_by
     result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
-    result.skipped = _walk_paths(outcome.skipped, scope)
-    result.ignored = _walk_paths(outcome.ignored, scope)
+    if report:
+        result.skipped = _walk_paths(outcome.skipped, scope)
+        result.ignored = _walk_paths(outcome.ignored, scope)
+    else:
+        result.ignored = ignored_scan(binary, query, scope, context, budget)
     return result
+
+
+def ignored_scan(
+    binary: Path, query: SearchQuery, scope: Scope, context: ToolContext, budget: SearchBudget
+) -> list[Path]:
+    """Return the paths ignore files exclude from the walk of the query's files.
+
+    ripgrep names them only in --debug reports, which also report every file a glob
+    or file type leaves out and so cost a search several times its own time. Only
+    results that show these paths run this walk. File types never apply to
+    directories and apply after ignore files, so the walk leaves them out and
+    skips the same paths. Its output is bounded like a listing's.
+    """
+    selection = _without_file_types(_base_arguments(query, scope))
+    arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
+    outcome = NativeOutcome()
+    records = native_lines(
+        binary, arguments, context, budget, cwd=scope.cwd, outcome=outcome, terminator=b"\0"
+    )
+    listed = size = 0
+    with contextlib.closing(records):
+        for record in records:
+            listed += 1
+            size += len(record)
+            if listed > MAX_ENTRIES or size > MAX_SCAN_BYTES:
+                break
+    return _walk_paths(outcome.ignored, scope)
+
+
+def _without_file_types(arguments: list[str]) -> list[str]:
+    return [argument for argument in arguments if not argument.startswith(_FILE_TYPE_FILTERS)]
 
 
 def _walk_paths(paths: list[bytes], scope: Scope) -> list[Path]:

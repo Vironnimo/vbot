@@ -227,24 +227,56 @@ def test_whitespace_normalized_keeps_ambiguity_and_replace_all_semantics() -> No
     assert replaced.replacements == 2
 
 
-# Counting each occurrence's line from the start of a large file was quadratic:
-# past the test timeout.
-@pytest.mark.parametrize("repeats", [1, 50_000])
-def test_repeated_text_is_ambiguous_unless_every_occurrence_is_replaced(repeats: int) -> None:
-    content = "x\ny\n" * repeats + "x\n"
-    lines = list(range(1, 2 * repeats + 2, 2))
+_REPEATS = 50_000
 
-    ambiguous = replace_fuzzy(content, "x", "z", replace_all=False)
-    replaced = replace_fuzzy(content, "x", "z", replace_all=True)
+
+@pytest.mark.parametrize(
+    ("content", "old_string", "new_string", "expected", "lines", "last_line"),
+    [
+        ("x\ny\nx\n", "x", "z", "z\ny\nz\n", [1, 3], 3),
+        # Counting each occurrence's line from the start of a large file was
+        # quadratic: past the test timeout.
+        (
+            "x\ny\n" * _REPEATS + "x\n",
+            "x",
+            "z",
+            "z\ny\n" * _REPEATS + "z\n",
+            list(range(1, 2 * _REPEATS + 2, 2)),
+            2 * _REPEATS + 1,
+        ),
+        # In a CRLF file, an occurrence with other typography or another line
+        # break counts too, although the old text with CRLF breaks misses it.
+        (
+            f'a = "x"\r\nb\r\na = {chr(0x201C)}x{chr(0x201D)}\r\nb\r\n',
+            'a = "x"\nb',
+            'a = "z"\nb',
+            'a = "z"\r\nb\r\na = "z"\r\nb\r\n',
+            [1, 3],
+            4,
+        ),
+        ("x\r\ny\r\nx\ry\r\n", "x\ny", "z", "z\r\nz\r\n", [1, 3], 2),
+    ],
+    ids=["lf", "large", "crlf-typography", "crlf-lone-cr"],
+)
+def test_repeated_text_is_ambiguous_unless_every_occurrence_is_replaced(
+    content: str,
+    old_string: str,
+    new_string: str,
+    expected: str,
+    lines: list[int],
+    last_line: int,
+) -> None:
+    ambiguous = replace_fuzzy(content, old_string, new_string, replace_all=False)
+    replaced = replace_fuzzy(content, old_string, new_string, replace_all=True)
 
     assert isinstance(ambiguous, AmbiguousFuzzyMatch)
     assert ambiguous.occurrences == len(lines)
     assert ambiguous.line_numbers == lines
     assert isinstance(replaced, FuzzyReplacement)
-    assert replaced.new_content == "z\ny\n" * repeats + "z\n"
+    assert replaced.new_content == expected
     assert replaced.replacements == len(lines)
     assert replaced.first_changed_line == 1
-    assert replaced.last_changed_line == lines[-1]
+    assert replaced.last_changed_line == last_line
 
 
 def test_no_match_returns_none() -> None:

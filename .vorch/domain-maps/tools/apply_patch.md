@@ -340,6 +340,16 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   of all occurrences come from one pass over the line breaks, and `replace_all`
   builds its result once (counting each occurrence's line from the file start
   took minutes on 100,000-line files; `test_fuzzy_match.py` guards it).
+- In a file with CRLF line breaks, the normalized step first searches the old
+  text with CRLF breaks (`_found_with_crlf`) and takes those spans when the
+  normalized file text, folded without a span map, holds no more matches;
+  otherwise it maps every character as before. Both give the same spans, so the
+  result and its `normalized` strategy (reindent, typography restore) are
+  unchanged. Replacements ask for the file's indentation unit only when they
+  convert indentation. Probe: an LF `old_string` on a 1 MB CRLF file matched in
+  about 16 instead of 400 ms and the whole `edit` call took about 330 instead
+  of 810 ms (4 MB: 60 instead of 2200 ms matching). Guard:
+  `test_repeated_text_is_ambiguous_unless_every_occurrence_is_replaced`.
 - Newline/Unicode/typography/whitespace/indentation differences are supported
   for every hunk line. Old text copied with other errors is applied whenever the
   passage is clearly identified, with stricter evidence for shorter text (user

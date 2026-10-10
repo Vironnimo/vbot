@@ -1070,9 +1070,8 @@ def _place_lines(
     if level is None or (best is not None and level > best):
         return None
     begin, end = file.region(start, start + len(old) - 1)
-    new = _reindent_replacement(
-        file.content[begin:end], "\n".join(old), hunk.new, file.unit()
-    ).split("\n")
+    region = file.content[begin:end]
+    new = _reindent_replacement(region, "\n".join(old), hunk.new, file.unit).split("\n")
     output = []
     differed = []
     kept_differed = []

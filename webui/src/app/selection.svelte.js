@@ -290,6 +290,28 @@ export function createAppSelection() {
       }
     }
   };
+
+  // The first roster, read at app mount. It is no change, so it bumps no
+  // refresh token: the surfaces mounted with the app read their own data. A
+  // roster a child view published meanwhile (Chat reads its own when it
+  // mounts) stands instead of this read.
+  const seedAgentsFromServer = async () => {
+    const requestId = ++agentsLoadRequestId;
+    const snapshotVersion = agentsSnapshotVersion;
+    try {
+      const result = await listAgents();
+      if (
+        requestId === agentsLoadRequestId &&
+        snapshotVersion === agentsSnapshotVersion
+      ) {
+        syncAgents(result.agents);
+      }
+    } catch (error) {
+      if (requestId === agentsLoadRequestId) {
+        console.warn('Agent list load failed:', error);
+      }
+    }
+  };
   function destroy() {
     agentsLoadRequestId += 1;
     projectsLoadRequestId += 1;
@@ -353,6 +375,9 @@ export function createAppSelection() {
     },
     get reloadAgentsFromServer() {
       return reloadAgentsFromServer;
+    },
+    get seedAgentsFromServer() {
+      return seedAgentsFromServer;
     },
   };
 }

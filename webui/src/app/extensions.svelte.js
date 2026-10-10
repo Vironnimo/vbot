@@ -18,6 +18,11 @@ export function createAppExtensions(context) {
 
   let extensionPagesRefreshQueued = false;
 
+  // Whether descriptors were requested before. The first load finds every
+  // subscriber holding what it read when it mounted; each later load follows
+  // a reconnect or an Extension layer change.
+  let extensionPagesRequested = false;
+
   // Every WebUI surface that shows Extension data subscribes here: the open
   // Extension page (`ExtensionPage.svelte`), the pending-input requests
   // (`ExtensionRequests.svelte`) and the Computer Use control
@@ -81,9 +86,10 @@ export function createAppExtensions(context) {
     });
   }
 
-  // Page descriptors may change after an Extension reload or reconnect. At
-  // most one request runs at once, with one follow-up request coalescing any
-  // burst. This fetches descriptors only; it never repeats page mutations.
+  // Page descriptors load on every `connection_ready`, the first included,
+  // and after an Extension reload. At most one request runs at once, with one
+  // follow-up request coalescing any burst. This fetches descriptors only; it
+  // never repeats page mutations.
   const loadExtensionPages = async () => {
     if (extensionPagesLoadInFlight) {
       extensionPagesRefreshQueued = true;
@@ -93,16 +99,20 @@ export function createAppExtensions(context) {
       let updated = false;
       do {
         extensionPagesRefreshQueued = false;
+        const reload = extensionPagesRequested;
+        extensionPagesRequested = true;
         try {
           const result = await listExtensionPages();
           extensionPages = Array.isArray(result?.pages) ? result.pages : [];
           updated = true;
           context.onPagesLoaded?.();
-          // A replaced descriptor reloads its page first; only a page that
-          // stays open is asked to refresh. Every other subscriber refreshes
-          // too: this load follows a reconnect or an Extension layer change.
-          await tick();
-          invalidate(null);
+          if (reload) {
+            // A replaced descriptor reloads its page first; only a page that
+            // stays open is asked to refresh. Every other subscriber
+            // refreshes too.
+            await tick();
+            invalidate(null);
+          }
         } catch {
           // Keep the last valid descriptors while a transient RPC error clears.
         }
@@ -122,7 +132,6 @@ export function createAppExtensions(context) {
       attributes: true,
       attributeFilter: ['class', 'style'],
     });
-    void loadExtensionPages();
     const onExtensionPage = (event) => {
       const target = event.detail;
       if (

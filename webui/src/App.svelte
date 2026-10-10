@@ -816,7 +816,7 @@
     // Voice routing and other non-Chat views also consume the shared Agent
     // roster, so seed it at app mount instead of relying on ChatView having
     // mounted first.
-    void selection.reloadAgentsFromServer();
+    void selection.seedAgentsFromServer();
 
     debugStatus()
       .then((result) => {
