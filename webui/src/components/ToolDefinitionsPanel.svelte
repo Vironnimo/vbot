@@ -1,6 +1,8 @@
 <script>
   // SystemPromptView owns prompt edits and request reconciliation. This reader
   // owns the separate, searchable Tool-definition surface, without edit state.
+  // `tools` lists `{ definition, tokens, on_demand }`; a caller without token
+  // estimates leaves `tokens` out and no size is shown.
   import { t } from '$lib/i18n.js';
   import Badge from './ui/Badge.svelte';
   import Button from './ui/Button.svelte';
@@ -74,11 +76,13 @@
             >
               <span class="tool-name">{entry.definition.name}</span>
               <span class="tool-index-meta">
-                <span class="tool-size"
-                  >{t('systemPrompt.preview.tokenCount', {
-                    count: entry.tokens,
-                  })}</span
-                >
+                {#if entry.tokens != null}
+                  <span class="tool-size"
+                    >{t('systemPrompt.preview.tokenCount', {
+                      count: entry.tokens,
+                    })}</span
+                  >
+                {/if}
                 {#if entry.on_demand}
                   <Badge variant="info"
                     >{t('systemPrompt.tools.onDemand')}</Badge
@@ -94,11 +98,13 @@
           <header class="tool-detail-header">
             <div>
               <h3>{selected.definition.name}</h3>
-              <span class="tool-size"
-                >{t('systemPrompt.preview.tokenCount', {
-                  count: selected.tokens,
-                })}</span
-              >
+              {#if selected.tokens != null}
+                <span class="tool-size"
+                  >{t('systemPrompt.preview.tokenCount', {
+                    count: selected.tokens,
+                  })}</span
+                >
+              {/if}
             </div>
             <Button variant="secondary" onClick={copyDefinition}
               >{t('systemPrompt.tools.copy')}</Button
