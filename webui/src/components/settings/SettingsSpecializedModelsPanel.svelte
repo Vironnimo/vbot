@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy, onMount, untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
 
   import LocalSpeechSupport from './LocalSpeechSupport.svelte';
@@ -12,6 +12,7 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import { getLocalSpeechMemory, unloadLocalSpeech } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { createViewVisibility } from '$lib/viewVisibility.svelte.js';
 
   const noop = () => {};
 
@@ -22,6 +23,7 @@
     modelsRefreshToken = 0,
     taskTypes = null,
     showTaskLabels = true,
+    active = true,
   } = $props();
 
   const editor = createTaskModelEditor({
@@ -34,6 +36,7 @@
   const ownsSpeech = editor.rows.some((row) =>
     ['speech_to_text', 'text_to_speech'].includes(row.taskType),
   );
+  const visibility = createViewVisibility(() => active);
 
   let destroyed = false;
   let speechMemory = $state(null);
@@ -60,6 +63,8 @@
   );
 
   async function refreshSpeechMemory() {
+    if (!visibility.visible || speechUnloading.size > 0) return;
+    clearTimeout(speechMemoryTimer);
     const request = ++speechMemoryRequest;
     try {
       const result = await getLocalSpeechMemory();
@@ -71,7 +76,7 @@
       speechMemory = null;
       speechMemoryError = t('settings.localSpeech.memoryError');
     } finally {
-      if (!destroyed && request === speechMemoryRequest)
+      if (!destroyed && visibility.visible && request === speechMemoryRequest)
         speechMemoryTimer = setTimeout(refreshSpeechMemory, 2000);
     }
   }
@@ -102,13 +107,18 @@
         };
     } finally {
       speechUnloading.delete(target);
-      if (!destroyed && speechUnloading.size === 0)
+      if (!destroyed && visibility.visible && speechUnloading.size === 0)
         speechMemoryTimer = setTimeout(refreshSpeechMemory, 2000);
     }
   }
 
-  onMount(() => {
-    if (ownsSpeech) void refreshSpeechMemory();
+  $effect(() => {
+    const visible = visibility.visible;
+    untrack(() => {
+      speechMemoryRequest += 1;
+      clearTimeout(speechMemoryTimer);
+      if (ownsSpeech && visible) void refreshSpeechMemory();
+    });
   });
 
   onDestroy(() => {
@@ -178,6 +188,7 @@
         {#if localSpeech}
           {#key binding.target}
             <LocalSpeechSupport
+              {active}
               target={binding.target}
               metadata={selectedTarget?.metadata}
               tts={row.taskType === 'text_to_speech'}

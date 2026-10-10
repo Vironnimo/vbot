@@ -79,6 +79,8 @@ async def apply_settings_change(
         for task_type in _SPEECH_TASKS
         if _binding(previous, task_type) != _binding(current, task_type)
     ]
+    if TASK_SPEECH_TO_TEXT in changed_speech:
+        runtime.speech.transcription_binding_changed()
     if changed_speech:
         runtime.speech.preload_configured(changed_speech)
     debug_enabled = _debug_enabled(current)

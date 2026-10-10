@@ -295,6 +295,18 @@ class SpeechService:
             if target_ref.kind == "local" and options.get(PRELOAD_OPTION) is True:
                 self._local_executor.prepare(target_ref.local_id, options)
 
+    def transcription_binding_changed(self) -> None:
+        """Retain only the selected local STT model after a Settings change."""
+        local_id = None
+        try:
+            binding = self._resolver.binding_for(TASK_SPEECH_TO_TEXT)
+            target = self._resolver.parse_target(binding.target)
+            if target.kind == "local":
+                local_id = target.local_id
+        except SpeechConfigurationError:
+            pass  # Removing the binding retires every local STT model.
+        self._local_executor.retain_transcription_model(local_id)
+
     def local_setup_for(self, target: str) -> LocalSpeechSetup:
         return self._local_executor.setup_for(target)
 

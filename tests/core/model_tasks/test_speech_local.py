@@ -1338,7 +1338,8 @@ async def test_manual_memory_release_guards_work_and_reloads_both_speech_tasks(t
 
 
 @pytest.mark.asyncio
-async def test_unloading_stt_does_not_wait_for_or_close_busy_tts():
+@pytest.mark.parametrize("release", ["manual", "binding-change"])
+async def test_unloading_stt_does_not_wait_for_or_close_busy_tts(release):
     events = []
     started = asyncio.Event()
     finish = threading.Event()
@@ -1370,10 +1371,28 @@ async def test_unloading_stt_does_not_wait_for_or_close_busy_tts():
     task = None
     try:
         await transcribe(executor, "stt")
+        executor.retain_transcription_model("stt")
+        await transcribe(executor, "stt")
+        assert sum(event[1] == "load" for event in events) == 1
         task = asyncio.create_task(executor.synthesize("tts", "hello", options={}))
         await asyncio.wait_for(started.wait(), 2)
-        result = await asyncio.wait_for(executor.release_memory("local/stt"), 0.5)
-        assert result["released"]
+        if release == "manual":
+            result = await asyncio.wait_for(executor.release_memory("local/stt"), 0.5)
+            assert result["released"]
+        else:
+            # Reselect before queued cleanup starts: retain the same warm model.
+            executor.retain_transcription_model(None)
+            releasing = executor._states["stt"].releasing
+            assert releasing is not None
+            executor.retain_transcription_model("stt")
+            await asyncio.wait_for(releasing, 0.5)
+            assert executor.memory_status()["models"][0]["loaded"]
+            assert ("stt", "close") not in events
+            executor.retain_transcription_model(None)
+            releasing = executor._states["stt"].releasing
+            assert releasing is not None
+            await asyncio.wait_for(releasing, 0.5)
+            result = executor.memory_status()
         stt, tts = result["models"]
         assert not stt["loaded"] and not stt["busy"]
         assert tts["loaded"] and tts["busy"]
@@ -1381,6 +1400,7 @@ async def test_unloading_stt_does_not_wait_for_or_close_busy_tts():
         assert ("tts", "close") not in events
         finish.set()
         assert (await task).audio == b"audio"
+        executor.retain_transcription_model("stt")
         await transcribe(executor, "stt")
         assert sum(event[1] == "load" for event in events) == 2
         assert all(model["loaded"] for model in executor.memory_status()["models"])
@@ -1391,6 +1411,133 @@ async def test_unloading_stt_does_not_wait_for_or_close_busy_tts():
         finish.set()
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("work", ["preload", "transcription"])
+@pytest.mark.parametrize("selection", [None, "second", "reselected"])
+async def test_stt_binding_change_releases_after_work_unless_selected_again(work, selection):
+    events: list[Any] = []
+    started: Future[None] = Future()
+    finish = threading.Event()
+    entry = definition("first", events)
+
+    def create(options: Mapping[str, Any]) -> Engine:
+        events.append(("first", "load", dict(options)))
+        if work == "preload":
+            started.set_result(None)
+            assert finish.wait(5)
+        model = Engine("first", events)
+        original = model.transcribe
+
+        def run(samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
+            if not started.done():
+                started.set_result(None)
+            assert finish.wait(5)
+            return original(samples, options)
+
+        model.transcribe = run  # type: ignore[method-assign]
+        return model
+
+    executor = LocalSpeechExecutor(
+        engines=[replace(entry, create=create), definition("second", events)]
+    )
+    request = None
+    try:
+        executor.retain_transcription_model("first")
+        if work == "preload":
+            assert executor.prepare("first", {}) == "loading"
+            request = executor._states["first"].preparing
+        else:
+            request = asyncio.create_task(transcribe(executor))
+        await asyncio.wrap_future(started)
+        # A superseded preload may be queued behind accepted work. Reselecting
+        # the engine must not revive that old preload's load options.
+        assert executor.prepare("first", {"custom": "obsolete"}) == "loading"
+        obsolete = executor._states["first"].preparing
+        executor.retain_transcription_model("second" if selection else None)
+        assert executor.memory_status()["models"][0]["busy"]
+        assert ("first", "close") not in events
+        if selection == "reselected":
+            executor.retain_transcription_model("first")
+        else:
+            assert executor.prepare("first", {}) == "unavailable"
+        finish.set()
+        assert request is not None and obsolete is not None
+        await request
+        await obsolete
+        releasing = executor._states["first"].releasing
+        if releasing is not None:
+            await releasing
+        assert sum(event[1] == "load" for event in events) == 1
+        assert (("first", "close") in events) == (selection != "reselected")
+        assert executor.memory_status()["models"][0]["loaded"] == (selection == "reselected")
+        if selection == "reselected":
+            assert (await transcribe(executor)).text == "first"
+            assert sum(event[1] == "load" for event in events) == 1
+    finally:
+        finish.set()
+        if request is not None:
+            await asyncio.gather(request, return_exceptions=True)
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["before-detach", "closing"])
+async def test_stt_reselection_observes_atomic_retirement(phase, monkeypatch):
+    events: list[Any] = []
+    entered: Future[None] = Future()
+    finish = threading.Event()
+    executor = LocalSpeechExecutor(engines=[definition("first", events)])
+    releasing = None
+    try:
+        await transcribe(executor)
+        state = executor._states["first"]
+
+        def gate():
+            entered.set_result(None)
+            assert finish.wait(5)
+
+        if phase == "before-detach":
+            original_unload = state.unload
+
+            def gated_unload(**kwargs):
+                gate()
+                original_unload(**kwargs)
+
+            monkeypatch.setattr(state, "unload", gated_unload)
+        else:
+            engine = state.engine
+            assert engine is not None
+            original_close = engine.close
+
+            def gated_close():
+                gate()
+                original_close()
+
+            monkeypatch.setattr(engine, "close", gated_close)
+
+        executor.retain_transcription_model(None)
+        releasing = state.releasing
+        assert releasing is not None
+        await asyncio.wrap_future(entered)
+        executor.retain_transcription_model("first")
+        assert executor.prepare("first", {}) == (
+            "loaded" if phase == "before-detach" else "loading"
+        )
+        finish.set()
+        await releasing
+        if state.preparing is not None:
+            await state.preparing
+        assert executor.memory_status()["models"][0]["loaded"]
+        assert sum(event[1] == "load" for event in events) == (1 if phase == "before-detach" else 2)
+        assert (("first", "close") in events) == (phase == "closing")
+    finally:
+        finish.set()
+        if releasing is not None:
+            await asyncio.gather(releasing, return_exceptions=True)
+        monkeypatch.undo()
         await executor.aclose()
 
 
