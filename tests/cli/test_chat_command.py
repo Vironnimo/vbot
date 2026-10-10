@@ -101,7 +101,14 @@ class FakeRunStream:
 
     @contextmanager
     def stream(
-        self, method: str, url: str, *, params: dict[str, Any], timeout: Any, trust_env: bool
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any],
+        timeout: Any,
+        trust_env: bool,
+        verify: Any,
     ) -> Iterator[SimpleNamespace]:
         assert (method, trust_env) == ("GET", False)
         assert url.endswith(SSE_URL)

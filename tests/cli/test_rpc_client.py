@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import httpx
 import pytest
 
 from cli import rpc_client
+from core.utils import tls
 from tests.cli.cli_test_support import make_instance
 
 
@@ -16,9 +18,9 @@ def _capture_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     def fake_post(
-        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
+        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool, verify: ssl.SSLContext
     ) -> httpx.Response:
-        captured.update(url=url, json=json, timeout=timeout, trust_env=trust_env)
+        captured.update(url=url, json=json, timeout=timeout, trust_env=trust_env, verify=verify)
         return httpx.Response(200, json={"ok": True, "result": {}})
 
     monkeypatch.setattr(httpx, "post", fake_post)
@@ -38,6 +40,9 @@ def test_rpc_call_posts_to_an_ipv6_safe_url_with_a_bounded_timeout_and_no_proxie
     # RPC bodies carry secrets (e.g. provider.set_key) over a plaintext loopback call, so the
     # transport must never honor ambient HTTP_PROXY/.netrc that could divert them off-host.
     assert captured["trust_env"] is False
+    # A plain-http call gets the fail-closed context that skips parsing the CA bundle.
+    assert captured["verify"] is tls.ssl_context_for(captured["url"])
+    assert captured["verify"].get_ca_certs() == []
 
 
 @pytest.mark.parametrize(

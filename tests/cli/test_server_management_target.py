@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import ssl
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -335,8 +336,12 @@ def test_probes_request_the_wildcard_target_directly_on_loopback_without_proxies
     instance = replace(make_instance(tmp_path), host="0.0.0.0", url="http://0.0.0.0:8420")
     captured: list[dict[str, Any]] = []
 
-    def fake_get(url: str, *, timeout: float, trust_env: bool) -> httpx.Response:
+    def fake_get(
+        url: str, *, timeout: float, trust_env: bool, verify: ssl.SSLContext
+    ) -> httpx.Response:
         captured.append({"url": url, "timeout": timeout, "trust_env": trust_env})
+        # A plain-http probe gets the fail-closed context that skips parsing the CA bundle.
+        assert verify.get_ca_certs() == []
         return response
 
     monkeypatch.setattr(httpx, "get", fake_get)

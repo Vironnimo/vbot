@@ -88,6 +88,8 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
 
     import httpx
 
+    from core.utils.tls import ssl_context_for
+
     request_body = {"method": method, "params": params}
     if method in _PROGRESS_PHASES:
         operation_progress(_PROGRESS_PHASES[method])
@@ -96,9 +98,10 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
         if method in _LONG_RUNNING_METHODS
         else RPC_TIMEOUT_SECONDS
     )
+    url = f"{instance.url}{RPC_PATH}"
     try:
         response = httpx.post(
-            f"{instance.url}{RPC_PATH}",
+            url,
             json=request_body,
             timeout=timeout,
             # The CLI only ever talks to the local server over loopback, and RPC bodies
@@ -106,6 +109,8 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
             # plaintext credential can never be diverted through an environment proxy — the
             # same hardening the health/webui probes already apply.
             trust_env=False,
+            # A plain-http target needs no CA bundle (parsing it costs 150 ms or more).
+            verify=ssl_context_for(url),
         )
     except httpx.RequestError as exc:
         not_sent = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
@@ -208,14 +213,18 @@ def stream_run_events(
     """
     import httpx
 
+    from core.utils.tls import ssl_context_for
+
+    url = f"{instance.url}{sse_path}"
     try:
         with httpx.stream(
             "GET",
-            f"{instance.url}{sse_path}",
+            url,
             params={"after_sequence": after_sequence},
             timeout=httpx.Timeout(RPC_TIMEOUT_SECONDS, read=RUN_EVENTS_READ_TIMEOUT_SECONDS),
             # Same hardening as rpc_call: never route through ambient proxies.
             trust_env=False,
+            verify=ssl_context_for(url),
         ) as response:
             if response.status_code != httpx.codes.OK:
                 raise RunEventStreamError(

@@ -146,11 +146,15 @@ def probe_health(
 
     import httpx
 
+    from core.utils.tls import ssl_context_for
+
+    url = _probe_url(instance, HEALTH_PATH)
     try:
         response = httpx.get(
-            _probe_url(instance, HEALTH_PATH),
+            url,
             timeout=timeout_seconds,
             trust_env=False,
+            verify=ssl_context_for(url),
         )
     except httpx.RequestError as exc:
         return HealthProbeResult(
@@ -211,11 +215,15 @@ def probe_webui(
 
     import httpx
 
+    from core.utils.tls import ssl_context_for
+
+    url = _probe_url(instance, WEBUI_PATH)
     try:
         response = httpx.get(
-            _probe_url(instance, WEBUI_PATH),
+            url,
             timeout=timeout_seconds,
             trust_env=False,
+            verify=ssl_context_for(url),
         )
     except httpx.RequestError as exc:
         return WebUIProbeResult(available=False, error=exc.__class__.__name__)
