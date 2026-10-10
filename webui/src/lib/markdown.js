@@ -53,6 +53,40 @@ md.renderer.rules['link_open'] = (tokens, idx, options, env, self) => {
   return defaultLinkOpenRender(tokens, idx, options, env, self);
 };
 
+// GitHub task list items ("- [ ] open", "- [x] done") start with a read-only
+// check box. As in GFM, the marker opens the item's first paragraph and text
+// follows it. A disabled checkbox carries the state for assistive technology;
+// it stays visually hidden next to the box markdown.css paints in the app's
+// Checkbox style.
+const TASK_MARKER = /^\[([ xX])\][ \t]+/;
+const TASK_CHECK =
+  '<svg viewBox="0 0 12 12"><path d="M2.5 6.2 5 8.6l4.5-5.2"/></svg>';
+
+md.core.ruler.push('task_lists', (state) => {
+  const { tokens } = state;
+  for (let index = 2; index < tokens.length; index += 1) {
+    const item = tokens[index - 2];
+    const first = tokens[index].children?.[0];
+    if (
+      tokens[index].type !== 'inline' ||
+      tokens[index - 1].type !== 'paragraph_open' ||
+      item.type !== 'list_item_open' ||
+      first?.type !== 'text'
+    )
+      continue;
+    const marker = TASK_MARKER.exec(first.content);
+    if (!marker) continue;
+    const done = marker[1] !== ' ';
+    first.content = first.content.slice(marker[0].length);
+    const box = new state.Token('html_inline', '', 0);
+    box.content =
+      `<input class="md-task__input" type="checkbox" disabled${done ? ' checked' : ''}>` +
+      `<span class="md-task__box" aria-hidden="true">${done ? TASK_CHECK : ''}</span>`;
+    tokens[index].children.unshift(box);
+    item.attrJoin('class', 'md-task');
+  }
+});
+
 // Only finished text belongs in the shared cache. A growing answer has a new
 // source at every flush; retaining those prefixes keeps hundreds of obsolete
 // documents alive. Mounted MarkdownContent instances own their current render.
