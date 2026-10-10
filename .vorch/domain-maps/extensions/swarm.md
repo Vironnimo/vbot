@@ -268,13 +268,20 @@ posts, chronological within each page. The Tool continues to older posts with
 `before` (the oldest shown post number); Store read cursors remain accepted.
 The Board UI reverses each page for newest-first display and appends older pages
 below it; this presentation does not change the Store or Tool read order.
-The management `board.read` (human projection, not the Tool) also takes `after`,
-a post number: it returns the discussion's posts numbered above it, oldest first
-and bounded like a page (`limit`, `batch_chars`); `has_more` means repeat after
-the last returned post, and such a page carries no cursor. `after` excludes
-`message_id` and `cursor` (`read_human_posts`, `test_swarm_store_board.py`,
-`test_swarm_operations.py`). The page uses it to put new posts on top instead of
-re-reading the newest page (see the page refresh paragraph below).
+The management `board.read` (human projection, not the Tool) has its own page
+budget, independent of the delivery settings that bound Agent reads: whole posts,
+at most `limit` and `HUMAN_PAGE_BYTES` (256 KiB) of text (`_store_reads.py`). The
+Store first reads the posts' text sizes from the record headers and then loads
+only the rows that fit, so a page never reads many more full posts than it
+returns. It also takes `after`, a post number: it returns the discussion's posts
+numbered above it, oldest first and bounded like a page; `has_more` means repeat
+after the last returned post, and such a page carries no cursor. With `before`, a
+post number, the page ends just below that post, and its cursor continues with
+earlier posts. `after` and `before` exclude each other, `message_id` and `cursor`
+(`read_human_posts`, `test_swarm_store_board.py`, `test_swarm_operations.py`).
+The page uses `after` to put new posts on top instead of re-reading the newest
+page (see the page refresh paragraph below), and both to show a revealed post
+among its neighbours. Its Board reads ask for 50 posts per page.
 Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
 typography, including fenced-code Copy actions. Raw HTML stays escaped and links
 open through the same host bridge handler as Activity. Discussion announcements
@@ -607,15 +614,17 @@ and reattach an active Run when its id is unchanged. Activity loads older canoni
 History pages through `next_before`, retaining the loaded page depth on refresh.
 Discussion, audit and Usage replies commit only for the current selection
 and request; delayed reads cannot overwrite newer navigation. Board replies commit
-only for the selected Swarm and discussion and while no newer full load of the
-newest page started (`boardVersion`); a read of newer posts waits for a full load
-in flight, and one dropped by a newer full load is covered by it, because that
-load started after the change.
+only for the selected Swarm and discussion and while no newer full load started
+(`boardVersion`; a full load reads the newest page or a revealed post's
+surroundings). A read of new posts waits for a full load or a requested newer
+page in flight, and one dropped by a newer full load is covered or replaced by
+it, because that load started after the change.
 Evidence: `SwarmPage.activity.test.js`, `SwarmPage.board.test.js`,
 `SwarmPage.usage.test.js` and `test_swarm_store_board.py`.
 
 Board reads retain each post's saved UTC timestamp. The page formats it in the
-host-provided timezone and separates the author/time header from the body.
+host-provided timezone with the WebUI's shared cached formatter
+(`formatAbsoluteTime`) and separates the author/time header from the body.
 Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
 stable across page remounts (`SwarmPage.board.test.js`) and does not change saved posts.
@@ -633,11 +642,27 @@ Rendered Markdown in posts, Wiki pages and Activity links cited `#N` and `wN`
 (`ui/referenceLinks.js`), never inside code, links or controls, and never in the
 user request. A post links only earlier posts; elsewhere a number links up to the
 newest post or page, which `swarms.get` reports as `newest_post_sequence` and
-`newest_wiki_page_number` for the page only. A link's tooltip loads the post's
-author and opening, or the page's title and opening, on first hover or focus.
-A post link opens the post's discussion on the Board, loads earlier pages until the
-post appears and scrolls to and focuses it; `#0` opens the user request
-(`SwarmPage.board.test.js`, `SwarmPage.wiki.test.js`, `test_swarm_operations.py`).
+`newest_wiki_page_number` for the page only. A link gets its tooltip on its first
+hover or focus, which loads the post's author and opening, or the page's title and
+opening. Linking walks only the rendered Markdown added to the page, skips code,
+links and controls as whole subtrees and ignores its own insertions.
+A post link shows the post on the Board, centered and focused; `#0` opens the
+user request. A post the Board does not show takes two round trips: the post by
+number, which names its discussion, then up to a page of posts ending with it
+(`before`) and up to a page of newer ones (`after`), read together while the
+discussion selector lists the discussion. These replace the shown posts. While
+the discussion's newest posts are not loaded, a sticky bar above the posts offers
+"Load newer messages" and "Jump to newest", and new posts are not put on top.
+A short way scrolls smoothly; a long one jumps and keeps the post centered for up
+to 12 frames while the posts around it render (`SwarmPage.board.test.js`,
+`SwarmPage.wiki.test.js`, `test_swarm_operations.py`).
+Board posts use `content-visibility: auto`, so only posts near the view are laid
+out and painted. `contain-intrinsic-size: auto 320px` deliberately underestimates
+a post (seeded posts averaged about 1,450 px): a low estimate only renders a few
+more posts near the view, and scroll anchoring keeps the view in place when
+posts render or earlier pages load (checked in Chrome, 2026-10-10). Queries for
+roles or accessible names over many loaded posts force their layout: a Playwright
+`getByRole` over 809 posts took 3.6 s instead of 0.2 s.
 Post backgrounds and left borders share the stable author color. The Swarm id
 stays under Usage (`SwarmPage.board.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
@@ -728,7 +753,9 @@ only for `profiles`, the Run list only for `swarms`, and the selected Swarm
 (`swarms.get`) for any change naming it, plus the changed parts of its visible
 tab: on the Board `board.list` for `discussions` and, for `posts`, a `board.read`
 after the newest shown post, repeated while `has_more` (a Board not yet showing
-the discussion loads its newest page instead). `null` or an unknown resource
+the discussion loads its newest page instead), but only while the Board shows the
+discussion's newest posts; around a revealed post, new posts wait for the newer
+bar. `null` or an unknown resource
 reloads everything, so reconnects, reloads and owner-less invalidations still
 refresh fully (`SwarmPage.test.js`, `SwarmPage.board.test.js`,
 `test_swarm_operations.py`, `test_swarm_board_tool.py`). Under the 3-participant
@@ -739,7 +766,13 @@ changes and incremental Board reads, and to 1.9 with the 1 s interval;
 visible tab; selecting a tab loads its current data independently of hidden reports. Activity retains
 the existing History and live subscription while its participant's Run identity
 and active state are unchanged. A new Run or terminal state reconciles History through the generation/sequence append cursor, preserving older loaded pages;
-subscription failures remain retryable on a later invalidation. Coverage:
+subscription failures remain retryable on a later invalidation. Activity reads
+History and follows its participant's Run only while its tab (`participants`)
+shows: hiding the tab ends the Run subscription and drops reads in flight, keeping what
+it shows; showing it again catches up once from the participant's current
+snapshot, with newer History (including a Run that settled meanwhile) and the
+Run if it is still active. In the seeded scale run, 15 s of new posts with the
+Board in view cost 23 History reads and 10 Run calls before, none after. Coverage:
 `pageRefresh.test.js`, `SwarmPage.streaming.test.js`, `SwarmPage.activity.test.js`
 and `SwarmPage.wiki.test.js`.
 
