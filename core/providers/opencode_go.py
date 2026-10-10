@@ -11,11 +11,13 @@ import httpx
 
 from core.models.models import Model
 from core.providers._http_shared import (
+    PreparedRequest,
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
     format_http_error_detail,
     iter_stream_lines,
+    json_body_headers,
     wrap_network_error,
 )
 from core.providers._responses_profile import (
@@ -167,7 +169,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     Messages adapter sharing this Adapter's client and wire profiles) or
     stateless Responses (``/responses``), and shapes its reasoning, parameters,
     media and replay. Every wire carries the ``x-opencode-session`` prompt-cache
-    affinity header and the gateway's error classification.
+    affinity header and the gateway's error classification, and resolves this
+    Adapter's output limit when it builds a payload.
     """
 
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages", "responses")
@@ -214,6 +217,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             client=self._client,
             api_version=ANTHROPIC_VERSION,
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
+            stamp_output_limit=self._apply_model_output_limit,
         )
         self._messages.bind_wire_profiles(self.wire)
 
@@ -291,29 +295,24 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        request_kwargs = self._kwargs_with_model_output_limit(model_id, messages, kwargs)
         protocol = self.wire_profile(model_id).protocol
         if protocol == "messages":
-            return await self._messages.send(
-                messages,
-                model_id=model_id,
-                **request_kwargs,
-            )
+            return await self._messages.send(messages, model_id=model_id, **kwargs)
         if protocol == "responses":
-            request_headers = self._stable_request_headers(model_id, request_kwargs)
+            request_headers = self._stable_request_headers(model_id, kwargs)
 
             def build() -> dict[str, Any]:
                 return self._build_responses_payload(
                     messages,
                     model_id=model_id,
-                    **self._request_kwargs_with_defaults(request_kwargs),
+                    **self._request_kwargs_with_defaults(
+                        self._kwargs_with_model_output_limit(model_id, messages, kwargs)
+                    ),
                 )
 
-            payload = build()
             response = await execute_learning_from_rejections(
-                lambda: self._post_responses_json(payload, request_headers=request_headers),
-                payload,
-                rebuild=build,
+                lambda request: self._post_responses_json(request, request_headers=request_headers),
+                self._request_plan(messages, model_id, build),
                 wire=self.wire,
                 model_id=model_id,
                 provider_label=self._config.id,
@@ -321,7 +320,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             if responses_returned_reasoning(response):
                 self.wire.observe_reasoning_returned(model_id)
             return response
-        return await super().send(messages, model_id=model_id, **request_kwargs)
+        return await super().send(messages, model_id=model_id, **kwargs)
 
     @override
     def stream(
@@ -331,35 +330,30 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        request_kwargs = self._kwargs_with_model_output_limit(model_id, messages, kwargs)
         protocol = self.wire_profile(model_id).protocol
         if protocol == "messages":
-            return self._messages.stream(
-                messages,
-                model_id=model_id,
-                **request_kwargs,
-            )
+            return self._messages.stream(messages, model_id=model_id, **kwargs)
         if protocol == "responses":
-            request_headers = self._stable_request_headers(model_id, request_kwargs)
+            request_headers = self._stable_request_headers(model_id, kwargs)
 
             def build() -> dict[str, Any]:
                 return self._build_responses_payload(
                     messages,
                     model_id=model_id,
                     stream=True,
-                    **self._request_kwargs_with_defaults(request_kwargs),
+                    **self._request_kwargs_with_defaults(
+                        self._kwargs_with_model_output_limit(model_id, messages, kwargs)
+                    ),
                 )
 
-            payload = build()
             return stream_learning_from_rejections(
-                lambda: self._stream_responses(payload, request_headers=request_headers),
-                payload,
-                rebuild=build,
+                lambda request: self._stream_responses(request, request_headers=request_headers),
+                self._request_plan(messages, model_id, build),
                 wire=self.wire,
                 model_id=model_id,
                 provider_label=self._config.id,
             )
-        return super().stream(messages, model_id=model_id, **request_kwargs)
+        return super().stream(messages, model_id=model_id, **kwargs)
 
     @override
     def normalize_response(
@@ -482,18 +476,19 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
 
     async def _post_responses_json(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
     ) -> dict[str, Any]:
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
+            headers.update(request.headers)
             headers.update(request_headers)
             try:
                 response = await self._client.post(
                     OPENCODE_GO_RESPONSES_ENDPOINT,
-                    json=payload,
-                    headers=headers,
+                    content=request.body,
+                    headers=json_body_headers(headers),
                 )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
@@ -508,12 +503,12 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
 
     async def _stream_responses(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_responses_stream(
-            payload,
+            request,
             request_headers=request_headers,
         )
         state = ResponsesStreamState()
@@ -545,12 +540,13 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
 
     async def _connect_responses_stream(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
     ) -> httpx.Response:
         async def _build_headers() -> dict[str, str]:
             headers = await self._build_headers()
+            headers.update(request.headers)
             headers.update(request_headers)
             return headers
 
@@ -568,7 +564,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         return await connect_streaming_with_retry(
             self._client,
             OPENCODE_GO_RESPONSES_ENDPOINT,
-            payload,
+            request.body,
             build_headers=_build_headers,
             handle_error_status=_handle_error_status,
         )
@@ -581,13 +577,13 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         """Copy the caller kwargs with the model output ceiling defaulted in.
 
-        Every wire needs it stamped here: the Chat path funnels through the
-        shared ``_build_payload`` (which would apply it anyway), but the
-        Messages and Responses paths bypass ``_build_payload``, so the ceiling
-        has to be resolved before the request splits. The explicit-vs-ceiling
-        logic lives in the base ``_apply_model_output_limit``; this adapter
-        only contributes flat-namespace candidate resolution via its
-        ``_model_max_output_tokens`` override.
+        The Responses build stamps it here because it bypasses the shared
+        ``_build_payload``, which applies it on the Chat path; the inner
+        Messages adapter applies it before each of its builds. Each runs in the
+        build, off the Event Loop. The explicit-vs-ceiling logic lives in the
+        base ``_apply_model_output_limit``; this adapter only contributes
+        flat-namespace candidate resolution via its ``_model_max_output_tokens``
+        override.
         """
 
         request_kwargs = dict(kwargs)

@@ -4,7 +4,7 @@ Task-gated reference for turning canonical Session history into one provider-rea
 
 ## Pipeline and ownership
 
-Prompt assembly and Tool-definition profiling use the Prompt pool; canonical Compaction projection, note embedding, Skill-context restoration, Tool-contract compilation, attachment/media scans, and token estimates use Chat's bounded transform pool. These synchronous transformations finish before the request crosses the async Provider boundary and never consume Event-Loop time proportional to Session size.
+Prompt assembly and Tool-definition profiling use the Prompt pool; canonical Compaction projection, note embedding, Skill-context restoration, Tool-contract compilation, attachment/media scans, and token estimates use Chat's bounded transform pool. These synchronous transformations finish before the request crosses the async Provider boundary and never consume Event-Loop time proportional to Session size. Behind that boundary the Adapter builds, encodes and size-checks the wire payload in one Provider worker hop that still sees Chat's `request_input_budget` (`providers/request-policy.md` -> HTTP, retry, and streaming).
 
 At a Model boundary, image limiting and exact request accounting share one transform job (`_request_history.py`). Completed Assistant replay, measured Usage observation and continuation accounting share another (`_step_outcomes.py`), after normalized Usage reaches the recorder. A completed Tool batch limits the live view and continuation and counts that continuation in one job. The prepared accounting value can then project Context without scanning the request again (`chat/usage.md`); persistence, hooks and cancellation remain separate async boundaries.
 

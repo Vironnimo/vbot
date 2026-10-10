@@ -18,6 +18,11 @@ delta arrives, so a rejection that a wire reports as an in-band stream event
 (the Codex WebSocket) is learned like an HTTP rejection. A stream also records
 that the Model returned reasoning, and that it ignores reasoning off when it
 reasons although the request turned reasoning off.
+
+Both take the request's :class:`RequestPlan` and render it off the Event Loop:
+the first build and every rebuild after a lesson run in one request-body worker
+hop each, together with encoding, the size check and the comparison that
+decides whether a rebuild changed anything.
 """
 
 from __future__ import annotations
@@ -28,6 +33,12 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from core.providers._http_shared import (
+    PreparedRequest,
+    RequestPlan,
+    prepare_request,
+    revise_request,
+)
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.reasoning import detail_names_rejected_effort, split_inline_reasoning
 from core.providers.reasoning_dialects import ReasoningCarriers, dialect_carriers
@@ -116,21 +127,20 @@ class _Lesson:
 
 
 async def execute_learning_from_rejections[T](
-    execute_attempt: Callable[[], Awaitable[T]],
-    payload: dict[str, Any],
+    execute_attempt: Callable[[PreparedRequest], Awaitable[T]],
+    plan: RequestPlan,
     *,
-    rebuild: Callable[[], dict[str, Any]],
     wire: WireBinding,
     model_id: str,
     provider_label: str,
 ) -> T:
     """Run one request, learning from a rejected parameter, effort or off switch.
 
-    ``execute_attempt`` performs one full (``retry_async``-wrapped) request over
-    the shared ``payload`` dict. On a fatal, non-auth ``ProviderError`` whose
-    detail attributes the rejection to what ``payload`` carries, the fact is
-    recorded, ``payload`` is replaced by ``rebuild()`` and the request runs
-    again:
+    The request is rendered from ``plan`` off the Event Loop, and
+    ``execute_attempt`` performs one full (``retry_async``-wrapped) request with
+    it. On a fatal, non-auth ``ProviderError`` whose detail attributes the
+    rejection to what the sent payload carries, the fact is recorded, the plan
+    is rebuilt and the request runs again:
 
     - a sampling parameter the payload carries, named next to a rejection
       marker, is dropped;
@@ -149,16 +159,17 @@ async def execute_learning_from_rejections[T](
     rejection marker), and a rebuild that changes nothing, propagates unchanged.
     """
 
+    request = await prepare_request(plan)
     rejected_parameters: set[str] = set()
     exclusive_groups: list[tuple[str, ...]] = []
     for _ in range(_MAX_LESSONS):
         try:
-            return await execute_attempt()
+            return await execute_attempt(request)
         except ProviderError as error:
             if error.retryable or isinstance(error, ProviderAuthError):
                 raise
             profile = wire.profile(model_id)
-            lesson = _learn(str(error), payload, profile)
+            lesson = _learn(str(error), request.payload, profile)
             if lesson is None:
                 raise
             if lesson.kind == "parameter":
@@ -169,18 +180,16 @@ async def execute_learning_from_rejections[T](
                 exclusive_groups.append(lesson.rejected)
             else:
                 wire.observe_rejected_effort(model_id, lesson.rejected[0])
-            rebuilt = rebuild()
-            for parameter in rejected_parameters:
-                _remove_sampling_parameter(rebuilt, profile.protocol, parameter)
-            for group in exclusive_groups:
-                carried = [
-                    parameter
-                    for parameter in group
-                    if _carries_sampling_parameter(rebuilt, profile.protocol, parameter)
-                ]
-                for parameter in carried[1:]:
-                    _remove_sampling_parameter(rebuilt, profile.protocol, parameter)
-            if rebuilt == payload:
+            revised = await revise_request(
+                plan,
+                _LessonRevision(
+                    request.payload,
+                    profile.protocol,
+                    tuple(rejected_parameters),
+                    tuple(exclusive_groups),
+                ),
+            )
+            if revised is None:
                 raise
             _LOGGER.warning(
                 "%s rejected %s for %s; retrying with the learned wire shape",
@@ -188,52 +197,59 @@ async def execute_learning_from_rejections[T](
                 lesson.description,
                 model_id,
             )
-            payload.clear()
-            payload.update(rebuilt)
-    return await execute_attempt()
+            request = revised
+    return await execute_attempt(request)
 
 
 async def stream_learning_from_rejections(
-    open_stream: Callable[[], AsyncGenerator[dict[str, Any]]],
-    payload: dict[str, Any],
+    open_stream: Callable[[PreparedRequest], AsyncGenerator[dict[str, Any]]],
+    plan: RequestPlan,
     *,
-    rebuild: Callable[[], dict[str, Any]],
     wire: WireBinding,
     model_id: str,
     provider_label: str,
 ) -> AsyncGenerator[dict[str, Any]]:
     """Stream one request, learning from a rejection before its first delta.
 
-    ``open_stream`` opens one full stream exchange over the shared ``payload``.
-    An error raised before the stream yields its first delta (an HTTP rejection
-    or an in-band error event) is learned and retried exactly like
-    :func:`execute_learning_from_rejections`; once a delta was yielded, every
-    error propagates unchanged. A delta carrying reasoning records that the
-    Model returned reasoning; when the request turned reasoning off, reasoning
-    in a delta or inline in the answer (``split_inline_reasoning``) records
-    that the Model ignores reasoning off.
+    ``open_stream`` opens one full stream exchange for the request rendered
+    from ``plan``. An error raised before the stream yields its first delta (an
+    HTTP rejection or an in-band error event) is learned and retried exactly
+    like :func:`execute_learning_from_rejections`; once a delta was yielded,
+    every error propagates unchanged and the request is never sent again, so
+    its payload and body are released. A delta carrying reasoning records that
+    the Model returned reasoning; when the request turned reasoning off,
+    reasoning in a delta or inline in the answer (``split_inline_reasoning``)
+    records that the Model ignores reasoning off.
     """
 
-    async def establish() -> tuple[AsyncGenerator[dict[str, Any]], dict[str, Any] | None]:
-        stream = open_stream()
+    established: list[PreparedRequest] = []
+
+    async def establish(
+        request: PreparedRequest,
+    ) -> tuple[AsyncGenerator[dict[str, Any]], dict[str, Any] | None]:
+        stream = open_stream(request)
         try:
-            return stream, await anext(stream)
+            first = await anext(stream)
         except StopAsyncIteration:
-            return stream, None
+            first = None
         except BaseException:
             await stream.aclose()
             raise
+        established.append(request)
+        return stream, first
 
     stream, first = await execute_learning_from_rejections(
         establish,
-        payload,
-        rebuild=rebuild,
+        plan,
         wire=wire,
         model_id=model_id,
         provider_label=provider_label,
     )
+    request = established.pop()
+    off_watch = _OffWatch() if _requests_off(request.payload, wire.profile(model_id)) else None
+    request.release()
+    del request
     returned_reasoning = False
-    off_watch = _OffWatch() if _requests_off(payload, wire.profile(model_id)) else None
     async with aclosing(stream):
         if first is None:
             return
@@ -250,6 +266,33 @@ async def stream_learning_from_rejections(
                 delta = await anext(stream)
             except StopAsyncIteration:
                 return
+
+
+@dataclass(frozen=True, eq=False)
+class _LessonRevision:
+    """Apply a request's lessons to its rebuilt payload; decline an unchanged rebuild.
+
+    Runs on the request-body worker with the rebuild, so comparing the rebuild
+    with the payload that was sent takes no Event-Loop time.
+    """
+
+    sent: Mapping[str, Any]
+    protocol: str
+    rejected_parameters: tuple[str, ...]
+    exclusive_groups: tuple[tuple[str, ...], ...]
+
+    def __call__(self, rebuilt: dict[str, Any]) -> bool:
+        for parameter in self.rejected_parameters:
+            _remove_sampling_parameter(rebuilt, self.protocol, parameter)
+        for group in self.exclusive_groups:
+            carried = [
+                parameter
+                for parameter in group
+                if _carries_sampling_parameter(rebuilt, self.protocol, parameter)
+            ]
+            for parameter in carried[1:]:
+                _remove_sampling_parameter(rebuilt, self.protocol, parameter)
+        return rebuilt != self.sent
 
 
 def _learn(detail: str, payload: Mapping[str, Any], profile: WireProfile) -> _Lesson | None:

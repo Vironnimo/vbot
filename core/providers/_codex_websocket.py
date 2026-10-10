@@ -11,6 +11,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from core.providers._http_shared import _REQUEST_BODY_WORKERS
 from core.providers._openai_constants import (
     _CODEX_WEBSOCKET_CONNECT_TIMEOUT_SECONDS,
     _CODEX_WEBSOCKET_STATUS_CODE,
@@ -106,6 +107,49 @@ def _codex_payloads_match_except_input(
     return current_rest == previous_rest
 
 
+def _render_codex_request(
+    payload: dict[str, Any],
+    continuation: _CodexWebSocketContinuation | None,
+) -> tuple[dict[str, Any], str]:
+    """Return the request to send and its ``response.create`` text.
+
+    The request is ``payload`` itself unless it extends ``continuation``'s
+    request and output unchanged; then it carries only the new input items
+    after ``previous_response_id``.
+    """
+
+    request_payload = _continued_request(payload, continuation)
+    return request_payload, _codex_wire_text(request_payload)
+
+
+def _continued_request(
+    payload: dict[str, Any],
+    continuation: _CodexWebSocketContinuation | None,
+) -> dict[str, Any]:
+    if continuation is None or not _codex_payloads_match_except_input(
+        payload, continuation.last_request_payload
+    ):
+        return payload
+    current_input = payload.get("input")
+    previous_input = continuation.last_request_payload.get("input")
+    if not isinstance(current_input, list) or not isinstance(previous_input, list):
+        return payload
+    baseline = [*previous_input, *continuation.last_response_items]
+    if len(current_input) < len(baseline) or current_input[: len(baseline)] != baseline:
+        return payload
+    return {
+        **payload,
+        "previous_response_id": continuation.last_response_id,
+        "input": current_input[len(baseline) :],
+    }
+
+
+def _codex_wire_text(request_payload: Mapping[str, Any]) -> str:
+    return json.dumps(
+        {"type": "response.create", **request_payload}, ensure_ascii=False, separators=(",", ":")
+    )
+
+
 class CodexWebSocket:
     """Own one route-isolated socket and connection-local response continuation."""
 
@@ -135,7 +179,7 @@ class CodexWebSocket:
         async with self._codex_websocket_lock:
             if self._codex_websocket_route not in {None, route}:
                 await self.aclose()
-            request_payload = self._build_codex_cached_request(payload, route)
+            request_payload, wire_text = await self._render_request(payload, route)
             retried_missing_continuation = False
             # Only final Provider snapshots can prove what previous_response_id
             # restores. The decoder also retains incomplete/modified snapshots.
@@ -145,6 +189,7 @@ class CodexWebSocket:
                     async with aclosing(
                         self._stream_codex_websocket_attempt(
                             request_payload,
+                            wire_text,
                             headers=headers,
                             route=route,
                             state=state,
@@ -168,6 +213,7 @@ class CodexWebSocket:
                     self._codex_websocket_continuation = None
                     await self.aclose()
                     request_payload = payload
+                    wire_text = await _REQUEST_BODY_WORKERS.run(_codex_wire_text, payload)
                     output_items.clear()
                     continue
                 except BaseException:
@@ -181,14 +227,13 @@ class CodexWebSocket:
     async def _stream_codex_websocket_attempt(
         self,
         request_payload: dict[str, Any],
+        wire_text: str,
         *,
         headers: dict[str, str],
         route: CodexWebSocketRoute,
         state: ResponsesStreamState,
         output_items: dict[int | None, dict[str, Any] | None],
     ) -> AsyncGenerator[dict[str, Any]]:
-        wire_payload = {"type": "response.create", **request_payload}
-        wire_text = json.dumps(wire_payload, ensure_ascii=False, separators=(",", ":"))
         capture = (
             self._debug_recorder.begin_capture(
                 method="WEBSOCKET",
@@ -344,35 +389,27 @@ class CodexWebSocket:
             )
         return f"{websocket_base}{CODEX_RESPONSES_ENDPOINT}"
 
-    def _build_codex_cached_request(
+    async def _render_request(
         self,
         payload: dict[str, Any],
         route: CodexWebSocketRoute,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], str]:
+        """Chain ``payload`` to this route's continuation and encode it, off the Event Loop.
+
+        Both the comparison with the last request and the encoding grow with
+        the Session, so they run on the request-body worker. A payload that
+        does not continue the last response drops the continuation.
+        """
+
         continuation = self._codex_websocket_continuation
-        if continuation is None or continuation.route != route:
+        if continuation is not None and continuation.route != route:
+            continuation = None
+        request_payload, wire_text = await _REQUEST_BODY_WORKERS.run(
+            _render_codex_request, payload, continuation
+        )
+        if request_payload is payload:
             self._codex_websocket_continuation = None
-            return payload
-        if not _codex_payloads_match_except_input(
-            payload,
-            continuation.last_request_payload,
-        ):
-            self._codex_websocket_continuation = None
-            return payload
-        current_input = payload.get("input")
-        previous_input = continuation.last_request_payload.get("input")
-        if not isinstance(current_input, list) or not isinstance(previous_input, list):
-            self._codex_websocket_continuation = None
-            return payload
-        baseline = [*previous_input, *continuation.last_response_items]
-        if len(current_input) < len(baseline) or current_input[: len(baseline)] != baseline:
-            self._codex_websocket_continuation = None
-            return payload
-        return {
-            **payload,
-            "previous_response_id": continuation.last_response_id,
-            "input": current_input[len(baseline) :],
-        }
+        return request_payload, wire_text
 
     def _remember_codex_websocket_continuation(
         self,

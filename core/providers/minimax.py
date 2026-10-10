@@ -30,7 +30,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
 
     Requests whose wire profile selects the ``messages`` protocol go through an
     inner Messages Adapter that shares this Adapter's HTTP client and wire
-    profiles.
+    profiles and resolves this Adapter's output limit when it builds a payload.
     """
 
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages")
@@ -64,6 +64,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
             client=self._client,
+            stamp_output_limit=self._apply_model_output_limit,
         )
         self._messages.bind_wire_profiles(self.wire)
 
@@ -86,9 +87,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         if self._uses_messages(model_id):
-            request_kwargs = dict(kwargs)
-            self._apply_model_output_limit(request_kwargs, model_id, messages)
-            return await self._messages.send(messages, model_id=model_id, **request_kwargs)
+            return await self._messages.send(messages, model_id=model_id, **kwargs)
         return await super().send(messages, model_id=model_id, **kwargs)
 
     @override
@@ -100,9 +99,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         if self._uses_messages(model_id):
-            request_kwargs = dict(kwargs)
-            self._apply_model_output_limit(request_kwargs, model_id, messages)
-            return self._messages.stream(messages, model_id=model_id, **request_kwargs)
+            return self._messages.stream(messages, model_id=model_id, **kwargs)
         return super().stream(messages, model_id=model_id, **kwargs)
 
     @override

@@ -26,6 +26,7 @@ from core.chat._run_state import (
 )
 from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ImageBudgetExceededError
+from core.providers._http_shared import prepare_request
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
@@ -529,9 +530,11 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
         @override
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
             if provider_pressure:
-                payload = wire._build_payload(messages, model_id, **kwargs)
+                plan = wire._request_plan(
+                    messages, model_id, lambda: wire._build_payload(messages, model_id, **kwargs)
+                )
                 try:
-                    await wire._prepare_request_body(payload, model_id)
+                    await prepare_request(plan)
                 except ProviderRequestTooLargeError as error:
                     rejected_sizes.append(error.size_bytes)
                     raise

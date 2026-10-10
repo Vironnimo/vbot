@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from contextlib import aclosing
+from functools import partial
 from typing import TYPE_CHECKING, Any, Self, override
 
 import httpx
@@ -67,14 +68,16 @@ from core.providers._chat_completions_wire import (
     _to_openai_user_content_part,
 )
 from core.providers._http_shared import (
+    PreparedRequest,
+    RequestPlan,
     build_async_client,
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
     format_http_error_detail,
     iter_sse_events,
+    json_body_headers,
     parse_sse_json_data,
-    prepare_json_body,
     wrap_network_error,
 )
 from core.providers._tool_calls import WIRE_TOOL_CALL_ID_PROFILES, normalize_tool_call_ids
@@ -91,7 +94,6 @@ from core.providers.adapter import (
 from core.providers.errors import (
     NetworkError,
     ProviderError,
-    ProviderRequestTooLargeError,
 )
 from core.providers.providers import (
     AuthConfig,
@@ -267,15 +269,34 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             headers.update(self._config.extra_headers)
         return headers
 
-    async def _build_request_headers(
+    def _payload_request_headers(
         self,
         messages: list[dict[str, Any]],
         payload: Mapping[str, Any],
     ) -> dict[str, str]:
-        """Build headers that may depend on one concrete request payload."""
+        """Return the headers that depend on one concrete request; none by default.
+
+        Runs once per built payload, off the Event Loop with the build, and may
+        refuse the request with a ``ProviderError``. Every attempt adds these
+        headers over its rebuilt auth headers.
+        """
 
         del messages, payload
-        return await self._build_headers()
+        return {}
+
+    def _request_plan(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        build: Callable[[], dict[str, Any]],
+    ) -> RequestPlan:
+        """Plan one request on this wire: ``build`` with its body limit and payload headers."""
+
+        return RequestPlan(
+            build=build,
+            body_limit=self.request_body_limit(model_id),
+            payload_headers=partial(self._payload_request_headers, messages),
+        )
 
     @override
     def normalize_response(
@@ -685,19 +706,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             # selection: a catalog non-reasoning Model has its effort stripped.
             return self.describe_reasoning_render(model_id, selected_effort or None)
 
-        payload = self._build_payload(messages, model_id, **kwargs)
-
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
-        async def _do_request(body: bytes) -> dict[str, Any]:
-            headers = httpx.Headers(await self._build_request_headers(messages, payload))
+        async def _do_request(request: PreparedRequest) -> dict[str, Any]:
+            headers = httpx.Headers({**await self._build_headers(), **request.headers})
             headers.update(request_headers)
-            headers.setdefault("Content-Type", "application/json")
             try:
                 response = await self._client.post(
                     CHAT_COMPLETIONS_ENDPOINT,
-                    content=body,
-                    headers=headers,
+                    content=request.body,
+                    headers=json_body_headers(headers),
                 )
             except httpx.TransportError as exc:
                 raise self._wrap_transport_error(exc) from exc
@@ -742,16 +760,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             )
             return parsed
 
-        async def _execute_payload() -> dict[str, Any]:
-            # Sampling fallback changes the payload; ordinary/OAuth retries do
-            # not. Prepare once for each revision and reuse its exact bytes.
-            body = await self._prepare_request_body(payload, model_id)
-            return await auth_recovery.run(lambda: retry_async(lambda: _do_request(body)))
+        async def _execute(request: PreparedRequest) -> dict[str, Any]:
+            # Ordinary and OAuth retries resend the prepared bytes; only a
+            # rebuild after a learned rejection renders a new request.
+            return await auth_recovery.run(lambda: retry_async(lambda: _do_request(request)))
 
         return await execute_learning_from_rejections(
-            _execute_payload,
-            payload,
-            rebuild=lambda: self._build_payload(messages, model_id, **kwargs),
+            _execute,
+            self._request_plan(
+                messages, model_id, partial(self._build_payload, messages, model_id, **kwargs)
+            ),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -771,13 +789,17 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         payload["stream"] = True
         _merge_stream_usage_options(payload)
 
-    async def _prepare_request_body(self, payload: dict[str, Any], model_id: str) -> bytes:
-        """Prepare the exact JSON bytes once and reject a known size overflow."""
-        body = await prepare_json_body(payload)
-        limit = self.request_body_limit(model_id)
-        if limit is not None and len(body) > limit:
-            raise ProviderRequestTooLargeError(len(body), limit)
-        return body
+    def _build_stream_payload(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        kwargs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Build the streaming variant of the Chat Completions payload."""
+
+        payload = self._build_payload(messages, model_id, **kwargs)
+        self._prepare_stream_payload(payload)
+        return payload
 
     @override
     async def stream(
@@ -813,19 +835,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 error payloads.
         """
         request_headers = self._stable_request_headers(model_id, kwargs)
-
-        def build_stream_payload() -> dict[str, Any]:
-            built = self._build_payload(messages, model_id, **kwargs)
-            self._prepare_stream_payload(built)
-            return built
-
-        payload = build_stream_payload()
+        plan = self._request_plan(
+            messages, model_id, partial(self._build_stream_payload, messages, model_id, kwargs)
+        )
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
-
-        async def _build_headers() -> dict[str, str]:
-            headers = await self._build_request_headers(messages, payload)
-            headers.update(request_headers)
-            return headers
 
         def _handle_error_status(
             status_code: int,
@@ -838,13 +851,18 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        async def _stream_payload() -> AsyncGenerator[dict[str, Any]]:
-            body = await self._prepare_request_body(payload, model_id)
+        async def _stream_request(request: PreparedRequest) -> AsyncGenerator[dict[str, Any]]:
+            async def _attempt_headers() -> dict[str, str]:
+                headers = await self._build_headers()
+                headers.update(request.headers)
+                headers.update(request_headers)
+                return headers
+
             response = await connect_streaming_with_retry(
                 self._client,
                 CHAT_COMPLETIONS_ENDPOINT,
-                body,
-                build_headers=_build_headers,
+                request.body,
+                build_headers=_attempt_headers,
                 handle_error_status=_handle_error_status,
                 auth_recovery=auth_recovery,
                 wrap_transport_error=self._wrap_transport_error,
@@ -855,9 +873,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         async with aclosing(
             stream_learning_from_rejections(
-                _stream_payload,
-                payload,
-                rebuild=build_stream_payload,
+                _stream_request,
+                plan,
                 wire=self.wire,
                 model_id=model_id,
                 provider_label=self._config.id,

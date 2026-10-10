@@ -24,11 +24,13 @@ from core.providers._chat_completions_catalog import (
     _read_string_list,
 )
 from core.providers._http_shared import (
+    PreparedRequest,
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
     format_http_error_detail,
     iter_stream_lines,
+    json_body_headers,
     wrap_network_error,
 )
 from core.providers._openrouter_catalog import (
@@ -162,11 +164,9 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 **self._request_kwargs_with_defaults(kwargs),
             )
 
-        payload = build()
         response = await execute_learning_from_rejections(
-            lambda: self._post_responses_json(payload, request_headers=request_headers),
-            payload,
-            rebuild=build,
+            lambda request: self._post_responses_json(request, request_headers=request_headers),
+            self._request_plan(messages, model_id, build),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -205,12 +205,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 **self._request_kwargs_with_defaults(kwargs),
             )
 
-        payload = build()
         async with aclosing(
             stream_learning_from_rejections(
-                lambda: self._stream_responses(payload, request_headers=request_headers),
-                payload,
-                rebuild=build,
+                lambda request: self._stream_responses(request, request_headers=request_headers),
+                self._request_plan(messages, model_id, build),
                 wire=self.wire,
                 model_id=model_id,
                 provider_label=self._config.id,
@@ -369,18 +367,19 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
 
     async def _post_responses_json(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
     ) -> dict[str, Any]:
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
+            headers.update(request.headers)
             headers.update(request_headers)
             try:
                 response = await self._client.post(
                     OPENROUTER_RESPONSES_ENDPOINT,
-                    json=payload,
-                    headers=headers,
+                    content=request.body,
+                    headers=json_body_headers(headers),
                 )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
@@ -395,11 +394,11 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
 
     async def _stream_responses(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_responses_stream(payload, request_headers=request_headers)
+        response = await self._connect_responses_stream(request, request_headers=request_headers)
         state = ResponsesStreamState(lenient_unknown_errors=True)
         newline_state: dict[str, Any] = {}
         event_lines: list[str] = []
@@ -444,12 +443,13 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
 
     async def _connect_responses_stream(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
     ) -> httpx.Response:
         async def _build_headers() -> dict[str, str]:
             headers = await self._build_headers()
+            headers.update(request.headers)
             headers.update(request_headers)
             return headers
 
@@ -467,7 +467,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         return await connect_streaming_with_retry(
             self._client,
             OPENROUTER_RESPONSES_ENDPOINT,
-            payload,
+            request.body,
             build_headers=_build_headers,
             handle_error_status=_handle_error_status,
         )

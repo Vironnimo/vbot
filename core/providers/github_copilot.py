@@ -22,6 +22,7 @@ from core.providers._chat_completions_catalog import (
     _read_string,
 )
 from core.providers._http_shared import (
+    PreparedRequest,
     classify_http_status,
     connect_streaming_with_retry,
     format_http_error_detail,
@@ -167,11 +168,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             return self._build_copilot_messages_payload(messages, model_id, kwargs)
 
         endpoint = RESPONSES_ENDPOINT if protocol == "responses" else MESSAGES_ENDPOINT
-        payload = build()
         response = await execute_learning_from_rejections(
-            lambda: self._post_json(endpoint, payload, messages, request_headers),
-            payload,
-            rebuild=build,
+            lambda request: self._post_json(endpoint, request, request_headers),
+            self._request_plan(messages, model_id, build),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -208,15 +207,13 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 built["stream"] = True
                 return built
 
-            payload = build()
             open_stream = (
                 self._stream_responses if protocol == "responses" else self._stream_messages
             )
             async with aclosing(
                 stream_learning_from_rejections(
-                    lambda: open_stream(payload, messages, request_headers),
-                    payload,
-                    rebuild=build,
+                    lambda request: open_stream(request, request_headers),
+                    self._request_plan(messages, model_id, build),
                     wire=self.wire,
                     model_id=model_id,
                     provider_label=self._config.id,
@@ -407,13 +404,12 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         )
 
     @override
-    async def _build_request_headers(
+    def _payload_request_headers(
         self,
         messages: list[dict[str, Any]],
         payload: Mapping[str, Any],
     ) -> dict[str, str]:
-        headers = await super()._build_request_headers(messages, payload)
-        headers["x-initiator"] = _copilot_request_initiator(messages)
+        headers = {"x-initiator": _copilot_request_initiator(messages)}
         if _copilot_payload_images(payload):
             headers["Copilot-Vision-Request"] = "true"
         self._validate_media_limits(payload)
@@ -468,28 +464,27 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
 
     async def _attempt_headers(
         self,
-        messages: list[dict[str, Any]],
-        payload: Mapping[str, Any],
+        request: PreparedRequest,
         request_headers: Mapping[str, str],
     ) -> dict[str, str]:
-        """Rebuild one attempt's auth and request headers, then add the stable ones."""
+        """Rebuild one attempt's auth headers, then add the request's and the stable ones."""
 
-        headers = await self._build_request_headers(messages, payload)
+        headers = await self._build_headers()
+        headers.update(request.headers)
         headers.update(request_headers)
         return headers
 
     async def _post_json(
         self,
         endpoint_path: str,
-        payload: dict[str, Any],
-        messages: list[dict[str, Any]],
+        request: PreparedRequest,
         request_headers: Mapping[str, str],
     ) -> dict[str, Any]:
         return await post_json_with_retry(
             self._client,
             endpoint_path,
-            payload,
-            build_headers=lambda: self._attempt_headers(messages, payload, request_headers),
+            request.body,
+            build_headers=lambda: self._attempt_headers(request, request_headers),
             handle_error_status=self._handle_error_status,
             provider_context="GitHub Copilot provider",
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
@@ -498,28 +493,24 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     async def _connect_stream(
         self,
         endpoint_path: str,
-        payload: dict[str, Any],
-        messages: list[dict[str, Any]],
+        request: PreparedRequest,
         request_headers: Mapping[str, str],
     ) -> httpx.Response:
         return await connect_streaming_with_retry(
             self._client,
             endpoint_path,
-            payload,
-            build_headers=lambda: self._attempt_headers(messages, payload, request_headers),
+            request.body,
+            build_headers=lambda: self._attempt_headers(request, request_headers),
             handle_error_status=self._handle_error_status,
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
 
     async def _stream_responses(
         self,
-        payload: dict[str, Any],
-        messages: list[dict[str, Any]],
+        request: PreparedRequest,
         request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_stream(
-            RESPONSES_ENDPOINT, payload, messages, request_headers
-        )
+        response = await self._connect_stream(RESPONSES_ENDPOINT, request, request_headers)
         state = ResponsesStreamState()
         event_lines: list[str] = []
         seen_finish_delta = False
@@ -549,11 +540,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
 
     async def _stream_messages(
         self,
-        payload: dict[str, Any],
-        messages: list[dict[str, Any]],
+        request: PreparedRequest,
         request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_stream(MESSAGES_ENDPOINT, payload, messages, request_headers)
+        response = await self._connect_stream(MESSAGES_ENDPOINT, request, request_headers)
         state = CopilotMessagesStreamState()
         seen_finish_delta = False
         try:

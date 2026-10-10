@@ -29,6 +29,7 @@ from core.providers._codex_websocket import (
 )
 from core.providers._http_shared import (
     PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
+    PreparedRequest,
     connect_streaming_with_retry,
     format_http_error_detail,
     iter_stream_lines,
@@ -483,13 +484,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 **self._request_kwargs_with_defaults(kwargs),
             )
 
-        payload = build()
         response = await execute_learning_from_rejections(
-            lambda: self._post_json(
-                RESPONSES_POLICY_ENDPOINT, payload, request_headers=request_headers
+            lambda request: self._post_json(
+                RESPONSES_POLICY_ENDPOINT, request, request_headers=request_headers
             ),
-            payload,
-            rebuild=build,
+            self._request_plan(messages, model_id, build),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -553,11 +552,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 **self._request_kwargs_with_defaults(kwargs),
             )
 
-        payload = build()
-
-        async def stream_payload() -> AsyncGenerator[dict[str, Any]]:
+        async def stream_request(request: PreparedRequest) -> AsyncGenerator[dict[str, Any]]:
             response = await self._connect_stream(
-                RESPONSES_POLICY_ENDPOINT, payload, request_headers=request_headers
+                RESPONSES_POLICY_ENDPOINT, request, request_headers=request_headers
             )
             async with aclosing(
                 self._responses_sse_deltas(response, _responses_stream_state())
@@ -567,9 +564,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
         async with aclosing(
             stream_learning_from_rejections(
-                stream_payload,
-                payload,
-                rebuild=build,
+                stream_request,
+                self._request_plan(messages, model_id, build),
                 wire=self.wire,
                 model_id=model_id,
                 provider_label=self._config.id,
@@ -711,14 +707,12 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 **self._request_kwargs_with_defaults(request_kwargs),
             )
 
-        payload = build()
-
-        def open_stream() -> AsyncGenerator[dict[str, Any]]:
+        def open_stream(request: PreparedRequest) -> AsyncGenerator[dict[str, Any]]:
             state = _responses_stream_state()
             if states is not None:
                 states.append(state)
             return self._stream_responses(
-                payload,
+                request,
                 endpoint_path=CODEX_RESPONSES_ENDPOINT,
                 request_headers=request_headers,
                 cache_scope_id=cache_scope_id,
@@ -728,8 +722,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
         return stream_learning_from_rejections(
             open_stream,
-            payload,
-            rebuild=build,
+            self._request_plan(messages, model_id, build),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -776,16 +769,17 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     async def _post_json(
         self,
         endpoint_path: str,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
     ) -> dict[str, Any]:
+        headers = {**request.headers, **request_headers}
         return await post_json_with_retry(
             self._client,
             endpoint_path,
-            payload,
-            build_headers=lambda: self._attempt_headers(cache_scope_id, request_headers),
+            request.body,
+            build_headers=lambda: self._attempt_headers(cache_scope_id, headers),
             handle_error_status=self._handle_error_status,
             provider_context="OpenAI provider",
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
@@ -794,23 +788,24 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     async def _connect_stream(
         self,
         endpoint_path: str,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
     ) -> httpx.Response:
+        headers = {**request.headers, **request_headers}
         return await connect_streaming_with_retry(
             self._client,
             endpoint_path,
-            payload,
-            build_headers=lambda: self._attempt_headers(cache_scope_id, request_headers),
+            request.body,
+            build_headers=lambda: self._attempt_headers(cache_scope_id, headers),
             handle_error_status=self._handle_error_status,
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
 
     async def _stream_responses(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         endpoint_path: str,
         request_headers: Mapping[str, str],
@@ -827,7 +822,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         ):
             async with aclosing(
                 self._stream_codex_auto(
-                    payload,
+                    request,
                     request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
                     conversation_id=conversation_id,
@@ -839,7 +834,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return
         async with aclosing(
             self._stream_responses_sse(
-                payload,
+                request,
                 endpoint_path=endpoint_path,
                 request_headers=request_headers,
                 cache_scope_id=cache_scope_id,
@@ -851,7 +846,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
     async def _stream_responses_sse(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         endpoint_path: str,
         request_headers: Mapping[str, str],
@@ -860,7 +855,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_stream(
             endpoint_path,
-            payload,
+            request,
             request_headers=request_headers,
             cache_scope_id=cache_scope_id,
         )
@@ -903,7 +898,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
     async def _stream_codex_auto(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         *,
         request_headers: Mapping[str, str],
         cache_scope_id: str,
@@ -914,8 +909,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         account_id = websocket_headers["chatgpt-account-id"]
         # The socket sends its handshake headers once; the request's stable
         # headers ride on that handshake like on an SSE request.
+        websocket_headers.update(request.headers)
         websocket_headers.update(request_headers)
-        model_id = payload.get("model")
+        model_id = request.payload.get("model")
         if not isinstance(model_id, str) or not model_id:
             raise ProviderError("Codex WebSocket request is missing a model", retryable=False)
         # The provider-visible headers share cache locality across compatible
@@ -925,7 +921,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         if route in self._codex_websocket_disabled_routes:
             async with aclosing(
                 self._stream_responses_sse(
-                    payload,
+                    request,
                     endpoint_path=CODEX_RESPONSES_ENDPOINT,
                     request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
@@ -939,7 +935,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         try:
             async with aclosing(
                 self._codex_socket.stream(
-                    payload,
+                    request.payload,
                     headers=websocket_headers,
                     route=route,
                     state=state,
@@ -951,9 +947,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             self._codex_websocket_disabled_routes.add(route)
             if exc.events_received:
                 raise
+            # No event arrived, so no delta was yielded and the prepared body
+            # is still held for this fallback.
             async with aclosing(
                 self._stream_responses_sse(
-                    payload,
+                    request,
                     endpoint_path=CODEX_RESPONSES_ENDPOINT,
                     request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
