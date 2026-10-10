@@ -51,7 +51,10 @@ MESSAGE_TOKEN_ESTIMATE_FIELDS = (
 NATIVE_MEDIA_TOKEN_RESERVE = 4096
 
 # Cache only digests and scalar results, never transcripts, base64 or pixels.
-_COUNT_CACHE_SIZE = 4096
+# A Run start counts every item of its request again; a long Session's request
+# has ~2,800 items, so 4096 entries thrashed as soon as two such Sessions took
+# turns. 65536 entries hold about twenty of them at ~185 bytes each (12 MB).
+_COUNT_CACHE_SIZE = 65536
 _IMAGE_CACHE_SIZE = 256
 _IMAGE_HEADER_BYTES = 256 * 1024
 _COUNT_CACHE: OrderedDict[bytes, int] = OrderedDict()
