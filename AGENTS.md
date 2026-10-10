@@ -31,9 +31,9 @@ Runtime Agent-facing text includes System Prompt blocks, Tool descriptions, Skil
 
 Use vBot's established terms as defined in the glossary and domain maps: Tools, Run, Session, Queue, Skill, Provider, and so on. Keep these terms untranslated.
 
-## Agent-facing text quality
+## Agent-facing work
 
-Runtime Agent-facing text must be self-contained for a fresh Agent that has not read project documentation. Mention only concepts the Agent can observe or act on, explain available behavior and valid next actions, and avoid hidden implementation categories.
+Before writing or reviewing runtime Agent-facing text, load the matching Skill and follow it: `vbot-agent-tools` for Tools (definitions, results, errors, argument tolerance), `vbot-agent-text` for System Prompt blocks, System Reminders and prompts for other Model jobs, `vbot-agent-eval` to test such a change with real Models.
 
 ## Architecture & code
 

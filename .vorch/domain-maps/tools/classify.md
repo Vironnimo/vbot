@@ -18,7 +18,7 @@ It never infers a missing type, never matches type typos, and never shifts score
 
 The Tool is registered consistently but only exposed when the Decision binding is usable through the implemented OpenRouter wire; dispatch checks readiness before reading arguments, so the `tool_lab` probe (no Decision model) reaches only the readiness hint. Tool Access Policy applies. The display summary counts the items after argument reading. No Skill is needed for this self-contained operation.
 
-Tests: `tests/core/tools/test_classify.py` (registry dispatch: item preservation, context per item, readiness, Usage attribution, result lines, partial failure, other argument shapes, refusals) and the executor tests listed in the canonical map. They verify execution contracts, not independent Model Tool choice; black-box evidence follows the `tool-review` Skill.
+Tests: `tests/core/tools/test_classify.py` (registry dispatch: item preservation, context per item, readiness, Usage attribution, result lines, partial failure, other argument shapes, refusals) and the executor tests listed in the canonical map. They verify execution contracts, not independent Model Tool choice; black-box evidence comes from the `vbot-agent-eval` Skill.
 
 ## Agent-facing text
 

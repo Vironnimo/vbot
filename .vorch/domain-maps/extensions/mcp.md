@@ -123,7 +123,7 @@ Management operation descriptions state each action and its continuation or revi
 
 ## Agent-facing text
 
-Rows cover the sentences of the guidance block, the connection Tool's description, its change note, parameter descriptions and error advice changed since 2026-09-28; the older wording has no recorded reasons yet. Tests assert every message verbatim as the Model reads it.
+Rows cover the sentences of the guidance block, the connection Tool's description, its change note, parameter descriptions and error advice changed since 2026-09-28; the older wording has no recorded reasons yet. Failure modes F1-F6: `tools.md` -> Terms. Tests assert every message verbatim as the Model reads it.
 
 | Text | Reason |
 |---|---|

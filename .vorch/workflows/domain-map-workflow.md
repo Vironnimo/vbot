@@ -181,6 +181,10 @@ Use this as a starting point. Remove every section that does not apply.
 
 [Non-obvious behavior, limitations, fragile areas, previous bugs, security/performance traps, and things that look safe to change but are not.]
 
+## Agent-facing text
+
+[Only if the domain owns runtime Agent-facing text: Tool descriptions and parameter texts, guidance blocks, System Reminders, prompts for Model jobs. A `| Text | Reason |` table with one row per sentence: the sentence or its unmistakable start, and the failure it prevents with its evidence where known (failure modes F1-F6: `tools.md` -> Terms). Add or update the row whenever a sentence is added or changed.]
+
 ## References
 
 [Only if the domain has supplementary files. One trigger line per file - when to read it, not just its title.]
