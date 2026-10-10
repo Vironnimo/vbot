@@ -380,6 +380,11 @@ def test_a_pass_a_bound_cut_short_names_its_reason_and_the_files_kept(
         ({"pattern": "absent"}, "build/, src/cache/"),
         ({"glob": "*.log"}, "build/, src/cache/"),
         ({"args": ["--dirs"]}, "build/, src/cache/"),
+        # File types select files after ignore files, so they leave the same paths out.
+        ({"args": ["-t", "py", "--files"]}, "build/, src/cache/"),
+        ({"pattern": "absent", "args": ["-t", "py"]}, "build/, src/cache/"),
+        # Every file matches, so no file lacks a match.
+        ({"pattern": ".", "args": ["--files-without-match"]}, "build/, src/cache/"),
         # Matches answer the question; -u and an explicit exclusion leave nothing to name.
         ({"pattern": "needle"}, None),
         ({"pattern": "absent", "args": ["-u"]}, None),

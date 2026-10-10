@@ -204,8 +204,22 @@ A content search runs in two phases:
 2. For line output, a `--json --max-count N` pass runs over only the page's files,
    given as explicit paths in batches of at most 28,000 command-line bytes.
 
-Listings use `--files --null`. ripgrep lists no directories, so `--dirs` runs
-`--files --debug` with only the excluding globs and collects the paths ripgrep's
+Neither phase runs with `--debug`: its skip reports name every file a glob or
+file type leaves out, which made such searches three times slower (probe on this
+repository, 2026-10: a content search with a glob or `-t py` took 300-360 ms
+with it and 85-125 ms without). Only a result without entries names the paths
+ignore files excluded (`skipped`, below); it takes them from the name listing
+that follows a search without matches, otherwise from one more
+`--files --debug` walk (`ignored_scan`).
+
+Listings use `--files --null --debug`, which reports the paths ignore files
+excluded in the same walk. With `-t` or `-T` they run without `--debug` and
+`ignored_scan` walks again without the type filters: ripgrep applies types
+after ignore files and never to directories, so that walk skips the same paths
+without reporting every file of another type.
+
+ripgrep lists no directories, so `--dirs` runs `--files --debug` with only the
+excluding globs and collects the paths ripgrep's
 walker reports as skipped (`ignoring <path>: Ignore(...)`, captured by
 `native_lines`; file type lines are dropped because types skip files only). The
 owner then walks the directories without those paths (`_walk_directories`), so
@@ -280,7 +294,8 @@ A successful result has these fields:
 - `skipped`: present when nothing was found or the call lists entries, and ignore
   files (`.gitignore`, `.ignore`, `.rgignore`) excluded paths in the walk. It names
   the five shallowest, counts the rest and points to `-u`. ripgrep's `--debug`
-  walk lines of kind `Gitignore` supply them (`NativeOutcome.ignored`); hidden-file,
+  walk lines of kind `Gitignore` supply them (`NativeOutcome.ignored`, from the
+  listing or `ignored_scan` walk described under Engine Contract); hidden-file,
   glob and type exclusions are what the call asked for and are not named. Agents
   checked correct empty and listed results with shell listings such as
   `Get-ChildItem -Recurse -Force` (first-use probe, 2026-10: every `search_dirs`

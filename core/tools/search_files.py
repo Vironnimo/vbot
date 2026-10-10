@@ -29,6 +29,7 @@ from core.tools._search_execution import (
     SearchRefusedError,
     count_scan,
     explain_failure,
+    ignored_scan,
     line_events,
     list_scan,
     match_names,
@@ -876,8 +877,12 @@ def _names_matching(
     cwd: Path,
     binary: Path,
     budget: SearchBudget,
-) -> list[Entry]:
-    """Return the searched files whose name or shown path the patterns match."""
+) -> tuple[list[Entry], list[Path]]:
+    """Return the searched files whose name or shown path the patterns match.
+
+    The second value names the paths ignore files excluded from the listing,
+    which are the ones they excluded from the search.
+    """
     listed = _Found()
     for index, scope in enumerate(scopes):
         listed.take(index, scope, list_scan(binary, query, scope, context, budget, cwd), cwd)
@@ -887,10 +892,11 @@ def _names_matching(
     try:
         matched = match_names(binary, query, patterns, names, context, budget)
     except SearchRefusedError:
-        return []
-    return [
+        return [], listed.ignored
+    named = [
         entry for entry in listed.entries if entry.label in matched or entry.path.name in matched
     ]
+    return named, listed.ignored
 
 
 def _search(
@@ -944,7 +950,9 @@ def _search(
         and not budget.stopped
     ):
         # No content matches, so a pattern that matches file names was meant for them.
-        named = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
+        named, found.ignored = _names_matching(
+            context, query, scopes, patterns, cwd, binary, budget
+        )
         if named:
             query.mode = "list_files"
             query.notes.append(
@@ -952,6 +960,10 @@ def _search(
             )
             found.entries = named
             return _Outcome(entry_page(named, query), found, len(named), len(named), patterns)
+    elif not found.entries:
+        # Only a result without entries names the paths ignore files excluded.
+        for scope in scopes:
+            found.ignored.extend(ignored_scan(binary, query, scope, context, budget))
     if query.mode != "content":
         page = entry_page(found.entries, query)
         return _Outcome(page, found, len(found.entries), lines_total, patterns)
