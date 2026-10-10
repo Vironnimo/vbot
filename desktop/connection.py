@@ -73,8 +73,12 @@ OPEN_AGENT_QUERY_PARAM = "open_agent"
 OPEN_SESSION_QUERY_PARAM = "open_session"
 LAUNCH_WAIT_SECONDS = 60.0
 """How long the launch connect keeps trying a server that is unreachable."""
-LAUNCH_RETRY_SECONDS = 1.0
-"""How often a waiting launch connect starts another attempt."""
+LAUNCH_RETRY_SECONDS = 0.25
+"""How often a waiting launch connect starts another attempt.
+
+A loopback attempt fails within 0.2 s (``LOOPBACK_CONNECT_TIMEOUT_SECONDS``), so a
+short interval lets the window connect soon after a starting server answers.
+"""
 # close() waits this long for a waiting launch connect to stop. It never touches
 # the window once ended, so a longer probe in flight may finish on its own.
 _LAUNCH_CLOSE_JOIN_SECONDS = 1.0

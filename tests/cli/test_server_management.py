@@ -102,17 +102,17 @@ def record_server(monkeypatch: pytest.MonkeyPatch, *, recorded: bool = True) -> 
 
 def script_busy_listener(
     monkeypatch: pytest.MonkeyPatch, instance: ServerInstance, *patient: httpx.Response | None
-) -> list[float]:
+) -> list[httpx.Timeout | float]:
     """Time out the quick health probe of a listening server, then answer the patient probe.
 
     Each ``patient`` entry answers the next longer probe; ``None`` times it out too.
     Returns the timeout of every health request made.
     """
 
-    timeouts: list[float] = []
+    timeouts: list[httpx.Timeout | float] = []
     later = iter(patient)
 
-    def get(url: str, *, timeout: float, **_kwargs: Any) -> httpx.Response:
+    def get(url: str, *, timeout: httpx.Timeout | float, **_kwargs: Any) -> httpx.Response:
         timeouts.append(timeout)
         answer = next(later) if len(timeouts) > 1 else None
         if answer is None:
