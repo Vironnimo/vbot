@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -190,7 +191,10 @@ def test_reload_rebuilds_the_extension_layer_like_a_restart(config: Config, tmp_
 
 
 def test_removed_extensions_leave_their_owner_managed_sessions_archived(
-    config: Config, tmp_path: Path
+    config: Config,
+    tmp_path: Path,
+    deny_access: Callable[[Path], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data_dir = config.data_dir
     extra = tmp_path / "extra"
@@ -219,6 +223,16 @@ def test_removed_extensions_leave_their_owner_managed_sessions_archived(
 
         asyncio.run(runtime.fire_extension_startup())
         # Every installed owner keeps its Sessions, a disabled one included.
+        assert owners() == ["helper", "resting"]
+
+        # A listed Extension whose file cannot be checked is still installed.
+        deny_access(helper)
+        asyncio.run(runtime.reload_extensions())
+        assert extension_record(runtime, "helper").status == "failed"
+        assert owners() == ["helper", "resting"]
+        monkeypatch.undo()
+        asyncio.run(runtime.reload_extensions())
+        assert extension_record(runtime, "helper").status == "loaded"
         assert owners() == ["helper", "resting"]
 
         helper.unlink()
