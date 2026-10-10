@@ -18,7 +18,11 @@ import pytest
 
 import core.tools.shell as shell_module
 from core.storage.temp_files import TemporaryFileManager
-from core.tools._powershell import POWERSHELL_ERROR_NOTE, powershell_command
+from core.tools._powershell import (
+    NULL_DEVICE_STATEMENTS,
+    POWERSHELL_ERROR_NOTE,
+    powershell_command,
+)
 from core.tools.shell import SHELL_TOOL_NAME, register_shell_tool
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry
@@ -326,6 +330,26 @@ async def test_bash_null_device_discards_and_reaches_native_programs_as_nul(
     assert {path.name for path in tmp_path.iterdir()} - {"temp"} == {"dev", "msys"}
     assert not any((tmp_path / "dev").iterdir())
     assert {path.name for path in msys.iterdir()} == {"msys-2.0.dll", "show.cmd"}
+
+
+@pytest.mark.parametrize(
+    ("command", "rewritten"),
+    [
+        ("python --version", False),
+        ("Get-ChildItem -Force | Select-Object -First 3 Name", False),
+        ("python x 2>/dev/NULL", True),
+        # PowerShell reads these strings as /dev/null without the letters in the text.
+        ("python x /dev/nu`ll", True),
+        ('python x "/dev/`u{6e}ull"', True),
+        ("python x /dev/nu\x01ll", True),
+        ("python x /dev/nul­l", True),
+    ],
+    ids=["native", "cmdlets", "letters", "escape", "unicode-escape", "control", "soft-hyphen"],
+)
+def test_only_commands_that_can_spell_the_null_device_carry_its_rewrite(
+    command: str, rewritten: bool
+) -> None:
+    assert (NULL_DEVICE_STATEMENTS in powershell_command(command)) is rewritten
 
 
 @pytest.mark.asyncio

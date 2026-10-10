@@ -34,6 +34,7 @@ command runs, to an application. Programs built on MSYS2 or Cygwin (with
 themselves and would create a file named NUL. So do shells and launchers that
 hand their arguments to Linux: bash, sh, wsl, ssh, docker, podman and kubectl.
 A cmdlet's argument, such as ``Out-File /dev/null``, keeps its PowerShell meaning.
+The rewrite runs only for commands whose text can spell /dev/null.
 
 Unix line filters. Agents habitually pipe into ``head``, ``tail`` and ``wc -l``,
 which PowerShell lacks. When such a command is genuinely missing, a
@@ -151,23 +152,12 @@ SETUP_STATEMENT = "; ".join(
         ERROR_RECORD_BASELINE_STATEMENT,
     )
 )
-# Parse the command after the setup; a syntax error is thrown as PowerShell reports
-# its own. A redirection to /dev/null becomes one to $null and a native program's
-# /dev/null argument becomes NUL, each padded to the same length, so every offset,
-# line and column stays as written and the syntax tree keeps describing the text
-# that runs. An error record's position names the command that wrote it, so the
-# command's syntax tree shows whether that command silenced it; a record without
-# such a command, such as a caught throw, stays reportable. The exit status runs at
-# the end of the last block: the unnamed body, a named end block, or an end block
-# added after begin or process blocks.
-RUN_STATEMENTS = r"""
-$__vbotParseErrors = $null
-$__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
-    $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
-if ($__vbotParseErrors) {
-    throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
-}
-$__vbotCommand = & {
+# A redirection to /dev/null becomes one to $null and a native program's /dev/null
+# argument becomes NUL, each padded to the same length, so every offset, line and
+# column stays as written and the syntax tree keeps describing the text that runs.
+# The walk costs about 20 ms of every call, so it runs only when the command can
+# spell /dev/null (_may_spell_null_device); it changes nothing else.
+NULL_DEVICE_STATEMENTS = r"""$__vbotCommand = & {
     $text = [System.Text.StringBuilder]::new($__vbotCommand)
     $put = {
         param($start, $end, $value)
@@ -220,7 +210,23 @@ $__vbotCommand = & {
     }
     $text.ToString()
 }
-$__vbotSilenced = {
+"""
+NULL_DEVICE_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", NULL_DEVICE_STATEMENTS)
+# Parse the command after the setup; a syntax error is thrown as PowerShell reports
+# its own. The /dev/null rewrite follows when the command can spell /dev/null. An
+# error record's position names the command that wrote it, so the command's syntax
+# tree shows whether that command silenced it; a record without such a command,
+# such as a caught throw, stays reportable. The exit status runs at the end of the
+# last block: the unnamed body, a named end block, or an end block added after
+# begin or process blocks.
+RUN_STATEMENTS = r"""
+$__vbotParseErrors = $null
+$__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
+    $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
+if ($__vbotParseErrors) {
+    throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
+}
+{null_device}$__vbotSilenced = {
     param($record)
     if ($ErrorActionPreference -in 'SilentlyContinue', 'Ignore') { return $true }
     if ($record -isnot [System.Management.Automation.ErrorRecord]) { return $false }
@@ -289,15 +295,31 @@ RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS)
 # the command's errors. Dot-sourcing the function keeps the command's own scope.
 INVOKE_STATEMENT = "function __vbotInvoke { . ([scriptblock]::Create($__vbotCommand)) }"
 _QUOTE = re.compile("(['‘’‚‛])")
+# Printable ASCII and whitespace: text PowerShell compares letter by letter.
+_PLAIN_ASCII = re.compile(r"[\t\n\v\f\r -~]*")
 
 
 def powershell_command(command: str) -> str:
     """Return the ``pwsh -Command`` text that sets up the console and runs *command*."""
-    run = RUN_STATEMENTS.replace("{note}", _escaped(POWERSHELL_ERROR_NOTE)).replace(
-        "{exit_status}", _escaped(EXIT_STATUS_STATEMENT)
+    null_device = NULL_DEVICE_STATEMENTS if _may_spell_null_device(command) else ""
+    run = (
+        RUN_STATEMENTS.replace("{null_device}", null_device)
+        .replace("{note}", _escaped(POWERSHELL_ERROR_NOTE))
+        .replace("{exit_status}", _escaped(EXIT_STATUS_STATEMENT))
     )
     literal = _escaped(command)
     return f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n$__vbotCommand = '{literal}'{run}"
+
+
+def _may_spell_null_device(command: str) -> bool:
+    """Return whether a string in *command* can have the value /dev/null or \\dev\\null.
+
+    Without the letters themselves, a backtick escape (``nu`ll``, ``"`u{6c}"``)
+    spells them, and PowerShell's culture-aware comparison takes non-ASCII text
+    and ASCII control characters other than whitespace for ignorable characters
+    or other spellings: it reads ``nu<U+00AD>ll`` and ``nu<U+0001>ll`` as ``null``.
+    """
+    return "`" in command or not _PLAIN_ASCII.fullmatch(command) or "null" in command.lower()
 
 
 def powershell_literal(text: str) -> str:
@@ -313,6 +335,7 @@ def _escaped(text: str) -> str:
 
 __all__ = [
     "EXIT_STATUS_STATEMENT",
+    "NULL_DEVICE_STATEMENTS",
     "POWERSHELL_ERROR_NOTE",
     "SETUP_STATEMENT",
     "UNIX_LINE_FILTERS_STATEMENT",
