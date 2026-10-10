@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, call
 
+import httpx
 import pytest
 import telegram
 import telegram.error
@@ -24,6 +25,7 @@ import core.channels._telegram_api as telegram_api
 import core.channels.telegram as telegram_module
 from core.channels import ChannelConfigError, ChannelError
 from core.channels.telegram import TelegramChannelAdapter
+from core.utils.tls import shared_ssl_context
 
 from .engine_test_support import (
     QUEUE_DRAIN_TIMEOUT_SECONDS,
@@ -123,6 +125,7 @@ class _RecordingBuilder:
         self._application = application
         self.received_token: str | None = None
         self.received_rate_limiter: Any = None
+        self.received_request: Any = None
         self.received_get_updates_request: Any = None
 
     def token(self, token: str) -> _RecordingBuilder:
@@ -133,6 +136,11 @@ class _RecordingBuilder:
     def rate_limiter(self, rate_limiter: Any) -> _RecordingBuilder:
         self._real.rate_limiter(rate_limiter)
         self.received_rate_limiter = rate_limiter
+        return self
+
+    def request(self, request: Any) -> _RecordingBuilder:
+        self._real.request(request)
+        self.received_request = request
         return self
 
     def get_updates_request(self, request: Any) -> _RecordingBuilder:
@@ -250,6 +258,14 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
     )
     application = _FakeApplication(bot, _IDENTITY)
     builder, rate_limiter_options = _install_ptb(monkeypatch, application)
+    verifying: list[Any] = []
+    real_client = httpx.AsyncClient
+
+    def recording_client(**options: Any) -> httpx.AsyncClient:
+        verifying.append(options.get("verify"))
+        return real_client(**options)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording_client)
 
     polling = await _start(adapter, application)
     # Telegram redelivers unconfirmed updates after a restart: the stored
@@ -290,6 +306,12 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
     assert builder.received_token == "runtime-token"
     assert isinstance(builder.received_rate_limiter, telegram_ext.AIORateLimiter)
     assert rate_limiter_options == [{"max_retries": 3}]
+    # The bot's and the getUpdates requests verify with the shared TLS context; a
+    # default client would parse the CA bundle again for each.
+    assert isinstance(builder.received_request, telegram.request.HTTPXRequest)
+    assert isinstance(builder.received_get_updates_request, telegram.request.HTTPXRequest)
+    assert len(verifying) == 2
+    assert all(verify is shared_ssl_context() for verify in verifying)
     assert application.events == [
         "initialize",
         "bot.get_me",

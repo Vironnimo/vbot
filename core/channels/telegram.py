@@ -33,6 +33,7 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
 from ._telegram_api import (
+    _bot_request,
     _load_telegram_ext,
     _markup_to_buttons,
     _observed_polling_request,
@@ -198,10 +199,12 @@ class TelegramChannelAdapter(ChannelAdapter):
         # trip flood control, and retries a send Telegram answers with RetryAfter. Without
         # it a rate-limit error mid-reply loses the remaining chunks.
         rate_limiter = telegram_ext.AIORateLimiter(max_retries=_SEND_MAX_RETRIES)
+        # Both requests verify with the shared TLS context (``_telegram_api._tls_kwargs``).
         return (
             telegram_ext.Application.builder()
             .token(self._token)
             .rate_limiter(rate_limiter)
+            .request(_bot_request())
             .get_updates_request(
                 _observed_polling_request(polling_health.answered, polling_health.timed_out)
             )
