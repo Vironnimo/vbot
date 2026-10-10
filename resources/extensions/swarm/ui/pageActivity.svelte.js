@@ -9,6 +9,7 @@ import {
 import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
 import { formatTokenUsageTooltip } from '../../../../webui/src/lib/tokenUsageTooltip.js';
 import { SvelteSet } from 'svelte/reactivity';
+import { untrack } from 'svelte';
 
 export function createSwarmPageActivity(host) {
   let history = $state(null);
@@ -22,6 +23,10 @@ export function createSwarmPageActivity(host) {
   const settledRuns = new SvelteSet();
   let flushTimer = null;
   let pendingEvents = [];
+  // Activity reads History and follows its participant's Run only while its
+  // tab shows. A hidden Activity keeps what it shows and catches up once when
+  // the tab shows again.
+  let paused = false;
 
   function flushEvents() {
     clearTimeout(flushTimer);
@@ -31,20 +36,25 @@ export function createSwarmPageActivity(host) {
     for (const event of events) appendRunEvent(projection, event);
   }
 
-  function clearProjection() {
+  // Drops the live projection of the followed Run, keeping loaded History.
+  function clearLiveRun() {
     clearTimeout(flushTimer);
     flushTimer = null;
     pendingEvents = [];
-    projection.messages = [];
-    projection.historyRuns = {};
-    projection.historyGeneration = null;
-    projection.historyAfter = '';
     projection.runEvents = [];
     projection.streamingRunEvents = [];
     projection.streamingPhase = 0;
     projection.seenStreamingEventKeys = new SvelteSet();
     projection.currentRun = null;
     projection.status = 'idle';
+  }
+
+  function clearProjection() {
+    clearLiveRun();
+    projection.messages = [];
+    projection.historyRuns = {};
+    projection.historyGeneration = null;
+    projection.historyAfter = '';
   }
 
   function adoptHistory(data) {
@@ -90,8 +100,46 @@ export function createSwarmPageActivity(host) {
     reasoningOpen = {};
     inspectedParticipant = null;
     inspectionRequest = null;
+    paused = false;
     settledRuns.clear();
   }
+
+  // Stops reading and following the inspected participant's Run while the
+  // tab is hidden; reads in flight are dropped.
+  function pause() {
+    if (paused || inspectedParticipant === null) return;
+    paused = true;
+    if (flushTimer !== null) flushEvents();
+    else pendingEvents = [];
+    activityRequest += 1;
+    historyRequest += 1;
+    historyLoading = false;
+    inspectionRequest = null;
+    currentSubscription?.();
+    currentSubscription = null;
+  }
+
+  // Catches up once with the participant's current snapshot: newer History,
+  // and its Run if it is still active.
+  function resume() {
+    if (!paused) return;
+    paused = false;
+    const participant =
+      host.model.selectedSwarm?.participants?.find(
+        (item) => item.id === inspectedParticipant?.id,
+      ) ?? inspectedParticipant;
+    if (participant)
+      void inspectParticipant(participant, {
+        activate: false,
+        preserve: true,
+        catchUp: true,
+      });
+  }
+
+  $effect(() => {
+    if (host.model.activeTab === 'participants') untrack(resume);
+    else untrack(pause);
+  });
 
   const activityTimeline = $derived(
     history ? visibleTimelineItemsForRender(projection) : [],
@@ -300,15 +348,21 @@ export function createSwarmPageActivity(host) {
     }
   }
 
+  // `preserve` keeps the shown History and the followed Run while the
+  // participant's Run identity and active state are unchanged; `catchUp`
+  // reconciles a resumed Activity even then.
   async function inspectParticipant(
     participant,
-    { activate = true, preserve = false } = {},
+    { activate = true, preserve = false, catchUp = false } = {},
   ) {
     if (!host.model.selectedSwarm) return;
     if (activate) host.model.openTab('participants');
+    // A hidden Activity catches up when its tab shows again.
+    else if (paused) return;
     if (settledRuns.has(participant.lifecycle_run_id))
       participant = { ...participant, run_active: false };
     if (
+      !catchUp &&
       preserve &&
       inspectedParticipant?.id === participant.id &&
       inspectedParticipant.lifecycle_run_id === participant.lifecycle_run_id &&
@@ -329,6 +383,15 @@ export function createSwarmPageActivity(host) {
       activityRequest += 1;
       currentSubscription?.();
       currentSubscription = null;
+      // A followed Run that ended or was replaced while the tab was hidden
+      // left a live projection that missed its end; History holds that Run.
+      if (
+        catchUp &&
+        projection.status === 'running' &&
+        (projection.currentRun?.runId !== participant.lifecycle_run_id ||
+          participant.run_active === false)
+      )
+        clearLiveRun();
     } else leaveActivity();
     inspectedParticipant = participant;
     const request = activityRequest;

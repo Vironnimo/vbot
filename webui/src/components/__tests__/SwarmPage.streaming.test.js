@@ -304,4 +304,64 @@ describe('Swarm Run subscriptions across refreshes', () => {
     await vi.waitFor(() => expect(historyText()).toContain('New live output'));
     expect(historyText()).not.toContain('Stale output');
   });
+
+  it('follows the Run only while Activity shows and catches up once when it shows again', async () => {
+    const { bridge, operation } = createBridge();
+    let detail = swarmWithRun('run-first');
+    overrideOperations(operation, { 'swarms.get': () => ({ swarm: detail }) });
+    bridge.readHistory.mockResolvedValue({ messages: [] });
+    bridge.subscribeRun.mockImplementation(async (_group, run) => ({
+      replay_through_sequence: 0,
+      subscription_id: run,
+    }));
+    const showTab = (label) =>
+      [...document.querySelectorAll('[role="tab"]')]
+        .find((tab) => tab.textContent.includes(label))
+        .click();
+    await openParticipant(bridge);
+    await vi.waitFor(() =>
+      expect(bridge.subscribeRun).toHaveBeenCalledTimes(1),
+    );
+    bridge.emitRun('run-first', delta('run-first', 1, 'Live before hiding'));
+    await vi.waitFor(() =>
+      expect(historyText()).toContain('Live before hiding'),
+    );
+
+    showTab(t('swarm.tabs.board'));
+    await vi.waitFor(() =>
+      expect(bridge.unsubscribeRun).toHaveBeenCalledWith('run-first'),
+    );
+    // The Run settles while Activity is hidden.
+    detail = swarmWithRun('run-first', { run_active: false });
+    bridge.readHistory.mockResolvedValue({
+      status: 'completed',
+      messages: [
+        message('final', 'assistant', 'Live before hiding, then done.'),
+      ],
+    });
+    await refreshSwarm(bridge, operation, 3);
+    await settle();
+    expect(bridge.readHistory).toHaveBeenCalledTimes(1);
+    showTab(t('swarm.tabs.activity'));
+    await vi.waitFor(() => expect(historyText()).toContain('then done.'));
+    expect(historyText().split('Live before hiding')).toHaveLength(2);
+    await settle();
+    expect(bridge.readHistory).toHaveBeenCalledTimes(2);
+    expect(bridge.subscribeRun).toHaveBeenCalledTimes(1);
+
+    // A Run that started while Activity was hidden is followed once it shows.
+    showTab(t('swarm.tabs.board'));
+    detail = swarmWithRun('run-second');
+    await refreshSwarm(bridge, operation);
+    await settle();
+    expect(bridge.subscribeRun).toHaveBeenCalledTimes(1);
+    showTab(t('swarm.tabs.activity'));
+    await vi.waitFor(() =>
+      expect(bridge.subscribeRun).toHaveBeenLastCalledWith(
+        'swr-a',
+        'run-second',
+      ),
+    );
+    expect(bridge.readHistory).toHaveBeenCalledTimes(3);
+  });
 });
