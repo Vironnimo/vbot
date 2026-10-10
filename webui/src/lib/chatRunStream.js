@@ -621,7 +621,13 @@ export function createChatRunStream({
         ) {
           return;
         }
-        if (reconciled) {
+        // A newer History read can restore this stream while the older
+        // recovery is pending. Its discarded response must neither strand a
+        // closed stream nor schedule a duplicate recovery of a restored one.
+        const streamRestored =
+          sessionState.currentRun?.runId === expectedRunId &&
+          Boolean(activeSubscriptions[sessionKey]);
+        if (reconciled || streamRestored) {
           clearPendingRecoveryRetry(reconciliationKey);
           if (sessionState.historyRuns?.[expectedRunId]?.complete) {
             delete orderedRunEventBuffers[reconciliationKey];

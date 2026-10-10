@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createChatController } from '../chatState.js';
+import { deferred } from './chatState.support.js';
 
 import {
   DISPLAYED_AGENT_ID,
@@ -237,6 +239,76 @@ describe('SSE reconnect and stall recovery', () => {
       RUN_ID,
     );
   });
+
+  it.each(['failed', 'running', 'completed'])(
+    'settles an older recovery from the newer %s History outcome',
+    async (newerOutcome) => {
+      let controller;
+      const { harness, subscriptions, sessionState } = setupRunningStream({
+        reconcileRunSession: (...args) =>
+          controller.reconcileRunSession(...args),
+      });
+      const older = deferred();
+      const completed = newerOutcome === 'completed';
+      const currentHistory = {
+        messages: [],
+        next_after: 'current',
+        incremental: true,
+        active_run: completed ? null : activeRun(RUN_ID),
+        runs: completed ? [{ run_id: RUN_ID, complete: true }] : [],
+      };
+      const loadChatHistory = vi.fn().mockReturnValueOnce(older.promise);
+      if (newerOutcome === 'failed') {
+        loadChatHistory.mockRejectedValueOnce(new Error('temporary outage'));
+      } else {
+        loadChatHistory.mockResolvedValueOnce(currentHistory);
+      }
+      loadChatHistory.mockResolvedValue(currentHistory);
+      sessionState.historyAfter = 'previous';
+      controller = createChatController({
+        chatState: harness.chatState,
+        runStream: harness.stream,
+        isDisplayedSession: () => true,
+        operations: {
+          loadChatHistory,
+          listQueue: vi.fn().mockResolvedValue({ items: [] }),
+        },
+      });
+
+      try {
+        for (const delay of [500, 1_000, 2_000]) {
+          subscriptions.at(-1).handlers.onError(new Error('drop'));
+          vi.advanceTimersByTime(delay);
+        }
+        subscriptions.at(-1).handlers.onError(new Error('drop'));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(loadChatHistory).toHaveBeenCalledOnce();
+
+        await controller.loadHistoryForSession(
+          DISPLAYED_AGENT_ID,
+          DISPLAYED_SESSION_ID,
+        );
+        older.resolve({
+          ...currentHistory,
+          messages: [{ id: 'stale', role: 'assistant', content: 'obsolete' }],
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        expect(loadChatHistory).toHaveBeenCalledTimes(
+          newerOutcome === 'failed' ? 3 : 2,
+        );
+        expect(subscriptions).toHaveLength(completed ? 4 : 5);
+        expect(sessionState.messages).toEqual([]);
+        if (!completed) {
+          expect(subscriptions.at(-1).close).not.toHaveBeenCalled();
+          expect(sessionState.streamError).toBe('');
+        }
+      } finally {
+        controller.destroy();
+      }
+    },
+  );
 
   it.each([
     { name: 'keeps retrying', closed: false, calls: 2 },

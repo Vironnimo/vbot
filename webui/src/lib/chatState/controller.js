@@ -477,10 +477,10 @@ export function createChatController({
         !isLatestRequest() ||
         sessionState.historySnapshotVersion !== request.snapshotVersion
       ) {
-        return (
-          sessionState.currentRun?.runId === expectedRunId ||
-          sessionState.historyRuns?.[expectedRunId]?.complete === true
-        );
+        // Keeping the same Run id does not prove the newer read succeeded:
+        // it may have failed while this recovery's stream was already closed.
+        // The stream owner can independently recognize a restored subscription.
+        return sessionState.historyRuns?.[expectedRunId]?.complete === true;
       }
 
       const successor = sessionState.currentRun?.runId !== expectedRunId;
