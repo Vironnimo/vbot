@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy, tick, untrack } from 'svelte';
-  import { inspectSkill, skillInventory } from '$lib/api.js';
+  import { inspectSkill, skillInventory, skillUsage } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { isImeComposing } from '$lib/keyboard.js';
@@ -33,7 +33,7 @@
     libraryRowMenu,
     projectRowMenu,
   } from './skillMenus.js';
-  import { filterArchivedSkills } from './skillRecords.js';
+  import { filterArchivedSkills, withSkillUsage } from './skillRecords.js';
   import {
     ARCHIVED_COLLECTION,
     filterSkills,
@@ -79,6 +79,8 @@
   let loading = $state(true);
   let loaded = $state(false);
   let loadError = $state('');
+  let usage = $state(null);
+  let usageError = $state(false);
 
   let scope = $state('all');
   let returnScope = 'all';
@@ -105,6 +107,7 @@
   let directoryEditor = $state();
 
   let inventoryVersion = 0;
+  let usageVersion = 0;
   let inspectVersion = 0;
   let disposed = false;
   let pendingInstallSelection = null;
@@ -173,8 +176,11 @@
       (currentPage + 1) * SKILL_PAGE_SIZE,
     ),
   );
+  let inventoryWithUsage = $derived(
+    usage === null ? inventory : withSkillUsage(inventory, usage),
+  );
   let selected = $derived(
-    inventory.find((entry) => entry.id === selectedId) ?? null,
+    inventoryWithUsage.find((entry) => entry.id === selectedId) ?? null,
   );
   let statusOptions = $derived([
     { value: 'all', label: t('skills.filter.all') },
@@ -417,6 +423,9 @@
     const version = ++inventoryVersion;
     loading = true;
     loadError = '';
+    usage = null;
+    usageError = false;
+    usageVersion++;
     try {
       const result = await skillInventory();
       if (disposed || version !== inventoryVersion) return;
@@ -427,6 +436,7 @@
       staleShared = result?.stale_shared ?? [];
       policyDiagnostics = result?.policy_diagnostics ?? [];
       loaded = true;
+      void loadUsage(version);
       if (scope !== 'directories' && !collection) navigation.replace(['all']);
       const installedEntry =
         pendingInstallSelection &&
@@ -453,6 +463,22 @@
         loadError = `${t('skills.loadError')} ${error.message}`;
     } finally {
       if (!disposed && version === inventoryVersion) loading = false;
+    }
+  }
+
+  async function loadUsage(version = inventoryVersion) {
+    const request = ++usageVersion;
+    usageError = false;
+    try {
+      const result = await skillUsage();
+      if (disposed || version !== inventoryVersion || request !== usageVersion)
+        return;
+      if (!Array.isArray(result?.usage))
+        throw new Error('Invalid Skill usage response');
+      usage = result.usage;
+    } catch {
+      if (!disposed && version === inventoryVersion && request === usageVersion)
+        usageError = true;
     }
   }
 
@@ -603,6 +629,14 @@
           >{t('common.retry')}</Button
         ></Banner
       >
+    {/if}
+    {#if usageError}
+      <Banner variant="warn" role="alert">
+        {t('skills.usageError')}<Button
+          variant="secondary"
+          onClick={() => loadUsage()}>{t('common.retry')}</Button
+        >
+      </Banner>
     {/if}
 
     {#if selected}

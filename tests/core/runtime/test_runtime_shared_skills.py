@@ -216,9 +216,8 @@ def test_a_stale_shared_entry_warns_once_until_it_resolves_not_per_registry_buil
     runtime.skills_for(None, "main")
     metadata_reads.clear()
     assert runtime.skill_inventory()["stale_shared"] == [{"agent_id": "gone", "name": "notes"}]
-    # Inventory's source and dependency scans plus one stale-share scan. Adding
-    # another shared name must not add another read of the entire owner's home.
-    assert metadata_reads[(secret / "SKILL.md").resolve()] <= 3
+    # Source, dependency, receiver and stale-share projections reuse one scan.
+    assert metadata_reads[(secret / "SKILL.md").resolve()] == 1
     shutil.rmtree(package)
     [again] = warnings_of_builds(2)
     assert "deploy" in again
@@ -672,7 +671,7 @@ def _write_skill_requiring(root: Path, name: str, dependency: str) -> None:
 
 
 def test_manager_projects_each_agents_effective_skill_access(
-    runtime: Runtime, tmp_path: Path
+    runtime: Runtime, tmp_path: Path, metadata_reads: Counter[Path]
 ) -> None:
     for name in ("alpha", "beta", "zeta"):
         write_skill(runtime.global_skills_dir, name, f"{name} playbook.")
@@ -691,7 +690,19 @@ def test_manager_projects_each_agents_effective_skill_access(
     runtime.agents.create("two", "Two", allowed_skills=["beta"])
     runtime.agents.update("two", root_project_id="gone")
 
+    # The manager refresh reads external changes even while the runtime keeps
+    # an older scoped registry, and every projection shares those fresh reads.
+    runtime.skills_for("p", "main")
+    (runtime.global_skills_dir / "beta" / "SKILL.md").write_text(
+        "---\nname: beta\ndescription: Fresh metadata fixture.\n---\nFixture.\n", encoding="utf-8"
+    )
+    metadata_reads.clear()
     inventory = runtime.skill_inventory()
+    assert metadata_reads and set(metadata_reads.values()) == {1}
+    assert (
+        next(entry for entry in inventory["skills"] if entry["name"] == "beta")["description"]
+        == "Fresh metadata fixture."
+    )
     main, two = inventory["agents"]
     watched = {
         "alpha",

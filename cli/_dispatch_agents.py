@@ -404,7 +404,7 @@ def dispatch_data_store_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    status_fn: Callable[[ServerInstance], CommandResult] = data_store_status,
+    status_fn: Callable[..., CommandResult] = data_store_status,
     snapshot_list_fn: Callable[[ServerInstance], CommandResult] = data_store_snapshot_list,
     snapshot_create_fn: Callable[[ServerInstance, str], CommandResult] = data_store_snapshot_create,
     snapshot_verify_fn: Callable[[ServerInstance, str], CommandResult] = data_store_snapshot_verify,
@@ -424,7 +424,7 @@ def dispatch_data_store_command(
     """Dispatch operator controls for the canonical databases and configuration backups."""
 
     if args.command == "status":
-        return status_fn(instance)
+        return status_fn(instance, verify_search=args.verify_search)
     if args.command == "snapshot":
         if args.snapshot_command == "list":
             return snapshot_list_fn(instance)

@@ -14,6 +14,7 @@ from core.database import (
     SnapshotFacts,
 )
 from core.sessions import _store_archive_backfill, _store_fts, _store_working_projects
+from core.sessions._store_health import SessionHealth
 from core.sessions.schema import APPLICATION_ID, DATABASE_NAME, FORMAT_GENERATION, SCHEMA_SQL
 
 # Owner facts every data snapshot records for the Session member and
@@ -28,9 +29,15 @@ _SNAPSHOT_FACTS = SnapshotFacts(
 )
 
 
-def session_database_spec(path: Path) -> DatabaseSpec:
+def session_database_spec(
+    path: Path, *, health: SessionHealth | None = None, verify_search: bool = False
+) -> DatabaseSpec:
     """Declare the canonical Session database at ``path`` (``<data-dir>/sessions.db``)."""
     data_dir = Path(path).parent
+    index_health = health if health is not None else SessionHealth()
+
+    def report_health(connection: sqlite3.Connection) -> DatabaseHealth:
+        return index_health.status(connection, verify_search=verify_search)
 
     def adopt_archives(connection: sqlite3.Connection) -> None:
         _store_archive_backfill.adopt_legacy_archives(connection, data_dir)
@@ -56,26 +63,8 @@ def session_database_spec(path: Path) -> DatabaseSpec:
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,
-        health=_session_health,
+        health=report_health,
         # Session writes, and so Runs, go on while a data snapshot is taken; the
         # snapshot stands for the instant this database is copied.
         snapshot_capture=ANCHOR_CAPTURE,
-    )
-
-
-def _session_health(connection: sqlite3.Connection) -> DatabaseHealth:
-    """Report the derived search index; canonical rows are verified by the kernel."""
-    fts = _store_fts._fts_health_from_connection(connection, verify_coverage=True)
-    return DatabaseHealth(
-        "healthy" if fts.available else "degraded",
-        None if fts.available else f"Session search: {fts.reason}",
-        {
-            "fts": {
-                "state": fts.state,
-                "reason": fts.reason,
-                "generation": fts.generation,
-                "target_high_water": fts.target_high_water,
-                "completed_high_water": fts.completed_high_water,
-            }
-        },
     )

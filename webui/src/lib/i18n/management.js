@@ -1012,6 +1012,7 @@ export default Object.freeze({
     'The inherited policy for keeping long conversations within the Model context.',
   'skills.title': 'Skills',
   'skills.loadError': 'Skills could not be loaded.',
+  'skills.usageError': 'Skill usage could not be loaded.',
   'skills.loading': 'Loading skills…',
   'skills.createScopeLabel': 'Create in',
   'skills.noDescription': 'No description',

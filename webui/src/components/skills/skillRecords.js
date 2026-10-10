@@ -12,6 +12,51 @@ export const SKILL_HISTORY_LIMIT = 50;
 
 const AGENT_SCOPE_PREFIX = 'agent:';
 
+/** Project Statistics' per-Agent use onto the packages in this inventory. */
+export function withSkillUsage(inventory, usage) {
+  const owners = new Map();
+  const privateUsers = new Map();
+  for (const entry of inventory) {
+    if (!entry.owner_id) continue;
+    if (!owners.has(entry.name)) {
+      owners.set(entry.name, new Set());
+      privateUsers.set(entry.name, new Set());
+    }
+    owners.get(entry.name).add(entry.owner_id);
+    for (const agent of [entry.owner_id, ...(entry.shared_with ?? [])])
+      privateUsers.get(entry.name).add(agent);
+  }
+  const byName = new Map();
+  for (const row of usage) {
+    if (!byName.has(row.name)) byName.set(row.name, []);
+    byName.get(row.name).push(row);
+  }
+  return inventory.map((entry) => {
+    const users = entry.owner_id
+      ? new Set([
+          entry.owner_id,
+          ...(entry.shared_with ?? []).filter(
+            (agent) => !owners.get(entry.name).has(agent),
+          ),
+        ])
+      : null;
+    const rows = (byName.get(entry.name) ?? []).filter((row) =>
+      users
+        ? users.has(row.agent_id)
+        : !privateUsers.get(entry.name)?.has(row.agent_id),
+    );
+    return {
+      ...entry,
+      uses: rows.reduce((total, row) => total + row.uses, 0),
+      last_used_at: rows.reduce(
+        (latest, row) =>
+          row.last_used_at > (latest ?? '') ? row.last_used_at : latest,
+        null,
+      ),
+    };
+  });
+}
+
 // Server timestamps carry microseconds; Date.parse needs at most milliseconds.
 function parseTime(value) {
   if (typeof value !== 'string' || !value) return null;

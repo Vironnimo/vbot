@@ -91,11 +91,14 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
     from core.utils.tls import ssl_context_for
 
     request_body = {"method": method, "params": params}
+    verify_search = method == "data_store.status" and params.get("verify_search") is True
     if method in _PROGRESS_PHASES:
         operation_progress(_PROGRESS_PHASES[method])
+    elif verify_search:
+        operation_progress("Verifying Session search index coverage")
     timeout: httpx.Timeout | float = (
         httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
-        if method in _LONG_RUNNING_METHODS
+        if method in _LONG_RUNNING_METHODS or verify_search
         else RPC_TIMEOUT_SECONDS
     )
     url = f"{instance.url}{RPC_PATH}"

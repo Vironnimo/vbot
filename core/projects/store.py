@@ -63,6 +63,7 @@ from core.utils.tree_move import move_tree
 
 if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
+    from core.skills.skills import SkillScan
 
 _LOGGER = get_logger("projects")
 
@@ -209,7 +210,7 @@ class ProjectStore:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")
             return self._read_project(config_path)
 
-    def refresh_sources(self, project_id: str) -> Project:
+    def refresh_sources(self, project_id: str, *, skill_scan: SkillScan | None = None) -> Project:
         """Discover newly present sources under the existing mutation lock."""
         from core.projects.sources import detect_sources, refresh_sources
 
@@ -218,7 +219,7 @@ class ProjectStore:
             root = Path(project.cwd)
             sources = refresh_sources(
                 project.sources,
-                detect_sources(root),
+                detect_sources(root, skill_scan=skill_scan),
                 root=root,
                 instructions_loaded=any((root / name).is_file() for name in project.auto_load),
             )

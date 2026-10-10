@@ -490,8 +490,8 @@ async def test_show_reloads_skills_and_reports_the_editor_skill_pool(tmp_path: P
     state, _repo = await _vbot_state(tmp_path, "builder.md")
     reload_calls: list[bool] = []
 
-    async def reload_skills_async() -> None:
-        reload_calls.append(True)
+    async def reload_skills_async(*, only_if_changed: bool = False) -> None:
+        reload_calls.append(only_if_changed)
 
     state.runtime.reload_skills_async = reload_skills_async
     # The Skill runtime owns the classification (shadowing, global vs. bundled);
@@ -621,6 +621,9 @@ async def test_project_skill_cache_follows_settings_and_repo_changes(tmp_path: P
             skills_global_enabled=["global-playbook"],
         )
         opted_in = allowed()
+        runtime.projects.create("other", "Other", _make_repo(tmp_path, "other"))
+        unrelated = runtime.skills_for("other", "main")
+        global_registry = runtime.skills
         # A skill added to the repo after the cache was primed surfaces on the next
         # open, in both the editor pool and the resolver's skill input.
         _write_project_skill(repo, "beta", "Beta playbook.")
@@ -634,5 +637,26 @@ async def test_project_skill_cache_follows_settings_and_repo_changes(tmp_path: P
             {"name": "project-playbook", "description": "Project instructions"},
         ]
         assert runtime.project_skill_names("p") == frozenset({"project-playbook", "beta"})
+        # An unchanged global catalog must not invalidate unrelated scopes.
+        assert runtime.skills is global_registry
+        assert runtime.skills_for("other", "main") is unrelated
+        await rpc_result(state, "project.show", project_id="p")
+        assert runtime.skills_for("other", "main") is unrelated
+
+        # A real external global edit still reaches both the editor and runtime
+        # scopes when the Project opens, without an explicit global reload.
+        (global_root / "SKILL.md").write_text(
+            "---\nname: global-playbook\ndescription: Changed fixture\n---\nBody.\n",
+            encoding="utf-8",
+        )
+        refreshed = await rpc_result(state, "project.show", project_id="p")
+        assert refreshed["scan"]["skills"]["global"] == [
+            {"name": "global-playbook", "description": "Changed fixture"}
+        ]
+        assert runtime.skills is not global_registry
+        assert runtime.skills_for("other", "main") is not unrelated
+        assert runtime.skills_for("other", "main").get("global-playbook").description == (
+            "Changed fixture"
+        )
     finally:
         await runtime.aclose()

@@ -194,6 +194,53 @@ class SkillDiagnostic:
     loadable: bool
 
 
+class SkillScan:
+    """One operation's filesystem reads, shared by its scoped projections.
+
+    Cache source discovery and parsed documents by their input paths: aliases
+    can supply different fallback names and path-bearing diagnostics. Origins,
+    duplicate handling, exclusions and grants are still evaluated per registry.
+    Discard the scan after the operation so external edits need no invalidation.
+    """
+
+    def __init__(self) -> None:
+        self._paths: dict[Path, Path] = {}
+        self._directories: dict[str, tuple[Path, ...] | OSError] = {}
+        self._metadata: dict[
+            str, tuple[SkillMetadata | None, ValidationResult] | OSError | ValueError
+        ] = {}
+
+    def resolve(self, path: Path) -> Path:
+        """Resolve each input once; Windows canonicalization is filesystem I/O too."""
+        if path not in self._paths:
+            self._paths[path] = path.resolve()
+        return self._paths[path]
+
+    def directories(self, root: Path) -> tuple[Path, ...]:
+        key = str(root)
+        if key not in self._directories:
+            try:
+                self._directories[key] = _skill_directories(root)
+            except OSError as error:
+                self._directories[key] = error
+        result = self._directories[key]
+        if isinstance(result, OSError):
+            raise result
+        return result
+
+    def metadata(self, path: Path) -> tuple[SkillMetadata | None, ValidationResult]:
+        key = str(path)
+        if key not in self._metadata:
+            try:
+                self._metadata[key] = _read_skill_metadata(path)
+            except (OSError, ValueError) as error:
+                self._metadata[key] = error
+        result = self._metadata[key]
+        if isinstance(result, (OSError, ValueError)):
+            raise result
+        return result
+
+
 class SkillRegistry:
     """Scans local skill directories and filters prompt-visible metadata."""
 
@@ -238,6 +285,7 @@ class SkillRegistry:
         origins: Sequence[str | None] | None = None,
         excluded_packages: Collection[tuple[Path, str]] | None = None,
         allowlist_exclusions: Iterable[str] | None = None,
+        scan: SkillScan | None = None,
     ) -> SkillRegistry:
         """Load all valid skills from immediate subdirectories of scan roots.
 
@@ -267,7 +315,7 @@ class SkillRegistry:
         exclusion = _PackageExclusion(frozenset(excluded_packages or ()))
         for index, scan_root in enumerate(scan_roots):
             origin = origin_tags[index] if index < len(origin_tags) else None
-            _load_skill_root(scan_root, skills, diagnostics, origin, exclusion)
+            _load_skill_root(scan_root, skills, diagnostics, origin, exclusion, scan)
 
         excluded_skills = exclusion.skipped
         return cls(
@@ -277,6 +325,17 @@ class SkillRegistry:
             always_allowed=always_allowed,
             excluded_skills=excluded_skills,
             allowlist_exclusions=allowlist_exclusions,
+        )
+
+    def same_catalog(self, other: SkillRegistry) -> bool:
+        """Whether replacing this registry would leave its complete catalog unchanged."""
+        return (
+            self._skills == other._skills
+            and self._diagnostics == other._diagnostics
+            and self._environment == other._environment
+            and self._excluded_skills == other._excluded_skills
+            and self._always_allowed == other._always_allowed
+            and self._allowlist_exclusions == other._allowlist_exclusions
         )
 
     @property
@@ -519,20 +578,12 @@ def _load_skill_root(
     diagnostics: list[SkillDiagnostic],
     origin: str | None = None,
     exclusion: _PackageExclusion | None = None,
+    scan: SkillScan | None = None,
 ) -> None:
-    if not skills_dir.is_dir():
-        return
-
-    # A scan root that is itself a skill package (its path contains SKILL.md)
-    # contributes exactly that one package. This is how the shared layer works:
-    # the runtime inserts individually resolved package directories — never an
-    # owner's whole skills home — so unshared neighbours cannot leak.
-    if (skills_dir / SKILL_FILENAME).is_file():
-        _load_skill_directory(skills_dir, skills, diagnostics, origin, exclusion)
-        return
-
     try:
-        skill_directories = sorted(skills_dir.iterdir(), key=lambda path: path.name)
+        skill_directories = (
+            scan.directories(skills_dir) if scan is not None else _skill_directories(skills_dir)
+        )
     except OSError as exc:
         warnings = [f"Cannot scan skill directory {skills_dir}: {exc}"]
         diagnostics.append(
@@ -548,11 +599,20 @@ def _load_skill_root(
         return
 
     for skill_dir in skill_directories:
-        if not skill_dir.is_dir():
-            continue
-        if not (skill_dir / SKILL_FILENAME).is_file():
-            continue
-        _load_skill_directory(skill_dir, skills, diagnostics, origin, exclusion)
+        _load_skill_directory(skill_dir, skills, diagnostics, origin, exclusion, scan)
+
+
+def _skill_directories(root: Path) -> tuple[Path, ...]:
+    if not root.is_dir():
+        return ()
+    # Shared layers select package roots, never the owner's entire home.
+    if (root / SKILL_FILENAME).is_file():
+        return (root,)
+    return tuple(
+        path
+        for path in sorted(root.iterdir(), key=lambda path: path.name)
+        if path.is_dir() and (path / SKILL_FILENAME).is_file()
+    )
 
 
 def _load_skill_directory(
@@ -561,13 +621,16 @@ def _load_skill_directory(
     diagnostics: list[SkillDiagnostic],
     origin: str | None = None,
     exclusion: _PackageExclusion | None = None,
+    scan: SkillScan | None = None,
 ) -> None:
     """Read one skill package directory into the accumulated load state."""
     skill_file = skill_dir / SKILL_FILENAME
 
-    resolved_skill_file = skill_file.resolve()
+    resolved_skill_file = scan.resolve(skill_file) if scan is not None else skill_file.resolve()
     try:
-        skill, result = _read_skill_metadata(skill_file)
+        skill, result = (
+            scan.metadata(skill_file) if scan is not None else _read_skill_metadata(skill_file)
+        )
     except OSError as exc:
         warnings = [f"Cannot read skill metadata {skill_file}: {exc}"]
         diagnostics.append(
@@ -741,6 +804,7 @@ def load_project_skill_registry(
     project_origin: str | None = None,
     bundled_origins: Sequence[str | None] | None = None,
     excluded_packages: Collection[tuple[Path, str]] | None = None,
+    scan: SkillScan | None = None,
 ) -> SkillRegistry:
     """Load ordered Project roots before the ordinary global pool."""
     roots = [*project_roots, *bundled_scan_roots]
@@ -755,12 +819,15 @@ def load_project_skill_registry(
         environment=environment,
         origins=origins,
         excluded_packages=excluded_packages,
+        scan=scan,
     )
 
 
 def scan_skill_names(
     skills_dir: Path,
     environment: Mapping[str, str] | None = None,
+    *,
+    scan: SkillScan | None = None,
 ) -> frozenset[str]:
     """Return the names of the skills defined directly under one skill directory.
 
@@ -769,7 +836,7 @@ def scan_skill_names(
     runtime uses this for both a project's own skills and an agent's private
     skills home.
     """
-    registry = SkillRegistry.load(skills_dir, environment=environment)
+    registry = SkillRegistry.load(skills_dir, environment=environment, scan=scan)
     return frozenset(skill.name for skill in registry.list_all())
 
 
@@ -795,8 +862,12 @@ def find_skill_package_dir(
 def scan_project_skill_names(
     project_roots: Sequence[Path],
     environment: Mapping[str, str] | None = None,
+    *,
+    scan: SkillScan | None = None,
 ) -> frozenset[str]:
-    return frozenset(name for root in project_roots for name in scan_skill_names(root, environment))
+    return frozenset(
+        name for root in project_roots for name in scan_skill_names(root, environment, scan=scan)
+    )
 
 
 # Skill registries are reloaded often — once per project, per run, and on every
