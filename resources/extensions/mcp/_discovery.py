@@ -6,6 +6,10 @@ item does and how it is called, so a target from an earlier definition is told
 apart from the current one without remembering earlier targets. Search ranks
 entries by query words and renders one bounded page; describe and call resolve
 a target, or a bare name, to exactly one entry and never choose between several.
+
+The protocol vocabulary comes from ``client``, which imports the MCP SDK; these
+functions import it where they use it, so loading the Extension does not. They
+serve a connection's catalog, and a connection has loaded the client by then.
 """
 
 from __future__ import annotations
@@ -37,12 +41,6 @@ from ._definitions import (
     TOOL_NAME_LABEL_LENGTH,
 )
 from ._views import argument_problem, compact, schema_summary, without_protocol_meta
-from .client import (
-    READ_OPERATIONS,
-    TASK_OPERATIONS,
-    operation_schema,
-    unsupported_operations,
-)
 from .content import pointer_part
 
 _TARGET_KINDS = ("tool", "resource", "template", "prompt", "operation")
@@ -108,6 +106,8 @@ def target_for(kind: str, name: str, definition: Any) -> str:
 
 
 def operation_target(operation: str) -> str:
+    from .client import operation_schema
+
     return target_for("operation", operation, operation_schema(operation))
 
 
@@ -124,6 +124,8 @@ def catalog_entries(
 
     Protocol operations the server does not offer under its protocol are left out.
     """
+    from .client import operation_schema, unsupported_operations
+
     entries = []
     for kind, field in _CATALOG_LISTS:
         for definition in catalog.get(field, []):
@@ -302,6 +304,8 @@ def search_page(
 
 def _operations_line(entries: list[dict[str, Any]], query: str) -> str | None:
     """Point a search without kind to the protocol operations it leaves out."""
+    from .client import TASK_OPERATIONS
+
     if not query.strip():
         call = compact({"action": "search", "kind": "operation"})
         tasks = any(
@@ -348,6 +352,8 @@ def resolve(
     the current target. Describe and reading calls use the current definition
     and say so in the note.
     """
+    from .client import READ_OPERATIONS
+
     target = arguments["target"]
     named, fingerprint = lookup(entries, target)
     if len(named) == 1:
@@ -441,6 +447,8 @@ def noted(result: dict[str, Any], note: str) -> dict[str, Any]:
 
 def arguments_schema(entry: dict[str, Any]) -> dict[str, Any]:
     """The schema of the arguments a call of *entry* takes."""
+    from .client import operation_schema
+
     if entry["kind"] == "tool":
         return dict(entry["definition"]["inputSchema"])
     if entry["kind"] == "operation":

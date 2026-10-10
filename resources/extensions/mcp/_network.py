@@ -23,10 +23,9 @@ guard could not check the destination.
 
 from __future__ import annotations
 
-import ipaddress
 import socket
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Literal, override
+from typing import override
 
 import anyio
 import httpcore2
@@ -34,58 +33,14 @@ import httpx2
 
 from core.utils.tls import shared_ssl_context
 
-type IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
-type Resolver = Callable[[str, int], Awaitable[list[str]]]
-type Destination = Literal["forbidden", "private", "public"]
+from ._addresses import IPAddress, address_of, classify
 
-# Metadata services outside the link-local ranges.
-_METADATA_ADDRESSES = frozenset(
-    {ipaddress.ip_address("fd00:ec2::254"), ipaddress.ip_address("100.100.100.200")}
-)
-_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+type Resolver = Callable[[str, int], Awaitable[list[str]]]
+
 # httpx2's default pool limits.
 _MAX_CONNECTIONS = 100
 _MAX_KEEPALIVE_CONNECTIONS = 20
 _KEEPALIVE_EXPIRY_SECONDS = 5.0
-
-
-def _ip(value: str) -> IPAddress | None:
-    """*value* as an address, IPv4 addresses embedded in IPv6 unwrapped; ``None`` for a name."""
-    try:
-        address = ipaddress.ip_address(value.split("%", 1)[0])
-    except ValueError:
-        return None
-    if isinstance(address, ipaddress.IPv6Address):
-        if address.ipv4_mapped is not None:
-            return address.ipv4_mapped
-        if address in _NAT64_PREFIX:
-            return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
-    return address
-
-
-def classify(address: IPAddress) -> Destination:
-    """Whether *address* is never reachable, only from a private server, or public."""
-    if (
-        address in _METADATA_ADDRESSES
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_unspecified
-    ):
-        return "forbidden"
-    if address.is_loopback:
-        return "private"
-    if address.is_reserved:
-        return "forbidden"
-    return "public" if address.is_global else "private"
-
-
-def is_loopback_host(host: str) -> bool:
-    """Whether *host* names this machine: ``localhost`` or a loopback address."""
-    name = host.strip("[]").rstrip(".").lower()
-    if name == "localhost" or name.endswith(".localhost"):
-        return True
-    address = _ip(name)
-    return address is not None and address.is_loopback
 
 
 async def _resolve(host: str, port: int) -> list[str]:
@@ -119,14 +74,14 @@ class DestinationGuard(httpcore2.AsyncNetworkBackend):
         return self._server_addresses
 
     async def _lookup(self, host: str, port: int) -> list[IPAddress]:
-        literal = _ip(host)
+        literal = address_of(host)
         if literal is not None:
             return [literal]
         try:
             resolved = await self._resolve(host, port)
         except OSError as error:
             raise httpcore2.ConnectError(f"Cannot resolve {host}: {error}") from error
-        addresses = [address for value in resolved if (address := _ip(value)) is not None]
+        addresses = [address for value in resolved if (address := address_of(value)) is not None]
         if not addresses:
             raise httpcore2.ConnectError(f"Cannot resolve {host}")
         return addresses

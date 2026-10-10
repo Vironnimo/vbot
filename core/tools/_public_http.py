@@ -6,6 +6,9 @@ URLs without credentials, only public addresses (the resolved address is pinned
 for the connection, so DNS rebinding cannot swap in a private one), every
 redirect hop revalidated, a bounded body and bounded retries. Failures carry
 precise codes and wording that say what went wrong and what to try next.
+
+curl_cffi loads with the first request: importing it costs about 0.1 s, which
+every process that imports the Tools would otherwise pay.
 """
 
 from __future__ import annotations
@@ -15,23 +18,17 @@ import ipaddress
 import re
 import socket
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urljoin, urlparse
-
-from curl_cffi import CurlOpt
-from curl_cffi.requests import AsyncSession
-from curl_cffi.requests.exceptions import (
-    CertificateVerifyError,
-    DNSError,
-    RequestException,
-    SSLError,
-    Timeout,
-)
 
 from core.tools.tools import JsonObject, tool_failure
 from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
 from core.utils.retry import MAX_RETRIES, sleep_for_retry
+
+if TYPE_CHECKING:
+    from curl_cffi.requests import AsyncSession
+    from curl_cffi.requests.exceptions import RequestException
 
 _LOGGER = get_logger("tools.public_http")
 
@@ -150,6 +147,8 @@ def _make_session(accept: str) -> AsyncSession:
     cannot swap in a private address between validation and connection while the
     hostname still drives the Host header and TLS SNI / certificate check.
     """
+    from curl_cffi.requests import AsyncSession
+
     return AsyncSession(impersonate=_IMPERSONATE_TARGET, headers={"Accept": accept})
 
 
@@ -423,6 +422,8 @@ def _retries_allowed(error: RequestException) -> int:
     A broken certificate or TLS setup fails the same way every time. A timeout
     during connection or response transfer gets one more bounded attempt.
     """
+    from curl_cffi.requests.exceptions import CertificateVerifyError, DNSError, SSLError, Timeout
+
     if isinstance(error, (SSLError, CertificateVerifyError, DNSError)):
         return 0
     if isinstance(error, Timeout):
@@ -432,6 +433,8 @@ def _retries_allowed(error: RequestException) -> int:
 
 async def _request_with_retry(session: AsyncSession, url: str, max_bytes: int) -> PublicResponse:
     """Fetch a URL and retry transient transport/status failures with backoff."""
+    from curl_cffi.requests.exceptions import RequestException
+
     for attempt in range(MAX_RETRIES + 1):
         try:
             result = await _http_get(session, url, max_bytes)
@@ -469,6 +472,8 @@ async def _fetch_with_retry(
     ``resolve_map`` accumulates ``(host, port) -> ip`` across hops so an earlier
     hop's pin survives a same-host redirect.
     """
+    from curl_cffi import CurlOpt
+
     current_url = url
     seen_urls: set[str] = set()
 
@@ -591,6 +596,8 @@ def _curl_detail(error: RequestException) -> str:
 
 def _transport_error(url: str, error: RequestException, attempts: int) -> PublicFetchError:
     """Describe a failure below HTTP: timeout, TLS or connection."""
+    from curl_cffi.requests.exceptions import CertificateVerifyError, DNSError, SSLError, Timeout
+
     host = urlparse(url).hostname or url
     detail = _curl_detail(error)
     if isinstance(error, Timeout):
@@ -641,6 +648,8 @@ async def fetch_public(
     ``what`` names the expected content in failure messages ("page", "image").
     Every failure, including an HTTP error status, raises ``PublicFetchError``.
     """
+    from curl_cffi.requests.exceptions import RequestException
+
     try:
         async with _make_session(accept) as session:
             result = await _fetch_with_retry(session, url, {}, max_bytes, what)

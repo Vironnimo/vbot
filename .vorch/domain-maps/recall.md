@@ -51,7 +51,7 @@ Passage construction advances two boundary cursors through the eligible Messages
 
 ## Passage Index
 
-`<data_dir>/recall/passage_index.sqlite` (kernel disposable projection `recall_index`, `passage_index.passage_index_database_spec`; `connection_setup` loads sqlite-vec on every connection). It is never authoritative and holds:
+`<data_dir>/recall/passage_index.sqlite` (kernel disposable projection `recall_index`, `passage_index.passage_index_database_spec`; `connection_setup` loads sqlite-vec on every connection; the Python package, which imports numpy, is imported with the first connection or vector, not with the module). It is never authoritative and holds:
 
 - the Passage Catalog;
 - literal FTS over `passages`: two external-content FTS tables kept in step by triggers, `passages_fts` (trigram) for queries whose every term (or phrase) has at least three characters and `passages_fts_tokens` (unicode61) for all others with whole-token candidates. The kernel cannot declare virtual tables, so the spec's `after_open` creates missing FTS tables and triggers and fills a new FTS table from `passages`;

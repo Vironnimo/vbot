@@ -13,7 +13,6 @@ from contextlib import suppress
 from functools import partial
 from typing import Any, Literal
 
-import httpx
 import psutil  # type: ignore[import-untyped]
 
 from cli._server_target import (
@@ -534,15 +533,21 @@ def _request_cooperative_shutdown(
 ) -> bool:
     """Ask the exact listener process to enter its application shutdown path."""
 
+    import httpx
+
+    from core.utils.tls import ssl_context_for
+
     control = read_server_control(instance.data_dir, instance.port)
     if control is None or control.pid != process.pid:
         return False
+    url = _probe_url(instance, CONTROL_SHUTDOWN_PATH)
     try:
         response = httpx.post(
-            _probe_url(instance, CONTROL_SHUTDOWN_PATH),
+            url,
             headers={CONTROL_TOKEN_HEADER: control.token, CONTROL_INITIATOR_HEADER: initiator},
             timeout=timeout_seconds,
             trust_env=False,
+            verify=ssl_context_for(url),
         )
     except httpx.RequestError:
         return False

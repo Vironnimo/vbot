@@ -17,6 +17,7 @@ from core.extensions import (
     InteractionButton,
 )
 from core.utils.logging import get_logger
+from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("channels.telegram")
 
@@ -224,6 +225,23 @@ class _PollingHealth:
         self._closed = True
 
 
+def _tls_kwargs() -> dict[str, Any]:
+    """httpx arguments that verify with the shared TLS context.
+
+    Without them every PTB request builds its own context and parses the CA
+    bundle again, about 0.3 s on the Event Loop per request.
+    """
+    return {"verify": shared_ssl_context()}
+
+
+def _bot_request() -> Any:
+    """Build PTB's default request for the Bot API calls other than ``getUpdates``."""
+    # PTB's ApplicationBuilder default for the bot: 256 pooled connections.
+    return _load_telegram_request().HTTPXRequest(
+        connection_pool_size=256, httpx_kwargs=_tls_kwargs()
+    )
+
+
 def _observed_polling_request(on_answer: Callable[[], None], on_timeout: Callable[[], None]) -> Any:
     """Build PTB's default ``getUpdates`` request, reporting answered and timed-out polls."""
     httpx_request: Any = _load_telegram_request().HTTPXRequest
@@ -241,7 +259,7 @@ def _observed_polling_request(on_answer: Callable[[], None], on_timeout: Callabl
             return code, payload
 
     # PTB's ApplicationBuilder default for getUpdates: one pooled connection.
-    return _ObservedPollingRequest(connection_pool_size=1)
+    return _ObservedPollingRequest(connection_pool_size=1, httpx_kwargs=_tls_kwargs())
 
 
 def _load_telegram_error() -> Any:

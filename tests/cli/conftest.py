@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 
 from cli import main as cli_main
-from cli import rpc_client
 from cli.server_management import ServerInstance
 from tests.cli.cli_test_support import FakeRpc, RunCli, make_instance
 
@@ -20,7 +20,7 @@ def instance(tmp_path: Path) -> ServerInstance:
 @pytest.fixture
 def rpc(monkeypatch: pytest.MonkeyPatch) -> FakeRpc:
     fake = FakeRpc()
-    monkeypatch.setattr(rpc_client.httpx, "post", fake.post)
+    monkeypatch.setattr(httpx, "post", fake.post)
     return fake
 
 

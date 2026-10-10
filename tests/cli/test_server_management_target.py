@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import ssl
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -175,6 +176,27 @@ def read_timeout(url: str, **_kwargs: Any) -> httpx.Response:
     raise httpx.ReadTimeout("busy", request=httpx.Request("GET", url))
 
 
+def socket_table(
+    monkeypatch: pytest.MonkeyPatch, *listeners: tuple[str, int]
+) -> list[SimpleNamespace]:
+    """Make the system socket table list exactly these ``(ip, port)`` listeners."""
+
+    table = [
+        SimpleNamespace(
+            status=server_management.psutil.CONN_LISTEN, laddr=SimpleNamespace(ip=ip, port=port)
+        )
+        for ip, port in listeners
+    ]
+    monkeypatch.setattr(server_management.psutil, "net_connections", lambda kind: table)
+    return table
+
+
+def read_budget(timeout: httpx.Timeout | float) -> float | None:
+    """The response budget of a request timeout, as plain seconds or ``httpx.Timeout``."""
+
+    return timeout.read if isinstance(timeout, httpx.Timeout) else timeout
+
+
 @pytest.mark.parametrize(
     ("get", "expected"),
     [
@@ -221,75 +243,127 @@ def test_probe_health_classifies_only_the_exact_health_answer_as_vbot(
     get: Callable[..., httpx.Response],
     expected: HealthProbeResult,
 ) -> None:
-    monkeypatch.setattr(server_management.httpx, "get", get)
+    socket_table(monkeypatch, (instance.host, instance.port))
+    monkeypatch.setattr(httpx, "get", get)
 
     assert probe_health(instance) == expected
+
+
+# A local handshake completes in the kernel, so only a remote target waits to connect.
+LOCAL_PROBE_TIMEOUT = httpx.Timeout(0.5, connect=0.2)
+
+
+@pytest.mark.parametrize(
+    ("host", "listeners", "requested"),
+    [
+        pytest.param("127.0.0.1", [], None, id="nothing-listens"),
+        pytest.param("127.0.0.1", [("127.0.0.1", 9999)], None, id="other-port-only"),
+        pytest.param("127.0.0.1", [("127.0.0.1", 8420)], LOCAL_PROBE_TIMEOUT, id="listener"),
+        # A wildcard or dual-stack socket may accept the target's traffic.
+        pytest.param("127.0.0.1", [("::", 8420)], LOCAL_PROBE_TIMEOUT, id="any-address"),
+        pytest.param("127.0.0.1", None, LOCAL_PROBE_TIMEOUT, id="unreadable-table"),
+        pytest.param("192.0.2.40", [], 0.5, id="remote-target"),
+    ],
+)
+def test_probe_health_asks_the_socket_table_before_connecting_to_a_local_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: str,
+    listeners: list[tuple[str, int]] | None,
+    requested: httpx.Timeout | float | None,
+) -> None:
+    """On Windows a refused connect waits out its budget, so a free port gets no request.
+
+    ``requested`` is the timeout of the one request sent, or ``None`` for no request.
+    """
+
+    instance = make_instance(tmp_path, host=host)
+    if listeners is None:
+
+        def unreadable(kind: str) -> list[SimpleNamespace]:
+            raise server_management.psutil.AccessDenied()
+
+        monkeypatch.setattr(server_management.psutil, "net_connections", unreadable)
+    else:
+        socket_table(monkeypatch, *listeners)
+    timeouts: list[httpx.Timeout | float] = []
+
+    def get(url: str, *, timeout: httpx.Timeout | float, **_kwargs: Any) -> httpx.Response:
+        timeouts.append(timeout)
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    health = probe_health(instance)
+
+    if requested is None:
+        assert timeouts == []
+        assert health == HealthProbeResult(
+            reachable=False, is_vbot=False, error=_server_target.NO_LISTENER_ERROR
+        )
+    else:
+        assert timeouts == [requested]
+        assert health.is_vbot
 
 
 BUSY_ABSENT = HealthProbeResult(reachable=False, is_vbot=False, error="ReadTimeout", timed_out=True)
 
 
 @pytest.mark.parametrize(
-    ("answers", "listener_offset", "requested_timeouts", "expected"),
+    ("answers", "listener", "requested_timeouts", "expected"),
     [
         pytest.param(
             [respond(httpx.Response(200, json={"status": "ok"}))],
-            0,
+            "127.0.0.1",
             [0.5],
             HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
             id="quick-answer-needs-no-retry",
         ),
         pytest.param(
             [read_timeout, respond(httpx.Response(200, json={"status": "ok"}))],
-            0,
+            "127.0.0.1",
             [0.5, 5.0],
             HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
             id="busy-listener-answers-late",
         ),
         pytest.param(
             [read_timeout, read_timeout],
-            0,
+            "127.0.0.1",
             [0.5, 5.0],
             replace(BUSY_ABSENT, unresponsive=True),
             id="listener-never-answers",
         ),
         pytest.param(
             [read_timeout, connect_error],
-            0,
+            "127.0.0.1",
             [0.5, 5.0],
             HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
             id="listener-closes-during-the-retry",
         ),
         # Windows reports a refused connection to a closed port as a connect timeout
         # within the quick budget, so a timeout alone must not mean a listener.
-        pytest.param([read_timeout], None, [0.5], BUSY_ABSENT, id="no-listener-is-absent"),
-        pytest.param([read_timeout], 1, [0.5], BUSY_ABSENT, id="other-port-listener-is-absent"),
+        pytest.param(
+            [read_timeout], "127.0.0.2", [0.5], BUSY_ABSENT, id="other-address-listener-is-absent"
+        ),
     ],
 )
 def test_probe_health_patiently_tells_a_busy_listener_from_an_absent_server(
     instance: ServerInstance,
     monkeypatch: pytest.MonkeyPatch,
     answers: list[Callable[..., httpx.Response]],
-    listener_offset: int | None,
+    listener: str,
     requested_timeouts: list[float],
     expected: HealthProbeResult,
 ) -> None:
-    timeouts: list[float] = []
+    timeouts: list[float | None] = []
     scripted = iter(answers)
 
-    def get(url: str, *, timeout: float, **kwargs: Any) -> httpx.Response:
-        timeouts.append(timeout)
+    def get(url: str, *, timeout: httpx.Timeout | float, **kwargs: Any) -> httpx.Response:
+        timeouts.append(read_budget(timeout))
         return next(scripted)(url, **kwargs)
 
-    table = [
-        SimpleNamespace(
-            status=server_management.psutil.CONN_LISTEN,
-            laddr=SimpleNamespace(ip="127.0.0.1", port=instance.port + offset),
-        )
-        for offset in ([] if listener_offset is None else [listener_offset])
-    ]
-    monkeypatch.setattr(server_management.httpx, "get", get)
-    monkeypatch.setattr(server_management.psutil, "net_connections", lambda kind: table)
+    monkeypatch.setattr(httpx, "get", get)
+    socket_table(monkeypatch, (listener, instance.port))
 
     assert probe_health_patiently(instance) == expected
     assert timeouts == requested_timeouts
@@ -312,16 +386,26 @@ def test_probe_webui_classifies_the_root_answer(
     get: Callable[..., httpx.Response],
     expected: WebUIProbeResult,
 ) -> None:
-    monkeypatch.setattr(server_management.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
 
     assert probe_webui(instance) == expected
 
 
 @pytest.mark.parametrize(
-    ("probe", "url", "response"),
+    ("probe", "url", "response", "timeout"),
     [
-        (probe_health, "http://127.0.0.1:8420/health", httpx.Response(200, json={"status": "ok"})),
-        (probe_webui, "http://127.0.0.1:8420/", httpx.Response(200)),
+        (
+            probe_health,
+            "http://127.0.0.1:8420/health",
+            httpx.Response(200, json={"status": "ok"}),
+            LOCAL_PROBE_TIMEOUT,
+        ),
+        (
+            probe_webui,
+            "http://127.0.0.1:8420/",
+            httpx.Response(200),
+            server_management.DEFAULT_PROBE_TIMEOUT_SECONDS,
+        ),
     ],
     ids=["health", "webui"],
 )
@@ -331,25 +415,25 @@ def test_probes_request_the_wildcard_target_directly_on_loopback_without_proxies
     probe: Callable[[ServerInstance], object],
     url: str,
     response: httpx.Response,
+    timeout: httpx.Timeout | float,
 ) -> None:
     instance = replace(make_instance(tmp_path), host="0.0.0.0", url="http://0.0.0.0:8420")
+    socket_table(monkeypatch, ("0.0.0.0", 8420))
     captured: list[dict[str, Any]] = []
 
-    def fake_get(url: str, *, timeout: float, trust_env: bool) -> httpx.Response:
+    def fake_get(
+        url: str, *, timeout: httpx.Timeout | float, trust_env: bool, verify: ssl.SSLContext
+    ) -> httpx.Response:
         captured.append({"url": url, "timeout": timeout, "trust_env": trust_env})
+        # A plain-http probe gets the fail-closed context that skips parsing the CA bundle.
+        assert verify.get_ca_certs() == []
         return response
 
-    monkeypatch.setattr(server_management.httpx, "get", fake_get)
+    monkeypatch.setattr(httpx, "get", fake_get)
 
     probe(instance)
 
-    assert captured == [
-        {
-            "url": url,
-            "timeout": server_management.DEFAULT_PROBE_TIMEOUT_SECONDS,
-            "trust_env": False,
-        }
-    ]
+    assert captured == [{"url": url, "timeout": timeout, "trust_env": False}]
 
 
 @pytest.mark.parametrize(

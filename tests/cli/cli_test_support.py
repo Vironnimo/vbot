@@ -65,7 +65,7 @@ class FakeRpc:
         return self
 
     def post(
-        self, url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
+        self, url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool, verify: Any
     ) -> httpx.Response:
         assert trust_env is False, "CLI RPC must ignore ambient proxy settings"
         method = json["method"]

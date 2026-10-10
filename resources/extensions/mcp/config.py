@@ -36,7 +36,7 @@ from core.json_documents import (
     write_json_document,
 )
 
-from ._network import is_loopback_host
+from ._addresses import is_loopback_host
 
 CONNECTION_ID_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
 ENVIRONMENT_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"

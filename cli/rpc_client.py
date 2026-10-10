@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Iterator, Mapping
-from typing import Any, Literal
-
-import httpx
+from typing import TYPE_CHECKING, Any, Literal
 
 from cli._progress import operation_progress
 from cli._server_target import RpcFailure
 from cli.server_management import CommandResult, ServerInstance
+
+if TYPE_CHECKING:
+    # httpx loads on the first request, so commands that never reach a server
+    # (help, parse errors) skip its import.
+    import httpx
 
 RPC_PATH = "/api/rpc"
 RPC_TIMEOUT_SECONDS = 10.0
@@ -36,10 +39,9 @@ _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
         "archive.purge",
     }
 )
-RPC_LONG_RUNNING_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
 # A Run's SSE stream sends a heartbeat after 10 quiet seconds; six missed
 # heartbeats mean the connection is gone, not that a Tool call is slow.
-RUN_EVENTS_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=60.0)
+RUN_EVENTS_READ_TIMEOUT_SECONDS = 60.0
 
 _PROGRESS_PHASES = {
     "skill.install": "Preparing and validating the Skill package",
@@ -84,15 +86,22 @@ class RpcPayload:
 def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> RpcPayload:
     """Call one server RPC method and return normalized success/error payload."""
 
+    import httpx
+
+    from core.utils.tls import ssl_context_for
+
     request_body = {"method": method, "params": params}
     if method in _PROGRESS_PHASES:
         operation_progress(_PROGRESS_PHASES[method])
     timeout: httpx.Timeout | float = (
-        RPC_LONG_RUNNING_TIMEOUT if method in _LONG_RUNNING_METHODS else RPC_TIMEOUT_SECONDS
+        httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
+        if method in _LONG_RUNNING_METHODS
+        else RPC_TIMEOUT_SECONDS
     )
+    url = f"{instance.url}{RPC_PATH}"
     try:
         response = httpx.post(
-            f"{instance.url}{RPC_PATH}",
+            url,
             json=request_body,
             timeout=timeout,
             # The CLI only ever talks to the local server over loopback, and RPC bodies
@@ -100,6 +109,8 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
             # plaintext credential can never be diverted through an environment proxy — the
             # same hardening the health/webui probes already apply.
             trust_env=False,
+            # A plain-http target needs no CA bundle (parsing it costs 150 ms or more).
+            verify=ssl_context_for(url),
         )
     except httpx.RequestError as exc:
         not_sent = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
@@ -200,14 +211,20 @@ def stream_run_events(
     stream, normally right after the terminal event; a lagging subscriber can be
     closed earlier and reconnects with the last sequence it received.
     """
+    import httpx
+
+    from core.utils.tls import ssl_context_for
+
+    url = f"{instance.url}{sse_path}"
     try:
         with httpx.stream(
             "GET",
-            f"{instance.url}{sse_path}",
+            url,
             params={"after_sequence": after_sequence},
-            timeout=RUN_EVENTS_TIMEOUT,
+            timeout=httpx.Timeout(RPC_TIMEOUT_SECONDS, read=RUN_EVENTS_READ_TIMEOUT_SECONDS),
             # Same hardening as rpc_call: never route through ambient proxies.
             trust_env=False,
+            verify=ssl_context_for(url),
         ) as response:
             if response.status_code != httpx.codes.OK:
                 raise RunEventStreamError(

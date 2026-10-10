@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_from_bytes
 
+import curl_cffi.requests
 import pytest
 from curl_cffi.requests.exceptions import CertificateVerifyError, DNSError, ReadTimeout
 
@@ -69,7 +70,7 @@ class _Web:
             return None
 
         monkeypatch.setattr(public_http, "_http_get", http_get)
-        monkeypatch.setattr(public_http, "AsyncSession", session)
+        monkeypatch.setattr(curl_cffi.requests, "AsyncSession", session)
         monkeypatch.setattr(public_http, "sleep_for_retry", no_sleep)
 
     def image(self, url: str, data: bytes, content_type: str = "image/png") -> None:

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import importlib
+import ipaddress
 import logging
 import os
 import sys
@@ -68,6 +69,9 @@ MINIMUM_WINDOW_WIDTH = 800
 MINIMUM_WINDOW_HEIGHT = 600
 WINDOW_SCREEN_EDGE_ALLOWANCE = 80
 PROBE_TIMEOUT_SECONDS = 2.0
+# The kernel completes a loopback handshake even while the server's Event Loop is
+# busy; a refused one is what takes long (Windows retries the SYN for about 2 s).
+LOOPBACK_CONNECT_TIMEOUT_SECONDS = 0.2
 PROBE_WEBUI_AVAILABLE = "webui_available"
 PROBE_WEBUI_UNAVAILABLE = "webui_unavailable"
 PROBE_SERVER_UNREACHABLE = "server_unreachable"
@@ -103,7 +107,9 @@ class HttpResponse(Protocol):
 class HttpGet(Protocol):
     """Synchronous HTTP GET callable used by Desktop probing."""
 
-    def __call__(self, url: str, *, timeout: float, trust_env: bool) -> HttpResponse:
+    def __call__(
+        self, url: str, *, timeout: httpx.Timeout | float, trust_env: bool
+    ) -> HttpResponse:
         """Fetch a URL with a bounded timeout."""
 
 
@@ -351,17 +357,33 @@ def probe_target(
     get: HttpGet | None = None,
     timeout: float = PROBE_TIMEOUT_SECONDS,
 ) -> DesktopProbeResult:
-    """Classify the target using one client and connection for both requests."""
+    """Classify the target using one client and connection for both requests.
+
+    A loopback target gets ``LOOPBACK_CONNECT_TIMEOUT_SECONDS`` to connect, so a
+    server that is not listening yet costs a launch wait attempt 0.2 s, not 2 s.
+    """
 
     if target.configuration_error is not None:
         return DesktopProbeResult(status=PROBE_INVALID_TARGET, target=target)
 
+    budget: httpx.Timeout | float = timeout
+    if _is_loopback_host(target.host):
+        budget = httpx.Timeout(timeout, connect=min(timeout, LOOPBACK_CONNECT_TIMEOUT_SECONDS))
     if get is not None:
-        return _probe_target(target, lambda url: get(url, timeout=timeout, trust_env=False))
-    with httpx.Client(
-        timeout=timeout, trust_env=False, verify=_http.shared_ssl_context()
-    ) as client:
+        return _probe_target(target, lambda url: get(url, timeout=budget, trust_env=False))
+    with httpx.Client(timeout=budget, trust_env=False, verify=_http.shared_ssl_context()) as client:
         return _probe_target(target, client.get)
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether a validated Desktop host names this machine's loopback interface."""
+
+    if host.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _probe_target(target: DesktopTarget, get: Callable[[str], HttpResponse]) -> DesktopProbeResult:

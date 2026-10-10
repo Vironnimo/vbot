@@ -654,7 +654,7 @@ def test_probe_target_classifies_the_server_with_one_request_per_step(
     replies = {HEALTH_URL: health, ROOT_URL: root}
     requested: list[str] = []
 
-    def get(url: str, *, timeout: float, trust_env: bool) -> FakeResponse:
+    def get(url: str, *, timeout: httpx.Timeout | float, trust_env: bool) -> FakeResponse:
         assert (timeout, trust_env) == (desktop_main.PROBE_TIMEOUT_SECONDS, False)
         requested.append(url)
         reply = replies[url]
@@ -671,7 +671,7 @@ def test_probe_target_classifies_the_server_with_one_request_per_step(
 
 
 def test_probe_target_reports_a_configuration_error_without_a_request() -> None:
-    def get(url: str, *, timeout: float, trust_env: bool) -> FakeResponse:
+    def get(url: str, *, timeout: httpx.Timeout | float, trust_env: bool) -> FakeResponse:
         raise AssertionError(f"unexpected request: {url}")
 
     target = DesktopTarget("bad host", 8420, "", configuration_error="bad host")
@@ -679,9 +679,18 @@ def test_probe_target_reports_a_configuration_error_without_a_request() -> None:
     assert desktop_main.probe_target(target, get=get).status == desktop_main.PROBE_INVALID_TARGET
 
 
-@pytest.mark.parametrize("root_fails", [False, True])
+@pytest.mark.parametrize(
+    ("root_fails", "host", "connect"),
+    [
+        pytest.param(False, "vbot.test", 0.75, id="remote"),
+        pytest.param(True, "vbot.test", 0.75, id="remote-root-fails"),
+        # A refused loopback connect waits out its whole budget on Windows (about 2 s).
+        pytest.param(False, "127.0.0.1", 0.2, id="loopback-address"),
+        pytest.param(False, "localhost", 0.2, id="localhost"),
+    ],
+)
 def test_probe_reuses_one_unproxied_client_and_closes_it(
-    monkeypatch: pytest.MonkeyPatch, root_fails: bool
+    monkeypatch: pytest.MonkeyPatch, root_fails: bool, host: str, connect: float
 ) -> None:
     clients: list[httpx.Client] = []
     requests: list[httpx.Request] = []
@@ -702,7 +711,7 @@ def test_probe_reuses_one_unproxied_client_and_closes_it(
             clients.append(self)
 
     monkeypatch.setattr(desktop_main.httpx, "Client", ProbeClient)
-    target = DesktopTarget("vbot.test", 8420, "http://vbot.test:8420/")
+    target = DesktopTarget(host, 8420, f"http://{host}:8420/")
     result = desktop_main.probe_target(target, timeout=0.75)
 
     assert result.status == (
@@ -711,7 +720,11 @@ def test_probe_reuses_one_unproxied_client_and_closes_it(
     assert len(clients) == 1
     assert clients[0].is_closed
     assert [request.url.path for request in requests] == ["/health", "/"]
-    assert all(request.extensions["timeout"]["connect"] == 0.75 for request in requests)
+    assert all(
+        request.extensions["timeout"]
+        == {"connect": connect, "read": 0.75, "write": 0.75, "pool": 0.75}
+        for request in requests
+    )
 
 
 # -- Host/port validation and URL building ---------------------------------------

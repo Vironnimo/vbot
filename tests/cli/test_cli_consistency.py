@@ -6,9 +6,10 @@ import shlex
 import sys
 from typing import override
 
+import httpx
 import pytest
 
-from cli import _commands, _output, _progress, main, rpc_client
+from cli import _commands, _output, _progress, main
 from cli._parser_common import AREA_HELP, COMMAND_PATHS
 from cli._progress import ProgressPrinter, current_progress
 from cli.formatting import output_mode, record_fields
@@ -270,7 +271,7 @@ def test_real_long_rpc_announces_before_response_and_stops_heartbeat(tmp_path, m
 
         return Response()
 
-    monkeypatch.setattr(rpc_client.httpx, "post", post)
+    monkeypatch.setattr(httpx, "post", post)
     assert main.run(["model", "refresh"], resolve=lambda **kw: instance) == 0
     out, err = capsys.readouterr()
     assert "4 models" in out and "[OK]" in err

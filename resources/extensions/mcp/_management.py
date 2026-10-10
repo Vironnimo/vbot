@@ -12,7 +12,7 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import ExtensionHost, ExtensionOperations
@@ -25,9 +25,11 @@ from core.utils.ids import new_id
 from ._definitions import MAX_FINISHED_JOBS, MCP_OPERATIONS, MCP_PARAMETERS
 from ._discovery import operation_target, remote_tool_name
 from ._importer import MAX_SETUP_CHARACTERS
-from .client import ConnectionRunner
 from .config import CONNECTION_SCHEMA
 from .interactions import InputRequests
+
+if TYPE_CHECKING:
+    from .client import ConnectionRunner
 
 # The resources of the changes the service publishes to accessors
 # (``ExtensionHost.publish_change``): what ``list`` and ``status`` report for a

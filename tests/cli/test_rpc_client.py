@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import httpx
 import pytest
 
 from cli import rpc_client
+from core.utils import tls
 from tests.cli.cli_test_support import make_instance
 
 
@@ -16,12 +18,12 @@ def _capture_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     def fake_post(
-        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
+        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool, verify: ssl.SSLContext
     ) -> httpx.Response:
-        captured.update(url=url, json=json, timeout=timeout, trust_env=trust_env)
+        captured.update(url=url, json=json, timeout=timeout, trust_env=trust_env, verify=verify)
         return httpx.Response(200, json={"ok": True, "result": {}})
 
-    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "post", fake_post)
     return captured
 
 
@@ -38,6 +40,9 @@ def test_rpc_call_posts_to_an_ipv6_safe_url_with_a_bounded_timeout_and_no_proxie
     # RPC bodies carry secrets (e.g. provider.set_key) over a plaintext loopback call, so the
     # transport must never honor ambient HTTP_PROXY/.netrc that could divert them off-host.
     assert captured["trust_env"] is False
+    # A plain-http call gets the fail-closed context that skips parsing the CA bundle.
+    assert captured["verify"] is tls.ssl_context_for(captured["url"])
+    assert captured["verify"].get_ca_certs() == []
 
 
 @pytest.mark.parametrize(
@@ -88,7 +93,7 @@ def test_transport_failure_reports_delivery_state_without_replay_or_secret(
         # Exception text can contain request data and must never be rendered.
         raise error_type("sk-test-secret", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "post", fake_post)
     result = rpc_client.rpc_call(instance, "provider.set_key", {"value": "sk-test-secret"})
 
     assert not result.ok
@@ -135,7 +140,7 @@ def test_malformed_response_preserves_applied_mutation_and_reports_uncertainty(
         saved.append(kwargs["json"]["params"])
         return response
 
-    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "post", fake_post)
     result = rpc_client.rpc_call(make_instance(tmp_path), "agent.create", {"id": "demo"})
 
     assert saved == [{"id": "demo"}]
@@ -157,7 +162,7 @@ def test_server_error_code_and_message_are_preserved(
             json={"ok": False, "error": {"code": "test_code", "message": "test sentinel"}},
         )
 
-    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "post", fake_post)
     result = rpc_client.rpc_call(make_instance(tmp_path), "agent.update", {})
 
     assert not result.ok

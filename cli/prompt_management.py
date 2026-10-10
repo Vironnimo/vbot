@@ -9,7 +9,6 @@ from typing import Any
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import string_or_default as _string_or_default
 from cli.formatting import value_text as _value_text
-from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 

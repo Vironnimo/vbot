@@ -25,6 +25,12 @@ httpx also imports its connection stack lazily: the first client imports
 httpcore, h11 and anyio, and the first request anyio's asyncio backend. On a
 cold start that took 380 ms on the Event Loop at the first Run, so the startup
 prewarm imports them too.
+
+Short-lived processes that only talk plain HTTP, such as the CLI talking to its
+local server, would pay the CA parsing for nothing: ``ssl_context_for(url)``
+gives a plain ``http://`` URL a context without trust anchors. It costs no CA
+parsing and fails closed: should a request through it ever reach a TLS
+handshake, no certificate verifies. Every other URL gets the shared context.
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ import httpx
 
 _lock = threading.Lock()
 _context: ssl.SSLContext | None = None
+_plain_http_context: ssl.SSLContext | None = None
 # What httpx imports on its first client and first request.
 _LAZY_TRANSPORT_MODULES = ("httpcore", "anyio._backends._asyncio")
 
@@ -54,6 +61,24 @@ def shared_ssl_context() -> ssl.SSLContext:
             context.load_default_certs(ssl.Purpose.SERVER_AUTH)
             _context = context
         return _context
+
+
+def ssl_context_for(url: str) -> ssl.SSLContext:
+    """Return the context a client for ``url`` verifies with, without CA parsing for HTTP.
+
+    A plain ``http://`` URL gets a client context with certificate and hostname
+    verification on but no trust anchors; any other URL gets ``shared_ssl_context()``.
+    """
+    global _plain_http_context
+    if not url.lower().startswith("http://"):
+        return shared_ssl_context()
+    context = _plain_http_context
+    if context is None:
+        # PROTOCOL_TLS_CLIENT requires a certificate and checks the hostname; with
+        # no CA loaded, no certificate can verify. A racing duplicate is harmless.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        _plain_http_context = context
+    return context
 
 
 def prewarm_outbound_http() -> None:

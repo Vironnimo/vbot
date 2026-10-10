@@ -6,7 +6,7 @@ import shlex
 import httpx
 import pytest
 
-from cli import _output, main, rpc_client
+from cli import _output, main
 from cli._recovery import recovery_guidance
 from cli._server_target import CommandResult, RpcFailure, ServerInstance
 from cli.parser import build_parser, parse_args
@@ -250,7 +250,7 @@ def test_real_rpc_error_keeps_stdout_and_adds_recovery_in_every_mode(
             json={"ok": False, "error": {"code": "project_not_found", "message": "test sentinel"}},
         )
 
-    monkeypatch.setattr(rpc_client.httpx, "post", post)
+    monkeypatch.setattr(httpx, "post", post)
     code = main.run(
         ["project", "show", "absent", "--output", mode], resolve=lambda **kw: instance(tmp_path)
     )
@@ -281,7 +281,7 @@ def test_saved_key_then_failed_refresh_preserves_failure_and_never_resends_secre
             )
         raise httpx.ConnectError("secret-sentinel", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(rpc_client.httpx, "post", post)
+    monkeypatch.setattr(httpx, "post", post)
     monkeypatch.setattr(_output, "recovery_guidance", observe)
     code = main.run(
         ["provider", "key", "set", "openai", "secret-sentinel", "--refresh-models"],

@@ -7,15 +7,30 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-import httpx
 import psutil  # type: ignore[import-untyped]
 
 from core.utils.config import DEFAULT_HOST, Config, resolve_port
 from core.utils.logging import resolve_daily_log_path
 
+if TYPE_CHECKING:
+    # httpx loads on the first request, so commands that never reach a server
+    # (help, parse errors) skip its import.
+    import httpx
+
 DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5
+
+
+# The kernel completes a local handshake even while the server's Event Loop is
+# busy, so connecting to a local target needs only a short budget. A refused
+# connection is what takes long: Windows retries the SYN for about 2 s.
+LOCAL_CONNECT_TIMEOUT_SECONDS = 0.2
+
+
+# ``HealthProbeResult.error`` when the socket table shows nothing listening on a
+# local target's port, so no request was sent.
+NO_LISTENER_ERROR = "NoListener"
 
 
 # A busy Event Loop (heavy Run load, a large replay) can hold back a reply for
@@ -49,7 +64,8 @@ class HealthProbeResult:
     none arrived in time: it does not prove a listener exists, because Windows
     reports a refused connection to a closed port as a connect timeout under a
     short budget. ``unresponsive`` is the conclusion of ``probe_health_patiently``:
-    a local listener holds the target but never answered.
+    a local listener holds the target but never answered. ``error`` is
+    ``NO_LISTENER_ERROR`` when nothing listened on a local target's port.
     """
 
     reachable: bool
@@ -138,13 +154,32 @@ def probe_health(
     *,
     timeout_seconds: float = DEFAULT_PROBE_TIMEOUT_SECONDS,
 ) -> HealthProbeResult:
-    """Probe `/health` and classify only the exact vBot health response as vBot."""
+    """Probe `/health` and classify only the exact vBot health response as vBot.
 
+    A local target is asked first whether anything listens on its port. When the
+    socket table shows nothing, the probe answers without a request, which on
+    Windows would wait out its connect budget; otherwise a local request gets
+    ``LOCAL_CONNECT_TIMEOUT_SECONDS`` to connect.
+    """
+
+    import httpx
+
+    from core.utils.tls import ssl_context_for
+
+    local = is_local_target(instance)
+    if local and _port_listening(instance.port) is False:
+        return HealthProbeResult(reachable=False, is_vbot=False, error=NO_LISTENER_ERROR)
+    timeout: httpx.Timeout | float = timeout_seconds
+    if local:
+        connect = min(timeout_seconds, LOCAL_CONNECT_TIMEOUT_SECONDS)
+        timeout = httpx.Timeout(timeout_seconds, connect=connect)
+    url = _probe_url(instance, HEALTH_PATH)
     try:
         response = httpx.get(
-            _probe_url(instance, HEALTH_PATH),
-            timeout=timeout_seconds,
+            url,
+            timeout=timeout,
             trust_env=False,
+            verify=ssl_context_for(url),
         )
     except httpx.RequestError as exc:
         return HealthProbeResult(
@@ -179,6 +214,8 @@ def probe_health_patiently(instance: ServerInstance) -> HealthProbeResult:
 def health_result(response: httpx.Response) -> HealthProbeResult:
     """Classify one `/health` response; only the exact vBot body counts as vBot."""
 
+    import httpx
+
     if response.status_code != httpx.codes.OK:
         return HealthProbeResult(reachable=True, is_vbot=False, status_code=response.status_code)
 
@@ -201,11 +238,17 @@ def probe_webui(
 ) -> WebUIProbeResult:
     """Probe `/` separately from API health to classify WebUI availability."""
 
+    import httpx
+
+    from core.utils.tls import ssl_context_for
+
+    url = _probe_url(instance, WEBUI_PATH)
     try:
         response = httpx.get(
-            _probe_url(instance, WEBUI_PATH),
+            url,
             timeout=timeout_seconds,
             trust_env=False,
+            verify=ssl_context_for(url),
         )
     except httpx.RequestError as exc:
         return WebUIProbeResult(available=False, error=exc.__class__.__name__)
@@ -260,6 +303,24 @@ def has_local_listener(instance: ServerInstance) -> bool:
     return any(
         connection.status == psutil.CONN_LISTEN
         and _connection_matches_instance(connection, instance)
+        for connection in connections
+    )
+
+
+def _port_listening(port: int) -> bool | None:
+    """Return whether any local socket listens on ``port``; ``None`` if unreadable.
+
+    Any address counts: a wildcard or dual-stack socket may accept the target's
+    traffic, so only a port nothing listens on proves a connect would be refused.
+    """
+
+    try:
+        connections = psutil.net_connections(kind="tcp")
+    except psutil.Error, OSError:
+        return None
+    return any(
+        connection.status == psutil.CONN_LISTEN
+        and getattr(getattr(connection, "laddr", None), "port", None) == port
         for connection in connections
     )
 

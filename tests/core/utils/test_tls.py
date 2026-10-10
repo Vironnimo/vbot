@@ -39,12 +39,32 @@ def test_shared_context_is_one_verifying_context() -> None:
     context = tls.shared_ssl_context()
 
     assert tls.shared_ssl_context() is context
+    assert tls.ssl_context_for("https://api.example.com/v1") is context
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname is True
     # The operating system's trusted CAs count as well as the certifi bundle.
     system = ssl.create_default_context()
     trusted = context.get_ca_certs(binary_form=True)
     assert all(ca in trusted for ca in system.get_ca_certs(binary_form=True))
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:8420/api/rpc", "HTTP://[::1]:8420/health"])
+def test_plain_http_urls_get_a_fail_closed_context_without_ca_parsing(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    def no_bundle(*_args: object, **_kwargs: object) -> ssl.SSLContext:
+        raise AssertionError("a plain-http client must not parse the CA bundle")
+
+    _reset_shared_context(monkeypatch)
+    monkeypatch.setattr(tls.httpx, "create_ssl_context", no_bundle)
+
+    context = tls.ssl_context_for(url)
+
+    assert tls.ssl_context_for(url) is context
+    # Verification stays on: a TLS handshake through this context cannot succeed.
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    assert context.get_ca_certs() == []
 
 
 def test_concurrent_first_use_builds_the_context_once(monkeypatch: pytest.MonkeyPatch) -> None:

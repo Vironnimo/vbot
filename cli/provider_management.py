@@ -10,7 +10,6 @@ from cli._progress import Status, status_line
 from cli.formatting import string_or_default as _string_or_default
 from cli.formatting import value_text as _value_text
 from cli.model_management import model_refresh
-from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 

@@ -15,7 +15,6 @@ from cli._recovery import format_command
 from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import RpcPayload
-from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
