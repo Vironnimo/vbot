@@ -4,7 +4,8 @@ A result is plain text in ``data.content``. Each changed file reads as one
 section; an Update names the lines it changed. It shows those regions as they
 are now, numbered like ``read`` output, only where the Agent cannot know them
 from its own call: when the written text deviates from the call's copy
-(``DeviationNote``) and in a partial result, whose resent changes build on
+(``DeviationNote``), when it removed lines, which leave nothing to name in the
+file as it is now, and in a partial result, whose resent changes build on
 them. Failures show the closest current text with line numbers. A call in which
 nothing applied is a failure envelope with the same failure text.
 
@@ -50,6 +51,8 @@ class _FileReport:
     destination: str | None = None
     preview: list[str] = field(default_factory=list)
     places: str = ""
+    # Removed lines leave nothing in the file to see, so their regions are shown.
+    removed: bool = False
     line_count: int = 0
     notes: list[str] = field(default_factory=list)
     syntax_warning: str | None = None
@@ -110,17 +113,17 @@ def _after_preview(before: str, after: str) -> list[str]:
     return lines
 
 
-def _changed_places(before: str, after: str) -> str:
+def _changed_places(before: str, after: str) -> tuple[str, bool]:
     """Name the changed lines, such as ``lines 4, 12-13; removed line 7``.
 
     Changed and added lines carry their numbers in ``after``. Removed lines carry
     their numbers in ``before``, as the Agent last read them, since no line of
-    ``after`` shows a removal.
+    ``after`` shows a removal. Also return whether any line was removed.
     """
     old_lines = split_text_lines(before, keepends=True)
     new_lines = split_text_lines(after, keepends=True)
     if not new_lines:
-        return "now empty"
+        return "now empty", False
     changed: list[list[int]] = []
     removed: list[list[int]] = []
     for tag, i1, i2, j1, j2 in line_opcodes(old_lines, new_lines):
@@ -144,7 +147,7 @@ def _changed_places(before: str, after: str) -> str:
     text = "; ".join(parts)
     if len(changed) + len(removed) > named:
         text += f" and {len(changed) + len(removed) - named} more places"
-    return text
+    return text, bool(removed)
 
 
 def file_report(
@@ -169,7 +172,7 @@ def file_report(
     if before is None or after is None or before == after:
         return report
     report.preview = _after_preview(before, after)
-    report.places = _changed_places(before, after)
+    report.places, report.removed = _changed_places(before, after)
     report.syntax_warning = warning_for_edited_file(path, before, after)
     return report
 
@@ -178,7 +181,9 @@ def _file_text(report: _FileReport, *, partial: bool) -> str:
     """Render one file's section; an Update shows its regions only where needed."""
     plural = "" if report.line_count == 1 else "s"
     size = f"{report.line_count} line{plural}" if report.line_count else "empty"
-    shown = partial or any(isinstance(note, DeviationNote) for note in report.notes)
+    shown = (
+        partial or report.removed or any(isinstance(note, DeviationNote) for note in report.notes)
+    )
     places = f" ({report.places})" if report.places else ""
     if report.kind == "created":
         lines = [f"Created {report.label} ({size})."]

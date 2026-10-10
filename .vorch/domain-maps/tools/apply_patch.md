@@ -116,20 +116,22 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   name changed and added lines as they are now and removed lines by their
   numbers before the call (`line 13`, `lines 4, 12-13; removed line 7`, `removed
   lines 2, 5-6`, `now empty`, five places at most and then `and N more places`).
-  Removals name their earlier numbers because no current line shows them. After
-  removing three lines, 3 of 4 runs reread or searched the file in a call of its
-  own, both when places named the line now at each removal and with `removed
-  lines 6, 12, 21`; with the region shown, 0 of 4 did, though both of them still
-  checked with a search inside their test command (agent-eval 2026-10-10,
-  GPT-6 Luna and DeepSeek V4.1 Flash; DeepSeek reread in every run). Coverage:
-  `test_apply_patch_reports.py::test_a_clean_change_names_its_places_without_a_region`.
+  Removals name their earlier numbers because no current line shows them.
+  Coverage:
+  `test_apply_patch_reports.py::test_a_clean_change_names_its_places_and_shows_only_removals`.
 - The changed regions as they are now, with `read`-style gutters (touching
   regions merge; more than two keep first and last plus an omission line; long
   lines show a window with an `N:C|` gutter), follow such a line (`Updated X
   (places):`) only when the written text differs from what the call sent: a copy
   tolerance note (lines that differed or were kept, respelled words; the engine
   marks these as `DeviationNote`) or the note on which occurrence of a repeated
-  text was changed, and in partial results. A clean change shows no region: the
+  text was changed, when the change removed lines, and in partial results.
+  Removed lines leave nothing to name in the file as it is now: after removing
+  three lines, 3 of 4 runs reread or searched the file in a call of its own,
+  both when places named the line now at each removal and with `removed lines
+  6, 12, 21`; with the region shown, 0 of 4 did (agent-eval 2026-10-10, GPT-6
+  Luna and DeepSeek V4.1 Flash; DeepSeek reread in every run without the
+  region). A clean change that only changes or adds lines shows no region: the
   Agent wrote that text itself, and Agents reread or ran `git diff` after a
   region anyway (real Sessions since 2026-09: 13-22% reread a file within three
   calls before changing it again, with the region shown; user decision

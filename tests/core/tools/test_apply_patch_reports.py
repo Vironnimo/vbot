@@ -54,22 +54,29 @@ def test_nearby_changes_read_as_one_region(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("hunks", "places"),
+    ("hunks", "result_text"),
     [
-        # Removed lines carry the numbers the Agent read; no line shows them now.
-        (["@@\n l1\n-l2\n l3", "@@\n l4\n-l5\n-l6\n l7"], "removed lines 2, 5-6"),
-        (["@@\n-l1\n+one", "@@\n l3\n-l4\n l5"], "line 1; removed line 4"),
         (
             [f"@@\n-l{n}\n+new {n}" for n in range(1, 14, 2)],
-            "lines 1, 3, 5, 7, 9 and 2 more places",
+            "Updated file.txt (lines 1, 3, 5, 7, 9 and 2 more places).",
         ),
-        (["@@\n" + "\n".join(f"-l{n}" for n in range(1, 14))], "now empty"),
+        (["@@\n" + "\n".join(f"-l{n}" for n in range(1, 14))], "Updated file.txt (now empty)."),
+        # Removed lines carry the numbers the Agent read, and the region shows the
+        # gap, since no line of the file names a removal.
+        (
+            ["@@\n l1\n-l2\n l3", "@@\n l4\n-l5\n-l6\n l7"],
+            "Updated file.txt (removed lines 2, 5-6):\n1| l1\n2| l3\n3| l4\n4| l7",
+        ),
+        (
+            ["@@\n-l1\n+one", "@@\n l3\n-l4\n l5"],
+            "Updated file.txt (line 1; removed line 4):\n1| one\n2| l2\n3| l3\n4| l5",
+        ),
     ],
 )
-def test_a_clean_change_names_its_places_without_a_region(tmp_path, hunks, places):
+def test_a_clean_change_names_its_places_and_shows_only_removals(tmp_path, hunks, result_text):
     (tmp_path / "file.txt").write_text("".join(f"l{n}\n" for n in range(1, 14)), encoding="utf-8")
     result = apply(tmp_path, update("\n".join(hunks)))
-    assert text(result) == f"Updated file.txt ({places})."
+    assert text(result) == result_text
 
 
 LABEL_OLD = '        "Savings 2 % p.a.": pd.Series('
