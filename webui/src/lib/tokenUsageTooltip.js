@@ -2,9 +2,7 @@
 // (components/chat/ContextUsageRing.svelte): the Context headline
 // ("tokens / contextWindow" in exact counts), the Session's cache hit rate and
 // token totals, and a "Last turn" block that splits the input into its cache
-// shares; plus the ring's warning level. `formatTokenUsageTooltip` renders the
-// same model as text with line breaks and middot-indented sub-lines (Swarm
-// Activity's quick tooltip).
+// shares; plus the ring's warning level.
 //
 // The cache lines matter for spotting prompt-cache breaks: canonical
 // `input_tokens` already contains the cached tokens, so the sub-lines are
@@ -13,32 +11,6 @@
 // that distinction.
 import { activeLocaleTag, t } from './i18n.js';
 import { formatTokensExact } from './statisticsView.js';
-
-export function formatTokenUsageTooltip(
-  contextUsage,
-  usage,
-  sessionUsage,
-  contextWindow,
-) {
-  const { summary, sections } = contextUsageCardModel(
-    contextUsage,
-    usage,
-    sessionUsage,
-    contextWindow,
-  );
-  const blocks = [
-    summary ? [summary] : [],
-    ...sections.map((section) => [
-      ...(section.title ? [section.title] : []),
-      ...section.rows.map(
-        (row) => `${row.sub ? '  · ' : ''}${row.label}: ${row.value}`,
-      ),
-    ]),
-  ].filter((block) => block.length > 0);
-  return blocks.length > 0
-    ? blocks.map((block) => block.join('\n')).join('\n\n')
-    : undefined;
-}
 
 // Context fill share at which the window counts as nearly exhausted.
 const CONTEXT_CRITICAL_RATIO = 0.9;

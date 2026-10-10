@@ -5,7 +5,6 @@ import {
   automaticCompactionRatio,
   contextLimitWarning,
   contextUsageCardModel,
-  formatTokenUsageTooltip,
 } from '../tokenUsageTooltip.js';
 
 const label = (key, params) => t(`chat.contextCard.${key}`, params);
@@ -112,42 +111,6 @@ describe('contextUsageCardModel', () => {
       summary: null,
       sections: [],
     });
-  });
-});
-
-describe('formatTokenUsageTooltip', () => {
-  it('renders the card model as text blocks with indented shares', () => {
-    const tooltip = formatTokenUsageTooltip(
-      { tokens: 2100, estimated: true },
-      { input_tokens: 1000, output_tokens: 50, cache_read_tokens: 800 },
-      {
-        input_tokens: 3000,
-        output_tokens: 150,
-        cache_read_tokens: 2400,
-      },
-      200000,
-    );
-
-    expect(tooltip).toBe(
-      [
-        '2,100 / 200,000',
-        '',
-        `${label('cacheHitRate')}: 80%`,
-        `${label('totalInput')}: 3,000`,
-        `${label('totalOutput')}: 150`,
-        '',
-        label('lastTurn'),
-        `${label('input')}: 1,000`,
-        `  · ${label('cacheRead')}: 800 (80%)`,
-        `  · ${label('cacheWrite')}: 0`,
-        `  · ${label('uncached')}: 200`,
-        `${label('output')}: 50`,
-      ].join('\n'),
-    );
-  });
-
-  it('returns undefined without any usage data', () => {
-    expect(formatTokenUsageTooltip(null, null, null)).toBeUndefined();
   });
 });
 
