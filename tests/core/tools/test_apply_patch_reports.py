@@ -53,6 +53,25 @@ def test_nearby_changes_read_as_one_region(tmp_path):
     ) in text(result)
 
 
+@pytest.mark.parametrize(
+    ("hunks", "places"),
+    [
+        # Removed lines carry the numbers the Agent read; no line shows them now.
+        (["@@\n l1\n-l2\n l3", "@@\n l4\n-l5\n-l6\n l7"], "removed lines 2, 5-6"),
+        (["@@\n-l1\n+one", "@@\n l3\n-l4\n l5"], "line 1; removed line 4"),
+        (
+            [f"@@\n-l{n}\n+new {n}" for n in range(1, 14, 2)],
+            "lines 1, 3, 5, 7, 9 and 2 more places",
+        ),
+        (["@@\n" + "\n".join(f"-l{n}" for n in range(1, 14))], "now empty"),
+    ],
+)
+def test_a_clean_change_names_its_places_without_a_region(tmp_path, hunks, places):
+    (tmp_path / "file.txt").write_text("".join(f"l{n}\n" for n in range(1, 14)), encoding="utf-8")
+    result = apply(tmp_path, update("\n".join(hunks)))
+    assert text(result) == f"Updated file.txt ({places})."
+
+
 LABEL_OLD = '        "Savings 2 % p.a.": pd.Series('
 LABEL_NEW = '        "Savings 2 % p.a. (1 year = 365 days)": pd.Series('
 LABELS = f"# Concurrent explanation\n{LABEL_NEW}\n            values,\n        )\n"

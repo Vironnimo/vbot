@@ -111,31 +111,39 @@ def _after_preview(before: str, after: str) -> list[str]:
 
 
 def _changed_places(before: str, after: str) -> str:
-    """Name the lines of ``after`` that changed, such as ``lines 4, 12-13``.
+    """Name the changed lines, such as ``lines 4, 12-13; removed line 7``.
 
-    A removal names the line now at its place.
+    Changed and added lines carry their numbers in ``after``. Removed lines carry
+    their numbers in ``before``, as the Agent last read them, since no line of
+    ``after`` shows a removal.
     """
     old_lines = split_text_lines(before, keepends=True)
     new_lines = split_text_lines(after, keepends=True)
     if not new_lines:
         return "now empty"
-    spans: list[list[int]] = []
-    for tag, _i1, _i2, j1, j2 in line_opcodes(old_lines, new_lines):
+    changed: list[list[int]] = []
+    removed: list[list[int]] = []
+    for tag, i1, i2, j1, j2 in line_opcodes(old_lines, new_lines):
         if tag == "equal":
             continue
-        first = min(j1 + 1, len(new_lines))
-        last = max(first, min(j2, len(new_lines)))
+        spans, first, last = (removed, i1 + 1, i2) if tag == "delete" else (changed, j1 + 1, j2)
         if spans and first <= spans[-1][1] + 1:
             spans[-1][1] = max(spans[-1][1], last)
         else:
             spans.append([first, last])
-    if not spans:
-        return ""
-    named = [str(a) if a == b else f"{a}-{b}" for a, b in spans[:_NAMED_PLACES]]
-    single = len(spans) == 1 and spans[0][0] == spans[0][1]
-    text = ("line " if single else "lines ") + ", ".join(named)
-    if len(spans) > _NAMED_PLACES:
-        text += f" and {len(spans) - _NAMED_PLACES} more places"
+    named = 0
+    parts: list[str] = []
+    for lead, spans in (("", changed), ("removed ", removed)):
+        shown = spans[: _NAMED_PLACES - named]
+        if not shown:
+            continue
+        named += len(shown)
+        single = len(spans) == 1 and spans[0][0] == spans[0][1]
+        numbers = ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in shown)
+        parts.append(lead + ("line " if single else "lines ") + numbers)
+    text = "; ".join(parts)
+    if len(changed) + len(removed) > named:
+        text += f" and {len(changed) + len(removed) - named} more places"
     return text
 
 

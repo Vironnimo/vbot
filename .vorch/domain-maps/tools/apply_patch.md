@@ -113,9 +113,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   (`display_search_path`). Each file's net effect reads once: `Created X (N
   lines).`, `Replaced the content of X (...)`, `Deleted X.`, `Moved A to B.`, or
   `Updated X (places).` / `Updated A (places) and moved it to B.`, where places
-  name the changed lines as they are now (`line 13`, `lines 4, 12-13`, `now
-  empty`, five places at most and then `and N more places`; a removal names the
-  line now at its place).
+  name changed and added lines as they are now and removed lines by their
+  numbers before the call (`line 13`, `lines 4, 12-13; removed line 7`, `removed
+  lines 2, 5-6`, `now empty`, five places at most and then `and N more places`).
+  Removals name their earlier numbers because no current line shows them: when
+  places named the line now at a removal, 3 of 4 runs that removed lines reread
+  or searched the file, against 0 of 4 with the region shown (agent-eval
+  2026-10-10). Coverage:
+  `test_apply_patch_reports.py::test_a_clean_change_names_its_places_without_a_region`.
 - The changed regions as they are now, with `read`-style gutters (touching
   regions merge; more than two keep first and last plus an omission line; long
   lines show a window with an `N:C|` gutter), follow such a line (`Updated X
