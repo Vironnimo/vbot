@@ -425,8 +425,8 @@ def interpret_search_call(arguments: Any, *, edit_tool: str | None = None) -> Se
 
 
 _GLOB_CHARACTERS = re.compile(r"[*?\[]")
-# A regex that ends in a file extension, such as \.py$ or \.[pP][yY]$, was meant for names.
-_NAME_REGEX = re.compile(r"\\\.(?:\w+|\[[^\]]+\]|\([\w|]+\))+\$$")
+# A content search without matches names at most this many files whose names match.
+_NAMED_FILES = 10
 
 
 @dataclass
@@ -868,6 +868,30 @@ class _Outcome:
     total: int
     lines_total: int
     patterns: list[str]
+    # Searched files whose name or path the patterns match, when no content does.
+    named: list[str] = field(default_factory=list)
+
+
+def _names_matching(
+    context: ToolContext,
+    query: SearchQuery,
+    scopes: list[Scope],
+    patterns: list[str],
+    cwd: Path,
+    binary: Path,
+    budget: SearchBudget,
+) -> list[str]:
+    """Return the labels of searched files whose name or shown path the patterns match."""
+    listed = _Found()
+    for index, scope in enumerate(scopes):
+        listed.take(index, scope, list_scan(binary, query, scope, context, budget, cwd), cwd)
+    listed.finish(query)
+    names = {entry.label: entry.path.name for entry in listed.entries}
+    try:
+        matched = match_names(binary, query, patterns, [*names, *names.values()], context, budget)
+    except SearchRefusedError:
+        return []
+    return [label for label, name in names.items() if label in matched or name in matched]
 
 
 def _search(
@@ -914,9 +938,13 @@ def _search(
         found.take(index, scope, result, cwd)
     found.finish(query)
     lines_total = sum(entry.count for entry in found.entries)
+    named: list[str] = []
+    if not lines_total and query.mode in {"content", "files_with_matches", "count"}:
+        # An Agent that meant a file name learns which files carry it.
+        named = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
     if query.mode != "content":
         page = entry_page(found.entries, query)
-        return _Outcome(page, found, len(found.entries), lines_total, patterns)
+        return _Outcome(page, found, len(found.entries), lines_total, patterns, named)
     window = content_window(found.entries, query.offset, query.limit)
     events: dict[tuple[int, bytes], list[dict[str, Any]]] = {}
     for index, scope in enumerate(scopes):
@@ -937,7 +965,7 @@ def _search(
         found.warnings.extend(warnings)
         events.update(((index, path), value) for path, value in scope_events.items())
     page = content_page(window, events, query)
-    return _Outcome(page, found, lines_total, lines_total, patterns)
+    return _Outcome(page, found, lines_total, lines_total, patterns, named)
 
 
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -985,14 +1013,13 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     elif budget.stopped:
         warnings.append("The Run was cancelled, so results are partial.")
     complete = found.complete and not budget.stopped
-    if (
-        not outcome.total
-        and query.mode in {"content", "files_with_matches", "count"}
-        and any(_NAME_REGEX.search(pattern) for pattern in outcome.patterns)
-    ):
+    if outcome.named:
+        shown = ", ".join(outcome.named[:_NAMED_FILES])
+        if len(outcome.named) > _NAMED_FILES:
+            shown += f" and {len(outcome.named) - _NAMED_FILES} more"
         query.notes.append(
-            "pattern searches file contents, not file names. To list files by name, omit "
-            'pattern and pass glob, such as "*.py".'
+            f"pattern searches file contents, not file names; these file names match it: "
+            f'{shown}. To list files by name, omit pattern and pass glob, such as "*.py".'
         )
     if query.mode in {"files_without_match", *LIST_MODES}:
         files = len(found.entries)

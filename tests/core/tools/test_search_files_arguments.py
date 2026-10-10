@@ -122,16 +122,28 @@ async def test_a_file_name_glob_in_pattern_lists_matching_files(project: Path, a
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("pattern", "hint"),
-    [(r".*\.[pP][yY]$", True), (r"\.(py|ts)$", True), (r"load\.ts$", True), (r"x\.y", False)],
+    ("arguments", "named"),
+    [
+        ({"pattern": r".*\.[pP][yY]$", "output": "files"}, "src/app.py"),
+        ({"pattern": r"\.(py|ts)$", "output": "files"}, "src/app.py, src/view.ts"),
+        # A bare file name, as DeepSeek sent it to find a file (agent-eval 2026-10-10).
+        ({"pattern": "app.py", "output": "files"}, "src/app.py"),
+        ({"pattern": "src/view"}, "src/view.ts"),
+        ({"pattern": r"load\.ts$", "output": "files"}, None),
+    ],
 )
-async def test_a_file_name_regex_without_content_matches_points_to_glob(
-    project: Path, pattern: str, hint: bool
+async def test_a_content_search_without_matches_names_files_whose_names_match(
+    project: Path, arguments: dict, named: str | None
 ):
-    result = await dispatch(project, {"pattern": pattern, "output": "files"})
+    result = await dispatch(project, arguments)
     assert result["data"]["content"] == ""
-    note = 'To list files by name, omit pattern and pass glob, such as "*.py".'
-    assert (note in result["data"].get("note", "")) is hint
+    if named is None:
+        assert "note" not in result["data"]
+    else:
+        assert result["data"]["note"] == (
+            f"pattern searches file contents, not file names; these file names match it: "
+            f'{named}. To list files by name, omit pattern and pass glob, such as "*.py".'
+        )
 
 
 @pytest.mark.asyncio
