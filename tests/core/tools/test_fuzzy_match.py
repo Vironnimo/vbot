@@ -55,6 +55,8 @@ def test_unicode_line_separator_is_line_content_not_a_line_ending() -> None:
         ("a = 1\n", f"a{chr(0xA0)}= 1", "a = 2", "a = 2\n"),
         # An LF locator in a CRLF file keeps the file's endings.
         ("alpha\r\nbeta\r\ngamma\r\n", "alpha\nbeta", "one\ntwo", "one\r\ntwo\r\ngamma\r\n"),
+        # One that starts with a line break takes the whole CRLF, never only its LF.
+        ("a = 1\r\nb = 2\r\nc = 3\r\n", "\nb = 2", "", "a = 1\r\nc = 3\r\n"),
     ],
 )
 def test_normalized_matches_typography_and_line_endings(
