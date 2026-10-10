@@ -56,7 +56,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   otherwise. `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
 - The definition is minimal (user decision 2026-10-04): the description names
-  the four effects, and `patch` names its frame. The patch route is offered only to
+  its effects, and `patch` names its frame and that Add File replaces an existing file. The patch route is offered only to
   GPT families, which know V4A from Codex, so the format, the hunk rules and the
   partial semantics are taught by results and errors, not by definition text.
   `test_apply_patch_has_a_minimal_definition` pins it. Other harnesses' fields are
@@ -495,7 +495,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 
 ## Agent-facing text
 
-About 53 tokens (`python -m scripts.tool_lab definitions` estimate), against about
+About 63 tokens (`python -m scripts.tool_lab definitions` estimate), against about
 315 before 2026-10-05. A sentence stays only when a fresh Agent would often make a
 failing call without it (user decision 2026-10-04). Removed, with what carries
 each case instead: the example and the prefix, `@@`, whole-line and Add File rules
@@ -509,8 +509,9 @@ file; the result shows the changed region.
 
 | Text | Reason |
 |---|---|
-| `Edit, create, delete or move files with a patch.` | Names all four effects, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). |
+| `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
+| `patch`: `Add File also replaces an existing file.` | Says how to replace a file in one section; without it a Model deleted the file first (agent-eval 2026-10-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
 
 ## Verification

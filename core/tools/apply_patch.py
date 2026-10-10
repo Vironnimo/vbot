@@ -42,13 +42,16 @@ from core.tools.tools import (
     tool_failure,
 )
 
-APPLY_PATCH_TOOL_DESCRIPTION = "Edit, create, delete or move files with a patch."
+APPLY_PATCH_TOOL_DESCRIPTION = "Edit, create, replace, delete or move files with a patch."
 APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "patch": {
             "type": "string",
-            "description": "Patch text from *** Begin Patch to *** End Patch.",
+            "description": (
+                "Patch text from *** Begin Patch to *** End Patch. Add File also replaces an "
+                "existing file."
+            ),
         },
     },
     "required": ["patch"],

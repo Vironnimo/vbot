@@ -14,14 +14,15 @@ def test_apply_patch_has_a_minimal_definition():
     assert tools.get("apply_patch").family == "files"
     definition = tools.provider_definitions(allowed_tools=["apply_patch"])[0]
 
-    assert definition["description"] == "Edit, create, delete or move files with a patch."
+    assert definition["description"] == "Edit, create, replace, delete or move files with a patch."
     # Other harnesses' fields are accepted but never advertised.
     assert definition["parameters"] == {
         "type": "object",
         "properties": {
             "patch": {
                 "type": "string",
-                "description": "Patch text from *** Begin Patch to *** End Patch.",
+                "description": "Patch text from *** Begin Patch to *** End Patch. Add File "
+                "also replaces an existing file.",
             }
         },
         "required": ["patch"],
