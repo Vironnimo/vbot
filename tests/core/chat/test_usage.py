@@ -1,7 +1,11 @@
-"""Tests for session-level token usage aggregation."""
+"""Tests for Session Context accounting and token Usage aggregation."""
 
 from __future__ import annotations
 
+import json
+import random
+import weakref
+from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -13,7 +17,20 @@ from core.chat.usage import (
     aggregate_session_usage,
     latest_session_context_usage,
 )
+from core.providers.adapter import (
+    TOOL_RESULT_CONTENT_BLOCKS_FIELD,
+    estimate_wire_request_input_tokens,
+)
 from core.utils.tokens import estimate_request_input_tokens
+from tests.core.providers.github_copilot_test_support import copilot_metadata
+from tests.core.providers.github_copilot_test_support import make_adapter as make_copilot_adapter
+from tests.core.providers.opencode_zen_test_support import (
+    CHAT_MODEL,
+    GEMINI_MODEL,
+    MESSAGES_MODEL,
+    RESPONSES_MODEL,
+    zen_adapter,
+)
 
 JsonObject = dict[str, Any]
 
@@ -376,52 +393,275 @@ def test_removal_cannot_project_nonempty_request_to_zero_tokens():
     assert "provider_input_tokens" not in projected
 
 
-class _CountingAdapter:
-    def __init__(self) -> None:
-        self.estimates = 0
+class _RecordingAdapter:
+    """Counts with ``adapter``'s wire and records how many messages each count reads."""
+
+    def __init__(self, adapter: Any, reads: list[int]) -> None:
+        self.adapter = adapter
+        self.reads = reads
 
     def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
-        self.estimates += 1
-        return estimate_request_input_tokens(messages, tools)[0]
+        self.reads.append(len(messages))
+        return estimate_wire_request_input_tokens(
+            self.adapter, messages, model_id=model_id, tools=tools
+        )
 
 
-def test_identical_requests_are_estimated_once_and_changes_estimate_afresh():
-    """A Step projects, observes and re-projects one request with one estimate."""
+_TOOLS = [
+    {
+        "name": "read",
+        "description": "Read a file.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+    }
+]
+
+
+def test_a_request_is_counted_once_and_its_continuation_by_what_it_adds() -> None:
+    """A Step's request is counted once; the next Step reads its newest turn, not history."""
+    reads: list[int] = []
+    adapter = _BiasedInputAdapter()
     accounting = RequestContextUsage()
-    adapter = _CountingAdapter()
-    args = {"target": _route(adapter), "tools": [], "scope": "epoch"}
-    request = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
-
+    args: JsonObject = {
+        "target": _route(_RecordingAdapter(adapter, reads)),
+        "tools": _TOOLS,
+        "scope": "epoch",
+    }
+    request: list[JsonObject] = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "task"},
+    ]
     prepared = accounting.prepare(request, **args)
-    before = accounting.project_prepared(prepared)
     accounting.observe_prepared({"input_tokens": 5_000}, prepared)
-    continuation = [*request, {"role": "assistant", "content": "done"}]
-    accounting.project(continuation, **args)
-    accounting.project([dict(message) for message in continuation], **args)
 
-    assert before == {"tokens": estimate_request_input_tokens(request)[0], "estimated": True}
-    assert accounting.project(request, **args)["tokens"] == 5_000
-    assert adapter.estimates == 2
-    edited = [*request, {"role": "assistant", "content": "edited"}]
-    accounting.project(edited, **args)
-    accounting.project(request, **{**args, "tools": [{"function": {"name": "read"}}]})
-    assert adapter.estimates == 4
-    # A snapshot owns only digests/counts: a later request edit cannot rewrite it.
-    request[1]["content"] = "a changed request " * 100
+    for step in range(100):
+        call = {"id": f"call_{step}", "name": "read", "arguments": {"path": f"{step}.txt"}}
+        request = [
+            *request,
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": call["id"], "content": f"line {step}\n" * 20},
+        ]
+        reads.clear()
+        continued = accounting.prepare(request, **args)
+        assert max(reads) <= 5
+    assert continued.tokens == adapter.estimate_request_input_tokens(
+        request, model_id="model", tools=_TOOLS
+    )
+    # The same request again, such as the one its response is measured against,
+    # costs no count, and a rebuilt copy of it no whole count.
+    reads.clear()
+    assert accounting.prepare(request, **args) == continued
+    assert reads == []
+    assert accounting.prepare(deepcopy(request), **args) == continued
+    assert sum(reads) < len(request)
+
+    # A change in place anywhere is noticed and counted whole.
+    request[1]["content"] = "a changed task " * 100
+    changed = accounting.prepare(request, **args)
+    assert changed.tokens == adapter.estimate_request_input_tokens(
+        request, model_id="model", tools=_TOOLS
+    )
+    # A prepared request holds digests and a count, which no later edit rewrites.
     assert accounting.project_prepared(prepared)["tokens"] == 5_000
-    assert accounting.project(request, **args)["tokens"] > 5_000
-    assert adapter.estimates == 5
 
 
-def test_estimate_memo_is_bounded_and_retains_only_digests():
+class _Weakly(dict):
+    """A request message that can tell whether anything still holds it."""
+
+
+class _WeakBlocks(list):
+    """Message content that can tell whether anything still holds it."""
+
+
+def test_counting_holds_no_older_request_and_a_bounded_memo() -> None:
+    """Counting keeps digests: once a newer request is counted, older content is released."""
     accounting = RequestContextUsage()
-    args = {"target": _route(_CountingAdapter()), "tools": [], "scope": "epoch"}
+    args: JsonObject = {"target": _route(), "tools": [], "scope": "epoch"}
+    held = []
     for index in range(10):
-        accounting.project([{"role": "user", "content": f"private {index}"}], **args)
+        content = _WeakBlocks([{"type": "text", "text": f"private {index}"}])
+        message = _Weakly(role="user", content=content)
+        held.append((weakref.ref(message), weakref.ref(content)))
+        accounting.project([message], **args)
+        del content, message
 
+    assert [message() is None and content() is None for message, content in held[:-1]] == [True] * 9
     memo = accounting._estimates
     assert len(memo) == 4
     assert all(
         len(key) == len(request_hash) == 64 and isinstance(count, int)
         for (key, request_hash), count in memo.items()
     )
+
+
+_IMAGE = {"type": "media", "media_type": "image/png", "base64": "aW1hZ2U="}
+_WIRES = {
+    "chat-completions": lambda: (zen_adapter(), CHAT_MODEL),
+    "messages": lambda: (zen_adapter(), MESSAGES_MODEL),
+    "responses": lambda: (zen_adapter(), RESPONSES_MODEL),
+    "gemini": lambda: (zen_adapter(), GEMINI_MODEL),
+    "copilot-messages": lambda: (
+        make_copilot_adapter(
+            metadata=copilot_metadata("Anthropic", "claude-sonnet-4.6", ["/v1/messages"])
+        ),
+        "claude-sonnet-4.6",
+    ),
+    "generic": lambda: (object(), "model"),
+}
+
+
+class _Conversation:
+    """Random request changes of the kinds Runs, hooks and Compaction make."""
+
+    CHANGES = {
+        "user": 3,
+        "step": 5,
+        "results": 2,
+        "answer": 2,
+        "edit": 1,
+        "mutate": 1,
+        "truncate": 1,
+        "copy_tail": 1,
+        "deep_copy": 0.5,
+        "back": 1,
+        "repeat": 1,
+        "system": 0.5,
+        "tools": 0.5,
+        "route": 0.5,
+        "adapter": 0.3,
+    }
+
+    def __init__(self, seed: str) -> None:
+        self.rng = random.Random(seed)
+        self.ids = 0
+        self.calls: list[str] = []
+        self.earlier: list[list[JsonObject]] = []
+
+    def next_change(self) -> str:
+        return self.rng.choices(list(self.CHANGES), weights=list(self.CHANGES.values()))[0]
+
+    def apply(self, change: str, request: list[JsonObject]) -> list[JsonObject]:
+        self.earlier = [*self.earlier[-7:], request]
+        changed: list[JsonObject] = getattr(self, change)(request)
+        return changed
+
+    def user(self, request: list[JsonObject]) -> list[JsonObject]:
+        content: Any = f"task {self.rng.random()}"
+        if self.rng.random() < 0.3:
+            content = [{"type": "text", "text": content}, _IMAGE]
+        return [*request, {"role": "user", "content": content}]
+
+    def step(self, request: list[JsonObject]) -> list[JsonObject]:
+        ids = [self._call_id() for _ in range(self.rng.randint(1, 3))]
+        if self.calls and self.rng.random() < 0.1:
+            ids[0] = self.rng.choice(self.calls)  # a Provider repeating an id
+        self.calls += ids
+        assistant = {
+            "role": "assistant",
+            "content": self.rng.choice(["", "Let me look."]),
+            "tool_calls": [
+                {"id": id_, "name": "read_file", "arguments": {"path": id_}} for id_ in ids
+            ],
+        }
+        answered = ids[: self.rng.randint(0, len(ids))]
+        return [*request, assistant, *map(self._result, answered)]
+
+    def results(self, request: list[JsonObject]) -> list[JsonObject]:
+        newest, older = self.calls[-3:], self.calls[:-3]
+        call_id = self.rng.choice(
+            [*newest, *newest, self.rng.choice(older or ["ghost"]), f"ghost_{self.ids}"]
+        )
+        return [*request, self._result(call_id)]
+
+    def answer(self, request: list[JsonObject]) -> list[JsonObject]:
+        calls: JsonObject = self.rng.choice([{}, {"tool_calls": []}, {"tool_calls": None}])
+        content = self.rng.choice(["Done.", ""])
+        return [*request, {"role": "assistant", "content": content, **calls}]
+
+    def edit(self, request: list[JsonObject]) -> list[JsonObject]:
+        index = self.rng.randrange(len(request))
+        edited = {**request[index], "content": f"edited {self.rng.random()}"}
+        return [*request[:index], edited, *request[index + 1 :]]
+
+    def mutate(self, request: list[JsonObject]) -> list[JsonObject]:
+        self.rng.choice(request)["content"] = f"mutated {self.rng.random()}"
+        return request
+
+    def truncate(self, request: list[JsonObject]) -> list[JsonObject]:
+        return request[: self.rng.randint(1, max(1, len(request) - 1))]
+
+    def copy_tail(self, request: list[JsonObject]) -> list[JsonObject]:
+        return [*request[:-1], dict(request[-1])]
+
+    def deep_copy(self, request: list[JsonObject]) -> list[JsonObject]:
+        return deepcopy(request)
+
+    def back(self, request: list[JsonObject]) -> list[JsonObject]:
+        return self.rng.choice(self.earlier)
+
+    def repeat(self, request: list[JsonObject]) -> list[JsonObject]:
+        return request
+
+    def system(self, request: list[JsonObject]) -> list[JsonObject]:
+        system = {"role": "system", "content": f"rules {self.rng.random()}"}
+        if self.rng.random() < 0.5:
+            return [*request, system]
+        return [system, *request[1:]]
+
+    def _call_id(self) -> str:
+        self.ids += 1
+        # Messages and Responses wires allow no dots or colons: these ids are rewritten.
+        return f"functions.read:{self.ids}" if self.rng.random() < 0.3 else f"call_{self.ids}"
+
+    def _result(self, call_id: str) -> JsonObject:
+        result: JsonObject = {"role": "tool", "tool_call_id": call_id, "content": '{"ok":true}'}
+        # Gemini names an unnamed result after its call, wherever that is.
+        if self.rng.random() < 0.5:
+            result["name"] = "read_file"
+        if self.rng.random() < 0.3:
+            result[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = [_IMAGE]
+        return result
+
+
+@pytest.mark.parametrize("wire", list(_WIRES))
+def test_every_request_counts_exactly_as_its_whole_wire_estimate(wire: str) -> None:
+    """However a request continues or changes, its count equals counting it whole."""
+    adapter, model = _WIRES[wire]()
+    conversation = _Conversation(wire)
+    reads: list[int] = []
+
+    def routes() -> list[ContextRoute]:
+        recording = _RecordingAdapter(adapter, reads)
+        return [ContextRoute(recording, model, f"{wire}/{name}") for name in ("model", "alias")]
+
+    targets = routes()
+    target, tools = targets[0], _TOOLS
+    request: list[JsonObject] = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "task"},
+    ]
+    accounting = RequestContextUsage()
+    digests: dict[str, str] = {}
+    counted_apart = 0
+    for _ in range(150):
+        change = conversation.next_change()
+        if change == "tools":
+            tools = conversation.rng.choice([_TOOLS, [{**_TOOLS[0], "description": "Read."}], []])
+        elif change == "route":
+            target = conversation.rng.choice(targets)
+        elif change == "adapter":  # a later Run's Adapter instance for the same route
+            targets = routes()
+            target = targets[0]
+        else:
+            request = conversation.apply(change, request)
+        reads.clear()
+
+        prepared = accounting.prepare(request, target=target, tools=tools, scope="epoch")
+
+        whole = estimate_wire_request_input_tokens(adapter, request, model_id=model, tools=tools)
+        assert prepared.tokens == whole, change
+        # Equal content has one digest, whichever way it was counted.
+        content = json.dumps(request, sort_keys=True)
+        assert digests.setdefault(content, prepared.request) == prepared.request, change
+        counted_apart += bool(reads) and max(reads) < len(request)
+    assert len(set(digests.values())) == len(digests)
+    assert counted_apart >= 40
