@@ -132,6 +132,7 @@ from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
 from core.utils.tls import prewarm_outbound_http
+from core.utils.tokens import prewarm_estimation_encoding
 from core.utils.version import detect_build_identity
 
 if TYPE_CHECKING:
@@ -783,6 +784,10 @@ def bootstrap(runtime: Runtime) -> None:
 
         runtime._startup_summary = _summarize_startup(runtime)
         runtime._started = True
+        # Every Run counts its requests with the estimation encoding. Load it off
+        # the Event Loop before the first Run needs it, but after the startup
+        # work it would slow down by contending for the GIL.
+        prewarm_estimation_encoding()
         # Measurement only observes; safe modes are measured like normal serving.
         runtime._start_performance_service()
         if runtime.safe_startup_mode is None:
