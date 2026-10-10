@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import aclosing
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
 
 from core.models.models import Model
 from core.providers._http_shared import (
+    PreparedRequest,
+    RequestPlan,
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
     iter_sse_events,
+    json_body_headers,
     parse_sse_json_data,
     wrap_network_error,
 )
@@ -45,7 +48,6 @@ from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderError,
-    ProviderRequestTooLargeError,
 )
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -351,16 +353,15 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         request_headers = self._stable_request_headers(model_id, kwargs)
-        payload = self._build_gemini_payload(messages, model_id, kwargs)
         auth_recovery = self._gemini_auth_recovery()
 
-        async def _request() -> dict[str, Any]:
-            headers = await self._gemini_headers(request_headers)
+        async def _request(request: PreparedRequest) -> dict[str, Any]:
+            headers = await self._gemini_headers({**request.headers, **request_headers})
             try:
                 response = await self._client.post(
                     f"/models/{model_id}:generateContent",
-                    json=payload,
-                    headers=headers,
+                    content=request.body,
+                    headers=json_body_headers(headers),
                 )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
@@ -375,9 +376,8 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             return dict(decode_response_json(response, "OpenCode Zen Gemini provider"))
 
         reply = await execute_learning_from_rejections(
-            lambda: auth_recovery.run(lambda: retry_async(_request)),
-            payload,
-            rebuild=lambda: self._build_gemini_payload(messages, model_id, kwargs),
+            lambda request: auth_recovery.run(lambda: retry_async(lambda: _request(request))),
+            self._gemini_request_plan(messages, model_id, kwargs),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -394,15 +394,13 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         **kwargs: Any,
     ) -> AsyncGenerator[dict[str, Any]]:
         request_headers = self._stable_request_headers(model_id, kwargs)
-        payload = self._build_gemini_payload(messages, model_id, kwargs)
         auth_recovery = self._gemini_auth_recovery()
         async with aclosing(
             stream_learning_from_rejections(
-                lambda: self._gemini_stream_deltas(
-                    payload, model_id, auth_recovery, request_headers
+                lambda request: self._gemini_stream_deltas(
+                    request, model_id, auth_recovery, request_headers
                 ),
-                payload,
-                rebuild=lambda: self._build_gemini_payload(messages, model_id, kwargs),
+                self._gemini_request_plan(messages, model_id, kwargs),
                 wire=self.wire,
                 model_id=model_id,
                 provider_label=self._config.id,
@@ -413,7 +411,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
 
     async def _gemini_stream_deltas(
         self,
-        payload: dict[str, Any],
+        request: PreparedRequest,
         model_id: str,
         auth_recovery: OAuthRequestRecovery,
         request_headers: Mapping[str, str],
@@ -425,11 +423,12 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 response_headers=headers,
             )
 
+        attempt_headers = {**request.headers, **request_headers}
         response = await connect_streaming_with_retry(
             self._client,
             f"/models/{model_id}:streamGenerateContent?alt=sse",
-            payload,
-            build_headers=lambda: self._gemini_headers(request_headers),
+            request.body,
+            build_headers=lambda: self._gemini_headers(attempt_headers),
             handle_error_status=_handle_error_status,
             auth_recovery=auth_recovery,
         )
@@ -472,6 +471,16 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             self._token_getter, AuthConfig(header="x-goog-api-key", prefix="")
         )
 
+    def _gemini_request_plan(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        kwargs: Mapping[str, Any],
+    ) -> RequestPlan:
+        return self._request_plan(
+            messages, model_id, partial(self._build_gemini_payload, messages, model_id, kwargs)
+        )
+
     def _build_gemini_payload(
         self,
         messages: list[dict[str, Any]],
@@ -484,8 +493,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             ProviderError: (not retryable, nothing sent) when the profile does
                 not admit the Model, a media type or parameter is not carried,
                 or the request holds too many images.
-            ProviderRequestTooLargeError: when the request exceeds the profile's
-                request body limit.
         """
 
         self._refuse_unadmitted_model(model_id)
@@ -558,12 +565,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         # Body rules name top-level request keys, so a ``generationConfig``
         # entry replaces or fills the whole object.
         profile.request.apply_body(payload)
-
-        limit = self.request_body_limit(model_id)
-        if limit is not None:
-            encoded_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-            if encoded_size > limit:
-                raise ProviderRequestTooLargeError(encoded_size, limit)
         return payload
 
 

@@ -199,8 +199,11 @@ def test_error_detail_is_status_and_body_or_the_bare_status() -> None:
 _Establish = Callable[..., Awaitable[Any]]
 
 
+_BODY = b'{"model":"m"}'
+
+
 async def _establish_stream(client: httpx.AsyncClient, **kwargs: Any) -> Any:
-    response = await connect_streaming_with_retry(client, "/v1/chat", {"model": "m"}, **kwargs)
+    response = await connect_streaming_with_retry(client, "/v1/chat", _BODY, **kwargs)
     try:
         return json.loads(await response.aread())
     finally:
@@ -209,7 +212,7 @@ async def _establish_stream(client: httpx.AsyncClient, **kwargs: Any) -> Any:
 
 async def _post_json(client: httpx.AsyncClient, **kwargs: Any) -> Any:
     return await post_json_with_retry(
-        client, "/v1/chat", {"model": "m"}, provider_context="Stub provider", **kwargs
+        client, "/v1/chat", _BODY, provider_context="Stub provider", **kwargs
     )
 
 
@@ -265,7 +268,8 @@ async def test_establishment_retries_with_headers_rebuilt_for_every_attempt(
     assert result == {"ok": True}
     assert [request.headers["Authorization"] for request in sent] == ["Bearer t1", "Bearer t2"]
     assert [request.url.path for request in sent] == ["/v1/chat", "/v1/chat"]
-    assert all(json.loads(request.content) == {"model": "m"} for request in sent)
+    assert all(request.content == _BODY for request in sent)
+    assert all(request.headers["Content-Type"] == "application/json" for request in sent)
 
 
 @_ESTABLISHERS
@@ -354,7 +358,7 @@ async def test_failed_error_body_read_closes_the_stream(
             await connect_streaming_with_retry(
                 client,
                 "/stream",
-                {},
+                b"{}",
                 build_headers=_no_headers,
                 handle_error_status=_never_expected_error_status,
             )

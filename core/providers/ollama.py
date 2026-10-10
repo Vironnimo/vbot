@@ -40,12 +40,15 @@ import httpx
 
 from core.models.models import Model
 from core.providers._http_shared import (
+    RequestPlan,
     build_async_client,
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
     iter_stream_lines,
+    json_body_headers,
     parse_sse_json_data,
+    prepare_request,
     wrap_network_error,
 )
 from core.providers._ollama_catalog import (
@@ -402,6 +405,23 @@ class OllamaAdapter(ProviderAdapter):
         rules.apply_body(payload)
         return payload
 
+    def _request_plan(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        kwargs: Mapping[str, Any],
+        *,
+        stream: bool,
+    ) -> RequestPlan:
+        """Plan one ``/api/chat`` request, built off the Event Loop."""
+
+        def build() -> dict[str, Any]:
+            payload = self._build_payload(messages, model_id, **kwargs)
+            payload["stream"] = stream
+            return payload
+
+        return RequestPlan(build=build, body_limit=self.request_body_limit(model_id))
+
     def _resolve_enforced_context(self, model_id: str) -> int | None:
         """Return the enforced ``num_ctx`` for flagged-local models, else ``None``."""
 
@@ -467,15 +487,18 @@ class OllamaAdapter(ProviderAdapter):
         """
 
         request_headers = self._stable_request_headers(model_id, kwargs)
-        payload = self._build_payload(messages, model_id, **kwargs)
-        payload["stream"] = False
+        request = await prepare_request(
+            self._request_plan(messages, model_id, kwargs, stream=False)
+        )
         reasoning_fields = self._reasoning_fields(model_id)
 
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
             headers.update(request_headers)
             try:
-                response = await self._client.post(CHAT_ENDPOINT, json=payload, headers=headers)
+                response = await self._client.post(
+                    CHAT_ENDPOINT, content=request.body, headers=json_body_headers(headers)
+                )
             except httpx.TransportError as exc:
                 raise self._wrap_transport_error(exc) from exc
             if response.status_code >= 400:
@@ -519,8 +542,7 @@ class OllamaAdapter(ProviderAdapter):
         """
 
         request_headers = self._stable_request_headers(model_id, kwargs)
-        payload = self._build_payload(messages, model_id, **kwargs)
-        payload["stream"] = True
+        request = await prepare_request(self._request_plan(messages, model_id, kwargs, stream=True))
 
         async def _build_headers() -> dict[str, str]:
             headers = await self._build_headers()
@@ -542,11 +564,13 @@ class OllamaAdapter(ProviderAdapter):
         response = await connect_streaming_with_retry(
             self._client,
             CHAT_ENDPOINT,
-            payload,
+            request.body,
             build_headers=_build_headers,
             handle_error_status=_handle_error_status,
             wrap_transport_error=self._wrap_transport_error,
         )
+        # The established stream never sends the request again.
+        request.release()
 
         reasoning_fields = self._reasoning_fields(model_id)
         observed_reasoning_field = False

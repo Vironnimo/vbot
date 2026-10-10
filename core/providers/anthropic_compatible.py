@@ -17,19 +17,22 @@ Key differences from the OpenAI-compatible adapter:
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from contextlib import aclosing
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
 
 from core.providers._http_shared import (
+    PreparedRequest,
+    RequestPlan,
     build_async_client,
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
-    enforce_request_body_limit,
     iter_sse_data,
+    json_body_headers,
     parse_sse_json_data,
     wrap_network_error,
 )
@@ -140,6 +143,10 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         token_getter: Async callable that returns the current auth token.
         api_version: ``anthropic-version`` header value, when the endpoint needs one.
         extra_retryable_statuses: Provider-specific retryable HTTP statuses.
+        stamp_output_limit: Called with each build's caller kwargs, Model id and
+            messages before the payload renders, on the build's thread. A
+            wrapping Adapter whose Model lookup differs resolves its own output
+            limit here.
     """
 
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("messages",)
@@ -157,8 +164,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         client: httpx.AsyncClient | None = None,
         api_version: str | None = None,
         extra_retryable_statuses: frozenset[int] = frozenset(),
+        stamp_output_limit: Callable[[dict[str, Any], str, list[dict[str, Any]]], None]
+        | None = None,
     ) -> None:
         self._config = config
+        self._stamp_output_limit = stamp_output_limit
         self._token_getter = (
             StaticTokenGetter(token_getter) if isinstance(token_getter, str) else token_getter
         )
@@ -290,6 +300,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ProviderError: (not retryable, nothing sent) when the wire profile
                 does not admit the Model or refuses a request parameter.
         """
+        if self._stamp_output_limit is not None:
+            self._stamp_output_limit(kwargs, model_id, messages)
         self._refuse_unadmitted_model(model_id)
         profile = self.wire_profile(model_id)
         rules = profile.request
@@ -584,19 +596,16 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         """
 
         request_headers = self._stable_request_headers(model_id, kwargs)
-        payload = self._build_payload(messages, model_id, **kwargs)
-        await enforce_request_body_limit(payload, self.request_body_limit(model_id))
-
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
-        async def _do_request() -> dict[str, Any]:
+        async def _do_request(request: PreparedRequest) -> dict[str, Any]:
             headers = await self._build_headers()
             headers.update(request_headers)
             try:
                 response = await self._client.post(
                     MESSAGES_ENDPOINT,
-                    json=payload,
-                    headers=headers,
+                    content=request.body,
+                    headers=json_body_headers(headers),
                 )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
@@ -612,10 +621,15 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             )
             return dict(decode_response_json(response, f"{self._config.name} provider"))
 
+        async def _execute(request: PreparedRequest) -> dict[str, Any]:
+            return await auth_recovery.run(lambda: retry_async(lambda: _do_request(request)))
+
         response = await execute_learning_from_rejections(
-            lambda: auth_recovery.run(lambda: retry_async(_do_request)),
-            payload,
-            rebuild=lambda: self._build_payload(messages, model_id, **kwargs),
+            _execute,
+            RequestPlan(
+                build=partial(self._build_payload, messages, model_id, **kwargs),
+                body_limit=self.request_body_limit(model_id),
+            ),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -668,14 +682,10 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 error payloads.
         """
         request_headers = self._stable_request_headers(model_id, kwargs)
-
-        def build_stream_payload() -> dict[str, Any]:
-            built = self._build_payload(messages, model_id, **kwargs)
-            built["stream"] = True
-            return built
-
-        payload = build_stream_payload()
-        await enforce_request_body_limit(payload, self.request_body_limit(model_id))
+        plan = RequestPlan(
+            build=partial(self._build_stream_payload, messages, model_id, kwargs),
+            body_limit=self.request_body_limit(model_id),
+        )
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
         async def _build_headers() -> dict[str, str]:
@@ -694,11 +704,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        async def _stream_payload() -> AsyncGenerator[dict[str, Any]]:
+        async def _stream_request(request: PreparedRequest) -> AsyncGenerator[dict[str, Any]]:
             response = await connect_streaming_with_retry(
                 self._client,
                 MESSAGES_ENDPOINT,
-                payload,
+                request.body,
                 build_headers=_build_headers,
                 handle_error_status=_handle_error_status,
                 auth_recovery=auth_recovery,
@@ -709,9 +719,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         async with aclosing(
             stream_learning_from_rejections(
-                _stream_payload,
-                payload,
-                rebuild=build_stream_payload,
+                _stream_request,
+                plan,
                 wire=self.wire,
                 model_id=model_id,
                 provider_label=self._config.id,
@@ -719,6 +728,18 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         ) as deltas:
             async for delta in deltas:
                 yield delta
+
+    def _build_stream_payload(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        kwargs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Build the streaming variant of the Messages payload."""
+
+        payload = self._build_payload(messages, model_id, **kwargs)
+        payload["stream"] = True
+        return payload
 
     async def _stream_response_deltas(
         self, response: httpx.Response

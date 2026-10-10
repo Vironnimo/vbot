@@ -9,9 +9,10 @@ exceptions.
 from __future__ import annotations
 
 import codecs
+import contextvars
 import json
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, override
 
@@ -43,8 +44,9 @@ if TYPE_CHECKING:
 _AUTH_ERROR_STATUS_CODES: frozenset[int] = frozenset({401, 403})
 _PROVIDER_HTTP_TIMEOUT_SECONDS = 60.0
 PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS = 180.0
-# Keep large JSON allocations bounded without competing with Chat transforms
-# or the Event Loop's default executor. Threads start only on the first request.
+# Payload builds and their JSON bodies grow with the Session. Keep them off the
+# Event Loop, bounded, and apart from Chat transforms and the loop's default
+# executor. Threads start only on the first request.
 _REQUEST_BODY_WORKERS = BoundedWorkerPool(name="provider-request-body", max_workers=2)
 
 
@@ -317,18 +319,110 @@ def _encode_json_body(payload: dict[str, Any]) -> bytes:
     return httpx.Request("POST", "https://request.invalid", json=payload).content
 
 
-async def prepare_json_body(payload: dict[str, Any]) -> bytes:
-    """Encode one stable payload off the Event Loop for size checks and retries."""
-    return await _REQUEST_BODY_WORKERS.run(_encode_json_body, payload)
+def json_body_headers(headers: Mapping[str, str]) -> httpx.Headers:
+    """Return one attempt's headers for an encoded JSON body.
+
+    ``Content-Type`` defaults to JSON, as httpx's ``json=`` would set it; an
+    explicit value in any letter case wins.
+    """
+    prepared = httpx.Headers(headers)
+    prepared.setdefault("Content-Type", "application/json")
+    return prepared
 
 
-async def enforce_request_body_limit(payload: dict[str, Any], limit: int | None) -> None:
-    """Raise ProviderRequestTooLargeError before I/O when *payload* exceeds *limit*."""
-    if limit is None:
-        return
-    size = len(await prepare_json_body(payload))
-    if size > limit:
-        raise ProviderRequestTooLargeError(size, limit)
+@dataclass(frozen=True, eq=False)
+class RequestPlan:
+    """How one Provider request is rendered: its payload build and the checks on it.
+
+    ``build`` renders the wire payload from the caller's messages and kwargs.
+    ``body_limit`` is the wire's verified request byte limit, when known.
+    ``payload_headers`` returns the headers that depend on the finished payload
+    and may refuse it with a ``ProviderError``; it runs once per payload, not
+    once per attempt.
+    """
+
+    build: Callable[[], dict[str, Any]]
+    body_limit: int | None = None
+    payload_headers: Callable[[Mapping[str, Any]], dict[str, str]] | None = None
+
+
+class PreparedRequest:
+    """One rendered request: its payload, exact JSON body and payload headers.
+
+    Every attempt of the request sends the same body bytes. An established
+    stream never sends its request again, so the stream owner calls
+    :meth:`release` and the payload and body need not live as long as the
+    stream; reading either afterwards is a programming error.
+    """
+
+    __slots__ = ("_body", "_payload", "headers")
+
+    def __init__(self, payload: dict[str, Any], body: bytes, headers: dict[str, str]) -> None:
+        self._payload: dict[str, Any] | None = payload
+        self._body: bytes | None = body
+        self.headers = headers
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        if self._payload is None:
+            raise RuntimeError("The Provider request was released after it was established")
+        return self._payload
+
+    @property
+    def body(self) -> bytes:
+        if self._body is None:
+            raise RuntimeError("The Provider request was released after it was established")
+        return self._body
+
+    def release(self) -> None:
+        """Drop the payload and body; the headers stay for diagnostics."""
+        self._payload = None
+        self._body = None
+
+
+type PayloadRevision = Callable[[dict[str, Any]], bool]
+"""Adjusts a freshly built payload in place and says whether it is worth sending."""
+
+
+async def prepare_request(plan: RequestPlan) -> PreparedRequest:
+    """Build, encode and check one request in a single request-body worker hop.
+
+    The build runs in a copy of the caller's context, so a scoped Chat input
+    budget decides the same output limit it would on the Event Loop. A
+    cancelled caller waits until a started hop settles and sends nothing.
+
+    Raises:
+        ProviderRequestTooLargeError: the body exceeds ``plan.body_limit``.
+        ProviderError: the build or ``plan.payload_headers`` refused the request.
+    """
+    prepared = await _REQUEST_BODY_WORKERS.run(
+        _render_request, contextvars.copy_context(), plan, None
+    )
+    assert prepared is not None  # only a revision can decline
+    return prepared
+
+
+async def revise_request(plan: RequestPlan, revise: PayloadRevision) -> PreparedRequest | None:
+    """Rebuild one request with ``revise`` applied, in one hop like :func:`prepare_request`.
+
+    Returns ``None`` when ``revise`` declines the rebuilt payload.
+    """
+    return await _REQUEST_BODY_WORKERS.run(
+        _render_request, contextvars.copy_context(), plan, revise
+    )
+
+
+def _render_request(
+    context: contextvars.Context, plan: RequestPlan, revise: PayloadRevision | None
+) -> PreparedRequest | None:
+    payload = context.run(plan.build)
+    if revise is not None and not revise(payload):
+        return None
+    body = _encode_json_body(payload)
+    if plan.body_limit is not None and len(body) > plan.body_limit:
+        raise ProviderRequestTooLargeError(len(body), plan.body_limit)
+    headers = context.run(plan.payload_headers, payload) if plan.payload_headers is not None else {}
+    return PreparedRequest(payload, body, headers)
 
 
 # Receives (status_code, error_body, response_headers) for every HTTP >= 400
@@ -350,37 +444,30 @@ def format_http_error_detail(status_code: int, body: str | None = None) -> str:
 async def connect_streaming_with_retry(
     client: httpx.AsyncClient,
     endpoint_path: str,
-    payload: dict[str, Any] | bytes,
+    body: bytes,
     *,
     build_headers: Callable[[], Awaitable[dict[str, str]]],
     handle_error_status: HttpErrorStatusHandler,
     auth_recovery: OAuthRequestRecovery | None = None,
     wrap_transport_error: TransportErrorWrapper = wrap_network_error,
 ) -> httpx.Response:
-    """Establish one streaming POST, retrying only the establishment.
+    """Establish one streaming POST of encoded JSON ``body``, retrying only the establishment.
 
     Headers rebuild on every attempt so a token refreshed during a retry
-    backoff is re-consulted each time. An error response is fully read and
-    closed before ``handle_error_status`` classifies it — this frees the
-    connection for the next attempt. Mid-stream failures are out of scope:
-    once this returns the response, Chat owns preservation and recovery.
-    Pre-encoded JSON bytes are reused on every attempt; dict callers retain
-    httpx's normal JSON serialization.
+    backoff is re-consulted each time; ``Content-Type`` defaults to JSON. An
+    error response is fully read and closed before ``handle_error_status``
+    classifies it — this frees the connection for the next attempt.
+    Mid-stream failures are out of scope: once this returns the response,
+    Chat owns preservation and recovery. Every attempt sends the same bytes.
     """
 
     async def _connect() -> httpx.Response:
-        headers = httpx.Headers(await build_headers())
-        body_arguments: dict[str, Any]
-        if isinstance(payload, bytes):
-            headers.setdefault("Content-Type", "application/json")
-            body_arguments = {"content": payload}
-        else:
-            body_arguments = {"json": payload}
+        headers = json_body_headers(await build_headers())
         request = build_streaming_request(
             client,
             "POST",
             endpoint_path,
-            **body_arguments,
+            content=body,
             headers=headers,
         )
         try:
@@ -414,7 +501,7 @@ async def connect_streaming_with_retry(
 async def post_json_with_retry(
     client: httpx.AsyncClient,
     endpoint_path: str,
-    payload: dict[str, Any],
+    body: bytes,
     *,
     build_headers: Callable[[], Awaitable[dict[str, str]]],
     handle_error_status: HttpErrorStatusHandler,
@@ -422,17 +509,18 @@ async def post_json_with_retry(
     auth_recovery: OAuthRequestRecovery | None = None,
     wrap_transport_error: TransportErrorWrapper = wrap_network_error,
 ) -> dict[str, Any]:
-    """POST one JSON payload and decode the object reply under shared retry.
+    """POST one encoded JSON ``body`` and decode the object reply under shared retry.
 
+    ``Content-Type`` defaults to JSON and every attempt sends the same bytes.
     Non-streaming responses arrive fully buffered, so the error hook receives
     ``response.text`` as the body. ``provider_context`` names the provider in
     malformed-body errors (e.g. ``"OpenAI provider"``).
     """
 
     async def _do_request() -> dict[str, Any]:
-        headers = await build_headers()
+        headers = json_body_headers(await build_headers())
         try:
-            response = await client.post(endpoint_path, json=payload, headers=headers)
+            response = await client.post(endpoint_path, content=body, headers=headers)
         except httpx.TransportError as exc:
             raise wrap_transport_error(exc) from exc
 
