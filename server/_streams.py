@@ -22,12 +22,11 @@ from server.events import (
     RESOURCE_KIND_CLIENTS,
     ServerEventBus,
 )
-from server.file_delivery import FileDelivery
+from server.file_delivery import FILE_PREVIEW_WORKERS, FileDelivery
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
 from server.rpc.payloads import (
     file_url_candidates,
-    remove_opaque_provider_metadata,
+    remove_opaque_provider_metadata_async,
     verified_file_urls,
 )
 
@@ -340,10 +339,12 @@ async def _sse_run_events(
                 except StopAsyncIteration:
                     break
                 event_task = None
-                data = remove_opaque_provider_metadata(
+                data = await remove_opaque_provider_metadata_async(
                     event.to_dict(),
                     file_delivery=file_delivery,
                 )
+                if shutdown_event is not None and shutdown_event.is_set():
+                    break
                 if include_file_urls:
                     # Most events (every text delta) carry no file URL; only a
                     # candidate needs the filesystem verification off the loop.
@@ -355,6 +356,8 @@ async def _sse_run_events(
                         if candidates
                         else []
                     )
+                    if shutdown_event is not None and shutdown_event.is_set():
+                        break
                 count(SSE_EVENTS_METRIC)
                 yield (
                     f"id: {event.sequence}\n"

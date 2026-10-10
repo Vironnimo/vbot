@@ -7,6 +7,7 @@ import os
 import stat
 import sys
 import threading
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -540,6 +541,39 @@ def test_patch_stats_keep_identical_session_and_run_ids_in_separate_scopes(tmp_p
             "paths": [str(tmp_path / name)],
             "file_stats": [{"path": str(tmp_path / name), "added": added, "removed": 0}],
         }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path aliases")
+def test_overlapping_calls_lock_case_aliases_in_the_same_order(tmp_path, monkeypatch):
+    state = FileReadState()
+    acquired = []
+    original_lock = state.lock_path
+
+    @contextmanager
+    def record_lock(path):
+        with original_lock(path):
+            acquired.append(path)
+            yield
+
+    monkeypatch.setattr(state, "lock_path", record_lock)
+    orders = []
+    for names in (("a.txt", "B.txt"), ("A.txt", "b.txt")):
+        acquired.clear()
+        result = apply(
+            tmp_path,
+            "*** Begin Patch\n"
+            + "".join(f"*** Add File: {name}\n+content\n" for name in names)
+            + "*** End Patch",
+            state=state,
+        )
+        assert result["ok"]
+        orders.append(acquired.copy())
+        for name in names:
+            (tmp_path / name).unlink()
+
+    # Equivalent multi-file calls must not acquire shared locks in reverse order.
+    assert len(orders[0]) == 2
+    assert orders[0] == orders[1]
 
 
 @pytest.mark.asyncio

@@ -103,6 +103,9 @@ class ClipboardTextInserter:
             return 0
 
     def insert(self, text: str, target_window: int) -> str:
+        # Wait before publishing the transcript: another app may change the
+        # clipboard while a modifier is held, and Ctrl+V must paste this text.
+        may_paste = self._may_paste(target_window)
         try:
             previous = self._host.read_clipboard_text()
         except Exception:
@@ -114,7 +117,7 @@ class ClipboardTextInserter:
         except Exception:
             logger.warning("Dictation could not write the clipboard", exc_info=True)
             return INSERT_FAILED
-        if not self._may_paste(target_window):
+        if not may_paste or not self._target_focused(target_window):
             return INSERT_CLIPBOARD
         try:
             pasted = self._host.send_paste()
@@ -130,8 +133,7 @@ class ClipboardTextInserter:
         return INSERT_PASTED
 
     def _may_paste(self, target_window: int) -> bool:
-        if target_window == 0 or self.foreground_window() != target_window:
-            logger.info("The focus moved during dictation; the text stays in the clipboard")
+        if not self._target_focused(target_window):
             return False
         try:
             reachable = self._host.can_send_input_to(target_window)
@@ -147,6 +149,12 @@ class ClipboardTextInserter:
                 logger.info("A modifier is still held; the text stays in the clipboard")
                 return False
             self._sleep(_MODIFIER_POLL_SECONDS)
+        return True
+
+    def _target_focused(self, target_window: int) -> bool:
+        if target_window == 0 or self.foreground_window() != target_window:
+            logger.info("The focus moved during dictation; the text stays in the clipboard")
+            return False
         return True
 
     def _restore(self, previous: str, written: int) -> None:

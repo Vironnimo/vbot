@@ -15,8 +15,10 @@ from typing import Any
 from urllib.parse import quote
 
 from core.attachments import sniff_media_type
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
+FILE_PREVIEW_WORKERS = BoundedWorkerPool(name="file-preview", max_workers=2)
 
 FILE_URL_PREFIX = "/api/files/"
 # How the WebUI presents the files of a Tool display.

@@ -222,7 +222,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         # Freeze the live projection at the same boundary as durable history.
         # A completion during projection must not turn an earlier page into idle history.
         active_run = (
-            _run_response(
+            await _run_response(
                 active_run_object,
                 sse_url=f"/api/runs/{active_run_object.id}/events",
                 file_delivery=state.file_delivery,
@@ -960,7 +960,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
         assistant_message = await submission.wait()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(
+    return await _run_response(
         submission,
         final_message=assistant_message,
         file_delivery=state.file_delivery,
@@ -976,7 +976,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
         _bridge_run_to_event_bus(state, submission)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(
+    return await _run_response(
         submission,
         sse_url=f"/api/runs/{submission.id}/events",
         file_delivery=state.file_delivery,
@@ -1008,7 +1008,7 @@ async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(
+    return await _run_response(
         run,
         sse_url=f"/api/runs/{run.id}/events",
         file_delivery=state.file_delivery,
@@ -1033,7 +1033,7 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
         run = await state.chat_runs.cancel(run_id, reason=reason, initiator="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(run, file_delivery=state.file_delivery)
+    return await _run_response(run, file_delivery=state.file_delivery)
 
 
 async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -1089,7 +1089,7 @@ async def _control_run_chat(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Invalid Run control action.")
     if not accepted:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "This action is no longer available.")
-    return _run_response(run)
+    return await _run_response(run)
 
 
 def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:

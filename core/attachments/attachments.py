@@ -9,6 +9,8 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
+from xml.parsers import expat
 from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
 
 from core.config_validation import (
@@ -50,6 +52,15 @@ _OOXML_WILDCARD = "application/vnd.openxmlformats-officedocument.*"
 # Bound the OOXML manifest separately from the compressed upload size. Only
 # stored/DEFLATE entries are admitted below, where ZipExtFile bounds decoded bytes.
 _MAX_OOXML_CONTENT_TYPES_BYTES = 1_048_576
+_OOXML_CONTENT_TYPES_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/content-types"
+_OOXML_MAIN_MEDIA_TYPES = {
+    f"{_OOXML_PREFIX}{subtype}.main+xml": f"{_OOXML_PREFIX}{subtype}"
+    for subtype in (
+        "wordprocessingml.document",
+        "spreadsheetml.sheet",
+        "presentationml.presentation",
+    )
+}
 _MIME_ALLOWLIST = frozenset(
     {
         "image/jpeg",
@@ -557,24 +568,58 @@ def _sniff_ooxml_media_type(data: bytes) -> str | None:
             with archive.open(manifest) as handle:
                 # Keep the read bounded even when the ZIP's declared size is false.
                 content_types_bytes = handle.read(_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
+            if len(content_types_bytes) > _MAX_OOXML_CONTENT_TYPES_BYTES:
+                return None
+            return _ooxml_main_media_type(content_types_bytes, archive)
     except BadZipFile, KeyError, OSError, EOFError, RuntimeError, zlib.error:
         # Encrypted entries, unsupported compression and invalid compressed data
         # are unrecognizable input, not failures of the attachment service.
         return None
 
-    if len(content_types_bytes) > _MAX_OOXML_CONTENT_TYPES_BYTES:
-        # The manifest exceeds our sniffing budget.
+
+def _ooxml_main_media_type(manifest: bytes, archive: ZipFile) -> str | None:
+    """Recognize a document's main part, never an embedded Office package.
+
+    SAX-style parsing retains no tree; the caller caps the bytes, and rejecting
+    DOCTYPE declarations prevents entity expansion or external declarations.
+    """
+    media_types: set[str] = set()
+    depth = 0
+
+    def start_element(name: str, attributes: dict[str, str]) -> None:
+        nonlocal depth
+        depth += 1
+        if depth == 1 and name != f"{_OOXML_CONTENT_TYPES_NAMESPACE}}}Types":
+            raise ValueError("Not an OPC content types manifest")
+        if depth != 2 or name != f"{_OOXML_CONTENT_TYPES_NAMESPACE}}}Override":
+            return
+        media_type = _OOXML_MAIN_MEDIA_TYPES.get(attributes.get("ContentType", ""))
+        part_name = attributes.get("PartName", "")
+        if media_type is None or not part_name.startswith("/"):
+            return
+        try:
+            part = archive.getinfo(unquote(part_name[1:]))
+        except KeyError:
+            return
+        if not part.is_dir():
+            media_types.add(media_type)
+
+    def end_element(name: str) -> None:
+        nonlocal depth
+        depth -= 1
+
+    def reject_doctype(*arguments: object) -> None:
+        raise ValueError("OPC content types must not declare a DOCTYPE")
+
+    parser = expat.ParserCreate(namespace_separator="}")
+    parser.StartElementHandler = start_element
+    parser.EndElementHandler = end_element
+    parser.StartDoctypeDeclHandler = reject_doctype
+    try:
+        parser.Parse(manifest, True)
+    except expat.ExpatError, LookupError, ValueError:
         return None
-    content_types = content_types_bytes.decode("utf-8", errors="ignore")
-
-    if "wordprocessingml.document" in content_types:
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if "spreadsheetml.sheet" in content_types:
-        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    if "presentationml.presentation" in content_types:
-        return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-
-    return None
+    return next(iter(media_types)) if len(media_types) == 1 else None
 
 
 def _sniff_legacy_office_media_type(data: bytes, filename: str) -> str | None:

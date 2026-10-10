@@ -7,6 +7,7 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
+from threading import get_ident
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -124,7 +125,8 @@ async def test_queued_item_bridge_logs_only_a_failed_run_start(
         ),
     ],
 )
-def test_run_started_event_carries_the_run_address_and_attribution(
+@pytest.mark.asyncio
+async def test_run_started_event_carries_the_run_address_and_attribution(
     run_fields: JsonObject, source_session_id: str, attribution: JsonObject
 ) -> None:
     event = RunEvent(
@@ -137,7 +139,7 @@ def test_run_started_event_carries_the_run_address_and_attribution(
         **run_fields,
     )
 
-    summary = _server_event_from_run_event(event, source_session_id=source_session_id)
+    summary = await _server_event_from_run_event(event, source_session_id=source_session_id)
 
     assert summary == {
         "type": "run_started",
@@ -225,10 +227,11 @@ _CHANGE_STATS = {
         ),
     ],
 )
-def test_terminal_events_project_only_their_completion_facts(
+@pytest.mark.asyncio
+async def test_terminal_events_project_only_their_completion_facts(
     event_type: str, event_payload: JsonObject, projected: JsonObject, withheld: tuple[str, ...]
 ) -> None:
-    summary = _server_event_from_run_event(_event(event_type, event_payload))
+    summary = await _server_event_from_run_event(_event(event_type, event_payload))
 
     assert summary["type"] == event_type
     assert {key: summary["payload"][key] for key in projected} == projected
@@ -274,8 +277,9 @@ def test_terminal_events_project_only_their_completion_facts(
         ),
     ],
 )
-def test_progress_events_bridge_as_run_output(event_type: str, payload: JsonObject) -> None:
-    summary = _server_event_from_run_event(_event(event_type, payload))
+@pytest.mark.asyncio
+async def test_progress_events_bridge_as_run_output(event_type: str, payload: JsonObject) -> None:
+    summary = await _server_event_from_run_event(_event(event_type, payload))
 
     assert summary["type"] == "run_output"
     assert summary["payload"]["run_event_type"] == event_type
@@ -283,7 +287,10 @@ def test_progress_events_bridge_as_run_output(event_type: str, payload: JsonObje
     assert "error" not in summary["payload"]
 
 
-def test_server_event_projects_assistant_file_reference(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_server_event_projects_assistant_file_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     image = tmp_path / "bridge.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
     marker = f"file:{image}"
@@ -298,10 +305,23 @@ def test_server_event_projects_assistant_file_reference(tmp_path: Path) -> None:
     )
     event = _event(ASSISTANT_OUTPUT_EVENT, {"message": message.to_dict()})
 
-    summary = _server_event_from_run_event(
-        event,
-        file_delivery=FileDelivery(secret=b"bridge-secret"),
-    )
+    delivery = FileDelivery(secret=b"bridge-secret")
+    event_loop_thread = get_ident()
+    project_message = delivery.project_message
+    worker_reads: list[int] = []
+
+    def checked_projection(value: JsonObject) -> JsonObject:
+        if value.get("output_files") or value.get("media_files"):
+            worker_reads.append(get_ident())
+            assert get_ident() != event_loop_thread
+        return project_message(value)
+
+    monkeypatch.setattr(delivery, "project_message", checked_projection)
+    event.payload["display"] = {"media_files": [{"path": str(image), "kind": "image"}]}
+    summary = await _server_event_from_run_event(event, file_delivery=delivery)
+
+    assert len(worker_reads) == 2
+    assert summary["payload"]["output"]["display"]["media"][0]["url"].startswith("/api/files/")
 
     serialized = str(summary)
     assert "output_files" not in serialized
@@ -441,6 +461,105 @@ async def test_run_event_bridge_observes_publish_failures(
 
     assert len(warnings) == 1
     assert warnings[0][1] is True
+
+
+@pytest.mark.asyncio
+async def test_run_event_bridge_closes_its_subscription_when_projection_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = Run(run_id="run-one", agent_id="agent-1", session_id="session-1")
+    projecting = asyncio.Event()
+
+    async def paused_projection(value: Any, **kwargs: Any) -> Any:
+        projecting.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(event_bridge, "remove_opaque_provider_metadata_async", paused_projection)
+    bridge = asyncio.create_task(_publish_run_events(ServerEventBus(), run))
+    try:
+        # Subscribe before emitting: replayed events precede queue registration.
+        await asyncio.sleep(0)
+        run.emit(RUN_STARTED_EVENT, {"status": "running"})
+        await projecting.wait()
+        assert run.subscriber_count == 1
+    finally:
+        bridge.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await bridge
+    assert run.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["replay", "live"])
+@pytest.mark.parametrize("complete_during_projection", [False, True])
+async def test_run_bridge_recovers_lag_during_projection(
+    phase: str, complete_during_projection: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = Run(
+        run_id="run-one",
+        agent_id="agent-one",
+        session_id="session-one",
+        subscriber_queue_limit=2,
+        event_retention_limit=3,
+    )
+    event_bus = ServerEventBus()
+    projecting = asyncio.Event()
+    release_projection = asyncio.Event()
+    resumed = asyncio.Event()
+
+    async def paused_projection(value: Any, **kwargs: Any) -> Any:
+        if value.get("status") == "running":
+            projecting.set()
+            await release_projection.wait()
+        else:
+            resumed.set()
+        return value
+
+    monkeypatch.setattr(event_bridge, "remove_opaque_provider_metadata_async", paused_projection)
+    if phase == "replay":
+        run.emit(RUN_STARTED_EVENT, {"status": "running"})
+    bridge = asyncio.create_task(_publish_run_events(event_bus, run))
+    try:
+        if phase == "live":
+            await asyncio.sleep(0)
+            assert run.subscriber_count == 1
+            run.emit(RUN_STARTED_EVENT, {"status": "running"})
+        await asyncio.wait_for(projecting.wait(), timeout=1)
+        # Overflow both the live queue and retained replay while projection waits.
+        for index in range(4):
+            run.emit(TOOL_CALL_OUTPUT_EVENT, {"text": str(index)})
+        run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": "Finished output"}})
+        if complete_during_projection:
+            # Completion also compacts retained events before replay can catch up.
+            run.mark_completed("done")
+        release_projection.set()
+        if not complete_during_projection:
+            await asyncio.wait_for(resumed.wait(), timeout=1)
+            run.mark_completed("done")
+        await asyncio.wait_for(bridge, timeout=1)
+    finally:
+        if not bridge.done():
+            bridge.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await bridge
+
+    assert [event["type"] for event in event_bus.events] == [
+        "run_started",
+        "run_output",
+        "run_completed",
+        "resource_changed",
+        "resource_changed",
+    ]
+    assert [event["payload"]["run_event_sequence"] for event in event_bus.events[:3]] == [
+        1,
+        6,
+        7,
+    ]
+    assert [event["payload"]["kind"] for event in event_bus.events[-2:]] == [
+        "debug_traces",
+        "sessions",
+    ]
+    assert run.subscriber_count == 0
 
 
 def test_run_event_bridge_dedupe_cache_is_bounded() -> None:
