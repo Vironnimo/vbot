@@ -249,10 +249,16 @@ class RunExecution:
                 if prompt_block_change is not None:
                     session.add_note(prompt_block_change)
                 # Speech-to-text runs before the Session lock and persists with
-                # the message, so history shows what a voice message said.
+                # the message, so history shows what a voice message said. Stop
+                # abandons it: the input persists without a transcription, and
+                # the Run ends after that.
                 user_content = request.content
                 if not internal and not request.input_already_persisted and user_content:
-                    user_content = await self._requests.transcribe_user_audio(user_content)
+                    try:
+                        user_content = await self._requests.transcribe_user_audio(user_content)
+                    except asyncio.CancelledError:
+                        if not run.cancel_requested:
+                            raise
                 async with self._dependencies.sessions.write_lock(session_address):
                     # Another admitted Run may have appended while this Run was
                     # queued for the Session lock. Refresh before assigning image
@@ -335,7 +341,10 @@ class RunExecution:
                     if takeover:
                         report_subagent_takeover(self._dependencies, session_address)
                     if not internal and not request.input_already_persisted:
-                        _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+                        # A Stop during speech-to-text still persisted the input.
+                        _emit_message_event(
+                            run, USER_MESSAGE_EVENT, user_message, allow_after_cancel=True
+                        )
                     if request.input_persisted_hook is not None:
                         try:
                             request.input_persisted_hook()

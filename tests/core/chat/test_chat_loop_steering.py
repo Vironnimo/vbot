@@ -17,7 +17,7 @@ from core.chat.content_blocks import MediaBlock
 from core.chat.messages import ChatMessage, InputOrigin
 from core.chat.wire_shaping import system_reminder_request_message
 from core.providers.errors import NetworkError
-from core.runs import PROVIDER_REQUEST_STATUS_EVENT, RunKind, RunStatus
+from core.runs import PROVIDER_REQUEST_STATUS_EVENT, RunCancelledError, RunKind, RunStatus
 from core.tools import ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
     PolicyStubAdapter,
@@ -200,6 +200,50 @@ async def test_voice_input_persists_with_its_transcription(tmp_path: Path) -> No
     # Each voice message is transcribed once; requests reuse the persisted text.
     assert transcriber.calls == ["a.ogg", "b.ogg"]
     assert "words of b.ogg" in str(adapter.requests[1]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_stop_during_speech_to_text_keeps_the_voice_message(tmp_path: Path) -> None:
+    # Stop abandons the speech-to-text of the Run's input: the voice message
+    # still persists, without a transcription, and the Run ends before a request.
+    class StalledTranscriber:
+        def __init__(self) -> None:
+            self.entered = asyncio.Event()
+
+        async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
+            self.entered.set()
+            await asyncio.Event().wait()
+            raise AssertionError("speech-to-text never finishes")
+
+    store = AttachmentStore(tmp_path)
+    voice = store.store("a.ogg", b"OggS\x00\x02voice-payload")
+    block = MediaBlock("media", voice.id, voice.filename, voice.media_type)
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/gpt-5.2"), adapter=adapter
+    )
+    runtime.chat_sessions.create("coder", session_id="one")
+    transcriber = StalledTranscriber()
+    loop = build_chat_loop(
+        runtime, attachment_resolver=ContentBlockResolver(store, transcriber=transcriber)
+    )
+    run = await loop.start_run("coder", [block], session_id="one")
+    await asyncio.wait_for(transcriber.entered.wait(), 5)
+    run.request_cancel(reason="user")
+    with pytest.raises(RunCancelledError):
+        await asyncio.wait_for(run.wait(), 10)
+
+    assert run.status == RunStatus.CANCELLED
+    history = runtime.chat_sessions.get(session_address("coder", "one")).load()
+    users = [message for message in history if message.role == "user"]
+    assert [message.content for message in users] == [[block]]
+    persisted = [
+        event.payload["message"]["id"]
+        for event in await runtime.timelines.events(run)
+        if event.type == "user_message_persisted"
+    ]
+    assert persisted == [users[0].id]
+    assert adapter.requests == []
 
 
 @pytest.mark.asyncio
