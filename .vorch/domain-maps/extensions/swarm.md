@@ -698,10 +698,12 @@ participant's Activity, as its chip does. Linking walks only the rendered
 Markdown added to the page, skips code, links and controls as whole subtrees and
 ignores its own insertions.
 A post link shows the post on the Board, focused and centered in the room below
-what sticks at the top: the newer-posts bar (see below) and what the Run shell
-makes stick above the panels, whose height it sets as `--swarm-run-sticky-top`
-(the bar sticks below it). A post taller than that room shows from its top, just
-below them. `#0` opens the user request. A post the Board does not show
+what sticks at the top, and a post taller than that room shows from its top just
+below it. The newer-posts bar (see below) sticks at the scroller's top edge, above
+its `--page-inset-top` as Activity's header does; when the Run shell makes
+something stick above the panels, it sets `--swarm-run-sticky-top`, the offset
+below that inset at which the bar sticks and which a reveal or focus keeps a post
+or the goal clear of. `#0` opens the user request. A post the Board does not show
 takes two round trips: the post by number, which names its discussion, then up
 to a page of posts ending with it (`before`) and up to a page of newer ones
 (`after`), read together while the discussion selector lists the discussion.

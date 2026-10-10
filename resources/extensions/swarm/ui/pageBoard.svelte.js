@@ -703,19 +703,26 @@ export function createSwarmPageBoard(host) {
 
   // Where a reveal puts `element`, whose box is `box`: in the middle of the
   // room below what sticks at the top of the view, or with its top just
-  // below it when it is taller than that room. Below the scroller's top
-  // padding stick the Run shell's parts (the stylesheet's scroll margin) and,
-  // above posts, the newer-posts bar. Returns the `scrollIntoView` block.
+  // below it when it is taller than that room. Returns the `scrollIntoView`
+  // block.
   function place(element, box, view) {
     element.style.scrollMarginTop = '';
+    // What the Run shell makes stick above the panels: the stylesheet's
+    // scroll margin, an offset below the scroller's top padding, as sticky
+    // `top` values are.
     const shell = parseFloat(getComputedStyle(element).scrollMarginTop) || 0;
     const bar = element.matches('.board > li')
-      ? (document.querySelector('.board-newer')?.getBoundingClientRect()
-          .height ?? 0)
-      : 0;
-    const stuck = shell + bar;
-    const tall = box.height > view.bottom - view.top - view.inset - stuck;
-    const margin = view.inset + stuck + (tall && stuck ? 8 : 0);
+      ? document.querySelector('.board-newer')
+      : null;
+    // How far into the view what sticks reaches: the newer-posts bar above
+    // posts, otherwise the shell's parts or the scroller's top padding.
+    const stuck = bar
+      ? view.inset +
+        (parseFloat(getComputedStyle(bar).top) || 0) +
+        bar.getBoundingClientRect().height
+      : view.inset + shell;
+    const tall = box.height > view.bottom - view.top - stuck;
+    const margin = stuck + (tall && (bar || shell) ? 8 : 0);
     element.style.scrollMarginTop = margin ? `${margin}px` : '';
     return tall ? 'start' : 'center';
   }

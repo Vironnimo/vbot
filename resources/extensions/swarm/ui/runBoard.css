@@ -248,11 +248,12 @@
   border-radius: var(--r-sm);
 }
 /* While the discussion's newest posts are not loaded, the way back stays in
-   view, below what the Run shell makes stick above the panels
-   (`--swarm-run-sticky-top`, its height). */
+   view: at the scroller's top edge, above its --page-inset-top as Activity's
+   header sticks, or below what the Run shell makes stick above the panels
+   (`--swarm-run-sticky-top`, the offset it sets). */
 .swarm-page .board-newer {
   position: sticky;
-  top: var(--swarm-run-sticky-top, 0px);
+  top: var(--swarm-run-sticky-top, calc(-1 * var(--page-inset-top, 0px)));
   z-index: 1;
   display: flex;
   flex-wrap: wrap;
