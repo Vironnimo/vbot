@@ -55,6 +55,7 @@ from core.database._documents import (
 )
 from core.database._files import fsync_dir, fsync_file
 from core.database._schema import KERNEL_SCHEMA_SQL, declared_schema, schema_changes
+from core.database._staging import restore_staging_path
 from core.database.errors import (
     DatabaseCorruptError,
     DatabaseFormatError,
@@ -579,7 +580,7 @@ def _install_member(
     source = member_path(snapshot_dir, member)
     if source is None:
         raise DatabaseCorruptError(f"snapshot member {name} is missing")
-    temporary = target.with_name(f".{target.name}.restore.{uuid.uuid4().hex}.tmp")
+    temporary = restore_staging_path(target)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, temporary)

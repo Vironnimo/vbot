@@ -40,6 +40,9 @@ APPLICATION_IDS: Mapping[str, int] = MappingProxyType(
     }
 )
 
+#: The data-directory child that holds each Extension's databases and files.
+EXTENSION_DATA_ROOT_NAME = "extension-data"
+
 _PLAIN_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 _EXTENSION_NAME = re.compile(r"^ext\.([a-z0-9][a-z0-9_-]*)\.([a-z0-9][a-z0-9_-]*)$")
 _MIGRATION_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
@@ -174,13 +177,34 @@ def canonical_relative_path(name: str) -> Path:
     validate_database_name(name)
     extension = _EXTENSION_NAME.fullmatch(name)
     if extension is not None:
-        return Path("extension-data") / extension.group(1) / f"{extension.group(2)}.db"
+        return Path(EXTENSION_DATA_ROOT_NAME) / extension.group(1) / f"{extension.group(2)}.db"
     return Path(f"{name.replace('_', '-')}.db")
 
 
 def canonical_database_path(data_dir: Path, name: str) -> Path:
     """The absolute location of canonical database ``name`` in ``data_dir``."""
     return Path(data_dir) / canonical_relative_path(name)
+
+
+def canonical_database_name(path: str) -> str | None:
+    """The database whose fixed location is the relative POSIX ``path``, or ``None``.
+
+    The inverse of :func:`canonical_relative_path`.
+    """
+    parts = path.split("/")
+    if not parts[-1].endswith(".db"):
+        return None
+    stem = parts[-1].removesuffix(".db")
+    if len(parts) == 1:
+        name = stem.replace("-", "_")
+    elif len(parts) == 3 and parts[0] == EXTENSION_DATA_ROOT_NAME:
+        name = f"ext.{parts[1]}.{stem}"
+    else:
+        return None
+    try:
+        return name if canonical_relative_path(name).as_posix() == path else None
+    except ValueError:
+        return None
 
 
 def canonical_data_dir(spec: DatabaseSpec) -> Path:

@@ -227,17 +227,24 @@ def test_whitespace_normalized_keeps_ambiguity_and_replace_all_semantics() -> No
     assert replaced.replacements == 2
 
 
-def test_repeated_text_is_ambiguous_unless_every_occurrence_is_replaced() -> None:
-    ambiguous = replace_fuzzy("x\ny\nx\n", "x", "z", replace_all=False)
-    replaced = replace_fuzzy("x\ny\nx\n", "x", "z", replace_all=True)
+# Counting each occurrence's line from the start of a large file was quadratic:
+# past the test timeout.
+@pytest.mark.parametrize("repeats", [1, 50_000])
+def test_repeated_text_is_ambiguous_unless_every_occurrence_is_replaced(repeats: int) -> None:
+    content = "x\ny\n" * repeats + "x\n"
+    lines = list(range(1, 2 * repeats + 2, 2))
+
+    ambiguous = replace_fuzzy(content, "x", "z", replace_all=False)
+    replaced = replace_fuzzy(content, "x", "z", replace_all=True)
 
     assert isinstance(ambiguous, AmbiguousFuzzyMatch)
-    assert ambiguous.occurrences == 2
-    assert ambiguous.line_numbers == [1, 3]
+    assert ambiguous.occurrences == len(lines)
+    assert ambiguous.line_numbers == lines
     assert isinstance(replaced, FuzzyReplacement)
-    assert replaced.new_content == "z\ny\nz\n"
-    assert replaced.replacements == 2
+    assert replaced.new_content == "z\ny\n" * repeats + "z\n"
+    assert replaced.replacements == len(lines)
     assert replaced.first_changed_line == 1
+    assert replaced.last_changed_line == lines[-1]
 
 
 def test_no_match_returns_none() -> None:

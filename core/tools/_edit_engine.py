@@ -203,7 +203,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
     details = _not_found(content, old, source="old_string")
     present = None
     if new.strip() and new != old:
-        present = replace_fuzzy(content, new, new, replace_all=True, typographic=True)
+        present = replace_fuzzy(content, new, new, replace_all=False, first=True, typographic=True)
         # Text the old text already holds proves nothing about an earlier edit.
         if isinstance(present, FuzzyReplacement) and new.strip() not in old:
             details["already_present"] = present.first_changed_line
@@ -648,9 +648,7 @@ def _match(
         if not positions:
             return None
         if len(positions) > 1 and not first:
-            return AmbiguousFuzzyMatch(
-                len(positions), [line for _, line in positions], [1] * len(positions)
-            )
+            return AmbiguousFuzzyMatch(len(positions), [line for _, line in positions])
         start, line = positions[0]
         return FuzzyReplacement(
             content[:start] + new + content[start:],

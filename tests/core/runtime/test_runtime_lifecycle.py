@@ -120,8 +120,10 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
 
 
 @pytest.mark.asyncio
-async def test_only_a_normal_start_releases_retired_core_databases(config: Config) -> None:
-    from core.database import open_database, read_marker, write_bootstrap_marker
+async def test_a_start_removes_killed_staging_and_only_a_normal_one_releases_retired_databases(
+    config: Config,
+) -> None:
+    from core.database import open_database, read_marker, snapshot_root, write_bootstrap_marker
     from core.runtime.databases import RETIRED_CANONICAL_DATABASES
     from tests.core.database.database_test_support import notes_spec
 
@@ -130,6 +132,8 @@ async def test_only_a_normal_start_releases_retired_core_databases(config: Confi
     write_bootstrap_marker(data_dir)
     for name in RETIRED_CANONICAL_DATABASES:
         open_database(notes_spec(data_dir, name=name)).close()
+    killed = snapshot_root(data_dir) / ".20260101T000000Z-deadbeef.4242.partial"
+    killed.mkdir(parents=True)
 
     def registered() -> set[str]:
         marker = read_marker(data_dir)
@@ -137,9 +141,11 @@ async def test_only_a_normal_start_releases_retired_core_databases(config: Confi
         return set(marker.databases)
 
     # An update's verification start keeps them: its rollback needs every registration.
+    # What a killed snapshot left goes at every start.
     verification = Runtime(config, safe_startup_mode="verification")
     verification.start()
     await verification.aclose()
+    assert not killed.exists()
     assert set(RETIRED_CANONICAL_DATABASES) <= registered()
 
     runtime = Runtime(config)

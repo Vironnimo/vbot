@@ -34,6 +34,7 @@ from core.database import (
     read_incident,
     read_marker,
     read_snapshot_health,
+    remove_interrupted_staging,
     required_journal_mode,
     restore_data_snapshot,
     snapshot_root,
@@ -749,13 +750,26 @@ def test_retention_enforces_the_byte_limit_around_the_published_snapshot(
     assert list_data_snapshots(data_dir) == [newest, published]
 
 
-def test_a_full_disk_removes_the_oldest_snapshots_but_keeps_the_newest(
+def test_a_full_disk_removes_killed_copies_then_the_oldest_snapshots_but_keeps_the_newest(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     oldest = snapshot_with_notes(data_dir, "one")
     middle = snapshot_with_notes(data_dir, "two")
-    newest = snapshot_with_notes(data_dir, "three")
     real_disk_usage = snapshots_module.shutil.disk_usage
+    # The copies of a killed snapshot give way first, so every verified snapshot stays.
+    killed = snapshot_root(data_dir) / ".20260101T000000Z-deadbeef.4242.partial"
+    killed.mkdir()
+    (killed / "notes.db").write_bytes(b"copy")
+
+    def room_once_the_killed_copies_are_gone(path: Any) -> Any:
+        usage = real_disk_usage(path)
+        return usage._replace(free=0 if killed.exists() else usage.free)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(snapshots_module.shutil, "disk_usage", room_once_the_killed_copies_are_gone)
+        newest = snapshot_with_notes(data_dir, "three")
+    assert not killed.exists()
+    assert list_data_snapshots(data_dir) == [newest, middle, oldest]
 
     def room_once_one_snapshot_is_left(path: Any) -> Any:
         usage = real_disk_usage(path)
@@ -784,6 +798,41 @@ def test_a_full_disk_removes_the_oldest_snapshots_but_keeps_the_newest(
     assert create_data_snapshot(data_dir, reason="test") is None
     assert read_snapshot_health(data_dir)["reason"] == "insufficient snapshot reserve"
     assert list_data_snapshots(data_dir) == [published]
+
+
+def test_only_the_staging_of_interrupted_attempts_is_removed(
+    data_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    published = snapshot_with_notes(data_dir, "hello")
+    hex_id = "0123456789abcdef" * 2
+    # The names a killed snapshot, restore or database creation leaves, as older
+    # vBot versions leave them too.
+    killed_snapshot = snapshot_root(data_dir) / ".20260101T000000Z-deadbeef.4242.partial"
+    staging = [
+        killed_snapshot / "notes.db",
+        data_dir / f".notes.db.restore.{hex_id}.tmp",
+        data_dir / f".notes.db.{hex_id}.creating",
+        data_dir / f".notes.db.{hex_id}.creating-journal",
+        data_dir / "extension-data" / "mcp" / f".catalog.db.restore.{hex_id}.tmp",
+        data_dir / "agents" / "a1" / f".agent.json.restore.{hex_id}.tmp",
+    ]
+    # A disposable database's creation and an Extension's own file only look alike.
+    others = [
+        data_dir / "statistics" / f".statistics.db.{hex_id}.creating",
+        data_dir / "extension-data" / "mcp" / f".cache.json.restore.{hex_id}.tmp",
+    ]
+    for path in (*staging, *others):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"left behind")
+
+    with caplog.at_level(logging.INFO, logger="vbot.database"):
+        remove_interrupted_staging(data_dir)
+
+    assert not killed_snapshot.exists()
+    assert [path for path in staging if path.exists()] == []
+    assert [path for path in others if not path.exists()] == []
+    assert list_data_snapshots(data_dir) == [published]
+    assert "Removed staging left by interrupted data-store operations" in caplog.text
 
 
 def test_retention_leaves_malformed_directories_untouched(

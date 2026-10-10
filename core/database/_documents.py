@@ -22,7 +22,6 @@ import os
 import re
 import shutil
 import stat
-import uuid
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -32,6 +31,7 @@ from typing import Any
 # A module import: ``core.json_documents`` imports the kernel's snapshot freeze in turn.
 import core.json_documents as json_documents
 from core.database._files import fsync_dir, fsync_file, sha256_file
+from core.database._staging import restore_staging_path
 from core.database.errors import DatabaseCorruptError, DatabaseUnavailableError
 from core.utils.file_status import exists_strict, is_link_status
 from core.utils.tree_move import remove_tree
@@ -322,7 +322,7 @@ def restore_documents(
                 raise DatabaseCorruptError(f"snapshot document {path} is missing")
             target = _data_path(data_dir, path)
             target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(f".{target.name}.restore.{uuid.uuid4().hex}.tmp")
+            temporary = restore_staging_path(target)
             staged[path] = temporary
             shutil.copy2(source, temporary)
             if (

@@ -72,7 +72,7 @@ from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
     _indent_unit,
-    _line_and_character_at,
+    _line_number_at,
     _meaningful_indents,
     _normalize_with_spans,
     _reindent_replacement,
@@ -1217,11 +1217,9 @@ def _result(
     content = file.content
     if len(unique) > 1:
         unique.sort(key=lambda item: item.start)
-        lines = [bisect_right(file.starts, item.start) for item in unique]
-        characters = [
-            item.start - file.starts[line - 1] + 1 for item, line in zip(unique, lines, strict=True)
-        ]
-        return AmbiguousFuzzyMatch(len(unique), lines, characters)
+        return AmbiguousFuzzyMatch(
+            len(unique), [bisect_right(file.starts, item.start) for item in unique]
+        )
     item = unique[0]
     if item.text is None:
         return None
@@ -1229,8 +1227,8 @@ def _result(
     after_end = item.start + len(item.text)
     return FuzzyReplacement(
         new_content,
-        _line_and_character_at(content, item.start)[0],
-        _line_and_character_at(new_content, max(item.start, after_end - 1))[0],
+        _line_number_at(content, item.start),
+        _line_number_at(new_content, max(item.start, after_end - 1)),
         1,
         "copied",
         ((item.start, item.end),),

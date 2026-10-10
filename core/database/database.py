@@ -30,7 +30,6 @@ import contextlib
 import logging
 import os
 import sqlite3
-import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -48,6 +47,7 @@ from core.database._schema import (
     quote_identifier,
     schema_changes,
 )
+from core.database._staging import creation_staging_path
 from core.database.errors import (
     DatabaseConversionRequiredError,
     DatabaseCorruptError,
@@ -476,7 +476,7 @@ def _create_database_file(spec: DatabaseSpec) -> None:
     declared = _declared(spec)
     path = spec.path
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.creating")
+    temporary = creation_staging_path(path)
     now = utc_now_timestamp()
     version = detect_vbot_version()
     meta = {

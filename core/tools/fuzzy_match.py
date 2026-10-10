@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import math
 import re
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -124,7 +125,6 @@ class AmbiguousFuzzyMatch:
 
     occurrences: int
     line_numbers: list[int]
-    character_numbers: list[int]
 
 
 @dataclass(frozen=True)
@@ -190,11 +190,9 @@ def replace_fuzzy(
         # occurrence still makes a single-target request ambiguous.
         matches = sorted(set(matches))
         if len(matches) > 1 and not replace_all and not first:
-            locations = [_line_and_character_at(content, start) for start, _ in matches]
+            line_starts = _line_starts(content)
             return AmbiguousFuzzyMatch(
-                len(matches),
-                [line for line, _ in locations],
-                [character for _, character in locations],
+                len(matches), [bisect_right(line_starts, start) for start, _ in matches]
             )
 
         selected = _leftmost_non_overlapping(matches) if replace_all else matches[:1]
@@ -206,10 +204,10 @@ def replace_fuzzy(
             old_string_lf=old_lf,
             file_ending=file_ending,
         )
-        first_line = _line_number_at(content, min(start for start, _ in selected))
-        last_line = max(
-            _line_number_at(new_content, max(start, end - 1)) for start, end in after_spans
-        )
+        # The spans ascend without overlapping, so the last one reaches furthest.
+        first_line = _line_number_at(content, selected[0][0])
+        last_start, last_end = after_spans[-1]
+        last_line = _line_number_at(new_content, max(last_start, last_end - 1))
         return FuzzyReplacement(
             new_content,
             first_line,
@@ -539,11 +537,9 @@ def _line_number_at(content: str, offset: int) -> int:
     return len(_LINE_BREAK_RE.findall(content[:offset])) + 1
 
 
-def _line_and_character_at(content: str, offset: int) -> tuple[int, int]:
-    """Return the 1-based read-style line and character at ``offset``."""
-    breaks = list(_LINE_BREAK_RE.finditer(content[:offset]))
-    line_start = breaks[-1].end() if breaks else 0
-    return len(breaks) + 1, offset - line_start + 1
+def _line_starts(content: str) -> list[int]:
+    """The offset of each read-rendered line, for many lookups with ``bisect_right``."""
+    return [0, *(found.end() for found in _LINE_BREAK_RE.finditer(content))]
 
 
 def _normalize_with_spans(
@@ -761,10 +757,13 @@ def _apply_replacements(
     old_string_lf: str,
     file_ending: str | None,
 ) -> tuple[str, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
-    prepared: list[tuple[int, int, str]] = []
+    # The spans do not overlap: the result is built in one pass, so many
+    # replacements cost linear time instead of one copy of the content each.
+    parts: list[str] = []
     before_spans: list[tuple[int, int]] = []
     after_spans: list[tuple[int, int]] = []
     offset_shift = 0
+    cursor = 0
     file_unit = _indent_unit([_meaningful_indents(content)]) if reindent else None
     for start, end in sorted(matches):
         if reindent:
@@ -775,17 +774,13 @@ def _apply_replacements(
             replacement_lf = replacement_text
         replacement = _to_line_ending(replacement_lf, file_ending)
         after_start = start + offset_shift
-        after_end = after_start + len(replacement)
-        prepared.append((start, end, replacement))
+        parts += (content[cursor:start], replacement)
+        cursor = end
         before_spans.append((start, end))
-        after_spans.append((after_start, after_end))
+        after_spans.append((after_start, after_start + len(replacement)))
         offset_shift += len(replacement) - (end - start)
-
-    result = content
-    # Splice from the end so earlier spans keep their offsets.
-    for start, end, replacement in reversed(prepared):
-        result = result[:start] + replacement + result[end:]
-    return result, tuple(before_spans), tuple(after_spans)
+    parts.append(content[cursor:])
+    return "".join(parts), tuple(before_spans), tuple(after_spans)
 
 
 def _leading_whitespace(line: str) -> str:
