@@ -57,19 +57,40 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   Project choices load when opening a profile editor; the Run form also loads
   the catalog to resolve a selected Project default, not on display context
   updates. Failed editor loads leave the overview usable (`SwarmPage.test.js`).
-- Profile editing uses the shared Model search/selection and effort helpers,
-  the shared Secondary bar, topic tabs, a bounded scrollport, and the shared
-  save state after its fields (`webui/autosave.md`).
-  Creation saves explicitly; saved profiles autosave and flush before navigation
-  through the generic page bridge. Invalidations preserve the mounted draft.
-  The System Prompt tab owns editable instructions, explicit block selection,
-  Model-specific combined previews and event reminder switches. New profiles
-  receive the complete default from `agent_text.py` through the editor catalog;
-  Swarm no longer registers a separately appended orientation block.
+- The profile editor is one continuous configuration page in the shared
+  section grammar (`webui/design.md` -> Settings, Agents, Projects, and
+  Schedules): Swarm, Participants, Working directory, Instructions, Tool access,
+  Skills, Communication, Compaction and a closed Advanced section (Swarm ID,
+  deletion), ending with the shared save state (`webui/autosave.md`). It uses
+  the shared Model search/selection and effort helpers.
+  Creation saves explicitly (Create Swarm or Cancel); leaving a new Swarm with
+  changes asks whether to create it, discard it or keep editing. Saved profiles
+  autosave and flush before navigation through the generic page bridge; when
+  leaving cannot save, a dialog offers Retry (Keep editing for incomplete
+  settings) or discarding. Field errors appear under the field's label; only a
+  save the user asked for moves focus to the first invalid field, while a
+  background autosave shows the errors in place. Invalidations preserve the
+  mounted draft. Leaving the Swarm page itself is outside the page's
+  navigation, so an unsaved new Swarm is then discarded without asking.
+  The Instructions section owns editable instructions, explicit block
+  selection, event reminder switches and Model-specific combined previews with
+  the separately sent Tool definitions (shared `ToolDefinitionsPanel`). New
+  profiles receive the complete default from `agent_text.py` through the editor
+  catalog; Swarm no longer registers a separately appended orientation block.
   The visible value is saved as-is, including an intentionally empty value;
   existing profiles are not backfilled and runtime adds no fallback.
   Omitted effort uses the Provider default, not shared Agent defaults.
   All/None Tool actions materialize a selected policy through `toolAccess.js`.
+  Skills use the shared Skill selection panel: adding new Skills automatically
+  is the `['*']` wildcard, and changing a single Skill turns it into the
+  explicit list of allowed Skills (saved names the catalog does not list are
+  kept). The Team agent row shows while the Swarm works in a Project with Team
+  agents; changing the working directory drops Team agents the new Project does
+  not offer, because saves reject them.
+  `DeliverySettings.svelte` edits one `delivery` value for any caller (per
+  route: when messages are received and whether a message starts an idle
+  participant; the batching limits behind a disclosure row) and holds no save
+  logic; numbers are reported as entered and normalized by the caller.
   Tests: `SwarmPage.profiles.test.js` and `test_swarm_store_profiles.py`.
 
 Profiles select every additional System Prompt block explicitly; Tool Call Style,
@@ -90,7 +111,7 @@ continuation receipts add no Model-visible reminder. Existing Session history is
 not rewritten. Evidence: `extension.py`, `test_swarm_store_profiles.py`,
 `test_swarm_wakes.py`, `test_swarm_stop_resume.py`.
 
-A profile's Tool and Skill selection applies as saved, also when the Swarm works in a Project whose Tool or Skill whitelist is narrower; the Project supplies directory, Skills and context (`projects.md`). Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_start.py`, `SwarmPage.profiles.test.js`).
+A profile's Tool and Skill selection applies as saved, also when the Swarm works in a Project whose Tool or Skill whitelist is narrower; the Project supplies directory, Skills and context (`projects.md`). Profiles expose all four private Swarm Tools under Tool access, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_start.py`, `SwarmPage.profiles.test.js`).
 `swarm_inbox` is offered only when some route (`main`, `discussion`, `ping`) can hold messages back, i.e. its mode is not `all`: with every route on `all` (the default), pending posts reach the next Model request anyway, and Inbox-only requests cost 3-10% of input in the eight analyzed Runs (Sessions, 2026-09). `_participant_config` decides from the profile (snapshot) delivery and denies it through `_tool_access` when a Session is created (start, Resume of a missing participant, preview). Live `swarms.settings` changes do not add or remove it from existing Sessions; Agent texts check `_inbox_available(binding)` (`test_swarm_inbox_is_offered_only_when_a_route_can_wait`).
 
 Profiles carry an optional `compaction_policy`. `null` (materialized on save) or an
@@ -102,8 +123,8 @@ the field on an update returns to inheritance; only `slug` is retained on omissi
 `_participant_config` passes the snapshot value into every participant's
 `TemporaryAgentConfig`, where it is the Agent-level Policy for automatic and manual
 Compaction (`agent.md`, `compaction.md`). Edits apply to future Runs; Resume creates
-missing participants from the saved snapshot. The editor's Overview Compaction
-section reuses the shared `CompactionPolicyEditor`; turning the override on starts
+missing participants from the saved snapshot. The editor's Compaction section
+reuses the shared `CompactionPolicyEditor` rows; turning the override on starts
 from the WebUI default Policy because the catalog carries no global Policy
 (`test_swarm_store_profiles.py`, `test_swarm_start.py`, `SwarmPage.profiles.test.js`).
 
@@ -713,8 +734,8 @@ Groups are read before rows because a Swarm row precedes its first participant S
 so a Swarm starting concurrently is never unknown. A failed archive is logged and
 retried at the next startup (`test_startup_archives_participant_sessions_of_swarms_missing_from_the_board`).
 
-A saved Swarm profile is deleted through `profiles.delete` from its editor header or
-beside the goal form's Swarm selector, after the same kind of confirmation (failures
+A saved Swarm profile is deleted through `profiles.delete` from its editor's Advanced
+section or beside the goal form's Swarm selector, after the same kind of confirmation (failures
 stay in the dialog for retry). Existing Runs keep their profile snapshots. Deletion
 sends the latest saved revision and closes the editor without the navigation flush,
 so an unsaved draft of the deleted profile is discarded, not saved again
@@ -722,9 +743,9 @@ so an unsaved draft of the deleted profile is discarded, not saved again
 
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_bundled_management.py` and `tests/cli/test_extensions_operations.py`.
 
-Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the model decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.
+Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the model decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; its section components `ProfileParticipants.svelte`, `ProfileInstructions.svelte` and `ProfileAccess.svelte` edit the bound draft, `DeliverySettings.svelte` edits a delivery value for any caller, and `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` scopes styles to the page surface, including portaled dialogs; `profileEditor.css` scopes the editor's own classes under `.swarm-profile-editor`, and the editor's dialogs use the shared Modal styles.
 
-Page route (the page's place in the app history, `webui/app-shell.md` -> Navigation): `''` is the start page (Run form), `/swarms/<id>` the Board, `/swarms/<id>/<tab>` the Wiki, Participants and Usage tabs, and `/profiles/<id>` and `/profiles/new` the profile editor. Opening a Swarm, a profile or the start page pushes the target route and shows the route the host sends back. A tab switches at once and pushes the route it shows; this also applies to revealing a post, Wiki links and inspecting a participant. Deleting the shown Swarm or profile, saving a new profile, and a route the page cannot show replace the route with what the page shows; corrections wait until the newest route is shown. Showing another record closes the dialogs of the current record. Filters, search, the selected Wiki page, participant inspection and editor sections are not part of the route. The page root provides the client's layer registry, so its dialogs (compose, settings, profile snapshot, delete confirmations, the profile editor's dialog) close on Back/Forward before the route changes (`SwarmPage.test.js`).
+Page route (the page's place in the app history, `webui/app-shell.md` -> Navigation): `''` is the start page (Run form), `/swarms/<id>` the Board, `/swarms/<id>/<tab>` the Wiki, Participants and Usage tabs, and `/profiles/<id>` and `/profiles/new` the profile editor. Opening a Swarm, a profile or the start page pushes the target route and shows the route the host sends back. A tab switches at once and pushes the route it shows; this also applies to revealing a post, Wiki links and inspecting a participant. Deleting the shown Swarm or profile, saving a new profile, and a route the page cannot show replace the route with what the page shows; corrections wait until the newest route is shown. Showing another record closes the dialogs of the current record. Filters, search, the selected Wiki page, participant inspection and the editor's open disclosures are not part of the route. The page root provides the client's layer registry, so its dialogs (compose, settings, profile snapshot, delete confirmations, the profile editor's leave dialogs) close on Back/Forward before the route changes (`SwarmPage.test.js`).
 
 Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`:
 each mounted page/panel has one refresh in flight and at most one pending pass,

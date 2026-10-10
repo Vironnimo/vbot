@@ -22,13 +22,10 @@ import { t, tOr } from '../../lib/i18n.js';
 
 const EDIT = t('common.edit');
 const NEW_SWARM = t('swarm.newProfile');
-const SAVE_SWARM = t('swarm.profile.save');
+const CREATE_SWARM = t('swarm.profile.create');
 const SAVED = t('common.saved');
-const SYSTEM_PROMPT = t('swarm.profile.systemPrompt');
-const TOOLS = t('swarm.profile.access');
-const COMMUNICATION = t('swarm.profile.communication');
 const GENERATE_PREVIEW = t('swarm.profile.generatePreview');
-const DELETE_SWARM = t('swarm.delete.title');
+const DELETE_SWARM = t('swarm.profile.deleteAction');
 
 async function openEditor(bridge) {
   await render(bridge);
@@ -52,15 +49,29 @@ const lastSaved = (operation) =>
 const toggle = (name) =>
   document.querySelector(`[role="switch"][aria-label="${name}"]`);
 const blockTitle = (id) => tOr(`systemPrompt.blockTitle.${id}`, id);
-const panel = (id) => document.getElementById(`swarm-profile-panel-${id}`);
 const dialog = () => document.querySelector('[role="dialog"]');
+const inDialog = (text) =>
+  [...dialog().querySelectorAll('button')].find(
+    (node) => node.textContent.trim() === text,
+  );
+// Adds `fields` to the catalog the page reads.
+const extendCatalog = (operation, extend) =>
+  overrideOperations(operation, {
+    catalog: async (_args, fallback) => {
+      const result = await fallback();
+      extend(result.catalog);
+      return result;
+    },
+  });
+async function saveAndConfirm() {
+  saveButton().click();
+  await vi.waitFor(() => expect(saveStateText()).toBe(SAVED));
+}
 
 describe('Swarm profile prompt', () => {
   it('shows prompt contributions and persists independent context and reminder switches', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);
-    button(SYSTEM_PROMPT).click();
-    await tick();
     const runtime = blockTitle('core:runtime');
     const project = blockTitle('core:working_project');
     const resume = t('swarm.profile.reminderResume');
@@ -76,9 +87,12 @@ describe('Swarm profile prompt', () => {
       );
     expect(document.body.textContent).toContain('test-owned runtime block');
     expect(document.body.textContent).toContain('test-owned resume guidance');
+    // A reminder without a title is listed under its event name.
+    expect(toggle('wake').getAttribute('aria-checked')).toBe('false');
     toggle(runtime).click();
     toggle(project).click();
     toggle(resume).click();
+    toggle('wake').click();
     await tick();
     saveButton().click();
     await settle(20);
@@ -89,7 +103,11 @@ describe('Swarm profile prompt', () => {
       'core:runtime',
       'core:working_project',
     ]);
-    expect(saved.reminders.resume).toBe(false);
+    expect(saved.reminders).toEqual({
+      delivery: true,
+      resume: false,
+      wake: true,
+    });
     expect(saved.working_directory).toEqual(profile.working_directory);
     await reopenEditor(bridge);
     expect(toggle(runtime).getAttribute('aria-checked')).toBe('true');
@@ -106,13 +124,11 @@ describe('Swarm profile prompt', () => {
     await openNewProfile(bridge);
     await choose('swarm-model-0', 'demo/model');
     fill('swarm-directory', 'C:/work');
-    button(COMMUNICATION).click();
-    await tick();
-    fill('swarm-coalesce', '350');
-    button(SYSTEM_PROMPT).click();
-    await tick();
+    fill('swarm-delivery-coalesce', '350');
     fill('swarm-instructions', 'unsaved-sentinel');
+    document.querySelector('[aria-controls="swarm-preview"]').click();
     await tick();
+    expect(document.getElementById('swarm-preview').hidden).toBe(false);
     button(GENERATE_PREVIEW).click();
     await tick();
     expect(operation).toHaveBeenCalledWith(
@@ -140,6 +156,10 @@ describe('Swarm profile prompt', () => {
       document.querySelector('[data-testid="swarm-prompt-preview"]');
     expect(preview().textContent).toBe('preview-sentinel');
     expect(document.body.textContent).toContain('definition-sentinel');
+    // The preview has no size estimates, so a definition shows none.
+    expect(document.querySelector('.tool-index-item').textContent.trim()).toBe(
+      'swarm_state',
+    );
     fill('swarm-instructions', 'changed-sentinel');
     await tick();
     expect(preview()).toBeNull();
@@ -166,7 +186,7 @@ describe('Swarm profile prompt', () => {
       await choose('swarm-model-0', 'demo/model');
       fill('swarm-directory', 'C:/work');
       await tick();
-      button(SAVE_SWARM).click();
+      button(CREATE_SWARM).click();
       await settle(20);
       expect(lastSaved(operation).instructions).toBe(replacement);
       await reopenEditor(bridge);
@@ -204,7 +224,7 @@ describe('Swarm profile settings', () => {
       include_files: false,
       prefix: 'w',
     });
-    button(SAVE_SWARM).click();
+    button(CREATE_SWARM).click();
     await settle(20);
     expect(document.body.textContent).not.toContain(
       t('swarm.profile.nameRequired'),
@@ -254,13 +274,10 @@ describe('Swarm profile settings', () => {
     );
   });
 
-  it('keeps drafts across tabs and saves bulk Tool selections', async () => {
+  it('saves bulk Tool selections together with other unsaved edits', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);
     fill('swarm-instructions', 'test-owned instruction body');
-    button(TOOLS).click();
-    await settle();
-    expect(panel('access').hidden).toBe(false);
     button(t('toolAccess.selectAll')).click();
     await tick();
     saveButton().click();
@@ -275,8 +292,6 @@ describe('Swarm profile settings', () => {
     expect(saved.instructions).toBe('test-owned instruction body');
     expect(saved.slug).toBe('research');
     await settle();
-    button(TOOLS).click();
-    await tick();
     button(t('toolAccess.deselectAll')).click();
     await tick();
     saveButton().click();
@@ -291,26 +306,19 @@ describe('Swarm profile settings', () => {
   it('shows and saves each private Swarm Tool independently', async () => {
     const { bridge, operation } = createBridge();
     const names = ['swarm_board', 'swarm_inbox', 'swarm_state', 'swarm_wiki'];
-    overrideOperations(operation, {
-      catalog: async (_args, fallback) => {
-        const result = await fallback();
-        result.catalog.tools.push(
-          ...names.map((name) => ({
-            name,
-            family: 'swarm',
-            family_label: 'Swarm',
-            activation: 'session_grant',
-          })),
-        );
-        return result;
-      },
-    });
-    await render(bridge);
-    button(EDIT).click();
-    await vi.waitFor(() => expect(button(TOOLS)).toBeDefined());
-    button(TOOLS).click();
-    await tick();
+    extendCatalog(operation, (catalog) =>
+      catalog.tools.push(
+        ...names.map((name) => ({
+          name,
+          family: 'swarm',
+          family_label: 'Swarm',
+          activation: 'session_grant',
+        })),
+      ),
+    );
+    await openEditor(bridge);
     const tool = (name) => document.querySelector(`[data-tool-name="${name}"]`);
+    await vi.waitFor(() => expect(tool('swarm_board')).not.toBeNull());
     for (const name of names)
       expect(tool(name)?.getAttribute('aria-checked')).toBe('true');
     tool('swarm_state').click();
@@ -332,6 +340,35 @@ describe('Swarm profile settings', () => {
     );
   });
 
+  it('adds new Skills automatically until single Skills are chosen', async () => {
+    const { bridge, operation } = createBridge();
+    extendCatalog(operation, (catalog) => {
+      catalog.skills = [
+        { name: 'alpha', description: 'test-owned alpha' },
+        { name: 'beta', description: 'test-owned beta' },
+      ];
+    });
+    await openEditor(bridge);
+    const autoAdd = () => toggle(t('skills.panel.autoAdd'));
+    const skill = (name) =>
+      document.querySelector(
+        `[role="checkbox"][aria-label="${t('skills.panel.toggle', { name })}"]`,
+      );
+    await vi.waitFor(() => expect(skill('beta')).not.toBeNull());
+    expect(autoAdd().getAttribute('aria-checked')).toBe('true');
+    expect(skill('beta').getAttribute('aria-checked')).toBe('true');
+    skill('beta').click();
+    await tick();
+    expect(autoAdd().getAttribute('aria-checked')).toBe('false');
+    await saveAndConfirm();
+    expect(lastSaved(operation).allowed_skills).toEqual(['alpha']);
+    autoAdd().click();
+    await tick();
+    expect(skill('beta').getAttribute('aria-checked')).toBe('true');
+    await saveAndConfirm();
+    expect(lastSaved(operation).allowed_skills).toEqual(['*']);
+  });
+
   it('switches working-directory sources without sending stale fields', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);
@@ -346,10 +383,68 @@ describe('Swarm profile settings', () => {
     });
   });
 
+  it('offers the Team agents of the selected Project and drops them outside it', async () => {
+    const { bridge, operation } = createBridge();
+    extendCatalog(operation, (catalog) => {
+      catalog.projects[0].agent_profiles = [
+        { id: 'reviewer', name: 'Reviewer', source: 'claude' },
+      ];
+    });
+    await openEditor(bridge);
+    const teamAgent = () => document.getElementById('swarm-team-agent-0');
+    await vi.waitFor(() =>
+      expect(document.getElementById('swarm-directory-source')).not.toBeNull(),
+    );
+    expect(teamAgent()).toBeNull();
+    await choose('swarm-directory-source', t('swarm.profile.projectOption'));
+    await choose('swarm-project', 'Project A');
+    await choose('swarm-team-agent-0', 'Reviewer');
+    await saveAndConfirm();
+    expect(lastSaved(operation).participants[0].repository_profile).toBe(
+      'reviewer',
+    );
+    await choose('swarm-directory-source', t('swarm.profile.directoryOption'));
+    expect(teamAgent()).toBeNull();
+    fill('swarm-directory', 'C:/work');
+    await saveAndConfirm();
+    expect(lastSaved(operation).participants[0]).not.toHaveProperty(
+      'repository_profile',
+    );
+  });
+
+  it('saves when and how each route delivers Board messages', async () => {
+    const { bridge, operation } = createBridge();
+    await openEditor(bridge);
+    await choose(
+      'swarm-delivery-ping-receive',
+      t('swarm.delivery.receive.pull'),
+    );
+    document.getElementById('swarm-delivery-discussion-wake').click();
+    document.querySelector('[aria-controls="swarm-delivery-advanced"]').click();
+    await tick();
+    expect(document.getElementById('swarm-delivery-advanced').hidden).toBe(
+      false,
+    );
+    fill('swarm-delivery-batch-messages', '5');
+    await tick();
+    await saveAndConfirm();
+    expect(lastSaved(operation).delivery).toEqual({
+      main: { mode: 'all', wake_idle: true },
+      discussion: { mode: 'all', wake_idle: false },
+      ping: { mode: 'pull', wake_idle: true },
+      coalesce_ms: 250,
+      batch_messages: 5,
+      batch_chars: 24000,
+    });
+  });
+
   it('overrides the Compaction Policy for participants and returns to inheritance', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);
-    const custom = () => toggle(t('swarm.profile.customCompaction'));
+    const custom = () =>
+      document.querySelector(
+        '[role="switch"][aria-labelledby="swarm-compaction-custom-label"]',
+      );
     const editor = () =>
       document.querySelector('[data-testid="swarm-compaction-editor"]');
     // A profile saved without the field inherits and is not dirty on open.
@@ -361,15 +456,14 @@ describe('Swarm profile settings', () => {
     await tick();
     flushSync();
     expect(editor()).not.toBeNull();
-    const tail = editor().querySelector(
+    const tail = document.querySelector(
       `input[aria-label="${t('compaction.strategy.tailTokens')}"]`,
     );
     tail.value = '9000';
     tail.dispatchEvent(new Event('input', { bubbles: true }));
     await tick();
     await choose('swarm-compaction-summary-model', 'demo/plain');
-    saveButton().click();
-    await vi.waitFor(() => expect(saveStateText()).toBe(SAVED));
+    await saveAndConfirm();
     expect(lastSaved(operation).compaction_policy).toEqual({
       enabled: true,
       trigger: { type: 'context_ratio', threshold: 0.8 },
@@ -384,8 +478,7 @@ describe('Swarm profile settings', () => {
     await tick();
     flushSync();
     expect(editor()).toBeNull();
-    saveButton().click();
-    await vi.waitFor(() => expect(saveStateText()).toBe(SAVED));
+    await saveAndConfirm();
     expect(lastSaved(operation).compaction_policy).toBeNull();
   });
 });
@@ -394,19 +487,18 @@ describe('Swarm profile saving', () => {
   it('returns to the invalid field and keeps failed saves editable', async () => {
     const { bridge, operation } = createBridge();
     await openNewProfile(bridge);
-    button(COMMUNICATION).click();
-    await tick();
-    button(SAVE_SWARM).click();
-    await tick();
-    expect(panel('overview').hidden).toBe(false);
+    button(CREATE_SWARM).click();
     await settle();
     expect(document.activeElement.id).toBe('swarm-profile-name');
+    expect(
+      document.getElementById('swarm-profile-name-error').textContent.trim(),
+    ).toBe(t('swarm.profile.nameRequired'));
     expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
     fill('swarm-profile-name', 'Retry');
     fill('swarm-directory', 'C:/work');
     await choose('swarm-model-0', 'demo/model');
     operation.mockRejectedValueOnce(new Error('save-failure-test'));
-    button(SAVE_SWARM).click();
+    button(CREATE_SWARM).click();
     await vi.waitFor(() =>
       expect(
         [...document.querySelectorAll('[role="alert"]')].map(
@@ -415,7 +507,7 @@ describe('Swarm profile saving', () => {
       ).toContainEqual(expect.stringContaining('save-failure-test')),
     );
     expect(document.getElementById('swarm-profile-name').value).toBe('Retry');
-    expect(button(SAVE_SWARM).disabled).toBe(false);
+    expect(button(CREATE_SWARM).disabled).toBe(false);
   });
 
   it('autosaves after the shared debounce without closing or replacing the editor', async () => {
@@ -437,6 +529,20 @@ describe('Swarm profile saving', () => {
     expect(name()).toBe('Autosaved profile');
     expect(saveButton()).toBeNull();
     expect(saveStateText()).toBe(SAVED);
+
+    // An invalid draft is reported in place; focus stays where the user is.
+    fill('swarm-profile-slug', 'Not A Shortcut');
+    document.getElementById('swarm-instructions').focus();
+    await tick();
+    await vi.advanceTimersByTimeAsync(800);
+    expect(callsTo(operation, 'profiles.save')).toHaveLength(1);
+    expect(
+      document.getElementById('swarm-profile-slug-error').textContent.trim(),
+    ).toBe(t('swarm.profile.shortcutValidation'));
+    expect(document.activeElement.id).toBe('swarm-instructions');
+    await expect(bridge.autosave.flush()).resolves.toBe(false);
+    expect(document.activeElement.id).toBe('swarm-instructions');
+    expect(callsTo(operation, 'profiles.save')).toHaveLength(1);
   });
 
   it('offers Save while the draft is unsaved and confirms the finished save', async () => {
@@ -492,24 +598,6 @@ describe('Swarm profile saving', () => {
     expect(bridge.autosave.hasPending()).toBe(false);
   });
 
-  it('blocks a topic transition on save failure and discards only when requested', async () => {
-    const { bridge, operation } = createBridge();
-    await openEditor(bridge);
-    fill('swarm-profile-name', 'Unsaved');
-    await tick();
-    operation.mockRejectedValueOnce(new Error('autosave-failure-test'));
-    button(COMMUNICATION).click();
-    await vi.waitFor(() => expect(dialog()).not.toBeNull());
-    expect(panel('overview').hidden).toBe(false);
-    button(t('autosave.discardAndContinue')).click();
-    await tick();
-    expect(panel('communication').hidden).toBe(false);
-    expect(document.getElementById('swarm-profile-name').value).toBe(
-      'Research',
-    );
-    expect(bridge.autosave.hasPending()).toBe(false);
-  });
-
   it('keeps the profile navigation and draft mounted during invalidation without Refresh in the editor', async () => {
     const { bridge, operation } = createBridge();
     await openNewProfile(bridge);
@@ -549,12 +637,26 @@ describe('Swarm profile saving', () => {
     );
   });
 
-  it('keeps a failed profile save open when selecting a retained Swarm', async () => {
+  it('keeps unsaved profile changes open on leaving until they are completed or discarded', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
     button('Research').click();
     await tick();
     flushSync();
+    // Incomplete settings cannot be saved; the user completes them.
+    fill('swarm-profile-name', '');
+    await tick();
+    button('Investigate').click();
+    await vi.waitFor(() => expect(dialog()).not.toBeNull());
+    expect(dialog().textContent).toContain(
+      t('swarm.profile.leaveIncompleteBody'),
+    );
+    inDialog(t('swarm.profile.keepEditing')).click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.id).toBe('swarm-profile-name'),
+    );
+    expect(dialog()).toBeNull();
+    // A failed save keeps the changes until the user discards them.
     fill('swarm-profile-name', 'Unsaved navigation');
     await tick();
     operation.mockRejectedValueOnce(new Error('navigation-save-failure'));
@@ -564,14 +666,83 @@ describe('Swarm profile saving', () => {
       'Unsaved navigation',
     );
     expect(callsTo(operation, 'swarms.get')).toHaveLength(0);
+    inDialog(t('autosave.discardAndContinue')).click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    expect(document.querySelector('.swarm-profile-editor')).toBeNull();
+    expect(callsTo(operation, 'profiles.save')).toHaveLength(1);
+    expect(bridge.autosave).toBeNull();
+  });
+
+  it('asks before leaving a changed new Swarm and discards it only on request', async () => {
+    const { bridge, operation } = createBridge();
+    await openNewProfile(bridge);
+    // An untouched new Swarm leaves without asking.
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    expect(dialog()).toBeNull();
+    button(NEW_SWARM).click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('swarm-profile-name')).not.toBeNull(),
+    );
+    fill('swarm-profile-name', 'Unfinished');
+    await tick();
+    button('Investigate').click();
+    await vi.waitFor(() => expect(dialog()).not.toBeNull());
+    expect(dialog().textContent).toContain(t('swarm.profile.leaveTitle'));
+    inDialog(t('swarm.profile.keepEditing')).click();
+    await tick();
+    expect(dialog()).toBeNull();
+    expect(document.getElementById('swarm-profile-name').value).toBe(
+      'Unfinished',
+    );
+    button('Investigate').click();
+    await vi.waitFor(() => expect(dialog()).not.toBeNull());
+    inDialog(t('common.discard')).click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-profile-editor')).toBeNull(),
+    );
+    expect(document.querySelector('.swarm-head')).not.toBeNull();
+    expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
+  });
+
+  it('creates a changed new Swarm before leaving when asked', async () => {
+    const { bridge, operation } = createBridge();
+    await openNewProfile(bridge);
+    fill('swarm-profile-name', 'Created on leaving');
+    await tick();
+    button('Investigate').click();
+    await vi.waitFor(() => expect(dialog()).not.toBeNull());
+    // Incomplete settings return to the first one instead of leaving.
+    inDialog(CREATE_SWARM).click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.id).toBe('swarm-model-0'),
+    );
+    expect(dialog()).toBeNull();
+    expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
+    await choose('swarm-model-0', 'demo/model');
+    fill('swarm-directory', 'C:/work');
+    await tick();
+    button('Investigate').click();
+    await vi.waitFor(() => expect(dialog()).not.toBeNull());
+    inDialog(CREATE_SWARM).click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    expect(lastSaved(operation)).toMatchObject({ name: 'Created on leaving' });
+    const calls = operation.mock.calls.map(([name]) => name);
+    expect(calls.indexOf('profiles.save')).toBeLessThan(
+      calls.indexOf('swarms.get'),
+    );
+    expect(button('Created on leaving')).toBeDefined();
   });
 });
 
 describe('Swarm profile deletion', () => {
-  const confirm = () =>
-    [...dialog().querySelectorAll('button')].find(
-      (node) => node.textContent.trim() === t('common.delete'),
-    );
+  const confirm = () => inDialog(t('common.delete'));
 
   it('deletes the open Swarm from its editor without saving the discarded draft', async () => {
     const { bridge, operation } = createBridge();
