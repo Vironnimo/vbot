@@ -1,4 +1,3 @@
-import { SvelteMap } from 'svelte/reactivity';
 import { t, init } from '../../../../webui/src/lib/i18n.js';
 import { formatAbsoluteTime } from '../../../../webui/src/lib/timeText.js';
 import {
@@ -17,23 +16,22 @@ import {
   everythingChanged,
   swarmChanged,
 } from './pageRefresh.js';
-import { referenceLinks } from './referenceLinks.js';
+import { createSwarmPageActivity } from './pageActivity.svelte.js';
+import { createSwarmPageBoard } from './pageBoard.svelte.js';
+import { createSwarmPageUsage } from './pageUsage.svelte.js';
 
-// Background changes reload the Usage report at most this often; the last
-// change of a burst is always followed by a reload.
-const USAGE_REFRESH_INTERVAL_MS = 10_000;
-
-// Posts per Board read: the newest page, an earlier or newer page, new posts,
-// and each side of a revealed post. The Store also caps a page's text.
-const BOARD_PAGE = 50;
-
-// The most animation frames a revealed post is kept centered after a jump.
-const RECENTER_FRAMES = 12;
-
+// The page's state across its areas: the profile and Run lists, the shown
+// Swarm or profile with its route and tab, the start form, Run lifecycle and
+// deletion, the communication settings draft, refreshes and the bridge
+// lifetime. The Board, Activity and Usage areas keep their own state and
+// requests in `board`, `activity` and `usage`.
 export function createSwarmPageModel(host) {
   // Exists from the start, so the page root can hand its layer registry to
   // the page's dialogs before any of them mounts.
   const client = host.bridgeClient ?? createExtensionPageClient();
+
+  const call = (operation, arguments_ = {}) =>
+    client.operation(operation, arguments_);
 
   let loading = $state(true);
 
@@ -49,29 +47,15 @@ export function createSwarmPageModel(host) {
 
   let selectedSwarm = $state(null);
 
-  let board = $state([]);
-
-  let boardCursor = $state(null);
-
-  let discussions = $state([]);
-
-  let selectedDiscussion = $state('');
-
-  let discussionCursor = $state(null);
-
   let profilesCursor = $state(null);
 
   let swarmsCursor = $state(null);
-
-  let usage = $state(null);
-
-  let participantUsage = $state([]);
 
   let activeTab = $state('board');
 
   let editor = $state(null);
 
-  let deleteCandidate = $state(null);
+  let profileDeleteCandidate = $state(null);
 
   let swarmDeleteCandidate = $state(null);
 
@@ -91,20 +75,11 @@ export function createSwarmPageModel(host) {
 
   let directoryLoading = $state(false);
 
-  let postText = $state('');
-
-  let composeOpen = $state(false);
-
-  let postRecipients = $state('');
-
-  let replyTo = $state('');
-
-  let posting = $state(false);
-  let postMutation = null;
-
   let pending = $state('');
 
   let profileEditor = $state(null);
+
+  let wikiPanel = $state(null);
 
   let editorKey = $state(0);
 
@@ -118,48 +93,7 @@ export function createSwarmPageModel(host) {
 
   let swarmsRequest = 0;
 
-  // `board` holds posts of `boardShown` (a Swarm and discussion), newest
-  // first: its newest page with any earlier pages below, or the posts around a
-  // revealed post with any earlier and newer pages. `boardAtNewest` tells
-  // whether the discussion's newest posts are loaded; only then do new posts
-  // go on top. Each full load (the newest page or a revealed post's
-  // surroundings) counts up `boardVersion`; an earlier page or newer posts
-  // read for an older version are dropped, since the newer full load
-  // includes or replaces them.
-  let boardShown = null;
-
-  let boardAtNewest = $state(true);
-
-  let boardVersion = 0;
-
-  // The full load in flight, which a read of new posts waits for.
-  let boardLoading = null;
-
-  // The requested newer page in flight, which a read of new posts waits for.
-  let boardNewerLoading = null;
-
-  let discussionsRequest = 0;
-
-  let usageRequest = 0;
-
-  let usageFlight = null;
-
-  // Counts background changes of the selected Swarm; an in-flight Usage
-  // request is shared only while no change has arrived since it started.
-  let usageChanges = 0;
-
-  let usageStartedAt = -Infinity;
-
-  let usageTimer = null;
-
-  let usageLoading = $state(false);
-
   let directoryRequest = 0;
-
-  let revealRequest = 0;
-
-  // Tooltip content for "#N" and "wN" links, by "post:N" and "page:N".
-  const references = new SvelteMap();
 
   let disposed = false;
 
@@ -185,11 +119,64 @@ export function createSwarmPageModel(host) {
 
   let profilesLoaded = false;
 
+  const board = createSwarmPageBoard({
+    call,
+    client,
+    get selectedSwarm() {
+      return selectedSwarm;
+    },
+    get selectionRequest() {
+      return selectionRequest;
+    },
+    get disposed() {
+      return disposed;
+    },
+    get error() {
+      return error;
+    },
+    set error(value) {
+      error = value;
+    },
+    navigate,
+    // A step to the Board that loads nothing; a revealed post loads only
+    // what it needs.
+    stepToBoard() {
+      activeTab = 'board';
+      syncRoute({ step: true });
+    },
+    async openWikiPage(id) {
+      openTab('wiki');
+      await tick();
+      await wikiPanel?.openPage(id);
+    },
+    refresh,
+    showResumeFailures,
+  });
+
+  const usage = createSwarmPageUsage({
+    call,
+    get selectedSwarm() {
+      return selectedSwarm;
+    },
+    get activeTab() {
+      return activeTab;
+    },
+    get disposed() {
+      return disposed;
+    },
+    get error() {
+      return error;
+    },
+    set error(value) {
+      error = value;
+    },
+  });
+
   const backgroundRefresh = createPageRefresh(refreshChanges);
 
   function navigate(action) {
     if (profileEditor) return profileEditor.requestTransition(action);
-    if (host.wiki) return host.wiki.requestTransition(action);
+    if (wikiPanel) return wikiPanel.requestTransition(action);
     return action();
   }
 
@@ -285,11 +272,11 @@ export function createSwarmPageModel(host) {
 
   // Dialogs act on the shown record, so showing another one closes them.
   function closeDialogs() {
-    composeOpen = false;
+    board.composeOpen = false;
     settingsOpen = false;
     profileSnapshotOpen = false;
     if (pending === 'delete') return;
-    deleteCandidate = null;
+    profileDeleteCandidate = null;
     swarmDeleteCandidate = null;
   }
 
@@ -297,7 +284,7 @@ export function createSwarmPageModel(host) {
     selectionRequest += 1;
     editor = null;
     selectedSwarm = null;
-    host.activity.leaveActivity();
+    activity.leaveActivity();
     void selectRunProfile(selectedProfile);
   }
 
@@ -349,9 +336,6 @@ export function createSwarmPageModel(host) {
     }
   }
 
-  const call = (operation, arguments_ = {}) =>
-    client.operation(operation, arguments_);
-
   const runGroups = $derived([
     {
       id: 'active',
@@ -401,13 +385,6 @@ export function createSwarmPageModel(host) {
   // In the host's timezone, which `applyContext` makes the application zone.
   const date = (value) => formatAbsoluteTime(value);
 
-  const discussionOptions = $derived(discussions);
-  const discussionParticipants = $derived(
-    (selectedSwarm?.participants ?? []).filter((participant) =>
-      participant.discussion_ids?.includes(selectedDiscussion),
-    ),
-  );
-
   const settingChanges = $derived(
     deliveryDraft && selectedSwarm
       ? [
@@ -440,20 +417,6 @@ export function createSwarmPageModel(host) {
       : [],
   );
 
-  const usageRows = $derived(
-    participantUsage.flatMap(({ participant, report }) => {
-      const models = report?.usage?.activity?.models ?? [];
-      return (models.length ? models : [null]).map((model, index) => ({
-        id: `${participant.id}:${index}`,
-        participant: participant.display_name,
-        model,
-        modelName: model ? model.model : participant.model,
-        participantRows: index === 0 ? Math.max(models.length, 1) : 0,
-        toolCalls: report?.usage?.activity?.tool_calls,
-      }));
-    }),
-  );
-
   function applyContext(next) {
     setApplicationTimeZone(next.timezone);
     document.documentElement.lang = init(next.locale);
@@ -464,21 +427,15 @@ export function createSwarmPageModel(host) {
       );
   }
 
-  // Posts never change; a Wiki page's title and text can.
-  function forgetPageReferences() {
-    for (const key of references.keys())
-      if (key.startsWith('page:')) references.delete(key);
-  }
-
   // Reloads everything the page shows. `background` marks a refresh no user
   // action asked for, which reloads a visible Usage report at most every
-  // USAGE_REFRESH_INTERVAL_MS.
+  // USAGE_REFRESH_INTERVAL_MS (`pageUsage.svelte.js`).
   async function refresh({ background = false } = {}) {
     const request = ++overviewRequest;
     const selection = selectionRequest;
     // Invalidation must not unmount an active form or Run inspection.
     loading = loading && !editor;
-    forgetPageReferences();
+    board.forgetPageReferences();
     error = '';
     try {
       await Promise.all([loadProfiles(), loadSwarms()]);
@@ -511,7 +468,7 @@ export function createSwarmPageModel(host) {
         ? selectedSwarm
         : null;
     if (selected && swarmChanged(changes, selected.id, 'wiki'))
-      forgetPageReferences();
+      board.forgetPageReferences();
     error = '';
     try {
       await Promise.all([
@@ -574,28 +531,24 @@ export function createSwarmPageModel(host) {
     const request = ++selectionRequest;
     if (!silent) {
       error = '';
-      host.activity.leaveActivity();
-      composeOpen = false;
+      activity.leaveActivity();
+      board.composeOpen = false;
     }
     try {
       const swarm = (await call('swarms.get', { swarm_id: id })).swarm;
       if (disposed || request !== selectionRequest) return;
       if (selectedSwarm?.id !== id) {
-        references.clear();
-        selectedDiscussion = swarm.main_discussion_id;
-        discussions = [];
-        clearBoard();
-        usage = null;
-        participantUsage = [];
+        board.reset(swarm);
+        usage.reset();
       }
       selectedSwarm = swarm;
       if (tab) activeTab = tab;
       if (!silent) editor = null;
       const inspected = swarm.participants?.find(
-        (item) => item.id === host.activity.history?.participant.id,
+        (item) => item.id === activity.history?.participant.id,
       );
       if (silent && inspected) {
-        void host.activity.inspectParticipant(inspected, {
+        void activity.inspectParticipant(inspected, {
           activate: false,
           preserve: true,
         });
@@ -606,26 +559,16 @@ export function createSwarmPageModel(host) {
     }
   }
 
-  // Loads the visible tab, or with `changes` only its parts that changed:
-  // the discussions, and the posts newer than those the Board shows.
+  // Loads the visible tab, or with `changes` only its parts that changed.
   async function loadVisibleTab(
     swarm = selectedSwarm,
     { background = false, changes = null } = {},
   ) {
     if (!swarm) return;
-    if (background) usageChanges += 1;
-    if (activeTab === 'board') {
-      const changed = (resource) => swarmChanged(changes, swarm.id, resource);
-      await Promise.all([
-        changed('discussions') ? loadDiscussions(swarm) : null,
-        !changed('posts')
-          ? null
-          : changes
-            ? loadNewPosts(swarm)
-            : loadBoard(swarm, selectedDiscussion),
-      ]);
-    } else if (activeTab === 'usage')
-      await (background ? scheduleUsage(swarm) : loadUsage(swarm));
+    if (background) usage.noteChange();
+    if (activeTab === 'board') await board.reload(swarm, changes);
+    else if (activeTab === 'usage')
+      await (background ? usage.schedule(swarm) : usage.load(swarm));
   }
 
   async function loadMoreProfiles() {
@@ -646,267 +589,6 @@ export function createSwarmPageModel(host) {
     });
     swarms = [...swarms, ...page(result)];
     swarmsCursor = result.cursor ?? null;
-  }
-
-  async function loadDiscussions(swarm = selectedSwarm, cursor = null) {
-    if (!swarm) return;
-    const selection = selectionRequest;
-    const request = ++discussionsRequest;
-    const result = await call('board.list', {
-      swarm_id: swarm.id,
-      limit: 100,
-      ...(cursor ? { cursor } : {}),
-    });
-    if (
-      disposed ||
-      selection !== selectionRequest ||
-      request !== discussionsRequest ||
-      selectedSwarm?.id !== swarm.id
-    )
-      return;
-    const selected = discussions.find((item) => item.id === selectedDiscussion);
-    discussions = cursor
-      ? [
-          ...new SvelteMap(
-            [...discussions, ...page(result)].map((item) => [item.id, item]),
-          ).values(),
-        ]
-      : page(result);
-    if (selected && !discussions.some((item) => item.id === selected.id))
-      discussions = [...discussions, selected];
-    discussionCursor = result.cursor ?? null;
-  }
-
-  function clearBoard() {
-    boardVersion += 1;
-    boardShown = null;
-    board = [];
-    boardCursor = null;
-    boardAtNewest = true;
-  }
-
-  const shows = (swarm, discussionId) =>
-    boardShown?.swarmId === swarm.id &&
-    boardShown.discussionId === discussionId;
-
-  const boardCurrent = (version, swarm, discussionId) =>
-    !disposed &&
-    version === boardVersion &&
-    selectedSwarm?.id === swarm.id &&
-    selectedDiscussion === discussionId;
-
-  const readPosts = (swarm, discussionId, bounds = {}) =>
-    call('board.read', {
-      swarm_id: swarm.id,
-      discussion_id: discussionId,
-      limit: BOARD_PAGE,
-      ...bounds,
-    });
-
-  // Loads the discussion's newest page, or with `cursor` the earlier page
-  // below the posts the Board shows.
-  async function loadBoard(
-    swarm = selectedSwarm,
-    discussionId = selectedDiscussion,
-    cursor = null,
-  ) {
-    if (!swarm) return;
-    const version = cursor ? boardVersion : ++boardVersion;
-    const load = readPosts(swarm, discussionId, cursor ? { cursor } : {});
-    if (!cursor) boardLoading = load;
-    let result;
-    try {
-      result = await load;
-    } finally {
-      if (boardLoading === load) boardLoading = null;
-    }
-    if (!boardCurrent(version, swarm, discussionId)) return;
-    const posts = [...page(result)].reverse();
-    if (cursor) {
-      if (!shows(swarm, discussionId)) return;
-      const oldest = board.at(-1)?.sequence ?? Infinity;
-      board = [...board, ...posts.filter((post) => post.sequence < oldest)];
-    } else {
-      board = posts;
-      boardShown = { swarmId: swarm.id, discussionId };
-      boardAtNewest = true;
-    }
-    boardCursor = result.cursor ?? null;
-  }
-
-  // Shows the post numbered `number` of a discussion with up to a page of
-  // earlier posts below it and up to a page of newer ones above, read
-  // together. Returns whether the Board shows them.
-  async function loadAround(swarm, discussionId, number) {
-    const version = ++boardVersion;
-    const load = Promise.all([
-      readPosts(swarm, discussionId, { before: number + 1 }),
-      readPosts(swarm, discussionId, { after: number }),
-    ]);
-    boardLoading = load;
-    let earlier, newer;
-    try {
-      [earlier, newer] = await load;
-    } finally {
-      if (boardLoading === load) boardLoading = null;
-    }
-    if (!boardCurrent(version, swarm, discussionId)) return false;
-    board = [...page(newer)].reverse().concat([...page(earlier)].reverse());
-    boardShown = { swarmId: swarm.id, discussionId };
-    boardCursor = earlier.cursor ?? null;
-    boardAtNewest = !newer.has_more;
-    return true;
-  }
-
-  // Puts newer posts of `result`, oldest first, on top of the Board.
-  function putNewer(result) {
-    const newest = board[0]?.sequence ?? 0;
-    board = [
-      ...page(result)
-        .filter((post) => post.sequence > newest)
-        .reverse(),
-      ...board,
-    ];
-  }
-
-  // Puts the selected discussion's posts newer than the Board's newest on top
-  // while the Board shows the discussion's newest posts. A Board that does
-  // not show the discussion yet loads its newest page.
-  async function loadNewPosts(swarm) {
-    const discussionId = selectedDiscussion;
-    // A load in flight may have read before the newest posts.
-    await boardLoading?.catch(() => {});
-    await boardNewerLoading?.catch(() => {});
-    if (!shows(swarm, discussionId)) return loadBoard(swarm, discussionId);
-    // The newer posts the Board does not show come with "Load newer
-    // messages" or "Jump to newest".
-    if (!boardAtNewest) return;
-    const version = boardVersion;
-    for (;;) {
-      const result = await readPosts(swarm, discussionId, {
-        after: board[0]?.sequence ?? 0,
-      });
-      if (!boardCurrent(version, swarm, discussionId)) return;
-      putNewer(result);
-      if (!result.has_more || !page(result).length) return;
-    }
-  }
-
-  // Puts the next page of newer posts on top of a Board that does not show
-  // the discussion's newest posts.
-  async function loadNewerPosts() {
-    const swarm = selectedSwarm;
-    const discussionId = selectedDiscussion;
-    if (!swarm || boardAtNewest || !shows(swarm, discussionId)) return;
-    const version = boardVersion;
-    const load = readPosts(swarm, discussionId, {
-      after: board[0]?.sequence ?? 0,
-    });
-    boardNewerLoading = load;
-    let result;
-    try {
-      result = await load;
-    } catch (cause) {
-      if (boardCurrent(version, swarm, discussionId)) error = cause.message;
-      return;
-    } finally {
-      if (boardNewerLoading === load) boardNewerLoading = null;
-    }
-    if (!boardCurrent(version, swarm, discussionId)) return;
-    putNewer(result);
-    boardAtNewest = !result.has_more;
-  }
-
-  // Replaces the shown posts with the discussion's newest page and shows its
-  // newest post.
-  async function jumpToNewest() {
-    const swarm = selectedSwarm;
-    if (!swarm) return;
-    const version = boardVersion + 1;
-    try {
-      await loadBoard(swarm, selectedDiscussion);
-    } catch (cause) {
-      if (!disposed && version === boardVersion) error = cause.message;
-      return;
-    }
-    if (disposed || version !== boardVersion) return;
-    await tick();
-    revealElement(document.querySelector('.board > li'));
-  }
-
-  async function chooseDiscussion(id) {
-    selectedDiscussion = id;
-    clearBoard();
-    await loadBoard(selectedSwarm, id);
-  }
-
-  async function openDiscussion(announcement) {
-    if (!discussions.some((item) => item.id === announcement.discussion_id))
-      discussions = [
-        ...discussions,
-        { id: announcement.discussion_id, title: announcement.title },
-      ];
-    try {
-      await chooseDiscussion(announcement.discussion_id);
-    } catch (cause) {
-      error = cause.message;
-    }
-  }
-
-  // A background change reloads Usage at once when the last request is old
-  // enough, otherwise when USAGE_REFRESH_INTERVAL_MS since it have passed.
-  function scheduleUsage(swarm) {
-    const wait = usageStartedAt + USAGE_REFRESH_INTERVAL_MS - Date.now();
-    if (wait <= 0) return loadUsage(swarm);
-    usageTimer ??= setTimeout(() => {
-      usageTimer = null;
-      if (disposed || activeTab !== 'usage' || !selectedSwarm) return;
-      void loadUsage(selectedSwarm).catch((cause) => {
-        if (!disposed) error = cause.message;
-      });
-    }, wait);
-  }
-
-  async function loadUsage(swarm = selectedSwarm) {
-    if (!swarm) return;
-    clearTimeout(usageTimer);
-    usageTimer = null;
-    const request = ++usageRequest;
-    usageLoading = true;
-    if (
-      usageFlight?.swarmId !== swarm.id ||
-      usageFlight.changes !== usageChanges
-    ) {
-      const flight = {
-        swarmId: swarm.id,
-        changes: usageChanges,
-        promise: call('swarms.usage', { swarm_id: swarm.id }),
-      };
-      usageFlight = flight;
-      usageStartedAt = Date.now();
-    }
-    const flight = usageFlight;
-    try {
-      const report = await flight.promise;
-      if (
-        disposed ||
-        request !== usageRequest ||
-        selectedSwarm?.id !== swarm.id
-      )
-        return;
-      usage = report;
-      participantUsage = (swarm.participants ?? []).map((participant) => ({
-        participant,
-        report: {
-          usage: report.usage?.participants?.find(
-            (row) => row.participant_id === participant.id,
-          ),
-        },
-      }));
-    } finally {
-      if (usageFlight === flight) usageFlight = null;
-      if (!disposed && request === usageRequest) usageLoading = false;
-    }
   }
 
   async function saveProfile(profile) {
@@ -943,7 +625,7 @@ export function createSwarmPageModel(host) {
       const nextCatalog = (await call('catalog'))?.catalog ?? {};
       if (disposed || request !== selectionRequest) return;
       catalog = nextCatalog;
-      host.activity.leaveActivity();
+      activity.leaveActivity();
       selectedSwarm = null;
       if (profile !== 'new') selectedProfile = profile;
       editorKey += 1;
@@ -957,11 +639,11 @@ export function createSwarmPageModel(host) {
 
   function confirmProfileDelete(profile) {
     deleteError = '';
-    deleteCandidate = profile;
+    profileDeleteCandidate = profile;
   }
 
   async function deleteProfile() {
-    const candidate = deleteCandidate;
+    const candidate = profileDeleteCandidate;
     if (!candidate || pending) return;
     pending = 'delete';
     deleteError = '';
@@ -981,7 +663,7 @@ export function createSwarmPageModel(host) {
         syncRoute({ step: false });
       }
       if (selectedProfile?.id === candidate.id) void selectRunProfile(null);
-      deleteCandidate = null;
+      profileDeleteCandidate = null;
       await refresh();
     } catch (cause) {
       deleteError = cause.message;
@@ -1125,286 +807,6 @@ export function createSwarmPageModel(host) {
     }
   }
 
-  async function post() {
-    if (posting || !selectedSwarm || !postText.trim()) return;
-    const payload = {
-      swarm_id: selectedSwarm.id,
-      discussion_id: selectedDiscussion,
-      text: postText,
-      ...(replyTo.trim() ? { reply_to: replyTo.trim() } : {}),
-      ...(postRecipients.trim()
-        ? {
-            recipients: postRecipients
-              .split(',')
-              .map((item) => item.trim())
-              .filter(Boolean),
-          }
-        : {}),
-    };
-    const fingerprint = JSON.stringify(payload);
-    if (postMutation?.fingerprint !== fingerprint)
-      postMutation = { fingerprint, id: requestId() };
-    posting = true;
-    error = '';
-    try {
-      const result = await call('board.post', {
-        ...payload,
-        request_id: postMutation.id,
-      });
-      postMutation = null;
-      postText = '';
-      postRecipients = '';
-      replyTo = '';
-      composeOpen = false;
-      await refresh();
-      showResumeFailures(result);
-    } catch (cause) {
-      error = cause.message;
-    } finally {
-      posting = false;
-    }
-  }
-
-  function contentLinks(node, { references: linked = true } = {}) {
-    node.addEventListener('click', openContentLink);
-    const numbers = linked
-      ? referenceLinks(node, {
-          target: referenceTarget,
-          describe: describeReference,
-          loading: (reference) => ({
-            title: reference,
-            text: t('swarm.references.loading'),
-          }),
-        })
-      : null;
-    return {
-      destroy: () => {
-        node.removeEventListener('click', openContentLink);
-        numbers?.destroy();
-      },
-    };
-  }
-
-  // "#N" names a post and "wN" a Wiki page. A post cites only earlier posts;
-  // other Markdown cites any post or page that exists.
-  function referenceTarget(kind, number, text) {
-    const swarm = selectedSwarm;
-    if (!swarm) return null;
-    if (kind === 'page')
-      return number >= 1 && number <= (swarm.newest_wiki_page_number ?? 0)
-        ? `#wiki/w${number}`
-        : null;
-    const post = text.parentElement?.closest('[data-post-number]');
-    const newest = post
-      ? Number(post.dataset.postNumber) - 1
-      : swarm.newest_post_sequence;
-    return newest != null && number <= newest ? `#post/${number}` : null;
-  }
-
-  function describeReference(kind, number) {
-    const key = `${kind}:${number}`;
-    if (!references.has(key))
-      references.set(
-        key,
-        (kind === 'post' ? describePost(number) : describePage(number)).catch(
-          () => {
-            references.delete(key);
-            return t('swarm.references.unavailable', {
-              reference: kind === 'post' ? `#${number}` : `w${number}`,
-            });
-          },
-        ),
-      );
-    return references.get(key);
-  }
-
-  const opening = (text) => {
-    const value = String(text ?? '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return value.length > 200 ? `${value.slice(0, 199)}…` : value;
-  };
-
-  async function describePost(number) {
-    const post =
-      board.find((item) => item.sequence === number) ??
-      page(
-        await call('board.read', {
-          swarm_id: selectedSwarm.id,
-          message_id: `#${number}`,
-        }),
-      )[0];
-    return {
-      title: `#${number} · ${post.author?.name ?? t('swarm.participant')}`,
-      text: opening(post.text),
-    };
-  }
-
-  async function describePage(number) {
-    const result = await call('wiki', {
-      swarm_id: selectedSwarm.id,
-      action: 'read',
-      page_id: `w${number}`,
-      limit: 300,
-    });
-    return {
-      title: result.deleted
-        ? t('swarm.references.deletedPage', {
-            reference: `w${number}`,
-            title: result.title,
-          })
-        : `w${number} · ${result.title}`,
-      text: opening(result.content),
-    };
-  }
-
-  // Lists the discussion `discussionId` in the selector, reading its pages
-  // until they name it.
-  async function listDiscussion(swarm, discussionId, current) {
-    if (!discussions.length) await loadDiscussions(swarm);
-    while (
-      !discussions.some((item) => item.id === discussionId) &&
-      discussionCursor &&
-      current()
-    ) {
-      const cursor = discussionCursor;
-      await loadDiscussions(swarm, cursor);
-      if (discussionCursor === cursor) break;
-    }
-    if (current() && !discussions.some((item) => item.id === discussionId))
-      discussions = [...discussions, { id: discussionId }];
-  }
-
-  // Shows a cited post on the Board, focused in the middle of the view. A post
-  // the Board does not show yet takes two round trips: its discussion, then
-  // the post with the posts around it.
-  async function revealPost(number) {
-    const swarm = selectedSwarm;
-    if (!swarm) return;
-    const request = ++revealRequest;
-    const current = () =>
-      !disposed && request === revealRequest && selectedSwarm?.id === swarm.id;
-    const shown = () =>
-      shows(swarm, selectedDiscussion) &&
-      board.some((item) => item.sequence === number);
-    // A step to the Board, which loads only what the post needs.
-    activeTab = 'board';
-    syncRoute({ step: true });
-    if (number === swarm.goal_post_sequence) {
-      await tick();
-      const goal = document.querySelector('.swarm-goal-post');
-      if (goal && current()) {
-        goal.open = true;
-        revealElement(goal, current);
-      }
-      return;
-    }
-    if (!shown()) {
-      const [post] = page(
-        await call('board.read', {
-          swarm_id: swarm.id,
-          message_id: `#${number}`,
-        }),
-      );
-      if (!post || !current()) return;
-      const discussionId = post.discussion_id;
-      if (!shown()) {
-        if (selectedDiscussion !== discussionId) {
-          selectedDiscussion = discussionId;
-          clearBoard();
-        }
-        const [around] = await Promise.all([
-          loadAround(swarm, discussionId, number),
-          listDiscussion(swarm, discussionId, current),
-        ]);
-        if (!around) return;
-      }
-    }
-    if (!current()) return;
-    await tick();
-    revealElement(
-      document.querySelector(`.board > li[data-post-number="${number}"]`),
-      current,
-    );
-  }
-
-  // Scrolls `element` to the middle of the view, then focuses and highlights
-  // it. A short way scrolls smoothly; a long one jumps, since smooth
-  // scrolling would render every post on the way.
-  function revealElement(element, current = () => !disposed) {
-    if (!element) return;
-    const reduced = window.matchMedia?.(
-      '(prefers-reduced-motion: reduce)',
-    )?.matches;
-    const box = element.getBoundingClientRect();
-    const near =
-      Math.abs(box.top + box.height / 2 - window.innerHeight / 2) <
-      window.innerHeight;
-    element.scrollIntoView?.({
-      block: 'center',
-      behavior: near && !reduced ? 'smooth' : 'auto',
-    });
-    if (!near) recenter(element, current);
-    element.tabIndex = -1;
-    element.focus({ preventScroll: true });
-    element.dataset.revealed = '';
-    setTimeout(() => delete element.dataset.revealed, 2000);
-  }
-
-  // Posts away from the view render only near it (`content-visibility`), so
-  // a jump places `element` by estimated heights of the posts on the way.
-  // Keeps it centered while posts coming into view replace their estimates:
-  // until it stays put for two frames, for at most RECENTER_FRAMES frames.
-  function recenter(element, current) {
-    let frames = RECENTER_FRAMES;
-    let still = 0;
-    let top = element.getBoundingClientRect().top;
-    const step = () => {
-      if (!current() || !element.isConnected || frames-- <= 0) return;
-      if (element.getBoundingClientRect().top === top) {
-        if (++still === 2) return;
-      } else {
-        still = 0;
-        element.scrollIntoView?.({ block: 'center', behavior: 'auto' });
-        top = element.getBoundingClientRect().top;
-      }
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }
-
-  function openContentLink(event) {
-    const link = event.target.closest('a[href]');
-    if (!link) return;
-    event.preventDefault();
-    const post = /^#post\/(\d+)$/.exec(link.getAttribute('href') ?? '');
-    if (post) {
-      void Promise.resolve(navigate(() => revealPost(Number(post[1])))).catch(
-        (cause) => {
-          if (!disposed) error = cause.message;
-        },
-      );
-      return;
-    }
-    const wiki = /^#wiki\/([^/]+)$/.exec(link.getAttribute('href') ?? '');
-    if (wiki) {
-      void navigate(async () => {
-        openTab('wiki');
-        await tick();
-        await host.wiki?.openPage(wiki[1]);
-      });
-      return;
-    }
-    const url = link.href;
-    if (!url) return;
-    const isMedia =
-      Boolean(link.querySelector('img, video, audio')) ||
-      /\.(avif|gif|jpe?g|mp3|mp4|ogg|png|svg|webm)(?:$|[?#])/i.test(url);
-    void (isMedia ? client.openMedia(url) : client.openLink(url)).catch(
-      (cause) => (error = cause.message),
-    );
-  }
-
   onMount(() => {
     const startupTimeout = setTimeout(() => {
       loading = false;
@@ -1427,16 +829,21 @@ export function createSwarmPageModel(host) {
     return () => {
       disposed = true;
       backgroundRefresh.destroy();
-      clearTimeout(usageTimer);
+      usage.destroy();
       selectionRequest += 1;
-      host.activity.destroy();
+      activity.destroy();
       clearTimeout(startupTimeout);
       offContext();
       offInvalidation();
       client.dispose();
     };
   });
-  return {
+  const activity = createSwarmPageActivity({
+    get model() {
+      return model;
+    },
+  });
+  const model = {
     get client() {
       return client;
     },
@@ -1464,32 +871,11 @@ export function createSwarmPageModel(host) {
     get selectedSwarm() {
       return selectedSwarm;
     },
-    get board() {
-      return board;
-    },
-    get boardCursor() {
-      return boardCursor;
-    },
-    get boardAtNewest() {
-      return boardAtNewest;
-    },
-    get selectedDiscussion() {
-      return selectedDiscussion;
-    },
-    get discussionCursor() {
-      return discussionCursor;
-    },
     get profilesCursor() {
       return profilesCursor;
     },
     get swarmsCursor() {
       return swarmsCursor;
-    },
-    get usageLoading() {
-      return usageLoading;
-    },
-    get usage() {
-      return usage;
     },
     get activeTab() {
       return activeTab;
@@ -1498,11 +884,11 @@ export function createSwarmPageModel(host) {
     get editor() {
       return editor;
     },
-    get deleteCandidate() {
-      return deleteCandidate;
+    get profileDeleteCandidate() {
+      return profileDeleteCandidate;
     },
-    set deleteCandidate(value) {
-      deleteCandidate = value;
+    set profileDeleteCandidate(value) {
+      profileDeleteCandidate = value;
     },
     get swarmDeleteCandidate() {
       return swarmDeleteCandidate;
@@ -1546,33 +932,6 @@ export function createSwarmPageModel(host) {
     get directoryLoading() {
       return directoryLoading;
     },
-    get postText() {
-      return postText;
-    },
-    set postText(value) {
-      postText = value;
-    },
-    get composeOpen() {
-      return composeOpen;
-    },
-    set composeOpen(value) {
-      composeOpen = value;
-    },
-    get postRecipients() {
-      return postRecipients;
-    },
-    set postRecipients(value) {
-      postRecipients = value;
-    },
-    get replyTo() {
-      return replyTo;
-    },
-    set replyTo(value) {
-      replyTo = value;
-    },
-    get posting() {
-      return posting;
-    },
     get pending() {
       return pending;
     },
@@ -1581,6 +940,12 @@ export function createSwarmPageModel(host) {
     },
     set profileEditor(value) {
       profileEditor = value;
+    },
+    get wikiPanel() {
+      return wikiPanel;
+    },
+    set wikiPanel(value) {
+      wikiPanel = value;
     },
     get editorKey() {
       return editorKey;
@@ -1605,28 +970,13 @@ export function createSwarmPageModel(host) {
       return tabs;
     },
     date,
-    get discussionOptions() {
-      return discussionOptions;
-    },
-    get discussionParticipants() {
-      return discussionParticipants;
-    },
     get settingChanges() {
       return settingChanges;
-    },
-    get usageRows() {
-      return usageRows;
     },
     refresh,
     openSwarm,
     loadMoreProfiles,
     loadMoreSwarms,
-    loadDiscussions,
-    loadBoard,
-    loadNewerPosts,
-    jumpToNewest,
-    chooseDiscussion,
-    openDiscussion,
     saveProfile,
     openProfile,
     confirmProfileDelete,
@@ -1638,7 +988,9 @@ export function createSwarmPageModel(host) {
     changeDelivery,
     changeDeliverySetting,
     applyDelivery,
-    post,
-    contentLinks,
+    board,
+    activity,
+    usage,
   };
+  return model;
 }

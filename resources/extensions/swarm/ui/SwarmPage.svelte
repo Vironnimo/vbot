@@ -30,28 +30,16 @@
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import { provideNavigation } from '../../../../webui/src/lib/navigation.svelte.js';
   import { createSwarmPageModel } from './pageModel.svelte.js';
-  import { createSwarmPageActivity } from './pageActivity.svelte.js';
   import './swarmPage.css';
   import WikiPanel from './WikiPanel.svelte';
-  let wikiPanel = $state(null);
 
   let { bridgeClient = null } = $props();
   const model = createSwarmPageModel({
     get bridgeClient() {
       return bridgeClient;
     },
-    get wiki() {
-      return wikiPanel;
-    },
-    get activity() {
-      return activity;
-    },
   });
-  const activity = createSwarmPageActivity({
-    get model() {
-      return model;
-    },
-  });
+  const { board, activity, usage } = model;
   // The page's dialogs register as layers of the app's navigation, so Back
   // and Forward close them before leaving the page's place.
   provideNavigation({ registerLayer: model.client.registerLayer });
@@ -306,10 +294,10 @@
             </Banner>
           {/if}
           {#key model.selectedSwarm.id}<WikiPanel
-              bind:this={wikiPanel}
+              bind:this={model.wikiPanel}
               swarmId={model.selectedSwarm.id}
               client={model.client}
-              contentLinks={model.contentLinks}
+              contentLinks={board.contentLinks}
               active={model.activeTab === 'wiki'}
             />{/key}
           {#if model.activeTab === 'board'}<section
@@ -323,10 +311,10 @@
                   ><select
                     class="s-input"
                     id="swarm-discussion"
-                    value={model.selectedDiscussion}
+                    value={board.selectedDiscussion}
                     onchange={(event) =>
-                      model.chooseDiscussion(event.currentTarget.value)}
-                    >{#each model.discussionOptions as discussion (discussion.id)}<option
+                      board.chooseDiscussion(event.currentTarget.value)}
+                    >{#each board.discussionOptions as discussion (discussion.id)}<option
                         value={discussion.id}
                         >{discussion.title ??
                           discussion.name ??
@@ -334,17 +322,17 @@
                       >{/each}</select
                   ></FormField
                 >
-                {#if model.discussionCursor}<Button
+                {#if board.discussionCursor}<Button
                     variant="secondary"
                     onClick={() =>
-                      model.loadDiscussions(
+                      board.loadDiscussions(
                         model.selectedSwarm,
-                        model.discussionCursor,
+                        board.discussionCursor,
                       )}>{t('swarm.board.moreDiscussions')}</Button
                   >{/if}
                 <Button
                   variant="secondary"
-                  onClick={() => (model.composeOpen = true)}
+                  onClick={() => (board.composeOpen = true)}
                 >
                   {@render actionIcon('edit')}{t('swarm.board.openComposer')}
                 </Button>
@@ -352,7 +340,7 @@
               <div class="board-context">
                 <details
                   class="swarm-goal-post"
-                  use:model.contentLinks={{ references: false }}
+                  use:board.contentLinks={{ references: false }}
                 >
                   <summary>{t('swarm.board.goal')}</summary>
                   <MarkdownContent
@@ -383,30 +371,30 @@
                 <p class="section-label">
                   {t('swarm.participants')}
                   <span class="participant-count"
-                    >{model.discussionParticipants.length}</span
+                    >{board.discussionParticipants.length}</span
                   >
                 </p>
                 <div class="participant-row">
-                  {#each model.discussionParticipants as participant (participant.id)}
+                  {#each board.discussionParticipants as participant (participant.id)}
                     {@render participantChip(participant)}
                   {:else}
                     <span class="muted">{t('swarm.board.noParticipants')}</span>
                   {/each}
                 </div>
               </section>
-              {#if model.board.length === 0}<EmptyState
+              {#if board.posts.length === 0}<EmptyState
                   density="compact"
                   title={t('swarm.board.empty')}
-                />{:else}{#if !model.boardAtNewest}<div class="board-newer">
-                    <Button variant="secondary" onClick={model.loadNewerPosts}
+                />{:else}{#if !board.boardAtNewest}<div class="board-newer">
+                    <Button variant="secondary" onClick={board.loadNewerPosts}
                       >{t('swarm.board.newer')}</Button
                     >
-                    <Button variant="secondary" onClick={model.jumpToNewest}
+                    <Button variant="secondary" onClick={board.jumpToNewest}
                       >{t('swarm.board.newest')}</Button
                     >
                   </div>{/if}
-                <ol class="board" use:model.contentLinks>
-                  {#each model.board as post (post.id)}<li
+                <ol class="board" use:board.contentLinks>
+                  {#each board.posts as post (post.id)}<li
                       data-post-number={post.sequence}
                       style:--participant-color={post.author?.kind ===
                         'participant' && post.author?.id
@@ -444,7 +432,7 @@
                           <Button
                             variant="secondary"
                             onClick={() =>
-                              model.openDiscussion(
+                              board.openDiscussion(
                                 post.discussion_announcement,
                               )}
                           >
@@ -479,13 +467,13 @@
                         >{/if}
                     </li>{/each}
                 </ol>
-                {#if model.boardCursor}<Button
+                {#if board.boardCursor}<Button
                     variant="secondary"
                     onClick={() =>
-                      model.loadBoard(
+                      board.loadBoard(
                         model.selectedSwarm,
-                        model.selectedDiscussion,
-                        model.boardCursor,
+                        board.selectedDiscussion,
+                        board.boardCursor,
                       )}>{t('swarm.board.more')}</Button
                   >{/if}{/if}
             </section>
@@ -504,7 +492,7 @@
               </div>
               {#if activity.history}<article
                   class="history"
-                  use:model.contentLinks
+                  use:board.contentLinks
                 >
                   <div class="section-head">
                     <h3>
@@ -600,21 +588,21 @@
                 <dt>{t('swarm.id')}</dt>
                 <dd>{model.selectedSwarm.id}</dd>
               </dl>
-              {#if model.usage?.usage}<dl class="usage-summary">
+              {#if usage.report?.usage}<dl class="usage-summary">
                   <div>
                     <dt>
                       {t('swarm.usage.tokensUsed')}
                     </dt>
-                    <dd>{tokensUsed(model.usage.usage.activity?.totals)}</dd>
+                    <dd>{tokensUsed(usage.report.usage.activity?.totals)}</dd>
                   </div>
                   <div>
                     <dt>{t('swarm.usage.toolCalls')}</dt>
                     <dd>
-                      {usageCount(model.usage.usage.activity?.tool_calls)}
+                      {usageCount(usage.report.usage.activity?.tool_calls)}
                     </dd>
                   </div>
                 </dl>
-                {#if model.usageRows.length}<div class="table-wrap">
+                {#if usage.rows.length}<div class="table-wrap">
                     <table>
                       <thead>
                         <tr>
@@ -626,7 +614,7 @@
                         </tr>
                       </thead>
                       <tbody>
-                        {#each model.usageRows as row (row.id)}
+                        {#each usage.rows as row (row.id)}
                           <tr>
                             {#if row.participantRows}
                               <td rowspan={row.participantRows}
@@ -645,7 +633,7 @@
                         {/each}
                       </tbody>
                     </table>
-                  </div>{/if}{:else if !model.usageLoading}<EmptyState
+                  </div>{/if}{:else if !usage.loading}<EmptyState
                   density="compact"
                   title={t('swarm.usageEmpty')}
                 />{/if}
@@ -752,10 +740,10 @@
   </div>
 </main>
 
-{#if model.composeOpen && model.selectedSwarm}<Modal
+{#if board.composeOpen && model.selectedSwarm}<Modal
     title={t('swarm.board.openComposer')}
-    closeDisabled={model.posting}
-    onClose={() => (model.composeOpen = false)}
+    closeDisabled={board.posting}
+    onClose={() => (board.composeOpen = false)}
   >
     {#snippet body()}<div class="modal-copy swarm-page-modal-copy">
         {#if model.error}<Banner variant="error" role="alert"
@@ -765,7 +753,7 @@
           ><textarea
             class="text-area text-area--default"
             id="swarm-post"
-            bind:value={model.postText}
+            bind:value={board.postText}
             rows="3"
             placeholder={t('swarm.board.placeholder')}></textarea></FormField
         >
@@ -775,7 +763,7 @@
               class="s-input"
               id="swarm-reply"
               placeholder="#42"
-              bind:value={model.replyTo}
+              bind:value={board.replyTo}
             /></FormField
           ><FormField
             controlId="swarm-pings"
@@ -783,20 +771,20 @@
             ><input
               class="s-input"
               id="swarm-pings"
-              bind:value={model.postRecipients}
+              bind:value={board.postRecipients}
             /></FormField
           >
         </div>
       </div>{/snippet}
     {#snippet footer()}<Button
         variant="secondary"
-        disabled={model.posting}
-        onClick={() => (model.composeOpen = false)}>{t('common.cancel')}</Button
+        disabled={board.posting}
+        onClick={() => (board.composeOpen = false)}>{t('common.cancel')}</Button
       ><Button
         variant="primary"
-        loading={model.posting}
-        disabled={!model.postText.trim()}
-        onClick={model.post}>{t('swarm.board.submit')}</Button
+        loading={board.posting}
+        disabled={!board.postText.trim()}
+        onClick={board.post}>{t('swarm.board.submit')}</Button
       >{/snippet}
   </Modal>{/if}
 {#if model.swarmDeleteCandidate}<Modal
@@ -822,13 +810,13 @@
         onClick={model.deleteSwarm}>{t('common.delete')}</Button
       >{/snippet}</Modal
   >{/if}
-{#if model.deleteCandidate}<Modal
+{#if model.profileDeleteCandidate}<Modal
     title={t('swarm.delete.title')}
     closeDisabled={model.pending === 'delete'}
-    onClose={() => (model.deleteCandidate = null)}
+    onClose={() => (model.profileDeleteCandidate = null)}
     >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
         <p>
-          {t('swarm.delete.body', { name: model.deleteCandidate.name })}
+          {t('swarm.delete.body', { name: model.profileDeleteCandidate.name })}
         </p>
         {#if model.deleteError}<Banner variant="error"
             >{model.deleteError}</Banner
@@ -836,7 +824,7 @@
       </div>{/snippet}{#snippet footer()}<Button
         variant="secondary"
         disabled={model.pending === 'delete'}
-        onClick={() => (model.deleteCandidate = null)}
+        onClick={() => (model.profileDeleteCandidate = null)}
         >{t('common.cancel')}</Button
       ><Button
         variant="danger"
