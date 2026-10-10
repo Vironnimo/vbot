@@ -1,0 +1,58 @@
+/* The Usage tab (RunUsage.svelte). */
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-identity {
+  margin: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-identity
+  dt {
+  color: var(--text-med);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-identity
+  dd {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+  overflow-wrap: anywhere;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .usage-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .usage-summary
+  div {
+  padding: 12px;
+  border-left: 2px solid var(--border-2);
+  background: var(--surface-2);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .usage-summary
+  dt {
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .usage-summary
+  dd {
+  margin: 5px 0 0;
+  color: var(--text-hi);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .table-wrap {
+  overflow-x: auto;
+  margin-top: 16px;
+}
+@media (max-width: 640px) {
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .usage-summary {
+    grid-template-columns: 1fr;
+  }
+}

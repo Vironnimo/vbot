@@ -1,0 +1,32 @@
+/* The selected Run's header and tabs (RunView.svelte). */
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-head {
+  margin-bottom: 20px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-head
+  > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-tabs {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-tabs
+  .tab-list {
+  flex: 1;
+  min-width: 0;
+}
+.swarm-page .swarm-heading-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.swarm-page .swarm-heading h2 {
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,52 @@
+/* The page's navigation pane (SwarmSidebar.svelte). */
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .secondary-pane {
+  flex-shrink: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .secondary-pane__header {
+  align-items: center;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .sidebar-title {
+  min-width: 0;
+  font-weight: 400;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* "New run" opens the goal form, the page's home: a pinned navigation row
+   below the pane header, like the Agents pane's Shared defaults entry. The
+   list below holds the Swarms, then the Run groups under group headings. */
+.swarm-page .swarm-pane-scroll {
+  padding: 12px;
+  scrollbar-gutter: auto;
+}
+.swarm-page .swarm-pane-scroll .secondary-list {
+  padding: 0;
+}
+.swarm-page .swarm-pane-scroll .run-group {
+  margin-top: 16px;
+}
+.swarm-page .run-group__empty {
+  margin: 0;
+  padding: 6px 12px;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
+}
+@media (max-width: 640px) {
+  /* Above the work area, the pane keeps its natural height until the
+     cap, then its lists scroll inside it; the work area keeps the
+     remaining height and its own scroll. */
+  .swarm-page > .secondary-pane {
+    width: 100%;
+    min-width: 0;
+    max-height: min(45vh, 400px);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .swarm-page .secondary-pane__pinned {
+    padding-bottom: 8px;
+  }
+}

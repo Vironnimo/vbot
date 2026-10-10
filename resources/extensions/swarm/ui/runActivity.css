@@ -1,0 +1,31 @@
+/* The Activity tab (RunActivity.svelte). */
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .context-usage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .history {
+  min-width: 0;
+  padding: 12px;
+  border-left: 2px solid var(--border-2);
+  background: var(--surface-2);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .history {
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .history
+  > .section-head {
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
