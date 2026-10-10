@@ -336,7 +336,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   Ambiguity counts every occurrence, including overlapping ones (repeated
   closing-brace lines) and ones following a filtered partial occurrence, for
   hunks and `@@` anchors alike; `replace_all` still replaces leftmost
-  non-overlapping spans.
+  non-overlapping spans. The report stays linear in the file size: the lines
+  of all occurrences come from one pass over the line breaks, and `replace_all`
+  builds its result once (counting each occurrence's line from the file start
+  took minutes on 100,000-line files; `test_fuzzy_match.py` guards it).
 - Newline/Unicode/typography/whitespace/indentation differences are supported
   for every hunk line. Old text copied with other errors is applied whenever the
   passage is clearly identified, with stricter evidence for shorter text (user
