@@ -70,6 +70,30 @@ describe('TextArea', () => {
     expect(onInput.mock.calls[0][1]).toBeInstanceOf(Event);
   });
 
+  it('grows with its text only when asked to', async () => {
+    const fixed = render();
+    fixed.value = 'Line\n'.repeat(20);
+    fixed.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(fixed.style.height).toBe('');
+    expect(fixed.classList.contains('text-area--grow')).toBe(false);
+    await unmount(mountedComponent);
+    document.body.innerHTML = '';
+
+    const onInput = vi.fn();
+    const growing = render({ autoGrow: true, rows: 3, onInput });
+    let contentHeight = 120;
+    Object.defineProperty(growing, 'scrollHeight', {
+      configurable: true,
+      get: () => contentHeight,
+    });
+    expect(growing.classList.contains('text-area--grow')).toBe(true);
+    contentHeight = 260;
+    growing.value = 'Line\n'.repeat(20);
+    growing.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(growing.style.height).toBe('260px');
+    expect(onInput).toHaveBeenCalledWith(growing.value, expect.any(Event));
+  });
+
   it('owns the inset variant, code and invalid states with their ARIA contract', () => {
     const textArea = render({
       variant: 'inset',
