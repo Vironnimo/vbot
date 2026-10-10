@@ -126,12 +126,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   tolerance note (lines that differed or were kept, respelled words; the engine
   marks these as `DeviationNote`) or the note on which occurrence of a repeated
   text was changed, when the change removed lines, and in partial results.
-  Removed lines leave nothing to name in the file as it is now: after removing
-  three lines, 3 of 4 runs reread or searched the file in a call of its own,
-  both when places named the line now at each removal and with `removed lines
-  6, 12, 21`; with the region shown, 0 of 4 did (agent-eval 2026-10-10, GPT-6
-  Luna and DeepSeek V4.1 Flash; DeepSeek reread in every run without the
-  region). A clean change that only changes or adds lines shows no region: the
+  Removed lines leave nothing to name in the file as it is now. Agent-eval
+  2026-10-10, removing three lines, a reread or search in a call of its own:
+  GPT-6 Luna 2 of 4 runs without the region, 0 of 4 with it (it checked inside
+  its test command instead); DeepSeek V4.1 Flash 4 of 4 without, 2 of 4 with
+  it, so the region does not stop DeepSeek's reread. A clean change that only changes or adds lines shows no region: the
   Agent wrote that text itself, and Agents reread or ran `git diff` after a
   region anyway (real Sessions since 2026-09: 13-22% reread a file within three
   calls before changing it again, with the region shown; user decision
