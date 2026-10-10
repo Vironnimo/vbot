@@ -73,4 +73,34 @@ describe('ConfirmDialog', () => {
     expect(extra).toBeTruthy();
     expect(dialog.contains(extra)).toBe(true);
   });
+
+  it('cannot be closed or confirmed again while the action runs', () => {
+    const onCancel = vi.fn();
+    const onConfirm = vi.fn();
+    render({ busy: true, onCancel, onConfirm });
+
+    const [cancel, confirm] = document.body.querySelectorAll(
+      '.modal-footer button',
+    );
+    expect(confirm.disabled).toBe(true);
+    expect(confirm.getAttribute('aria-busy')).toBe('true');
+    expect(cancel.disabled).toBe(true);
+    expect(document.body.querySelector('.modal-close').disabled).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('shows a failed action inside the dialog and keeps both choices', () => {
+    render({ error: 'The event could not be deleted.' });
+
+    const alert = document.body.querySelector('.modal-body [role="alert"]');
+    expect(alert.textContent).toContain('The event could not be deleted.');
+    for (const button of document.body.querySelectorAll(
+      '.modal-footer button',
+    )) {
+      expect(button.disabled).toBe(false);
+    }
+  });
 });
