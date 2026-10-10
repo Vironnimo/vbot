@@ -1,5 +1,6 @@
-import { SvelteDate, SvelteMap } from 'svelte/reactivity';
-import { t, activeLocaleTag, init } from '../../../../webui/src/lib/i18n.js';
+import { SvelteMap } from 'svelte/reactivity';
+import { t, init } from '../../../../webui/src/lib/i18n.js';
+import { formatAbsoluteTime } from '../../../../webui/src/lib/timeText.js';
 import {
   canStop,
   participantState,
@@ -102,8 +103,6 @@ export function createSwarmPageModel(host) {
   let postMutation = null;
 
   let pending = $state('');
-
-  let context = $state({ locale: 'en', timezone: 'UTC', theme: {} });
 
   let profileEditor = $state(null);
 
@@ -399,14 +398,8 @@ export function createSwarmPageModel(host) {
     { id: 'usage', label: t('swarm.tabs.usage') },
   ]);
 
-  const date = (value) =>
-    value
-      ? new Intl.DateTimeFormat(activeLocaleTag(), {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-          timeZone: context.timezone || 'UTC',
-        }).format(new SvelteDate(value))
-      : '';
+  // In the host's timezone, which `applyContext` makes the application zone.
+  const date = (value) => formatAbsoluteTime(value);
 
   const discussionOptions = $derived(discussions);
   const discussionParticipants = $derived(
@@ -462,7 +455,6 @@ export function createSwarmPageModel(host) {
   );
 
   function applyContext(next) {
-    context = next;
     setApplicationTimeZone(next.timezone);
     document.documentElement.lang = init(next.locale);
     for (const [name, value] of Object.entries(next.theme ?? {}))
