@@ -102,7 +102,7 @@
   aria-labelledby="swarm-run-tab-participants"
 >
   <div
-    class="participant-row activity-participants"
+    class="participants participant-row"
     role="group"
     aria-label={t('swarm.participants')}
   >
