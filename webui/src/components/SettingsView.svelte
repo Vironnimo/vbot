@@ -892,7 +892,7 @@
   }
 </script>
 
-{#snippet panelContent(panelId)}
+{#snippet panelContent(panelId, active)}
   {#if panelId === 'preferences'}
     <SettingsGeneralPanel
       page="preferences"
@@ -917,6 +917,7 @@
     />
   {:else if panelId === 'channels'}
     <SettingsChannelsPanel
+      {active}
       {onToast}
       {channelsRefreshToken}
       {agentsRefreshToken}
@@ -941,6 +942,7 @@
     />
   {:else if modelTasksBySection[panelId]}
     <SettingsSpecializedModelsPanel
+      {active}
       taskTypes={modelTasksBySection[panelId]}
       {settings}
       onCommit={commitSettings}
@@ -1245,7 +1247,12 @@
                     </header>
                   {/if}
                   <div class="settings-editor-body s-section__body">
-                    {@render panelContent(panelId)}
+                    {@render panelContent(
+                      panelId,
+                      !searchActive &&
+                        activePageId === page.id &&
+                        (!subPage || panelId === page.subPages),
+                    )}
                   </div>
                 </section>
               {/each}

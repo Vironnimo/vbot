@@ -48,6 +48,7 @@
   const noop = () => {};
 
   let {
+    active = true,
     onToast = noop,
     onError = noop,
     channelsRefreshToken = 0,
@@ -936,6 +937,7 @@
           <div class="s-channel-attention">
             {#if channel.platform === 'whatsapp'}
               <WhatsAppSetup
+                {active}
                 channelId={channel.id}
                 onChanged={loadChannelsPanel}
                 hideWhenConnected={!expanded}

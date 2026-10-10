@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 import {
   api,
@@ -36,6 +37,51 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
   });
 
   describe('speech memory', () => {
+    it('reads speech memory only while its page and document are visible, then refreshes immediately', async () => {
+      vi.useFakeTimers();
+      const props = reactiveProps({ active: false });
+      mountPanel(props);
+      await settle();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(api.getLocalSpeechMemory).not.toHaveBeenCalled();
+
+      props.active = true;
+      await settle();
+      expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(1);
+      const stale = deferred();
+      api.getLocalSpeechMemory.mockReturnValueOnce(stale.promise);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(2);
+
+      const hidden = vi.spyOn(document, 'hidden', 'get');
+      try {
+        hidden.mockReturnValue(true);
+        document.dispatchEvent(new Event('visibilitychange'));
+        await settle();
+        await vi.advanceTimersByTimeAsync(6000);
+        expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(2);
+
+        hidden.mockReturnValue(false);
+        document.dispatchEvent(new Event('visibilitychange'));
+        await settle();
+        expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(3);
+        stale.resolve({
+          models: [{ target: 'local/old', label: 'Stale model', loaded: true }],
+        });
+        await settle();
+        expect(document.body.textContent).not.toContain('Stale model');
+        props.active = false;
+        await settle();
+        await vi.advanceTimersByTimeAsync(6000);
+        expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(3);
+        props.active = true;
+        await settle();
+        expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(4);
+      } finally {
+        hidden.mockRestore();
+      }
+    });
+
     it('unloads a specific model and ignores an older in-flight status poll', async () => {
       vi.useFakeTimers();
       const loaded = {
@@ -68,6 +114,38 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       const calls = api.getLocalSpeechMemory.mock.calls.length;
       await vi.advanceTimersByTimeAsync(6000);
       expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(calls);
+    });
+
+    it('finishes an admitted unload while hidden without restarting background polling', async () => {
+      vi.useFakeTimers();
+      const loaded = {
+        target: 'local/chatterbox',
+        label: 'Voice',
+        loaded: true,
+        busy: false,
+      };
+      api.getLocalSpeechMemory.mockResolvedValue({ models: [loaded] });
+      const unload = deferred();
+      api.unloadLocalSpeech.mockReturnValueOnce(unload.promise);
+      const props = reactiveProps({ active: true });
+      mountPanel(props);
+      await settle();
+      button(UNLOAD).click();
+      props.active = false;
+      await settle();
+      unload.resolve({
+        models: [{ ...loaded, loaded: false }],
+        released: true,
+      });
+      await settle();
+      expect(document.querySelector('[data-local-speech-memory]')).toBeNull();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(1);
+      api.getLocalSpeechMemory.mockResolvedValue({ models: [] });
+      props.active = true;
+      await settle();
+      expect(api.getLocalSpeechMemory).toHaveBeenCalledTimes(2);
+      expect(api.unloadLocalSpeech).toHaveBeenCalledOnce();
     });
 
     it.each([
@@ -155,6 +233,49 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
   });
 
   describe('setup', () => {
+    it('keeps an installation running while its retained page is hidden and reads its result on return', async () => {
+      vi.useFakeTimers();
+      targetsFor('speech_to_text', [
+        {
+          id: 'local/qwen3-asr-1.7b',
+          label: 'Qwen3 ASR',
+          kind: 'local',
+          usable: false,
+        },
+      ]);
+      setupState('missing');
+      const props = reactiveProps({
+        active: false,
+        settings: {
+          model_tasks: {
+            speech_to_text: { target: 'local/qwen3-asr-1.7b', options: {} },
+          },
+        },
+      });
+      mountPanel(props);
+      await settle();
+      expect(api.getLocalSetupStatus).not.toHaveBeenCalled();
+      props.active = true;
+      await settle();
+      expect(api.getLocalSetupStatus).toHaveBeenCalledOnce();
+      const install = deferred();
+      api.installLocalSetup.mockReturnValueOnce(install.promise);
+      button('Install').click();
+      props.active = false;
+      await settle();
+      install.resolve({ state: 'installing', phase: 'downloading' });
+      await settle();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(api.getLocalSetupStatus).toHaveBeenCalledOnce();
+      setupState('ready');
+      props.active = true;
+      await settle();
+      expect(api.getLocalSetupStatus).toHaveBeenCalledTimes(2);
+      expect(api.installLocalSetup).toHaveBeenCalledOnce();
+      expect(button('Installing…')).toBeUndefined();
+      expect(button('Install')).toBeUndefined();
+    });
+
     async function mountLocalPanel() {
       targetsFor('speech_to_text', [
         {

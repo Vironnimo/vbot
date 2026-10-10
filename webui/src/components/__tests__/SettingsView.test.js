@@ -107,6 +107,39 @@ describe('SettingsView', () => {
   }
 
   describe('layout and navigation', () => {
+    it('retains editors but polls speech memory only on the visible Voice page', async () => {
+      await mountSettings();
+      vi.useFakeTimers();
+      const calls = () =>
+        rpcMock.mock.calls.filter(
+          ([method]) => method === 'speech.local_memory_status',
+        ).length;
+      const editor = document.getElementById(
+        'settings-specialized-speech_to_text',
+      );
+      expect(editor).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(calls()).toBe(0);
+
+      clickButton('Voice');
+      await flushAsyncUpdates();
+      expect(calls()).toBe(1);
+      search('speech');
+      await flushAsyncUpdates();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(calls()).toBe(1);
+      search('');
+      await flushAsyncUpdates();
+      expect(calls()).toBe(2);
+      clickButton('General');
+      await flushAsyncUpdates();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(calls()).toBe(2);
+      expect(
+        document.getElementById('settings-specialized-speech_to_text'),
+      ).toBe(editor);
+    });
+
     it('renders the split layout, loads settings, and keeps token-count controls absent', async () => {
       rpcMock.mockImplementation(createSettingsRpcMock());
       mountedComponent = mount(SettingsView, { target: document.body });
