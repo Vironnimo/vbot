@@ -8,6 +8,7 @@
   import ChatTimelineEntry from '../../../../webui/src/components/chat/ChatTimelineEntry.svelte';
   import SwarmIcon from './SwarmIcon.svelte';
   import ParticipantChip from './ParticipantChip.svelte';
+  import './runActivity.css';
 
   // The Activity tab: the Run's participants and the inspected participant's
   // activity. The page model supplies the Run, the participant's resume and

@@ -4,6 +4,7 @@
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import './boardComposer.css';
 
   // The dialog that posts to the Board's discussion, optionally as a reply
   // and to chosen recipients.

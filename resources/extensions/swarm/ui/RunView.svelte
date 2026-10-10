@@ -9,6 +9,7 @@
   import RunActivity from './RunActivity.svelte';
   import RunUsage from './RunUsage.svelte';
   import WikiPanel from './WikiPanel.svelte';
+  import './runView.css';
 
   // The selected Run: its header with the lifecycle actions, the tabs and
   // the shown tab's panel. The Wiki stays mounted across tab changes.

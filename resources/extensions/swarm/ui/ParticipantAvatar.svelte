@@ -1,5 +1,6 @@
 <script>
   import { participantColor, participantInitials } from './pagePresentation.js';
+  import './participantChip.css';
 
   // `kind` is a post author's kind; only a participant has its own color.
   let { id, name, kind = 'participant' } = $props();

@@ -4,6 +4,8 @@
   import ProfileEditor from './ProfileEditor.svelte';
   import { provideNavigation } from '../../../../webui/src/lib/navigation.svelte.js';
   import { createSwarmPageModel } from './pageModel.svelte.js';
+  // The shared rules load before the areas' own stylesheets.
+  import './swarmPage.css';
   import SwarmSidebar from './SwarmSidebar.svelte';
   import RunStartForm from './RunStartForm.svelte';
   import RunView from './RunView.svelte';
@@ -12,7 +14,6 @@
   import SwarmDeleteDialog from './SwarmDeleteDialog.svelte';
   import CommunicationDialog from './CommunicationDialog.svelte';
   import RunSnapshotDialog from './RunSnapshotDialog.svelte';
-  import './swarmPage.css';
 
   let { bridgeClient = null } = $props();
   const model = createSwarmPageModel({

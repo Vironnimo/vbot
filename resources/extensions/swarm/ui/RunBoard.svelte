@@ -9,6 +9,7 @@
   import SwarmIcon from './SwarmIcon.svelte';
   import ParticipantAvatar from './ParticipantAvatar.svelte';
   import ParticipantChip from './ParticipantChip.svelte';
+  import './runBoard.css';
 
   // The Board tab: the discussion picker, the Run's goal and directory, the
   // discussion's participants and its posts. Posts stay `li` children of

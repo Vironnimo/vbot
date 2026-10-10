@@ -2,6 +2,7 @@
   import { tokensUsed, usageCount } from './pagePresentation.js';
   import { t } from '../../../../webui/src/lib/i18n.js';
   import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
+  import './runUsage.css';
 
   // The Usage tab: the Run's id, its token and tool call totals and one row
   // per participant and model.

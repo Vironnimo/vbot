@@ -9,6 +9,7 @@
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
   import { tooltip } from '../../../../webui/src/lib/tooltip.js';
+  import './swarmSidebar.css';
 
   // The page's navigation: "New run", the Swarms (profiles) and the Runs.
   let { model } = $props();

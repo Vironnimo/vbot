@@ -1,0 +1,236 @@
+/* The Board tab: toolbar, context, participants and posts (RunBoard.svelte). */
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .board {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  > li {
+  min-width: 0;
+  padding: 12px;
+  border-left: 2px solid var(--border-2);
+  background: var(--surface-2);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  .post-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  time,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  small {
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-header {
+  align-items: center;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-2);
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-header
+  strong {
+  font-size: var(--fs-body-md);
+  color: var(--text-hi);
+  overflow-wrap: anywhere;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-author {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  time {
+  white-space: nowrap;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-number {
+  color: var(--text-med);
+  font: 600 var(--fs-label-sm) var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  .msg-markdown {
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .discussion-announcement
+  p {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  margin: 7px 0 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .discussion-announcement {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .discussion-announcement
+  button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-pane {
+  display: grid;
+  gap: 10px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-pane
+  small,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .run-indicator {
+  display: block;
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .run-indicator {
+  color: var(--amber);
+}
+.swarm-page .board-toolbar {
+  justify-content: start;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.swarm-page .board-toolbar .form-field {
+  flex: 0 1 280px;
+  min-width: 0;
+}
+.swarm-page .board-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: 8px 24px;
+  padding-block: 10px;
+  border-block: 1px solid var(--border);
+}
+.swarm-page .swarm-goal-post {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.swarm-page .swarm-goal-post summary {
+  cursor: pointer;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+.swarm-page .swarm-goal-post summary:hover {
+  color: var(--text-hi);
+}
+.swarm-page .board-directory {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-med);
+  font: var(--fs-mono-xs) var(--font-mono);
+}
+.swarm-page .board-directory svg {
+  flex-shrink: 0;
+}
+.swarm-page .board-directory span {
+  overflow-wrap: anywhere;
+}
+.swarm-page .participant-pane {
+  gap: 7px;
+}
+.swarm-page .participant-count {
+  margin-left: 5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.swarm-page .board > li {
+  border-left: 2px solid
+    color-mix(in srgb, var(--participant-color) 55%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--participant-color) 5%, var(--bg));
+  padding: 14px 16px;
+  overflow-anchor: auto;
+  /* Posts away from the view skip rendering. Until a post first renders, it
+     counts as a short post: too low an estimate only renders a few more posts
+     near the view, and scroll anchoring keeps the view in place as they grow. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+}
+/* While the discussion's newest posts are not loaded, the way back stays in
+   view. */
+.swarm-page .board-newer {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-block: 8px;
+  background: var(--bg);
+}
+.swarm-page .board > li[data-revealed],
+.swarm-page .swarm-goal-post[data-revealed] {
+  outline: none;
+  animation: swarm-post-revealed 2s ease-out;
+}
+@keyframes swarm-post-revealed {
+  from {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  to {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .swarm-page .board > li[data-revealed],
+  .swarm-page .swarm-goal-post[data-revealed] {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+.swarm-page .board .post-header {
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--participant-color) 14%,
+    transparent
+  );
+}
+.swarm-page .board .participant-avatar {
+  min-width: 26px;
+  height: 26px;
+  border-color: color-mix(in srgb, var(--participant-color) 35%, transparent);
+  background: transparent;
+}
+@media (max-width: 640px) {
+  .swarm-page .board-toolbar .form-field {
+    flex-grow: 1;
+  }
+  .swarm-page .board > li {
+    padding: 12px;
+  }
+}

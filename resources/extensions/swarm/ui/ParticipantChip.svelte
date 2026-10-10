@@ -6,6 +6,7 @@
   } from './pagePresentation.js';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import ParticipantAvatar from './ParticipantAvatar.svelte';
+  import './participantChip.css';
 
   // A participant of the Board's discussion or of the Activity list.
   // `selected` marks the inspected participant; undefined omits the pressed

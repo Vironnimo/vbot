@@ -6,6 +6,7 @@
   import PathField from '../../../../webui/src/components/ui/PathField.svelte';
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import SwarmIcon from './SwarmIcon.svelte';
+  import './runStartForm.css';
 
   // The start page: a goal for a new Run of the chosen Swarm (profile) in a
   // working directory.

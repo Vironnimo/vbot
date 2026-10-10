@@ -1,0 +1,91 @@
+/* Participant chips, their avatars and the rows that hold them
+   (ParticipantChip.svelte, ParticipantAvatar.svelte). */
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 32px;
+  height: 32px;
+  padding-inline: 4px;
+  box-sizing: border-box;
+  border-radius: var(--r-sm);
+  color: var(--participant-color);
+  background: var(--bg);
+  border: 1px solid currentColor;
+  font: 600 var(--fs-label-sm) var(--font-ui);
+  white-space: nowrap;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-row
+  strong {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-row
+  button {
+  text-align: left;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.swarm-page .participant-row {
+  gap: 4px 6px;
+}
+.swarm-page .participant-chip {
+  min-height: 32px;
+  padding: 3px 7px 3px 3px;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--participant-color) 4%, var(--bg));
+}
+.swarm-page .participant-chip[aria-pressed='true'],
+.swarm-page .participant-chip:hover {
+  background: color-mix(in srgb, var(--participant-color) 10%, var(--bg));
+  border-color: color-mix(in srgb, var(--participant-color) 24%, transparent);
+}
+.swarm-page .participant-chip strong {
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+}
+.swarm-page .participant-chip .participant-avatar {
+  min-width: 22px;
+  height: 22px;
+  padding-inline: 3px;
+  font-size: var(--fs-label-sm);
+  border: 0;
+  background: transparent;
+}
+.swarm-page .participant-status {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-med);
+}
+.swarm-page .participant-status[data-state='running'] {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-dim);
+}
+.swarm-page .participant-status[data-state='failed'],
+.swarm-page .participant-status[data-state='interrupted'] {
+  background: var(--red);
+}
+.swarm-page .participant-status[data-state='cancelled'] {
+  background: var(--amber);
+}
+@media (max-width: 640px) {
+  .swarm-page .participant-chip {
+    min-height: 40px;
+  }
+}

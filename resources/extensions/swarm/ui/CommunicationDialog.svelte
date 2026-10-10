@@ -3,6 +3,7 @@
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import './communicationDialog.css';
 
   // Changes the selected Run's message delivery: a mode and wake setting per
   // route, the batching limits, and a preview of the changes.
