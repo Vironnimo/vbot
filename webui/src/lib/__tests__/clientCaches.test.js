@@ -1,48 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  createBoundedKeySet,
   mergeBoundedEntries,
   replaceActiveSubAgentStatuses,
   subAgentGuardKeysForEvictedStatuses,
 } from '../clientCaches.js';
-
-describe('createBoundedKeySet', () => {
-  it('remembers keys below the cap', () => {
-    const keySet = createBoundedKeySet(3);
-
-    keySet.add('a');
-    keySet.add('b');
-
-    expect(keySet.has('a')).toBe(true);
-    expect(keySet.has('b')).toBe(true);
-    expect(keySet.has('c')).toBe(false);
-  });
-
-  it('evicts the oldest key once the cap is exceeded', () => {
-    const keySet = createBoundedKeySet(2);
-
-    keySet.add('first');
-    keySet.add('second');
-    keySet.add('third');
-
-    expect(keySet.has('first')).toBe(false);
-    expect(keySet.has('second')).toBe(true);
-    expect(keySet.has('third')).toBe(true);
-  });
-
-  it('ignores re-adds of known keys without evicting anything', () => {
-    const keySet = createBoundedKeySet(2);
-
-    keySet.add('first');
-    keySet.add('second');
-    keySet.add('first');
-    keySet.add('first');
-
-    expect(keySet.has('first')).toBe(true);
-    expect(keySet.has('second')).toBe(true);
-  });
-});
 
 describe('mergeBoundedEntries', () => {
   it('merges updates without eviction while under the cap', () => {

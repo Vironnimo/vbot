@@ -11,19 +11,24 @@ import {
   syncAgentSessionActivity,
 } from './sessionState.js';
 
-const TERMINAL_RUN_SERVER_EVENT_TYPES = new Set([
-  'run_completed',
-  'run_cancelled',
-  'run_failed',
-  'run_interrupted',
-]);
-
 // Durable completion activity (unread markers) for the Agent addresses a Chat
 // owner displays. Reads are coalesced: at most one `session.activity_list`
 // runs, and a pass requests only the addresses that need server truth. Exact
 // Session invalidations are applied from what the client already knows
 // whenever possible.
-export function createChatActivity({ chatState, operations, errorMessage }) {
+//
+// The owner supplies `retainsTerminalRunEvent(runId)`: whether the App's Run
+// event feed still holds that Run's terminal event, which carries its
+// completion. A hidden owner defers Run events; `applyDeferredRunEvents()`
+// applies them, so a completion fact (an activity read, a read
+// acknowledgement, a deletion) always lands after the Run events before it.
+export function createChatActivity({
+  chatState,
+  operations,
+  errorMessage,
+  retainsTerminalRunEvent = () => false,
+  applyDeferredRunEvents = () => {},
+}) {
   let addresses = [];
   let fullRefreshKey = null;
   const refreshedAddresses = new Set();
@@ -43,6 +48,7 @@ export function createChatActivity({ chatState, operations, errorMessage }) {
     if (requested.length === 0 || disposed) {
       return true;
     }
+    applyDeferredRunEvents();
     // A terminal event can land while the read is in flight. The response
     // omits Sessions without a completion, so an omitted Session is cleared
     // only when its local completion is still the one seen at request time.
@@ -117,11 +123,16 @@ export function createChatActivity({ chatState, operations, errorMessage }) {
     void refresher.run(needed);
   }
 
+  // Re-read every displayed address, for an owner that lost Run events.
+  function refreshAllActivity() {
+    refresher.schedule(addresses);
+  }
+
   // Apply App's Session invalidation window. The terminal Run event already
   // carries its completion, a read acknowledgement clears the matching unread
   // marker, and a deletion drops the Session's marker; only an unknown or
   // unmatched fact reads that Agent's activity again.
-  function applySessionInvalidations(entries, runServerEvents = []) {
+  function applySessionInvalidations(entries) {
     const { targets, lastId, overflowed } = takeSessionInvalidations(
       entries,
       lastInvalidationId,
@@ -130,6 +141,20 @@ export function createChatActivity({ chatState, operations, errorMessage }) {
     if (overflowed) {
       refresher.schedule(addresses);
       return;
+    }
+    const displayed = new Set(addresses);
+    // A deferred terminal event applied after a read acknowledgement or a
+    // deletion would bring the Session's completion back. A finished Run's
+    // own completion is needed now only where an indicator shows it.
+    if (
+      targets.some(
+        (target) =>
+          target.deleted ||
+          target.readRunId ||
+          (target.runId && displayed.has(target.agentAddress)),
+      )
+    ) {
+      applyDeferredRunEvents();
     }
     const stale = new Set();
     for (const target of targets) {
@@ -147,14 +172,10 @@ export function createChatActivity({ chatState, operations, errorMessage }) {
         if (!applyReadAcknowledgement(target)) {
           stale.add(target.agentAddress);
         }
-      } else if (
-        target.runId &&
-        !retainsTerminalRunEvent(runServerEvents, target.runId)
-      ) {
+      } else if (target.runId && !retainsTerminalRunEvent(target.runId)) {
         stale.add(target.agentAddress);
       }
     }
-    const displayed = new Set(addresses);
     const needed = [...stale].filter((address) => displayed.has(address));
     if (needed.length > 0) {
       refresher.schedule(needed);
@@ -218,6 +239,7 @@ export function createChatActivity({ chatState, operations, errorMessage }) {
     applySessionInvalidations,
     markSessionCompletionRead,
     refreshAgentActivity,
+    refreshAllActivity,
     syncAgentActivity,
     dispose() {
       disposed = true;
@@ -225,14 +247,6 @@ export function createChatActivity({ chatState, operations, errorMessage }) {
       chatState.loadingAgentActivity = false;
     },
   };
-}
-
-function retainsTerminalRunEvent(runServerEvents, runId) {
-  return (Array.isArray(runServerEvents) ? runServerEvents : []).some(
-    (event) =>
-      TERMINAL_RUN_SERVER_EVENT_TYPES.has(event?.type) &&
-      event?.payload?.run_id === runId,
-  );
 }
 
 function uniqueAddresses(values) {

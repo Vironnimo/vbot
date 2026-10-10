@@ -141,6 +141,9 @@ export function createChatController({
   chatState,
   runStream,
   operations = defaultChatOperations(),
+  // The App's Run event feed (`runEventFeed.svelte.js`); without one this
+  // owner applies no Run server events.
+  runEvents = null,
   isDisplayedSession = () => false,
   shouldLoadCurrentHistory = () => true,
   onAgentsChanged = () => {},
@@ -156,6 +159,12 @@ export function createChatController({
   let initialHistoryPending = false;
   const historyLoadVersions = new Map();
   const queueSyncVersions = new Map();
+  // Feed positions: the newest one this owner applied, and the newest one a
+  // hidden owner scanned for its displayed Session's Run starts. Those starts
+  // apply early, at the positions in `earlyRunStarts`.
+  let runEventCursor = 0;
+  let runStartCursor = 0;
+  const earlyRunStarts = new Set();
 
   let displayedHistoryLoad = null;
   const childTasks = createChatChildTasks({
@@ -171,7 +180,14 @@ export function createChatController({
     loadSubAgentWork,
     reconcileSubAgentRows,
   } = childTasks;
-  const activity = createChatActivity({ chatState, operations, errorMessage });
+  const activity = createChatActivity({
+    chatState,
+    operations,
+    errorMessage,
+    retainsTerminalRunEvent: (runId) =>
+      runEvents?.retainsTerminal(runId) === true,
+    applyDeferredRunEvents: () => applyRunEvents(),
+  });
   const reflections = createChatReflections({
     operations,
     isDisplayedSession,
@@ -194,6 +210,18 @@ export function createChatController({
     const version = (queueSyncVersions.get(sessionState.key) ?? 0) + 1;
     queueSyncVersions.set(sessionState.key, version);
     return version;
+  }
+
+  // Reads a Session's Queue again after its Run ended or another window
+  // changed it, where the Queue is shown or still holds items. Any other
+  // Session reads its Queue when opened.
+  async function refreshSessionQueue(sessionState) {
+    if (
+      isDisplayedSession(sessionState?.agentId, sessionState?.sessionId) ||
+      sessionState?.queue?.length > 0
+    ) {
+      await syncSessionQueue(sessionState);
+    }
   }
 
   async function syncSessionQueue(sessionState) {
@@ -271,6 +299,8 @@ export function createChatController({
     if (!oldAgentId || !newAgentId || oldAgentId === newAgentId) {
       return;
     }
+    // Deferred Run events still name the old address.
+    applyRunEvents();
     const renamed = Object.values(chatState.sessions).filter(
       (sessionState) => sessionState.agentId === oldAgentId,
     );
@@ -905,6 +935,9 @@ export function createChatController({
     if (!snapshot || snapshot === handledConnectionSnapshot) {
       return false;
     }
+    // Run events that arrived before the snapshot come first. The snapshot
+    // itself recovers any of them this owner missed.
+    applyRunEvents({ onMissed: () => {} });
     handledConnectionSnapshot = snapshot;
     if (Array.isArray(snapshot.queues)) {
       const queueItemsBySession = new Map();
@@ -951,32 +984,93 @@ export function createChatController({
     return true;
   }
 
-  function handleServerEvents(event, events) {
-    runStream.handleServerEvents(event, events);
+  // Apply the App's new Run events. A shown Chat applies each as it arrives.
+  // A hidden one (`deferred`) leaves them in the feed: the App carries the
+  // Runs of every Session, Swarm participants included, and nothing shows
+  // them meanwhile. It applies them when shown, or before a completion fact
+  // or activity read that must follow them. Its displayed Session's Run
+  // starts still apply at once, so that Session streams as when shown.
+  function handleRunEvents({ deferred = false } = {}) {
+    if (deferred) {
+      applyDisplayedRunStarts();
+    } else {
+      applyRunEvents();
+    }
+  }
+
+  function applyRunEvents({ onMissed = recoverRunEvents } = {}) {
+    if (!runEvents || runEventCursor >= runEvents.end) {
+      return;
+    }
+    const { events, from, end, missed } = runEvents.read(runEventCursor);
+    // Advance first: applying an event can lead back here.
+    runEventCursor = end;
+    runStartCursor = Math.max(runStartCursor, end);
+    events.forEach((serverEvent, index) => {
+      if (!earlyRunStarts.has(from + index)) {
+        runStream.handleServerEvent(serverEvent);
+      }
+    });
+    earlyRunStarts.clear();
+    if (missed) {
+      onMissed();
+    }
+  }
+
+  function applyDisplayedRunStarts() {
+    const after = Math.max(runEventCursor, runStartCursor);
+    if (!runEvents || after >= runEvents.end) {
+      return;
+    }
+    const { events, from, end } = runEvents.read(after);
+    runStartCursor = end;
+    events.forEach((serverEvent, index) => {
+      const payload = serverEvent?.payload;
+      if (
+        serverEvent?.type === 'run_started' &&
+        isDisplayedSession(
+          formatAgentAddress(payload?.agent_id, payload?.project_id),
+          payload?.session_id,
+        )
+      ) {
+        earlyRunStarts.add(from + index);
+        runStream.handleServerEvent(serverEvent);
+      }
+    });
+  }
+
+  // Run events left the feed before this owner applied them. Start again
+  // from current state, as after a reconnect: the feed's active Runs,
+  // durable completion activity, the Queues on show and the displayed
+  // Session's reflections.
+  function recoverRunEvents() {
+    runStream.applyConnectionSnapshot({ active_runs: runEvents.activeRuns });
+    activity.refreshAllActivity();
+    for (const sessionState of Object.values(chatState.sessions)) {
+      void refreshSessionQueue(sessionState);
+      if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+        void reflections.refresh(sessionState);
+      }
+    }
   }
 
   // A Chat owner created after the app connected (split view's second area,
   // leaving onboarding, recovery remounts) starts from current server state:
-  // the latest connection snapshot with the App's live Run list. The retained
-  // event window is already reflected in that list and may have lost the
-  // terminal events of Runs the snapshot named, so it is not replayed.
-  // Without a live Run list the owner keeps replaying the retained inputs.
-  function startFromServerState({
-    connectionSnapshot,
-    activeRuns,
-    runServerEvent,
-    runServerEvents,
-  } = {}) {
-    if (!connectionSnapshot || !Array.isArray(activeRuns)) {
+  // the latest connection snapshot with the feed's live Run list. The events
+  // already in the feed are reflected in that list and may have lost the
+  // terminal events of Runs the snapshot named, so they are not replayed.
+  function startFromServerState(connectionSnapshot) {
+    if (!connectionSnapshot || !runEvents) {
       return false;
     }
-    runStream.skipServerEvents(runServerEvent, runServerEvents);
+    runEventCursor = runEvents.end;
+    runStartCursor = runEventCursor;
     handledConnectionSnapshot = connectionSnapshot;
     // A new owner holds no Sessions yet, so the snapshot's Queue scopes have
     // nothing to reconcile; its Sessions load their Queues when opened.
     runStream.applyConnectionSnapshot({
       ...connectionSnapshot,
-      active_runs: activeRuns,
+      active_runs: runEvents.activeRuns,
     });
     return true;
   }
@@ -995,7 +1089,7 @@ export function createChatController({
         sessionState.sessionId === scope.sessionId &&
         agentId === scope.agentId
       ) {
-        void syncSessionQueue(sessionState);
+        void refreshSessionQueue(sessionState);
       }
     }
     return true;
@@ -1028,7 +1122,7 @@ export function createChatController({
     controlRun,
     destroy,
     editMessage,
-    handleServerEvents,
+    handleRunEvents,
     startFromServerState,
     listFiles: (agentAddress, target) =>
       operations.listFiles(agentAddress, target),
@@ -1050,6 +1144,7 @@ export function createChatController({
     reconcileSubAgentRows,
     refreshAgentActivity,
     refreshReflections: reflections.refresh,
+    refreshSessionQueue,
     removeQueued,
     renameAgent,
     steerQueued,

@@ -241,10 +241,8 @@
   );
 
   let providerAuthEvent = $derived(appControllerState.providerAuthEvent);
-  let runServerEvents = $derived(appControllerState.runServerEvents);
   let commandStatuses = $derived(appControllerState.commandStatuses);
   let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
-  let activeRuns = $derived(appControllerState.activeRuns);
 
   let serverSwitcherOpen = $state(false);
 
@@ -780,6 +778,7 @@
     onLoadBackgroundActivity: loadBackgroundActivity,
     onCheckWebuiBuild: checkWebuiBuild,
   });
+  const runEvents = appController.runEvents;
   navigator.start();
 
   onMount(() => {
@@ -990,10 +989,9 @@
         {navigateToSubAgent}
         {pendingSessionNavigation}
         onSessionNavigation={handleChatSessionNavigation}
-        {runServerEvents}
+        {runEvents}
         {commandStatuses}
         {connectionSnapshot}
-        {activeRuns}
         {sessionsRefreshToken}
         {sessionInvalidations}
         {commandsRefreshToken}

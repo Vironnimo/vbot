@@ -453,13 +453,21 @@ describe('Queue', () => {
   });
 
   it('re-syncs only held sessions matching a scoped Queue invalidation', async () => {
-    const { chatState, controller, listQueue } = setupController();
+    const { chatState, controller, listQueue } = setupController({
+      isDisplayedSession: (agentId, sessionId) =>
+        agentId === 'builder@project-one' && sessionId === 'session-one',
+    });
     const target = ensureSessionState(
       chatState,
       'builder@project-one',
       'session-one',
     );
-    ensureSessionState(chatState, 'reviewer@project-one', 'session-two');
+    const other = ensureSessionState(
+      chatState,
+      'reviewer@project-one',
+      'session-two',
+    );
+    other.queue = [{ id: 'held', content: 'Held' }];
     const scope = { agentId: 'builder', sessionId: 'session-one' };
 
     expect(controller.applyQueueInvalidation(scope)).toBe(true);
@@ -481,6 +489,45 @@ describe('Queue', () => {
       },
     ]);
   });
+
+  it.each([
+    {
+      change: 'its Run ended',
+      refresh: (controller, sessionState) =>
+        controller.refreshSessionQueue(sessionState),
+    },
+    {
+      change: 'another window changed it',
+      refresh: (controller, sessionState) =>
+        controller.applyQueueInvalidation({
+          agentId: sessionState.agentId,
+          sessionId: sessionState.sessionId,
+        }),
+    },
+  ])(
+    'reads the Queue again after $change only where it is shown or holds items',
+    async ({ refresh }) => {
+      const { chatState, controller, listQueue } = setupController({
+        isDisplayedSession: (agentId, sessionId) =>
+          agentId === 'alpha' && sessionId === 'shown',
+      });
+      const shown = ensureSessionState(chatState, 'alpha', 'shown');
+      const holding = ensureSessionState(chatState, 'alpha', 'holding');
+      holding.queue = [{ id: 'next', content: 'Next' }];
+      const background = ensureSessionState(chatState, 'worker', 'background');
+
+      for (const sessionState of [shown, holding, background]) {
+        refresh(controller, sessionState);
+      }
+      await vi.waitFor(() => expect(listQueue).toHaveBeenCalledTimes(2));
+
+      expect(listQueue.mock.calls).toEqual([
+        ['alpha', 'shown'],
+        ['alpha', 'holding'],
+      ]);
+      expect(background.queue).toEqual([]);
+    },
+  );
 
   it('authoritatively replaces held Queue projections from a connection snapshot', () => {
     const { chatState, controller, onRestartQueueDiscarded } =

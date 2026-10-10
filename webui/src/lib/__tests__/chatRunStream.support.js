@@ -20,7 +20,7 @@ export function makeStreamHarness({
 } = {}) {
   const subAgentRunStatuses = {};
   const subscriptions = [];
-  const syncSessionQueue = vi.fn(async () => {});
+  const refreshSessionQueue = vi.fn(async () => {});
 
   const stream = createChatRunStream({
     chatState,
@@ -29,7 +29,7 @@ export function makeStreamHarness({
       subscriptions.push(subscription);
       return subscription;
     },
-    syncSessionQueue,
+    refreshSessionQueue,
     reconcileRunSession,
     reportStreamDiagnostic,
     onReflectionFinished,
@@ -56,13 +56,18 @@ export function makeStreamHarness({
     subAgentRunStatuses,
     reconcileRunSession,
     reportStreamDiagnostic,
-    syncSessionQueue,
+    refreshSessionQueue,
     displayedSession: () =>
       ensureSessionState(chatState, displayedAgentId, displayedSessionId),
     // Delivers raw Run events through the newest SSE subscription.
     sse: (...events) => {
       for (const data of events)
         subscriptions.at(-1).handlers.onEvent({ data });
+    },
+    // Hands WebSocket Run server events over in feed order.
+    ws: (...serverEvents) => {
+      for (const serverEvent of serverEvents)
+        stream.handleServerEvent(serverEvent);
     },
   };
 }

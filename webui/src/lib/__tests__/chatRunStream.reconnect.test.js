@@ -153,10 +153,10 @@ describe('SSE reconnect and stall recovery', () => {
       const { harness, subscriptions, sessionState } = setupRunningStream();
       subscriptions[0].handlers.onEvent(runEvent(1));
 
-      harness.stream.handleServerEvents(runCompleted(3));
+      harness.stream.handleServerEvent(runCompleted(3));
       if (successor) {
         harness.reconcileRunSession.mockResolvedValueOnce(false);
-        harness.stream.handleServerEvents(
+        harness.stream.handleServerEvent(
           serverRunEvent('run_started', 1, {
             agent_id: DISPLAYED_AGENT_ID,
             session_id: DISPLAYED_SESSION_ID,
@@ -203,7 +203,7 @@ describe('SSE reconnect and stall recovery', () => {
   it('closes the SSE subscription when a contiguous terminal event arrives over WebSocket', () => {
     const { harness, subscriptions, sessionState } = setupRunningStream();
 
-    harness.stream.handleServerEvents(runCompleted(1));
+    harness.stream.handleServerEvent(runCompleted(1));
 
     expect(sessionState.status).toBe('completed');
     expect(subscriptions[0].close).toHaveBeenCalledOnce();
