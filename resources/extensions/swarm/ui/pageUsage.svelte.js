@@ -1,3 +1,5 @@
+import { totalTokens } from '../../../../webui/src/lib/statisticsView.js';
+
 // Background changes reload the Usage report at most this often; the last
 // change of a burst is always followed by a reload.
 const USAGE_REFRESH_INTERVAL_MS = 10_000;
@@ -8,6 +10,8 @@ const USAGE_REFRESH_INTERVAL_MS = 10_000;
 export function createSwarmPageUsage(host) {
   let report = $state(null);
 
+  // The Run's participants in order, each with its activity in the report
+  // (null without one).
   let participantUsage = $state([]);
 
   let usageRequest = 0;
@@ -24,16 +28,21 @@ export function createSwarmPageUsage(host) {
 
   let loading = $state(false);
 
+  // One row per participant and Model; a participant without recorded Models
+  // gets one row with its configured Model. Tool calls belong to the
+  // participant, not to a Model; `first` marks the row that shows them.
+  // Unknown counts are null.
   const rows = $derived(
-    participantUsage.flatMap(({ participant, report: participantReport }) => {
-      const models = participantReport?.usage?.activity?.models ?? [];
+    participantUsage.flatMap(({ participant, activity }) => {
+      const models = activity?.models ?? [];
       return (models.length ? models : [null]).map((model, index) => ({
         id: `${participant.id}:${index}`,
         participant: participant.display_name,
-        model,
-        modelName: model ? model.model : participant.model,
-        participantRows: index === 0 ? Math.max(models.length, 1) : 0,
-        toolCalls: participantReport?.usage?.activity?.tool_calls,
+        first: index === 0,
+        model: model ? model.model : participant.model,
+        tokens: model ? totalTokens(model) : null,
+        runs: model?.runs ?? null,
+        toolCalls: activity?.tool_calls ?? null,
       }));
     }),
   );
@@ -94,11 +103,10 @@ export function createSwarmPageUsage(host) {
       report = result;
       participantUsage = (swarm.participants ?? []).map((participant) => ({
         participant,
-        report: {
-          usage: result.usage?.participants?.find(
+        activity:
+          result.usage?.participants?.find(
             (row) => row.participant_id === participant.id,
-          ),
-        },
+          )?.activity ?? null,
       }));
     } finally {
       if (usageFlight === flight) usageFlight = null;

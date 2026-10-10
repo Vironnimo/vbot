@@ -1,58 +1,115 @@
-/* The Usage tab (RunUsage.svelte). */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-identity {
-  margin: 0;
+/* The Usage tab (RunUsage.svelte): tiles as in Statistics, then the
+   participant table. A narrow tab moves each row's Model below the
+   participant's name, so every column stays in view. */
+.swarm-page .usage {
+  container: swarm-usage / inline-size;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-identity
-  dt {
-  color: var(--text-med);
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-identity
-  dd {
-  margin: 6px 0 0;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
-  overflow-wrap: anywhere;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .usage-summary {
+.swarm-page .usage-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 0;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .usage-summary
-  div {
-  padding: 12px;
-  border-left: 2px solid var(--border-2);
+.swarm-page .usage-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   background: var(--surface-2);
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .usage-summary
-  dt {
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-weight: 500;
+.swarm-page .usage-tile dt {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .usage-summary
-  dd {
-  margin: 5px 0 0;
+.swarm-page .usage-tile dd {
+  margin: 0;
   color: var(--text-hi);
+  font-size: var(--fs-heading-lg);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  white-space: nowrap;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .table-wrap {
-  overflow-x: auto;
-  margin-top: 16px;
+/* A value with its exact count on hover or focus. */
+.swarm-page .usage-tile__more {
+  border-radius: var(--r-sm);
+  cursor: default;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--text-faint);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
 }
-@media (max-width: 640px) {
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .usage-summary {
-    grid-template-columns: 1fr;
+.swarm-page .usage-number {
+  border-radius: var(--r-sm);
+  cursor: default;
+}
+.swarm-page :is(.usage-tile__more, .usage-number):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The page's table rules (swarmPage.css) add a header border that would
+   double DataTable's header line. */
+.swarm-page .usage-table th.data-table__cell {
+  border-bottom: 0;
+}
+/* A participant's further Models read as part of its first row. */
+.swarm-page
+  .usage-table
+  .data-table__row:has(+ .data-table__row .usage-participant__name--repeat)
+  > td.data-table__cell {
+  border-bottom-color: transparent;
+}
+.swarm-page .usage-participant {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.swarm-page .usage-participant__name--repeat {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.swarm-page .usage-participant__model {
+  display: none;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+.swarm-page .usage-model {
+  display: inline-block;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+@container swarm-usage (max-width: 520px) {
+  .swarm-page .usage-tile {
+    padding: 12px;
+  }
+  .swarm-page .usage-tile dd {
+    font-size: var(--fs-heading-md);
+  }
+  .swarm-page .usage-table :is(th, td):nth-child(2) {
+    display: none;
+  }
+  .swarm-page .usage-participant__model {
+    display: block;
+  }
+  .swarm-page .usage-model {
+    max-width: 100%;
+  }
+  .swarm-page .usage-table th.data-table__cell {
+    white-space: normal;
   }
 }
