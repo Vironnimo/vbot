@@ -245,6 +245,7 @@ def _entry_payload(listing: ArchiveListing) -> JsonObject:
         "origin": entry.origin,
         "purge_at": listing.purge_at,
         "session_count": entry.session_count,
+        "review_fork_count": entry.review_fork_count,
         "restorable": listing.restorable,
         "not_restorable_reason": listing.not_restorable_reason,
         "may_hold_user_folders": listing.may_hold_user_folders,
@@ -265,6 +266,7 @@ def _detail_payload(detail: ArchiveEntryDetail) -> JsonObject:
                 "title": member.title,
                 "created_at": member.created_at,
                 "last_activity_at": member.last_activity_at,
+                "review_fork": member.review_fork,
             }
             for member in detail.sessions
         ],

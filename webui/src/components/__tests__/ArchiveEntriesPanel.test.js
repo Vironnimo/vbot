@@ -493,6 +493,55 @@ describe('ArchiveEntriesPanel', () => {
     });
   });
 
+  it('shows the review forks of a Session entry as its Reflections', async () => {
+    const notes = entry({ ...NOTES, session_count: 3, review_fork_count: 2 });
+    const member = (sessionId, title, reviewFork) => ({
+      session_id: sessionId,
+      project_id: null,
+      agent_id: 'main',
+      title,
+      created_at: '2026-09-01T10:00:00+00:00',
+      last_activity_at: '2026-09-19T10:00:00+00:00',
+      review_fork: reviewFork,
+    });
+    listMock.mockResolvedValue(page([notes]));
+    showMock.mockResolvedValue({
+      ...detailOf(notes),
+      sessions: [
+        member('notes', 'Notes', false),
+        member('review-1', 'Main: Notes', true),
+        member('review-2', 'Main: Notes', true),
+      ],
+    });
+    mountView({ navigation: createStandaloneNavigation() });
+
+    await waitForCondition(() => rowIds().length === 1);
+    expect(row('e-notes').textContent).toContain(t('archive.row.oneSession'));
+    expect(row('e-notes').textContent).toContain(
+      t('archive.row.reflections', { count: 2 }),
+    );
+
+    row('e-notes').querySelector('.archive-row__main').click();
+    await waitForCondition(() =>
+      document.getElementById('archive-detail-reflections'),
+    );
+    const section = (id) => document.getElementById(id).closest('section');
+    const titles = (id) =>
+      [...section(id).querySelectorAll('.archive-item__title')].map((item) =>
+        item.textContent.trim(),
+      );
+    expect(titles('archive-detail-sessions')).toEqual(['Notes']);
+    expect(titles('archive-detail-reflections')).toEqual([
+      t('archive.detail.reflection'),
+      t('archive.detail.reflection'),
+    ]);
+    expect(
+      section('archive-detail-reflections').querySelector(
+        '.archive-detail__count',
+      ).textContent,
+    ).toBe('2');
+  });
+
   it('reloads on archive changes and says when the shown entry is gone', async () => {
     const navigation = createStandaloneNavigation(['e-gone']);
     const props = reactiveProps({ navigation, archiveRefreshToken: 0 });
