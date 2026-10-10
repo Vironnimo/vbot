@@ -9,7 +9,7 @@ against an ``openai_compatible`` Model:
   ``limit_request_images``).
 * ``chat.request_wire`` - request messages plus Tool definitions to the
   provider payload, as ``OpenAICompatibleAdapter.stream()`` builds it on the
-  Event Loop without a prepared Context budget (``_build_payload`` including
+  request-body worker without a prepared Context budget (``_build_payload`` including
   its full-request token estimate, then ``_prepare_stream_payload``).
 * ``chat.request_wire_scoped`` - the same payload construction with Chat's
   already-prepared Context budget, as ordinary Agentic requests send it.
