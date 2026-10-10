@@ -64,8 +64,8 @@ export function participantLabel(participant) {
 }
 
 // A participant's details card: its name, Model (the provider path muted, as
-// ModelId shows it), state, pending messages, its context use when the caller
-// knows it and its last error when one is known.
+// ModelId shows it), state, pending messages and its context use when the
+// caller knows it.
 export function participantCard(participant, { context = '' } = {}) {
   const { lead, name } = modelIdParts(participant.model);
   const count = participant.pending_count ?? 0;
@@ -86,11 +86,6 @@ export function participantCard(participant, { context = '' } = {}) {
       },
       { label: t('swarm.participant.queue'), value: messages },
       { label: t('swarm.participant.context'), value: context },
-      {
-        label: t('swarm.participant.lastError'),
-        value: participant.last_error ?? '',
-        tone: 'danger',
-      },
     ],
   };
 }

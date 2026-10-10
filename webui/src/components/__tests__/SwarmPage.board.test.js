@@ -1035,8 +1035,7 @@ describe('Swarm Board discussions', () => {
       'running',
     );
     expect(beta.querySelector('.participant-status')).toBeNull();
-    // Its details card adds the Model, its provider path muted, and the last
-    // error when one is known.
+    // Its details card adds the Model, its provider path muted.
     const card = () => document.querySelector('#app-tooltip');
     const rows = () =>
       [...card().querySelectorAll('dt')].map((label) => [
@@ -1058,7 +1057,6 @@ describe('Swarm Board discussions', () => {
     );
     participants[1].state = 'failed';
     participants[1].pending_count = 3;
-    participants[1].last_error = 'Provider quota exhausted';
     bridge.invalidate();
     await vi.waitFor(() =>
       expect(beta.getAttribute('aria-label')).toBe(
@@ -1071,7 +1069,6 @@ describe('Swarm Board discussions', () => {
       ['Model', 'demo/fallback'],
       ['State', 'Failed'],
       ['Pending', '3 messages'],
-      ['Last error', 'Provider quota exhausted'],
     ]);
     await selectDiscussion('Findings');
     await vi.waitFor(() => expect(names()).toEqual(['Beta']));

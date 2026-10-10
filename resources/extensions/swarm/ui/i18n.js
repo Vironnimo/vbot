@@ -61,7 +61,6 @@ export default Object.freeze({
   'swarm.participant.messages.one': '1 message',
   'swarm.participant.messages': '{count} messages',
   'swarm.participant.context': 'Context',
-  'swarm.participant.lastError': 'Last error',
   'swarm.participant.state.idle': 'Idle',
   'swarm.participant.state.running': 'Running',
   'swarm.participant.state.failed': 'Failed',
