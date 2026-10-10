@@ -14,12 +14,16 @@ import {
   fixtureState,
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
+import { formatMoment } from '../../lib/timeText.js';
 
 const WIKI = t('swarm.tabs.wiki');
 const BOARD = t('swarm.tabs.board');
 const EDIT = t('common.edit');
+// Long past, so its distance from now stays the same during a test.
+const UPDATED = '2026-01-05T10:00:00Z';
 
-// A bridge whose Wiki holds one page, `w1`, with its version history.
+// A bridge whose Wiki holds one page, `w1`, with its version history. The
+// page opens with its title as a heading, as participants usually write it.
 function wikiBridge() {
   const fixture = createBridge();
   vi.spyOn(fixture.bridge, 'openLink');
@@ -27,10 +31,11 @@ function wikiBridge() {
     page_id: 'wpg-one',
     number: 1,
     title: 'Shared research',
-    content: 'Original evidence from #1',
+    content: '# Shared research\n\nOriginal evidence from #1',
     revision: 1,
     current_revision: 1,
     deleted: false,
+    updated_at: UPDATED,
     author: { name: 'Alpha', kind: 'participant' },
     link: '[Shared research](#wiki/w1)',
   };
@@ -65,6 +70,11 @@ function wikiBridge() {
     versions.push(structuredClone(page));
     return structuredClone(page);
   };
+  const matches = (args) =>
+    (!page.deleted || args.include_deleted) &&
+    `${page.title}\n${page.content}`
+      .toLowerCase()
+      .includes((args.query ?? '').toLowerCase());
   overrideOperations(fixture.operation, {
     'swarms.get': () => ({
       swarm: {
@@ -89,10 +99,7 @@ function wikiBridge() {
     wiki: (args) => {
       if (args.action === 'list')
         return {
-          entries:
-            page.deleted && !args.include_deleted
-              ? []
-              : [{ ...page, excerpt: page.content }],
+          entries: matches(args) ? [{ ...page, excerpt: page.content }] : [],
           has_more: false,
         };
       if (args.action === 'read')
@@ -132,6 +139,10 @@ async function openWiki(fixture) {
   await vi.waitFor(() => expect(button(EDIT)).toBeDefined());
 }
 const wikiContent = () => document.querySelector('.wiki-content').textContent;
+const wikiCalls = (fixture, action) =>
+  callsTo(fixture.operation, 'wiki').filter(
+    ([, args]) => args.action === action,
+  );
 // Holds the next Wiki call of `action` open until the test finishes it.
 function holdWiki(fixture, action, finish) {
   overrideOperations(fixture.operation, {
@@ -143,11 +154,12 @@ function holdWiki(fixture, action, finish) {
 }
 
 describe('Swarm Wiki pages', () => {
-  it('replaces the initial loading state with a list failure', async () => {
+  it('replaces the initial loading state with a list failure it can retry', async () => {
     const fixture = wikiBridge();
+    let unavailable = true;
     overrideOperations(fixture.operation, {
       wiki: (args, fallback) =>
-        args.action === 'list'
+        args.action === 'list' && unavailable
           ? Promise.reject(new Error('Wiki unavailable'))
           : fallback(),
     });
@@ -158,6 +170,10 @@ describe('Swarm Wiki pages', () => {
     );
     expect(panel().querySelector('[role="status"]')).toBeNull();
     expect(panel().textContent).not.toContain(t('swarm.wiki.empty'));
+    unavailable = false;
+    button(t('common.retry')).click();
+    await vi.waitFor(() => expect(button('Shared research')).toBeDefined());
+    expect(panel().textContent).not.toContain('Wiki unavailable');
   });
 
   it('opens internal Board links, displays the pinned request and restores a deleted page', async () => {
@@ -179,14 +195,28 @@ describe('Swarm Wiki pages', () => {
       'wiki',
       expect.objectContaining({ action: 'read', page_id: 'w1' }),
     );
-    expect(
-      document.querySelector('.wiki-content h3 .wiki-number').textContent,
-    ).toBe('w1');
-    const row = document.querySelector('.wiki-page-link');
+    // The link lands on the page title; the page header shows the title,
+    // so the content's leading heading that repeats it is left out.
+    const heading = document.querySelector('.wiki-content h3');
+    expect(heading.querySelector('.wiki-number').textContent).toBe('w1');
+    await vi.waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(document.querySelector('.wiki-content h1')).toBeNull();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    button(t('swarm.wiki.copyLink')).click();
+    expect(writeText).toHaveBeenCalledWith('[Shared research](#wiki/w1)');
+    // A narrow panel shows the list or a page; going back to the list
+    // returns to the page's row.
+    button(t('swarm.wiki.allPages')).click();
+    const row = document.querySelector('.wiki-row');
+    await vi.waitFor(() => expect(document.activeElement).toBe(row));
+    expect(document.querySelector('.wiki-panel').dataset.view).toBe('list');
     expect(row.querySelector('.wiki-number').textContent).toBe('w1');
-    // The list names pages; revision and author appear on hover or focus.
+    // The list names pages; revision, author and time appear on hover or focus.
     expect(row.textContent).not.toContain('Original evidence');
-    row.focus();
     await vi.waitFor(() =>
       expect(
         [...document.querySelectorAll('#app-tooltip dt')].map((label) => [
@@ -196,9 +226,16 @@ describe('Swarm Wiki pages', () => {
       ).toEqual([
         [t('swarm.wiki.revisionLabel'), '1'],
         [t('swarm.wiki.author'), 'Alpha'],
+        [t('swarm.wiki.updated'), formatMoment(UPDATED)],
       ]),
     );
-    const restore = t('swarm.wiki.restore');
+    const reads = wikiCalls(fixture, 'read').length;
+    row.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.wiki-panel').dataset.view).toBe('page'),
+    );
+    expect(wikiCalls(fixture, 'read')).toHaveLength(reads);
+    const restore = t('swarm.wiki.restorePage');
     const remove = t('swarm.wiki.delete');
     button(remove).click();
     await vi.waitFor(() => expect(button(restore)).toBeDefined());
@@ -223,18 +260,40 @@ describe('Swarm Wiki pages', () => {
   it('creates free Markdown pages and searches without exposing content as HTML', async () => {
     const fixture = wikiBridge();
     await openWiki(fixture);
+    // Cancel leaves an untouched new page and shows the page from before.
+    button(t('swarm.wiki.new')).click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.id).toBe('wiki-title'),
+    );
+    button(t('common.cancel')).click();
+    await vi.waitFor(() =>
+      expect(wikiContent()).toContain('Original evidence'),
+    );
     button(t('swarm.wiki.new')).click();
     await tick();
-    fill('wiki-title', 'New findings');
     fill('wiki-content', '# Findings\n<script>bad()</script>');
     await tick();
+    // Save creates the page only once it has a title.
     button(t('common.save')).click();
     await vi.waitFor(() =>
-      expect(fixture.operation).toHaveBeenCalledWith(
-        'wiki',
-        expect.objectContaining({ action: 'create', title: 'New findings' }),
+      expect(document.getElementById('wiki-title-error')?.textContent).toBe(
+        t('swarm.wiki.titleRequired'),
       ),
     );
+    expect(document.activeElement.id).toBe('wiki-title');
+    fill('wiki-title', 'New findings');
+    await tick();
+    expect(document.getElementById('wiki-title-error')).toBeNull();
+    button(t('common.save')).click();
+    await vi.waitFor(() =>
+      expect(button(t('swarm.wiki.preview'))).toBeDefined(),
+    );
+    expect(wikiCalls(fixture, 'create')).toEqual([
+      [
+        'wiki',
+        expect.objectContaining({ action: 'create', title: 'New findings' }),
+      ],
+    ]);
     button(t('swarm.wiki.preview')).click();
     await vi.waitFor(() =>
       expect(document.querySelector('.wiki-content h1')).not.toBeNull(),
@@ -255,6 +314,72 @@ describe('Swarm Wiki pages', () => {
       ),
     );
   });
+
+  it('searches once typing rests and clears a search without matches', async () => {
+    const fixture = wikiBridge();
+    await openWikiTab(fixture);
+    await vi.waitFor(() => expect(button('Shared research')).toBeDefined());
+    vi.useFakeTimers();
+    const lists = () => wikiCalls(fixture, 'list');
+    const count = lists().length;
+    fill('wiki-search', 'missing');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(lists()).toHaveLength(count);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(lists()).toHaveLength(count + 1);
+    expect(lists().at(-1)[1]).toMatchObject({ query: 'missing' });
+    await vi.waitFor(() =>
+      expect(document.querySelector('.wiki-index').textContent).toContain(
+        t('swarm.wiki.noMatchesHelp', { query: 'missing' }),
+      ),
+    );
+    button(t('swarm.wiki.clearSearch')).click();
+    await vi.waitFor(() => expect(button('Shared research')).toBeDefined());
+    expect(document.getElementById('wiki-search').value).toBe('');
+    expect(lists().at(-1)[1]).not.toHaveProperty('query');
+  });
+
+  it('shows earlier versions, returns to the current one and restores one', async () => {
+    const fixture = wikiBridge();
+    await openWiki(fixture);
+    button(EDIT).click();
+    await tick();
+    fill('wiki-content', 'Second evidence');
+    button(t('swarm.wiki.preview')).click();
+    await vi.waitFor(() => expect(wikiContent()).toContain('Second evidence'));
+    button(t('swarm.wiki.history')).click();
+    const versions = () => [...document.querySelectorAll('.wiki-version')];
+    await vi.waitFor(() => expect(versions()).toHaveLength(2));
+    expect(versions()[0].textContent).toContain(t('swarm.wiki.current'));
+    expect(versions()[0].getAttribute('aria-current')).toBe('true');
+    versions()[1].click();
+    await vi.waitFor(() =>
+      expect(wikiContent()).toContain('Original evidence'),
+    );
+    expect(wikiContent()).toContain(
+      t('swarm.wiki.viewingRevision', { revision: 1, total: 2 }),
+    );
+    expect(versions()[1].getAttribute('aria-current')).toBe('true');
+    expect(button(EDIT).disabled).toBe(true);
+    button(t('swarm.wiki.backToCurrent')).click();
+    await vi.waitFor(() => expect(wikiContent()).toContain('Second evidence'));
+    versions()[1].click();
+    await vi.waitFor(() =>
+      expect(button(t('swarm.wiki.restore'))).toBeDefined(),
+    );
+    button(t('swarm.wiki.restore')).click();
+    await vi.waitFor(() => expect(versions()).toHaveLength(3));
+    expect(fixture.operation).toHaveBeenCalledWith(
+      'wiki',
+      expect.objectContaining({
+        action: 'restore',
+        expected_revision: 2,
+        revision: 1,
+      }),
+    );
+    expect(wikiContent()).toContain('Original evidence');
+    expect(button(EDIT).disabled).toBe(false);
+  });
 });
 
 describe('Swarm Wiki drafts and refresh', () => {
@@ -262,7 +387,13 @@ describe('Swarm Wiki drafts and refresh', () => {
     const fixture = wikiBridge();
     await openWiki(fixture);
     button(EDIT).click();
-    await tick();
+    // The editor holds the whole Markdown source, title heading included.
+    await vi.waitFor(() =>
+      expect(document.activeElement.id).toBe('wiki-content'),
+    );
+    expect(document.activeElement.value).toBe(
+      '# Shared research\n\nOriginal evidence from #1',
+    );
     fill('wiki-content', 'My evidence');
     button(BOARD).click();
     await vi.waitFor(() =>
@@ -303,12 +434,9 @@ describe('Swarm Wiki drafts and refresh', () => {
     const fixture = wikiBridge();
     await openWiki(fixture);
     vi.useFakeTimers();
-    const reads = () =>
-      fixture.operation.mock.calls.filter(
-        ([name, args]) => name === 'wiki' && args.action === 'read',
-      ).length;
+    const reads = () => wikiCalls(fixture, 'read').length;
     const count = reads();
-    const wikiCalls = callsTo(fixture.operation, 'wiki').length;
+    const wikiCallCount = callsTo(fixture.operation, 'wiki').length;
     // Only changes of this Swarm's Wiki reload it.
     for (const [resource, id] of [
       ['wiki', 'swr-b'],
@@ -318,7 +446,7 @@ describe('Swarm Wiki drafts and refresh', () => {
     ])
       fixture.bridge.invalidate({ resource, ids: [id], revision: 2 });
     await vi.advanceTimersByTimeAsync(160);
-    expect(callsTo(fixture.operation, 'wiki')).toHaveLength(wikiCalls);
+    expect(callsTo(fixture.operation, 'wiki')).toHaveLength(wikiCallCount);
     fixture.bridge.invalidate({
       resource: 'wiki',
       ids: ['swr-a'],
@@ -327,7 +455,7 @@ describe('Swarm Wiki drafts and refresh', () => {
     // It follows the pass that just ran, so it waits for that pass's second.
     await vi.advanceTimersByTimeAsync(1000);
     expect(callsTo(fixture.operation, 'wiki').length).toBeGreaterThan(
-      wikiCalls,
+      wikiCallCount,
     );
     fixture.bridge.invalidate();
     await vi.advanceTimersByTimeAsync(160);
@@ -353,6 +481,55 @@ describe('Swarm Wiki drafts and refresh', () => {
     });
     await vi.waitFor(() => expect(wikiContent()).toContain('Peer evidence'));
     expect(reads()).toBe(count + 1);
+  });
+
+  it('keeps the pages loaded with Load more when the Wiki refreshes', async () => {
+    const fixture = wikiBridge();
+    const pages = Array.from({ length: 25 }, (_, index) => ({
+      page_id: `wpg-${index + 1}`,
+      number: index + 1,
+      title: `Page ${index + 1}`,
+      revision: 1,
+      updated_at: UPDATED,
+    }));
+    overrideOperations(fixture.operation, {
+      wiki: (args, fallback) => {
+        if (args.action !== 'list') return fallback();
+        const offset = Number(args.cursor ?? 0);
+        const more = offset + 20 < pages.length;
+        return {
+          entries: pages.slice(offset, offset + 20),
+          has_more: more,
+          ...(more
+            ? {
+                next_call: {
+                  arguments: { ...args, cursor: String(offset + 20) },
+                },
+              }
+            : {}),
+        };
+      },
+    });
+    await openWikiTab(fixture);
+    const rows = () => document.querySelectorAll('.wiki-row');
+    await vi.waitFor(() => expect(rows()).toHaveLength(20));
+    button(t('swarm.wiki.loadMore')).click();
+    await vi.waitFor(() => expect(rows()).toHaveLength(25));
+    // Focus continues at the first page it loaded.
+    await vi.waitFor(() =>
+      expect(document.activeElement.dataset.pageId).toBe('wpg-21'),
+    );
+    const lists = wikiCalls(fixture, 'list').length;
+    fixture.bridge.invalidate({
+      resource: 'wiki',
+      ids: ['swr-a'],
+      revision: 2,
+    });
+    await vi.waitFor(() =>
+      expect(wikiCalls(fixture, 'list')).toHaveLength(lists + 2),
+    );
+    await settle();
+    expect(rows()).toHaveLength(25);
   });
 
   it('does not replace a Wiki draft with an in-flight background page read', async () => {
