@@ -578,6 +578,8 @@ export default Object.freeze({
   'chat.voice.progress.transcribing': 'Transcribing recording…',
   'chat.composerArea': 'Message composer',
   'chat.contextRingLabel': 'Context window usage',
+  'chat.contextRingFigures': '{tokens} / {context} · {share}',
+  'chat.contextRingFiguresLabel': 'Context window usage: {figures}',
   'chat.historyOlderLoadError': 'Older chat history could not be loaded.',
   'chat.requestTimeout': 'Provider request timed out.',
   'chat.requestRateLimit': 'Provider rate limit reached.',

@@ -1,9 +1,10 @@
-// Composes the context usage breakdown: the Context headline
-// ("tokens / contextWindow"), the Session's cache hit rate and token totals,
-// and a "Last turn" block that splits the input into its cache shares.
-// `contextUsageCardModel` returns label/value rows for the Chat context
-// ring's card; `formatTokenUsageTooltip` renders the same model as text with
-// line breaks and middot-indented sub-lines (Swarm Activity's quick tooltip).
+// Composes the context usage breakdown of the context ring's card
+// (components/chat/ContextUsageRing.svelte): the Context headline
+// ("tokens / contextWindow" in exact counts), the Session's cache hit rate and
+// token totals, and a "Last turn" block that splits the input into its cache
+// shares; plus the ring's warning level. `formatTokenUsageTooltip` renders the
+// same model as text with line breaks and middot-indented sub-lines (Swarm
+// Activity's quick tooltip).
 //
 // The cache lines matter for spotting prompt-cache breaks: canonical
 // `input_tokens` already contains the cached tokens, so the sub-lines are
@@ -11,6 +12,7 @@
 // figure or vBot estimated it is not shown here; Statistics diagnostics keep
 // that distinction.
 import { activeLocaleTag, t } from './i18n.js';
+import { formatTokensExact } from './statisticsView.js';
 
 export function formatTokenUsageTooltip(
   contextUsage,
@@ -132,11 +134,12 @@ export function contextLimitWarning(
 }
 
 /**
- * Structured model for the Chat context ring's card. `summary` is the
+ * Structured model for the context ring's card. `summary` is the
  * "tokens / contextWindow" headline (null without a Context projection);
  * `sections` hold label/value rows (`sub` rows are shares of the row above,
  * never additions): first the Session's cache hit rate and totals, then the
- * last turn. The card lays them out in a right-aligned column.
+ * last turn. Figures are exact counts; the card lays them out in a
+ * right-aligned column.
  */
 export function contextUsageCardModel(
   contextUsage,
@@ -144,8 +147,8 @@ export function contextUsageCardModel(
   sessionUsage,
   contextWindow,
 ) {
-  const numberFormat = new Intl.NumberFormat(activeLocaleTag());
-  const format = (value) => numberFormat.format(value);
+  const locale = activeLocaleTag();
+  const format = (value) => formatTokensExact(value, locale);
   const sections = [
     sessionSection(sessionUsage, format),
     usage ? lastTurnSection(usage, format) : null,
