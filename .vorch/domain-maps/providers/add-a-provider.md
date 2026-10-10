@@ -40,6 +40,7 @@ Do not invent a capability because a compatible API documents it generally. Spar
 - Adapter and discovery selector maps agree.
 - Auth headers rebuild inside retry attempts; secrets never enter logs, fixtures, catalogs, or response payloads.
 - `send()`, `stream()`, and `normalize_response()` agree on routing and canonical shapes.
+- Every new request path renders its payload through a `RequestPlan` and `prepare_request()`, so building and encoding stay off the Event Loop (`providers/request-policy.md` -> HTTP, retry, and streaming); `test_request_preparation.py` lists every path.
 - Replay scope and fidelity, media types, output-limit behavior, and other request rules come from the wire profile file; an Adapter override only narrows them by a per-Model catalog fact (GitHub Copilot's reported image types and image count, Anthropic's 100-image cap for a context window up to 200k); `resources/wire/<id>.json` parses without issues (`test_bundled_wire_profile_files_are_valid`).
 - Discovery failures do not erase unrelated Connection catalogs; generated facts and hand overrides retain separate ownership.
 - Provider-specific tests and the relevant shared suites pass; docs point to the canonical shared or Provider-specific reference.
