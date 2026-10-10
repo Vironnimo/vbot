@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
+import curl_cffi.requests
 import pytest
 from curl_cffi import CurlOpt
 from curl_cffi.requests.exceptions import CertificateVerifyError, ConnectTimeout, ReadTimeout
@@ -403,7 +404,7 @@ async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
         )
     )
     session_factory = Mock(return_value=session)
-    monkeypatch.setattr(public_http, "AsyncSession", session_factory)
+    monkeypatch.setattr(curl_cffi.requests, "AsyncSession", session_factory)
 
     result = await fetch(tmp_path, {"url": url})
 
@@ -430,7 +431,7 @@ async def test_responses_over_the_download_limit_are_refused(
         # Neither chunk alone exceeds the limit; together they do.
         else StreamingResponse([b"x", bytes(limit)])
     )
-    monkeypatch.setattr(public_http, "AsyncSession", lambda **_: StreamingSession(response))
+    monkeypatch.setattr(curl_cffi.requests, "AsyncSession", lambda **_: StreamingSession(response))
 
     result = await fetch(tmp_path, {"url": "https://example.com/large"})
 

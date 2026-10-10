@@ -33,8 +33,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, override
 
-import sqlite_vec  # type: ignore[import-untyped]
-
 from core.database import APPLICATION_IDS, DISPOSABLE, DatabaseCorruptError, DatabaseSpec
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity, EmbeddingUsage
 from core.recall._passage_catalog import (
@@ -271,10 +269,17 @@ def index_path(data_dir: Path) -> Path:
     return data_dir / INDEX_DIR_NAME / INDEX_FILE_NAME
 
 
+def _sqlite_vec() -> Any:
+    """The sqlite-vec package, imported on first use: importing it imports numpy."""
+    import sqlite_vec  # type: ignore[import-untyped]
+
+    return sqlite_vec
+
+
 def _load_sqlite_vec(connection: sqlite3.Connection) -> None:
     connection.enable_load_extension(True)
     try:
-        sqlite_vec.load(connection)
+        _sqlite_vec().load(connection)
     finally:
         connection.enable_load_extension(False)
 
@@ -464,7 +469,7 @@ class PassageIndex(PassageCatalog):
                     f"vector length {len(vector)} does not match pinned dimension "
                     f"{header.dimension} for model {header.provider_id}/{header.model_id}"
                 )
-            serialized[text_hash] = sqlite_vec.serialize_float32([float(v) for v in vector])
+            serialized[text_hash] = _sqlite_vec().serialize_float32([float(v) for v in vector])
 
         def store(connection: sqlite3.Connection) -> bool:
             if _read_header(connection) != header:
@@ -557,7 +562,7 @@ class PassageIndex(PassageCatalog):
                 f"query vector length {len(query_vector)} does not match pinned dimension "
                 f"{header.dimension} for model {header.provider_id}/{header.model_id}"
             )
-        embedding = sqlite_vec.serialize_float32([float(value) for value in query_vector])
+        embedding = _sqlite_vec().serialize_float32([float(value) for value in query_vector])
         k = min(limit, KNN_MAX_K)
 
         def search(connection: sqlite3.Connection) -> KnnMatches:

@@ -5,18 +5,24 @@ connection, and the Tools each connection publishes: the connection Tool
 ``mcp_<id>`` and one deferred follower per remote Tool. Finding and describing
 catalog items lives in ``_discovery``, the management surface in
 ``_management``, and the protocol client in ``client``.
+
+The protocol client imports the MCP SDK and its HTTP stack, about half a second
+of imports, so it loads in a worker once a connection exists: at start when
+connections are saved, else when the first one is saved. Loading the Extension
+and running it without connections never imports the SDK.
 """
 
 from __future__ import annotations
 
 import asyncio
 import copy
+import importlib
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from http import HTTPStatus
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
@@ -69,19 +75,13 @@ from ._management import (
     invoke_for_agent,
     register_management,
 )
-from ._oauth import forget_sign_in, sign_in_status
-from ._tasks import TaskEndedError
 from ._views import compact
-from .client import (
-    READ_OPERATIONS,
-    ConnectionRunner,
-    InvalidToolResultError,
-    InvocationNotSentError,
-    UnsupportedOperationError,
-)
 from .config import ConnectionStore, validate_connection
 from .content import ContentStore
 from .interactions import InputRequests
+
+if TYPE_CHECKING:
+    from .client import ConnectionRunner, InvalidToolResultError
 
 __all__ = [
     "GUIDANCE_PREVIEW_CHARACTERS",
@@ -102,6 +102,15 @@ __all__ = [
 ]
 
 _DETAIL_CHARACTERS = 300
+
+
+async def _load_protocol_client() -> None:
+    """Import ``client`` and with it the MCP SDK in a worker, off the Event Loop.
+
+    The service's own imports of ``client`` and its protocol modules then find
+    them loaded.
+    """
+    await run_tool_worker(importlib.import_module, ".client", __package__)
 
 
 @dataclass
@@ -156,6 +165,8 @@ class MCPService:
             )
         # Saved summaries first, so each connection Tool starts with its known names.
         await self.catalogs.open(host)
+        if self.connections:
+            await _load_protocol_client()
         for config in self.connections.values():
             self._runner(config)
             if config["enabled"]:
@@ -210,6 +221,8 @@ class MCPService:
         return self.host
 
     def _runner(self, config: dict[str, Any]) -> ConnectionRunner:
+        from .client import ConnectionRunner
+
         identifier = config["id"]
         if identifier not in self.runners:
             self.runners[identifier] = ConnectionRunner(
@@ -455,6 +468,8 @@ class MCPService:
 
     def _not_sent(self, runner: ConnectionRunner, error: Exception) -> dict[str, Any]:
         """The failure for a request that never ran: refused by the server, or not sent."""
+        from .client import InvocationNotSentError
+
         detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
         refused = error.refused if isinstance(error, InvocationNotSentError) else None
         if refused is not None:
@@ -536,6 +551,14 @@ class MCPService:
         *,
         source: str | None = None,
     ) -> dict[str, Any]:
+        from ._tasks import TaskEndedError
+        from .client import (
+            READ_OPERATIONS,
+            InvalidToolResultError,
+            InvocationNotSentError,
+            UnsupportedOperationError,
+        )
+
         try:
             payload = await runner.invoke(operation, arguments, context)
         except UnsupportedOperationError:
@@ -686,7 +709,7 @@ class MCPService:
                 if not config.get("oauth"):
                     raise ValueError("MCP connection does not sign in with OAuth")
                 await self._stop(identifier)
-                forget_sign_in(self._host(), identifier)
+                self._forget_sign_in(identifier)
                 self._connection_changed(identifier)
                 self.api.logger.info("MCP connection signed out (connection=%s)", identifier)
                 runner = self._runner(config)
@@ -741,8 +764,16 @@ class MCPService:
             ],
         }
         if config.get("oauth"):
+            from ._oauth import sign_in_status
+
             result["oauth"] = sign_in_status(self._host(), config)
         return result
+
+    def _forget_sign_in(self, identifier: str) -> None:
+        """Delete the stored OAuth tokens and registered client of *identifier*."""
+        from ._oauth import forget_sign_in
+
+        forget_sign_in(self._host(), identifier)
 
     def _missing_credentials(self, config: dict[str, Any]) -> list[str]:
         """The credentials *config* references that have no value yet."""
@@ -909,7 +940,7 @@ class MCPService:
             else:
                 await self._stop(identifier)
                 if previous is not None and _signs_in_elsewhere(previous, config):
-                    forget_sign_in(self._host(), identifier)
+                    self._forget_sign_in(identifier)
                 # A disabled connection keeps its connection Tool, not ready.
                 runner = self._runner(config)
                 if config["enabled"]:
@@ -932,7 +963,7 @@ class MCPService:
             if operation == "remove":
                 self.catalogs.forget(identifier)
                 await self._stop(identifier)
-                forget_sign_in(self._host(), identifier)
+                self._forget_sign_in(identifier)
             elif operation == "disable":
                 # Its Tools stay registered but not ready, so the Agent no longer
                 # sees them and naming one says the connection is disabled.
@@ -955,6 +986,8 @@ class MCPService:
         """Save *records* and make them the current connections; the caller holds ``_lock``."""
         if self.store is None:
             raise RuntimeError("MCP store was not initialized")
+        if records:
+            await _load_protocol_client()
         await run_tool_worker(self.store.save, records)
         changed = [
             identifier

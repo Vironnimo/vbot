@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
+import curl_cffi.requests
 import pytest
 
 import core.tools._public_http as public_http
@@ -122,7 +123,7 @@ class StreamingSession:
 @pytest.fixture(autouse=True)
 def stub_http_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep mocked HTTP tests from creating curl's Windows selector thread."""
-    monkeypatch.setattr(public_http, "AsyncSession", lambda **_kwargs: StreamingSession())
+    monkeypatch.setattr(curl_cffi.requests, "AsyncSession", lambda **_kwargs: StreamingSession())
 
 
 @pytest.fixture(autouse=True)

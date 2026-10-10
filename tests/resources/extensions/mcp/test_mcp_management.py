@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
+import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+import resources.extensions.mcp
 from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.databases import ExtensionDatabases
-from core.tools.tools import tool_success
+from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
+from core.tools.tools import ToolRegistry, tool_success
 from resources.extensions.mcp._connectors import load_connectors
 from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.config import validate_connection
@@ -478,3 +483,43 @@ async def test_adding_from_the_catalog_creates_a_connection_and_never_replaces_o
         assert sorted(service.connections) == ["docs", "docs_3", "tracker"]
     finally:
         await service.close()
+
+
+# The Extension's modules that import the MCP SDK or its HTTP stack.
+_PROTOCOL_MODULES = ("client", "_tasks", "_oauth", "_events", "_callbacks", "_network")
+
+
+@pytest.mark.asyncio
+async def test_the_protocol_client_loads_only_once_a_connection_exists(host):
+    # A fresh copy of the Extension's package, so modules other tests loaded do not count.
+    package = "mcp_lazy_load_probe"
+    root = Path(resources.extensions.mcp.__file__).parent
+    spec = importlib.util.spec_from_file_location(
+        package, root / "__init__.py", submodule_search_locations=[str(root)]
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[package] = module
+
+    def loaded() -> list[str]:
+        return [name for name in _PROTOCOL_MODULES if f"{package}.{name}" in sys.modules]
+
+    try:
+        spec.loader.exec_module(module)
+        assert loaded() == []
+        api = ExtensionAPI(
+            "mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("test.mcp")
+        )
+        api.operations.bind(ToolRegistry())
+        service = module.extension.MCPService(api)
+        await service.start(host)
+        try:
+            assert loaded() == []
+            await service.manage("save", {"connection": {**_CONNECTION, "enabled": False}})
+            assert "client" in loaded()
+            assert service.runners["example"].state == "disconnected"
+        finally:
+            await service.close()
+    finally:
+        for name in [name for name in sys.modules if name.split(".")[0] == package]:
+            del sys.modules[name]
