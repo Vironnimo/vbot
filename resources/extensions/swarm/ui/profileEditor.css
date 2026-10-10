@@ -1,194 +1,238 @@
+/* The Swarm editor: one configuration page (`.page-scroll`) in the shared
+   section grammar (sections.css). This file styles only what the grammar
+   leaves to the page; every rule stays under the editor's own classes, so
+   nested shared components keep their styles. */
 .swarm-profile-editor {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  width: 100%;
+  --page-measure: var(--content-max-narrow);
 }
-/* A configuration page: head, topic tabs, notices and form share one
-   centered measure inside the page insets. */
-.swarm-profile-editor .editor-head,
-.swarm-profile-editor .tab-list,
-.swarm-profile-editor > .banner {
-  box-sizing: border-box;
-  width: calc(100% - 2 * var(--page-inset-x));
-  max-width: var(--content-max-narrow);
-  flex-shrink: 0;
-  margin-inline: auto;
+
+.swarm-profile-editor > .swarm-profile-editor__header {
+  margin-bottom: 28px;
 }
-.swarm-profile-editor .editor-head {
-  padding: var(--page-inset-top) 0 20px;
+
+/* Only disables every field while a new Swarm is created; the sections
+   inside keep the section rhythm. */
+.swarm-profile-editor > .swarm-profile-editor__fields {
+  min-width: 0;
+  margin-block: 0;
+  padding: 0;
+  border: 0;
 }
-.swarm-profile-editor > .banner {
-  margin-top: 14px;
+
+.swarm-profile-editor > .swarm-profile-editor__save-error {
+  margin-top: 28px;
 }
-.swarm-profile-transition-copy {
-  margin: 0;
-  padding: 0 20px 20px;
-}
-.swarm-profile-editor .editor-head,
-.swarm-profile-editor .section-head,
-.swarm-profile-editor .switch-row,
-.swarm-profile-editor .editor-footer,
-.swarm-profile-editor .editor-footer > div {
+
+.swarm-profile-editor > .swarm-profile-editor__footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 28px;
+  padding-bottom: 4px;
 }
-.swarm-profile-editor .editor-head,
-.swarm-profile-editor .editor-footer {
-  flex-shrink: 0;
-}
-/* The header follows the shared page-header pattern: actions top-aligned. */
-.swarm-profile-editor .editor-head {
-  align-items: flex-start;
-}
-.swarm-profile-editor h3,
-.swarm-profile-editor p:not(.view-header__subtitle) {
-  margin: 0;
-}
-.swarm-profile-editor h3 {
-  font-size: var(--fs-heading-sm);
-  font-weight: 600;
-}
-.swarm-profile-editor .hint,
-.swarm-profile-editor .editor-footer p {
-  color: var(--text-med);
+
+/* A field's validation message under its label; the control points here
+   with aria-describedby. */
+.swarm-profile-editor .swarm-profile-editor__error {
+  margin: 4px 0 0;
+  color: var(--red);
   font-size: var(--fs-body-sm);
+  line-height: 1.4;
 }
-.swarm-profile-editor .editor-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  scrollbar-gutter: stable both-edges;
-  padding: 24px var(--page-inset-x) var(--page-inset-bottom);
+
+/* A label followed by its InfoHint. */
+.swarm-profile-editor .swarm-profile-editor__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
-.swarm-profile-editor fieldset {
-  border: 0;
-  margin: 0;
-  padding: 0;
-  max-width: var(--content-max-narrow);
-  margin-inline: auto;
+
+.swarm-profile-editor .swarm-profile-editor__count {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A removable Model row: the remove action follows the Model picker inside
+   the control column, so every control keeps its left edge. */
+.swarm-profile-editor .swarm-profile-editor__model-control {
+  gap: 4px;
+}
+
+.swarm-profile-editor
+  .s-group
+  > .s-row
+  > .swarm-profile-editor__model-control
+  > .searchable-dropdown {
+  width: auto;
   min-width: 0;
+  flex: 1 1 auto;
 }
-.swarm-profile-editor .topic {
-  display: grid;
-  gap: 28px;
+
+.swarm-profile-editor .swarm-profile-editor__remove.btn-tertiary {
+  flex-shrink: 0;
+  color: var(--text-lo);
 }
-.swarm-profile-editor .topic[hidden] {
+
+.swarm-profile-editor .swarm-profile-editor__remove.btn-tertiary:hover {
+  color: var(--red);
+}
+
+.swarm-profile-editor .s-group > .swarm-profile-editor__prompt-row,
+.swarm-profile-editor .s-group > .swarm-profile-editor__path-row {
+  gap: 10px;
+}
+
+.swarm-profile-editor .swarm-profile-editor__prompt {
+  min-height: 240px;
+}
+
+/* A switch row whose label also shows or hides the text it switches; the
+   chevron lines up with the group's disclosure rows. */
+.swarm-profile-editor .swarm-profile-editor__reveal {
+  display: inline-flex;
+  max-width: calc(100% + 6px);
+  align-items: center;
+  margin: -4px 0 -4px -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.swarm-profile-editor .swarm-profile-editor__reveal:hover .disclosure-chevron {
+  color: var(--text-hi);
+}
+
+.swarm-profile-editor .swarm-profile-editor__reveal:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Labels that are identifiers (a block or reminder without a title). */
+.swarm-profile-editor .swarm-profile-editor__mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+/* Rows without a chevron keep their label on the chevron rows' text. */
+.swarm-profile-editor .swarm-profile-editor__indented {
+  padding-left: 15px;
+}
+
+/* Revealed text continues its row, indented to the row's label. */
+.swarm-profile-editor .s-group > .swarm-profile-editor__content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 18px 14px 33px;
+  border-top: 0;
+}
+
+.swarm-profile-editor .s-group > .swarm-profile-editor__content[hidden] {
   display: none;
 }
-.swarm-profile-editor .form-section {
-  display: grid;
-  gap: 14px;
+
+.swarm-profile-editor .swarm-profile-editor__note {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
 }
-.swarm-profile-editor .formation {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
-  align-items: start;
-  gap: 16px;
-  padding: 16px;
-  background: var(--surface);
+
+.swarm-profile-editor .swarm-profile-editor__text,
+.swarm-profile-editor .swarm-profile-editor__preview-text {
+  min-width: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-}
-.swarm-profile-editor .formation-settings {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 80px auto;
-  align-items: end;
-  gap: 12px;
-}
-.swarm-profile-editor .formation-settings .btn-icon {
-  justify-self: end;
-}
-.swarm-profile-editor .directory-fields {
-  display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 14px;
-}
-.swarm-profile-editor .three {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-.swarm-profile-editor .advanced {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-}
-.swarm-profile-editor .prompt-block {
-  border-bottom: 1px solid var(--border);
-  padding: 12px 0;
-}
-.swarm-profile-editor .prompt-block-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 14px;
-}
-.swarm-profile-editor .prompt-block details {
-  margin-top: 8px;
-}
-.swarm-profile-editor .topic pre {
+  color: var(--text-hi);
+  background: var(--bg);
+  font: var(--fs-mono-sm) / 1.7 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 480px;
-  overflow: auto;
-  color: var(--text-hi);
-  font: inherit;
 }
-.swarm-profile-editor .topic pre.tool-json {
+
+.swarm-profile-editor .swarm-profile-editor__text {
+  max-height: 320px;
+}
+
+.swarm-profile-editor .swarm-profile-editor__preview-text {
+  max-height: 480px;
+  border-color: var(--border-2);
+  background: var(--preview-surface);
+}
+
+/* The preview action and its result under the preview's Model row. */
+.swarm-profile-editor .s-group__rows > .swarm-profile-editor__preview {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px 18px 18px 33px;
+  border-top: 1px solid var(--border);
+}
+
+.swarm-profile-editor .swarm-profile-editor__preview > .s-subhead__title {
+  margin-top: 8px;
+}
+
+/* Advanced: a closed section whose heading line opens it. */
+.swarm-profile-editor .swarm-profile-editor__advanced-summary {
+  gap: 0;
+  border-radius: var(--r-sm);
+  list-style: none;
+  cursor: pointer;
+}
+
+.swarm-profile-editor
+  .swarm-profile-editor__advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.swarm-profile-editor
+  .swarm-profile-editor__advanced-summary:hover
+  .disclosure-chevron {
+  color: var(--text-hi);
+}
+
+.swarm-profile-editor .swarm-profile-editor__advanced-summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.swarm-profile-editor .swarm-profile-editor__id {
+  gap: 4px;
+}
+
+.swarm-profile-editor .swarm-profile-editor__id-value {
+  min-width: 0;
+  color: var(--text-med);
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
+  overflow-wrap: anywhere;
+  text-align: right;
 }
-.swarm-profile-editor .prompt-preview {
-  background: var(--surface);
-  padding: 14px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-}
-.swarm-profile-editor .advanced summary {
-  cursor: pointer;
-  color: var(--text-med);
-}
-.swarm-profile-editor .advanced summary:hover {
-  color: var(--text-hi);
-}
-.swarm-profile-editor .advanced > :not(summary) {
-  margin-top: 14px;
-}
-/* The Save action ends the form within the same measure as its fields. */
-.swarm-profile-editor .editor-footer {
-  justify-content: flex-end;
-  max-width: var(--content-max-narrow);
-  margin-inline: auto;
-  padding: 12px 0 0;
-}
-.swarm-profile-editor .editor-footer > div {
-  flex-shrink: 0;
-}
-@media (max-width: 1200px) {
-  .swarm-profile-editor .formation {
-    grid-template-columns: 1fr;
-  }
-}
+
 @media (max-width: 640px) {
-  .swarm-profile-editor .directory-fields,
-  .swarm-profile-editor .three {
-    grid-template-columns: 1fr;
+  .swarm-profile-editor .s-group > .swarm-profile-editor__content {
+    padding: 0 14px 14px 29px;
   }
-  .swarm-profile-editor .formation-settings {
-    grid-template-columns: minmax(0, 1fr) 86px auto;
-    gap: 8px;
+
+  .swarm-profile-editor .s-group__rows > .swarm-profile-editor__preview {
+    padding: 14px 14px 14px 29px;
   }
-  .swarm-profile-editor .formation {
-    grid-template-columns: 1fr;
-    padding: 12px;
-  }
-  .swarm-profile-editor .editor-footer p {
-    display: none;
-  }
-  .swarm-profile-editor .editor-footer {
-    justify-content: flex-end;
+
+  .swarm-profile-editor .swarm-profile-editor__id-value {
+    text-align: left;
   }
 }

@@ -1,40 +1,35 @@
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
-  import TabList from '../../../../webui/src/components/ui/TabList.svelte';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import FormField from '../../../../webui/src/components/ui/FormField.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import PathField from '../../../../webui/src/components/ui/PathField.svelte';
-  import {
-    filterModelSelectOptions,
-    modelFilterFooterLabel,
-    buildModelSelectOptions,
-  } from '../../../../webui/src/lib/modelSelection.js';
-  import {
-    reasoningForModelValue,
-    effortOptionsForReasoning,
-  } from '../../../../webui/src/lib/agentForm.js';
-  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
-  import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
-  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
-  import ToolAccessEditor from '../../../../webui/src/components/tools/ToolAccessEditor.svelte';
-  import CompactionPolicyEditor from '../../../../webui/src/components/compaction/CompactionPolicyEditor.svelte';
-  import ToggleChipList from '../../../../webui/src/components/ui/ToggleChipList.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  // The Swarm editor: one configuration page for a reusable Swarm (a
+  // profile) in the shared section grammar. Saved Swarms autosave through
+  // the page bridge and show the shared save state at the end; a new Swarm
+  // is created explicitly, and leaving it with changes asks first. The
+  // section components edit the bound draft; this owner keeps the draft, its
+  // validation and every save.
   import { onDestroy, tick, untrack } from 'svelte';
-  import { SvelteSet } from 'svelte/reactivity';
+  import { t } from '../../../../webui/src/lib/i18n.js';
+  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
+  import Button from '../../../../webui/src/components/ui/Button.svelte';
+  import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
+  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
+  import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
+  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import PathField from '../../../../webui/src/components/ui/PathField.svelte';
+  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
+  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
+  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
+  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
+  import CompactionPolicyEditor from '../../../../webui/src/components/compaction/CompactionPolicyEditor.svelte';
   import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
-  import { changeToolAccessMode } from '../../../../webui/src/lib/toolAccess.js';
   import {
     DEFAULT_COMPACTION_POLICY,
     buildCompactionPolicyPayload,
     normalizeCompactionPolicy,
   } from '../../../../webui/src/lib/compactionPolicy.js';
-  import { createProfilePromptPreview } from './profilePromptPreview.svelte.js';
+  import { buildModelSelectOptions } from '../../../../webui/src/lib/modelSelection.js';
+  import DeliverySettings from './DeliverySettings.svelte';
+  import ProfileAccess from './ProfileAccess.svelte';
+  import ProfileInstructions from './ProfileInstructions.svelte';
+  import ProfileParticipants from './ProfileParticipants.svelte';
   import './profileEditor.css';
 
   let {
@@ -45,17 +40,9 @@
     onCancel,
     onDelete,
   } = $props();
-  const preview = createProfilePromptPreview({
-    get snapshot() {
-      return snapshot;
-    },
-    get bridgeClient() {
-      return bridgeClient;
-    },
-    get profilePayload() {
-      return profilePayload;
-    },
-  });
+
+  // The `/swarm <shortcut>` names the backend accepts.
+  const SHORTCUT_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
   const defaults = {
     schema_version: 1,
     name: '',
@@ -75,23 +62,44 @@
     },
     compaction_policy: null,
   };
-  let draft = $state(
-    untrack(() => JSON.parse(JSON.stringify(profile ?? defaults))),
-  );
   const copy = (value) => JSON.parse(JSON.stringify(value));
   const snapshot = (value = draft) => {
     const result = copy(value);
     delete result.revision;
     return JSON.stringify(result);
   };
+
+  let draft = $state(untrack(() => copy(profile ?? defaults)));
   let savedProfile = $state(untrack(() => copy(draft)));
   let savedSnapshot = $state(untrack(() => snapshot()));
   let saving = $state(false);
+  // A new Swarm keeps its fields still while it is created.
   const busy = $derived(saving && !profile);
-  let saveReason = '';
+  let saveError = $state('');
+  // Field errors appear once a save found one and then follow the draft.
+  let showValidation = $state(false);
+  let advancedOpen = $state(false);
+  // A saved Swarm whose changes could not be saved on leaving.
   let pendingTransition = $state.raw(null);
   let transitionSaving = $state(false);
+  // A new Swarm with changes the user is leaving.
+  let leaveAction = $state.raw(null);
+  let leaveSaving = $state(false);
+
   const hasChanges = () => snapshot() !== savedSnapshot;
+  const fieldErrors = $derived(
+    showValidation
+      ? Object.fromEntries(
+          validate(draft).map((issue) => [issue.id, issue.message]),
+        )
+      : {},
+  );
+  // A save failed on the draft's own settings rather than on the server.
+  const incomplete = $derived(Object.keys(fieldErrors).length > 0);
+  const describedBy = (id, help = '') =>
+    [help, fieldErrors[id] ? `${id}-error` : ''].filter(Boolean).join(' ') ||
+    undefined;
+
   const autosave = createDebouncedAutosave({
     getSnapshot: () => snapshot(),
     hasChanges,
@@ -112,11 +120,20 @@
     autosave.cancelPendingTimer();
   });
 
+  // Every navigation away from the editor passes here (the page model's
+  // `navigate`). A saved Swarm flushes its autosave first; a new Swarm with
+  // changes asks whether to create it, discard it or keep editing.
   export async function requestTransition(action) {
-    if (transitionSaving) return;
+    if (transitionSaving || leaveAction) return;
     transitionSaving = true;
-    const saved = !profile || (await autosave.participant.flush());
+    // A Swarm being created finishes first and then leaves like a saved one.
+    const saved = profile || saving ? await autosave.participant.flush() : true;
     transitionSaving = false;
+    if (!profile) {
+      if (hasChanges()) leaveAction = action;
+      else action();
+      return;
+    }
     if (!saved) {
       pendingTransition = action;
       return;
@@ -124,40 +141,103 @@
     pendingTransition = null;
     action();
   }
+
   function discardTransition() {
     const action = pendingTransition;
     pendingTransition = null;
     autosave.cancelPendingTimer();
     draft = copy(savedProfile);
-    error = '';
+    saveError = '';
+    showValidation = false;
     action?.();
   }
+
+  // Incomplete settings cannot be saved by retrying; the user completes
+  // them, starting at the first one.
+  async function keepEditing() {
+    pendingTransition = null;
+    const [first] = validate(draft);
+    if (first) await focusField(first.id);
+  }
+
+  function discardDraft() {
+    const action = leaveAction;
+    leaveAction = null;
+    draft = copy(savedProfile);
+    saveError = '';
+    showValidation = false;
+    action?.();
+  }
+
+  async function createAndLeave() {
+    const action = leaveAction;
+    const issues = validate(draft);
+    if (issues.length) {
+      leaveAction = null;
+      showValidation = true;
+      await focusField(issues[0].id);
+      return;
+    }
+    leaveSaving = true;
+    const created = await save();
+    leaveSaving = false;
+    if (!created) return;
+    leaveAction = null;
+    action?.();
+  }
+
   function save() {
     autosave.cancelPendingTimer();
     return autosave.participant.runSave('manual', { force: true });
   }
 
-  let error = $state('');
-  let tab = $state('overview');
-  let showAllModels = $state(false);
-  let scrollport;
-
-  const promptBlocks = $derived(
-    (catalog.prompt_blocks ?? []).filter(
-      (block) => block.id !== 'core:agent_body',
-    ),
-  );
-  const reminderTitles = $derived({
-    delivery: t('swarm.profile.reminderDelivery'),
-    resume: t('swarm.profile.reminderResume'),
-  });
-  function setPromptBlock(id, enabled) {
-    draft.prompt_blocks = enabled
-      ? [...new Set([...draft.prompt_blocks, id])]
-      : draft.prompt_blocks.filter((item) => item !== id);
+  // Each problem a save would reject, in page order, keyed by its control.
+  function validate(value) {
+    const issues = [];
+    if (!value.name.trim())
+      issues.push({
+        id: 'swarm-profile-name',
+        message: t('swarm.profile.nameRequired'),
+      });
+    if (value.slug?.trim() && !SHORTCUT_PATTERN.test(value.slug))
+      issues.push({
+        id: 'swarm-profile-slug',
+        message: t('swarm.profile.shortcutValidation'),
+      });
+    value.participants.forEach((row, index) => {
+      if (!row.model)
+        issues.push({
+          id: `swarm-model-${index}`,
+          message: t('swarm.profile.modelRequired'),
+        });
+      const count = Number(row.count);
+      if (!Number.isInteger(count) || count < 1)
+        issues.push({
+          id: `swarm-count-${index}`,
+          message: t('swarm.profile.countRequired'),
+        });
+    });
+    const directory = value.working_directory;
+    if (directory.kind === 'project' && !directory.project_id)
+      issues.push({
+        id: 'swarm-project',
+        message: t('swarm.profile.projectRequired'),
+      });
+    if (directory.kind === 'directory' && !directory.path?.trim())
+      issues.push({
+        id: 'swarm-directory',
+        message: t('swarm.profile.directoryRequired'),
+      });
+    return issues;
   }
+
+  async function focusField(id) {
+    await tick();
+    document.getElementById(id)?.focus();
+  }
+
   function profilePayload() {
-    const payload = JSON.parse(JSON.stringify(draft));
+    const payload = copy(draft);
     payload.name = payload.name.trim();
     payload.participants = payload.participants.map((row) => ({
       ...row,
@@ -175,121 +255,82 @@
     return payload;
   }
 
-  const models = $derived(catalog.models ?? []);
+  // Saves the draft and reports whether it was saved. Only a save the user
+  // asked for moves focus to the first invalid field; background autosave
+  // shows the problems in place.
+  async function persist(reason) {
+    if (profile && !hasChanges()) return true;
+    saveError = '';
+    const issues = validate(draft);
+    if (issues.length) {
+      showValidation = true;
+      if (reason === 'manual') await focusField(issues[0].id);
+      return false;
+    }
+    const submittedSnapshot = snapshot();
+    saving = true;
+    try {
+      const saved = await onSave(profilePayload());
+      if (profile) {
+        savedProfile = copy(saved);
+        if (snapshot() === submittedSnapshot) draft = copy(saved);
+        else draft.revision = saved.revision;
+        savedSnapshot = snapshot(saved);
+      }
+      showValidation = false;
+      return true;
+    } catch (cause) {
+      saveError = cause.message;
+      return false;
+    } finally {
+      saving = false;
+    }
+  }
+
   const projects = $derived(catalog.projects ?? []);
-  const tools = $derived(
-    (catalog.tools ?? []).filter(
-      (tool) => !(tool.constraints ?? []).includes('identity_agent'),
-    ),
-  );
-  const skills = $derived(catalog.skills ?? []);
-  const tabs = $derived([
-    { id: 'overview', label: t('swarm.profile.overview') },
-    { id: 'prompt', label: t('swarm.profile.systemPrompt') },
-    { id: 'access', label: t('swarm.profile.access') },
-    {
-      id: 'communication',
-      label: t('swarm.profile.communication'),
-    },
-  ]);
-  const skillItems = $derived(
-    skills.map((skill) => ({
-      name: skill.name,
-      description: skill.description,
-      allowed:
-        draft.allowed_skills.includes('*') ||
-        draft.allowed_skills.includes(skill.name),
-    })),
-  );
-  const totalParticipants = $derived(
-    draft.participants.reduce((sum, row) => sum + (Number(row.count) || 0), 0),
+  const selectedProject = $derived(
+    draft.working_directory.kind === 'project'
+      ? projects.find(
+          (project) => project.id === draft.working_directory.project_id,
+        )
+      : null,
   );
   const directoryOptions = $derived([
-    {
-      value: 'directory',
-      label: t('swarm.profile.directoryOption'),
-    },
+    { value: 'directory', label: t('swarm.profile.directoryOption') },
     { value: 'project', label: t('swarm.profile.projectOption') },
   ]);
-  const deliveryOptions = $derived([
-    {
-      value: 'all',
-      label: t('swarm.profile.deliveryAll'),
-    },
-    { value: 'idle', label: t('swarm.profile.deliveryIdle') },
-    {
-      value: 'pull',
-      label: t('swarm.profile.deliveryPull'),
-    },
-  ]);
-  const routes = $derived([
-    { id: 'main', label: t('swarm.profile.mainMessages') },
-    {
-      id: 'discussion',
-      label: t('swarm.profile.joinedMessages'),
-    },
-    { id: 'ping', label: t('swarm.profile.mentions') },
-  ]);
+  const projectOptions = $derived(
+    projects.map((project) => ({
+      value: project.id,
+      label: project.name,
+      secondaryLabel: project.cwd,
+    })),
+  );
 
-  function modelOptions(value) {
-    return buildModelSelectOptions({
-      models,
-      modelOnly: true,
-      selectedModelValue: value,
-      emptyLabel: t('swarm.profile.selectModel'),
-    });
-  }
-  function effortOptions(model) {
-    return effortOptionsForReasoning(reasoningForModelValue(model, models)).map(
-      (value) => ({
-        value,
-        label:
-          value === ''
-            ? t('swarm.profile.providerDefault')
-            : t(`agents.form.thinkingEffortOption.${value}`),
-      }),
+  // Team agents belong to the selected Project; the backend rejects others.
+  function keepTeamAgents(project) {
+    const known = new Set(
+      (project?.agent_profiles ?? []).map((agent) => agent.id),
     );
+    for (const row of draft.participants)
+      if (row.repository_profile && !known.has(row.repository_profile))
+        delete row.repository_profile;
   }
-  function selectModel(row, value) {
-    row.model = value;
-    if (
-      reasoningForModelValue(value, models)?.supported === false ||
-      !effortOptions(value).some(
-        (option) => option.value === (row.thinking_effort ?? ''),
-      )
-    ) {
-      row.thinking_effort = '';
-    }
+
+  function setDirectoryKind(kind) {
+    if (kind === draft.working_directory.kind) return;
+    draft.working_directory =
+      kind === 'project' ? { kind, project_id: '' } : { kind, path: '' };
+    keepTeamAgents(null);
   }
-  function changeTab(value) {
-    return requestTransition(() => {
-      tab = value;
-      scrollport?.scrollTo?.({ top: 0 });
-    });
+
+  function selectProject(id) {
+    draft.working_directory.project_id = id;
+    keepTeamAgents(projects.find((project) => project.id === id));
   }
-  function setSkill(name, next) {
-    const current = draft.allowed_skills.includes('*')
-      ? skills.map((skill) => skill.name)
-      : draft.allowed_skills;
-    draft.allowed_skills = next
-      ? [...new Set([...current, name])]
-      : current.filter((item) => item !== name);
-  }
-  function setToolAccess(next) {
-    // Profiles pin the current selection. Materialize All/None through the
-    // shared policy owner instead of relabeling an incompatible policy shape.
-    draft.tool_access = changeToolAccessMode(next, 'selected', tools);
-    if (next.mode === 'none' || next.mode === 'all') {
-      const denied = new SvelteSet(draft.tool_access.denied ?? []);
-      for (const tool of tools.filter((item) => item.family === 'swarm')) {
-        if (next.mode === 'none') denied.add(tool.name);
-        else denied.delete(tool.name);
-      }
-      if (denied.size) draft.tool_access.denied = [...denied];
-      else delete draft.tool_access.denied;
-    }
-  }
-  // Absent or null inherits the global Compaction settings for every participant.
+
+  // Absent or null inherits the global Compaction settings for every
+  // participant.
   const compactionPolicy = $derived(
     draft.compaction_policy
       ? normalizeCompactionPolicy(draft.compaction_policy)
@@ -297,399 +338,264 @@
   );
   const summaryModelOptions = $derived(
     buildModelSelectOptions({
-      models,
+      models: catalog.models ?? [],
       modelOnly: true,
       selectedModelValue: compactionPolicy?.strategy.summary_model ?? '',
       emptyLabel: t('swarm.profile.summaryModelDefault'),
     }),
   );
+
   function setCustomCompaction(enabled) {
     draft.compaction_policy = enabled ? copy(DEFAULT_COMPACTION_POLICY) : null;
   }
+
   function selectSummaryModel(value) {
     draft.compaction_policy = {
       ...compactionPolicy,
       strategy: { ...compactionPolicy.strategy, summary_model: value || null },
     };
   }
-  function setDirectoryKind(kind) {
-    draft.working_directory =
-      kind === 'project' ? { kind, project_id: '' } : { kind, path: '' };
-  }
-  async function invalid(message, id) {
-    error = message;
-    if (saveReason === 'auto') return false;
-    tab = 'overview';
-    await tick();
-    document.getElementById(id)?.focus();
-    return false;
-  }
-  async function persist(reason) {
-    saveReason = reason;
-    if (profile && !hasChanges()) return true;
-    error = '';
-    if (!draft.name.trim())
-      return invalid(t('swarm.profile.nameRequired'), 'swarm-profile-name');
-    if (draft.slug?.trim() && !/^[a-z0-9][a-z0-9_-]*$/.test(draft.slug)) {
-      await invalid(
-        t('swarm.profile.shortcutValidation'),
-        'swarm-profile-slug',
-      );
-      const shortcut = document.getElementById('swarm-profile-slug');
-      if (shortcut?.closest('details')) shortcut.closest('details').open = true;
-      shortcut?.focus();
-      return;
-    }
-    const invalidRow = draft.participants.findIndex(
-      (row) =>
-        !row.model ||
-        !Number.isInteger(Number(row.count)) ||
-        Number(row.count) < 1,
-    );
-    if (invalidRow >= 0)
-      return invalid(
-        t('swarm.profile.modelsRequired'),
-        `swarm-model-${invalidRow}`,
-      );
-    const directory = draft.working_directory;
-    if (
-      directory.kind === 'project'
-        ? !directory.project_id
-        : !directory.path?.trim()
-    ) {
-      return invalid(
-        t('swarm.profile.directoryValidation'),
-        directory.kind === 'project' ? 'swarm-project' : 'swarm-directory',
-      );
-    }
-    const submittedSnapshot = snapshot();
-    saving = true;
-    try {
-      const payload = profilePayload();
-      const saved = await onSave(payload);
-      if (profile) {
-        savedProfile = copy(saved);
-        if (snapshot() === submittedSnapshot) draft = copy(saved);
-        else draft.revision = saved.revision;
-        savedSnapshot = snapshot(saved);
-      }
-      return true;
-    } catch (cause) {
-      error = cause.message;
-      return false;
-    } finally {
-      saving = false;
-    }
-  }
 </script>
 
 <section
-  class="editor swarm-profile-editor"
+  class="swarm-profile-editor page-scroll"
   aria-label={t('swarm.profile.editorLabel')}
 >
-  <header class="editor-head">
+  <header class="view-header swarm-profile-editor__header">
     <div class="view-header__intro">
       <h2 class="view-header__title">
         {profile ? savedProfile.name : t('swarm.profile.new')}
       </h2>
       <p class="view-header__subtitle">
-        {t('swarm.profile.scopeHelp')}
+        {profile ? t('swarm.profile.scopeHelp') : t('swarm.profile.newHelp')}
       </p>
     </div>
-    <div class="view-header__actions">
-      {#if profile}
-        <!-- Waits for an in-flight autosave so the dialog confirms the
-             saved revision. -->
-        <Button
-          variant="tertiary"
-          icon
-          disabled={saving}
-          ariaLabel={t('swarm.delete.title')}
-          tooltip={t('swarm.delete.title')}
-          onClick={() => onDelete(savedProfile)}
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            aria-hidden="true"
-            ><path
-              d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7"
-            /></svg
-          >
-        </Button>
-      {/if}
-      <Button
-        variant="tertiary"
-        icon
-        disabled={busy}
-        ariaLabel={t('common.close')}
-        tooltip={t('common.close')}
-        onClick={onCancel}
-      >
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg
-        >
-      </Button>
-    </div>
   </header>
-  <TabList
-    items={tabs}
-    value={tab}
-    idPrefix="swarm-profile"
-    ariaLabel={t('swarm.profile.sections')}
-    onChange={changeTab}
-  />
-  {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
-  <div class="editor-scroll" bind:this={scrollport}>
-    <fieldset disabled={busy}>
-      <div
-        class="topic"
-        hidden={tab !== 'overview'}
-        role="tabpanel"
-        tabindex="0"
-        id="swarm-profile-panel-overview"
-        aria-labelledby="swarm-profile-tab-overview"
-      >
-        <FormField
-          controlId="swarm-profile-name"
-          label={t('swarm.profile.name')}
-          required
-        >
-          <TextField
-            id="swarm-profile-name"
-            value={draft.name}
-            maxlength="120"
-            onInput={(value) => (draft.name = value)}
-          />
-        </FormField>
-        <section class="form-section">
-          <div class="section-head">
-            <h3>{t('swarm.profile.models')}</h3>
-            <Button
-              onClick={() =>
-                (draft.participants = [
-                  ...draft.participants,
-                  { model: '', count: 1, thinking_effort: '' },
-                ])}
-              ><svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.7"
-                aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg
-              >{t('swarm.profile.addModel')}</Button
-            >
-          </div>
-          {#each draft.participants as row, index (index)}
-            {@const allOptions = modelOptions(row.model)}
-            {@const visibleOptions = filterModelSelectOptions(allOptions, {
-              showAll: showAllModels,
-              selectedModelValue: row.model,
-            })}
-            {@const noReasoning =
-              reasoningForModelValue(row.model, models)?.supported === false}
-            <div class="formation">
-              <FormField
-                controlId={`swarm-model-${index}`}
-                label={t('swarm.profile.model')}
-                required
-              >
-                <SearchableDropdown
-                  id={`swarm-model-${index}`}
-                  value={row.model}
-                  options={visibleOptions}
-                  ariaLabel={t('swarm.profile.model')}
-                  disabled={busy}
-                  searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
-                  footerActionLabel={modelFilterFooterLabel({
-                    showAll: showAllModels,
-                    hiddenCount: allOptions.length - visibleOptions.length,
-                  })}
-                  onFooterAction={() => (showAllModels = !showAllModels)}
-                  onValueChange={(value) => selectModel(row, value)}
-                />
-              </FormField>
-              <FormField
-                controlId={`swarm-repository-profile-${index}`}
-                label={t('swarm.profile.repositoryProfile')}
-              >
-                <Dropdown
-                  id={`swarm-repository-profile-${index}`}
-                  value={row.repository_profile ?? ''}
-                  options={[
-                    {
-                      value: '',
-                      label: t('swarm.profile.repositoryProfileNone'),
-                    },
-                    ...(
-                      (catalog.projects ?? []).find(
-                        (project) =>
-                          project.id === draft.working_directory.project_id,
-                      )?.agent_profiles ?? []
-                    ).map((agent) => ({
-                      value: agent.id,
-                      label: `${agent.name} (${agent.source})`,
-                    })),
-                  ]}
-                  ariaLabel={t('swarm.profile.repositoryProfile')}
-                  disabled={busy || draft.working_directory.kind !== 'project'}
-                  onValueChange={(value) => {
-                    if (value) row.repository_profile = value;
-                    else delete row.repository_profile;
-                  }}
-                />
-              </FormField>
-              <div class="formation-settings">
-                <FormField
-                  controlId={`swarm-effort-${index}`}
-                  help={noReasoning
-                    ? t('agents.form.thinkingEffortUnsupported')
-                    : ''}
+
+  <fieldset class="swarm-profile-editor__fields" disabled={busy}>
+    <section class="s-section" aria-labelledby="swarm-section-swarm">
+      <header class="s-section__head">
+        <h3 class="s-section__title" id="swarm-section-swarm">
+          {t('swarm.profile')}
+        </h3>
+      </header>
+      <div class="s-section__body">
+        <div class="s-group">
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="swarm-profile-name">
+                {t('swarm.profile.name')}
+              </label>
+              {#if fieldErrors['swarm-profile-name']}
+                <p
+                  class="swarm-profile-editor__error"
+                  id="swarm-profile-name-error"
+                  role="alert"
                 >
-                  {#snippet labelContent()}{t(
-                      'agents.form.thinkingEffort',
-                    )}<InfoHint
-                      text={t('swarm.profile.effortHelp')}
-                    />{/snippet}
-                  <Dropdown
-                    id={`swarm-effort-${index}`}
-                    value={row.thinking_effort ?? ''}
-                    options={effortOptions(row.model)}
-                    ariaLabel={t('agents.form.thinkingEffort')}
-                    disabled={busy || !row.model || noReasoning}
-                    onValueChange={(value) => (row.thinking_effort = value)}
-                  />
-                </FormField>
-                <FormField
-                  controlId={`swarm-count-${index}`}
-                  label={t('swarm.profile.participants')}
-                  required
-                >
-                  <TextField
-                    id={`swarm-count-${index}`}
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={row.count}
-                    onInput={(value) => (row.count = value)}
-                  />
-                </FormField>
-                <Button
-                  variant="danger"
-                  icon
-                  ariaLabel={t('swarm.profile.removeModel', {
-                    number: index + 1,
-                  })}
-                  tooltip={t('swarm.profile.remove')}
-                  disabled={busy || draft.participants.length === 1}
-                  onClick={() =>
-                    (draft.participants = draft.participants.filter(
-                      (_, i) => i !== index,
-                    ))}
-                >
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg
-                  >
-                </Button>
-              </div>
+                  {fieldErrors['swarm-profile-name']}
+                </p>
+              {/if}
             </div>
-          {/each}
-          <p class="hint">
-            {t('swarm.profile.sessionCount', { count: totalParticipants })}
-          </p>
-        </section>
-        <section class="form-section">
-          <h3>{t('swarm.profile.directoryHeading')}</h3>
-          <div class="directory-fields">
-            <FormField
-              controlId="swarm-directory-source"
-              label={t('swarm.profile.directorySource')}
-            >
+            <div class="s-row-control">
+              <TextField
+                id="swarm-profile-name"
+                value={draft.name}
+                maxlength="120"
+                aria-required="true"
+                invalid={Boolean(fieldErrors['swarm-profile-name'])}
+                aria-describedby={describedBy('swarm-profile-name')}
+                onInput={(value) => (draft.name = value)}
+              />
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label swarm-profile-editor__label">
+                <label for="swarm-profile-slug">
+                  {t('swarm.profile.chatShortcut')}
+                </label>
+                <InfoHint text={t('swarm.profile.shortcutHelp')} />
+              </div>
+              {#if fieldErrors['swarm-profile-slug']}
+                <p
+                  class="swarm-profile-editor__error"
+                  id="swarm-profile-slug-error"
+                  role="alert"
+                >
+                  {fieldErrors['swarm-profile-slug']}
+                </p>
+              {/if}
+            </div>
+            <div class="s-row-control">
+              <TextField
+                id="swarm-profile-slug"
+                code
+                value={draft.slug ?? ''}
+                placeholder={t('swarm.profile.automaticShortcut')}
+                spellcheck="false"
+                autocomplete="off"
+                invalid={Boolean(fieldErrors['swarm-profile-slug'])}
+                aria-describedby={describedBy('swarm-profile-slug')}
+                onInput={(value) => (draft.slug = value)}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <ProfileParticipants bind:draft {catalog} {fieldErrors} />
+
+    <section class="s-section" aria-labelledby="swarm-section-directory">
+      <header class="s-section__head">
+        <h3 class="s-section__title" id="swarm-section-directory">
+          {t('swarm.profile.directoryHeading')}
+        </h3>
+      </header>
+      <p class="s-section__desc">{t('swarm.profile.directoryHelp')}</p>
+      <div class="s-section__body">
+        <div class="s-group">
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="swarm-directory-source">
+                {t('swarm.profile.directorySource')}
+              </label>
+            </div>
+            <div class="s-row-control">
               <Dropdown
                 id="swarm-directory-source"
-                ariaLabel={t('swarm.profile.directorySource')}
                 value={draft.working_directory.kind}
                 options={directoryOptions}
-                disabled={busy}
+                ariaLabel={t('swarm.profile.directorySource')}
                 onValueChange={setDirectoryKind}
               />
-            </FormField>
-            {#if draft.working_directory.kind === 'project'}
-              <FormField
-                controlId="swarm-project"
-                label={t('swarm.profile.project')}
-                required
-              >
+            </div>
+          </div>
+          {#if draft.working_directory.kind === 'project'}
+            <div class="s-row">
+              <div class="s-row-info">
+                <label class="s-row-label" for="swarm-project">
+                  {t('swarm.profile.project')}
+                </label>
+                {#if selectedProject}
+                  <div class="s-row-desc" id="swarm-project-help">
+                    <code>{selectedProject.cwd}</code>
+                  </div>
+                {/if}
+                {#if fieldErrors['swarm-project']}
+                  <p
+                    class="swarm-profile-editor__error"
+                    id="swarm-project-error"
+                    role="alert"
+                  >
+                    {fieldErrors['swarm-project']}
+                  </p>
+                {/if}
+              </div>
+              <div class="s-row-control">
                 <SearchableDropdown
                   id="swarm-project"
-                  ariaLabel={t('swarm.profile.project')}
                   value={draft.working_directory.project_id}
-                  disabled={busy}
-                  options={projects.map((project) => ({
-                    value: project.id,
-                    label: project.name,
-                    secondaryLabel: project.cwd,
-                  }))}
+                  options={projectOptions}
                   placeholder={t('swarm.profile.selectProject')}
-                  onValueChange={(value) =>
-                    (draft.working_directory.project_id = value)}
+                  ariaLabel={t('swarm.profile.project')}
+                  ariaDescribedby={describedBy(
+                    'swarm-project',
+                    selectedProject ? 'swarm-project-help' : '',
+                  )}
+                  onValueChange={selectProject}
                 />
-              </FormField>
-            {:else}
-              <FormField
-                controlId="swarm-directory"
-                label={t('swarm.profile.directory')}
-                required
-              >
-                <PathField
-                  id="swarm-directory"
-                  mode="directory"
-                  listDirectory={bridgeClient.listDirectory}
-                  value={draft.working_directory.path}
-                  onInput={(value) => (draft.working_directory.path = value)}
-                />
-              </FormField>
-            {/if}
-          </div>
-        </section>
-        <section class="form-section">
-          <h3>{t('swarm.profile.compactionHeading')}</h3>
-          <p class="hint">
-            {compactionPolicy
-              ? t('swarm.profile.compactionCustomHelp')
-              : t('swarm.profile.compactionInheritHelp')}
-          </p>
-          <div class="switch-row">
-            <span>{t('swarm.profile.customCompaction')}</span>
-            <Toggle
-              checked={compactionPolicy !== null}
-              disabled={busy}
-              ariaLabel={t('swarm.profile.customCompaction')}
-              onChange={setCustomCompaction}
-            />
+              </div>
+            </div>
+          {:else}
+            <div class="s-row s-row--stacked swarm-profile-editor__path-row">
+              <div class="s-row-info">
+                <label class="s-row-label" for="swarm-directory">
+                  {t('swarm.profile.directory')}
+                </label>
+                {#if fieldErrors['swarm-directory']}
+                  <p
+                    class="swarm-profile-editor__error"
+                    id="swarm-directory-error"
+                    role="alert"
+                  >
+                    {fieldErrors['swarm-directory']}
+                  </p>
+                {/if}
+              </div>
+              <PathField
+                id="swarm-directory"
+                mode="directory"
+                listDirectory={bridgeClient.listDirectory}
+                value={draft.working_directory.path}
+                invalid={Boolean(fieldErrors['swarm-directory'])}
+                aria-describedby={describedBy('swarm-directory')}
+                onInput={(value) => (draft.working_directory.path = value)}
+              />
+            </div>
+          {/if}
+        </div>
+      </div>
+    </section>
+
+    <ProfileInstructions
+      bind:draft
+      {catalog}
+      {bridgeClient}
+      {snapshot}
+      payload={profilePayload}
+    />
+
+    <ProfileAccess bind:draft {catalog} />
+
+    <section class="s-section" aria-labelledby="swarm-section-communication">
+      <header class="s-section__head">
+        <h3 class="s-section__title" id="swarm-section-communication">
+          {t('swarm.profile.communication')}
+        </h3>
+      </header>
+      <p class="s-section__desc">{t('swarm.profile.communicationHelp')}</p>
+      <div class="s-section__body">
+        <DeliverySettings
+          value={draft.delivery}
+          idPrefix="swarm-delivery"
+          onChange={(next) => (draft.delivery = next)}
+        />
+      </div>
+    </section>
+
+    <section class="s-section" aria-labelledby="swarm-section-compaction">
+      <header class="s-section__head">
+        <h3 class="s-section__title" id="swarm-section-compaction">
+          {t('swarm.profile.compactionHeading')}
+        </h3>
+      </header>
+      <div class="s-section__body">
+        <div class="s-group">
+          <div class="s-row s-row--compact">
+            <div class="s-row-info">
+              <div class="s-row-label" id="swarm-compaction-custom-label">
+                {t('swarm.profile.customCompaction')}
+              </div>
+              <div class="s-row-desc" id="swarm-compaction-custom-help">
+                {compactionPolicy
+                  ? t('swarm.profile.compactionCustomHelp')
+                  : t('swarm.profile.compactionInheritHelp')}
+              </div>
+            </div>
+            <div class="s-row-control">
+              <Toggle
+                checked={compactionPolicy !== null}
+                aria-labelledby="swarm-compaction-custom-label"
+                aria-describedby="swarm-compaction-custom-help"
+                onChange={setCustomCompaction}
+              />
+            </div>
           </div>
           {#if compactionPolicy}
             <CompactionPolicyEditor
+              layout="rows"
               value={draft.compaction_policy}
-              disabled={busy}
               idPrefix="swarm-compaction"
               {summaryModelOptions}
               summaryModelSelectValue={compactionPolicy.strategy
@@ -698,296 +604,81 @@
               onChange={(next) => (draft.compaction_policy = next)}
             />
           {/if}
-        </section>
-        <details class="advanced">
-          <summary>{t('swarm.profile.chatShortcut')}</summary>
-          <p class="hint">
-            {t('swarm.profile.shortcutHelp')}
-          </p>
-          <FormField
-            controlId="swarm-profile-slug"
-            label={t('swarm.profile.shortcutName')}
-          >
-            <TextField
-              id="swarm-profile-slug"
-              value={draft.slug ?? ''}
-              placeholder={t('swarm.profile.automaticShortcut')}
-              onInput={(value) => (draft.slug = value)}
-            />
-          </FormField>
-          {#if draft.slug}<code>/swarm {draft.slug}</code>{/if}
-        </details>
+        </div>
       </div>
-      <div
-        class="topic"
-        hidden={tab !== 'prompt'}
-        role="tabpanel"
-        tabindex="0"
-        id="swarm-profile-panel-prompt"
-        aria-labelledby="swarm-profile-tab-prompt"
+    </section>
+
+    {#if profile}
+      <details
+        class="s-section swarm-profile-editor__advanced"
+        bind:open={advancedOpen}
       >
-        <FormField
-          controlId="swarm-instructions"
-          label={t('swarm.profile.instructions')}
-        >
-          <TextArea
-            id="swarm-instructions"
-            rows="14"
-            value={draft.instructions}
-            onInput={(value) => (draft.instructions = value)}
-          />
-        </FormField>
-        <section class="form-section">
-          <h3>
-            {t('swarm.profile.promptContributions')}
-          </h3>
-          <p class="hint">
-            {t('swarm.profile.promptSelectionHelp')}
-          </p>
-          {#each promptBlocks as block (block.id)}
-            {@const detail = preview.previewCurrent
-              ? preview.preview.blocks.find((item) => item.id === block.id)
-              : null}
-            <div class="prompt-block">
-              <div class="prompt-block-head">
-                <span>{preview.blockTitle(block.id)}</span>
-                <Toggle
-                  checked={draft.prompt_blocks.includes(block.id)}
-                  ariaLabel={preview.blockTitle(block.id)}
-                  onChange={(enabled) => setPromptBlock(block.id, enabled)}
+        <summary class="s-section__head swarm-profile-editor__advanced-summary">
+          <span
+            class="disclosure-chevron"
+            class:disclosure-chevron--open={advancedOpen}
+            aria-hidden="true"
+          ></span>
+          <h3 class="s-section__title">{t('swarm.profile.advanced')}</h3>
+        </summary>
+        <div class="s-section__body">
+          <div class="s-group">
+            <div class="s-row s-row--compact">
+              <div class="s-row-info">
+                <div class="s-row-label">{t('swarm.profile.id')}</div>
+              </div>
+              <div class="s-row-control swarm-profile-editor__id">
+                <span class="swarm-profile-editor__id-value"
+                  >{savedProfile.id}</span
+                >
+                <CopyButton
+                  text={savedProfile.id}
+                  label={t('swarm.profile.copyId')}
                 />
               </div>
-              <details>
-                <summary>{t('swarm.profile.inspectContent')}</summary>
-                {#if detail}
-                  {#if !detail.active}<p class="hint">
-                      {t('swarm.profile.blockInactive')}
-                    </p>{/if}
-                  <pre>{detail.text}</pre>
-                {:else if block.text !== undefined}<pre>{block.text}</pre>
-                {:else}<p class="hint">
-                    {t('swarm.profile.dynamicPreview')}
-                  </p>{/if}
-              </details>
             </div>
-          {/each}
-          {#each draft.prompt_blocks.filter((id) => !promptBlocks.some((block) => block.id === id)) as id (id)}
-            <div class="prompt-block-head">
-              <span
-                >{preview.blockTitle(id)} — {t(
-                  'swarm.profile.blockUnavailable',
-                )}</span
-              >
-              <Toggle
-                checked={true}
-                ariaLabel={preview.blockTitle(id)}
-                onChange={(enabled) => setPromptBlock(id, enabled)}
-              />
-            </div>
-          {/each}
-        </section>
-        <section class="form-section">
-          <h3>{t('swarm.profile.promptPreview')}</h3>
-          <div class="prompt-block-head">
-            <Dropdown
-              id="swarm-preview-model"
-              value={preview.previewFormation}
-              options={draft.participants.map((row, index) => ({
-                value: index,
-                label: `${index + 1}: ${row.model || t('swarm.profile.selectModel')}`,
-              }))}
-              ariaLabel={t('swarm.profile.previewModel')}
-              onValueChange={(value) => (preview.previewFormation = value)}
-            />
-            <Button
-              variant="secondary"
-              disabled={preview.previewBusy}
-              onClick={preview.inspectPrompt}
-              >{t('swarm.profile.generatePreview')}</Button
-            >
           </div>
-          {#if preview.previewError}<Banner variant="error" role="alert"
-              >{preview.previewError}</Banner
-            >{/if}
-          {#if preview.preview && !preview.previewCurrent}<Banner
-              >{t('swarm.profile.previewStale')}</Banner
-            >{/if}
-          {#if preview.previewCurrent}
-            <pre
-              class="prompt-preview"
-              data-testid="swarm-prompt-preview">{preview.preview.text}</pre>
-            <details>
-              <summary>{t('swarm.profile.nativeTools')}</summary>
-              {#each preview.preview.tools as tool (tool.name)}
-                <details>
-                  <summary>{tool.name}</summary>
-                  <pre class="tool-json">{JSON.stringify(tool, null, 2)}</pre>
-                </details>
-              {/each}
-            </details>
-          {/if}
-        </section>
-        <section class="form-section">
-          <h3>{t('swarm.profile.reminders')}</h3>
-          <p class="hint">
-            {t('swarm.profile.reminderHelp')}
-          </p>
-          {#each Object.entries(catalog.reminder_texts ?? {}) as [event, text] (event)}
-            <div class="prompt-block">
-              <div class="prompt-block-head">
-                <span>{reminderTitles[event]}</span>
-                <Toggle
-                  checked={draft.reminders[event]}
-                  ariaLabel={reminderTitles[event]}
-                  onChange={(value) => (draft.reminders[event] = value)}
-                />
+          <div class="s-group">
+            <div class="s-row s-row--compact">
+              <div class="s-row-info">
+                <div class="s-row-label">{t('swarm.profile.deleteTitle')}</div>
+                <div class="s-row-desc">{t('swarm.profile.deleteHelp')}</div>
               </div>
-              <details>
-                <summary>{t('swarm.profile.inspectContent')}</summary>
-                <pre>{text}</pre>
-              </details>
+              <div class="s-row-control">
+                <!-- Waits for a running autosave, so the dialog confirms
+                     the saved revision. -->
+                <Button
+                  variant="danger"
+                  disabled={saving}
+                  onClick={() => onDelete(savedProfile)}
+                  >{t('swarm.profile.deleteAction')}</Button
+                >
+              </div>
             </div>
-          {/each}
-        </section>
-      </div>
-      <div
-        class="topic"
-        hidden={tab !== 'access'}
-        role="tabpanel"
-        tabindex="0"
-        id="swarm-profile-panel-access"
-        aria-labelledby="swarm-profile-tab-access"
-      >
-        <section class="form-section">
-          <h3>{t('swarm.profile.tools')}</h3>
-          <p class="hint">
-            {t('swarm.profile.toolSelectionHelp')}
-          </p>
-          <ToolAccessEditor
-            value={draft.tool_access}
-            memoryPromptMode="off"
-            {tools}
-            disabled={busy}
-            onChange={setToolAccess}
-          />
-        </section>
-        <section class="form-section">
-          <h3>{t('swarm.profile.skillsHeading')}</h3>
-          <ToggleChipList
-            items={skillItems}
-            emptyLabel={t('swarm.profile.noSkills')}
-            note={draft.allowed_skills.includes('*')
-              ? t('swarm.profile.allSkills')
-              : ''}
-            ariaToggleLabel={(name) => t('swarm.profile.toggleSkill', { name })}
-            onToggle={setSkill}
-            onSetAll={(next) => (draft.allowed_skills = next ? ['*'] : [])}
-          />
-        </section>
-      </div>
-      <div
-        class="topic"
-        hidden={tab !== 'communication'}
-        role="tabpanel"
-        tabindex="0"
-        id="swarm-profile-panel-communication"
-        aria-labelledby="swarm-profile-tab-communication"
-      >
-        <p class="hint">
-          {t('swarm.profile.communicationHelp')}
-        </p>
-        {#each routes as route (route.id)}
-          <section class="form-section">
-            <h3>{route.label}</h3>
-            <FormField
-              controlId={`swarm-delivery-${route.id}`}
-              label={t('swarm.profile.receiveMessages')}
-            >
-              <Dropdown
-                id={`swarm-delivery-${route.id}`}
-                ariaLabel={t('swarm.profile.receiveMessages')}
-                value={draft.delivery[route.id].mode}
-                options={deliveryOptions}
-                disabled={busy}
-                onValueChange={(value) =>
-                  (draft.delivery[route.id].mode = value)}
-              />
-            </FormField>
-            <div class="switch-row">
-              <span>{t('swarm.profile.wakeIdle')}</span>
-              <Toggle
-                checked={draft.delivery[route.id].wake_idle}
-                disabled={busy}
-                ariaLabel={t('swarm.profile.wakeRoute', { route: route.label })}
-                onChange={(value) =>
-                  (draft.delivery[route.id].wake_idle = value)}
-              />
-            </div>
-          </section>
-        {/each}
-        <details class="advanced">
-          <summary>{t('swarm.profile.advancedDelivery')}</summary>
-          <div class="three">
-            <FormField
-              controlId="swarm-coalesce"
-              label={t('swarm.profile.batchDelay')}
-            >
-              <TextField
-                id="swarm-coalesce"
-                type="number"
-                min="0"
-                max="5000"
-                value={draft.delivery.coalesce_ms}
-                onInput={(value) => (draft.delivery.coalesce_ms = value)}
-              />
-            </FormField>
-            <FormField
-              controlId="swarm-batch-messages"
-              label={t('swarm.delivery.batchMessages')}
-            >
-              <TextField
-                id="swarm-batch-messages"
-                type="number"
-                min="1"
-                max="100"
-                value={draft.delivery.batch_messages}
-                onInput={(value) => (draft.delivery.batch_messages = value)}
-              />
-            </FormField>
-            <FormField
-              controlId="swarm-batch-chars"
-              label={t('swarm.delivery.batchChars')}
-            >
-              <TextField
-                id="swarm-batch-chars"
-                type="number"
-                min="16000"
-                max="128000"
-                value={draft.delivery.batch_chars}
-                onInput={(value) => (draft.delivery.batch_chars = value)}
-              />
-            </FormField>
           </div>
-        </details>
-      </div>
-    </fieldset>
-    <footer class="editor-footer">
-      <div>
-        {#if profile}
-          <!-- Saved Swarms autosave; their save state works like
-               Settings. -->
-          <SaveStatus {saving} pending={hasChanges()} onClick={save} />
-        {:else}
-          <Button disabled={busy} onClick={onCancel}
-            >{t('common.cancel')}</Button
-          >
-          <Button variant="primary" loading={saving} onClick={save}>
-            {t('swarm.profile.save')}
-          </Button>
-        {/if}
-      </div>
-    </footer>
-  </div>
+        </div>
+      </details>
+    {/if}
+  </fieldset>
+
+  {#if saveError}
+    <Banner
+      variant="error"
+      role="alert"
+      class="swarm-profile-editor__save-error">{saveError}</Banner
+    >
+  {/if}
+  <footer class="swarm-profile-editor__footer">
+    {#if profile}
+      <!-- Saved Swarms autosave; their save state works like Settings. -->
+      <SaveStatus {saving} pending={hasChanges()} onClick={save} />
+    {:else}
+      <Button disabled={busy} onClick={onCancel}>{t('common.cancel')}</Button>
+      <Button variant="primary" loading={saving} onClick={save}
+        >{t('swarm.profile.create')}</Button
+      >
+    {/if}
+  </footer>
 </section>
 
 {#if pendingTransition}
@@ -996,18 +687,58 @@
     closeDisabled={transitionSaving}
     onClose={() => (pendingTransition = null)}
   >
-    {#snippet body()}<p class="transition-copy swarm-profile-transition-copy">
-        {t('autosave.transitionFailureBody')}
-      </p>{/snippet}
+    {#snippet body()}
+      <div class="modal-body">
+        <p>
+          {incomplete
+            ? t('swarm.profile.leaveIncompleteBody')
+            : t('autosave.transitionFailureBody')}
+        </p>
+      </div>
+    {/snippet}
     {#snippet footer()}
-      <Button
-        variant="primary"
-        loading={transitionSaving}
-        onClick={() => requestTransition(pendingTransition)}
-        >{t('common.retry')}</Button
-      >
       <Button disabled={transitionSaving} onClick={discardTransition}
         >{t('autosave.discardAndContinue')}</Button
+      >
+      {#if incomplete}
+        <Button variant="primary" onClick={keepEditing}
+          >{t('swarm.profile.keepEditing')}</Button
+        >
+      {:else}
+        <Button
+          variant="primary"
+          loading={transitionSaving}
+          onClick={() => requestTransition(pendingTransition)}
+          >{t('common.retry')}</Button
+        >
+      {/if}
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if leaveAction}
+  <Modal
+    title={t('swarm.profile.leaveTitle')}
+    closeDisabled={leaveSaving}
+    onClose={() => (leaveAction = null)}
+  >
+    {#snippet body()}
+      <div class="modal-body">
+        <p>{t('swarm.profile.leaveBody')}</p>
+        {#if saveError}
+          <Banner variant="error" role="alert">{saveError}</Banner>
+        {/if}
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button disabled={leaveSaving} onClick={() => (leaveAction = null)}
+        >{t('swarm.profile.keepEditing')}</Button
+      >
+      <Button variant="danger" disabled={leaveSaving} onClick={discardDraft}
+        >{t('common.discard')}</Button
+      >
+      <Button variant="primary" loading={leaveSaving} onClick={createAndLeave}
+        >{t('swarm.profile.create')}</Button
       >
     {/snippet}
   </Modal>

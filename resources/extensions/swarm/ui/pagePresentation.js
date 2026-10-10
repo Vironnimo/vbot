@@ -39,7 +39,7 @@ export function participantDetails(participant) {
 export const participantTotal = (profile) =>
   (profile.participants ?? []).reduce((sum, row) => sum + row.count, 0);
 
-const participantCount = (count) =>
+export const participantCount = (count) =>
   count === 1
     ? t('swarm.participantCount.one')
     : t('swarm.participantCount', { count });
