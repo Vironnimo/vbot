@@ -35,6 +35,7 @@ from typing import Any
 
 from core.providers.adapter import tool_result_text
 from core.tools._line_diff import line_opcodes
+from core.tools._patch_report import edit_outcome
 from core.tools._patch_requests import normalize_patch_arguments, patch_operations
 from core.tools._patch_syntax import _HEADER, _MOVE_TO, _clean_path
 from core.tools._read_arguments import normalize_read_arguments
@@ -202,7 +203,11 @@ def recorded(call: HistoryCall) -> Recorded:
     for entry in data.get("files") or ():
         if isinstance(entry, dict):
             notes.extend(str(warning) for warning in entry.get("warnings") or ())
+    # Results carry their outcome only in their text since 2026-10; earlier ones
+    # recorded it as ``status``.
     status = data.get("status")
+    if status is None and isinstance(data.get("content"), str):
+        status = edit_outcome(data["content"])
     if status == "success":
         results = [entry for entry in data.get("results") or () if isinstance(entry, dict)]
         no_ops = {"unchanged", "already_applied"}

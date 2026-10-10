@@ -117,10 +117,7 @@ async def test_edits_apply_in_order_as_one_change(tmp_path) -> None:
         name="edit",
     )
 
-    assert result["data"] == {
-        "status": "applied",
-        "content": "Updated a.py:\n1| x = 3\n2| z = 2\n3| x = 3",
-    }
+    assert result["data"] == {"content": "Updated a.py (lines 1-3)."}
     assert (tmp_path / "a.py").read_bytes() == b"x = 3\nz = 2\nx = 3\n"
 
 
@@ -171,7 +168,7 @@ async def test_other_edit_spellings_make_the_same_change(tmp_path, arguments) ->
 
     result = await call(tmp_path, arguments, name="edit")
 
-    assert result["data"] == {"status": "applied", "content": "Updated a.py:\n1| x = 3\n2| y = 2"}
+    assert result["data"] == {"content": "Updated a.py (line 1)."}
 
 
 @pytest.mark.asyncio
@@ -196,7 +193,7 @@ async def test_edits_that_leave_the_file_as_it_is_say_so(tmp_path, edits, messag
 
     result = await call(tmp_path, {"path": "a.py", "edits": edits}, name="edit")
 
-    assert result["data"] == {"status": "unchanged", "content": f"{message} No file was changed."}
+    assert result["data"] == {"content": f"{message} No file was changed."}
 
 
 @pytest.mark.asyncio
@@ -222,10 +219,7 @@ async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(t
     assert text(created) == "Created deep/w.txt (2 lines)."
     # A missing final line break is added to a new file and follows a replaced one.
     assert (tmp_path / "deep" / "w.txt").read_bytes() == b"w\r\nx\r\n"
-    assert unchanged["data"] == {
-        "status": "unchanged",
-        "content": "a.txt already has this content. No file was changed.",
-    }
+    assert unchanged["data"] == {"content": "a.txt already has this content. No file was changed."}
     assert text(replaced) == "Replaced the content of a.txt (1 line)."
     assert path.read_bytes() == b"new\n"
     assert bare.read_bytes() == b"new"

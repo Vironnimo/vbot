@@ -7,6 +7,7 @@ import re
 
 import pytest
 
+from core.tools._patch_report import edit_outcome
 from core.tools.file_state import FileReadState
 from tests.core.tools.apply_patch_test_support import apply, call, registry, text, update
 
@@ -16,14 +17,14 @@ def test_long_line_preview_shows_the_change_and_surrounding_lines(tmp_path):
     old = "x" * 400 + "TARGET=old" + "z" * 100
     new = old.replace("TARGET=old", "TARGET=new")
     path.write_text("header\n" + old + "\nfooter\n", encoding="utf-8")
-    result = apply(tmp_path, update("@@\n-" + old + "\n+" + new))
-    preview = text(result).splitlines()
-    assert preview[0] == "Updated file.txt:"
-    assert preview[1] == "1| header"
-    assert preview[3] == "3| footer"
+    # The failed second hunk makes the result show the changed region as it is now.
+    result = apply(tmp_path, update(f"@@\n-{old}\n+{new}\n@@\n-missing\n+unused"))
+    lines = text(result).splitlines()
+    assert lines[1:3] == ["Updated file.txt (line 2):", "1| header"]
+    assert lines[4] == "3| footer"
+    assert lines[5].startswith("Failed: file.txt, hunk 2: ")
     # The long line is shown around the change, with its starting column in the gutter.
-    assert preview[2].startswith("2:") and "TARGET=new" in preview[2]
-    assert len(preview) == 4 and all(len(line) <= 255 for line in preview)
+    assert lines[3].startswith("2:") and "TARGET=new" in lines[3] and len(lines[3]) <= 255
     assert path.read_text(encoding="utf-8") == "header\n" + new + "\nfooter\n"
 
 
@@ -31,21 +32,25 @@ def test_preview_keeps_first_and_last_region_and_reports_omission(tmp_path):
     path = tmp_path / "file.txt"
     gap = "s\n" * 3
     path.write_text(f"a=old\n{gap}b=old\n{gap}c=old\n", encoding="utf-8")
-    result = apply(tmp_path, update("\n".join(f"@@\n-{key}=old\n+{key}=new" for key in "abc")))
-    assert result["data"] == {
-        "status": "applied",
-        "content": "Updated file.txt:\n1| a=new\n2| s\n-- (1 more changed place not shown)\n"
-        "8| s\n9| c=new",
-    }
+    # A failed last hunk makes the result show the changed regions.
+    hunks = [f"@@\n-{key}=old\n+{key}=new" for key in "abc"]
+    result = apply(tmp_path, update("\n".join([*hunks, "@@\n-missing\n+unused"])))
+    assert (
+        "\nUpdated file.txt (lines 1, 5, 9):\n1| a=new\n2| s\n-- (1 more changed place not shown)\n"
+        "8| s\n9| c=new\nFailed: file.txt, hunk 4: "
+    ) in text(result)
 
 
 def test_nearby_changes_read_as_one_region(tmp_path):
     path = tmp_path / "file.txt"
     path.write_bytes(b"a=old\nseparator\nb=old\nseparator\nc=old\n")
-    result = apply(tmp_path, update("\n".join(f"@@\n-{key}=old\n+{key}=new" for key in "abc")))
-    assert text(result) == (
-        "Updated file.txt:\n1| a=new\n2| separator\n3| b=new\n4| separator\n5| c=new"
-    )
+    # A failed last hunk makes the result show the changed regions.
+    hunks = [f"@@\n-{key}=old\n+{key}=new" for key in "abc"]
+    result = apply(tmp_path, update("\n".join([*hunks, "@@\n-missing\n+unused"])))
+    assert (
+        "\nUpdated file.txt (lines 1, 3, 5):\n1| a=new\n2| separator\n3| b=new\n4| separator\n"
+        "5| c=new\nFailed: file.txt, hunk 4: "
+    ) in text(result)
 
 
 LABEL_OLD = '        "Savings 2 % p.a.": pd.Series('
@@ -104,7 +109,7 @@ def test_changes_already_made_leave_the_file_untouched(tmp_path, before, earlier
 
     result = apply(tmp_path, patch)
 
-    assert result["ok"] and result["data"]["status"] == "unchanged", result
+    assert result["ok"] and edit_outcome(text(result)) == "unchanged", result
     if content is not None:
         assert text(result) == content
     assert path.read_bytes() == current[0]
@@ -254,7 +259,7 @@ def test_failed_hunk_report_shows_the_file_as_it_is_now(tmp_path, bad_index):
         for i in range(7)
     ]
     result = apply(tmp_path, update("\n".join(hunks)))
-    assert result["ok"] and result["data"]["status"] == "partial"
+    assert result["ok"]
     expected = before
     for i in range(7):
         if i != bad_index:
@@ -263,8 +268,9 @@ def test_failed_hunk_report_shows_the_file_as_it_is_now(tmp_path, bad_index):
     # One region shows the file as it is now, including the unchanged line.
     shown = "\n".join(f"{i + 1}| {line}" for i, line in enumerate(expected.splitlines()))
     assert text(result).startswith("6 of 7 changes applied; 1 did not.")
+    places = "lines 2-7" if bad_index == 0 else "lines 1-6"
     assert text(result).endswith(
-        f"\nUpdated file.txt:\n{shown}\n"
+        f"\nUpdated file.txt ({places}):\n{shown}\n"
         f"Failed: file.txt, hunk {bad_index + 1}: the lines to replace were not found.\n"
         "The patch line 'unrelated missing declaration' is not in the file. A - line names a "
         'line to remove, so it must match a line of the file. read(path="file.txt") shows its '
@@ -340,7 +346,7 @@ def test_context_failure_returns_candidates_without_substituting_target(
     assert f"3| {third}" in text(result) and "6| value=2" in text(result)
     assert path.read_bytes() == before
     corrected = apply(tmp_path, update("@@ second\n marker\n-value=2\n+value=3"))
-    assert corrected["data"]["status"] == "applied"
+    assert text(corrected) == "Updated file.txt (line 6)."
     assert path.read_bytes() == f"first\nmarker\n{third}\nsecond\nmarker\nvalue=3\n".encode()
 
 
@@ -554,7 +560,7 @@ async def test_long_mismatch_is_visible_and_read_continuation_recovers(tmp_path,
     corrected = await call(
         tmp_path, {"patch": update(f"@@\n-{recovered}\n+changed", name)}, tools=tools
     )
-    assert corrected["data"]["status"] == "applied"
+    assert text(corrected) == f"Updated {name} (line 2)."
     assert path.read_bytes() == ending.join(("header", "changed", "tail", "")).encode()
 
 

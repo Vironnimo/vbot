@@ -103,18 +103,34 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   complete"). A failed hunk in Update plus Move leaves successful hunks applied at
   the source and skips that operation's move with its own message (the file keeps
   its name). Other files continue.
-- Results are plain text: success data is `{status, content}` (result schema
-  requires both), `status` one of `applied`, `partial`, `unchanged`. Paths show
-  relative to the call's cwd when inside it (`display_search_path`). Each file's
-  net effect reads once: `Created X (N lines).`, `Replaced the content of X (...)`,
-  `Deleted X.`, `Moved A to B.`, or `Updated X:` / `Updated A and moved it to B:`
-  followed by the changed regions as they are now with `read`-style gutters
-  (touching regions merge; more than two keep first and last plus an omission
-  line; long lines show a window with an `N:C|` gutter). Notes (recoveries,
-  metadata drift) and syntax warnings follow as `Note:` / `Warning:` lines. Syntax
-  warnings compare the initial and final Tool-written text; a created or fully
-  replaced file reports any final syntax error, even when the original was invalid.
-- Mixed outcomes return `status: partial`, led by counts (`N of M changes
+- Results are plain text: success data is `{content}` alone (the result schema
+  requires it); the outcome is in the text, not in a field, because the Model
+  reads data fields as `name: value` lines and `status: applied` told it nothing
+  the text does not (user decision 2026-10-10). Code that needs the outcome
+  (replay, probes) derives `applied`, `partial` or `unchanged` with
+  `_patch_report.edit_outcome`; results recorded before 2026-10-10 still carry
+  `status`. Paths show relative to the call's cwd when inside it
+  (`display_search_path`). Each file's net effect reads once: `Created X (N
+  lines).`, `Replaced the content of X (...)`, `Deleted X.`, `Moved A to B.`, or
+  `Updated X (places).` / `Updated A (places) and moved it to B.`, where places
+  name the changed lines as they are now (`line 13`, `lines 4, 12-13`, `now
+  empty`, five places at most and then `and N more places`; a removal names the
+  line now at its place).
+- The changed regions as they are now, with `read`-style gutters (touching
+  regions merge; more than two keep first and last plus an omission line; long
+  lines show a window with an `N:C|` gutter), follow such a line (`Updated X
+  (places):`) only when the written text differs from what the call sent: a copy
+  tolerance note (lines that differed or were kept, respelled words; the engine
+  marks these as `DeviationNote`) or the note on which occurrence of a repeated
+  text was changed, and in partial results. A clean change shows no region: the
+  Agent wrote that text itself, and Agents reread or ran `git diff` after a
+  region anyway (real Sessions since 2026-09: 13-22% reread a file within three
+  calls before changing it again, with the region shown; user decision
+  2026-10-10). Notes (recoveries, metadata drift) and syntax warnings follow as
+  `Note:` / `Warning:` lines. Syntax warnings compare the initial and final
+  Tool-written text; a created or fully replaced file reports any final syntax
+  error, even when the original was invalid.
+- Mixed outcomes are a success led by counts (`N of M changes
   applied; K did not.`, or `fully applied; K only in part` when a write was
   incomplete) and the instruction to resend only unfinished changes; each failure
   follows as `Failed:`/`Skipped:`/`Incomplete:` with its `where` (path plus
@@ -124,7 +140,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - `unchanged` covers verified no-ops (`already has this content`, `already
   contains this change`, `already has that name`, identical old/new text) and
   changes that cancel out (`cancel each other out`). It never substitutes for
-  failed or uncertain operations. WebUI reads only `status === 'partial'`.
+  failed or uncertain operations. The WebUI marks a successful call partial when
+  its display records an `error` notice (`toolDisplayRecordsError`); a partial
+  result recorded before 2026-10-10 has no such notice and shows as success.
 
 ## Matching and recovery
 
@@ -495,7 +513,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 
 ## Agent-facing text
 
-About 63 tokens (`python -m scripts.tool_lab definitions` estimate), against about
+About 55 tokens (`python -m scripts.tool_lab definitions` estimate), against about
 315 before 2026-10-05. A sentence stays only when a fresh Agent would often make a
 failing call without it (user decision 2026-10-04). Removed, with what carries
 each case instead: the example and the prefix, `@@`, whole-line and Add File rules
@@ -505,13 +523,15 @@ names both and shows where the lines are, or the line the file lacks without `+`
 batching and partial semantics (a partial result says what was applied and what
 to resend), and the path forms (both are accepted). Pure `+` blocks after an `@@`
 hint are inserted after that line, where Codex appends them at the end of the
-file; the result shows the changed region.
+file; the result names the lines they now occupy. `Add File also replaces an
+existing file.` on `patch` was removed again: with it, 8 of 8 GPT-6 Luna
+replacements still went through Delete File plus Add File (agent-eval
+2026-10-10), which is harmless since both land in one call.
 
 | Text | Reason |
 |---|---|
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
-| `patch`: `Add File also replaces an existing file.` | Says how to replace a file in one section; without it a Model deleted the file first (agent-eval 2026-10-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
 
 ## Verification
@@ -551,7 +571,7 @@ file; the result shows the changed region.
   (no imposed call count or prebuilt arguments), exact edge/invalid requests,
   and continuation from an actual partial Tool Result with candidate excerpts.
   It vets targets through `patch_targets`, rejects imports from a different
-  checkout, checks file effects, result `status` and expected result text
+  checkout, checks file effects, the outcome (`edit_outcome`) and expected result text
   (`mentions`), and verifies that recovery avoids replaying a completed append. Natural
   tasks also cover insertion, EOF targeting, and recovery from missing/ambiguous
   hints. Exact cases pair move-metadata recovery with conflicting destinations and

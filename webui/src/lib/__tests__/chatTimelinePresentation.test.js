@@ -636,8 +636,11 @@ describe('Tool row presentation', () => {
         result: {
           ok: true,
           error: null,
-          data: { status: 'partial', succeeded: 2, failed: 1 },
+          data: { content: '1 of 2 changes applied.' },
           artifacts: [],
+        },
+        display: {
+          details: [{ type: 'notice', level: 'error', text: 'Not found.' }],
         },
         timing: {
           started_at: '2026-08-28T00:00:00.000Z',
@@ -664,7 +667,10 @@ describe('Tool row presentation', () => {
       type: 'tool_call_result',
       payload: {
         tool_call: { id: 'edit-1', name: 'edit' },
-        result: { ok: true, error: null, data: { status: 'partial' } },
+        result: { ok: true, error: null, data: { content: 'Partly.' } },
+        display: {
+          details: [{ type: 'notice', level: 'error', text: 'Not found.' }],
+        },
         timing: { started_at: startedAt, completed_at: completedAt },
       },
     });

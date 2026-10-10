@@ -1,24 +1,29 @@
 """Model-facing apply_patch results: what changed, what failed, and what to send next.
 
-A result is plain text in ``data.content`` under a ``status`` of ``applied``,
-``partial`` or ``unchanged``. Each changed file reads as one section: an Update
-shows its changed regions as they are now, numbered like ``read`` output, so the
-next patch can reuse those lines directly. Failures show the closest current
-text with line numbers. A call in which nothing applied is a failure envelope
-with the same failure text.
+A result is plain text in ``data.content``. Each changed file reads as one
+section; an Update names the lines it changed. It shows those regions as they
+are now, numbered like ``read`` output, only where the Agent cannot know them
+from its own call: when the written text deviates from the call's copy
+(``DeviationNote``) and in a partial result, whose resent changes build on
+them. Failures show the closest current text with line numbers. A call in which
+nothing applied is a failure envelope with the same failure text.
 
 The user reads the call through its display instead: the changed files' diffs
 and one notice per note, warning and failed change, without the text the next
-call needs.
+call needs. An ``error`` notice in a successful call's display marks it as
+partial for the WebUI.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from core.tools._change_preview import _PREVIEW_CONTEXT_LINES, _change_preview
+from core.tools._edit_engine import DeviationNote
 from core.tools._line_diff import line_opcodes
 from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, split_text_lines
 from core.tools.model_names import model_tool_name
@@ -28,6 +33,12 @@ from core.tools.tools import JsonObject, ToolContext, tool_failure, tool_success
 _FAILED = {"failed", "skipped", "partial"}
 _NOT_FOUND_CODES = {"text_not_found", "context_not_found", "line_numbered_content"}
 _AMBIGUOUS_CODES = {"ambiguous_match", "ambiguous_context"}
+# An Update names at most this many changed places before counting the rest.
+_NAMED_PLACES = 5
+_PARTIAL_LEAD = re.compile(r"\d+ of \d+ changes (?:fully )?applied")
+_FILE_HEADS = ("Created ", "Replaced the content of ", "Deleted ", "Moved ", "Updated ")
+
+type EditOutcome = Literal["applied", "partial", "unchanged"]
 
 
 @dataclass
@@ -38,6 +49,7 @@ class _FileReport:
     kind: str  # created, replaced, updated, deleted or moved
     destination: str | None = None
     preview: list[str] = field(default_factory=list)
+    places: str = ""
     line_count: int = 0
     notes: list[str] = field(default_factory=list)
     syntax_warning: str | None = None
@@ -98,6 +110,35 @@ def _after_preview(before: str, after: str) -> list[str]:
     return lines
 
 
+def _changed_places(before: str, after: str) -> str:
+    """Name the lines of ``after`` that changed, such as ``lines 4, 12-13``.
+
+    A removal names the line now at its place.
+    """
+    old_lines = split_text_lines(before, keepends=True)
+    new_lines = split_text_lines(after, keepends=True)
+    if not new_lines:
+        return "now empty"
+    spans: list[list[int]] = []
+    for tag, _i1, _i2, j1, j2 in line_opcodes(old_lines, new_lines):
+        if tag == "equal":
+            continue
+        first = min(j1 + 1, len(new_lines))
+        last = max(first, min(j2, len(new_lines)))
+        if spans and first <= spans[-1][1] + 1:
+            spans[-1][1] = max(spans[-1][1], last)
+        else:
+            spans.append([first, last])
+    if not spans:
+        return ""
+    named = [str(a) if a == b else f"{a}-{b}" for a, b in spans[:_NAMED_PLACES]]
+    single = len(spans) == 1 and spans[0][0] == spans[0][1]
+    text = ("line " if single else "lines ") + ", ".join(named)
+    if len(spans) > _NAMED_PLACES:
+        text += f" and {len(spans) - _NAMED_PLACES} more places"
+    return text
+
+
 def file_report(
     path: Path,
     label: str,
@@ -120,13 +161,17 @@ def file_report(
     if before is None or after is None or before == after:
         return report
     report.preview = _after_preview(before, after)
+    report.places = _changed_places(before, after)
     report.syntax_warning = warning_for_edited_file(path, before, after)
     return report
 
 
-def _file_text(report: _FileReport) -> str:
+def _file_text(report: _FileReport, *, partial: bool) -> str:
+    """Render one file's section; an Update shows its regions only where needed."""
     plural = "" if report.line_count == 1 else "s"
     size = f"{report.line_count} line{plural}" if report.line_count else "empty"
+    shown = partial or any(isinstance(note, DeviationNote) for note in report.notes)
+    places = f" ({report.places})" if report.places else ""
     if report.kind == "created":
         lines = [f"Created {report.label} ({size})."]
     elif report.kind == "replaced":
@@ -134,11 +179,14 @@ def _file_text(report: _FileReport) -> str:
     elif report.kind == "deleted":
         lines = [f"Deleted {report.label}."]
     elif report.kind == "moved" and report.preview:
-        lines = [f"Updated {report.label} and moved it to {report.destination}:", *report.preview]
+        head = f"Updated {report.label}{places} and moved it to {report.destination}"
+        lines = [f"{head}:", *report.preview] if shown else [f"{head}."]
     elif report.kind == "moved":
         lines = [f"Moved {report.label} to {report.destination}."]
+    elif shown:
+        lines = [f"Updated {report.label}{places}:", *report.preview]
     else:
-        lines = [f"Updated {report.label}:", *report.preview]
+        lines = [f"Updated {report.label}{places}."]
     lines.extend(f"Note: {note}" for note in dict.fromkeys(report.notes))
     if report.syntax_warning:
         lines.append(f"Warning: {report.syntax_warning}")
@@ -406,7 +454,7 @@ def patch_result(
     sections: list[str] = []
     if failed:
         sections.append(_partial_lead(entries, failed))
-    sections.extend(_file_text(report) for report in files)
+    sections.extend(_file_text(report, partial=bool(failed)) for report in files)
     notes: list[str] = []
     # Changes that leave no net effect, such as a line changed and changed back.
     notes.extend(
@@ -425,8 +473,20 @@ def patch_result(
     _record_notices(context, files, notes, failed)
     sections.extend(notes)
     sections.extend(_entry_text(entry) for entry in failed)
-    status = "partial" if failed else "applied" if files else "unchanged"
-    return tool_success({"status": status, "content": "\n".join(sections)})
+    return tool_success({"content": "\n".join(sections)})
 
 
-__all__ = ["failure_text", "file_report", "patch_result"]
+def edit_outcome(content: str) -> EditOutcome:
+    """Classify a successful file edit result's text, for tools that study results.
+
+    ``partial`` when some changes did not apply, ``applied`` when a file changed,
+    ``unchanged`` when the call found nothing to change.
+    """
+    if _PARTIAL_LEAD.match(content):
+        return "partial"
+    if any(line.startswith(_FILE_HEADS) for line in content.split("\n")):
+        return "applied"
+    return "unchanged"
+
+
+__all__ = ["EditOutcome", "edit_outcome", "failure_text", "file_report", "patch_result"]

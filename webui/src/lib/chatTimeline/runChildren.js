@@ -18,6 +18,7 @@ import {
 } from './model.js';
 import { isPlainObject } from '../values.js';
 import { isSpeechPlaybackUrl } from '../api.js';
+import { toolDisplayRecordsError } from '../chatToolDetails.js';
 
 // Reasoning has no explicit end event: any other live Run event (except the
 // idle heartbeat) means the streamed reasoning draft stopped growing, so its
@@ -375,7 +376,11 @@ function toolStatusFromResultEvent(event, toolName) {
   if (hasToolResultFailure(event)) {
     return CHAT_STATUS_FAILED;
   }
-  return hasResultPartial(result) ? CHAT_STATUS_PARTIAL : 'success';
+  const display =
+    event.payload?.display ?? event.payload?.message?.tool_display;
+  return parseResult(result)?.ok === true && toolDisplayRecordsError(display)
+    ? CHAT_STATUS_PARTIAL
+    : 'success';
 }
 
 export function mergeSubAgentSessionStarted(assistantRun, event) {
@@ -540,14 +545,6 @@ export function hasResultFailure(result) {
     normalizedResult.ok === false ||
     normalizedResult.success === false ||
     ['error', 'failed'].includes(normalizedResult.status),
-  );
-}
-
-function hasResultPartial(result) {
-  const normalizedResult = parseResult(result);
-  return (
-    normalizedResult?.ok === true &&
-    normalizedResult?.data?.status === 'partial'
   );
 }
 

@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import pytest
 
+from core.tools._patch_report import edit_outcome
 from tests.core.tools.apply_patch_test_support import apply, call, context, registry, text
 
 
@@ -21,8 +22,7 @@ def test_apply_patch_has_a_minimal_definition():
         "properties": {
             "patch": {
                 "type": "string",
-                "description": "Patch text from *** Begin Patch to *** End Patch. Add File "
-                "also replaces an existing file.",
+                "description": "Patch text from *** Begin Patch to *** End Patch.",
             }
         },
         "required": ["patch"],
@@ -150,7 +150,7 @@ def test_display_notices_name_each_failed_change_without_the_recovery_text(tmp_p
         "apply_patch", {"patch": patch}, context=ctx, result=result
     )
 
-    assert result["data"]["status"] == "partial"
+    assert edit_outcome(result["data"]["content"]) == "partial"
     changes, notice = display["details"]
     assert [change["path"] for change in changes["files"]] == ["a.txt"]
     assert notice["level"] == "error" and "subject" not in notice
@@ -216,7 +216,7 @@ async def test_one_replacement_in_any_shape(tmp_path, arguments):
 
     result = await call(tmp_path, arguments)
 
-    assert result["data"] == {"status": "applied", "content": "Updated a.py:\n1| x = 3\n2| y = 2"}
+    assert result["data"] == {"content": "Updated a.py (line 1)."}
     assert (tmp_path / "a.py").read_bytes() == b"x = 3\ny = 2\n"
 
 
@@ -258,9 +258,10 @@ async def test_multi_edit_keeps_applied_edits_and_names_the_failed_one(tmp_path)
             "edits": [{"old_string": "a", "new_string": "A"}, {"old": "zzz", "new": "B"}],
         },
     )
-    assert result["data"]["status"] == "partial"
-    assert "Updated a.txt:\n1| A\n2| b\nFailed: a.txt, edit 2: old_string was not found." in (
-        text(result)
+    assert edit_outcome(result["data"]["content"]) == "partial"
+    assert (
+        "Updated a.txt (line 1):\n1| A\n2| b\nFailed: a.txt, edit 2: old_string was not found."
+        in text(result)
     )
     assert (tmp_path / "a.txt").read_bytes() == b"A\nb\n"
 

@@ -69,9 +69,11 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   needs no read stamp: the unique match against current bytes is the precondition;
   a file changed since the Session's read adds the stale note to a successful
   result or a match failure (`file_state.md`).
-- **Results** are `apply_patch`'s (`_patch_report.patch_result`, `{status,
-  content}`): `Updated X:` with the changed regions as they are now, `Created X (N
-  lines).`, notes and syntax warnings; `unchanged` for identical old/new text, and
+- **Results** are `apply_patch`'s (`_patch_report.patch_result`, `{content}`):
+  `Updated X (places).`, with the changed regions as they are now only when the
+  written text differs from the call or the call was partial (`apply_patch.md`),
+  `Created X (N lines).`, notes and syntax warnings; a note for identical old/new
+  text, and
   `X already reads as this edit would leave it.` (`these edits`) when the edits
   leave the file as it was, such as a change and its reversal (the
   `already_applied` template).
