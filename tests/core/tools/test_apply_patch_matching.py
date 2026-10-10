@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.tools._patch_report import edit_outcome
 from core.tools.file_state import FileReadState
 from tests.core.tools.apply_patch_test_support import apply, call, registry, text, update
 
@@ -269,6 +270,11 @@ async def test_text_copied_with_a_misspelling_is_applied_and_named(tmp_path, arg
     assert path.read_bytes() == (
         b"import os\n\ndef load(order):\n    return order.reciept_total + order.tax\n"
     )
+    # The written line is not the call's copy, so the result shows it as it now reads.
+    assert text(result).startswith(
+        "Updated a.py (line 4):\n3| def load(order):\n"
+        "4|     return order.reciept_total + order.tax\nNote: "
+    )
     assert (
         "Line 4 did not match your old text exactly and was edited anyway; it read:     "
         "return order.reciept_total" in text(result)
@@ -348,7 +354,7 @@ def test_stale_code_context_never_selects_a_similar_function(tmp_path, both):
         expected = expected[:start] + expected[start:].replace(
             "Some(self.text.clone())", "Some(counted_clone(&self.text))"
         )
-        assert result["data"]["status"] == "partial"
+        assert edit_outcome(result["data"]["content"]) == "partial"
         assert "hunk 1" in result["data"]["content"]
     else:
         assert result["error"]["code"] == "text_not_found"
@@ -363,7 +369,7 @@ def test_actual_code_context_changes_only_its_function(tmp_path, indent):
 
     result = apply(tmp_path, "*** Update File: buffer.rs\n" + _buffer_hunk("undo", guard=True))
 
-    assert result["data"]["status"] == "applied"
+    assert edit_outcome(result["data"]["content"]) == "applied"
     assert target.read_text(encoding="utf-8") == original.replace(
         "Some(self.text.clone())", "Some(counted_clone(&self.text))", 1
     )
@@ -440,7 +446,7 @@ def test_code_name_edits_apply_to_their_target(tmp_path, original, body, expecte
 
     result = apply(tmp_path, update("@@\n" + body, "target.txt"))
 
-    assert result["data"]["status"] == "applied"
+    assert edit_outcome(result["data"]["content"]) == "applied"
     assert target.read_text(encoding="utf-8") == expected
 
 
@@ -496,8 +502,7 @@ def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
     assert apply(tmp_path, patch)["ok"]
     before = path.read_bytes()
     retried = apply(tmp_path, patch)
-    assert retried["data"]["status"] == "unchanged"
-    assert "file.txt already contains this change" in text(retried)
+    assert text(retried) == "file.txt already contains this change. No file was changed."
     assert path.read_bytes() == before == b"section\ninserted\nnew\ntail\n"
 
 
@@ -505,10 +510,7 @@ def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
 def test_context_block_constrains_later_edit(tmp_path, anchor):
     (tmp_path / "file.txt").write_bytes(b"first\nvalue=1\nsecond\n  details\nvalue=1\n")
     result = apply(tmp_path, update(f"@@\n{anchor}\n@@\n-value=1\n+value=2"))
-    assert result["data"] == {
-        "status": "applied",
-        "content": "Updated file.txt:\n4|   details\n5| value=2",
-    }
+    assert result["data"] == {"content": "Updated file.txt (line 5)."}
     assert (tmp_path / "file.txt").read_bytes() == b"first\nvalue=1\nsecond\n  details\nvalue=2\n"
 
 
@@ -600,7 +602,7 @@ def test_at_at_lines_that_do_not_place_the_lines_refuse_the_hunk(tmp_path, body,
 
 
 @pytest.mark.parametrize(
-    ("body", "expected", "note"),
+    ("body", "expected", "region", "note"),
     [
         # Session shape: a context block names the enclosing function, and the
         # function's last lines occur again in a later function.
@@ -608,6 +610,7 @@ def test_at_at_lines_that_do_not_place_the_lines_refuse_the_hunk(tmp_path, body,
             "@@\n def second():\n@@\n     return value\n+\n+\n+def third():\n+    return 3",
             b"def first():\n    return value\n\n\ndef second():\n    return value\n\n\n"
             b"def third():\n    return 3\n\n\ndef last():\n    return value\n",
+            "Updated file.py (lines 9-12):\n8| \n9| def third():\n",
             "The lines to replace occur 2 times after 'def second():'; the first, at line 6, "
             "was changed.",
         ),
@@ -617,13 +620,14 @@ def test_at_at_lines_that_do_not_place_the_lines_refuse_the_hunk(tmp_path, body,
             "@@\n-    return value\n+    return 2",
             b"def first(value):\n    return 1\n\n\ndef second():\n    return 2\n\n\n"
             b"def last():\n    return value\n",
+            "Updated file.py (lines 1-2, 6):\n1| def first(value):\n",
             "The lines to replace occur 2 times; the first after the previous change in this "
             "file, at line 6, was changed.",
         ),
     ],
 )
 def test_first_occurrence_after_an_at_at_line_or_previous_change_is_changed(
-    tmp_path, body, expected, note
+    tmp_path, body, expected, region, note
 ):
     path = tmp_path / "file.py"
     path.write_bytes(
@@ -633,6 +637,8 @@ def test_first_occurrence_after_an_at_at_line_or_previous_change_is_changed(
     result = apply(tmp_path, update(body, "file.py"))
     assert result["ok"], result
     assert path.read_bytes() == expected
+    # The call left the choice open, so the result shows the changed region as it now reads.
+    assert text(result).startswith(region)
     assert text(result).endswith(f"Note: {note}")
 
 
@@ -651,7 +657,7 @@ def test_previous_change_orders_only_later_occurrences_of_the_same_update(tmp_pa
     path = tmp_path / "file.txt"
     path.write_bytes(b"start\nx=0\nx=0\nend\n")
     result = apply(tmp_path, update(body))
-    assert result["data"]["status"] == "partial"
+    assert edit_outcome(result["data"]["content"]) == "partial"
     assert "the lines to replace occur 2 times (lines 2, 3)" in text(result)
     assert path.read_bytes().count(b"x=0") == 2
 
@@ -722,10 +728,10 @@ def test_changes_already_in_the_file_are_recognized(tmp_path, current, patch, ap
     result = apply(tmp_path, update(patch))
     assert result["ok"], result
     if applied:
-        assert result["data"]["status"] == "applied"
+        assert text(result) == "Updated file.txt (line 1)."
         assert path.read_bytes() == b'"Series new": pd.Series(\n"Series new": pd.Series(\n'
     else:
-        assert result["data"]["status"] == "unchanged"
+        assert text(result) == "file.txt already contains this change. No file was changed."
         assert path.read_bytes() == current.encode()
 
 
@@ -811,5 +817,5 @@ def test_failed_hunk_does_not_block_normalized_independent_match(tmp_path):
         update("@@\n-not present anywhere\n+unused\n@@\n-independent = old\n+independent = new"),
     )
     assert text(result).startswith("1 of 2 changes applied; 1 did not.")
-    assert "Updated file.txt:\n1|     independent = new\n" in text(result)
+    assert "Updated file.txt (line 1):\n1|     independent = new\n" in text(result)
     assert path.read_bytes() == b"    independent = new\r\n"

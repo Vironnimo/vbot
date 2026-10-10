@@ -83,7 +83,7 @@ async def test_replay_exports_session_edits_and_classifies_their_replay(tmp_path
     write_bootstrap_marker(live)
     manager = ChatSessionManager(live)
     add = _patch("*** Add File: src/app.py", "+def main():", "+    value = 1", "+    return value")
-    created = {"status": "applied", "content": "Created src/app.py (3 lines)."}
+    created = {"content": "Created src/app.py (3 lines)."}
     seed_history(
         manager.create("main", session_id="s1"),
         [
@@ -98,13 +98,7 @@ async def test_replay_exports_session_edits_and_classifies_their_replay(tmp_path
             *_patch_call(
                 3,
                 _update("    value = 1"),
-                {
-                    "ok": True,
-                    "data": {
-                        "status": "applied",
-                        "content": "Updated src/app.py:\n1| def main():\n2|     value = 2",
-                    },
-                },
+                {"ok": True, "data": {"content": "Updated src/app.py (line 2)."}},
             ),
             ChatMessage.run_summary(
                 run_id="run-1",

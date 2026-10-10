@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any, TextIO
 
 from core.runtime.runtime import Runtime
 from core.tools._line_diff import line_opcodes
+from core.tools._patch_report import edit_outcome
 from core.tools.arguments import split_text_lines
 from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor
 from scripts.tool_lab._lab_runtime import DEFAULT_AGENT_ID, lab_runtime
@@ -179,8 +180,9 @@ class Dispatcher:
             failure = envelope.get("error") or {}
             return Dispatched(False, "failed", failure.get("code"), text, after)
         data = envelope.get("data") or {}
-        status = data.get("status") if isinstance(data, dict) else None
-        return Dispatched(True, str(status or "applied"), None, text, after)
+        content = data.get("content") if isinstance(data, dict) else None
+        status = edit_outcome(content) if isinstance(content, str) else "applied"
+        return Dispatched(True, status, None, text, after)
 
 
 @asynccontextmanager

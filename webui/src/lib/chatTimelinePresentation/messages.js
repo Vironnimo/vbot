@@ -5,6 +5,7 @@ import { isPlainObject } from '$lib/values.js';
 import { toolNameForRunTool } from './toolFacts.js';
 import { timestampToMs, formatDurationMs } from './time.js';
 import { getAttachmentUrl, isSpeechPlaybackUrl } from '$lib/api.js';
+import { toolDisplayRecordsError } from '$lib/chatToolDetails.js';
 
 export const isUserItem = (item) =>
   item.type === 'assistant_run'
@@ -651,5 +652,7 @@ export function hasToolResultPartial(event) {
   const rawResult =
     event.payload?.result ?? messageFromEvent(event)?.content ?? null;
   const result = parseJsonValue(rawResult);
-  return result?.ok === true && result?.data?.status === 'partial';
+  const display =
+    event.payload?.display ?? messageFromEvent(event)?.tool_display;
+  return result?.ok === true && toolDisplayRecordsError(display);
 }

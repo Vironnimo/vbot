@@ -56,10 +56,7 @@ def test_separate_frames_apply_in_order_without_replaying(tmp_path, separator):
         "*** Move File: one.txt -> moved.txt\n*** End Patch\n"
         "*** Add File: last.txt\n+*** End Patch\n*** End Patch",
     )
-    assert result["data"] == {
-        "status": "applied",
-        "content": "Created moved.txt (2 lines).\nCreated last.txt (1 line).",
-    }
+    assert result["data"] == {"content": "Created moved.txt (2 lines).\nCreated last.txt (1 line)."}
     assert not (tmp_path / "one.txt").exists()
     assert (tmp_path / "moved.txt").read_bytes() == b"first\nsecond\n"
     assert (tmp_path / "last.txt").read_bytes() == b"*** End Patch\n"
@@ -68,7 +65,7 @@ def test_separate_frames_apply_in_order_without_replaying(tmp_path, separator):
 def test_identical_empty_update_header_is_redundant_not_a_second_edit(tmp_path):
     (tmp_path / "file.txt").write_bytes(b"old\n")
     result = apply(tmp_path, update("*** Update File: file.txt\n@@\n-old\n+new"))
-    assert result["data"] == {"status": "applied", "content": "Updated file.txt:\n1| new"}
+    assert result["data"] == {"content": "Updated file.txt (line 1)."}
     assert (tmp_path / "file.txt").read_bytes() == b"new\n"
 
 
@@ -194,10 +191,7 @@ def test_move_metadata_position_preserves_the_operation(tmp_path, positions):
     for position in reversed(positions):
         parts.insert(position, "*** Move to: moved.txt")
     result = apply(tmp_path, update("\n".join(parts)))
-    assert result["data"] == {
-        "status": "applied",
-        "content": "Updated file.txt and moved it to moved.txt:\n1| new\n2| last",
-    }
+    assert result["data"] == {"content": "Updated file.txt (lines 1-2) and moved it to moved.txt."}
     assert not (tmp_path / "file.txt").exists()
     assert (tmp_path / "moved.txt").read_bytes() == b"new\nlast\n"
 
@@ -220,7 +214,7 @@ def test_conflicting_moves_reject_before_any_effect(tmp_path, operation):
 def test_move_shaped_added_content_remains_literal(tmp_path):
     (tmp_path / "file.txt").write_bytes(b"old\n")
     result = apply(tmp_path, update("@@\n-old\n+*** Move to: literal.txt\n*** Move to: moved.txt"))
-    assert result["data"]["status"] == "applied"
+    assert text(result) == "Updated file.txt (line 1) and moved it to moved.txt."
     assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == {
         "moved.txt": b"*** Move to: literal.txt\n"
     }
@@ -230,7 +224,7 @@ def test_move_with_explicit_hunks_uses_update_move_semantics(tmp_path):
     source = tmp_path / "one.txt"
     source.write_bytes(b"old\n")
     result = apply(tmp_path, "*** Move File: one.txt -> moved.txt\n@@\n-old\n+new")
-    assert text(result) == "Updated one.txt and moved it to moved.txt:\n1| new"
+    assert text(result) == "Updated one.txt (line 1) and moved it to moved.txt."
     assert not source.exists()
     assert (tmp_path / "moved.txt").read_bytes() == b"new\n"
     source.write_bytes(b"source\n")

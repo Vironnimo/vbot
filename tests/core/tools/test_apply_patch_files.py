@@ -15,6 +15,7 @@ import pytest
 from core.sessions import SessionAddress
 from core.tools import _file_changes as file_changes_module
 from core.tools import file_state as file_state_module
+from core.tools._patch_report import edit_outcome
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
 from tests.core.tools.apply_patch_test_support import apply, call, context, registry, text, update
@@ -56,7 +57,9 @@ def test_update_and_replacement_preserve_encoding_endings_and_permissions(
     assert path.read_bytes() == bom + b"new" + ending + b"content" + (ending if final else b"")
     assert stat.S_IMODE(path.stat().st_mode) == mode
     assert state.check_stale("session-test", path) is None
-    assert apply(tmp_path, patch, state=state)["data"]["status"] == "unchanged"
+    assert text(apply(tmp_path, patch, state=state)) == (
+        "file.txt already has this content. No file was changed."
+    )
 
 
 def test_add_and_append_use_lf_when_a_file_has_only_unicode_separators(tmp_path):
@@ -173,7 +176,7 @@ async def test_read_alias_and_ordered_full_replacements_share_state(tmp_path):
         },
         tools=tools,
     )
-    assert result["data"]["status"] == "applied"
+    assert text(result) == "Replaced the content of file.txt (1 line)."
     assert path.read_bytes() == b"final\n"
 
 
@@ -341,7 +344,7 @@ def test_update_through_a_link_edits_the_target_and_move_to_renames_the_link(tmp
     )
 
     # The edit lands in the link's target, and the link itself is renamed.
-    assert text(result) == "Updated shared/real.txt:\n1| edited\nMoved link.txt to renamed.txt."
+    assert text(result) == "Updated shared/real.txt (line 1).\nMoved link.txt to renamed.txt."
     assert target.read_bytes() == b"edited\n"
     assert (tmp_path / "renamed.txt").is_symlink()
     assert not os.path.lexists(link)
@@ -363,7 +366,7 @@ def test_a_link_retargeted_while_the_patch_runs_is_not_written_through(tmp_path,
 
     result = apply(tmp_path, "*** Add File: first.txt\n+x\n*** Add File: link.txt\n+fresh")
 
-    assert result["data"]["status"] == "partial"
+    assert edit_outcome(text(result)) == "partial"
     assert text(result).endswith(
         "Created first.txt (1 line).\nFailed: link.txt now leads to another file than when this "
         "patch started, because a link on its way changed. Send this change again in a separate "
@@ -416,7 +419,7 @@ def test_case_only_move_renames_the_file(tmp_path):
 
     result = apply(tmp_path, "*** Move File: readme.txt -> README.txt", state=state)
 
-    assert result["data"] == {"status": "applied", "content": "Moved readme.txt to README.txt."}
+    assert result["data"] == {"content": "Moved readme.txt to README.txt."}
     assert os.listdir(tmp_path) == ["README.txt"]
     assert (tmp_path / "README.txt").read_bytes() == b"hi\n"
     # The renamed file counts as read for a later full replacement.
@@ -428,7 +431,7 @@ def test_update_with_case_only_move_to_edits_and_renames(tmp_path):
 
     result = apply(tmp_path, update("*** Move to: README.TXT\n@@\n-hi\n+hello", "readme.txt"))
 
-    assert text(result) == "Updated readme.txt and moved it to README.TXT:\n1| hello"
+    assert text(result) == "Updated readme.txt (line 1) and moved it to README.TXT."
     assert os.listdir(tmp_path) == ["README.TXT"]
     assert (tmp_path / "README.TXT").read_bytes() == b"hello\n"
 
@@ -605,7 +608,7 @@ def test_invalid_operation_keeps_successful_siblings(tmp_path, suffix):
     path = tmp_path / "file.txt"
     path.write_bytes(b"original\n")
     result = apply(tmp_path, "*** Add File: new/created.txt\n+would be new\n" + suffix)
-    assert result["ok"] and result["data"]["status"] == "partial"
+    assert result["ok"]
     assert text(result).startswith("1 of 2 changes applied; 1 did not.")
     assert "\nFailed: " in text(result)
     assert path.read_bytes() == b"original\n"
@@ -637,7 +640,7 @@ def test_write_failure_reports_actual_partial_changes(tmp_path, monkeypatch, fai
 
     monkeypatch.setattr(file_changes_module, "atomic_write_bytes", fail_one)
     result = apply(tmp_path, "*** Add File: a.txt\n+first\n*** Add File: b.txt\n+second")
-    assert result["ok"] and result["data"]["status"] == "partial"
+    assert result["ok"]
     assert text(result).startswith("1 of 2 changes applied; 1 did not.")
     assert f"Created {written} (1 line)." in text(result)
     assert text(result).endswith(
@@ -720,7 +723,7 @@ def test_partial_move_reports_destination_and_skips_uncertain_paths(tmp_path, mo
         "*** Update File: destination.txt\n@@\n-keep\n+clobbered\n"
         "*** Add File: independent.txt\n+done",
     )
-    assert result["ok"] and result["data"]["status"] == "partial"
+    assert result["ok"]
     assert text(result).startswith("1 of 3 changes fully applied; 1 only in part; 1 not at all.")
     assert (
         "Incomplete: Could not change source.txt: fixture cannot remove source. Check this "
@@ -812,7 +815,7 @@ def test_external_change_between_hunks_is_not_overwritten(tmp_path, monkeypatch)
 
     monkeypatch.setattr(file_changes_module, "_commit", racing_commit)
     result = apply(tmp_path, update("@@\n-one=old\n+one=new\n@@\n-two=old\n+two=new"))
-    assert result["data"]["status"] == "partial"
+    assert edit_outcome(text(result)) == "partial"
     assert text(result).endswith(
         "Failed: file.txt changed on disk while this patch ran. Read it and resend the "
         "unfinished changes."
@@ -847,7 +850,7 @@ def test_post_write_verification_failure_retains_effect_and_continues_siblings(
     monkeypatch.setattr(file_changes_module, "atomic_write_bytes", write_then_interfere)
     monkeypatch.setattr(file_changes_module, "_snapshot", snapshot)
     result = apply(tmp_path, "*** Add File: a.txt\n+requested\n*** Add File: b.txt\n+done")
-    assert result["ok"] and result["data"]["status"] == "partial"
+    assert result["ok"]
     reason = (
         "a.txt was written, but reading it back failed: fixture observation unavailable. "
         "Check it before resending this change."
@@ -880,7 +883,7 @@ def test_move_rechecks_destination_before_deleting_source(tmp_path, monkeypatch)
 
     monkeypatch.setattr(file_changes_module, "_snapshot", snapshot)
     result = apply(tmp_path, "*** Move File: source.txt -> destination.txt")
-    assert result["data"]["status"] == "partial"
+    assert edit_outcome(text(result)) == "partial"
     assert text(result).endswith(
         "Incomplete: destination.txt changed on disk while this patch ran. Read it and resend "
         "the unfinished changes.\nAlready done: destination.txt. Not done: source.txt."
@@ -937,7 +940,7 @@ def test_windows_retry_replaces_once_without_replaying_earlier_append(tmp_path, 
     result = apply(
         tmp_path, "*** Update File: log.txt\n@@\n+done\n*** Update File: file.txt\n@@\n-old\n+new"
     )
-    assert result["ok"] and result["data"]["status"] == "applied"
+    assert text(result) == "Updated log.txt (line 2).\nUpdated file.txt (line 1)."
     assert attempts == ["log.txt", "file.txt", "file.txt", "file.txt"]
     assert len(sleeps) == 2
     assert (tmp_path / "log.txt").read_bytes() == b"start\ndone\n"
@@ -1038,7 +1041,7 @@ def test_replace_failure_is_bounded_and_keeps_other_operations(
     assert 1 < len(attempts) <= 10 if retried else len(attempts) == 1
     tried = f"The write was attempted {len(attempts)} times."
     if other_file:
-        assert result["data"]["status"] == "partial"
+        assert edit_outcome(text(result)) == "partial"
         assert "Created other.txt (1 line).\nFailed: Could not change file.txt" in text(result)
         assert (tried in text(result)) is retried
         assert (tmp_path / "other.txt").read_bytes() == b"done\n"

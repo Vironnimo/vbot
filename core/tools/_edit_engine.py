@@ -52,6 +52,20 @@ from core.tools.tools import JsonObject
 
 type _Found = FuzzyReplacement | AmbiguousFuzzyMatch | None
 
+
+class DeviationNote(str):
+    """A note that the change landed on text other than the call's copy.
+
+    It names lines that read differently, respelled words or the occurrence a
+    repeated text chose. A result that carries one shows the changed region as
+    it now reads, since the written text is not what the call sent.
+    """
+
+
+def _deviations(notes: list[str]) -> list[str]:
+    return [DeviationNote(note) for note in notes]
+
+
 _GUTTER_WARNING = "Removed read-output line-number prefixes before applying the change."
 _GUTTER_KEPT_NOTE = (
     "{count} added lines start with a number and | like read output, such as {example!r}; "
@@ -206,7 +220,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
                 **values,
             )
         if copied is not None:
-            return copied.new_content, copy_warnings(copied)
+            return copied.new_content, _deviations(copy_warnings(copied))
     raise _PatchError(
         "text_not_found",
         template="old_text_not_found",
@@ -262,7 +276,7 @@ def _apply_line_hunk(
     if isinstance(found, AmbiguousFuzzyMatch):
         occurrences = found.occurrences
         start, found = _first_occurrence(content, hunk, found, section, previous, copied, path)
-        notes.append(_ordering_note(content, hunk, occurrences, found, start))
+        notes.append(DeviationNote(_ordering_note(content, hunk, occurrences, found, start)))
     return _splice(content, start, hunk, found, path, notes)
 
 
@@ -607,7 +621,8 @@ def _splice(
         if last_output_prefix == "+" or hunk.no_newline:
             output[-1] = (output[-1][0], "" if hunk.no_newline else added_ending)
     replacement_text = "".join(text + line_end for text, line_end in output)
-    notes.extend(copy_warnings(found, line_shift=len(_BREAK.findall(content, 0, offset))))
+    line_shift = len(_BREAK.findall(content, 0, offset))
+    notes.extend(_deviations(copy_warnings(found, line_shift=line_shift)))
     return content[: offset + start] + replacement_text + window[end:], notes
 
 

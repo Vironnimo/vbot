@@ -429,6 +429,7 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
 async def _probe_apply_patch_case(
     adapter: Any, args: argparse.Namespace, case: dict[str, Any]
 ) -> dict[str, Any]:
+    from core.tools._patch_report import edit_outcome
     from core.tools.apply_patch import patch_targets, register_apply_patch_tool
     from core.tools.file_state import FileReadState
     from core.tools.read import register_read_tool
@@ -591,10 +592,9 @@ async def _probe_apply_patch_case(
         expected = case.get("expected", case["before"])
         codes = [outcome["error"]["code"] if not outcome["ok"] else None for outcome in outcomes]
         data = (outcomes[0].get("data") or {}) if len(outcomes) == 1 else {}
-        result_ok = (
-            (case.get("status", "applied") == data.get("status")) if not case.get("error") else True
-        )
         content = str(data.get("content", ""))
+        outcome = edit_outcome(content)
+        result_ok = case.get("status", "applied") == outcome if not case.get("error") else True
         entries_ok = all(text in content for text in case.get("mentions", []))
         recovery_ok = touched_paths == set(case["only_paths"]) if "only_paths" in case else True
         passed = (

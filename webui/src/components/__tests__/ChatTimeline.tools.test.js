@@ -330,7 +330,7 @@ describe('ChatTimeline Tools', () => {
           toolResult(
             'call',
             'apply_patch',
-            { ok: true, data: { status: 'partial', content: 'Updated.' } },
+            { ok: true, data: { content: 'Updated.' } },
             { display },
           ),
         ]),
@@ -384,9 +384,7 @@ describe('ChatTimeline Tools', () => {
       expect(rawCall.querySelector('.tool-raw-call__body')).toBeNull();
       openDisclosures('.tool-raw-call');
       expect(detailText('chat.toolArgs')).toBe('patch: *** Begin Patch');
-      expect(detailText('chat.toolResultLabel')).toBe(
-        'status: partial\ncontent: Updated.',
-      );
+      expect(detailText('chat.toolResultLabel')).toBe('Updated.');
       expect(rawCall.contains(detailRow('chat.toolResultLabel'))).toBe(true);
     });
 

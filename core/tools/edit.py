@@ -534,7 +534,7 @@ _EDIT_HIDDEN_ARGUMENT_KEYS = (
     "new_text",
 )
 _WRITE_HIDDEN_ARGUMENT_KEYS = ("content", "contents", "text", "file_text")
-_RESULT_SCHEMA: JsonObject = {"type": "object", "required": ["status", "content"]}
+_RESULT_SCHEMA: JsonObject = {"type": "object", "required": ["content"]}
 
 
 def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) -> None:

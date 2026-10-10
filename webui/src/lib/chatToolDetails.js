@@ -400,6 +400,17 @@ const FILE_CHANGE_KINDS = new Set([
 const DIFF_LINE_KINDS = { '+': 'added', '-': 'removed', ' ': 'context' };
 
 const NOTICE_LEVELS = new Set(['info', 'warning', 'error']);
+
+// A successful Tool call whose display records an error notice completed only
+// in part, such as a patch in which some changes did not apply.
+export function toolDisplayRecordsError(display) {
+  return (
+    Array.isArray(display?.details) &&
+    display.details.some(
+      (block) => block?.type === 'notice' && block.level === 'error',
+    )
+  );
+}
 const MEMORY_SCOPES = new Set(['agent', 'user']);
 const MEMORY_CHANGE_OPS = new Set(['added', 'removed', 'replaced']);
 const TEXT_LABELS = new Set([

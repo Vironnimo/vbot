@@ -851,17 +851,16 @@ describe('Run status projection', () => {
       'failed',
       { ok: false, error: { code: 'process_timeout', message: 'timed out' } },
     ],
+    // A successful call whose display records an error notice applied in part.
     [
       'partial',
-      {
-        ok: true,
-        error: null,
-        data: { status: 'partial', total: 3, succeeded: 2, failed: 1 },
-      },
+      { ok: true, error: null, data: { content: '1 of 2 changes applied.' } },
+      'apply_patch',
+      { details: [{ type: 'notice', level: 'error', text: 'Not found.' }] },
     ],
   ])(
     'settles a live Tool row as %s from its result envelope',
-    (status, result, name = 'bash') => {
+    (status, result, name = 'bash', display = undefined) => {
       const state = session();
       start(state, 'run-1');
       const toolCall = { id: 'call-tool', index: 0, name };
@@ -871,6 +870,7 @@ describe('Run status projection', () => {
       append(state, 'run-1', 2, 'tool_call_result', {
         tool_call: toolCall,
         result: { data: null, artifacts: [], ...result },
+        ...(display ? { display } : {}),
       });
 
       const run = assistantRun(state);
