@@ -122,6 +122,9 @@ class FakeSessions:
     async def get_async(self, address: Any) -> Any:
         return self.get(address)
 
+    def review_forks(self, address: Any) -> tuple[Any, ...]:
+        return ()
+
     async def archive(self, address: Any) -> Any:
         self.archived.append((address.agent_id, address.session_id, address.project_id))
         if self.archive_error is not None:

@@ -94,6 +94,9 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
     with sqlite3.connect(manager._store.path) as connection:
         shared = _rows(connection, "SELECT COUNT(*) FROM entries")
     assert shared == [(6,)]
+    # A review fork follows its source: the delete takes it first, so it gets no copies.
+    review = await manager.fork(source.address, run_kind=RunKind.MEMORY_REFLECTION)
+    review.append(ChatMessage.user("reviewed"))
     # Later source work and an edit of the forked question change no fork.
     source.append(ChatMessage.user("source only"))
     question = source.load_active()[0]
@@ -104,6 +107,7 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
 
     manager.delete(source.address)
 
+    assert not manager.exists(review.address)
     assert child.load_active() == grandchild.load_active() == inherited
     assert child.load() == grandchild.load() == []
     assert [history_revision(manager, fork.address) for fork in (child, grandchild)] == [

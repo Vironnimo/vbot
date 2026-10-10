@@ -49,6 +49,7 @@ function entry(fields) {
     restorable: true,
     not_restorable_reason: null,
     may_hold_user_folders: false,
+    accepts_target_id: true,
     ...fields,
   };
 }
@@ -78,6 +79,7 @@ const LEGACY = entry({
   restorable: false,
   not_restorable_reason: 'kind_not_restorable',
   may_hold_user_folders: true,
+  accepts_target_id: false,
 });
 
 // The App navigator goes up with Back when the list is the previous entry,

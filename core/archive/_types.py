@@ -73,7 +73,8 @@ class ProjectArchiveOutcome:
 class SessionArchiveOutcome:
     """An archived Session and, for an Identity Agent, its current Session afterwards.
 
-    ``was_current`` tells whether the archived Session was that current Session.
+    ``was_current`` tells whether that current Session was archived: the Session
+    itself or one of the review forks that went with it.
     """
 
     entry_id: str
@@ -176,6 +177,8 @@ class ArchiveListing:
     retention period ends for the entry, ``None`` when retention never deletes it.
     ``may_hold_user_folders`` marks an entry that may hold folders the user owns:
     neither retention nor a purge of every matching entry deletes it.
+    ``accepts_target_id`` tells whether a restore may name a new id: an Agent or
+    Project entry, or a Session entry of one Session and its review forks.
     """
 
     entry: ArchiveEntry
@@ -184,6 +187,7 @@ class ArchiveListing:
     not_restorable_reason: str | None
     purge_at: str | None = None
     may_hold_user_folders: bool = False
+    accepts_target_id: bool = False
 
 
 @dataclass(frozen=True)

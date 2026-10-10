@@ -44,4 +44,6 @@ Task-gated detail for `sessions.md`: how forks share history, how a history edit
 
 Then the `sessions` row is deleted (entries, Runs, side rows, prompt pins, seen Skills, Stream drafts and owned relations cascade; direct forks' `fork_parent_key` becomes NULL, so their `fork_source` disappears), and prompt blobs no other Session pins are deleted. A descendant's cursor stays valid across the materialization (same seqs and ids), while its revision bump makes Recall and Statistics re-read it.
 
+Review forks (`sessions.md` -> Terms -> Review fork) never receive copies of their source: `delete` deletes the idle live ones first, newest first, and archiving a Session takes them into its entry, whose purge deletes them before it. User forks, also of a review fork, and a review fork with a running Run stay and receive copies (`test_review_forks_join_their_session_entry_and_go_before_it_on_purge`).
+
 Materialization copies every live `entries` column, including additive columns unknown to this version, while replacing only the entry key, owning Session, Run reference and supersession state. Side-row and Run copies, including Run change paths, likewise preserve additive columns; deleting an ancestor must not erase newer fields from the descendant's history.

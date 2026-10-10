@@ -85,6 +85,7 @@ async def test_list_pages_entries_newest_first_with_their_retention(tmp_path: Pa
         "restorable": True,
         "not_restorable_reason": None,
         "may_hold_user_folders": False,
+        "accepts_target_id": True,
     }
     assert first["entries"][1]["label"] == "Notes"
 

@@ -47,7 +47,6 @@ TEXT_PREFIX = (
 RESULT_OF_TOOL = (
     "EXISTS (SELECT 1 FROM tool_calls AS c WHERE c.result_entry_key = e.entry_key AND c.name = ?)"
 )
-_REFLECTION_KINDS = "('reflection', 'memory_reflection', 'skill_reflection')"
 
 
 def current_view(
@@ -539,7 +538,7 @@ def run_records(
 
 
 def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
-    """Read the first finished own Run of each reflection fork of this Session.
+    """Read the first finished own Run of each live review fork of this Session.
 
     Only forks in the Session's own scope count: a reflection reviews its
     source for the same Agent.
@@ -549,21 +548,20 @@ def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> 
         f"""
         SELECT s.session_id, r.run_id, r.status, r.started_at,
           (SELECT k.run_kind FROM session_run_kinds AS k
-           WHERE k.session_key = s.session_key AND k.run_kind IN {_REFLECTION_KINDS}
+           WHERE k.session_key = s.session_key
+             AND k.run_kind IN {_store_values._REFLECTION_RUN_KINDS_SQL}
            ORDER BY k.run_kind LIMIT 1) AS run_kind
-        FROM sessions AS s
+        FROM sessions AS p
+        JOIN sessions AS s ON {_store_values._review_fork_of("s", "p")}
         JOIN runs AS r ON r.run_key = (
           SELECT run_key FROM runs
           WHERE session_key = s.session_key AND status <> 'running' AND inherited = 0
           ORDER BY start_seq, run_key LIMIT 1
         )
-        WHERE s.fork_parent_key = ? AND s.state = 'live'
-          AND s.project_id = ? AND s.agent_id = ?
-          AND EXISTS (SELECT 1 FROM session_run_kinds AS k
-            WHERE k.session_key = s.session_key AND k.run_kind IN {_REFLECTION_KINDS})
+        WHERE p.session_key = ? AND s.state = 'live'
         ORDER BY r.started_at, r.run_id
         """,
-        (source["session_key"], address.project_id or "", address.agent_id),
+        (source["session_key"],),
     ).fetchall()
     return [dict(row) for row in rows]
 

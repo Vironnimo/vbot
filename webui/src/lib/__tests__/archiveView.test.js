@@ -25,6 +25,7 @@ function entry(fields) {
     purge_at: null,
     session_count: 1,
     restorable: true,
+    accepts_target_id: true,
     ...fields,
   };
 }
@@ -105,9 +106,20 @@ describe('archive view rules', () => {
 
   it.each([
     ['an Agent', { kind: 'agent' }, null, true],
-    ['a single Session', { kind: 'session', session_count: 1 }, null, true],
-    ['a Session batch', { kind: 'session', session_count: 3 }, null, false],
-    ['Extension Sessions', { kind: 'owner_group' }, null, false],
+    // The server counts a Session's review forks with it but lets it take a new id.
+    ['a Session', { kind: 'session', session_count: 3 }, null, true],
+    [
+      'a Session batch',
+      { kind: 'session', session_count: 3, accepts_target_id: false },
+      null,
+      false,
+    ],
+    [
+      'Extension Sessions',
+      { kind: 'owner_group', accepts_target_id: false },
+      null,
+      false,
+    ],
     [
       'an Agent whose ID is taken',
       { kind: 'agent' },

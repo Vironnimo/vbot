@@ -104,13 +104,19 @@ class ArchiveEntry:
 
 @dataclass(frozen=True)
 class ArchiveMember:
-    """One archived Session generation of an entry, for display."""
+    """One archived Session generation of an entry, for display.
+
+    ``review_fork`` marks a review fork of another member: it followed that
+    Session into the entry and keeps its own Session id when the entry is
+    restored under a new one.
+    """
 
     address: SessionAddress
     generation_id: str
     title: str | None
     created_at: str
     last_activity_at: str
+    review_fork: bool
 
 
 @dataclass(frozen=True)

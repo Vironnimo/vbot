@@ -102,6 +102,20 @@ def check(services: ArchiveServices, entry_id: str, target_id: str | None) -> Re
     return _plan(services, _require_entry(services, entry_id), target_id).check
 
 
+def accepts_target_id(services: ArchiveServices, entry: ArchiveEntry) -> bool:
+    """Whether a restore of the entry may name a new id.
+
+    An Agent or Project entry takes a new Agent or Project id. A ``session``
+    entry takes a new Session id only for its one Session; the review forks that
+    followed it keep theirs.
+    """
+    if entry.kind in (ARCHIVE_KIND_AGENT, ARCHIVE_KIND_PROJECT):
+        return True
+    return entry.kind == ARCHIVE_KIND_SESSION and (
+        services.sessions.archive_ledger.holds_one_session(entry.entry_key)
+    )
+
+
 def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> RestoreOutcome:
     """Restore one entry, under ``target_id`` when given, and run its follow-up.
 
@@ -545,7 +559,7 @@ def _check_session(
 ) -> None:
     ledger = services.sessions.archive_ledger
     renamed = target != entry.subject_id
-    if renamed and entry.session_count != 1:
+    if renamed and not accepts_target_id(services, entry):
         findings.block(
             "invalid_target_id",
             "the entry holds several Sessions; restore it without a new Session id",

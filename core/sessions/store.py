@@ -226,9 +226,15 @@ class SessionStore:
         )
 
     def archive(self, address: SessionAddress) -> ArchiveEntryRef:
-        """Archive one live Session as its own ``session`` archive entry."""
+        """Archive one live Session with its review forks as its own ``session`` archive entry."""
         return self._execute_write(
             lambda connection: _store_archive.archive_session(connection, address, None)
+        )
+
+    def review_forks(self, address: SessionAddress) -> tuple[SessionAddress, ...]:
+        """The live review forks that follow one live Session; see ``_store_mutations``."""
+        return self._read(
+            lambda connection: _store_mutations.review_fork_addresses(connection, address)
         )
 
     def move(self, source: SessionAddress, target: SessionAddress) -> None:

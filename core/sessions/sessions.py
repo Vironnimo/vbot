@@ -976,11 +976,27 @@ class ChatSessionManager:
         return ChatSession(self._store, target)
 
     def delete(self, address: SessionAddress) -> None:
+        """Delete one live Session; its live review forks go first.
+
+        A review fork with a running Run stays, whole.
+        """
         self._store.delete(address)
+
+    def review_forks(self, address: SessionAddress) -> tuple[SessionAddress, ...]:
+        """The live review forks that follow one live Session, oldest first.
+
+        A review fork is a fork in the Session's own scope that carries a
+        reflection Run kind; review forks of those follow too. Archive and delete
+        take them along, so a caller that guards the Session's Runs must guard
+        theirs as well.
+        """
+        _validate_session_id(address.session_id)
+        return self._store.review_forks(address)
 
     async def archive(self, address: SessionAddress) -> ArchiveEntryRef:
         """Archive one live Session as its own ``session`` archive entry.
 
+        Its live review forks join the entry, except one with a running Run.
         An owner-managed Session refuses with a ``ChatSessionError``.
         """
         async with self.write_lock(address):
