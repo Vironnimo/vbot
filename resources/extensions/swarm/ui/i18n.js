@@ -33,8 +33,25 @@ export default Object.freeze({
   'swarm.board.more': 'Load earlier messages',
   'swarm.board.newer': 'Load newer messages',
   'swarm.board.newest': 'Jump to newest',
-  'swarm.activity': 'activity',
-  'swarm.context': 'Context',
+  'swarm.activity.empty': 'Choose a participant',
+  'swarm.activity.emptyHint':
+    'Their messages and Tool calls show here, live while they work.',
+  'swarm.activity.stop.network':
+    'The last Run stopped because the connection to the Provider failed.',
+  'swarm.activity.stop.timeout':
+    'The last Run stopped because the Provider stopped responding.',
+  'swarm.activity.stop.provider':
+    'The last Run stopped because the Provider returned an error.',
+  'swarm.activity.stop.internal':
+    'The last Run stopped because of an internal error. Check the application logs for details.',
+  'swarm.activity.stop.shutdown':
+    'The last Run stopped because vBot shut down.',
+  'swarm.activity.stop.restart': 'The last Run stopped because vBot restarted.',
+  'swarm.activity.stop.interrupted': 'The last Run was interrupted.',
+  'swarm.activity.stop.failed':
+    'The last Run failed. Check the application logs for details.',
+  'swarm.activity.stop.notStarted':
+    'A new Run could not start. Check the application logs for details.',
   'swarm.resumeParticipant': 'Resume participant',
   'swarm.loadOlderMessages': 'Load older messages',
   'swarm.noActivity': 'No retained activity yet.',
