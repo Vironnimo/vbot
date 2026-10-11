@@ -235,6 +235,45 @@ def test_unusable_attempt_stays_one_correlated_rejected_call(
 
 
 @pytest.mark.parametrize(
+    ("arguments", "expected", "named"),
+    [
+        pytest.param(
+            '{"path": ., "glob": *.py, "limit": 5}',
+            {"glob": "*.py", "limit": 5, "path": "."},
+            None,
+            id="bare-values",
+        ),
+        pytest.param('{"paths": [src, "docs"]}', {"paths": ["src", "docs"]}, None, id="array-item"),
+        # Each of these has another reading than text, or none: the call stays rejected.
+        pytest.param('{"path": C:/repo}', None, "C:/repo", id="colon"),
+        pytest.param('{"path": src\\\\app}', None, "path", id="backslash"),
+        pytest.param('{"command": ls -la}', None, "command", id="whitespace"),
+        pytest.param('{"path": None}', None, "None", id="value-word-none"),
+        pytest.param('{"mode": undefined}', None, "undefined", id="value-word-undefined"),
+        pytest.param('{"recursive": True}', None, "True", id="value-word-true"),
+        pytest.param("[., src]", None, None, id="not-an-object"),
+        pytest.param("placeholder", None, "placeholder", id="plain-text"),
+    ],
+)
+def test_bare_argument_values_are_read_as_text_only_when_that_is_their_one_reading(
+    arguments: str, expected: dict[str, Any] | None, named: str | None
+) -> None:
+    [candidate] = normalize_tool_call_candidates(
+        tool_call_id="call_bare", name="search_files", arguments=arguments, fallback_id="t0"
+    )
+
+    if expected is not None:
+        assert candidate["arguments"] == expected
+        assert TOOL_CALL_REJECTION_FIELD not in candidate
+        return
+    rejection = candidate[TOOL_CALL_REJECTION_FIELD]
+    assert candidate["arguments"] == {}
+    assert rejection["code"] == "malformed_tool_arguments"
+    if named is not None:
+        assert named in rejection["message"]
+
+
+@pytest.mark.parametrize(
     ("arguments", "expected_arguments", "rejected"),
     [
         pytest.param(
