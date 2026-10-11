@@ -984,6 +984,8 @@ beside the page, narrower one of them with an "All pages" button back to the lis
 It shows each page's number in the list and page header and opens `#wiki/w3` links
 by number. List rows show number, title and the relative time of the latest change
 (no excerpt); their tooltip names the latest revision, its author and the exact time.
+Revision lines name the user's own revisions "You", as Board posts do
+(`authorLabel`).
 A leading level-one heading that repeats the page title is not rendered twice.
 Search runs 300 ms after typing stops or at once on Enter; refreshes reload at least
 as many pages as are loaded, so they never take back "Load more". History lists

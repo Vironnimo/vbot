@@ -14,6 +14,7 @@
   import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
+  import { authorLabel } from './pagePresentation.js';
 
   let {
     entries,
@@ -53,7 +54,7 @@
     title: page.title,
     rows: [
       { label: t('swarm.wiki.revisionLabel'), value: page.revision },
-      { label: t('swarm.wiki.author'), value: page.author?.name },
+      { label: t('swarm.wiki.author'), value: authorLabel(page.author) },
       { label: t('swarm.wiki.updated'), value: formatMoment(page.updated_at) },
     ].filter((row) => row.value != null && row.value !== ''),
     placement: 'right',

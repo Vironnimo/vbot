@@ -9,6 +9,7 @@
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
   import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
+  import { authorLabel } from './pagePresentation.js';
 
   let {
     page,
@@ -71,12 +72,12 @@
   const pageMeta = $derived(
     metaLine(
       t('swarm.wiki.revisionNumber', { revision: page.revision }),
-      page.author?.name,
+      authorLabel(page.author),
       moment(page.updated_at),
     ),
   );
   const versionLine = (version) =>
-    metaLine(version.author?.name, moment(version.updated_at));
+    metaLine(authorLabel(version.author), moment(version.updated_at));
 </script>
 
 <article class="wiki-page" aria-labelledby="wiki-page-title" bind:this={root}>

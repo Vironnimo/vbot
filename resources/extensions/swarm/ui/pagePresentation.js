@@ -23,6 +23,10 @@ export function participantInitials(name) {
   ).toUpperCase();
 }
 
+// An author as the page names it: "You" for the user, otherwise its name.
+export const authorLabel = (author) =>
+  author?.kind === 'user' ? t('swarm.you') : (author?.name ?? '');
+
 export function participantState(participant) {
   return participant.run_active ? 'running' : participant.state;
 }

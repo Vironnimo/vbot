@@ -71,7 +71,7 @@ export default Object.freeze({
     'The Run was interrupted before anyone posted. Resume it to continue.',
   'swarm.board.emptyStopped': 'The Run was stopped before anyone posted.',
   'swarm.board.discussionOpened': '{name} opened the discussion {title}',
-  'swarm.board.you': 'You',
+  'swarm.you': 'You',
   'swarm.board.inReplyTo': 'In reply to {reference}',
   'swarm.board.addressed': 'To {names}',
   'swarm.board.showMore': 'Show more',

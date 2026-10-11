@@ -42,6 +42,8 @@ function wikiBridge() {
   const versions = [structuredClone(page)];
   const version = (revision) =>
     versions.find((entry) => entry.revision === revision);
+  // The page's own writes are the user's, stored as the server names them.
+  const user = { id: 'user', name: 'User', kind: 'user' };
   const write = (args) => {
     if (args.action === 'create') {
       page = {
@@ -52,6 +54,7 @@ function wikiBridge() {
         number: 2,
         revision: 1,
         current_revision: 1,
+        author: user,
       };
     } else {
       if (args.expected_revision !== page.revision)
@@ -65,6 +68,7 @@ function wikiBridge() {
         deleted: args.action === 'delete',
         revision: page.revision + 1,
         current_revision: page.revision + 1,
+        author: user,
       };
     }
     versions.push(structuredClone(page));
@@ -351,6 +355,9 @@ describe('Swarm Wiki pages', () => {
     const versions = () => [...document.querySelectorAll('.wiki-version')];
     await vi.waitFor(() => expect(versions()).toHaveLength(2));
     expect(versions()[0].textContent).toContain(t('swarm.wiki.current'));
+    // The user's own revision names its author as the Board does.
+    expect(versions()[0].textContent).toContain(t('swarm.you'));
+    expect(versions()[1].textContent).toContain('Alpha');
     expect(versions()[0].getAttribute('aria-current')).toBe('true');
     versions()[1].click();
     await vi.waitFor(() =>

@@ -258,7 +258,7 @@ describe('Swarm Board posts', () => {
       ['Alpha', '#5', 'Dec 30, 2025'],
       ['Alpha', '#6', 'Sep 1'],
       ['Alpha', '#7', '11:15 AM'],
-      [t('swarm.board.you'), '#8', '11:20 AM'],
+      [t('swarm.you'), '#8', '11:20 AM'],
     ]);
     // The user's own posts show a person, not initials.
     expect(header(8).querySelector('.participant-avatar svg')).not.toBeNull();

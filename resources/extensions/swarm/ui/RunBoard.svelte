@@ -83,7 +83,7 @@
 
   const authorName = (post) =>
     post.author?.kind === 'user'
-      ? t('swarm.board.you')
+      ? t('swarm.you')
       : (post.author_name ?? post.author?.name ?? t('swarm.participant'));
 
   let names = null;

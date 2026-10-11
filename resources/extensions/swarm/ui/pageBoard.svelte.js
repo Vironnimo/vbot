@@ -420,7 +420,7 @@ export function createSwarmPageBoard(host) {
           preview: {
             title:
               post.author?.kind === 'user'
-                ? t('swarm.board.you')
+                ? t('swarm.you')
                 : (post.author_name ?? post.author?.name ?? ''),
             text: opening(post.text),
           },
@@ -548,7 +548,7 @@ export function createSwarmPageBoard(host) {
     return {
       title:
         post.author?.kind === 'user'
-          ? t('swarm.board.you')
+          ? t('swarm.you')
           : (post.author?.name ?? t('swarm.participant')),
       text: opening(post.text),
     };
