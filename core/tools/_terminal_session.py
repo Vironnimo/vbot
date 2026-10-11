@@ -782,6 +782,23 @@ class TerminalSession:
             raise TerminalManagerError(f"Terminal {self.terminal_id} does not run a command")
         return self._command
 
+    def _drive(self) -> float | None:
+        """The Agent types into the session: a command becomes its console.
+
+        Like an interactive program, the command then wakes the Agent when it
+        goes idle and runs until it exits or is stopped; its result still
+        arrives when it ends. Returns the timeout in seconds this ended, None
+        when the command had none left to end.
+        """
+        self._activity.drive()
+        command = self._command
+        # A timeout that already fired finishes its stop.
+        if command is None or command.timeout_seconds is None or command.stop_reason is not None:
+            return None
+        ended, command.timeout_seconds = command.timeout_seconds, None
+        self._cancel_task(self._timeout_task)
+        return ended
+
     async def _stop_after(self, seconds: float) -> None:
         try:
             await self._services.sleep(seconds)
@@ -1072,9 +1089,7 @@ class TerminalSession:
                 self._screen_revision += 1
                 # A wait's pattern matches what the program prints below this line.
                 await self._screen.mark_input()
-                # A command the Agent answers wakes it when it goes idle, as an
-                # interactive program does; its result still arrives when it ends.
-                self._activity.drive()
+                timeout_ended = self._drive()
                 running = await self._running_before_input()
                 *typed, last = chunks
                 typed_at = self._services.monotonic()
@@ -1097,6 +1112,7 @@ class TerminalSession:
                             key,
                             bracketed_paste=bracketed_paste,
                             superseded=superseded,
+                            timeout_ended=timeout_ended,
                         )
         raise await self._write_failure() from write_error
 
@@ -1982,7 +1998,13 @@ class TerminalSession:
             )
 
     def _input_result(
-        self, characters: int, key: str | None, *, bracketed_paste: bool, superseded: int | None
+        self,
+        characters: int,
+        key: str | None,
+        *,
+        bracketed_paste: bool,
+        superseded: int | None,
+        timeout_ended: float | None = None,
     ) -> dict[str, Any]:
         return {
             "terminal_id": self.terminal_id,
@@ -1994,6 +2016,8 @@ class TerminalSession:
             "screen_revision": self._screen_revision,
             # A wait for the reply ends at the next quiet boundary after this count.
             "quiet_boundaries": self._quiet_boundaries,
+            # The command's timeout in seconds this input ended (``_drive``).
+            "timeout_ended": timeout_ended,
         }
 
     def _finish_files(self) -> None:

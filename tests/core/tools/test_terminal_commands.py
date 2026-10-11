@@ -384,9 +384,14 @@ class Tools(Harness):
         data: JsonObject = result["data"]
         return data
 
-    async def background(self, command: str) -> tuple[str, FakeTerminalAdapter, FakeTree]:
+    async def background(
+        self, command: str, *, timeout: float | None = None
+    ) -> tuple[str, FakeTerminalAdapter, FakeTree]:
         """Run *command* in background mode; return its terminal, adapter and tree."""
-        result = await self.call(SHELL_TOOL_NAME, {"command": command, "mode": "background"})
+        arguments: JsonObject = {"command": command, "mode": "background"}
+        if timeout is not None:
+            arguments["timeout"] = timeout
+        result = await self.call(SHELL_TOOL_NAME, arguments)
         assert result["ok"] is True, result
         return str(result["data"]["terminal_id"]), self.factory.adapters[-1], self.trees[-1]
 
@@ -664,12 +669,15 @@ async def test_command_wait_ends_only_at_exit_match_or_timeout(tools: Tools, wor
 
 
 @pytest.mark.asyncio
-async def test_a_command_the_agent_typed_into_wakes_it_when_it_goes_idle(tools: Tools) -> None:
-    terminal_id, adapter, tree = await tools.background("sync-tool")
+async def test_a_command_the_agent_typed_into_behaves_like_an_interactive_terminal(
+    tools: Tools,
+) -> None:
+    terminal_id, adapter, tree = await tools.background("sync-tool", timeout=10)
     adapter.emit("Sync now? ")
     await eventually(lambda: shows(tools, terminal_id, "Sync now?"))
 
-    # The answer starts work that outlasts the reply: the result says how its screen arrives.
+    # The answer starts work that outlasts the reply: the result says how its screen
+    # arrives, and that the command now runs until it exits or the Agent stops it.
     typing = asyncio.ensure_future(
         tools.terminal({"action": "input", "terminal_id": terminal_id, "text": "y", "key": "enter"})
     )
@@ -680,16 +688,24 @@ async def test_a_command_the_agent_typed_into_wakes_it_when_it_goes_idle(tools: 
     # Output renders in real time: the clock moves on once it shows.
     await eventually(lambda: shows(tools, terminal_id, "Syncing..."))
     await tools.run_clock(typing, until=tools.clock.now + 10)
-    assert typing.result()["next"] == (
+    typed = typing.result()
+    assert typed["note"] == (
+        "Your input removed the command's 10-second timeout: it now runs until it exits or you "
+        f"stop it with {terminal_call('kill', terminal_id)} when you no longer need it."
+    )
+    assert typed["next"] == (
         "The command is still working; it has no timeout. Its screen arrives as a new message "
         "once it goes idle, and its result when it exits; continue other work or end your turn. "
         f"To wait for it now instead, call {terminal_call('wait', terminal_id)}."
     )
     tools.keep_results()
 
-    # A wait without pattern ends when the work is done; the screen it shows is not delivered.
+    # A wait without pattern ends when the work is done, not at the removed timeout;
+    # the screen it shows is not delivered.
     waiting = asyncio.ensure_future(tools.terminal({"action": "wait", "terminal_id": terminal_id}))
     await eventually(lambda: tools.clock.sleeping)
+    await tools.run_clock(waiting, until=12)
+    assert not waiting.done()
     adapter.emit("Synced 3 files.\r\nSync again? ")
     await eventually(lambda: shows(tools, terminal_id, "Sync again?"))
     tree.running = tree.running[:1]
