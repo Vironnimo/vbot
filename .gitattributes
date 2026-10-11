@@ -1,5 +1,10 @@
-# Shell scripts and Git hooks must keep LF endings or the shebang breaks on Linux.
+# Every text file is stored and checked out with LF, whatever each machine's
+# core.autocrlf says; Git detects binary files itself.
+* text=auto eol=lf
+# Shell scripts and Git hooks must keep LF endings or the shebang breaks on
+# Linux, so they never depend on that detection.
 *.sh text eol=lf
 .githooks/* text eol=lf
-*.ps1 text eol=crlf
 scripts/linux/vbot text eol=lf
+# Windows PowerShell scripts keep CRLF.
+*.ps1 text eol=crlf
