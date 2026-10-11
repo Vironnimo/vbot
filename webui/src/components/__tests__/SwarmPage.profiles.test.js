@@ -385,6 +385,28 @@ describe('Swarm profile settings', () => {
     expect(lastSaved(operation).allowed_skills).toEqual(['*']);
   });
 
+  it('drops Skills that no longer exist once single Skills change', async () => {
+    // The list cannot show a removed Skill, so turning every shown one off
+    // must not leave it behind.
+    const { bridge, operation } = createBridge({
+      ...profile,
+      allowed_skills: ['alpha', 'vanished'],
+    });
+    extendCatalog(operation, (catalog) => {
+      catalog.skills = [{ name: 'alpha', description: 'test-owned alpha' }];
+    });
+    await openEditor(bridge);
+    const alpha = () =>
+      document.querySelector(
+        `[role="checkbox"][aria-label="${t('skills.panel.toggle', { name: 'alpha' })}"]`,
+      );
+    await vi.waitFor(() => expect(alpha()).not.toBeNull());
+    alpha().click();
+    await tick();
+    await saveAndConfirm();
+    expect(lastSaved(operation).allowed_skills).toEqual([]);
+  });
+
   it('switches working-directory sources without sending stale fields', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);

@@ -854,6 +854,17 @@ describe('Swarm Run start', () => {
     await vi.waitFor(() => expect(directory()).not.toBeNull());
     expect(document.getElementById('swarm-goal-error')).toBeNull();
     expect(document.getElementById('swarm-start-directory-error')).toBeNull();
+    // A Model the catalog no longer offers is named in the page's notice.
+    fill('swarm-goal', 'goal');
+    fill('swarm-start-directory', 'C:/work');
+    await tick();
+    operation.mockRejectedValueOnce(new Error('model_unavailable'));
+    button(START_RUN).click();
+    await vi.waitFor(() =>
+      expect(notice('alert')).toBe(
+        t('swarm.error.model_unavailable.named', { models: '“demo/model”' }),
+      ),
+    );
   });
 });
 

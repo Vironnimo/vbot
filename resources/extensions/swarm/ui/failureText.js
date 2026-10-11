@@ -10,6 +10,7 @@ const CODE_TEXTS = {
   directory_not_found: () => t('swarm.error.directory_not_found'),
   invalid_arguments: () => t('swarm.error.invalid_arguments'),
   message_not_found: () => t('swarm.error.message_not_found'),
+  model_unavailable: () => t('swarm.error.model_unavailable'),
   participant_not_resumable: () => t('swarm.error.participant_not_resumable'),
   profile_not_found: () => t('swarm.error.profile_not_found'),
   revision_conflict: () => t('swarm.error.revision_conflict'),

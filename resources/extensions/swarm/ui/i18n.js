@@ -181,6 +181,10 @@ export default Object.freeze({
   'swarm.error.invalid_arguments':
     'vBot could not accept this request. Check your entries and try again.',
   'swarm.error.message_not_found': 'That post is not on this Run’s Board.',
+  'swarm.error.model_unavailable':
+    'A Model of this Swarm is no longer available. Choose another Model in the Swarm.',
+  'swarm.error.model_unavailable.named':
+    'This Swarm uses a Model that is no longer available: {models}. Choose another Model in the Swarm.',
   'swarm.error.participant_not_resumable':
     'This participant is already working.',
   'swarm.error.profile_not_found':

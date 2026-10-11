@@ -114,13 +114,15 @@ def _swarm_projection(swarm: Json) -> Json:
 
 
 def _validate_profile_catalog(profile: Json, catalog: Json) -> None:
+    """Refuse a profile whose participants cannot run with the current catalog.
+
+    A Model or Team Agent the catalog no longer offers stops the Run. Skills and
+    Tools it no longer has are left out, as core does for an Agent's allowlists:
+    such an entry only narrows the grant.
+    """
     known_models = {item.get("id") for item in catalog.get("models", [])}
     if any(item["model"] not in known_models for item in profile["participants"]):
-        raise SwarmStoreError("invalid_arguments", field="participants")
-    known_tools = {item.get("name") for item in catalog.get("tools", [])}
-    allowed = profile["tool_access"].get("allowed", [])
-    if any(item not in known_tools for item in allowed):
-        raise SwarmStoreError("invalid_arguments", field="tool_access")
+        raise SwarmStoreError("model_unavailable", field="participants")
     project = next(
         (
             item
@@ -135,10 +137,6 @@ def _validate_profile_catalog(profile: Json, catalog: Json) -> None:
         for item in profile["participants"]
     ):
         raise SwarmStoreError("invalid_arguments", field="repository_profile")
-    known_skills = {item.get("name") for item in catalog.get("skills", [])}
-    known_skills.update((project or {}).get("allowed_skills", []))
-    if any(item != "*" and item not in known_skills for item in profile["allowed_skills"]):
-        raise SwarmStoreError("invalid_arguments", field="allowed_skills")
 
 
 def _participant_config(profile: Json, participant: Json, cwd: Path) -> TemporaryAgentConfig:

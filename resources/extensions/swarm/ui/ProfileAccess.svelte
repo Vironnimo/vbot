@@ -2,8 +2,9 @@
   // The Tool access and Skills sections of the Swarm editor: what every
   // participant may use. It edits the editor's bound draft.
   // `allowed_skills` is `['*']` while new Skills are added automatically and
-  // names the allowed Skills otherwise; saved names the catalog does not list
-  // (a Project's own Skills) are kept.
+  // names the allowed Skills otherwise. A change keeps saved names of the
+  // chosen Project's own Skills, which the list does not show, but drops names
+  // of Skills that no longer exist: the list cannot show them either.
   import { SvelteSet } from 'svelte/reactivity';
   import { t } from '../../../../webui/src/lib/i18n.js';
   import SkillSelectionPanel from '../../../../webui/src/components/skills/SkillSelectionPanel.svelte';
@@ -21,6 +22,11 @@
   );
   const skillNames = $derived(
     (catalog.skills ?? []).map((skill) => skill.name),
+  );
+  const projectSkillNames = $derived(
+    (catalog.projects ?? []).find(
+      (project) => project.id === draft.working_directory?.project_id,
+    )?.allowed_skills ?? [],
   );
   const everySkill = $derived(draft.allowed_skills.includes('*'));
   const skillItems = $derived(
@@ -65,10 +71,11 @@
   // Skill that stays allowed.
   function setSkills(names, allowed) {
     if (everySkill && allowed) return;
+    const known = new Set([...skillNames, ...projectSkillNames]);
     const next = new SvelteSet(
       everySkill
         ? skillNames
-        : draft.allowed_skills.filter((name) => name !== '*'),
+        : draft.allowed_skills.filter((name) => known.has(name)),
     );
     for (const name of names) {
       if (allowed) next.add(name);

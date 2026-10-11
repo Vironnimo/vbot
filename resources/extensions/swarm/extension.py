@@ -521,6 +521,13 @@ class SwarmExtension:
                     return await handlers[name](arguments)
             return await handlers[name](arguments)
         except SwarmStoreError as error:
+            # The page words the code; the log keeps the field it concerns.
+            _LOGGER.warning(
+                "Swarm operation rejected (operation=%s code=%s field=%s)",
+                name,
+                error.code,
+                error.field or "-",
+            )
             raise ValueError(error.code) from error
 
     async def _catalog(self, _arguments: Json) -> Json:

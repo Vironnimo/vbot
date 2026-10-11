@@ -166,6 +166,35 @@ async def test_run_rejects_invalid_directory_before_creating_sessions(lifecycle,
 
 
 @pytest.mark.asyncio
+async def test_run_leaves_out_vanished_skills_and_tools_but_not_models(lifecycle, tmp_path):
+    def profile(model: str) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "name": f"Catalog {model}",
+            "participants": [{"model": model, "count": 1}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": ["vanished_tool"]},
+            "allowed_skills": ["vanished-skill"],
+        }
+
+    # Skills and Tools the catalog no longer has only narrow the grant.
+    kept = await lifecycle.service.store.save_profile(
+        profile("fixture/model"), expected_revision=None
+    )
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": kept["id"], "prompt": "goal", "request_id": "kept"}
+    )
+    assert started["swarm_id"]
+    # A Model it no longer offers cannot run.
+    gone = await lifecycle.service.store.save_profile(profile("gone/model"), expected_revision=None)
+    with pytest.raises(ValueError, match="^model_unavailable$"):
+        await lifecycle.service.operation(
+            "swarms.start", {"profile_id": gone["id"], "prompt": "goal", "request_id": "gone"}
+        )
+    assert len((await lifecycle.service.store.list_swarms()).entries) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "policy",
     [

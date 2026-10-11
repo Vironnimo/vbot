@@ -96,8 +96,9 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   All/None Tool actions materialize a selected policy through `toolAccess.js`.
   Skills use the shared Skill selection panel: adding new Skills automatically
   is the `['*']` wildcard, and changing a single Skill turns it into the
-  explicit list of allowed Skills (saved names the catalog does not list are
-  kept). The Team agent row shows while the Swarm works in a Project with Team
+  explicit list of allowed Skills. That change keeps saved names of the chosen
+  Project's own Skills, which the panel does not show, and drops names of
+  Skills that no longer exist. The Team agent row shows while the Swarm works in a Project with Team
   agents; changing the working directory drops Team agents the new Project does
   not offer, because saves reject them.
   `DeliverySettings.svelte` edits one `delivery` value for any caller (per
@@ -655,7 +656,11 @@ the optional absolute-path `swarms.start.working_directory` argument and selects
 directory-only execution, without inferring Project identity from a path.
 Start validates the effective directory and catalog before creating Sessions;
 a directory that names no existing absolute folder, also a Project's folder that
-is gone, fails with `directory_not_found`.
+is gone, fails with `directory_not_found`, and a Model the catalog no longer
+offers with `model_unavailable` (the page names it). Skills and Tools the
+catalog no longer has are left out, as core does for Agent allowlists: they
+only narrow the grant. Every rejected page operation is logged with its code
+and field (`Swarm operation rejected`).
 The stored profile and profile snapshot stay unchanged; `effective_configuration`
 records the Run directory and Project selection for Resume and request replay.
 On the page, Start first checks that a Swarm, a working directory and a goal

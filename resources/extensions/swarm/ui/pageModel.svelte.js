@@ -928,6 +928,22 @@ export function createSwarmPageModel(host) {
 
   // Validates the form, showing each problem at its field and focusing the
   // first, then starts the Run and shows it with its header focused.
+  // Names the Swarm's Models the catalog no longer offers, when it knows them.
+  function unavailableModelsText(profile) {
+    const known = (catalog.models ?? []).map((model) => model.id);
+    const missing = (profile?.participants ?? [])
+      .map((row) => row.model)
+      .filter(
+        (model, index, models) =>
+          model && !known.includes(model) && models.indexOf(model) === index,
+      );
+    return missing.length
+      ? t('swarm.error.model_unavailable.named', {
+          models: missing.map((model) => `“${model}”`).join(', '),
+        })
+      : null;
+  }
+
   async function startSwarm() {
     error = '';
     const errors = {
@@ -970,6 +986,8 @@ export function createSwarmPageModel(host) {
       // A folder the server does not find is a problem of its field.
       missingDirectory = cause?.message === 'directory_not_found';
       if (missingDirectory) startErrors = { directory: failureText(cause) };
+      else if (cause?.message === 'model_unavailable')
+        error = unavailableModelsText(selectedProfile) ?? failureText(cause);
       else error = failureText(cause);
     } finally {
       pending = '';
