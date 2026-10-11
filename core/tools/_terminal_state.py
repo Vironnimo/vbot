@@ -26,10 +26,6 @@ TERMINAL_STATUS_DEFAULT_LINES = 30
 TERMINAL_STATUS_MAX_LINES = 100
 TERMINAL_MAX_LIVE_PER_SESSION = 4
 TERMINAL_MAX_LIVE_GLOBAL = 32
-# Shell commands are Terminal Sessions with their own capacity and size.
-TERMINAL_MAX_LIVE_COMMANDS = 64
-TERMINAL_COMMAND_COLUMNS = 200
-TERMINAL_COMMAND_ROWS = 50
 TERMINAL_SWEEP_INTERVAL_SECONDS = 60.0
 TERMINAL_FINISHED_TTL = timedelta(minutes=30)
 TERMINAL_NOTICE_MESSAGE_CAP_CHARS = 16_000
@@ -98,7 +94,6 @@ TerminalState = Literal[
     "error",
 ]
 AttentionKind = Literal["idle", "exited", "error"]
-TerminalKind = Literal["terminal", "command"]
 # Why a wait for a program ended: it exited, printed output matching the
 # pattern, went quiet after input, went idle showing a new screen, or the
 # wait's time ran out.
@@ -166,16 +161,16 @@ class TerminalClosedError(TerminalManagerError):
 class TerminalCapacityError(TerminalManagerError):
     """Raised when a live Terminal Session capacity limit is reached.
 
-    ``scope`` names the limit: ``session`` (one vBot Session's terminals),
-    ``global`` (every terminal) or ``commands``. ``terminals`` are the live
-    terminals the requesting Session started, oldest first: the ones it can stop.
+    ``scope`` names the limit: ``session`` (one vBot Session's terminals) or
+    ``global`` (every terminal). ``terminals`` are the live terminals the
+    requesting Session started, oldest first: the ones it can stop.
     """
 
     def __init__(
         self,
         message: str,
         *,
-        scope: Literal["session", "global", "commands"],
+        scope: Literal["session", "global"],
         limit: int,
         terminals: tuple[TerminalInfo, ...] = (),
     ) -> None:
@@ -183,14 +178,6 @@ class TerminalCapacityError(TerminalManagerError):
         self.scope = scope
         self.limit = limit
         self.terminals = terminals
-
-
-class TerminalIsCommandError(TerminalManagerError):
-    """Raised when attach or detach targets a shell command's terminal.
-
-    A command stays attached to the Session that ran it, so its result reaches
-    that Session.
-    """
 
 
 class TerminalLaunchError(TerminalManagerError):
@@ -257,14 +244,8 @@ class TerminalInfo:
     attention_revision: int
     acknowledged_attention_revision: int
     log_path: Path | None
-    # ``command``: a shell command run by the shell Tool.
-    kind: TerminalKind = "terminal"
-    # A command still running in the foreground of its Tool call is not listed.
-    hidden: bool = False
     # vBot, the user or an Agent stopped the program before it ended on its own.
     stopped: bool = False
-    # The shell command an Agent ran, for a command terminal.
-    shell_command: str | None = None
 
     @property
     def finished(self) -> bool:
@@ -272,11 +253,8 @@ class TerminalInfo:
 
     @property
     def program(self) -> str:
-        """The program as it was asked for: the Agent's shell command, the
-        program a manual terminal runs inside its shell, or the started command
-        line - never the shell vBot wraps a command in."""
-        if self.shell_command is not None:
-            return self.shell_command
+        """The program as it was asked for: the program a manual terminal runs
+        inside its shell, or the started command line."""
         if self.launch_command:
             return _command_line((self.launch_command, *self.launch_arguments))
         return _command_line((self.command, *self.arguments))

@@ -164,18 +164,10 @@ def test_definition_fits_the_offered_tools(shell_offered: bool, expected: str) -
 
     terminal = projected[0]
     assert terminal["description"] == expected.format(shell=SHELL)
-    # The shell's results hand out terminal ids only where the shell is offered.
-    assert terminal["parameters"]["properties"]["terminal_id"]["description"] == (
-        f"The terminal's id from start, list, or a {SHELL} result. Required except for start "
-        "and list."
-        if shell_offered
-        else "The terminal's id from start or list. Required except for start and list."
-    )
+    assert terminal["parameters"] == TERMINAL_TOOL_PARAMETERS
     assert projected[1:] == definitions[1:]
     # The registered definition stays as it was.
-    assert TERMINAL_TOOL_PARAMETERS["properties"]["terminal_id"]["description"].endswith(
-        f"or a {SHELL} result. Required except for start and list."
-    )
+    assert definitions[0]["description"] == TERMINAL_TOOL_DESCRIPTION
     without_terminal = definitions[1:]
     assert project_terminal_tool_definitions(without_terminal) == without_terminal
 
@@ -591,6 +583,44 @@ async def test_start_rejects_unresolvable_workdirs_before_spawn(
     )
     assert factory.calls == []
     assert terminal_manager.list_groups_for_operator() == groups_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_id", "offered", "named_call"),
+    [
+        ("sub_child", ("background_tasks",), {"action": "status", "id": "sub_child"}),
+        ("cmd_build", (), None),
+    ],
+)
+async def test_ids_of_background_tasks_are_refused_before_anything_runs(
+    manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    task_id: str,
+    offered: tuple[str, ...],
+    named_call: JsonObject | None,
+) -> None:
+    """A background command or Sub-Agent is never a terminal: every action refuses its id,
+    and names the background_tasks call only when the Agent can make it."""
+    terminal_manager, factory = manager
+    context = make_context(tmp_path, offered_tools=offered)
+
+    for action in ("start", "status", "wait", "input", "kill", "attach", "detach"):
+        result = await call(
+            terminal_manager,
+            context,
+            {"action": action, "terminal_id": task_id, "text": "y"}
+            if action in {"start", "input"}
+            else {"action": action, "terminal_id": task_id},
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == "not_a_terminal"
+        message = str(result["error"]["message"])
+        assert task_id in message
+        mentioned = re.findall(r"background_tasks (\{.*?\})", message)
+        assert [json.loads(found) for found in mentioned] == ([named_call] if named_call else [])
+        assert ("background_tasks" in message) is (named_call is not None)
+    assert terminal_manager.list_terminals() == [] and factory.calls == []
 
 
 @pytest.mark.asyncio

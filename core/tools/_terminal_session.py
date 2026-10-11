@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, TextIO
+from typing import Any, TextIO
 
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
@@ -27,15 +27,6 @@ from ._terminal_activity import (
     ProcessSample,
     QuietRestart,
     TerminalActivity,
-)
-from ._terminal_command import (
-    COMMAND_IDLE_SECONDS,
-    COMMAND_LEFTOVER_QUIET_SECONDS,
-    COMMAND_LOG_REFRESH_SECONDS,
-    COMMAND_STOP_GRACE_SECONDS,
-    CommandReport,
-    CommandState,
-    StopReason,
 )
 from ._terminal_input import input_chunks
 from ._terminal_render_host import TerminalScreen
@@ -61,26 +52,11 @@ from ._terminal_state import (
     _utc_now,
     _validate_dimensions,
 )
-from .process_tree import IDLE_CPU_SECONDS, TREE_POLL_SECONDS, ProcessTree, ProcessTreeFacts
+from .process_tree import TREE_POLL_SECONDS, ProcessTree
 
 _LOGGER = get_logger("tools.terminal_manager")
 _READ_CHUNK_CHARS = 4096
 _OPERATOR_READ_HISTORY_LINES = 30
-# A command's shell is checked this often even while output keeps arriving.
-_COMMAND_LIVENESS_SECONDS = 0.5
-# After the shell exited, and after the last process of a command ended, its
-# last output is read for at most this long.
-_COMMAND_DRAIN_SECONDS = 1.0
-# A command's progress tail is published at most this often.
-_COMMAND_PROGRESS_SECONDS = 0.5
-_COMMAND_PROGRESS_LINES = 40
-# Output and input must pause this long before the idle CPU baseline is taken.
-_COMMAND_IDLE_BASELINE_SECONDS = 1.0
-# While a wait finds no idle baseline yet, it checks for one this often.
-_COMMAND_QUIET_POLL_SECONDS = 0.5
-# After a match, a command's wait lingers this long for its exit: a final line
-# such as "BUILD OK" then reports the exit code instead of a running command.
-_COMMAND_MATCH_EXIT_SECONDS = 2.0
 # Labels in Agent notices are cut to this many characters.
 _NOTICE_LABEL_CHARS = 60
 # A key typed after text follows once the output paused for this share of the
@@ -92,19 +68,6 @@ _ECHO_LIMIT_SHARE = 0.5
 # Failures that persist across chunks or polls, keyed by (terminal id, kind):
 # logged when they start and when they end, not on every repetition.
 _CONDITIONS = LoggedConditions()
-
-CommandWaitOutcome = Literal["exited", "deadline", "idle"]
-
-
-@dataclass(slots=True)
-class _QuietWatch:
-    """A command's idle tracking: the activity count its quiet period belongs to,
-    and the time, tree CPU and started processes when its baseline was taken."""
-
-    activity_count: int = -1
-    since: float | None = None
-    cpu_seconds: float = 0.0
-    started_processes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,11 +138,10 @@ class TerminalSession:
         log_lease: TemporaryFileLease | None,
         cleanup: Callable[[], None] | None,
         services: TerminalSessionServices,
-        command: CommandState | None = None,
         observer: ProcessTree | None = None,
     ) -> None:
-        """*observer* watches an interactive program's process tree, whose CPU time
-        and new processes show work its output does not."""
+        """*observer* watches the program's process tree, whose CPU time and new
+        processes show work its output does not."""
         self.terminal_id = terminal_id
         self.owner = owner
         self.lifecycle_owner = owner
@@ -198,7 +160,6 @@ class TerminalSession:
         self._lock = asyncio.Lock()
         # Serializes input, so nothing types between a text and the key after it.
         self._input_lock = asyncio.Lock()
-        self._command = command
         self._observer = observer
         self._activity = TerminalActivity(
             awaiting_initial_input=awaiting_initial_input,
@@ -206,7 +167,6 @@ class TerminalSession:
             repaint_window=TERMINAL_REPAINT_WINDOW_SECONDS,
             quiet_seconds=services.activity_quiet_seconds,
             idle_seconds=services.idle_seconds,
-            command=command is not None,
         )
         self._title = ""
         self._bracketed_paste = False
@@ -230,15 +190,13 @@ class TerminalSession:
         self._activity_origin_run_id: str | None = None
         self._activity_execution_owner = execution_owner
         self._suppress_exit_attention = False
-        # vBot, the user or an Agent stopped the interactive program.
+        # vBot, the user or an Agent stopped the program.
         self._stopped = False
         # A result durably showed the program's end: its exit is not delivered.
         self._exit_acknowledged = False
         # Set and replaced whenever output, input, attention or the program's
         # end changes what a waiter can observe.
         self._change = asyncio.Event()
-        # A command's exit attention, held until the session has finished.
-        self._command_attention: dict[str, Any] | None = None
         self._termination_pending = False
         self._termination_targets: list[Any] = []
         self._output_event = asyncio.Event()
@@ -253,27 +211,13 @@ class TerminalSession:
         self._log_handle = log_handle
         self._log_lease = log_lease
         self._cleanup = cleanup
-        self._timeout_task: asyncio.Task[None] | None = None
         self._last_output_at = services.monotonic()
-        # A command's log file lacks output rendered after it last showed the pending rows.
-        self._log_stale = False
-        self._log_shown_at = -COMMAND_LOG_REFRESH_SECONDS
-        # Output and input: a command is idle only while neither happens.
-        self._activity_count = 0
-        self._last_activity_at = self._last_output_at
-        self._quiet = _QuietWatch()
-        self._shell_dead_at: float | None = None
-        self._tree_dead_at: float | None = None
         # Set once vBot killed the process tree.
         self._tree_killed = asyncio.Event()
         # Why output can no longer be read, and why the screen fell behind it;
         # either becomes the Session's failure once its processes have ended.
         self._read_failure: Exception | None = None
         self._render_failure: Exception | None = None
-        # Set once the session finished: none of its processes runs any longer.
-        self._finished_event = asyncio.Event()
-        self._next_liveness_check = 0.0
-        self._next_tree_poll = 0.0
 
     # Facts
 
@@ -292,15 +236,6 @@ class TerminalSession:
     @property
     def launch(self) -> TerminalLaunch:
         return self._launch
-
-    @property
-    def command(self) -> CommandState | None:
-        return self._command
-
-    @property
-    def hidden(self) -> bool:
-        """A command still running in the foreground of its Tool call is not listed."""
-        return self._command is not None and self._command.hidden
 
     def info(self) -> TerminalInfo:
         return TerminalInfo(
@@ -328,13 +263,8 @@ class TerminalSession:
             attention=self._attention,
             attention_revision=self._attention_revision,
             acknowledged_attention_revision=self._acknowledged_attention_revision,
-            log_path=self._log_path if self._command is None else self._command.log_path,
-            kind="terminal" if self._command is None else "command",
-            hidden=self.hidden,
-            stopped=self._stopped
-            if self._command is None
-            else self._command.stop_reason is not None,
-            shell_command=None if self._command is None else self._command.command,
+            log_path=self._log_path,
+            stopped=self._stopped,
         )
 
     # Lifecycle
@@ -342,11 +272,6 @@ class TerminalSession:
     def start(self, *, initial_text: str | None) -> None:
         """Start reading output and, for an Agent start with text, its first input."""
         self._reader_task = self._background(self._read(), "reader")
-        command = self._command
-        if command is not None and command.timeout_seconds is not None:
-            self._timeout_task = self._background(
-                self._stop_after(command.timeout_seconds), "timeout"
-            )
         if initial_text is not None and self.origin_run_id is not None:
             self._initial_input_task = self._background(
                 self._send_initial_input(initial_text, origin_run_id=self.origin_run_id),
@@ -355,19 +280,11 @@ class TerminalSession:
             self._initial_input_task.add_done_callback(lambda _task: self._signal_change())
         self._publish_state()
 
-    async def terminate(
-        self, *, suppress_attention: bool, reason: StopReason | None = None
-    ) -> None:
-        """Stop the process tree; a failure leaves the Session unfinished for a retry.
-
-        For a command, *reason* records why vBot stopped it (the Agent's own
-        kill is ``agent``).
-        """
+    async def terminate(self, *, suppress_attention: bool) -> None:
+        """Stop the process tree; a failure leaves the Session unfinished for a retry."""
         self._cancel_task(self._initial_input_task)
         if not self.finished:
             self._stopped = True
-        if self._command is not None:
-            self._command.request_stop(reason or "agent")
         if suppress_attention:
             self._suppress_exit_attention = True
             self._cancel_delivery()
@@ -399,8 +316,6 @@ class TerminalSession:
         """Synchronously stop the process for Runtime shutdown; False if the tree survived."""
         self._suppress_exit_attention = True
         self._cancel_delivery()
-        if self._command is not None:
-            self._command.request_stop("shutdown")
         if self._termination_pending or not self.finished:
             self._termination_pending = True
             try:
@@ -414,7 +329,6 @@ class TerminalSession:
             self._initial_input_task,
             self._settle_task,
             self._sample_task,
-            self._timeout_task,
         ):
             self._cancel_task(task)
         self._finish_files()
@@ -422,10 +336,6 @@ class TerminalSession:
 
     def _kill_tree(self) -> None:
         """Kill the process tree (blocking); OSError when that is not confirmed."""
-        tree = self._command.tree if self._command is not None else None
-        if tree is not None:
-            tree.terminate()
-            return
         terminal_backend.terminate_process_tree(self._adapter, targets=self._termination_targets)
 
     def pending_tasks(self) -> list[asyncio.Task[Any]]:
@@ -440,7 +350,6 @@ class TerminalSession:
                 self._settle_task,
                 self._sample_task,
                 self._delivery_task,
-                self._timeout_task,
             )
             if task is not None and not task.done()
         ]
@@ -453,134 +362,7 @@ class TerminalSession:
         for kind in ("render", "end_check", "process_sample"):
             _CONDITIONS.ended((self.terminal_id, kind))
 
-    # Commands
-
-    async def wait_command(
-        self,
-        *,
-        deadline: float | None,
-        idle_seconds: float | None,
-        progress: Callable[[str], Awaitable[None]] | None,
-    ) -> CommandWaitOutcome:
-        """Wait until the command ends, *deadline* passes or it turns idle.
-
-        The command ends once its shell exited and every process it left
-        running ended or went quiet (``_settle_leftovers``).
-
-        *deadline* is a ``monotonic`` time. Idle means no output and less
-        than a trace of CPU time in the whole process tree for *idle_seconds*;
-        only a command whose shell still runs turns idle.
-        *progress* receives the screen's newest rows while output arrives.
-        """
-        command = self._require_command()
-        services = self._services
-        published_output = -1
-        next_progress = 0.0
-        while not command.has_ended:
-            now = services.monotonic()
-            if deadline is not None and now >= deadline:
-                return "deadline"
-            if (
-                idle_seconds is not None
-                and not command.shell_exited
-                and await self._command_idle(command, idle_seconds)
-            ):
-                return "idle"
-            if (
-                progress is not None
-                and self._output_count != published_output
-                and now >= next_progress
-            ):
-                published_output = self._output_count
-                next_progress = now + _COMMAND_PROGRESS_SECONDS
-                async with self._lock:
-                    tail = (await self._screen.observe(_COMMAND_PROGRESS_LINES)).tail
-                await progress(tail)
-            pause = _COMMAND_PROGRESS_SECONDS
-            if deadline is not None:
-                pause = min(pause, max(0.0, deadline - now))
-            await self._wait_or_sleep(command.ended, pause)
-        return "exited"
-
-    async def command_idle_seconds(self) -> float | None:
-        """How long the running command has been idle, counted from its last output or input.
-
-        None while it works: it printed output, got input, used CPU or
-        started a process within ``COMMAND_IDLE_SECONDS``, or once its shell exited.
-        """
-        command = self._require_command()
-        if command.shell_exited or not await self._command_idle(command, COMMAND_IDLE_SECONDS):
-            return None
-        return self._services.monotonic() - self._last_activity_at
-
-    async def _command_idle(self, command: CommandState, idle_seconds: float) -> bool:
-        """Whether the command printed nothing, got no input and its tree used no CPU
-        for *idle_seconds*."""
-        if not await self._quiet_baseline(command):
-            return False
-        quiet = self._quiet
-        now = self._services.monotonic()
-        if quiet.since is None or now - quiet.since < idle_seconds:
-            return False
-        activity = self._activity_count
-        facts = await asyncio.to_thread(command.tree_facts)
-        if facts is None or activity != self._activity_count:
-            return False
-        if (
-            abs(facts.cpu_seconds - quiet.cpu_seconds) > IDLE_CPU_SECONDS
-            or facts.started != quiet.started_processes
-        ):
-            # CPU time or a new process is work, and so is an exit that took its
-            # CPU time out of the sum (POSIX counts running processes only): the
-            # quiet period starts again.
-            quiet.since = now
-            quiet.cpu_seconds = facts.cpu_seconds
-            quiet.started_processes = facts.started
-            return False
-        return True
-
-    async def _quiet_baseline(self, command: CommandState) -> bool:
-        """Take the CPU baseline of the current quiet period; True once it is taken.
-
-        Output or input ends a quiet period; the next one's baseline is taken
-        once both have paused for a moment. Every check of the command's
-        idleness shares it: the reader, a wait, and a status.
-        """
-        quiet = self._quiet
-        if quiet.activity_count != self._activity_count:
-            quiet.activity_count = self._activity_count
-            quiet.since = None
-        if quiet.since is not None:
-            return True
-        now = self._services.monotonic()
-        if now - self._last_activity_at < _COMMAND_IDLE_BASELINE_SECONDS:
-            return False
-        activity = self._activity_count
-        facts = await asyncio.to_thread(command.tree_facts)
-        if facts is None or activity != self._activity_count:
-            return False
-        if quiet.since is None:
-            quiet.since = now
-            quiet.cpu_seconds = facts.cpu_seconds
-            quiet.started_processes = facts.started
-        return True
-
-    def _note_activity(self) -> None:
-        """Output arrived or input was written: a command is not idle now."""
-        self._activity_count += 1
-        self._last_activity_at = self._services.monotonic()
-
-    async def stop_command(self, reason: StopReason) -> None:
-        """Interrupt the command with Ctrl+C, then kill every process still running."""
-        command = self._require_command()
-        if self.finished:
-            return
-        command.request_stop(reason)
-        if not command.shell_exited:
-            with contextlib.suppress(EOFError, OSError):
-                await asyncio.to_thread(self._adapter.write, "\x03")
-            await self._wait_or_sleep(command.exited, COMMAND_STOP_GRACE_SECONDS)
-        await self.terminate(suppress_attention=False, reason=reason)
+    # Waiting
 
     async def _wait_or_sleep(self, event: asyncio.Event, seconds: float) -> None:
         """Wait until *event* is set or *seconds* pass on the session clock."""
@@ -595,17 +377,6 @@ class TerminalSession:
                 waiter.cancel()
             await asyncio.gather(happened, pause, return_exceptions=True)
 
-    def hand_off(self, *, deliver: bool) -> None:
-        """List the running command; with *deliver*, its result is delivered when it ends."""
-        command = self._require_command()
-        command.hidden = False
-        command.delivers_result = deliver
-        self._publish_state()
-
-    async def wait_finished(self) -> None:
-        """Wait until none of the session's processes runs any longer."""
-        await self._finished_event.wait()
-
     async def wait_for_program(
         self,
         *,
@@ -617,30 +388,24 @@ class TerminalSession:
         """Wait until the program exits, its output matches *pattern*, it goes idle
         showing a new screen, or *deadline* (a ``monotonic`` time) passes.
 
-        A command exits when it ends; until the Agent typed into it, its wait
-        ends only then, at a match, or at the deadline. After a match, a
-        command's wait lingers briefly and ends ``exited`` when the command
-        ends within that time. Output printed before the call counts for
-        *pattern*, except output before the Agent's last input and that
-        input's echo. The program went idle when an ``idle`` attention above
-        *after_revision* exists; with *pattern* that does not end the wait.
-        *on_match* receives the line where the match starts.
+        Output printed before the call counts for *pattern*, except output
+        before the Agent's last input and that input's echo. The program went
+        idle when an ``idle`` attention above *after_revision* exists; with
+        *pattern* that does not end the wait. *on_match* receives the line
+        where the match starts.
         """
-        command = self._command
         services = self._services
         match_from: int | None = None
         while True:
             change = self._change
-            if self.finished or (command is not None and command.has_ended):
+            if self.finished:
                 return "exited"
             if pattern is not None:
                 matched, match_from = await self._output_matches(pattern, match_from)
                 if matched is not None:
                     if on_match is not None:
                         on_match(matched)
-                    if command is None:
-                        return "matched"
-                    return await self._linger_for_exit(command, deadline)
+                    return "matched"
             attention = self._attention
             if (
                 pattern is None
@@ -652,25 +417,7 @@ class TerminalSession:
             now = services.monotonic()
             if now >= deadline:
                 return "timeout"
-            pause = deadline - now
-            if command is not None and not await self._quiet_baseline(command):
-                # Output can pause without a change to wake this wait: take the
-                # idle baseline in time, so the result can tell an idle command.
-                pause = min(pause, _COMMAND_QUIET_POLL_SECONDS)
-            await self._wait_or_sleep(change, pause)
-
-    async def _linger_for_exit(self, command: CommandState, deadline: float) -> WaitEnded:
-        """After a match, wait briefly for the command's exit; ``exited`` if it came."""
-        services = self._services
-        until = min(deadline, services.monotonic() + _COMMAND_MATCH_EXIT_SECONDS)
-        while True:
-            change = self._change
-            if self.finished or command.has_ended:
-                return "exited"
-            now = services.monotonic()
-            if now >= until:
-                return "matched"
-            await self._wait_or_sleep(change, until - now)
+            await self._wait_or_sleep(change, deadline - now)
 
     async def wait_for_reply(self, *, deadline: float, after_quiet: int) -> WaitEnded:
         """Wait until the output pauses after input, the program exits, or *deadline* passes.
@@ -678,10 +425,9 @@ class TerminalSession:
         *after_quiet* is the ``quiet_boundaries`` count the input reported:
         the output paused once a quiet boundary follows it.
         """
-        command = self._command
         while True:
             change = self._change
-            if self.finished or (command is not None and command.has_ended):
+            if self.finished:
                 return "exited"
             if self._quiet_boundaries > after_quiet:
                 return "quiet"
@@ -748,133 +494,11 @@ class TerminalSession:
         end = text.find("\n", match.start())
         return text[start : len(text) if end < 0 else end], int(found["next_line"])
 
-    def command_report(self) -> CommandReport:
-        command = self._require_command()
-        return command.report(self.terminal_id, self._services.monotonic())
-
-    async def command_view(self, rows: int) -> tuple[CommandReport, str]:
-        """The command's report and the output that follows its transcript.
-
-        While the shell runs, that output is the screen's newest *rows* rows;
-        after it exited, the rows the transcript does not hold yet. Output is
-        rendered and the transcript extended under the session lock, which
-        this holds, so the two join without gap or overlap.
-        """
-        command = self._require_command()
-        async with self._lock:
-            if self.finished and command.has_ended:
-                following = ""
-            elif command.shell_exited:
-                following = "\n".join(await self._screen.pending_transcript())
-            else:
-                following = (await self._screen.observe(rows)).tail
-            return command.report(self.terminal_id, self._services.monotonic()), following
-
-    async def command_screen(self, lines: int) -> str:
-        """The screen's newest non-blank rows."""
-        async with self._lock:
-            return (await self._screen.observe(lines)).tail
-
-    def _require_command(self) -> CommandState:
-        if self._command is None:
-            raise TerminalManagerError(f"Terminal {self.terminal_id} does not run a command")
-        return self._command
-
-    def _drive(self) -> float | None:
-        """The Agent types into the session: a command becomes its console.
-
-        Like an interactive program, the command then wakes the Agent when it
-        goes idle and runs until it exits or is stopped; its result still
-        arrives when it ends. Returns the timeout in seconds this ended, None
-        when the command had none left to end.
-        """
-        self._activity.drive()
-        command = self._command
-        # A timeout that already fired finishes its stop.
-        if command is None or command.timeout_seconds is None or command.stop_reason is not None:
-            return None
-        ended, command.timeout_seconds = command.timeout_seconds, None
-        self._cancel_task(self._timeout_task)
-        return ended
-
-    async def _stop_after(self, seconds: float) -> None:
-        try:
-            await self._services.sleep(seconds)
-            await self.stop_command("timeout")
-        except asyncio.CancelledError:
-            return
-
-    async def _command_alive(self, *, read_timed_out: bool) -> bool:
-        """Whether the command session still runs; records the shell's exit once."""
-        command = self._require_command()
-        now = self._services.monotonic()
-        if not command.shell_exited:
-            if self._shell_dead_at is None:
-                if not read_timed_out and now < self._next_liveness_check:
-                    return True
-                self._next_liveness_check = now + _COMMAND_LIVENESS_SECONDS
-                if await asyncio.to_thread(self._adapter.is_alive):
-                    return True
-                self._shell_dead_at = now
-            # Read the shell's last output until it pauses, for a bounded time.
-            if not read_timed_out and now - self._shell_dead_at < _COMMAND_DRAIN_SECONDS:
-                return True
-            async with self._lock:
-                await self._record_shell_exit()
-        if self._tree_dead_at is not None:
-            # Read the processes' last output until it pauses, for a bounded time.
-            return not read_timed_out and now - self._tree_dead_at < _COMMAND_DRAIN_SECONDS
-        if now < self._next_tree_poll:
-            return True
-        self._next_tree_poll = now + TREE_POLL_SECONDS
-        facts = await asyncio.to_thread(command.tree_facts)
-        # A tree that cannot be inspected now may still run.
-        if facts is None:
-            return True
-        if facts.running:
-            await self._settle_leftovers(command, facts)
-            return True
-        self._tree_dead_at = now
-        return not read_timed_out
-
-    async def _settle_leftovers(self, command: CommandState, facts: ProcessTreeFacts) -> None:
-        """End the command once the processes its exited shell left running went
-        quiet: no output, no new process and no CPU for
-        ``COMMAND_LEFTOVER_QUIET_SECONDS``, like a server waiting for requests.
-
-        Processes that work hold the command until they end or go quiet, so a
-        program the shell did not wait for, such as a GUI-subsystem program run
-        from PowerShell, ends the command only with its own output.
-        """
-        if command.has_ended or not await self._command_idle(
-            command, COMMAND_LEFTOVER_QUIET_SECONDS
-        ):
-            return
-        async with self._lock:
-            await self._record_command_end(facts)
-
-    async def _keep_idle_baseline(self) -> None:
-        """While output pauses, take the idle baseline, so a status or wait can tell
-        an idle command."""
-        command = self._command
-        if command is not None and not command.shell_exited:
-            await self._quiet_baseline(command)
-
-    def _shell_exit_code(self) -> int | None:
-        # A liveness check makes a stopped Windows shell's exit status known.
-        with contextlib.suppress(Exception):
-            self._adapter.is_alive()
-        try:
-            return self._adapter.exit_code()
-        except Exception:
-            return None
-
     async def _await_end(self) -> None:
-        """Wait until the Session's processes have ended, or vBot killed them.
+        """Wait until the Session's process has ended, or vBot killed it.
 
-        Output has ended or can no longer be read, so the processes are polled:
-        an interactive program until it exits, a command until its shell exited
-        and every process it started ended.
+        Output has ended or can no longer be read, so the process is polled
+        until it exits.
         """
         while not self._tree_killed.is_set():
             if await self._processes_ended():
@@ -882,10 +506,10 @@ class TerminalSession:
             await self._wait_or_sleep(self._tree_killed, TREE_POLL_SECONDS)
 
     async def _processes_ended(self) -> bool:
-        """Whether every process of the Session has ended; False while that is unknown."""
+        """Whether the Session's process has ended; False while that is unknown."""
         key = (self.terminal_id, "end_check")
         try:
-            ended = await self._check_processes_ended()
+            ended = not await asyncio.to_thread(self._adapter.is_alive)
         except Exception:
             if _CONDITIONS.started(key):
                 _LOGGER.warning(
@@ -898,96 +522,6 @@ class TerminalSession:
         if _CONDITIONS.ended(key):
             _LOGGER.info("Terminal process check recovered (terminal=%s)", self.terminal_id)
         return ended
-
-    async def _check_processes_ended(self) -> bool:
-        if await asyncio.to_thread(self._adapter.is_alive):
-            return False
-        command = self._command
-        if command is None:
-            return True
-        async with self._lock:
-            await self._record_shell_exit()
-        tree = command.tree
-        if tree is None:
-            return True
-        # Raises when the tree cannot be inspected.
-        facts = await asyncio.to_thread(tree.facts)
-        if facts.running:
-            await self._settle_leftovers(command, facts)
-            return False
-        return True
-
-    async def _commit_output(self) -> None:
-        """Add the screen's output the transcript does not hold yet; the lock is held."""
-        command = self._require_command()
-        try:
-            command.add_lines(await self._screen.commit_transcript())
-            # Every rendered row is final now; none is pending.
-            command.show_pending(())
-        except Exception:
-            _LOGGER.warning(
-                "Could not render the final output of command terminal=%s",
-                self.terminal_id,
-                exc_info=True,
-            )
-
-    async def _record_shell_exit(self) -> None:
-        """Fix the shell's exit code when it exits; the lock is held.
-
-        Without processes left running, the command ends with it. Otherwise
-        it ends once they ended or went quiet, and the timeout stays armed:
-        it stops them.
-        """
-        command = self._require_command()
-        if command.shell_exited:
-            return
-        exit_code = await asyncio.to_thread(self._shell_exit_code)
-        await self._commit_output()
-        facts = await asyncio.to_thread(command.tree_facts)
-        command.record_exit(exit_code, facts)
-        self.exit_code = exit_code
-        if facts is None or not facts.running:
-            await self._record_command_end(facts)
-        self._signal_change()
-
-    async def _record_command_end(self, facts: ProcessTreeFacts | None) -> None:
-        """Fix the command's outcome and set its exit attention; the lock is held.
-
-        *facts* show the processes that still run, quiet ones the shell left
-        running; their later output still enters the transcript.
-        """
-        command = self._require_command()
-        await self._commit_output()
-        if command.has_ended:
-            return
-        command.record_end(facts, now=self._services.monotonic())
-        report = command.report(self.terminal_id, self._services.monotonic())
-        exit_code = command.exit_code
-        reason = command.stop_reason
-        summary = (
-            f"Command exited with code {exit_code}."
-            if reason is None
-            else f"Command stopped ({reason})."
-        )
-        attention: dict[str, Any] = {
-            "kind": "exited",
-            "summary": summary,
-            "details": {"exit_code": exit_code, "stop_reason": reason},
-            "deliver": command.delivers_result
-            and not self._suppress_exit_attention
-            and not self._exit_acknowledged
-            and reason != "agent",
-            "body": command.formatter(report),
-        }
-        # The session's own end later adds no second attention.
-        self._suppress_exit_attention = True
-        if report.still_running:
-            # Processes the command started keep the terminal live: tell it now.
-            self._set_attention(**attention)
-        else:
-            # The session finishes next; a waiter woken then sees it exited.
-            self._command_attention = attention
-        self._signal_change()
 
     # Attachment
 
@@ -1087,7 +621,6 @@ class TerminalSession:
                 self._screen_revision += 1
                 # A wait's pattern matches what the program prints below this line.
                 await self._screen.mark_input()
-                timeout_ended = self._drive()
                 running = await self._running_before_input()
                 *typed, last = chunks
                 typed_at = self._services.monotonic()
@@ -1110,7 +643,6 @@ class TerminalSession:
                             key,
                             bracketed_paste=bracketed_paste,
                             superseded=superseded,
-                            timeout_ended=timeout_ended,
                         )
         raise await self._write_failure() from write_error
 
@@ -1122,7 +654,6 @@ class TerminalSession:
         *running* are the processes that ran before the input. Returns the
         error when the PTY refused the chunk.
         """
-        self._note_activity()
         restart, changed = self._activity.input(
             self._services.monotonic(),
             notify=True,
@@ -1181,12 +712,10 @@ class TerminalSession:
             self._check_revision(expected_screen_revision)
             self._cancel_task(self._initial_input_task)
             self._screen_revision += 1
-            self._note_activity()
             running = await self._running_before_input()
-            # The operator's input does not drive a command: its output stays its result.
             restart, changed = self._activity.input(
                 self._services.monotonic(),
-                notify=self.attachment is not None and not self._activity.result_only,
+                notify=self.attachment is not None,
                 delivery_pending=self._delivery_pending(),
                 running=running,
             )
@@ -1206,9 +735,7 @@ class TerminalSession:
     async def _write_failure(self) -> TerminalManagerError:
         """The error for input the PTY refused, by whether the program still runs.
 
-        An interactive program that has ended finishes the Session now. A
-        command's Session finishes once every process it started has ended,
-        which the reader notices.
+        A program that has ended finishes the Session now.
         """
         try:
             alive = await asyncio.to_thread(self._adapter.is_alive)
@@ -1218,8 +745,7 @@ class TerminalSession:
             return TerminalManagerError(
                 f"The input could not be written to terminal {self.terminal_id}"
             )
-        if self._command is None:
-            await self._mark_finished()
+        await self._mark_finished()
         return TerminalClosedError("Terminal Session is no longer running")
 
     async def resize(self, columns: int, rows: int) -> dict[str, Any]:
@@ -1293,7 +819,6 @@ class TerminalSession:
             data["name"] = info.name
         data["program"] = info.program
         data["stopped"] = info.stopped
-        data["kind"] = info.kind
         initial_input = self._initial_input_task
         data["initial_input_pending"] = initial_input is not None and not initial_input.done()
         typed_at = self._initial_input_quiet
@@ -1367,8 +892,8 @@ class TerminalSession:
 
         The end of output - EOF, a closed PTY, or a failure to read or handle
         it - is no end of the program: the Session finishes only once its
-        process has ended (a command's: its whole tree), or once vBot killed
-        it, which ends the wait or cancels this task.
+        process has ended, or once vBot killed it, which ends the wait or
+        cancels this task.
         """
         ended = False
         try:
@@ -1384,13 +909,12 @@ class TerminalSession:
                 await self._mark_finished()
 
     async def _read_output(self) -> None:
-        """Read and render output until it ends or the command's processes ended.
+        """Read and render output until it ends or the program has ended.
 
         An unexpected failure ends only the reading: it becomes the Session's
         failure, and the program keeps running until it ends or is stopped.
         """
         loop = asyncio.get_running_loop()
-        command = self._command is not None
         try:
             while True:
                 try:
@@ -1398,22 +922,12 @@ class TerminalSession:
                         self._services.reader_executor, self._adapter.read, _READ_CHUNK_CHARS
                     )
                 except TimeoutError:
-                    if command:
-                        if not await self._command_alive(read_timed_out=True):
-                            return
-                        if self._log_stale:
-                            async with self._lock:
-                                await self._refresh_log()
-                        await self._keep_idle_baseline()
-                    elif not await asyncio.to_thread(self._adapter.is_alive):
+                    if not await asyncio.to_thread(self._adapter.is_alive):
                         return
                     continue
                 if text:
                     async with self._lock:
                         await self._render_output(text)
-                        await self._refresh_log()
-                if command and not await self._command_alive(read_timed_out=False):
-                    return
         except EOFError, OSError:
             # Output ended (POSIX: every holder of the terminal closed it).
             return
@@ -1438,8 +952,6 @@ class TerminalSession:
         self._publish_output(text)
         update = await self._render(text)
         self._last_output_at = self._services.monotonic()
-        self._log_stale = self._command is not None
-        self._note_activity()
         facts_changed = False
         if update is not None:
             facts_changed = await self._apply_update(update)
@@ -1476,28 +988,6 @@ class TerminalSession:
             with contextlib.suppress(OSError):
                 handle.close()
 
-    async def _refresh_log(self) -> None:
-        """Show the command's rendered rows that are not final yet in its log file,
-        at most every ``COMMAND_LOG_REFRESH_SECONDS``; the lock is held."""
-        command = self._command
-        now = self._services.monotonic()
-        if (
-            command is None
-            or not self._log_stale
-            or now - self._log_shown_at < COMMAND_LOG_REFRESH_SECONDS
-        ):
-            return
-        self._log_stale = False
-        self._log_shown_at = now
-        try:
-            command.show_pending(await self._screen.pending_transcript())
-        except Exception:
-            _LOGGER.warning(
-                "Could not render the pending output of command terminal=%s",
-                self.terminal_id,
-                exc_info=True,
-            )
-
     async def _render(self, text: str) -> EmulatorUpdate | None:
         """Feed *text* to the screen; None when that failed, which leaves the screen behind."""
         try:
@@ -1524,8 +1014,6 @@ class TerminalSession:
 
     async def _apply_update(self, update: EmulatorUpdate) -> bool:
         """Apply what rendering found; True when the title or the alternate screen changed."""
-        if self._command is not None:
-            self._command.add_lines(update.transcript)
         if update.responses:
             # Terminal protocol replies, not input: they start no activity. Whether
             # a program that can no longer read them still runs is checked apart.
@@ -1567,7 +1055,7 @@ class TerminalSession:
         )
         sampler = self._sample_task
         if (
-            self._process_tree() is not None
+            self._observer is not None
             and self._activity.cycle_open
             and (sampler is None or sampler.done())
         ):
@@ -1590,11 +1078,6 @@ class TerminalSession:
                 if settled == "activity":
                     self._quiet_boundaries += 1
                     self._signal_change()
-                if self._activity.result_only:
-                    # A command's output is its result, delivered when it ends.
-                    if settled == "activity":
-                        self._publish_state()
-                    return
                 if settled == "repaint" or self._settle_idle(generation, observation):
                     return
             # Process samples can end the cycle earlier; without them, nothing
@@ -1662,13 +1145,9 @@ class TerminalSession:
             self._signal_change()
         return True
 
-    def _process_tree(self) -> ProcessTree | None:
-        """The tree a cycle samples: the command's, or the observed program's."""
-        return self._observer if self._command is None else self._command.tree
-
     async def _process_sample(self) -> ProcessSample | None:
         """The program's processes now; None without a process tree or when it failed."""
-        tree = self._process_tree()
+        tree = self._observer
         if tree is None:
             return None
         key = (self.terminal_id, "process_sample")
@@ -1695,8 +1174,6 @@ class TerminalSession:
         """The processes that run before input starts a cycle: a process started
         later is the cycle's work. The sample also starts the CPU measurement,
         so CPU work shows from the cycle's first periodic sample on."""
-        if self._activity.result_only:
-            return None
         sample = await self._process_sample()
         if sample is None:
             return None
@@ -1777,22 +1254,11 @@ class TerminalSession:
         async with self._lock:
             if self.finished:
                 return
-            command = self._command
-            if command is not None:
-                await self._record_shell_exit()
-                facts = await asyncio.to_thread(command.tree_facts)
-                command.tree_ended()
-                await self._record_command_end(
-                    None if facts is None else replace(facts, running=())
-                )
             self.finished_at = self.finished_at or _utc_now()
-            if self._command is None:
-                self.exit_code = await asyncio.to_thread(self._adapter.exit_code)
-            # Release the terminal (on Windows also its console host and reader
-            # thread) and the timeout, which has nothing left to stop.
+            self.exit_code = await asyncio.to_thread(self._adapter.exit_code)
+            # Release the terminal (on Windows also its console host and reader thread).
             with contextlib.suppress(OSError):
                 await asyncio.to_thread(self._adapter.close)
-            self._cancel_task(self._timeout_task)
             error = self._read_failure or self._render_failure
             self._activity.finish(error=error is not None)
             try:
@@ -1804,10 +1270,7 @@ class TerminalSession:
                     self.terminal_id,
                     exc_info=True,
                 )
-            if self._command_attention is not None:
-                attention, self._command_attention = self._command_attention, None
-                self._set_attention(**attention)
-            elif self._suppress_exit_attention:
+            if self._suppress_exit_attention:
                 self._publish_state()
             else:
                 tail = ""
@@ -1828,7 +1291,6 @@ class TerminalSession:
                         screen_tail=tail,
                     )
             self._output_event.set()
-            self._finished_event.set()
             self._signal_change()
             self._finish_files()
 
@@ -1842,7 +1304,6 @@ class TerminalSession:
         details: dict[str, Any],
         deliver: bool = True,
         screen_tail: str = "",
-        body: str | None = None,
     ) -> None:
         self._cancel_delivery()
         self._attention_revision += 1
@@ -1856,16 +1317,12 @@ class TerminalSession:
             created_at=_utc_now(),
         )
         self._attention = attention
-        self._attention_body = (
-            body
-            if body is not None
-            else _attention_body(
-                self.terminal_id,
-                self._notice_label(),
-                attention,
-                screen_tail=screen_tail,
-                idle_seconds=self._services.idle_seconds,
-            )
+        self._attention_body = _attention_body(
+            self.terminal_id,
+            self._notice_label(),
+            attention,
+            screen_tail=screen_tail,
+            idle_seconds=self._services.idle_seconds,
         )
         if kind in {"exited", "error"} and self._exit_acknowledged:
             # A result already showed the end.
@@ -1980,8 +1437,7 @@ class TerminalSession:
                 "terminal": self._services.operator_summary(self.info()),
             }
         )
-        if not self.hidden:
-            self._services.changed(self.terminal_id)
+        self._services.changed(self.terminal_id)
 
     # Helpers
 
@@ -2002,7 +1458,6 @@ class TerminalSession:
         *,
         bracketed_paste: bool,
         superseded: int | None,
-        timeout_ended: float | None = None,
     ) -> dict[str, Any]:
         return {
             "terminal_id": self.terminal_id,
@@ -2014,13 +1469,9 @@ class TerminalSession:
             "screen_revision": self._screen_revision,
             # A wait for the reply ends at the next quiet boundary after this count.
             "quiet_boundaries": self._quiet_boundaries,
-            # The command's timeout in seconds this input ended (``_drive``).
-            "timeout_ended": timeout_ended,
         }
 
     def _finish_files(self) -> None:
-        if self._command is not None:
-            self._command.close()
         observer, self._observer = self._observer, None
         if observer is not None:
             with contextlib.suppress(Exception):

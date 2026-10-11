@@ -31,19 +31,9 @@ _ENTER = TERMINAL_INPUT_KEY_SEQUENCES["enter"]
 
 _FIELD_ALIASES = SpellingAliases(
     {
-        "terminal_id": (
-            "session_id",
-            "terminal",
-            "term_id",
-            "terminal_session_id",
-            "id",
-            # Background-command ids of other harnesses (Claude Code, Codex) and older vBot.
-            "process_id",
-            "proc_id",
-            "bash_id",
-            "shell_id",
-            "task_id",
-        ),
+        # Background-command ids of other harnesses (process_id, bash_id, shell_id,
+        # task_id) belong to background_tasks.
+        "terminal_id": ("session_id", "terminal", "term_id", "terminal_session_id", "id"),
         "command": ("cmd", "program", "executable"),
         "workdir": ("cwd", "dir", "directory", "working_directory", "working_dir"),
         "text": ("input",),
@@ -126,7 +116,6 @@ _ACTION_VALUES = {
             "end",
             "destroy",
             "killsession",
-            "killshell",
             "cancel",
             "abort",
         ),
