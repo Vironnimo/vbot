@@ -660,7 +660,8 @@ The stored profile and profile snapshot stay unchanged; `effective_configuration
 records the Run directory and Project selection for Resume and request replay.
 On the page, Start first checks that a Swarm, a working directory and a goal
 are given: each missing one shows its error under its field until that field
-changes, and the first takes focus; the page's error banner is only for failed
+changes or the start page opens again (the goal is kept), and the first takes
+focus; the page's error banner is only for failed
 requests. A folder the server does not find (`directory_not_found`) shows under
 the directory field the same way. A started Run shows with focus on its title.
 Evidence: `SwarmPage.test.js` and `test_swarm_start.py`.

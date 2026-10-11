@@ -360,10 +360,12 @@ export function createSwarmPageModel(host) {
     cancelDelete();
   }
 
+  // A new visit to the start page keeps the goal but no earlier field errors.
   function showStart() {
     selectionRequest += 1;
     editor = null;
     selectedSwarm = null;
+    startErrors = {};
     activity.leaveActivity();
     void selectRunProfile(selectedProfile);
   }

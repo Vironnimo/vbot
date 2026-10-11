@@ -839,6 +839,21 @@ describe('Swarm Run start', () => {
       document.getElementById('swarm-start-directory-error').textContent,
     ).toBe(t('swarm.error.directory_not_found'));
     expect(notice('alert')).toBe('');
+    // A later visit to the start page keeps the goal but no old errors.
+    fill('swarm-goal', '');
+    await tick();
+    button(START_RUN).click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('swarm-goal-error')).not.toBeNull(),
+    );
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    button(NEW_RUN).click();
+    await vi.waitFor(() => expect(directory()).not.toBeNull());
+    expect(document.getElementById('swarm-goal-error')).toBeNull();
+    expect(document.getElementById('swarm-start-directory-error')).toBeNull();
   });
 });
 
