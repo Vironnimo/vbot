@@ -92,7 +92,7 @@
           </div>
         </details>
       </div>{/snippet}{#snippet footer()}<Button
-        variant="primary"
+        variant="secondary"
         onClick={model.closeDetails}>{t('common.close')}</Button
       >{/snippet}</Modal
   >{/if}
