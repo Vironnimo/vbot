@@ -122,7 +122,7 @@ class Tasks:
         arguments: Any,
         *,
         owner: SessionAddress = OWNER,
-        tools: tuple[str, ...] = (SHELL_TOOL_NAME, "terminal"),
+        tools: tuple[str, ...] = (SHELL_TOOL_NAME, "terminal", SUBAGENT),
     ) -> JsonObject:
         """One call as the executor sends it; a call that waits on time fails the test."""
         allowed = [BACKGROUND_TASKS_TOOL_NAME, *tools]
@@ -329,16 +329,18 @@ def _stop_text(subagent_id: str) -> str:
 
 
 @pytest.mark.parametrize(
-    ("status", "deeper", "next_text"),
+    ("status", "deeper", "subagent_tool", "next_text"),
     [
         (
             "working",
             False,
+            True,
             "The Sub-Agent is working; its answer arrives as a new message when its turn ends, "
             "so do not poll for it. " + _stop_text("sub_child"),
         ),
         (
             "queued",
+            True,
             True,
             "The Sub-Agent is working for your Sub-Agent sub_child, which receives its answer. "
             + _stop_text("sub_grandchild"),
@@ -346,26 +348,31 @@ def _stop_text(subagent_id: str) -> str:
         (
             "idle",
             False,
+            True,
             "The Sub-Agent is idle. To give it more work, send it a message with subagent "
             "action send.",
         ),
+        # Without subagent, the Agent cannot give it more work.
+        ("idle", False, False, "The Sub-Agent is idle."),
         (
             "idle",
+            True,
             True,
             "The Sub-Agent is idle; only your Sub-Agent sub_child can send it messages.",
         ),
         (
             "taken over by the user",
             False,
+            True,
             "The user took over this Sub-Agent by writing in its Session; it works for the "
             "user, and vBot no longer sends you its answers.",
         ),
     ],
-    ids=["working", "queued-deeper", "idle", "idle-deeper", "taken-over"],
+    ids=["working", "queued-deeper", "idle", "idle-without-subagent", "idle-deeper", "taken-over"],
 )
 @pytest.mark.asyncio
 async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
-    tasks: Tasks, status: Any, deeper: bool, next_text: str
+    tasks: Tasks, status: Any, deeper: bool, subagent_tool: bool, next_text: str
 ) -> None:
     subagent = dataclasses.replace(tasks.subagents.child, status=status)
     if deeper:
@@ -376,8 +383,9 @@ async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
     else:
         tasks.subagents.child = subagent
         tasks.subagents.running = ["background command cmd_a (serve)"]
+    tools = (SHELL_TOOL_NAME, SUBAGENT) if subagent_tool else (SHELL_TOOL_NAME,)
 
-    shown = data(await tasks.call({"action": "status", "id": subagent.id}))
+    shown = data(await tasks.call({"action": "status", "id": subagent.id}, tools=tools))
 
     assert shown["next"] == next_text
     assert (shown["id"], shown["type"], shown["status"]) == (subagent.id, "subagent", status)
@@ -388,38 +396,64 @@ async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
     assert tasks.subagents.stopped == []
 
 
-@pytest.mark.parametrize("working", [True, False], ids=["working", "idle"])
-@pytest.mark.asyncio
-async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
-    tasks: Tasks, working: bool
-) -> None:
-    if not working:
-        tasks.subagents.child = dataclasses.replace(
-            tasks.subagents.child, status="idle", last_tool=None
-        )
-
-    result = await tasks.call({"action": "stop", "id": "sub_child"})
-    stopped = data(result)
-
-    assert tasks.subagents.stopped == ["sub_child"]
-    assert stopped == {
-        "id": "sub_child",
-        "type": "subagent",
-        "agent_id": "sub-agent",
-        "session_id": CHILD.session_id,
-        "project_id": "project-a",
-        "status": "stopped" if working else "idle",
-        "notes": [
+@pytest.mark.parametrize(
+    ("status", "deeper", "note"),
+    [
+        (
+            "working",
+            False,
             "Stopped: its current turn, its queued messages, its background commands and "
             "terminals, and its own Sub-Agents. Its Session keeps the history; send it a "
-            "message to continue."
-            if working
-            else "Sub-Agent sub_child and its own Sub-Agents were idle and ran no background "
-            "commands or terminals, so nothing needed stopping."
-        ],
+            "message to continue.",
+        ),
+        # Only its own Parent can message a deeper Sub-Agent.
+        (
+            "working",
+            True,
+            "Stopped: its current turn, its queued messages, its background commands and "
+            "terminals, and its own Sub-Agents. Its Session keeps the history; your Sub-Agent "
+            "sub_child can send it a message to continue.",
+        ),
+        (
+            "idle",
+            False,
+            "Sub-Agent sub_child and its own Sub-Agents were idle and ran no background "
+            "commands or terminals, so nothing needed stopping.",
+        ),
+    ],
+    ids=["working", "working-deeper", "idle"],
+)
+@pytest.mark.asyncio
+async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
+    tasks: Tasks, status: Any, deeper: bool, note: str
+) -> None:
+    working = status == "working"
+    subagent = dataclasses.replace(
+        tasks.subagents.child, status=status, last_tool="bash" if working else None
+    )
+    if deeper:
+        subagent = dataclasses.replace(
+            subagent, id="sub_grandchild", session=GRANDCHILD, parent_id="sub_child"
+        )
+        tasks.subagents.grandchild = subagent
+    else:
+        tasks.subagents.child = subagent
+
+    result = await tasks.call({"action": "stop", "id": subagent.id})
+    stopped = data(result)
+
+    assert tasks.subagents.stopped == [subagent.id]
+    assert stopped == {
+        "id": subagent.id,
+        "type": "subagent",
+        "agent_id": "sub-agent",
+        "session_id": subagent.session.session_id,
+        "project_id": "project-a",
+        "status": "stopped" if working else "idle",
+        "notes": [note],
     }
     shown = tasks.registry.display_for_call(
-        BACKGROUND_TASKS_TOOL_NAME, {"action": "stop", "id": "sub_child"}, result=result
+        BACKGROUND_TASKS_TOOL_NAME, {"action": "stop", "id": subagent.id}, result=result
     )["details"]
     assert shown == [
         {

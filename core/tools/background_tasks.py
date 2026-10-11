@@ -201,16 +201,22 @@ class BackgroundTasksTool:
             running = await self._subagents.running_work(subagent)
             if running:
                 data["running"] = list(running)
-            data["next"] = _subagent_next(subagent)
+            data["next"] = _subagent_next(subagent, can_send=context.can_call(SUBAGENT_TOOL_NAME))
             return data
         stopped = await self._subagents.stop_subagent(context, subagent)
         data = _subagent_identity(subagent)
         if stopped:
             data["status"] = "stopped"
+            # Only the Sub-Agent's own Parent can message it.
+            sender = (
+                "send it a message"
+                if subagent.parent_id is None
+                else f"your Sub-Agent {subagent.parent_id} can send it a message"
+            )
             note = (
                 "Stopped: its current turn, its queued messages, its background commands and "
-                "terminals, and its own Sub-Agents. Its Session keeps the history; send it a "
-                "message to continue."
+                f"terminals, and its own Sub-Agents. Its Session keeps the history; {sender} to "
+                "continue."
             )
         else:
             data["status"] = "idle"
@@ -446,8 +452,8 @@ def _subagent_fields(subagent: SubAgentState, *, with_project: bool = False) -> 
     return data
 
 
-def _subagent_next(subagent: SubAgentState) -> str:
-    """What the caller can do about the Sub-Agent now."""
+def _subagent_next(subagent: SubAgentState, *, can_send: bool) -> str:
+    """What the caller can do about the Sub-Agent now; *can_send*: it can call ``subagent``."""
     if subagent.status == _TAKEN_OVER:
         return (
             "The user took over this Sub-Agent by writing in its Session; it works for the "
@@ -466,6 +472,8 @@ def _subagent_next(subagent: SubAgentState) -> str:
             f"answer. {stop}"
         )
     if parent_id is None:
+        if not can_send:
+            return "The Sub-Agent is idle."
         return (
             "The Sub-Agent is idle. To give it more work, send it a message with subagent "
             "action send."

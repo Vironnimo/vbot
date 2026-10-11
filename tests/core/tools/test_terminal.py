@@ -612,11 +612,11 @@ class _SubAgents:
 
 
 @pytest.mark.asyncio
-async def test_list_names_the_sub_agent_whose_session_holds_a_terminal(
+async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A terminal attached to a Sub-Agent's Session (any depth) names that Sub-Agent;
-    one attached to any other Session stays ``other``."""
+    """A terminal attached to a Sub-Agent's Session (any depth) names that Sub-Agent in
+    list and status; one attached to any other Session stays ``other``."""
     monkeypatch.setattr(manager_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, _factory = manager
     grandchild = TerminalOwner("project-a", "helper", "session-grandchild")
@@ -645,6 +645,25 @@ async def test_list_names_the_sub_agent_whose_session_holds_a_terminal(
     assert subagents.callers == [SessionAddress("project-a", "agent-a", "session-a")]
     shown = details(terminal_manager, tmp_path, arguments, listed)[-1]["items"]
     assert shown[0]["meta"].endswith("attached to Sub-Agent sub_grandchild")
+
+    statuses = [
+        cast(
+            dict[str, Any],
+            await call(
+                terminal_manager,
+                make_context(tmp_path),
+                {"action": "status", "terminal_id": terminal_id},
+                subagents=subagents,
+            ),
+        )["data"]
+        for terminal_id in terminal_ids
+    ]
+    # One layout: status shows who holds the terminal as list does.
+    assert [(item["attached"], item.get("subagent")) for item in statuses] == [
+        ("subagent", "sub_grandchild"),
+        ("other", None),
+        ("no", None),
+    ]
 
 
 @pytest.mark.asyncio
@@ -786,6 +805,6 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     assert closed["error"]["code"] == "terminal_closed"
     assert closed["error"]["message"] == (
         f"The program in {terminal_id} has ended (stopped, exit code -1), so the input was not "
-        f"sent. To read its last screen or output, call terminal {call_text('status')}. To run "
-        'the program again, call terminal with action "start".'
+        f"sent. To read its last screen, call terminal {call_text('status')}. To run the "
+        'program again, call terminal with action "start".'
     )

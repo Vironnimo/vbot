@@ -319,12 +319,16 @@ class SubAgentHarness:
         session: SessionAddress | None = None,
         *,
         tool_name: str = SUBAGENT_TOOL_NAME,
+        allowed_tools: list[str] | None = None,
         **context_options: Any,
     ) -> JsonObject:
-        """Dispatch one Agent call and return what the Agent receives."""
+        """Dispatch one Agent call and return what the Agent receives.
+
+        The Run allows *allowed_tools*, by default every Tool.
+        """
         context = self.context(session, tool_name=tool_name, **context_options)
         try:
-            return cast(JsonObject, await self.registry.dispatch(context, arguments))
+            return cast(JsonObject, await self.registry.dispatch(context, arguments, allowed_tools))
         except Exception as error:  # The Tool executor's failure envelope.
             return tool_failure_for_exception(context.tool_name, error)
 

@@ -278,7 +278,7 @@ def project_terminal_tool_definitions(definitions: list[JsonObject]) -> list[Jso
 
 
 class SubAgentSessions(Protocol):
-    """The caller's Sub-Agents, whose Sessions ``list`` names as theirs."""
+    """The caller's Sub-Agents, whose Sessions ``list`` and ``status`` name as theirs."""
 
     async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
         """*caller*'s Sub-Agents at every depth, each with its Session and id."""
@@ -332,7 +332,7 @@ async def _handle_terminal(
         if action == "detach":
             return _handle_detach(terminal_manager, context, arguments)
         if action == "status":
-            return await _handle_status(terminal_manager, context, arguments)
+            return await _handle_status(terminal_manager, subagents, context, arguments)
         if action == "wait":
             return await _handle_wait(terminal_manager, context, arguments)
         if action == "input":
@@ -549,31 +549,46 @@ async def _handle_list(
 ) -> JsonObject:
     owner = _owner(context)
     terminals = terminal_manager.list_terminals()
-    descendants: Mapping[SessionAddress, str] = {}
-    if subagents is not None and any(info.attachment not in (None, owner) for info in terminals):
-        descendants = {
-            subagent.session: subagent.id for subagent in await subagents.subagents(_address(owner))
-        }
+    holders = await _subagent_holders(subagents, owner, terminals)
     rows: list[JsonObject] = []
     for info in terminals:
-        attached = _attachment(info, owner)
-        # A terminal a Sub-Agent of this Session, at any depth, holds names that Sub-Agent.
-        subagent = (
-            descendants.get(_address(info.attachment))
-            if attached == "other" and info.attachment is not None
-            else None
-        )
         row: JsonObject = {
             "terminal_id": info.terminal_id,
             "program": _short_program(info.program),
             "name": info.name,
             "state": _agent_state(info),
             "exit_code": info.exit_code if info.finished else None,
-            "attached": "subagent" if subagent is not None else attached,
-            "subagent": subagent,
+            **_attachment_fields(info, owner, holders),
         }
         rows.append({key: value for key, value in row.items() if value not in (None, "")})
     return tool_success({"terminals": rows})
+
+
+async def _subagent_holders(
+    subagents: SubAgentSessions | None, owner: TerminalOwner, terminals: Sequence[TerminalInfo]
+) -> Mapping[SessionAddress, str]:
+    """The Sessions of this Session's Sub-Agents (any depth) by Sub-Agent id, when one of
+    *terminals* is attached to another Session."""
+    if subagents is None or all(info.attachment in (None, owner) for info in terminals):
+        return {}
+    return {
+        subagent.session: subagent.id for subagent in await subagents.subagents(_address(owner))
+    }
+
+
+def _attachment_fields(
+    info: TerminalInfo, owner: TerminalOwner, holders: Mapping[SessionAddress, str]
+) -> JsonObject:
+    """``attached``, and ``subagent`` for a terminal a Sub-Agent of this Session holds."""
+    attached = _attachment(info, owner)
+    subagent = (
+        holders.get(_address(info.attachment))
+        if attached == "other" and info.attachment is not None
+        else None
+    )
+    if subagent is None:
+        return {"attached": attached}
+    return {"attached": "subagent", "subagent": subagent}
 
 
 def _handle_attach(
@@ -610,6 +625,7 @@ def _handle_detach(
 
 async def _handle_status(
     terminal_manager: TerminalManager,
+    subagents: SubAgentSessions | None,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -638,7 +654,8 @@ async def _handle_status(
         snapshot, view="status", page_lines=lines, include_screen=start_line is None
     )
     if not attached_here:
-        data["attached"] = _attachment(info, owner)
+        holders = await _subagent_holders(subagents, owner, [info])
+        data.update(_attachment_fields(info, owner, holders))
         data["next"] = _not_attached_text(info, terminal_id)
     return tool_success(data)
 
@@ -1210,8 +1227,8 @@ def _closed_message(terminal_manager: TerminalManager, terminal_id: str, action:
         ended = f"has ended ({state}, exit code {info.exit_code})"
     done = "the input was not sent" if action == "input" else f"{action} was not done"
     message = (
-        f"The program in {terminal_id} {ended}, so {done}. To read its last screen or output, "
-        f"call terminal {_call('status', terminal_id)}."
+        f"The program in {terminal_id} {ended}, so {done}. To read its last screen, call "
+        f"terminal {_call('status', terminal_id)}."
     )
     if info is not None:
         message += ' To run the program again, call terminal with action "start".'
@@ -1352,9 +1369,9 @@ def register_terminal_tool(
 ) -> None:
     """Register the Agent-facing terminal Tool.
 
-    *subagents* tells which Sessions descend from the caller, so ``list`` names
-    the Sub-Agent that holds a terminal; without it such a terminal shows as
-    attached to another Session.
+    *subagents* tells which Sessions descend from the caller, so ``list`` and
+    ``status`` name the Sub-Agent that holds a terminal; without it such a
+    terminal shows as attached to another Session.
     """
     registry.register(
         TERMINAL_TOOL_NAME,

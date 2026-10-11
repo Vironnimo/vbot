@@ -35,12 +35,15 @@ SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
     "Activity log of this Sub-Agent: {path}. Read it only if its progress matters."
 )
 
-# Refusals of the ``subagent`` Tool. ``{call}`` placeholders receive compact JSON.
+# Refusals of the ``subagent`` Tool. ``{call}`` placeholders receive compact JSON. The
+# parts naming ``background_tasks`` are left out while the Agent cannot call it.
 SUBAGENT_MISSING_TASK_MESSAGE = (
     'subagent was not run: "content" must carry the task for the Sub-Agent. Call '
     '{"description": "<3-5 word title>", "content": "<self-contained task: goal, relevant '
-    'context, scope, constraints, expected result>"}. To see your Sub-Agents instead, call '
-    'background_tasks {"action": "list"}.'
+    'context, scope, constraints, expected result>"}.'
+)
+SUBAGENT_MISSING_TASK_LIST_TEXT = (
+    ' To see your Sub-Agents instead, call background_tasks {"action": "list"}.'
 )
 SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE = (
     'subagent was not run: a new Sub-Agent needs "description", a 3-5 word title that the '
@@ -51,12 +54,13 @@ SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE = (
     "another Sub-Agent; nothing was started. Do this task yourself."
 )
 # Active-limit refusals. ``count`` is the limit with its noun, such as "8 Sub-Agents";
-# ``{retry}`` is replaced per action.
+# ``{retry}`` is replaced per action; ``{or_stop}`` is ``SUBAGENT_LIMIT_STOP_TEXT`` or empty.
 _SESSION_LIMIT_TEXT = "You already have {count} working, the most you can have at the same time."
 _SESSION_LIMIT_CONTINUATION = (
-    "A Sub-Agent stops counting once it has answered or was stopped: wait for an answer or "
-    "stop one with background_tasks action stop, then {retry}, or do this task yourself."
+    "A Sub-Agent stops counting once it has answered or was stopped: wait for an answer"
+    "{or_stop}, then {retry}, or do this task yourself."
 )
+SUBAGENT_LIMIT_STOP_TEXT = " or stop one with background_tasks action stop"
 _APP_LIMIT_TEXT = "{count} are working across vBot, the most it runs at the same time."
 _APP_LIMIT_CONTINUATION = (
     "Do this task yourself, or wait until one of your own working Sub-Agents answers, then {retry}."
@@ -117,10 +121,13 @@ SUBAGENT_SESSION_NOT_SUBAGENT_MESSAGE_TEMPLATE = (
 SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE = "No Sub-Agent with id {id} belongs to you. {yours}"
 SUBAGENT_YOURS_TEMPLATE = "Your Sub-Agents: {entries}. "
 SUBAGENT_NONE_YOURS_TEXT = "You have no Sub-Agents. "
+# ``{or_stop}`` is ``SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE`` filled in, or empty.
 SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE = (
     "Sub-Agent {id} was started by your Sub-Agent {parent_id}, so only {parent_id} can send "
-    "it messages; nothing was sent. Send your message to {parent_id}, or stop {id} with "
-    'background_tasks {{"action": "stop", "id": "{id}"}}.'
+    "it messages; nothing was sent. Send your message to {parent_id}{or_stop}."
+)
+SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE = (
+    ', or stop {id} with background_tasks {{"action": "stop", "id": "{id}"}}'
 )
 SUBAGENT_TAKEN_OVER_MESSAGE_TEMPLATE = (
     "The user took over Sub-Agent {id} by writing in its Session; it works for the user and "
@@ -133,10 +140,12 @@ SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE = (
 SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE = (
     'send needs "content", the message for Sub-Agent {id}; nothing was sent. Call {call}.'
 )
+# ``{stop}`` is ``SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE`` filled in, or empty.
 SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE = (
     "subagent was not run: it received Sub-Agent id {id} but no action. To message that "
-    "Sub-Agent, call {send_call}; to stop it, call background_tasks {stop_call}."
+    "Sub-Agent, call {send_call}{stop}."
 )
+SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE = "; to stop it, call background_tasks {stop_call}"
 SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE = (
     "subagent was not run: Sub-Agent {id} is set to a Model that cannot run: {reason}. "
     'Repeat this call with "model" set to a Model that can run.'

@@ -484,10 +484,17 @@ async def test_send_reaches_only_direct_subagents(harness: SubAgentHarness) -> N
     await harness.settle()
 
     nested = await harness.call({"action": "send", "id": inner["id"], "content": "hi"})
+    without_tasks = await harness.call(
+        {"action": "send", "id": inner["id"], "content": "hi"}, allowed_tools=["subagent"]
+    )
     foreign = await harness.call({"action": "send", "id": stranger["id"], "content": "hi"})
 
     assert nested["error"]["code"] == "subagent_not_direct"
     assert outer["id"] in nested["error"]["message"]
+    # The refusal names the stop only while the Agent can call background_tasks.
+    assert "background_tasks" in nested["error"]["message"]
+    assert without_tasks["error"]["code"] == "subagent_not_direct"
+    assert "background_tasks" not in without_tasks["error"]["message"]
     assert foreign["error"]["code"] == "subagent_not_found"
     assert outer["id"] in foreign["error"]["message"]
     assert foreign["error"]["message"].count(stranger["id"]) == 1
@@ -809,6 +816,14 @@ async def test_limits_refuse_another_subagent(
     assert result["error"]["code"] == code
     assert "{" not in result["error"]["message"]
     assert [turn.content for turn in harness.loop.turns] == ["first"]
+    if code == "subagent_limit_exceeded":
+        # The refusal names the stop only while the Agent can call background_tasks.
+        without_tasks = await harness.call(
+            {"description": "Do second", "content": "second"}, caller, allowed_tools=["subagent"]
+        )
+        assert "background_tasks" in result["error"]["message"]
+        assert without_tasks["error"]["code"] == code
+        assert "background_tasks" not in without_tasks["error"]["message"]
 
 
 async def test_send_counts_against_the_limit_only_when_it_starts_an_idle_subagent(

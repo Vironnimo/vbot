@@ -87,7 +87,7 @@ class ProcessTreeFacts:
 
 
 class ProcessTree(Protocol):
-    """The process tree of one command."""
+    """The process tree of one shell command or of one terminal's program."""
 
     def facts(self) -> ProcessTreeFacts: ...
 

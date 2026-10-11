@@ -17,7 +17,7 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from core.tools._background_tasks_arguments import is_wait_action, wait_refusal
+from core.tools._background_tasks_arguments import is_wait_action
 from core.tools.call_syntax import (
     PLACEHOLDER_WORDS,
     SpellingAliases,
@@ -179,15 +179,18 @@ def _task_text_request(arguments: dict[str, Any]) -> dict[str, Any]:
 def _read_background_tasks_action(arguments: dict[str, Any]) -> dict[str, Any]:
     """Move an action that lists, checks or stops Sub-Agents out of ``action``.
 
-    The handler runs it as ``background_tasks``; waiting is refused the way that
-    Tool refuses it.
+    The handler runs it as ``background_tasks``. Waiting is refused with this
+    Tool's own actions: nothing waits for a Sub-Agent.
     """
     keys = [key for key in arguments if spelling(key) in _ACTION_KEYS]
     if len(keys) != 1 or not isinstance(arguments[keys[0]], str):
         return arguments
     action = arguments[keys[0]]
     if is_wait_action(action):
-        raise ToolContractError(wait_refusal(action))
+        raise ToolContractError(
+            f'Unknown action "{action}". Use one of: run, send. Sub-Agent answers arrive as new '
+            "messages, so there is nothing to wait for."
+        )
     if spelling(action) not in _BACKGROUND_TASKS_ACTIONS:
         return arguments
     result = {key: value for key, value in arguments.items() if key != keys[0]}

@@ -54,10 +54,14 @@ from core.subagents._constants import (
     SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE,
     SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE,
+    SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE,
     SUBAGENT_IGNORED_LABEL_NOTE_TEMPLATE,
+    SUBAGENT_LIMIT_STOP_TEXT,
     SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE,
+    SUBAGENT_MISSING_TASK_LIST_TEXT,
     SUBAGENT_MISSING_TASK_MESSAGE,
     SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE,
+    SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE,
     SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE,
@@ -109,6 +113,7 @@ from core.subagents.links import (
     read_link,
 )
 from core.tools.availability import subagent_allowed_agents
+from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.contracts import ToolContractError
 from core.tools.terminal_manager import TerminalOwner
 from core.tools.tools import (
@@ -178,11 +183,17 @@ class SubAgentCoordinator:
         self._admission_lock = asyncio.Lock()
 
     async def _limit_refusal(
-        self, parent: SessionAddress, settings: dict[str, int], idle_id: str | None = None
+        self,
+        parent: SessionAddress,
+        settings: dict[str, int],
+        idle_id: str | None = None,
+        *,
+        can_stop: bool,
     ) -> JsonObject | None:
         """Refuse a start when *parent* or the whole app has its limit of working Sub-Agents.
 
         *idle_id* names the idle Sub-Agent a ``send`` would start; omitted for ``run``.
+        *can_stop*: the caller can call ``background_tasks``, so the refusal names its stop.
         Taken-over Sub-Agents count for neither limit. Call it under the admission lock.
         """
         runtime, sessions = self._runtime, self._runtime.chat_sessions
@@ -196,7 +207,11 @@ class SubAgentCoordinator:
             )
             return tool_failure(
                 "subagent_limit_exceeded",
-                template.format(count=_subagent_count(limit), id=idle_id),
+                template.format(
+                    count=_subagent_count(limit),
+                    id=idle_id,
+                    or_stop=SUBAGENT_LIMIT_STOP_TEXT if can_stop else "",
+                ),
             )
         manager = runtime.chat_run_manager
         busy = {
@@ -240,7 +255,9 @@ class SubAgentCoordinator:
         try:
             action = arguments.get("action")
             if action is None:
-                implied = _implied_action(arguments)
+                implied = _implied_action(
+                    arguments, can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME)
+                )
                 if not isinstance(implied, str):
                     return implied
                 action = implied
@@ -443,7 +460,10 @@ class SubAgentCoordinator:
 
     async def _run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         if not has_text(arguments, "content"):
-            return tool_failure("invalid_arguments", SUBAGENT_MISSING_TASK_MESSAGE)
+            message = SUBAGENT_MISSING_TASK_MESSAGE
+            if context.can_call(BACKGROUND_TASKS_TOOL_NAME):
+                message += SUBAGENT_MISSING_TASK_LIST_TEXT
+            return tool_failure("invalid_arguments", message)
         runtime, caller = self._runtime, _caller(context)
         sessions = runtime.chat_sessions
         notes: list[str] = []
@@ -528,7 +548,9 @@ class SubAgentCoordinator:
                 SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=settings["max_subagent_depth"]),
             )
         async with self._admission_lock:
-            refusal = await self._limit_refusal(caller, settings)
+            refusal = await self._limit_refusal(
+                caller, settings, can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME)
+            )
             if refusal is not None:
                 return refusal
             if context.is_cancelled():
@@ -669,10 +691,17 @@ class SubAgentCoordinator:
             return _not_found(subagent_id, own)
         if link.parent != caller:
             parent_link = await sessions.run_async(read_link, sessions, link.parent)
+            or_stop = (
+                SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE.format(id=link.id)
+                if context.can_call(BACKGROUND_TASKS_TOOL_NAME)
+                else ""
+            )
             return tool_failure(
                 "subagent_not_direct",
                 SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE.format(
-                    id=link.id, parent_id=parent_link.id if parent_link is not None else "?"
+                    id=link.id,
+                    parent_id=parent_link.id if parent_link is not None else "?",
+                    or_stop=or_stop,
                 ),
             )
         if link.taken_over_at is not None:
@@ -712,7 +741,10 @@ class SubAgentCoordinator:
         async with self._admission_lock:
             if not is_working(runtime, address):
                 refusal = await self._limit_refusal(
-                    caller, _load_subagent_settings(runtime), idle_id=link.id
+                    caller,
+                    _load_subagent_settings(runtime),
+                    idle_id=link.id,
+                    can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME),
                 )
                 if refusal is not None:
                     return refusal
@@ -886,12 +918,22 @@ class SubAgentCoordinator:
         return cast(TemporarySessionBinding, binding)
 
 
-def _implied_action(arguments: JsonObject) -> str | JsonObject:
-    """Return the action a call without ``action`` clearly means, or its refusal."""
+def _implied_action(arguments: JsonObject, *, can_stop: bool) -> str | JsonObject:
+    """Return the action a call without ``action`` clearly means, or its refusal.
+
+    *can_stop*: the caller can call ``background_tasks``, so the refusal names its stop.
+    """
     subagent_id = arguments.get("id")
     if isinstance(subagent_id, str) and subagent_id.strip():
         if has_text(arguments, "content"):
             return "send"
+        stop = (
+            SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE.format(
+                stop_call=call_text({"action": "stop", "id": subagent_id})
+            )
+            if can_stop
+            else ""
+        )
         return tool_failure(
             "invalid_arguments",
             SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE.format(
@@ -899,7 +941,7 @@ def _implied_action(arguments: JsonObject) -> str | JsonObject:
                 send_call=call_text(
                     {"action": "send", "id": subagent_id, "content": _FOLLOW_UP_PLACEHOLDER}
                 ),
-                stop_call=call_text({"action": "stop", "id": subagent_id}),
+                stop=stop,
             ),
         )
     return "run"

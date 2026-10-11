@@ -15,6 +15,7 @@ import pytest
 
 from core.subagents._constants import (
     SUBAGENT_BACKGROUND_IGNORED_NOTE,
+    SUBAGENT_MISSING_TASK_LIST_TEXT,
     SUBAGENT_MISSING_TASK_MESSAGE,
     SUBAGENT_STARTED_NOTE,
 )
@@ -36,6 +37,7 @@ from tests.core.subagents.subagents_test_support import (
 pytestmark = pytest.mark.asyncio
 
 BRIEF = 'Read-only review of src/a.py. Preserve literal {"action":"CANCEL"}.\nReference R-17.'
+MISSING_TASK = SUBAGENT_MISSING_TASK_MESSAGE + SUBAGENT_MISSING_TASK_LIST_TEXT
 PARAMETER_LIST = (
     "subagent parameters: action, content, description, agent_id, id, model, thinking_effort."
 )
@@ -225,9 +227,9 @@ def _id_without_action(subagent_id: str) -> str:
     ("arguments", "message"),
     [
         # No task, or a decision is missing.
-        ({}, SUBAGENT_MISSING_TASK_MESSAGE),
-        ({"description": "Review source"}, SUBAGENT_MISSING_TASK_MESSAGE),
-        ({"content": " "}, SUBAGENT_MISSING_TASK_MESSAGE),
+        ({}, MISSING_TASK),
+        ({"description": "Review source"}, MISSING_TASK),
+        ({"content": " "}, MISSING_TASK),
         ({"id": "sub_abcdefghijkl", "agent_id": "worker"}, _id_without_action("sub_abcdefghijkl")),
         (
             {"goal": "Check links."},
@@ -243,8 +245,8 @@ def _id_without_action(subagent_id: str) -> str:
         # Nothing waits for a Sub-Agent, and stopping one needs its id.
         (
             {"action": "wait", "id": "sub_abcdefghijkl"},
-            'Unknown action "wait". Use one of: list, status, stop. Command results and '
-            "Sub-Agent answers arrive as new messages, so there is nothing to wait for.",
+            'Unknown action "wait". Use one of: run, send. Sub-Agent answers arrive as new '
+            "messages, so there is nothing to wait for.",
         ),
         (
             {"action": "cancel", "content": "stop it"},
@@ -366,17 +368,30 @@ async def test_calls_that_list_check_or_stop_run_as_background_tasks(
     await harness.settle()
 
 
-async def test_list_and_stop_words_are_refused_when_background_tasks_is_not_callable(
-    harness: SubAgentHarness,
+@pytest.mark.parametrize(
+    "arguments",
+    [{"action": "list"}, {}, {"id": "sub_abcdefghijkl"}],
+    ids=["list", "missing-task", "id-without-action"],
+)
+async def test_refusals_name_background_tasks_only_while_it_is_callable(
+    harness: SubAgentHarness, arguments: JsonObject
 ) -> None:
-    result = await harness.registry.dispatch(
-        harness.context(), {"action": "list"}, [SUBAGENT_TOOL_NAME]
+    with_tasks = await harness.registry.dispatch(
+        harness.context(), arguments, [SUBAGENT_TOOL_NAME, "background_tasks"]
     )
+    without = await harness.registry.dispatch(harness.context(), arguments, [SUBAGENT_TOOL_NAME])
 
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": 'subagent was not run: "action" must be one of "run", "send"; received "list".',
-    }
+    if arguments == {"action": "list"}:
+        # A list word runs as background_tasks, and is an unknown action without it.
+        assert with_tasks["ok"] is True
+        assert without["error"]["message"] == (
+            'subagent was not run: "action" must be one of "run", "send"; received "list".'
+        )
+    else:
+        assert "background_tasks" in with_tasks["error"]["message"]
+    assert without["error"]["code"] == "invalid_arguments"
+    assert "background_tasks" not in without["error"]["message"]
+    assert harness.loop.turns == []
 
 
 @pytest.mark.parametrize(

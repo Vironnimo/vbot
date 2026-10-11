@@ -167,8 +167,8 @@ def is_wait_action(action: str) -> bool:
     return spelling(action) in _WAIT_ACTIONS
 
 
-def wait_refusal(action: str) -> str:
-    """The refusal of an action that waits for a task; ``subagent`` refuses it the same way."""
+def _wait_refusal(action: str) -> str:
+    """The refusal of an action that waits for a task."""
     return (
         f'Unknown action "{action}". Use one of: {_CHOICES}. Command results and Sub-Agent '
         "answers arrive as new messages, so there is nothing to wait for."
@@ -180,7 +180,7 @@ def _unknown_action(arguments: dict[str, Any], action: str) -> JsonObject:
     word = spelling(action)
     unknown = f'Unknown action "{action}". Use one of: {_CHOICES}.'
     if is_wait_action(action):
-        raise ToolContractError(wait_refusal(action))
+        raise ToolContractError(_wait_refusal(action))
     task_id = arguments.get("id")
     if (
         word in _MESSAGE_ACTIONS
@@ -241,5 +241,4 @@ __all__ = [
     "TERMINAL_ID_PREFIX",
     "is_wait_action",
     "normalize_background_tasks_arguments",
-    "wait_refusal",
 ]
