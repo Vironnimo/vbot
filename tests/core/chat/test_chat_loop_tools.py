@@ -395,7 +395,7 @@ async def test_real_run_cancel_during_parallel_tools_keeps_finished_results(
     after_cancel = history(runtime)
     assert cancel_callbacks == ["call_slow"]
     # The settled Run releases its shell commands only after cancelling them.
-    assert runtime.terminal_manager.run_events == [
+    assert runtime.command_manager.run_events == [
         ("cancel", cancelled_run.id),
         ("release", cancelled_run.id),
     ]

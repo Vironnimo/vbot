@@ -30,17 +30,29 @@ NOT_RUN = f"{SHELL_MODEL_NAME} was not run: "
         ({"command": ["ls"]}, {"command": "ls"}),
         ({"command": "ls", "timeout_ms": 5000}, {"command": "ls", "timeout_ms": 5000}),
         ({"command": "ls", "timeout_seconds": 5}, {"command": "ls", "timeout": 5}),
-        ({"command": "ls", "mode": "auto"}, {"command": "ls", "mode": "foreground"}),
-        ({"command": "ls", "mode": "bg"}, {"command": "ls", "mode": "background"}),
-        ({"command": "ls", "run_in_background": True}, {"command": "ls", "mode": "background"}),
-        ({"command": "ls", "background": "true"}, {"command": "ls", "mode": "background"}),
-        ({"command": "ls", "is_background": False}, {"command": "ls", "mode": "foreground"}),
+        ({"command": "ls", "mode": "auto"}, {"command": "ls", "run_in_background": False}),
+        ({"command": "ls", "mode": "bg"}, {"command": "ls", "run_in_background": True}),
+        ({"command": "ls", "mode": ""}, {"command": "ls"}),
+        ({"command": "ls", "run_in_background": ""}, {"command": "ls"}),
+        ({"command": "ls", "background": "true"}, {"command": "ls", "run_in_background": True}),
+        ({"command": "ls", "is_background": False}, {"command": "ls", "run_in_background": False}),
         (
-            {"command": "ls", "background": True, "mode": "background"},
-            {"command": "ls", "mode": "background"},
+            {"command": "ls", "background": True, "mode": "background", "run_in_background": True},
+            {"command": "ls", "run_in_background": True},
         ),
-        ({"command": "ls", "yieldMs": 10000}, {"command": "ls"}),
-        ({"command": "ls", "background_after_seconds": 0}, {"command": "ls", "mode": "background"}),
+        (
+            {"command": "ls", "background_after_seconds": 0},
+            {"command": "ls", "run_in_background": True},
+        ),
+        # A terminal, input or a yield time cannot be had: the command runs with a note.
+        (
+            {"command": "ls", "yieldMs": 10000, "pty": True, "stdin": "y\n"},
+            {
+                "command": "ls",
+                "no_effect_fields": {"yieldMs": "wait", "pty": "terminal", "stdin": "input"},
+            },
+        ),
+        ({"command": "ls", "tty": False, "interactive": "false", "input": ""}, {"command": "ls"}),
         (
             {"command": "ls", "explanation": "List files"},
             {"command": "ls", "description": "List files"},
@@ -62,8 +74,6 @@ NOT_RUN = f"{SHELL_MODEL_NAME} was not run: "
                 "max_output_tokens": 1000,
                 "notifyOnComplete": True,
                 "dangerouslyDisableSandbox": True,
-                "pty": True,
-                "tty": False,
                 "sandbox_permissions": "use_default",
                 "require_user_approval": False,
                 "user": "",
@@ -95,16 +105,21 @@ def test_other_harness_shapes_map_onto_the_shell_fields(arguments, expected) -> 
     ("arguments", "message"),
     [
         (
-            {"command": "ls", "background": True, "mode": "foreground"},
-            'mode is "foreground" but background asks for background; send one of them.',
+            {"command": "ls", "mode": "background", "run_in_background": False},
+            "run_in_background is false but mode asks for background; send one of them.",
         ),
         (
             {"command": "ls", "is_background": False, "mode": "background"},
-            'mode is "background" but is_background asks for foreground; send one of them.',
+            "is_background asks for foreground but mode asks for background; send one of them.",
         ),
         (
             {"command": "ls", "mode": "foreground", "yield_after": 0},
-            'mode is "foreground" but yield_after asks for background; send one of them.',
+            "mode asks for foreground but yield_after asks for background; send one of them.",
+        ),
+        (
+            {"command": "ls", "mode": "later"},
+            "mode 'later' is not a mode. Pass run_in_background: true to run the command in "
+            "the background, or omit both to wait for it.",
         ),
         ({"command": "ls", "background": "maybe"}, "background must be true or false."),
         ({"command": "ls", "commands": ["pwd"]}, "command and commands are both given; send one."),

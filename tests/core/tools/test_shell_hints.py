@@ -135,6 +135,45 @@ _BASH_SYNTAX = (
             id="timeout_program",
         ),
         pytest.param("make test", 124, "", None, id="exit_124_without_timeout_program"),
+        # A command gets no input and has no terminal.
+        pytest.param(
+            "Read-Host 'Name'",
+            1,
+            "Read-Host: PowerShell is in NonInteractive mode. Read and Prompt functionality is "
+            "not available.",
+            ["PowerShell cannot prompt in a command: pass the value as a parameter"],
+            id="powershell_prompt",
+        ),
+        pytest.param(
+            "Get-Credential",
+            1,
+            "Get-Credential: PowerShell befindet sich im Nichtinteraktiv-Modus. Lese- und "
+            "Promptfunktionen sind nicht verfügbar.",
+            ["add -Confirm:$false or -Force to a cmdlet that asks for confirmation."],
+            id="powershell_prompt_german",
+        ),
+        pytest.param(
+            "docker run -it ubuntu bash",
+            1,
+            "the input device is not a TTY",
+            ["run the container without -t, and without -i unless you pipe input into it."],
+            id="container_tty",
+        ),
+        pytest.param(
+            "python ask.py",
+            1,
+            'Traceback (most recent call last):\n  File "ask.py", line 1\nEOFError: EOF when '
+            "reading a line\nbash: python: command not found",
+            ["The program asked for input, and commands get none."],
+            id="end_of_input_before_not_installed",
+        ),
+        pytest.param(
+            "npm init vite",
+            1,
+            "Error: User force closed the prompt with 0 null",
+            ["such as -y or --yes, or pipe it into the program within the command."],
+            id="prompt_library_closed",
+        ),
     ],
 )
 def test_failure_output_gets_the_matching_hint(
@@ -388,6 +427,20 @@ _WINDOWS_FIND = (
             {"search_files"},
             f"{_WINDOWS_FIND}, or use search_files.",
         ),
+        (
+            "python ask.py",
+            "EOFError: EOF when reading a line",
+            {"terminal"},
+            "pipe it into the program within the command. To answer it yourself, run the "
+            "program with terminal.",
+        ),
+        ("python ask.py", "EOFError: EOF when reading a line", set(), "within the command."),
+        (
+            "docker run -it ubuntu bash",
+            "the input device is not a TTY",
+            {"terminal"},
+            "To work inside the container interactively, run it with terminal.",
+        ),
     ],
 )
 def test_hints_name_only_the_tools_the_agent_is_offered(
@@ -397,7 +450,7 @@ def test_hints_name_only_the_tools_the_agent_is_offered(
 
     assert hint is not None
     assert expected in hint
-    for tool in {"search_files", "read", "apply_patch", "edit"} - offered:
+    for tool in {"search_files", "read", "apply_patch", "edit", "terminal"} - offered:
         assert f" {tool}." not in hint and f" {tool}," not in hint
 
 

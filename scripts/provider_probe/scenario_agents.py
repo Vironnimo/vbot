@@ -27,63 +27,57 @@ from scripts.provider_probe.common import ProbeScenario, _probe_messages
 def _bash_scenario(case_name: str) -> ProbeScenario:
     bash_arguments: dict[str, dict[str, Any]] = {
         "top_foreground_default": {"command": "python --version"},
-        "top_foreground": {"mode": "foreground", "command": "python --version"},
+        "top_foreground": {"command": "python --version", "run_in_background": False},
         "top_foreground_description": {
-            "mode": "foreground",
             "command": "python --version",
             "description": "Check Python version",
         },
         "top_foreground_workdir": {
-            "mode": "foreground",
             "command": "python --version",
             "workdir": "src",
         },
         "top_foreground_timeout": {
-            "mode": "foreground",
             "command": "python --version",
             "timeout": 120,
         },
         "top_foreground_unbounded": {"command": "python --version", "timeout": 0},
         "top_foreground_long_timeout": {"command": "python --version", "timeout": 3600},
         "top_foreground_env_one": {
-            "mode": "foreground",
             "command": "python -c \"import os; print(bool(os.environ['OPENAI_API_KEY']))\"",
             "env_keys": ["OPENAI_API_KEY"],
         },
         "top_foreground_env_many": {
-            "mode": "foreground",
             "command": 'python -c "import os; print(len(os.environ))"',
             "env_keys": ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
         },
         "top_foreground_all_multiline": {
-            "mode": "foreground",
             "command": ("python --version\npython -m pytest tests/core/tools/test_bash.py -q"),
             "description": "Run Bash tool tests",
             "workdir": "src",
             "timeout": 120,
         },
         "top_background": {
-            "mode": "background",
             "command": "python -m http.server 8765",
+            "run_in_background": True,
         },
         "top_background_workdir": {
-            "mode": "background",
             "command": "python -m http.server 8765",
+            "run_in_background": True,
             "workdir": "public",
         },
         "top_background_timeout": {
-            "mode": "background",
             "command": "python -m http.server 8765",
+            "run_in_background": True,
             "timeout": 600,
         },
         "top_background_unbounded": {
-            "mode": "background",
             "command": "python -m http.server 8765",
+            "run_in_background": True,
             "timeout": 0,
         },
         "top_background_all": {
-            "mode": "background",
             "command": "python -m http.server 8765",
+            "run_in_background": True,
             "description": "Serve local preview",
             "workdir": "public",
             "timeout": 600,

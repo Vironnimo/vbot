@@ -94,7 +94,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         ),
         get_local_context_windows=lambda: runtime.local_context_windows(),
         image_understanding_available=image_understanding_available,
-        get_terminal_manager=lambda: getattr(runtime, "terminal_manager", None),
+        get_command_manager=lambda: getattr(runtime, "command_manager", None),
         deliver_background_completions=lambda run, session: bool(
             getattr(
                 runtime,
@@ -646,7 +646,7 @@ class StubSkills:
         return [self._skills[name] for name in allowed_skills if name in self._skills]
 
 
-class StubTerminalManager:
+class StubCommandManager:
     """Record the Run-level shell command cleanup in call order."""
 
     def __init__(self) -> None:
@@ -727,7 +727,7 @@ class StubRuntime:
         self.chat_run_manager = self.chat_runs
         # Complete Run timelines; a finished Run itself replays only its ending.
         self.timelines = RunTimelines(self.chat_runs)
-        self.terminal_manager = StubTerminalManager()
+        self.command_manager = StubCommandManager()
         self.extensions: Any = None
         self.providers = StubProviders(provider_ids or {agent.model.split("/", 1)[0]})
         # Usable connections mirror reality: the primary provider's key plus

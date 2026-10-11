@@ -130,9 +130,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
     if (config_backups := runtime._config_backups) is not None:
         # The last check backs up a configuration changed since the previous one.
         yield _Step("config_backups", config_backups.stop, config_backups.aclose)
-    if (terminals := runtime._terminal_manager) is not None:
-        # Before triggers close, so a handed-off command's stopped result is submitted.
-        yield _Step("commands", None, terminals.shutdown_commands)
+    if (commands := runtime._command_manager) is not None:
+        # Before triggers close, so a background command's stopped result is submitted.
+        yield _Step("commands", None, commands.shutdown)
     if (triggers := runtime._trigger_service) is not None:
         yield _Step("triggers", None, triggers.aclose)
     if (reflection := runtime._reflection_service) is not None:
@@ -167,6 +167,8 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         )
     if (performance := runtime._performance) is not None:
         yield _Step("performance", performance.stop, performance.aclose)
+    if (commands := runtime._command_manager) is not None:
+        yield _Step("command_processes", commands.close, commands.aclose)
     if (terminals := runtime._terminal_manager) is not None:
         yield _Step("terminals", terminals.stop, terminals.aclose)
     if (keep_awake := runtime._keep_awake) is not None:

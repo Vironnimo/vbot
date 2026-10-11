@@ -105,6 +105,7 @@ from core.tools import (
     UpdateHandoffs,
     register_analyze_image_tool,
     register_apply_patch_tool,
+    register_background_tasks_tool,
     register_edit_tools,
     register_generate_image_tool,
     register_generate_music_tool,
@@ -123,6 +124,7 @@ from core.tools import (
 )
 from core.tools.calendar import register_calendar_tool
 from core.tools.classify import register_classify_tool
+from core.tools.command_manager import CommandManager
 from core.tools.cron import register_cron_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
@@ -618,7 +620,7 @@ def bootstrap(runtime: Runtime) -> None:
                 if runtime._trigger_service is not None
                 else False
             ),
-            get_terminal_manager=lambda: runtime._terminal_manager,
+            get_command_manager=lambda: runtime._command_manager,
             subagent_taken_over=lambda address: (
                 runtime._subagent_coordinator.subagent_taken_over(address)
                 if runtime._subagent_coordinator is not None
@@ -650,6 +652,10 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._start_terminal_manager()
         register_terminal_tool(runtime._tools, runtime._terminal_manager, runtime._projects)
+        runtime._command_manager = CommandManager(
+            runtime._trigger_service, temporary_files=runtime._storage.temporary_files
+        )
+        runtime._command_manager.start()
         runtime._bootstrap_service = BootstrapService(
             runtime._trigger_service,
             runtime._storage.data_dir,
@@ -734,7 +740,7 @@ def bootstrap(runtime: Runtime) -> None:
         )
         register_shell_tool(
             runtime._tools,
-            runtime._terminal_manager,
+            runtime._command_manager,
             credential_resolver=runtime.resolve_environment_credential,
             prompt_blocks=runtime._tool_prompt_blocks,
             update_handoffs=runtime._update_handoffs,
@@ -746,6 +752,11 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tools,
             runtime._subagent_coordinator,
             runtime._tool_prompt_blocks,
+        )
+        register_background_tasks_tool(
+            runtime._tools,
+            runtime._command_manager,
+            subagents=runtime._subagent_coordinator,
         )
         register_status_tool(
             runtime._tools,

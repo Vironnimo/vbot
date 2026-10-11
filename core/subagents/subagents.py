@@ -339,6 +339,15 @@ class SubAgentCoordinator:
             clear_root_queue=False,
         )
 
+    async def descendant_sessions(self, caller: SessionAddress) -> dict[SessionAddress, str]:
+        """The Sessions of *caller*'s Sub-Agents at every depth, each with its Sub-Agent id.
+
+        ``background_tasks`` shows the caller the background work of these Sessions.
+        """
+        sessions = self._runtime.chat_sessions
+        links = await sessions.run_async(descendants, sessions, caller)
+        return {link.session: link.id for link in links}
+
     async def drain_activity(self) -> None:
         """Wait until the activity files' text so far is on disk."""
         await self._activities.drain()

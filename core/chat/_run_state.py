@@ -83,8 +83,8 @@ if TYPE_CHECKING:
     from core.skills.skills import SkillRegistry
     from core.storage import StorageManager
     from core.tools.change_tracker import ChangeTracker
+    from core.tools.command_manager import CommandManager
     from core.tools.file_state import FileReadState
-    from core.tools.terminal_manager import TerminalManager
     from core.tools.tools import ToolRegistry
     from core.usage import UsageRecorder
 
@@ -185,8 +185,8 @@ class ChatLoopDependencies:
     get_local_context_windows: Callable[[], Mapping[str, Any]]
     image_understanding_available: Callable[[], Awaitable[bool]]
     deliver_background_completions: Callable[[Run, ChatSession], bool]
-    # The Terminal Sessions of shell commands; created after the Chat Loop.
-    get_terminal_manager: Callable[[], TerminalManager | None]
+    # The shell's commands; created after the Chat Loop.
+    get_command_manager: Callable[[], CommandManager | None]
     usage_recorder: UsageRecorder | None = None
     # Called once the user's first message in a Sub-Agent Session is persisted.
     subagent_taken_over: Callable[[SessionAddress], None] | None = None
@@ -735,16 +735,17 @@ async def create_run_execution_context(
     )
     try:
         run.add_cancel_callback(lambda: _close_adapter(target.adapter))
-        terminals = dependencies.get_terminal_manager()
-        if terminals is not None:
-            # A cancelled Run stops every shell command it started, handed off or not.
-            run.add_cancel_callback(lambda: terminals.cancel_run(run.id))
+        commands = dependencies.get_command_manager()
+        if commands is not None:
+            # A cancelled Run stops the shell commands still inside their call;
+            # commands already in the background keep running and deliver.
+            run.add_cancel_callback(lambda: commands.cancel_run(run.id))
 
             async def release_command_scope(_status: RunStatus) -> None:
                 # Completion observers run after the executor, every Tool task, and
                 # all cancellation callbacks have settled, so no shell command for
                 # this Run can race the release of its cancellation marker.
-                terminals.release_run(run.id)
+                commands.release_run(run.id)
 
             run.add_completion_observer(release_command_scope)
         temporary_cwd: Path | None = None

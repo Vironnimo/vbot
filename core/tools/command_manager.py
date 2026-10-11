@@ -20,12 +20,12 @@ idle (notice id ``command:<command_id>``).
 
 Stops (``stop``) name a reason; the first reason wins:
 
-- ``agent``: the Agent of the command's Session killed it with the
-  ``background_commands`` Tool; nothing more is delivered, since the kill's
+- ``agent``: the Agent of the command's Session stopped it with the
+  ``background_tasks`` Tool; nothing more is delivered, since the stop's
   result shows the outcome.
 - ``parent``: the Agent of an ancestor Session (a Parent Agent of the Sub-Agent
-  that started it) killed it; the result is delivered to the command's own
-  Session, whose Agent did not see the kill.
+  that started it) stopped it; the result is delivered to the command's own
+  Session, whose Agent did not see the stop.
 - ``user``: the user stopped this command; a background result is delivered.
 - ``run_cancelled``: the Run whose call waited for the command was cancelled
   (``cancel_run`` stops only foreground commands).

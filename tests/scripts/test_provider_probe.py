@@ -256,7 +256,7 @@ def test_shell_probe_reports_the_violated_env_keys_keyword() -> None:
             [
                 {
                     "name": SHELL_TOOL_NAME,
-                    "arguments": {"mode": "foreground", "command": "ls", "env_keys": keys},
+                    "arguments": {"command": "ls", "env_keys": keys},
                 }
             ],
             contracts,

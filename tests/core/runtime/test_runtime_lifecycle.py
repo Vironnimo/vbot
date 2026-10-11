@@ -43,6 +43,7 @@ from core.statistics.index import StatisticsIndex
 from core.storage.layout import DataDirectoryLayout
 from core.storage.storage import StorageManager
 from core.storage.temp_files import TemporaryFileManager
+from core.tools.command_manager import CommandManager
 from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.update_handoff import HANDOFF_DIRECTORY, UPDATE_HANDOFF_FILE_RETENTION
 from core.utils.config import Config
@@ -59,6 +60,7 @@ _STARTED_SERVICES = (
     "tools",
     "update_handoffs",
     "terminal_manager",
+    "command_manager",
     "skills",
     "chat_sessions",
     "system_prompts",
@@ -429,6 +431,7 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
     record(KeepAwakeController, "close", "keep_awake")
     record(SpeechService, "close", "speech")
     record(TerminalManager, "stop", "terminal_manager")
+    record(CommandManager, "close", "command_manager")
     record(PerformanceService, "stop", "performance")
     record(RecallIntegration, "close", "recall")
     record(StatisticsIndex, "close", "statistics_index")
@@ -448,7 +451,8 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
     expected = {
         "ensure_directories": set(),
         "_start_terminal_manager": started,
-        "_start_provider_usage_service": started | {"terminal_manager", "performance"},
+        "_start_provider_usage_service": started
+        | {"terminal_manager", "command_manager", "performance"},
     }[method]
     assert expected <= set(released)
     if "performance" in expected:
@@ -644,10 +648,11 @@ async def test_loop_started_runtime_owns_background_services_until_aclose(
     try:
         terminal_manager = runtime.terminal_manager
         temporary_files = runtime.storage.temporary_files
+        command_sweeper = runtime.command_manager._sweeper  # noqa: SLF001
         sweepers = [
             manager._sweeper_task  # noqa: SLF001 - lifecycle resource under test.
             for manager in (terminal_manager, temporary_files)
-        ]
+        ] + [command_sweeper]
         assert all(task is not None and not task.done() for task in sweepers)
         assert isinstance(runtime.cron_service, CronService)
         provider_usage = runtime.provider_usage
@@ -674,6 +679,7 @@ async def test_loop_started_runtime_owns_background_services_until_aclose(
     assert not performance.monitoring
     assert watchdog is not None and not watchdog.is_alive()
     assert terminal_manager._sweeper_task is None  # noqa: SLF001
+    assert command_sweeper is not None and command_sweeper.done()
     assert temporary_files._sweeper_task is None  # noqa: SLF001
     assert database.is_closed()
     assert runtime.canonical_databases() == ()
@@ -765,7 +771,7 @@ _ASYNC_SHUTDOWN = (
     "cron.aclose",
     "bootstrap.aclose",
     "archive_retention.aclose",
-    "commands.shutdown_commands",
+    "commands.shutdown",
     "triggers.aclose",
     "reflection.aclose",
     "librarian.aclose",
@@ -777,6 +783,7 @@ _ASYNC_SHUTDOWN = (
     "provider_usage.aclose",
     "debug_traces.aclose",
     "performance.aclose",
+    "commands.aclose",
     "terminals.aclose",
     "keep_awake.close",
     "temporary_files.aclose",
@@ -799,6 +806,7 @@ _SYNC_SHUTDOWN = (
     "speech.close",
     "provider_usage.close",
     "performance.stop",
+    "commands.close",
     "terminals.stop",
     "keep_awake.close",
     "temporary_files.stop",
@@ -824,10 +832,6 @@ def _recording_service(
     async def acall(method: str) -> None:
         call(method)
 
-    async def stop_commands() -> None:
-        # The "commands" step of the terminal manager, apart from its close.
-        events.append("commands.shutdown_commands")
-
     return SimpleNamespace(
         stop=partial(call, "stop"),
         close=partial(call, "close"),
@@ -835,7 +839,7 @@ def _recording_service(
         aclose=partial(acall, "aclose"),
         fire_shutdown=partial(acall, "fire_shutdown"),
         drain_activity=partial(acall, "drain_activity"),
-        shutdown_commands=stop_commands,
+        shutdown=partial(acall, "shutdown"),
     )
 
 
@@ -895,6 +899,7 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
         ("_speech", "speech"),
         ("_provider_usage", "provider_usage"),
         ("_performance", "performance"),
+        ("_command_manager", "commands"),
         ("_terminal_manager", "terminals"),
         ("_keep_awake", "keep_awake"),
         ("_recall", "recall"),

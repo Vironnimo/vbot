@@ -900,31 +900,10 @@ async def _command_result(
     wait_ended: str | None = None,
     typed: bool = False,
 ) -> JsonObject:
-    """The shell result of a command terminal; a screen, idle or end it shows is not
-    delivered again. *typed* marks the reply to the Agent's input."""
-    # Imported here: the shell Tool owns the result of a command and imports the manager.
-    from core.tools.shell import command_terminal_result
-
-    owner = _owner(context)
-    try:
-        # Taken first, so the result shows this screen or a newer one.
-        shown = await terminal_manager.snapshot(terminal_id, owner, lines=1, include_name=False)
-    except TerminalNotOwnedError:
-        shown = None
-    data = await command_terminal_result(
-        terminal_manager,
-        context,
-        terminal_id,
-        wait_ended=wait_ended,
-        working=typed and shown is not None and shown.get("state") == "working",
-    )
-    if shown is not None:
-        _acknowledge_after_persistence(terminal_manager, context, owner, shown)
-    if data.get("status") in {"exited", "stopped"}:
-        context.after_result_persisted(
-            lambda: terminal_manager.acknowledge_exit(terminal_id, owner)
-        )
-    return data
+    """Unreachable: the shell Tool runs its commands through ``CommandManager``, so no
+    terminal is a command terminal. The command branches calling this go with the
+    terminal subsystem's command code."""
+    raise TerminalManagerError(f"Terminal {terminal_id} does not run a shell command")
 
 
 # What an attached interactive program sends on its own; Agents polled for it.

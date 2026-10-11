@@ -24,6 +24,7 @@ from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
+from core.tools.command_manager import CommandManager
 from core.tools.live import LIVE_TOOL_NAMES
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolNotFoundError, ToolRegistry
@@ -33,6 +34,7 @@ from core.utils.version import detect_vbot_version
 CANONICAL_BUILTIN_TOOLS = [
     "analyze_image",
     "apply_patch",
+    "background_tasks",
     "bash",
     "calendar",
     "classify",
@@ -77,7 +79,7 @@ CANONICAL_REGISTERED_TOOLS = sorted(
 
 # Tools whose description opens with a sentence as short as a summary. Every
 # other Tool an Agent can load on demand declares a summary.
-FIRST_SENTENCE_SUMMARY_TOOLS = {"apply_patch", "edit", "write"}
+FIRST_SENTENCE_SUMMARY_TOOLS = {"apply_patch", "background_tasks", "edit", "write"}
 
 BUNDLED_SKILLS = [
     "coding-agents",
@@ -171,6 +173,7 @@ def test_runtime_wires_its_services_to_the_data_directory(shared_runtime: Runtim
         ("tools", ToolRegistry),
         ("update_handoffs", UpdateHandoffs),
         ("terminal_manager", TerminalManager),
+        ("command_manager", CommandManager),
         ("skills", SkillRegistry),
         ("chat_sessions", ChatSessionManager),
         ("statistics_index", StatisticsIndex),

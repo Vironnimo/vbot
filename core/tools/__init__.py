@@ -20,6 +20,12 @@ from core.tools.availability import (
     normalize_tool_access,
     resolve_tool_access,
 )
+from core.tools.background_tasks import (
+    BACKGROUND_TASKS_TOOL_DESCRIPTION,
+    BACKGROUND_TASKS_TOOL_NAME,
+    BACKGROUND_TASKS_TOOL_PARAMETERS,
+    register_background_tasks_tool,
+)
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import (
     ToolContract,
@@ -305,6 +311,10 @@ __all__ = [
     "SHELL_TOOL_NAME",
     "SHELL_TOOL_PARAMETERS",
     "register_shell_tool",
+    "BACKGROUND_TASKS_TOOL_DESCRIPTION",
+    "BACKGROUND_TASKS_TOOL_NAME",
+    "BACKGROUND_TASKS_TOOL_PARAMETERS",
+    "register_background_tasks_tool",
     "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",
     "read_media_artifact",

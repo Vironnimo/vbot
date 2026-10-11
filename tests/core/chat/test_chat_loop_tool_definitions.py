@@ -159,7 +159,7 @@ async def test_shell_definition_carries_the_host_shell_name(tmp_path: Path) -> N
     # The Provider request carries the name the Model knows on this host.
     assert shell["name"] == model_tool_name(SHELL_TOOL_NAME)
     assert shell["description"] == SHELL_TOOL_DESCRIPTION
-    assert shell["parameters"]["properties"]["mode"]["enum"] == ["foreground", "background"]
+    assert shell["parameters"]["properties"]["run_in_background"]["type"] == "boolean"
 
 
 def _tools_sent(runtime: Any) -> list[list[JsonObject]]:
