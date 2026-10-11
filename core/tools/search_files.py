@@ -44,6 +44,7 @@ from core.tools._search_query import (
     MAX_OFFSET,
     SearchArgumentError,
     SearchQuery,
+    flag_list,
     interpret,
 )
 from core.tools._search_results import (
@@ -88,19 +89,26 @@ def _repair_argument_array(value: Any) -> Any:
     A string that starts with an option is a command line such as
     "-F computeDamage( src"; it splits like one, with quotes grouping words.
     Backslashes would be shell escapes there but regex escapes here, so such a
-    string stays one argument.
+    string stays one argument. Flags that broken list syntax wraps, such as
+    '--files"]' or "['--files']", are those flags (``flag_list``); a valid JSON
+    list is decoded first, so its items keep every character.
     """
-    if isinstance(value, str) and value.lstrip().startswith("-") and "\\" not in value:
+    if not isinstance(value, str):
+        return value
+    encoded = re.match(r'^\s*\[\s*"', value) is not None
+    if encoded:
+        with contextlib.suppress(ValueError):
+            return load_json_value(value)
+    flags = flag_list(value)
+    if flags is not None:
+        return flags
+    if value.lstrip().startswith("-") and "\\" not in value:
         with contextlib.suppress(ValueError):
             words = shlex.split(value)
             if len(words) > 1:
                 return words
-    if not isinstance(value, str) or not re.match(r'^\s*\[\s*"', value):
+    if not encoded:
         return value
-    try:
-        return load_json_value(value)
-    except ValueError:
-        pass
 
     # In encoded regex lists, \( and \w often omit the JSON escape for the
     # backslash. Preserve that backslash; never change members of real arrays.

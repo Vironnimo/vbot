@@ -381,6 +381,27 @@ async def test_a_command_line_string_in_args_splits_into_arguments(project: Path
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "content"),
+    [
+        ({"args": '--files"]', "pattern": "."}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
+        ({"args": "['--files']", "path": "src"}, "src/app.py\nsrc/view.ts"),
+        ({"args": "[--dirs]", "pattern": "do"}, "docs/"),
+        ({"args": '["-i", "-t", "ts"', "pattern": "LOAD"}, "src/view.ts:1:export const load = 1;"),
+        # Text that is not only flags stays what it was: here a regex class, the pattern.
+        ({"args": "[u]", "path": "src"}, "src/app.py:3:    return os.name"),
+    ],
+)
+async def test_flags_wrapped_in_stray_list_syntax_are_those_flags(
+    project: Path, arguments: dict, content: str
+):
+    os.utime(project / "docs", (1_000_000_000, 1_000_000_000))
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    assert result["data"]["content"] == content
+
+
+@pytest.mark.asyncio
 async def test_a_command_line_string_with_backslashes_asks_for_one_argument_per_item(
     project: Path,
 ) -> None:
@@ -746,6 +767,8 @@ _PATHS = "path must name a file or directory"
         ({"args": ["needle"], "argv": ["other"]}, None, "Conflicting values for args"),
         ({"args": r'["-e", "\bcall\("]'}, None, _LIST),
         ({"args": '["needle",]'}, None, _LIST),
+        # A value next to list syntax could hold a regex class: its brackets stay.
+        ({"args": '["-e", "[ab]"'}, None, _LIST),
     ],
 )
 async def test_ambiguous_or_unsupported_requests_reject_without_substitution(

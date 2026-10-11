@@ -149,6 +149,16 @@ Other rules:
 - A scalar `args` string that starts with an option and contains no backslash
   splits like a command line. One with backslashes asks for one argument per item
   and shows the split list as an example.
+- A scalar `args` string that broken list syntax wraps (`--files"]`,
+  `['--files']`, `[--dirs]`, `["-i", "-t", "ts"`) is read as its items
+  (`flag_list`, silently) when every item is a ripgrep flag or the value of the
+  valued flag before it, brackets, quotes and commas occur only around items,
+  and no backslash occurs. A valid JSON list is decoded first. Anything else
+  stays as it was: `[u]` remains a pattern operand, `["-e", "[ab]"` the
+  malformed-list error, since a bracket next to a value could belong to a regex
+  or glob class. Swarm Sessions (2026-10): `--files"]` failed as an unknown
+  flag, and `[--dirs]` beside a pattern became the root glob `/[--dirs]` and
+  answered "No matches in 0 searched files".
 - A `path` or `glob` string that is a JSON list of strings is that list.
 
 Roots (`_resolve_roots`):

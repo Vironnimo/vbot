@@ -405,6 +405,145 @@ def _matches_everything(query: SearchQuery, pattern: str) -> bool:
     return not narrowing
 
 
+# ripgrep 15.1.0's long flags, their negations, and the ones vBot adds or reads as grep's.
+_LONG_FLAGS = frozenset(
+    {
+        *_VALUED,
+        *_SILENT,
+        *_IGNORED_WITH_NOTE,
+        *_BLOCKED,
+        *_REFERENCE,
+        *_OUTPUT_FLAGS,
+        *[
+            "auto-hybrid-regex",
+            "binary",
+            "case-sensitive",
+            "count-matches",
+            "crlf",
+            "dfa-size-limit",
+            "engine",
+            "files",
+            "files-without-match",
+            "fixed-strings",
+            "follow",
+            "glob-case-insensitive",
+            "hidden",
+            "ignore-case",
+            "ignore-file-case-insensitive",
+            "include-zero",
+            "invert-match",
+            "line-regexp",
+            "max-filesize",
+            "multiline",
+            "multiline-dotall",
+            "no-ignore",
+            "no-ignore-dot",
+            "no-ignore-exclude",
+            "no-ignore-files",
+            "no-ignore-global",
+            "no-ignore-parent",
+            "no-ignore-vcs",
+            "no-pcre2-unicode",
+            "no-require-git",
+            "no-unicode",
+            "null-data",
+            "one-file-system",
+            "only-matching",
+            "pcre2",
+            "regex-size-limit",
+            "search-zip",
+            "smart-case",
+            "sort-files",
+            "stop-on-nonmatch",
+            "text",
+            "type-list",
+            "unrestricted",
+            "word-regexp",
+            "no-auto-hybrid-regex",
+            "no-binary",
+            "no-crlf",
+            "no-encoding",
+            "no-fixed-strings",
+            "no-follow",
+            "no-glob-case-insensitive",
+            "no-hidden",
+            "no-ignore-file-case-insensitive",
+            "no-include-zero",
+            "no-invert-match",
+            "no-multiline",
+            "no-multiline-dotall",
+            "no-one-file-system",
+            "no-pcre2",
+            "no-pre",
+            "no-search-zip",
+            "no-sort-files",
+            "no-text",
+            "dirs",
+        ],
+    }
+)
+_LIST_SYNTAX = re.compile(r"""[\[\]"',]""")
+
+
+def flag_list(text: str) -> list[str] | None:
+    """Read args text that list syntax broke, such as '--files"]' or "['--files']".
+
+    Returns the items only when every one is a ripgrep flag, or the value of
+    the valued flag before it, and list syntax ([ ] " ' and commas) occurs only
+    around them; otherwise None. A value keeps every character but its quotes,
+    so one next to a bracket, which could belong to a regex or glob class,
+    fails the reading. So does text with a backslash, which could be a regex
+    escape.
+    """
+    if "\\" in text or not _LIST_SYNTAX.search(text):
+        return None
+    pieces = [piece for piece in re.split(r"[\s,]+", text) if piece.strip("[]\"'")]
+    items: list[str] = []
+    wanted = 0  # values still owed to the valued flag before
+    for index, piece in enumerate(pieces):
+        if wanted:
+            if index == len(pieces) - 1 and text.lstrip().startswith("["):
+                piece = piece.rstrip().removesuffix("]")
+            value = piece.strip("\"'")
+            if "[" in piece or "]" in piece or _LIST_SYNTAX.search(value):
+                return None
+            items.append(value)
+            wanted = 0
+            continue
+        item = piece.strip("[]\"'")
+        if _LIST_SYNTAX.search(item):
+            return None
+        wanted = _owed_values(item, pieces[len(items) + 1 :])
+        if wanted < 0:
+            return None
+        items.append(item)
+    return None if wanted else items
+
+
+def _owed_values(item: str, following: list[str]) -> int:
+    """Return how many next items the flag item takes as its value, or -1 if not a flag."""
+    if item.startswith("--"):
+        name, equals, _ = item[2:].partition("=")
+        if name not in _LONG_FLAGS:
+            return -1
+        return 1 if name in _VALUED and not equals else 0
+    if not item.startswith("-") or len(item) < 2:
+        return -1
+    for position, letter in enumerate(item[1:], start=2):
+        known = _SHORT_NAMES.get(letter)
+        if known is None:
+            return -1
+        if known not in _VALUED:
+            continue
+        if position < len(item):
+            return 0
+        if known == "encoding" and not (following and _is_encoding(following[0].strip("\"'"))):
+            # grep's -E (extended regex) is ripgrep's default syntax.
+            return 0
+        return 1
+    return 0
+
+
 def interpret(
     *,
     pattern: str | None,
