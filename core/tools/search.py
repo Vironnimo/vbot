@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from core.tools._search_execution import (
     ALWAYS_EXCLUDED,
+    CACHES_EXCLUDED,
     DEFAULT_ARGUMENTS,
     NativeOutcome,
     native_lines,
@@ -30,7 +31,7 @@ SEARCH_TIMEOUT_SECONDS = 30.0
 MAX_OUTPUT_BYTES = 50 * 1024
 
 # The selection of a search_files listing without arguments.
-_SELECTION = (*DEFAULT_ARGUMENTS, f"--glob={ALWAYS_EXCLUDED}")
+_SELECTION = (*DEFAULT_ARGUMENTS, f"--glob={CACHES_EXCLUDED}", f"--glob={ALWAYS_EXCLUDED}")
 
 
 class SearchBudget:
@@ -89,7 +90,8 @@ def list_selected_files(
 
     The selection is the search engine's own: hidden files are included;
     ``.gitignore``, ``.ignore``, ``.rgignore``, ``.git/info/exclude`` and the
-    global Git excludes apply; ``.git`` and directory links are never entered.
+    global Git excludes apply; ``.git``, ``__pycache__`` and directory links are
+    never entered.
     Paths are relative to ``root`` with ``/`` separators, in no particular order.
     The second value says whether the list may be incomplete: ``limit`` cut it or
     ``budget`` stopped it.
@@ -125,7 +127,8 @@ def unselected_names(
     """Return the ``names`` in ``directory`` that :func:`list_selected_files` leaves out.
 
     ``directory`` is relative to ``root`` with ``/`` separators (``""`` is ``root``).
-    An entry is left out when an ignore rule or the ``.git`` exclusion skips it, and
+    An entry is left out when an ignore rule or the ``.git`` or ``__pycache__``
+    exclusion skips it, and
     every entry is when ``directory`` lies in a skipped directory. A stopped
     ``budget`` leaves the answer incomplete; check it afterwards.
     """

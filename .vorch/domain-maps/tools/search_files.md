@@ -34,7 +34,8 @@ without arguments returns, read NUL-separated so a name with a line break stays
 whole) and `unselected_names` (which entries of one directory that selection
 leaves out, from ripgrep's `--debug` skip reports). They call
 `native_lines` without a `ToolContext`, so only their budget stops the child, and
-keep the picker on the same selection as the Tool. `core/tools/_path_suggestions.py`
+keep the picker on the same selection as the Tool, `__pycache__` exclusion
+included (the picker marks cache directories as ignored). `core/tools/_path_suggestions.py`
 (shared with `read`) suggests similar paths. The async handler runs the whole
 operation through `run_tool_worker`.
 
@@ -196,14 +197,21 @@ Roots (`_resolve_roots`):
 Every ripgrep run gets `DEFAULT_ARGUMENTS`
 (`--no-config --hidden --no-require-git --glob-case-insensitive`), then the
 query's rg arguments, so later `args` override them (`--no-hidden`,
-`--no-glob-case-insensitive`). `--glob=!.git` always comes last. This gives the
-following selection:
+`--no-glob-case-insensitive`). `--glob=!.git` always comes last, preceded by
+`--glob=!__pycache__` unless the call asks for the caches (`skips_caches`). This
+gives the following selection:
 
 - hidden files are included;
 - `.gitignore`, `.ignore`, `.rgignore`, `.git/info/exclude` and the global Git
   excludes apply, also outside Git repositories;
 - binary files are skipped;
-- `.git` is never searched.
+- `.git` is never searched;
+- `__pycache__` directories are skipped unless `args` holds `-u`/`--no-ignore` or
+  a selecting glob names `__pycache__`, `.pyc` or `.pyo`. The exclusion is an
+  override glob, so no later glob can select the files inside; a root inside a
+  cache is still searched, as ripgrep searches explicit roots. Swarm review
+  (2026-10): `__pycache__` entries were 29% of the lines of whole-tree listings,
+  and Agents turned to shell listings instead.
 
 A positive glob overrides ignore rules, as in ripgrep. File types match names in
 any letter case while globs do (the default): ripgrep compares type globs

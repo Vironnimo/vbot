@@ -58,6 +58,7 @@ async def test_index_lists_what_the_search_tools_search(tmp_path: Path) -> None:
         "src/app.py": "x",
         "src/generated.py": "x",
         "src/deep/mod.py": "x",
+        "src/__pycache__/app.cpython-314.pyc": "x",
     }
     expected = [
         ".env",

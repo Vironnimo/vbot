@@ -1216,7 +1216,8 @@ Examples:
 
 Default selection: hidden files are searched, .gitignore and .ignore rules apply (also
 outside git repositories), binary files are skipped, and .git is always skipped. A
-glob that names files also selects files those rules exclude. Globs and file types
+glob that names files also selects files those rules exclude. __pycache__ is skipped
+unless -u is given or a glob names __pycache__ or .pyc files. Globs and file types
 match names in any letter case unless --no-glob-case-insensitive is given.
 
 Output: content shows path:line:text for matching lines and path-line-text for context

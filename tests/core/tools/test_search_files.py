@@ -587,6 +587,31 @@ def test_the_git_directory_is_never_searched(project: Path, arguments: dict[str,
     assert not any(line.startswith(".git/") for line in content.splitlines())
 
 
+@pytest.mark.parametrize(
+    ("arguments", "listed"),
+    [
+        ({}, {"pkg/a.py"}),
+        ({"pattern": "needle", "output": "files"}, {"pkg/a.py"}),
+        ({"args": ["--dirs"]}, {"pkg/"}),
+        ({"glob": "!*.txt"}, {"pkg/a.py"}),
+        # Asked for: -u, a glob naming the caches or their files, or a root inside one.
+        ({"args": ["-u"]}, {"pkg/a.py", "pkg/__pycache__/a.pyc", "__pycache__/note.txt"}),
+        ({"glob": "*.pyc"}, {"pkg/__pycache__/a.pyc"}),
+        ({"glob": "**/__pycache__/**"}, {"pkg/__pycache__/a.pyc", "__pycache__/note.txt"}),
+        ({"path": "pkg/__pycache__"}, {"pkg/__pycache__/a.pyc"}),
+    ],
+)
+def test_python_caches_are_skipped_unless_asked_for(
+    tmp_path: Path, arguments: dict[str, Any], listed: set[str]
+) -> None:
+    _write(
+        tmp_path,
+        {"pkg/a.py": "needle\n", "pkg/__pycache__/a.pyc": "needle\n", "__pycache__/note.txt": "x"},
+    )
+    content = search(tmp_path, **arguments)["content"]
+    assert set(content.splitlines()) == listed
+
+
 def test_long_lines_show_the_match_in_an_excerpt(tmp_path: Path) -> None:
     _write(tmp_path, {"a": "x" * 100000 + "NEEDLE" + "y" * 100000 + "\n"})
     content = search(tmp_path, pattern="NEEDLE")["content"]

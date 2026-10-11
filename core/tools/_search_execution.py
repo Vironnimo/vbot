@@ -65,6 +65,9 @@ _DEBUG_MESSAGE_BYTES = 1024 * 1024
 # Defaults that differ from ripgrep's own; later args items override them.
 DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
 ALWAYS_EXCLUDED = "!.git"
+# Python bytecode caches, skipped like .git unless the call asks for them (``skips_caches``).
+CACHES_EXCLUDED = "!__pycache__"
+_CACHE_NAMES = ("__pycache__", ".pyc", ".pyo")
 # Arguments that select files by type; --type-add and --type-clear only define types.
 _FILE_TYPE_FILTERS = ("--type=", "--type-not=")
 
@@ -346,13 +349,28 @@ class SearchRefusedError(RuntimeError):
     """ripgrep refused the query; the message says how to correct it."""
 
 
-def rg_globs(globs: list[str], prefixes: list[str]) -> list[str]:
+def skips_caches(query: SearchQuery) -> bool:
+    """Whether the query skips ``__pycache__`` directories, as it does by default.
+
+    ``-u`` and ``--no-ignore`` include them, and so does a selecting glob that
+    names them or compiled Python files: once skipped, no later glob can select
+    the files inside. A root inside one is searched anyway, as by ripgrep.
+    """
+    if any(argument in {"--unrestricted", "--no-ignore"} for argument in query.rg_args):
+        return False
+    selecting = [glob for glob in query.globs if not glob.startswith("!")]
+    selecting += [arg for arg in query.rg_args if arg.startswith("--iglob=") and "=!" not in arg]
+    return not any(name in glob.casefold() for glob in selecting for name in _CACHE_NAMES)
+
+
+def rg_globs(globs: list[str], prefixes: list[str], *, skip_caches: bool = False) -> list[str]:
     """Return ripgrep glob arguments for one scope.
 
     A glob with a slash is tried relative to the scope's directory and relative
     to each searched root below it, so ``tests/*.py`` and ``*.py`` under the
     root ``tests`` both select ``tests/a.py``. ``./`` anchors like a leading
-    ``/``. ``.git`` is always excluded, after every other glob.
+    ``/``. ``.git`` is always excluded, and with ``skip_caches`` ``__pycache__``,
+    after every other glob.
     """
     arguments: list[str] = []
     for glob in globs:
@@ -367,6 +385,8 @@ def rg_globs(globs: list[str], prefixes: list[str]) -> list[str]:
             for prefix in prefixes:
                 variants.append(f"/{prefix}{body}" if body.startswith("/") else f"{prefix}/{body}")
         arguments.extend(f"--glob={'!' if negated else ''}{variant}" for variant in variants)
+    if skip_caches:
+        arguments.append(f"--glob={CACHES_EXCLUDED}")
     arguments.append(f"--glob={ALWAYS_EXCLUDED}")
     return arguments
 
@@ -375,7 +395,7 @@ def _base_arguments(query: SearchQuery, scope: Scope, *, globs: bool = True) -> 
     return [
         *DEFAULT_ARGUMENTS,
         *query.rg_args,
-        *(rg_globs(query.globs, scope.prefixes) if globs else []),
+        *(rg_globs(query.globs, scope.prefixes, skip_caches=skips_caches(query)) if globs else []),
     ]
 
 
@@ -483,7 +503,12 @@ def list_scan(
     """
     if directories:
         excluding = [glob for glob in query.globs if glob.startswith("!")]
-        selection = [*DEFAULT_ARGUMENTS, *query.rg_args, *rg_globs(excluding, scope.prefixes)]
+        skip_caches = skips_caches(query)
+        selection = [
+            *DEFAULT_ARGUMENTS,
+            *query.rg_args,
+            *rg_globs(excluding, scope.prefixes, skip_caches=skip_caches),
+        ]
         report = True
     else:
         selection = _base_arguments(query, scope)
