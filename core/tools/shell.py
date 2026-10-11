@@ -98,10 +98,15 @@ _WINDOWS_COMMAND_LINE_MAX_CHARS = 32_000
 _TERMINAL_TOOL = "terminal"
 # A command that sleeps prints nothing and uses no CPU while it waits on purpose,
 # as a command waiting for an answer does: Start-Sleep or its alias sleep, bash's
-# sleep, Python's time.sleep, cmd's timeout /t. Such a command is never idle.
+# sleep, a sleep call such as Python's time.sleep, cmd's timeout /t. Such a command
+# is never idle. Start-Sleep and sleep count where a command starts (also within a
+# quoted command line) and with their duration; the word in a file name or a
+# message is no sleep.
 _SLEEP = re.compile(
-    r"(?<![\w-])(?:Start-Sleep|sleep)(?![\w-])|(?<![\w-])timeout(?:\.exe)?[ \t]+[/-]t\b",
-    re.IGNORECASE,
+    r"(?:^|[;&|({\"']|\b(?:do|then|else)\b)[ \t]*(?:Start-Sleep|sleep)[ \t]+(?:[-\d.$(]|inf)"
+    r"|(?:\.|::)sleep[ \t]*\("
+    r"|(?<![\w-])timeout(?:\.exe)?[ \t]+[/-]t\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 # A pipeline stage that passes nothing on before its input ends: the last lines,
 # a sort, a count or a group, or one string of everything. Output piped into it

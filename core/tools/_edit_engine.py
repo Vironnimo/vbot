@@ -33,6 +33,7 @@ from itertools import pairwise
 from os.path import commonprefix
 from typing import Literal
 
+from core.tools._decorated_insert import place_before_decorators
 from core.tools._patch_syntax import _Hunk, _PatchError
 from core.tools.arguments import (
     TEXT_LINE_BREAK,
@@ -243,7 +244,8 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             **values,
         )
     if found is not None:
-        return found.new_content, notes + _joined_lines(content, found)
+        edited, placed = _keep_decorated(content, found, path)
+        return edited, notes + _joined_lines(content, found) + placed
     details = _not_found(content, old, source="old_string")
     present = None
     if new.strip() and new != old:
@@ -264,9 +266,11 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
                 **values,
             )
         if copied is not None:
-            return copied.new_content, [
+            edited, placed = _keep_decorated(content, copied, path)
+            return edited, [
                 *_deviations(copy_warnings(copied)),
                 *_joined_lines(content, copied),
+                *placed,
             ]
     raise _PatchError(
         "text_not_found",
@@ -275,6 +279,13 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         label=hunk.label,
         details=details,
     )
+
+
+def _keep_decorated(content: str, found: FuzzyReplacement, path: object) -> tuple[str, list[str]]:
+    """Return the replaced text with added lines kept off a definition's decorators."""
+    spans = list(zip(found.before_spans, found.after_spans, strict=True))
+    edited, notes = place_before_decorators(content, found.new_content, spans, path)
+    return edited, _deviations(notes)
 
 
 def _joined_lines(content: str, found: FuzzyReplacement) -> list[str]:
@@ -716,7 +727,12 @@ def _splice(
     replacement_text = "".join(text + line_end for text, line_end in output)
     line_shift = len(_BREAK.findall(content, 0, offset))
     notes.extend(_deviations(copy_warnings(found, line_shift=line_shift)))
-    return content[: offset + start] + replacement_text + window[end:], notes
+    edited = content[: offset + start] + replacement_text + window[end:]
+    written = (offset + start, offset + start + len(replacement_text))
+    edited, placed = place_before_decorators(
+        content, edited, [((offset + start, offset + end), written)], path
+    )
+    return edited, notes + _deviations(placed)
 
 
 # --- Matching helpers ------------------------------------------------------------------

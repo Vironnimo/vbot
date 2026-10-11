@@ -89,28 +89,6 @@ def test_misspelling_in_a_changed_line_is_placed_by_exact_context() -> None:
                 ("+", "    return 1"),
             ],
         ),
-        # Parameters and arguments are names: one added or left out on a kept line
-        # names another signature or call (a decorator above it may not hold).
-        (
-            "    @staticmethod\n    def process(data, limit):\n        pass\n\nprocess(self)\n",
-            [
-                (" ", "    def process(self, data, limit):"),
-                ("-", "        pass"),
-                ("+", "        return 1"),
-            ],
-        ),
-        (
-            "def process(data, strict):\n    pass\n",
-            [(" ", "def process(data):"), ("-", "    pass"), ("+", "    return 1")],
-        ),
-        (
-            "    result = process(data, strict)\n    return result\n",
-            [
-                (" ", "    result = process(data)"),
-                ("-", "    return result"),
-                ("+", "    return result or None"),
-            ],
-        ),
         # Words under 4 characters, other digits, and words the file holds are not
         # misspellings.
         (
@@ -210,11 +188,11 @@ def test_a_change_next_to_another_difference_is_refused() -> None:
 @pytest.mark.parametrize(
     ("held", "context"),
     [
-        # A stale or misremembered kept line may add or lack a few words.
+        # A stale or misremembered kept line may add or lack a few words, in prose
+        # as in a signature; the line stays as the file reads.
         ("# Run the tests before you push.", "# Run all the tests before you push."),
-        ("# Run all the tests before you push.", "# Run the tests before you push."),
-        # Words in quotes are text, not names, even within a call.
-        ('log("Saving the file now")', 'log("Saving the file")'),
+        ("    def process(data):", "    def process(self, data):"),
+        ("def process(data, strict):", "def process(data):"),
     ],
 )
 def test_kept_lines_may_lack_or_add_a_few_words(held: str, context: str) -> None:

@@ -375,15 +375,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   otherwise, one difference per 4 correct words, but never where either side of
   a difference names another target: lexical identifiers (underscore, digit, or
   inner capital), plus names evidenced by calls, declarations and member/namespace
-  access even when they are plain lowercase words, and the words between a call's
-  or declaration's parentheses outside quotes (arguments and parameters). This
-  evidence covers omitted names too, so substring recovery cannot drop a row ID
-  to find another row, and it holds on kept lines: a kept line that adds or lacks
-  a name is not a stale context line but another signature or call (Swarm Run
-  2026-10: an `old_string` copying `def f(self, x)` for the file's
-  `@staticmethod` `def f(x)` was placed by the kept-line gap rule, and the
-  method inserted above it took the decorator from the original). Words in
-  quotes stay text.
+  access even when they are plain lowercase words. This evidence covers omitted
+  names too, so substring recovery cannot drop a row ID to find another row.
   Misspellings still qualify under the rules below. Exactly copied first and last lines (3+ lines, 2+ words
   each) also place a passage around similar lines (SequenceMatcher ratio >= 0.5,
   or 0.7 when the anchor pair repeats), but cannot override a copied name that
@@ -442,6 +435,23 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   patch, field, Skill and Wiki suites.
 - Only changed lines are emitted from the replacement; context lines keep their
   actual original bytes.
+- Lines a change adds before a definition whose decorators, annotations or
+  attributes lie directly above the matched lines go above those decorators
+  (`_decorated_insert.place_before_decorators`, called for every placed text
+  replacement and hunk). The Agent copied the definition's line without them,
+  so its literal effect hands the decorators to the added code or breaks the
+  syntax: replay of 10063 recorded edit and apply_patch calls (2026-10) found 2
+  such calls, both wrong as written (a `@staticmethod` split from its method by
+  a new method above it, Swarm Run 2026-10, exact and tolerated copies alike; a
+  `@contextlib.contextmanager` left on a comment block). Decorators the added
+  lines end with stay directly on the definition; lines that only add
+  decorators, comments or blank lines stay as written. The definition is found
+  again in the replacement by its name at its indentation (a changed signature
+  counts; a rename or a name held twice there leaves the change as written);
+  only file types with known decorator syntax take part (`@` for Python,
+  JS/TS, JVM languages, Dart, Swift; `#[` for Rust and PHP; `[` for C#). A note
+  names where the decorators and their definition are now. Tests:
+  `test_apply_patch_matching.py::test_lines_added_before_a_decorated_definition_keep_its_decorators`.
 - Changed lines matched with different indentation are written in the file's
   indentation style: each indent the matched lines show maps to its file
   indent, and other indents (new deeper lines) convert level by level between
@@ -578,6 +588,7 @@ replacements still went through Delete File plus Add File (agent-eval
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
 | Syntax warning excerpt (shared with `edit` and `write`): `Warning: Syntax check failed after this edit: SyntaxError: '(' was never closed (line 2, column 12)` followed by `1| ...`, `2| ...`, a caret line and `3| ...` | Real Sessions (2026-10) read 30-45 lines after a warning to find the line the error names; the excerpt shows it in the result. Only the error's own lines are shown, not more, so a result stays short. |
+| Decorator note (shared with `edit`): `The added lines went above line 13 (@staticmethod), not between it and the definition at line 14 it belongs to.` | The written text differs from the call, so the Agent learns it and gets the region shown; without the note it would see its lines below where it put them and could "fix" them back between decorator and definition. Line numbers name the decorators and the definition, not the added lines, whose numbers the `Updated X (lines ...)` header can count differently when an added line repeats a decorator. |
 | `context_lines_not_found`: `X: the context lines around the + lines were not found.` | A block that only adds lines was reported as `the lines to replace were not found`, which names lines the block does not have and points the Agent at text to replace instead of at its context lines (review of a Swarm Run, 2026-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
 
