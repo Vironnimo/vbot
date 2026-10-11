@@ -34,6 +34,7 @@ from core.utils.workers import BoundedWorkerPool
 
 from ._telegram_api import (
     _bot_request,
+    _load_telegram_error,
     _load_telegram_ext,
     _markup_to_buttons,
     _observed_polling_request,
@@ -78,6 +79,16 @@ _INTERACTION_UNAVAILABLE_REPLY = "This action is no longer available."
 # Retries for a send that Telegram answers with RetryAfter (flood control), honoring the
 # server-provided delay — the project convention of max 3 retries for transient errors.
 _SEND_MAX_RETRIES = 3
+# Waits between attempts to initialize while the network is unavailable, about 30 s
+# in all before a start fails to the supervisor.
+_CONNECT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0)
+# Retries of the webhook deletion polling starts with; initializing just reached Telegram.
+_BOOTSTRAP_RETRIES = 3
+# The update types the handlers consume. Telegram otherwise keeps the list the token
+# last asked for, which could leave out button taps.
+_ALLOWED_UPDATES = ("message", "callback_query")
+# Test seam: tests skip the connect retry waits.
+_sleep = asyncio.sleep
 
 
 class TelegramChannelAdapter(ChannelAdapter):
@@ -128,6 +139,7 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         self._application: Any | None = None
         self._polling_health: _PollingHealth | None = None
+        self._token_rejected = False
         self._stop_event = asyncio.Event()
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
         self._denied_chat_log = DeniedChatLog()
@@ -147,7 +159,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         telegram_ext = _load_telegram_ext()
-        polling_health = _PollingHealth(self._config.id)
+        polling_health = _PollingHealth(self._config.id, self._on_token_rejected)
         self._polling_health = polling_health
         application = self._build_application(telegram_ext, polling_health)
         for handler in self._build_message_handlers(telegram_ext):
@@ -158,28 +170,63 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._application = application
         self._stop_event.clear()
 
+        # Initializing fetches the bot's own identity (getMe).
+        await self._initialize(application)
+        # The identity feeds the addressing facts (@mention and visible-name detection,
+        # reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
+        self._set_bot_identity(application.bot.bot)
+        self._last_update_id = await _STATE_IO_POOL.run(self._load_update_offset)
+        self._last_update_claimed_at = time.monotonic()
         # A start failure reaches the supervisor's log; PTB's own text for a rejected
         # token quotes the token, so its errors leave through the error boundary.
         with _telegram_error_boundary(self._config.id):
-            await application.initialize()
-            # The bot's own identity feeds the addressing facts (@mention and visible-name
-            # detection, reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
-            bot_user = await application.bot.get_me()
-            self._set_bot_identity(bot_user)
-            self._last_update_id = await _STATE_IO_POOL.run(self._load_update_offset)
-            self._last_update_claimed_at = time.monotonic()
-            await application.bot.delete_webhook(drop_pending_updates=False)
             await application.start()
-
             updater = application.updater
             if updater is None:
                 raise ChannelError("Telegram updater is unavailable")
-
-            # PTB retries failed polls forever; the health reports the failing and
-            # recovered transitions instead of PTB's traceback on every attempt.
-            await updater.start_polling(error_callback=polling_health.failed)
+            # Polling first deletes any webhook, keeping pending updates. PTB then
+            # retries failed polls forever; the health reports outages instead of
+            # PTB's traceback on every attempt.
+            await updater.start_polling(
+                allowed_updates=list(_ALLOWED_UPDATES),
+                bootstrap_retries=_BOOTSTRAP_RETRIES,
+                error_callback=polling_health.failed,
+            )
         self._report_connected()
         await self._stop_event.wait()
+        if self._token_rejected:
+            raise ChannelConfigError(
+                f"Telegram rejected the bot token while polling (channel={self._config.id})"
+            )
+
+    async def _initialize(self, application: Any) -> None:
+        """Initialize the application, riding out a network blip while connecting.
+
+        A server start or a resume from sleep often finds the network not ready for
+        a few seconds; only a longer outage fails the start to the supervisor.
+        """
+        for delay in (*_CONNECT_RETRY_DELAYS, None):
+            try:
+                with _telegram_error_boundary(self._config.id):
+                    await application.initialize()
+                return
+            except ChannelError as error:
+                if delay is None or not error.retryable:
+                    raise
+                wait = max(delay, error.retry_after or 0.0)
+                _LOGGER.debug(
+                    "Telegram connect failed, retrying (channel=%s delay=%.0fs): %s",
+                    self._config.id,
+                    wait,
+                    error,
+                )
+                await _sleep(wait)
+
+    def _on_token_rejected(self) -> None:
+        # PTB ends polling on a rejected token and never retries; the adapter fails,
+        # so the supervisor reports the Channel and keeps retrying its start.
+        self._token_rejected = True
+        self._stop_event.set()
 
     async def _log_update_handler_error(self, _update: object, context: Any) -> None:
         # The update itself is never logged: it carries message text and platform ids.
@@ -205,9 +252,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             .token(self._token)
             .rate_limiter(rate_limiter)
             .request(_bot_request())
-            .get_updates_request(
-                _observed_polling_request(polling_health.answered, polling_health.timed_out)
-            )
+            .get_updates_request(_observed_polling_request(polling_health))
             .build()
         )
 
@@ -289,6 +334,9 @@ class TelegramChannelAdapter(ChannelAdapter):
             self._application = None
             if application is not None:
                 await self._run_lifecycle_step(application.shutdown, "application.shutdown")
+                # Shutting down an application that never finished initializing
+                # leaves its bot's HTTP clients open; this closes them (else a no-op).
+                await self._run_lifecycle_step(application.bot.shutdown, "bot.shutdown")
 
     @override
     async def send(
@@ -884,6 +932,10 @@ class TelegramChannelAdapter(ChannelAdapter):
         except RuntimeError:
             return
         except Exception as error:
+            if self._token_rejected and isinstance(error, _load_telegram_error().InvalidToken):
+                # The updater re-raises the rejection that ended its polling; start()
+                # already failed with it.
+                return
             _LOGGER.warning(
                 "Telegram adapter lifecycle step failed (%s channel=%s): %s",
                 label,

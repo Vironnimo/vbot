@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import threading
 import traceback
@@ -51,7 +52,7 @@ class _FakeApplication:
     """python-telegram-bot's Application as the adapter drives it, with PTB's state rules."""
 
     def __init__(
-        self, bot: SimpleNamespace, identity: object, *, with_updater: bool = True
+        self, bot: SimpleNamespace, *identities: object, with_updater: bool = True
     ) -> None:
         self.bot = bot
         self.events: list[str] = []
@@ -60,6 +61,9 @@ class _FakeApplication:
         self.polling = asyncio.Event()
         self.drain_on_stop: Callable[[], Awaitable[None]] | None = None
         self.error_callback: Callable[[telegram.error.TelegramError], None] | None = None
+        self.polling_options: dict[str, Any] = {}
+        # What each initialize's identity lookup (getMe) answers; the last one repeats.
+        self._identities = list(identities)
         self._running = False
         self.updater = (
             SimpleNamespace(start_polling=self._start_polling, stop=self._stop_polling)
@@ -67,17 +71,10 @@ class _FakeApplication:
             else None
         )
 
-        async def get_me() -> object:
-            self.events.append("bot.get_me")
-            if isinstance(identity, Exception):
-                raise identity
-            return identity
+        async def shutdown_bot() -> None:
+            self.events.append("bot.shutdown")
 
-        async def delete_webhook(*, drop_pending_updates: bool) -> None:
-            self.events.append(f"bot.delete_webhook(drop_pending_updates={drop_pending_updates})")
-
-        bot.get_me = get_me
-        bot.delete_webhook = delete_webhook
+        bot.shutdown = shutdown_bot
 
     def add_handler(self, handler: Any) -> None:
         self.handlers.append(handler)
@@ -86,7 +83,12 @@ class _FakeApplication:
         self.error_handlers.append(handler)
 
     async def initialize(self) -> None:
+        # PTB's initialize fetches the bot's identity and caches it as ``bot.bot``.
         self.events.append("initialize")
+        identity = self._identities.pop(0) if len(self._identities) > 1 else self._identities[0]
+        if isinstance(identity, Exception):
+            raise identity
+        self.bot.bot = identity
 
     async def start(self) -> None:
         self.events.append("start")
@@ -105,10 +107,14 @@ class _FakeApplication:
         self.events.append("shutdown")
 
     async def _start_polling(
-        self, *, error_callback: Callable[[telegram.error.TelegramError], None] | None = None
+        self,
+        *,
+        error_callback: Callable[[telegram.error.TelegramError], None] | None = None,
+        **options: Any,
     ) -> None:
         self.events.append("updater.start_polling")
         self.error_callback = error_callback
+        self.polling_options = options
         self.polling.set()
 
     async def _stop_polling(self) -> None:
@@ -256,8 +262,15 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
         update_offset_store=storage,
         running=False,
     )
-    application = _FakeApplication(bot, _IDENTITY)
+    # The network is not ready at the first attempt to connect, as after a resume.
+    application = _FakeApplication(bot, telegram.error.NetworkError("down"), _IDENTITY)
     builder, rate_limiter_options = _install_ptb(monkeypatch, application)
+    connect_waits: list[float] = []
+
+    async def record_wait(delay: float) -> None:
+        connect_waits.append(delay)
+
+    monkeypatch.setattr(telegram_module, "_sleep", record_wait)
     verifying: list[Any] = []
     real_client = httpx.AsyncClient
 
@@ -312,16 +325,19 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
     assert isinstance(builder.received_get_updates_request, telegram.request.HTTPXRequest)
     assert len(verifying) == 2
     assert all(verify is shared_ssl_context() for verify in verifying)
+    assert connect_waits == [1.0]
     assert application.events == [
         "initialize",
-        "bot.get_me",
-        "bot.delete_webhook(drop_pending_updates=False)",
+        "initialize",
         "start",
         "updater.start_polling",
         "updater.stop",
         "stop",
         "shutdown",
+        "bot.shutdown",
     ]
+    # Telegram keeps the update types a token last asked for; button taps must be among them.
+    assert set(application.polling_options["allowed_updates"]) == {"message", "callback_query"}
     # Drained updates still reach the live bot; stop then settles the work they
     # started and their watermark saves before the application shuts down.
     assert "pong" in sent_texts(bot)
@@ -333,41 +349,54 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("failure", "failures", "levels"),
+    ("failure", "failed_at", "answer_sent_at", "levels"),
     [
-        # PTB hands a failed poll to the error callback: the first one warns.
+        # A network blip: PTB's next poll is answered well within a minute.
+        ("error-callback", [0.0, 1.0], 2.5, [logging.DEBUG, logging.DEBUG]),
+        # An outage warns once it has lasted a minute, logs its further failures at
+        # DEBUG, and its end once.
         (
             "error-callback",
-            3,
-            [logging.WARNING, logging.DEBUG, logging.DEBUG, logging.INFO],
-        ),
-        # PTB retries a timed-out poll without the callback; the request sees it, and
-        # only a run of timeouts is a failing stretch.
-        (
-            "timeout",
-            4,
+            [0.0, 30.0, 60.0, 90.0],
+            95.0,
             [logging.DEBUG, logging.DEBUG, logging.WARNING, logging.DEBUG, logging.INFO],
         ),
-        ("timeout", 2, [logging.DEBUG, logging.DEBUG]),
+        # PTB retries a timed-out poll without the callback; the request sees it.
+        (
+            "timeout",
+            [0.0, 30.0, 60.0, 90.0],
+            95.0,
+            [logging.DEBUG, logging.DEBUG, logging.WARNING, logging.DEBUG, logging.INFO],
+        ),
     ],
-    ids=["failed-polls", "sustained-timeouts", "brief-timeouts"],
+    ids=["blip", "outage", "outage-seen-as-timeouts"],
 )
-async def test_polling_failures_log_once_until_a_poll_is_answered(
+async def test_polling_warns_only_about_an_outage_and_logs_its_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     failure: str,
-    failures: int,
+    failed_at: list[float],
+    answer_sent_at: float,
     levels: list[int],
 ) -> None:
     adapter, _sessions, _trigger, bot = make_adapter(tmp_path, monkeypatch, running=False)
     application = _FakeApplication(bot, _IDENTITY)
     builder, _ = _install_ptb(monkeypatch, application)
+    now = 0.0
+    monkeypatch.setattr(
+        telegram_module,
+        "_PollingHealth",
+        functools.partial(telegram_api._PollingHealth, clock=lambda: now),
+    )
     telegram_reachable = True
 
     async def answer(*_args: Any, **_kwargs: Any) -> tuple[int, bytes]:
+        nonlocal now
         if not telegram_reachable:
-            raise telegram.error.TimedOut()
+            raise telegram.error.TimedOut() from httpx.ReadTimeout("")
+        # Telegram holds a long poll open until updates arrive or it times out.
+        now += 10.0
         return 200, b'{"ok": true, "result": []}'
 
     # Only the HTTP exchange is replaced; the adapter's getUpdates request is PTB's.
@@ -384,65 +413,117 @@ async def test_polling_failures_log_once_until_a_poll_is_answered(
         with contextlib.suppress(telegram.error.TimedOut):
             await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
 
+    def connection_reset() -> telegram.error.NetworkError:
+        # PTB's error for a reset connection: the OS error sits at the end of its chain.
+        error = telegram.error.NetworkError("httpx.ReadError: ")
+        error.__cause__ = httpx.ReadError("")
+        error.__cause__.__context__ = ConnectionResetError(64, "network name deleted")
+        return error
+
     await poll()
-    for _ in range(failures):
+    for moment in failed_at:
+        now = moment
         if failure == "timeout":
             telegram_reachable = False
             await poll()
         else:
-            report_failure(telegram.error.NetworkError("down"))
+            report_failure(connection_reset())
     telegram_reachable = True
+    now = answer_sent_at
     await poll()
     await poll()
     await adapter.stop()
-    report_failure(telegram.error.NetworkError("down"))
+    report_failure(connection_reset())
     await asyncio.wait_for(polling, timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
 
-    # A healthy poll is silent; a failing stretch logs one WARNING with the error
-    # type, its retries at DEBUG without tracebacks, and one INFO on recovery.
+    # Healthy polls are silent and nothing carries a traceback. The warning names
+    # the failure down to its cause; the recovery counts the outage up to the poll
+    # that was answered, not the time Telegram held it open.
     records = [record for record in caplog.records if record.name == "vbot.channels.telegram"]
     assert [record.levelno for record in records] == levels
-    warnings = [record for record in records if record.levelno == logging.WARNING]
-    expected_type = "TimedOut" if failure == "timeout" else "NetworkError"
-    assert all(expected_type in record.getMessage() for record in warnings)
-    if levels[-1] == logging.INFO:
-        assert f"failures={failures}" in records[-1].getMessage()
     assert all(record.exc_info is None for record in records)
+    for record in records:
+        if record.levelno == logging.WARNING:
+            cause = "ReadTimeout" if failure == "timeout" else "ConnectionResetError"
+            assert f"cause={cause}" in record.getMessage()
+        if record.levelno == logging.INFO:
+            assert f"failures={len(failed_at)}" in record.getMessage()
+            assert "down_for=95.0s" in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_a_token_rejected_while_polling_fails_the_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # PTB ends its polling for good on a rejected token without calling the error
+    # callback; an adapter that kept waiting would look connected but receive nothing.
+    adapter, _sessions, _trigger, bot = make_adapter(tmp_path, monkeypatch, running=False)
+    application = _FakeApplication(bot, _IDENTITY)
+    builder, _ = _install_ptb(monkeypatch, application)
+
+    async def reject(*_args: Any, **_kwargs: Any) -> tuple[int, bytes]:
+        return 401, b'{"ok": false, "error_code": 401, "description": "Unauthorized"}'
+
+    monkeypatch.setattr(telegram.request.HTTPXRequest, "do_request", reject)
+    polling = await _start(adapter, application)
+    request = builder.received_get_updates_request
+    with contextlib.suppress(telegram.error.InvalidToken):
+        await request.post("https://api.telegram.org/bot/getUpdates")
+
+    with pytest.raises(ChannelConfigError, match="rejected the bot token"):
+        await asyncio.wait_for(polling, timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
+    # The updater re-raises the rejection that ended its polling; stop expects it.
+    assert application.updater is not None
+    application.updater.stop = AsyncMock(side_effect=telegram.error.InvalidToken("Unauthorized"))
+    caplog.set_level(logging.WARNING, logger="vbot.channels.telegram")
+    await adapter.stop()
+
+    assert application.events[-2:] == ["shutdown", "bot.shutdown"]
+    assert [record for record in caplog.records if record.name == "vbot.channels.telegram"] == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("identity", "with_updater", "start_error", "stop_events"),
+    ("identity", "with_updater", "connect_waits", "stop_events"),
     [
+        # A network that stays down fails the start after about 30 s of retries.
         # Before polling starts, PTB's stop calls raise RuntimeError; stop ignores them.
         (
             telegram.error.NetworkError("down"),
             True,
-            ChannelError,
+            [1.0, 2.0, 4.0, 8.0, 15.0],
             ["updater.stop", "stop"],
         ),
-        (_IDENTITY, False, ChannelError, ["stop"]),
+        (_IDENTITY, False, [], ["stop"]),
     ],
-    ids=["identity-lookup-fails", "no-updater"],
+    ids=["telegram-unreachable", "no-updater"],
 )
 async def test_stop_after_a_failed_start_still_shuts_the_application_down(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     identity: object,
     with_updater: bool,
-    start_error: type[Exception],
+    connect_waits: list[float],
     stop_events: list[str],
 ) -> None:
     adapter, _sessions, _trigger, bot = make_adapter(tmp_path, monkeypatch, running=False)
     application = _FakeApplication(bot, identity, with_updater=with_updater)
     _install_ptb(monkeypatch, application)
+    waits: list[float] = []
 
-    with pytest.raises(start_error):
+    async def record_wait(delay: float) -> None:
+        waits.append(delay)
+
+    monkeypatch.setattr(telegram_module, "_sleep", record_wait)
+
+    with pytest.raises(ChannelError):
         await adapter.start()
     events_before_stop = len(application.events)
     await adapter.stop()
 
-    assert application.events[events_before_stop:] == [*stop_events, "shutdown"]
+    assert waits == connect_waits
+    # The bot's HTTP clients close even when initializing never completed.
+    assert application.events[events_before_stop:] == [*stop_events, "shutdown", "bot.shutdown"]
     with pytest.raises(ChannelError, match="not running"):
         await adapter.send("late", "12345")
 
@@ -718,4 +799,4 @@ async def test_stop_waits_for_an_in_flight_watermark_save(
 
     assert storage.load_update_offset("tg-assistant", _BOT) == 7
     assert application.events.count("shutdown") == 1
-    assert application.events[-1] == "shutdown"
+    assert application.events[-2:] == ["shutdown", "bot.shutdown"]
