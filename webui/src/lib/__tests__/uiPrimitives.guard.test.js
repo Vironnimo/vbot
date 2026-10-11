@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,6 +11,8 @@ import { readStyleSheet } from '../../__tests__/styles.support.js';
 // through that component instead of re-applying the global CSS classes by hand.
 // This test fails the build if a raw element reintroduces a primitive's class,
 // so a bypassed primitive cannot drift back in. Each phase adds its rule below.
+// Bundled Extension pages build from the same primitives, so every rule scans
+// them too.
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const APP_CSS = readStyleSheet(join(SRC_DIR, 'styles', 'app.css'));
@@ -33,19 +35,15 @@ function collectSvelteFiles(directory) {
   return files;
 }
 
-const SVELTE_FILES = collectSvelteFiles(SRC_DIR);
-// The bundled Swarm Extension UI imports the same tooltip/InfoHint helpers
-// from webui/src, so the native-title guard covers it too.
-const SWARM_UI_DIR = join(
-  SRC_DIR,
-  '..',
-  '..',
-  'resources',
-  'extensions',
-  'swarm',
-  'ui',
-);
-const SWARM_UI_SVELTE_FILES = collectSvelteFiles(SWARM_UI_DIR);
+const EXTENSIONS_DIR = join(SRC_DIR, '..', '..', 'resources', 'extensions');
+const EXTENSION_UI_SVELTE_FILES = readdirSync(EXTENSIONS_DIR)
+  .map((name) => join(EXTENSIONS_DIR, name, 'ui'))
+  .filter((directory) => existsSync(directory))
+  .flatMap(collectSvelteFiles);
+const SVELTE_FILES = [
+  ...collectSvelteFiles(SRC_DIR),
+  ...EXTENSION_UI_SVELTE_FILES,
+];
 
 function classTokensInTag(openingTag) {
   const tokens = [];
@@ -521,14 +519,31 @@ describe('UI primitive guard', () => {
     const NATIVE_TITLE = /<(?!iframe\b)[a-z][\w-]*\b[^>]*\stitle\s*=/g;
     const violations = [];
 
-    expect(SWARM_UI_SVELTE_FILES.length).toBeGreaterThan(0);
-    for (const filePath of [...SVELTE_FILES, ...SWARM_UI_SVELTE_FILES]) {
+    for (const filePath of SVELTE_FILES) {
       const source = readFileSync(filePath, 'utf8');
       for (const match of source.matchAll(NATIVE_TITLE)) {
         const relativePath = relative(SRC_DIR, filePath);
         violations.push(
           `${relativePath}: ${match[0].replaceAll('\n', ' ').slice(0, 80)}`,
         );
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps Extension pages to the shared form and table primitives', () => {
+    // A page cannot borrow WebUI's look for a raw control: Dropdown,
+    // SearchableDropdown, TextField, Checkbox, Toggle, TextArea and DataTable
+    // carry the shared styling, states and accessibility.
+    const RAW_CONTROL = /<(select|input|textarea|table)\b/g;
+    const violations = [];
+
+    expect(EXTENSION_UI_SVELTE_FILES.length).toBeGreaterThan(0);
+    for (const filePath of EXTENSION_UI_SVELTE_FILES) {
+      const source = readFileSync(filePath, 'utf8');
+      for (const match of source.matchAll(RAW_CONTROL)) {
+        violations.push(`${relative(SRC_DIR, filePath)}: <${match[1]}>`);
       }
     }
 
