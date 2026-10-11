@@ -56,11 +56,13 @@
         <ProfileEditor
           bind:this={model.profileEditor}
           profile={model.editor === 'new' ? null : model.editor}
+          newDraft={model.newProfileDraft}
           catalog={model.catalog}
           bridgeClient={model.client}
           onSave={model.saveProfile}
           onCancel={model.openStart}
           onDelete={model.confirmProfileDelete}
+          onDraftChange={(next) => (model.newProfileDraft = next)}
         />
       {/key}
     {:else if model.selectedSwarm}<RunView {model} />{:else}<RunStartForm

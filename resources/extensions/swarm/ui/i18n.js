@@ -278,9 +278,9 @@ export default Object.freeze({
   'swarm.profile.deleteHelp': 'Runs started from it remain available.',
   'swarm.profile.deleteAction': 'Delete Swarm…',
   'swarm.profile.create': 'Create Swarm',
-  'swarm.profile.leaveTitle': 'Create this Swarm before leaving?',
-  'swarm.profile.leaveBody':
-    'It has not been created yet. If you discard it, its settings are lost.',
+  'swarm.profile.discardTitle': 'Discard this new Swarm?',
+  'swarm.profile.discardBody':
+    'It has not been created yet, so its settings are lost.',
   'swarm.profile.keepEditing': 'Keep editing',
   'swarm.profile.leaveIncompleteBody':
     'Some settings are incomplete, so the changes could not be saved. Complete them, or discard the changes and continue.',

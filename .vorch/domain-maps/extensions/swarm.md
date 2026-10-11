@@ -66,8 +66,11 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   Skills, Communication, Compaction and a closed Advanced section (Swarm ID,
   deletion), ending with the shared save state (`webui/autosave.md`). It uses
   the shared Model search/selection and effort helpers.
-  Creation saves explicitly (Create Swarm or Cancel); leaving a new Swarm with
-  changes asks whether to create it, discard it or keep editing. Saved profiles
+  Creation saves explicitly (Create Swarm or Cancel). Like a new Cron job
+  (`webui/source-map.md`), a new Swarm's changed draft outlives its editor in the page
+  model (`newProfileDraft`): leaving it by any page navigation, Back/Forward
+  included, keeps it without asking, and New Swarm continues it; Cancel asks
+  before discarding it, and a successful Create ends it. Saved profiles
   autosave and flush before navigation through the generic page bridge; when
   leaving cannot save, a dialog offers Retry (Keep editing for incomplete
   settings) or discarding. Field errors appear under the field's label; only a
@@ -75,9 +78,8 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   background autosave shows the errors in place. The batching limits are
   checked here with the server's ranges (`DELIVERY_LIMITS`), so an empty or
   out-of-range limit is such a field error: never saved, never dropped.
-  Invalidations preserve the mounted draft. Leaving the Swarm page itself is
-  outside the page's navigation, so an unsaved new Swarm is then discarded
-  without asking.
+  Invalidations preserve the mounted draft. Leaving the Swarm page itself
+  unmounts the page, so a new Swarm's draft ends there.
   The Instructions section owns editable instructions, explicit block
   selection, event reminder switches and Model-specific combined previews with
   the separately sent Tool definitions (shared `ToolDefinitionsPanel`). A

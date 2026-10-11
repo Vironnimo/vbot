@@ -725,69 +725,61 @@ describe('Swarm profile saving', () => {
     expect(bridge.autosave).toBeNull();
   });
 
-  it('asks before leaving a changed new Swarm and discards it only on request', async () => {
+  it('keeps a changed new Swarm across navigation until Cancel discards it', async () => {
     const { bridge, operation } = createBridge();
+    const name = () => document.getElementById('swarm-profile-name')?.value;
+    const editorShown = () => document.querySelector('.swarm-profile-editor');
     await openNewProfile(bridge);
-    // An untouched new Swarm leaves without asking.
+    fill('swarm-profile-name', 'Unfinished');
+    await tick();
+    // Leaving by the pane or by Back keeps the draft without asking, and New
+    // Swarm or Forward continues it.
     button('Investigate').click();
     await vi.waitFor(() =>
       expect(document.querySelector('.swarm-head')).not.toBeNull(),
     );
     expect(dialog()).toBeNull();
     button(NEW_SWARM).click();
-    await vi.waitFor(() =>
-      expect(document.getElementById('swarm-profile-name')).not.toBeNull(),
-    );
-    fill('swarm-profile-name', 'Unfinished');
+    await vi.waitFor(() => expect(name()).toBe('Unfinished'));
+    bridge.goTo('');
+    await vi.waitFor(() => expect(editorShown()).toBeNull());
+    bridge.goTo('/profiles/new');
+    await vi.waitFor(() => expect(name()).toBe('Unfinished'));
+    // Cancel asks before it discards the draft.
+    button(t('common.cancel')).click();
     await tick();
-    button('Investigate').click();
-    await vi.waitFor(() => expect(dialog()).not.toBeNull());
-    expect(dialog().textContent).toContain(t('swarm.profile.leaveTitle'));
+    expect(dialog().textContent).toContain(t('swarm.profile.discardTitle'));
     inDialog(t('swarm.profile.keepEditing')).click();
     await tick();
     expect(dialog()).toBeNull();
-    expect(document.getElementById('swarm-profile-name').value).toBe(
-      'Unfinished',
-    );
-    button('Investigate').click();
-    await vi.waitFor(() => expect(dialog()).not.toBeNull());
+    expect(name()).toBe('Unfinished');
+    button(t('common.cancel')).click();
+    await tick();
     inDialog(t('common.discard')).click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('.swarm-profile-editor')).toBeNull(),
-    );
-    expect(document.querySelector('.swarm-head')).not.toBeNull();
+    await vi.waitFor(() => expect(editorShown()).toBeNull());
+    button(NEW_SWARM).click();
+    await vi.waitFor(() => expect(name()).toBe(''));
+    // An untouched new Swarm cancels without asking.
+    button(t('common.cancel')).click();
+    await vi.waitFor(() => expect(editorShown()).toBeNull());
+    expect(dialog()).toBeNull();
     expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
   });
 
-  it('creates a changed new Swarm before leaving when asked', async () => {
+  it('leaves no new Swarm draft behind once it is created', async () => {
     const { bridge, operation } = createBridge();
     await openNewProfile(bridge);
-    fill('swarm-profile-name', 'Created on leaving');
-    await tick();
-    button('Investigate').click();
-    await vi.waitFor(() => expect(dialog()).not.toBeNull());
-    // Incomplete settings return to the first one instead of leaving.
-    inDialog(CREATE_SWARM).click();
-    await vi.waitFor(() =>
-      expect(document.activeElement.id).toBe('swarm-model-0'),
-    );
-    expect(dialog()).toBeNull();
-    expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
+    fill('swarm-profile-name', 'Created draft');
     await choose('swarm-model-0', 'demo/model');
     fill('swarm-directory', 'C:/work');
     await tick();
-    button('Investigate').click();
-    await vi.waitFor(() => expect(dialog()).not.toBeNull());
-    inDialog(CREATE_SWARM).click();
+    button(CREATE_SWARM).click();
+    await settle(20);
+    expect(lastSaved(operation)).toMatchObject({ name: 'Created draft' });
+    button(NEW_SWARM).click();
     await vi.waitFor(() =>
-      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+      expect(document.getElementById('swarm-profile-name')?.value).toBe(''),
     );
-    expect(lastSaved(operation)).toMatchObject({ name: 'Created on leaving' });
-    const calls = operation.mock.calls.map(([name]) => name);
-    expect(calls.indexOf('profiles.save')).toBeLessThan(
-      calls.indexOf('swarms.get'),
-    );
-    expect(button('Created on leaving')).toBeDefined();
   });
 });
 

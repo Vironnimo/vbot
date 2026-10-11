@@ -2,13 +2,15 @@
   // The Swarm editor: one configuration page for a reusable Swarm (a
   // profile) in the shared section grammar. Saved Swarms autosave through
   // the page bridge and show the shared save state at the end; a new Swarm
-  // is created explicitly, and leaving it with changes asks first. The
-  // section components edit the bound draft; this owner keeps the draft, its
+  // is created explicitly, its changed draft outlives the editor
+  // (`newDraft`), and Cancel asks before discarding it. The section
+  // components edit the bound draft; this owner keeps the draft, its
   // validation and every save.
   import { onDestroy, tick, untrack } from 'svelte';
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
+  import ConfirmDialog from '../../../../webui/src/components/ui/ConfirmDialog.svelte';
   import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
   import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
   import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
@@ -39,11 +41,15 @@
 
   let {
     profile = null,
+    // A new Swarm's changed draft from an earlier visit, or null; the
+    // editor reports every change of it with `onDraftChange`.
+    newDraft = null,
     catalog = {},
     bridgeClient,
     onSave,
     onCancel,
     onDelete,
+    onDraftChange = () => {},
   } = $props();
 
   // The `/swarm <shortcut>` names the backend accepts.
@@ -78,9 +84,10 @@
     return JSON.stringify(result);
   };
 
-  let draft = $state(untrack(() => copy(profile ?? defaults)));
-  let savedProfile = $state(untrack(() => copy(draft)));
-  let savedSnapshot = $state(untrack(() => snapshot()));
+  let draft = $state(untrack(() => copy(profile ?? newDraft ?? defaults)));
+  // A new Swarm's changes count from the defaults, also in a kept draft.
+  let savedProfile = $state(untrack(() => copy(profile ?? defaults)));
+  let savedSnapshot = $state(untrack(() => snapshot(savedProfile)));
   let saving = $state(false);
   // A new Swarm keeps its fields still while it is created.
   const busy = $derived(saving && !profile);
@@ -91,9 +98,8 @@
   // A saved Swarm whose changes could not be saved on leaving.
   let pendingTransition = $state.raw(null);
   let transitionSaving = $state(false);
-  // A new Swarm with changes the user is leaving.
-  let leaveAction = $state.raw(null);
-  let leaveSaving = $state(false);
+  // Cancel asks before it discards a changed new Swarm.
+  let discardOpen = $state(false);
 
   const hasChanges = () => snapshot() !== savedSnapshot;
   const fieldErrors = $derived(
@@ -138,21 +144,26 @@
     autosave.cancelPendingTimer();
   });
 
+  // A new Swarm is created only by Create, so the page keeps its changed
+  // draft while the editor is closed: leaving it by any navigation, Back and
+  // Forward included, keeps the draft, and New Swarm continues it. Only
+  // Cancel (after asking) and a successful Create discard it.
+  $effect(() => {
+    if (profile) return;
+    const kept = hasChanges() ? copy(draft) : null;
+    untrack(() => onDraftChange(kept));
+  });
+
   // Every navigation away from the editor passes here (the page model's
-  // `navigate`). A saved Swarm flushes its autosave first; a new Swarm with
-  // changes asks whether to create it, discard it or keep editing.
+  // `navigate`). A saved Swarm flushes its autosave first and stays open
+  // when that fails; a new Swarm leaves, its draft kept.
   export async function requestTransition(action) {
-    if (transitionSaving || leaveAction) return;
+    if (transitionSaving) return;
     transitionSaving = true;
     // A Swarm being created finishes first and then leaves like a saved one.
     const saved = profile || saving ? await autosave.participant.flush() : true;
     transitionSaving = false;
-    if (!profile) {
-      if (hasChanges()) leaveAction = action;
-      else action();
-      return;
-    }
-    if (!saved) {
+    if (profile && !saved) {
       pendingTransition = action;
       return;
     }
@@ -178,30 +189,19 @@
     if (first) await focusField(first.id);
   }
 
-  function discardDraft() {
-    const action = leaveAction;
-    leaveAction = null;
+  function cancel() {
+    if (hasChanges()) discardOpen = true;
+    else onCancel();
+  }
+
+  function discardNew() {
+    discardOpen = false;
     draft = copy(savedProfile);
     saveError = '';
     showValidation = false;
-    action?.();
-  }
-
-  async function createAndLeave() {
-    const action = leaveAction;
-    const issues = validate(draft);
-    if (issues.length) {
-      leaveAction = null;
-      showValidation = true;
-      await focusField(issues[0].id);
-      return;
-    }
-    leaveSaving = true;
-    const created = await save();
-    leaveSaving = false;
-    if (!created) return;
-    leaveAction = null;
-    action?.();
+    // Leaving may close the editor before its effects run again.
+    onDraftChange(null);
+    onCancel();
   }
 
   function save() {
@@ -301,9 +301,13 @@
       return false;
     }
     const submittedSnapshot = snapshot();
+    const creating = !profile;
     saving = true;
     try {
       const saved = await onSave(profilePayload());
+      // A created Swarm leaves no new draft behind, also when the editor
+      // closed meanwhile.
+      if (creating) onDraftChange(null);
       if (profile) {
         savedProfile = copy(saved);
         if (snapshot() === submittedSnapshot) draft = copy(saved);
@@ -708,7 +712,7 @@
       <!-- Saved Swarms autosave; their save state works like Settings. -->
       <SaveStatus {saving} pending={hasChanges()} onClick={save} />
     {:else}
-      <Button disabled={busy} onClick={onCancel}>{t('common.cancel')}</Button>
+      <Button disabled={busy} onClick={cancel}>{t('common.cancel')}</Button>
       <Button variant="primary" loading={saving} onClick={save}
         >{t('swarm.profile.create')}</Button
       >
@@ -751,30 +755,13 @@
   </Modal>
 {/if}
 
-{#if leaveAction}
-  <Modal
-    title={t('swarm.profile.leaveTitle')}
-    closeDisabled={leaveSaving}
-    onClose={() => (leaveAction = null)}
-  >
-    {#snippet body()}
-      <div class="modal-body">
-        <p>{t('swarm.profile.leaveBody')}</p>
-        {#if saveError}
-          <Banner variant="error" role="alert">{saveError}</Banner>
-        {/if}
-      </div>
-    {/snippet}
-    {#snippet footer()}
-      <Button disabled={leaveSaving} onClick={() => (leaveAction = null)}
-        >{t('swarm.profile.keepEditing')}</Button
-      >
-      <Button variant="danger" disabled={leaveSaving} onClick={discardDraft}
-        >{t('common.discard')}</Button
-      >
-      <Button variant="primary" loading={leaveSaving} onClick={createAndLeave}
-        >{t('swarm.profile.create')}</Button
-      >
-    {/snippet}
-  </Modal>
+{#if discardOpen}
+  <ConfirmDialog
+    title={t('swarm.profile.discardTitle')}
+    body={t('swarm.profile.discardBody')}
+    confirmLabel={t('common.discard')}
+    cancelLabel={t('swarm.profile.keepEditing')}
+    onConfirm={discardNew}
+    onCancel={() => (discardOpen = false)}
+  />
 {/if}

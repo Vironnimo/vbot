@@ -140,6 +140,10 @@ export function createSwarmPageModel(host) {
 
   let profileEditor = $state(null);
 
+  // A new Swarm's changed draft, kept while its editor is closed
+  // (ProfileEditor's `newDraft`); the page's state ends with the page.
+  let newProfileDraft = $state.raw(null);
+
   let wikiPanel = $state(null);
 
   let editorKey = $state(0);
@@ -1291,6 +1295,12 @@ export function createSwarmPageModel(host) {
     },
     set profileEditor(value) {
       profileEditor = value;
+    },
+    get newProfileDraft() {
+      return newProfileDraft;
+    },
+    set newProfileDraft(value) {
+      newProfileDraft = value;
     },
     get wikiPanel() {
       return wikiPanel;
