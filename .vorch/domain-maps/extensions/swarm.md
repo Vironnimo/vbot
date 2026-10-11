@@ -665,9 +665,9 @@ The Activity tab lists the Run's participants as the Board's chips, the inspecte
 one pressed; until one is chosen, and only once the participants are loaded, it
 asks to choose one. A chosen participant's header (avatar, name, the shared
 context ring with its figures, Resume participant when resumable, close) shows at
-once, with a loading banner until its History arrives, and sticks to the top of
-the page's scroller while the timeline scrolls (its `top` offsets the scroller's
-`--page-inset-top`); in an Activity narrower than 520px Resume participant moves
+once, with a loading banner until its History arrives, and sticks below the Run
+view's tab row while the timeline scrolls (`--swarm-run-sticky-top`, as the
+Board's newer-posts bar); in an Activity narrower than 520px Resume participant moves
 to a second row. A participant's Activity opens at its newest entries.
 Below the timeline a banner says why a failed or interrupted participant
 stopped when its timeline does not (`stopReason` in `pageActivity.svelte.js`).
@@ -692,8 +692,7 @@ current one; the time's tooltip gives the absolute and relative moment
 Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
 stable across page remounts (`SwarmPage.board.test.js`) and does not change saved posts.
-The header shows the snapshot Swarm name and state. The Board's toolbar is one
-row: the discussion picker (a searchable dropdown of the discussions' titles with
+The Board's toolbar is one row: the discussion picker (a searchable dropdown of the discussions' titles with
 their numbers `dN`, the main discussion named "Main discussion", and "Load more
 discussions" in its footer) and Write post. Below it a framed Goal card folds the
 user request to its first line beside the working directory, which stays on one
@@ -732,11 +731,10 @@ Markdown added to the page, skips code, links and controls as whole subtrees and
 ignores its own insertions.
 A post link shows the post on the Board, focused and centered in the room below
 what sticks at the top, and a post taller than that room shows from its top just
-below it. The newer-posts bar (see below) sticks at the scroller's top edge, above
-its `--page-inset-top` as Activity's header does; when the Run shell makes
-something stick above the panels, it sets `--swarm-run-sticky-top`, the offset
-below that inset at which the bar sticks and which a reveal or focus keeps a post
-or the goal clear of. `#0` opens the user request. A post the Board does not show
+below it. The newer-posts bar (see below) sticks below the Run view's tab row at
+`--swarm-run-sticky-top`, as Activity's header does (without that offset, at the
+scroller's top edge above its `--page-inset-top`); a reveal or focus keeps a post
+or the goal clear of the same offset. `#0` opens the user request. A post the Board does not show
 takes two round trips: the post by number, which names its discussion, then up
 to a page of posts ending with it (`before`) and up to a page of newer ones
 (`after`), read together while the discussion selector lists the discussion.
@@ -799,8 +797,8 @@ input defaults are resolved when a profile is saved or previewed.
 
 The Run view (`RunView.svelte`) is a centred page at the configuration measure
 (`--content-max-narrow`), like the start form. Its header names the Run by its
-title (the list entry's generated title, else the goal's first line as plain
-text), then the Swarm it started from, its start (relative, with the absolute
+list entry's title (the canonical group title, else the goal's first line) as
+plain text, then the Swarm it started from, its start (relative, with the absolute
 moment as tooltip) and its size, then one row with the state chip, at most one
 lifecycle action and the Run's menu: Communication settings… (open Runs only),
 Run details and Delete…. The lifecycle action is Stop while the Swarm is
