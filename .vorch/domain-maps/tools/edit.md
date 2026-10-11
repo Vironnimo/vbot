@@ -84,8 +84,13 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   (`_edit_failure`): one edit -> `No file was changed.`; several -> the failed edit
   is labeled `edit K of N` and the closing says no edit was applied and to send all
   edits again with edit K corrected or left out (left out when its change is
-  already in the file); a match report for edit K > 1 adds that its line numbers
-  count the text the earlier edits left. Coverage:
+  already in the file). A match report for edit K > 1 shows the text the earlier
+  edits left, not the file, and says so where it names lines (`The closest text
+  in the file after edits 1-2, ...`, `First difference: after edits 1-2, line N
+  reads ...`, `Where it occurs after edit 1:`); when shown lines are ones an
+  earlier edit of the call wrote, it names that edit (`Edit 2 of this call wrote
+  line N.`; `apply_hunks` tracks each edit's written lines through the later
+  ones). Coverage:
   `test_failed_changes_change_nothing_and_say_what_to_send`,
   `test_a_file_changed_during_the_call_is_not_overwritten`.
 
@@ -110,6 +115,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `path`, `edits[].new_string`: no text | The names say the role, both path forms are accepted, and `""` deleting is trained behavior (review 2026-10-10). |
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
+| Match report for edit K > 1: `The closest text in the file after edits 1-4, line 287:`, `First difference: after edits 1-4, line 287 reads '...' where old_string has '...'.`, `Edit 2 of this call wrote line 287.` | Replaces `the file has` plus a trailing `Line numbers count the text as edits 1-4 left it.`: the report said the file had `Param(1)` at line 287, which edit 2 of the same call had written; the file held `Param(0)` (Swarm Run 2026-10). The trailing sentence came after the text it qualified, and naming the edit shows that the failed edit's place overlaps a change the call already makes. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 
 ## Verification

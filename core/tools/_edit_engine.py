@@ -90,19 +90,62 @@ def apply_hunks(
 
     Each hunk sees the text the hunks before it produced. ``previous``, and the
     returned change end, is where the line holding the file's last change starts;
-    it orders the occurrences of lines a later hunk matches.
+    it orders the occurrences of lines a later hunk matches. A hunk that fails
+    after others applied carries ``written`` in its error details: the lines of
+    the text it saw that each earlier hunk wrote, as ``{label, first, last}``.
     """
     notes: list[str] = []
+    written: list[tuple[str, int, int]] = []
     for hunk in hunks:
-        if hunk.replacement is not None:
-            edited, placed = _apply_replacement(content, hunk, path)
-        else:
-            edited, placed = _apply_line_hunk(content, hunk, path, previous)
+        try:
+            if hunk.replacement is not None:
+                edited, placed = _apply_replacement(content, hunk, path)
+            else:
+                edited, placed = _apply_line_hunk(content, hunk, path, previous)
+        except _PatchError as error:
+            if written:
+                error.details["written"] = [
+                    {"label": label, "first": first, "last": last} for label, first, last in written
+                ]
+            raise
         if edited != content:
             previous = _change_end_line(content, edited)
+            written = _track_written(written, content, edited, hunk.label)
         content = edited
         notes.extend(placed)
     return content, notes, previous
+
+
+def _track_written(
+    written: list[tuple[str, int, int]], before: str, after: str, label: str
+) -> list[tuple[str, int, int]]:
+    """Move earlier hunks' written lines past the change from ``before`` to ``after``.
+
+    The change's own lines are added under ``label``; lines it replaced drop out
+    of the earlier ranges.
+    """
+    prefix = len(commonprefix((before, after)))
+    limit = min(len(before), len(after)) - prefix
+    suffix = len(commonprefix((before[::-1][:limit], after[::-1][:limit])))
+    old_end, new_end = len(before) - suffix, len(after) - suffix
+    first = len(_BREAK.findall(before, 0, prefix)) + 1
+    if old_end > prefix:
+        last = len(_BREAK.findall(before, 0, old_end - 1)) + 1
+    elif prefix == 0 or before[prefix - 1] in "\r\n":
+        last = first - 1  # whole lines inserted: no earlier line changes
+    else:
+        last = first
+    delta = len(_BREAK.findall(after)) - len(_BREAK.findall(before))
+    moved: list[tuple[str, int, int]] = []
+    for name, start, end in written:
+        if start < first:
+            moved.append((name, start, min(end, first - 1)))
+        if end > last:
+            moved.append((name, max(start, last + 1) + delta, end + delta))
+    if new_end > prefix:
+        start = len(_BREAK.findall(after, 0, prefix)) + 1
+        moved.append((label, start, len(_BREAK.findall(after, 0, new_end - 1)) + 1))
+    return moved
 
 
 def line_ending(content: str) -> str:
