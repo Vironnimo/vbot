@@ -60,7 +60,7 @@ def test_example_extensions_load_cleanly_and_word_count_honors_its_schema(
         result = asyncio.run(tools.dispatch(context, {"text": text}))
         assert (result["ok"], result["data"]) == (True, {"word_count": count})
     for arguments, problem in (
-        ({}, '"text" is required'),
+        ({"words": "one two"}, '"text" is required'),
         ({"text": None}, '"text" must be a string'),
         ({"text": "one", "extra": True}, '"extra" is not a parameter'),
     ):

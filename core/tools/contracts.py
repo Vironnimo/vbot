@@ -95,6 +95,23 @@ class ToolContract:
                 _render_argument_problems(self.name, self.input_schema, problems, names_matter)
             )
 
+    def no_arguments_message(self) -> str:
+        """Return the refusal of a call that arrived with no arguments at all.
+
+        Such a call lost its arguments on the way, most often in Tool-call
+        markup the Provider could not read, so naming each missing parameter
+        would miss the point: the whole call has to be sent again.
+        """
+        tool_name = model_tool_name(self.name)
+        lines = [
+            f"{tool_name} was not run: the call arrived with no arguments at all. "
+            "Send the complete call again."
+        ]
+        parameter_line = _parameter_line(tool_name, self.input_schema)
+        if parameter_line:
+            lines.append(parameter_line)
+        return "\n".join(lines)
+
     def validate_success_data(self, data: Any) -> None:
         """Raise an actionable error when successful Tool data violates its schema."""
         if self.result_validator is None:
@@ -863,12 +880,7 @@ def _render_argument_problems(
     tool_name: str, schema: JsonObject, problems: list[str], names_matter: bool
 ) -> str:
     tool_name = model_tool_name(tool_name)
-    parameters = schema.get("properties")
-    parameter_line = ""
-    if names_matter and isinstance(parameters, dict) and parameters:
-        required = schema.get("required", [])
-        names = ", ".join(f"{name} (required)" if name in required else name for name in parameters)
-        parameter_line = f"{tool_name} parameters: {names}."
+    parameter_line = _parameter_line(tool_name, schema) if names_matter else ""
     if len(problems) == 1 and not parameter_line:
         return f"{tool_name} was not run: {problems[0]}"
     shown = problems[:_MAX_REPORTED_PROBLEMS]
@@ -878,6 +890,16 @@ def _render_argument_problems(
     if parameter_line:
         lines.append(parameter_line)
     return "\n".join(lines)
+
+
+def _parameter_line(tool_name: str, schema: JsonObject) -> str:
+    """Return the line listing the Tool's parameters, ``""`` when it has none."""
+    parameters = schema.get("properties")
+    if not isinstance(parameters, dict) or not parameters:
+        return ""
+    required = schema.get("required", [])
+    names = ", ".join(f"{name} (required)" if name in required else name for name in parameters)
+    return f"{tool_name} parameters: {names}."
 
 
 def _unknown_parameter(key: str, parameters: tuple[str, ...], arguments: JsonObject) -> str:

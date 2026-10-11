@@ -176,7 +176,7 @@ def test_a_tuple_schema_stays_rejected_after_its_json_twin_compiled() -> None:
     ("arguments", "message"),
     [
         (
-            {},
+            {"label": "x"},
             'sample was not run:\n- "count" is required.\n'
             "sample parameters: count (required), label.",
         ),
@@ -213,6 +213,35 @@ async def test_dispatch_rejects_invalid_arguments_before_handler(
 
     assert str(exc_info.value) == message
     assert calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "arrived_empty"),
+    [
+        pytest.param({}, True, id="no-arguments"),
+        # The owner's repair empties the call, but the Model did send arguments.
+        pytest.param({"label": ""}, False, id="emptied-by-repair"),
+    ],
+)
+async def test_a_call_that_arrived_without_arguments_is_asked_for_again_complete(
+    arguments: JsonObject, arrived_empty: bool
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "sample",
+        "Sample.",
+        _input_schema(),
+        lambda _context, _arguments: tool_success({"value": "ok"}),
+        argument_normalizer=lambda call: {key: value for key, value in call.items() if value},
+    )
+
+    with pytest.raises(ToolContractError) as exc_info:
+        await registry.dispatch(make_context("sample"), arguments, ["sample"])
+
+    no_arguments = registry.get("sample").contract.no_arguments_message()
+    assert (str(exc_info.value) == no_arguments) is arrived_empty
+    assert "count" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

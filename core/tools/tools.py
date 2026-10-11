@@ -153,18 +153,23 @@ def _checked_arguments(tool: Tool, contract: ToolContract, arguments: Any) -> An
     """Return the arguments the handler receives, or refuse the call before it runs.
 
     Whatever argument repair and validation raise refuses the call as a
-    ``ToolContractError``, because nothing has run yet. A repair that crashes
-    for another reason than a ``ValueError`` is a defect and is logged.
+    ``ToolContractError``, because nothing has run yet. A call refused that
+    arrived as ``{}`` lost its arguments on the way and is told so. A repair
+    that crashes for another reason than a ``ValueError`` is a defect and is
+    logged.
     """
+    received = arguments
     try:
         if tool.argument_normalizer is not None:
             arguments = tool.argument_normalizer(copy.deepcopy(arguments))
         normalized = contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
         if not tool.handler_validates_arguments:
             contract.validate_arguments(normalized, unadvertised=tool.unadvertised_parameters)
-    except ToolContractError:
-        raise
-    except ValueError as error:
+    except ValueError as error:  # ToolContractError included
+        if isinstance(received, dict) and not received:
+            raise ToolContractError(contract.no_arguments_message()) from error
+        if isinstance(error, ToolContractError):
+            raise
         raise ToolContractError(str(error)) from error
     except Exception as error:
         _LOGGER.error("Tool %s argument repair crashed unexpectedly", tool.name, exc_info=error)
