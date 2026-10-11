@@ -84,6 +84,10 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     opening = created["data"]["opening_post_id"]
     assert (discussion, opening) == ("d2", "#1")
     first, _ = await call(board, {"action": "list", "limit": 1})
+    # A value that continues no list, such as a discussion ID, lists from the start.
+    restarted, _ = await call(board, {"action": "list", "cursor": "d1", "limit": 1})
+    assert restarted["data"]["content"] == first["data"]["content"]
+    assert "note" in restarted["data"] and "note" not in first["data"]
     next_page, _ = await call(board, continuation(first["data"]["more"]))
     assert f'- {discussion} "Topic": joined, members: 1' in next_page["data"]["content"]
     joined, _ = await call(board, {"action": "join", "discussion_id": discussion}, peer=1)
@@ -578,6 +582,20 @@ async def test_board_extra_targets_run_only_when_they_change_nothing(board):
     )
     listed = await board.store.list_discussions(board.swarm["id"], board.bindings[0].participant_id)
     assert sorted(row["title"] for row in listed.entries) == ["First", "Main", "Second", "Third"]
+    # A title beside an existing discussion names nothing new: the post is saved without it.
+    titled, _ = await dispatch(
+        board, {"action": "post", "discussion_id": existing, "title": "Heading", "text": "titled"}
+    )
+    assert titled["ok"] and "note" in titled["data"], titled
+    for arguments in [
+        {"action": "post", "title": "Heading", "text": "untargeted"},
+        {"action": "post", "discussion_id": "d9", "title": "Heading", "text": "untargeted"},
+    ]:
+        refused, _ = await dispatch(board, arguments)
+        assert refused["error"]["code"] == "invalid_arguments", refused
+    texts = [post["text"] for post in await board_posts(board, discussion_id=existing)]
+    assert "titled" in texts
+    assert "untargeted" not in {post["text"] for post in await board_posts(board)}
 
     target = first["data"]["opening_post_id"]
     # A post that names a post with message_id answers it, as with reply_to.
@@ -612,6 +630,19 @@ async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(boar
     clamped, _ = await dispatch(board, {"action": "read", "limit": 500})
     assert clamped["data"]["note"] == "limit 500 is above the maximum of 100; used 100."
     assert "(3 shown)" in clamped["data"]["page"]
+    # offset, as other harnesses page, skips that many of the newest posts.
+    skipped, _ = await dispatch(board, {"action": "read", "limit": 1, "offset": "1"})
+    assert skipped["data"]["content"].endswith(":\npost 1")
+    assert continuation(skipped["data"]["older"])["before"] == "#2"
+    beyond, _ = await dispatch(board, {"action": "read", "offset": 3})
+    assert beyond["ok"] and "content" not in beyond["data"]
+    # Beside a post or a page start, offset positions nothing.
+    one, _ = await dispatch(board, {"action": "read", "message_id": "#1", "offset": 2})
+    assert one["data"]["content"].endswith(":\npost 0") and "note" not in one["data"]
+    before, _ = await dispatch(board, {"action": "read", "before": "#3", "offset": 1})
+    assert before["data"]["content"].endswith(":\npost 1") and "note" in before["data"]
+    negative, _ = await dispatch(board, {"action": "read", "offset": -1})
+    assert negative["error"]["code"] == "invalid_arguments"
     ignored, _ = await dispatch(board, {"action": "post", "text": "paged", "limit": 5})
     assert ignored["data"]["note"] == "limit is not used by post and was ignored."
     assert "paged" in {post["text"] for post in await board_posts(board)}

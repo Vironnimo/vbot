@@ -8,6 +8,7 @@ and renders the result as readable text.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, overload
 
@@ -22,6 +23,7 @@ from ._board_view import (
     discussion_choices,
     discussion_label,
     discussions_text,
+    excerpt,
     post_block,
     post_discussion_label,
     post_suggestion,
@@ -37,7 +39,8 @@ if TYPE_CHECKING:
 
 _FIELDS = {
     "list": {"cursor", "limit"},
-    "read": {"discussion_id", "message_id", "before", "cursor", "limit"},
+    # offset (unadvertised) skips that many of the newest posts.
+    "read": {"discussion_id", "message_id", "before", "cursor", "limit", "offset"},
     "post": {"discussion_id", "text", "reply_to", "recipients"},
     "create": {"title", "text", "recipients"},
     "join": {"discussion_id"},
@@ -50,7 +53,7 @@ _REQUIRED = {
     "leave": ("discussion_id",),
 }
 # Paging fields request nothing an action without pages could do.
-_PAGING = frozenset({"cursor", "limit", "before"})
+_PAGING = frozenset({"cursor", "limit", "before", "offset"})
 _REFERENCES = ("discussion_id", "message_id", "reply_to", "before")
 _MAX_LIMIT = 100
 _MAX_TEXT = {"text": 16000, "title": 120}
@@ -75,20 +78,33 @@ def prepare_board_call(arguments: Json) -> tuple[str, list[str]]:
     if action == "read" and "message_id" in arguments:
         if {"before", "cursor"} & arguments.keys():
             raise AgentCallError("invalid_arguments", text.MESSAGE_WITH_PAGE)
-        # One exact post needs no page size.
+        # One exact post needs no page size or position.
         arguments.pop("limit", None)
-    # create resolves a discussion_id against the group before deciding.
-    accepted = _FIELDS[action] | ({"discussion_id"} if action == "create" else set())
+        arguments.pop("offset", None)
+    if action == "read" and "offset" in arguments:
+        start = next((field for field in ("before", "cursor") if field in arguments), None)
+        if start is not None:
+            del arguments["offset"]
+            notes.append(text.OFFSET_IGNORED.format(field=start))
+    # create resolves a discussion_id against the group before deciding, and so does a
+    # post with a title: a title beside an existing discussion adds nothing to the post.
+    accepted = _FIELDS[action] | (
+        {"discussion_id"}
+        if action == "create"
+        else {"title"}
+        if action == "post" and "discussion_id" in arguments
+        else set()
+    )
     for field in sorted(arguments.keys() - {"action", *accepted}):
-        if field in _PAGING or (action == "list" and field == "discussion_id"):
+        users = [name for name, fields in _FIELDS.items() if field in fields]
+        if field in _PAGING or not users or (action == "list" and field == "discussion_id"):
             del arguments[field]
             notes.append(text.FIELD_IGNORED.format(field=field, action=action))
             continue
-        users = [name for name, fields in _FIELDS.items() if field in fields]
         raise AgentCallError(
             "invalid_arguments",
             text.FIELD_FOR_OTHER_ACTION.format(
-                action=action, field=field, actions=" or ".join(users) or "no action"
+                action=action, field=field, actions=" or ".join(users)
             ),
         )
     for field in _REQUIRED.get(action, ()):
@@ -110,6 +126,12 @@ def prepare_board_call(arguments: Json) -> tuple[str, list[str]]:
             if value > _MAX_LIMIT:
                 arguments[field] = _MAX_LIMIT
                 notes.append(text.LIMIT_CLAMPED.format(requested=value, maximum=_MAX_LIMIT))
+        elif field == "offset":
+            if type(value) is not int or value < 0:
+                raise AgentCallError("invalid_arguments", text.OFFSET_INVALID.format(value=value))
+        elif field == "title" and action == "post":
+            # BoardCall.post saves the post without it once its discussion exists.
+            continue
         elif field == "recipients":
             if not isinstance(value, list) or not all(
                 isinstance(item, str) and item.strip() for item in value
@@ -121,6 +143,8 @@ def prepare_board_call(arguments: Json) -> tuple[str, list[str]]:
             or len(value) > _MAX_TEXT.get(field, len(value))
         ):
             raise SwarmStoreError("invalid_arguments", field=field)
+    if arguments.get("offset") == 0:
+        del arguments["offset"]
     return action, notes
 
 
@@ -148,14 +172,18 @@ class BoardCall:
         self._discussion_rows: list[Json] | None = None
 
     async def list(self, arguments: Json) -> Json:
+        limit = arguments.get("limit", 20)
         try:
             page = await self.store.list_discussions(
-                self.sid, self.pid, cursor=arguments.get("cursor"), limit=arguments.get("limit", 20)
+                self.sid, self.pid, cursor=arguments.get("cursor"), limit=limit
             )
         except SwarmStoreError as error:
-            if error.code == "invalid_cursor":
-                raise AgentCallError("invalid_cursor", text.LIST_CURSOR_INVALID) from error
-            raise
+            if error.code != "invalid_cursor":
+                raise
+            # Listing is harmless, and a value such as "d1" is no continuation: start over.
+            self.notes.append(text.LIST_CURSOR_RESTARTED.format(value=_quoted(arguments["cursor"])))
+            del arguments["cursor"]
+            page = await self.store.list_discussions(self.sid, self.pid, limit=limit)
         data: Json = {"user_request": self._user_request()}
         if page.has_more:
             data["more"] = text.BOARD_MORE_DISCUSSIONS.format(
@@ -203,8 +231,10 @@ class BoardCall:
                 if count
                 else text.BOARD_PAGE_EMPTY_BEFORE.format(before=query["before"], discussion=label)
             )
-        elif "cursor" in query:
+        elif "cursor" in query or (count and "offset" in query):
             summary = text.BOARD_PAGE_OLDER.format(count=count, discussion=label)
+        elif "offset" in query:
+            summary = text.BOARD_PAGE_EMPTY_OFFSET.format(offset=query["offset"], discussion=label)
         else:
             summary = (
                 text.BOARD_PAGE_NEWEST.format(count=count, discussion=label)
@@ -230,6 +260,16 @@ class BoardCall:
 
     async def post(self, arguments: Json) -> Json:
         values = {key: value for key, value in arguments.items() if key != "action"}
+        if values.pop("title", None) is not None:
+            # A title names a new discussion; beside an existing one it adds nothing.
+            if await self._discussion(values["discussion_id"], required=False) is None:
+                raise AgentCallError(
+                    "invalid_arguments",
+                    text.FIELD_FOR_OTHER_ACTION.format(
+                        action="post", field="title", actions="create"
+                    ),
+                )
+            self.notes.append(text.POST_TITLE_IGNORED)
         try:
             data = await self.store.post(
                 self.sid,
@@ -507,6 +547,10 @@ def _names(reference: str, discussion_id: str, sequence: int) -> bool:
     """Whether ``reference`` is the discussion's stored ID or its number."""
 
     return reference == discussion_id or discussion_number(reference) == sequence
+
+
+def _quoted(value: Any) -> str:
+    return json.dumps(excerpt(value) if isinstance(value, str) else value, ensure_ascii=False)
 
 
 __all__ = ["BoardCall", "prepare_board_call"]

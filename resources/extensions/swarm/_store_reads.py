@@ -133,6 +133,7 @@ def _read_posts(
     cursor: str | None,
     limit: int,
     before: str | None = None,
+    offset: int = 0,
 ) -> Page:
     with db._read() as connection:
         _participant(connection, swarm_id, participant_id)
@@ -174,6 +175,7 @@ def _read_posts(
             cursor,
             limit,
             before_sequence=before_sequence,
+            skip=offset,
         )
 
 
@@ -315,6 +317,7 @@ def _post_page(
     limit: int,
     *,
     before_sequence: int | None = None,
+    skip: int = 0,
 ) -> Page:
     high_water = _post_high_water(connection, swarm_id, discussion_id)
     scope = f"{swarm_id}:{participant_id}:{discussion_id}"
@@ -328,6 +331,7 @@ def _post_page(
         high_water = frozen_high_water
     else:
         offset = 0
+    offset += skip
     batch_chars = _load(
         connection.execute(
             "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)

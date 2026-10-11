@@ -259,6 +259,11 @@ STATE_MORE = "More participants exist. Continue with {call}"
 LIMIT_CLAMPED = "limit {requested} is above the maximum of {maximum}; used {maximum}."
 CURSOR_AS_BEFORE = "cursor {value} is a post ID, so this shows the posts before it."
 FIELD_IGNORED = "{field} is not used by {action} and was ignored."
+OFFSET_IGNORED = "offset was ignored: {field} already sets where the page starts."
+POST_TITLE_IGNORED = (
+    "title was ignored: posts have no title; only create uses one, to name a new discussion."
+)
+LIST_CURSOR_RESTARTED = "cursor {value} does not continue a list, so this lists from the start."
 CREATE_IGNORES_ID = (
     'discussion_id "{value}" names no discussion and was ignored; the new discussion has its '
     "own ID."
@@ -289,6 +294,7 @@ BOARD_PAGE_BEFORE = "Posts before {before} in {discussion}, oldest first ({count
 BOARD_PAGE_EMPTY = "No posts in {discussion} yet."
 BOARD_PAGE_EMPTY_BEFORE = "No posts before {before} in {discussion}."
 BOARD_PAGE_OLDER = "Older posts of {discussion}, oldest first ({count} shown)."
+BOARD_PAGE_EMPTY_OFFSET = "No posts in {discussion} beyond its {offset} newest."
 BOARD_ONE_POST = "Post {post_id} in {discussion}."
 BOARD_OLDER = "Older posts exist. Continue with {call}"
 BOARD_MORE_DISCUSSIONS = "More discussions exist. Continue with {call}"
@@ -385,9 +391,9 @@ FIELD_FOR_OTHER_ACTION = (
     "{action} does not use {field}, so the call may mean another action. Repeat it without "
     "{field}, or use an action that takes {field}: {actions}. The call was not run."
 )
-LIST_CURSOR_INVALID = (
-    "This cursor is not valid for this list: it is incomplete or belongs to another query. "
-    "Omit cursor to list from the start."
+OFFSET_INVALID = (
+    "offset {value} is not a post count. Send the number of newest posts to skip, 0 or more, "
+    "or omit offset to read the newest posts. The call was not run."
 )
 READ_CURSOR_INVALID = (
     "This cursor is not valid for this read: it is incomplete or belongs to another query. "

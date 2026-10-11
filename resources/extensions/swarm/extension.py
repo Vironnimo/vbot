@@ -103,8 +103,9 @@ _BOARD_CHANGES = {
     "leave": ("discussions",),
 }
 # Accepted without being offered: a Participant's own identity copied from its
-# reminders, the single action of the inbox and state Tools, and explicit Board
-# recipients, which "@" before names in the post text replaces.
+# reminders, the single action of the inbox and state Tools, explicit Board
+# recipients, which "@" before names in the post text replaces, and the offset
+# other harnesses page with, which ``before`` replaces.
 UNADVERTISED_PARAMETERS: dict[str, Json] = {
     name: {
         **({"action": {"type": "string", "enum": [action]}} if action else {}),
@@ -115,6 +116,7 @@ UNADVERTISED_PARAMETERS: dict[str, Json] = {
             {
                 "recipients": {"type": "array", "items": {"type": "string"}},
                 "reply_to": {"type": "string"},
+                "offset": {"type": "integer"},
             }
             if name == "swarm_board"
             else {}

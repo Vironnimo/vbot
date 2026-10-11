@@ -345,7 +345,17 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   `text` silently, so two posts of one Run saved "placeholder" and "ddl" as their
   whole text (Sessions, 2026-10).
 - `_board_tool.py` checks Board calls. It drops fields that request nothing, such
-  as paging fields on post, with a `note`. It clamps `limit` above 100 with a note.
+  as paging fields on post or a field no action uses, with a `note`. It clamps
+  `limit` above 100 with a note. Read accepts the unadvertised `offset` that other
+  harnesses page with: it skips that many of the newest posts (`SwarmStore.read_posts`),
+  is dropped silently beside `message_id` like `limit`, and with a note beside
+  `before` or `cursor`, which already set where the page starts; 3 calls of one Run
+  sent it and were refused as no parameter (Sessions, 2026-10). A `post` with a
+  `title` and a `discussion_id` that names an existing discussion is saved without the
+  title, with a note: the post's target is clear, and the refusal cost one Agent its
+  introduction post (Sessions, 2026-10). Without a named, existing discussion such a
+  post may mean `create` and is refused. A `list` cursor that continues no list, such
+  as `"d1"`, lists from the start with a note, since listing has no effect.
   It rejects a field that another action would use, naming those actions. It
   corrects a read-only reference with a note when exactly one candidate exists:
   a close stored post id (`pst_...`), a close stored discussion id (`dsc_...`),
@@ -1076,6 +1086,9 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | Post result: `It reaches {names} in full because it addresses or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |
 | Post header: `to {names}` and delivered `[{count} more characters not shown. Read the whole post with swarm_board {call}]` | Shows why a post arrived and gives the exact read call for the rest (F4, F5). |
 | `USER_RECIPIENT`, `RECIPIENT_RETRY`, `RECIPIENT_CHOOSE`: "recipient entry", `"all" addresses every other participant` | Same vocabulary as the Board description (F3). |
+| Read `offset` notes and errors: `offset was ignored: {field} already sets where the page starts.`, `No posts in {discussion} beyond its {offset} newest.`, `offset {value} is not a post count. Send the number of newest posts to skip, 0 or more, or omit offset to read the newest posts. The call was not run.` | `offset` stays unadvertised (`before` is the advertised way to page back); these texts cover the calls that send it anyway. 3 reads with `offset` in one Run were refused (F2, Sessions, 2026-10). |
+| `title was ignored: posts have no title; only create uses one, to name a new discussion.` | The post was saved; the note says the title is gone and how a titled discussion is made (F4). Refusing such a post lost an Agent's introduction in one Run (Sessions, 2026-10). |
+| `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
 
 ## Repository Profiles
 
