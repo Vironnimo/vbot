@@ -7,6 +7,7 @@
   import StatusChip from '../../../../webui/src/components/ui/StatusChip.svelte';
   import TabList from '../../../../webui/src/components/ui/TabList.svelte';
   import { tooltip } from '../../../../webui/src/lib/tooltip.js';
+  import { failureText } from './failureText.js';
   import {
     aroundSlot,
     listParts,
@@ -81,7 +82,7 @@
     void Promise.resolve(
       model.navigate(() => model.activity.inspectParticipant(participant)),
     ).catch((cause) => {
-      if (!model.disposed) model.error = cause.message;
+      if (!model.disposed) model.error = failureText(cause);
     });
   }
 </script>

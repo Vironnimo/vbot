@@ -554,6 +554,24 @@ describe('Swarm profile saving', () => {
     );
     expect(document.getElementById('swarm-profile-name').value).toBe('Retry');
     expect(button(CREATE_SWARM).disabled).toBe(false);
+    // A shortcut another Swarm uses is a problem of its field, which takes
+    // focus, until the shortcut changes.
+    const slugError = () => document.getElementById('swarm-profile-slug-error');
+    fill('swarm-profile-slug', 'research');
+    operation.mockRejectedValueOnce(new Error('slug_unavailable'));
+    button(CREATE_SWARM).click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.id).toBe('swarm-profile-slug'),
+    );
+    expect(slugError().textContent.trim()).toBe(
+      t('swarm.error.slug_unavailable'),
+    );
+    expect(
+      document.querySelector('.swarm-profile-editor__save-error'),
+    ).toBeNull();
+    fill('swarm-profile-slug', 'research-2');
+    await tick();
+    expect(slugError()).toBeNull();
   });
 
   it('autosaves after the shared debounce without closing or replacing the editor', async () => {

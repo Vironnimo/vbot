@@ -13,6 +13,7 @@ import {
   render,
   openSwarm,
   choose,
+  notice,
   fixtureState,
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
@@ -379,7 +380,7 @@ describe('Swarm Board posts', () => {
     }
   });
 
-  it('shows newest Board posts first, appends earlier pages below and reads only newer posts on a change', async () => {
+  it('shows newest Board posts first, appends earlier pages below, reports a failed one and reads only newer posts on a change', async () => {
     const { bridge, operation } = createBridge();
     const posts = (ids) =>
       ids.map((id) => ({
@@ -391,11 +392,16 @@ describe('Swarm Board posts', () => {
       }));
     // Posts after a number arrive oldest first, in bounded pages.
     const newer = { 4: [[5, 6], true], 6: [[7], false], 7: [[], false] };
+    let earlierFails = true;
     overrideOperations(operation, {
       'board.read': (args) => {
         if ('after' in args) {
           const [ids, hasMore] = newer[args.after];
           return { entries: posts(ids), has_more: hasMore };
+        }
+        if (args.cursor && earlierFails) {
+          earlierFails = false;
+          throw new Error('invalid_cursor');
         }
         return args.cursor
           ? { entries: posts([1, 2]), cursor: null, has_more: false }
@@ -413,6 +419,13 @@ describe('Swarm Board posts', () => {
       );
     expect(messages()).toEqual(['message-4', 'message-3']);
     const more = t('swarm.board.more');
+    // A failed page shows as the page error, here in the words the codes
+    // share that the page does not bring about, until the next try.
+    button(more).click();
+    await vi.waitFor(() =>
+      expect(notice('alert')).toContain(t('swarm.error.unexpected')),
+    );
+    expect(messages()).toEqual(['message-4', 'message-3']);
     button(more).click();
     await vi.waitFor(() =>
       expect(messages()).toEqual([
@@ -422,6 +435,7 @@ describe('Swarm Board posts', () => {
         'message-1',
       ]),
     );
+    expect(notice('alert')).toBe('');
     expect(operation).toHaveBeenCalledWith('board.read', {
       swarm_id: swarm.id,
       discussion_id: swarm.main_discussion_id,

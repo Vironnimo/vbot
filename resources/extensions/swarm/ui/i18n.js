@@ -172,6 +172,25 @@ export default Object.freeze({
   'swarm.tabs.usage': 'Usage',
   'swarm.loadError': 'The Swarm page could not load.',
   'swarm.refreshError': 'The page could not refresh: {error}',
+  // A failed Swarm operation by its error code (failureText.js).
+  'swarm.error.invalid_arguments':
+    'vBot could not accept this request. Check your entries and try again.',
+  'swarm.error.message_not_found': 'That post is not on this Run’s Board.',
+  'swarm.error.participant_not_resumable':
+    'This participant is already working.',
+  'swarm.error.profile_not_found':
+    'This Swarm no longer exists. It may have been deleted.',
+  'swarm.error.revision_conflict':
+    'This was changed elsewhere in the meantime. Reopen it to see the current version, then try again.',
+  'swarm.error.slug_unavailable': 'Another Swarm already uses this shortcut.',
+  'swarm.error.swarm_closed':
+    'This Run cannot be changed right now, for example while it is stopping or being deleted.',
+  'swarm.error.swarm_not_found':
+    'This Run no longer exists. It may have been deleted.',
+  'swarm.error.swarm_not_stopped':
+    'This Run is still working. Stop it, then try deleting it again.',
+  'swarm.error.unexpected':
+    'Something went wrong. Try again, or reopen Swarms if it keeps happening.',
   'swarm.start.directoryRequired': 'Choose a working directory.',
   'swarm.post.resumeFailed':
     'Your message was posted, but the Run could not resume. Use Resume to try again.',

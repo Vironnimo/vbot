@@ -1,4 +1,5 @@
 import { t, tOr } from '../../../../webui/src/lib/i18n.js';
+import { failureText } from './failureText.js';
 
 // The Swarm editor's prompt preview for one formation row: it requests the
 // combined System Prompt of the current draft (`profiles.preview`), keeps
@@ -33,7 +34,7 @@ export function createProfilePromptPreview(context) {
       preview = result.preview;
       previewSnapshot = submitted;
     } catch (cause) {
-      if (request === previewRequest) previewError = cause.message;
+      if (request === previewRequest) previewError = failureText(cause);
     } finally {
       if (request === previewRequest) previewBusy = false;
     }

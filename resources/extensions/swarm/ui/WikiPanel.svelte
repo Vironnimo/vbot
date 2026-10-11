@@ -9,6 +9,7 @@
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
+  import { failureText } from './failureText.js';
   import { requestId } from './pagePresentation.js';
   import { createPageRefresh, swarmChanged } from './pageRefresh.js';
   import WikiEditor from './WikiEditor.svelte';
@@ -159,7 +160,8 @@
       next = result.next_call?.arguments ?? null;
       now = Date.now();
     } catch (cause) {
-      if (!disposed && generation === listGeneration) listError = cause.message;
+      if (!disposed && generation === listGeneration)
+        listError = failureText(cause);
     }
   }
   async function loadMore() {
@@ -176,7 +178,8 @@
       await tick();
       if (first) index?.focusPage(first);
     } catch (cause) {
-      if (!disposed && generation === listGeneration) listError = cause.message;
+      if (!disposed && generation === listGeneration)
+        listError = failureText(cause);
     }
   }
   function cancelSearch() {
@@ -236,7 +239,8 @@
       now = Date.now();
       return true;
     } catch (cause) {
-      if (!disposed && generation === readGeneration) error = cause.message;
+      if (!disposed && generation === readGeneration)
+        error = failureText(cause);
       return false;
     }
   }
@@ -395,7 +399,7 @@
       void refresh({ keep: true });
       return true;
     } catch (cause) {
-      if (!disposed) error = cause.message;
+      if (!disposed) error = failureText(cause);
       return false;
     } finally {
       saving = false;
@@ -435,7 +439,8 @@
       }
       return true;
     } catch (cause) {
-      if (!disposed && generation === historyGeneration) error = cause.message;
+      if (!disposed && generation === historyGeneration)
+        error = failureText(cause);
       return false;
     }
   }
@@ -477,7 +482,7 @@
       await tick();
       pageView?.focusTitle();
     } catch (cause) {
-      if (!disposed) error = cause.message;
+      if (!disposed) error = failureText(cause);
     } finally {
       saving = false;
     }

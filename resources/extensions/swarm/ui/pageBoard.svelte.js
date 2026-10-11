@@ -2,6 +2,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { tick } from 'svelte';
 import { t } from '../../../../webui/src/lib/i18n.js';
 import { page, participantCard, requestId } from './pagePresentation.js';
+import { failureText } from './failureText.js';
 import { swarmChanged } from './pageRefresh.js';
 import { referenceLinks } from './referenceLinks.js';
 
@@ -320,7 +321,7 @@ export function createSwarmPageBoard(host) {
       result = await load;
     } catch (cause) {
       if (boardCurrent(version, swarm, discussionId))
-        host.error = cause.message;
+        host.error = failureText(cause);
       return;
     } finally {
       if (boardNewerLoading === load) boardNewerLoading = null;
@@ -340,7 +341,7 @@ export function createSwarmPageBoard(host) {
       await loadBoard(swarm, selectedDiscussion);
     } catch (cause) {
       if (!host.disposed && version === boardVersion)
-        host.error = cause.message;
+        host.error = failureText(cause);
       return;
     }
     if (host.disposed || version !== boardVersion) return;
@@ -348,22 +349,63 @@ export function createSwarmPageBoard(host) {
     revealElement(document.querySelector('.board > li'));
   }
 
+  // Shows the discussion `id` from its newest posts. A user step: its failure
+  // shows as the page error unless a newer read replaced it.
   async function chooseDiscussion(id) {
+    const swarm = host.selectedSwarm;
     selectedDiscussion = id;
     clearBoard();
-    await loadBoard(host.selectedSwarm, id);
+    if (!swarm) return;
+    host.error = '';
+    const version = boardVersion + 1;
+    try {
+      await loadBoard(swarm, id);
+    } catch (cause) {
+      if (boardCurrent(version, swarm, id)) host.error = failureText(cause);
+    }
   }
 
-  async function openDiscussion(announcement) {
+  function openDiscussion(announcement) {
     if (!discussions.some((item) => item.id === announcement.discussion_id))
       discussions = [
         ...discussions,
         { id: announcement.discussion_id, title: announcement.title },
       ];
+    return chooseDiscussion(announcement.discussion_id);
+  }
+
+  // "Load more discussions" in the discussion picker, a user step.
+  async function loadMoreDiscussions() {
+    const swarm = host.selectedSwarm;
+    if (!swarm || !discussionCursor) return;
+    host.error = '';
+    const selection = host.selectionRequest;
+    const request = discussionsRequest + 1;
     try {
-      await chooseDiscussion(announcement.discussion_id);
+      await loadDiscussions(swarm, discussionCursor);
     } catch (cause) {
-      host.error = cause.message;
+      if (
+        !host.disposed &&
+        selection === host.selectionRequest &&
+        request === discussionsRequest &&
+        host.selectedSwarm?.id === swarm.id
+      )
+        host.error = failureText(cause);
+    }
+  }
+
+  // "Load earlier posts" below the posts the Board shows, a user step.
+  async function loadEarlierPosts() {
+    const swarm = host.selectedSwarm;
+    const discussionId = selectedDiscussion;
+    if (!swarm || !boardCursor) return;
+    host.error = '';
+    const version = boardVersion;
+    try {
+      await loadBoard(swarm, discussionId, boardCursor);
+    } catch (cause) {
+      if (boardCurrent(version, swarm, discussionId))
+        host.error = failureText(cause);
     }
   }
 
@@ -416,7 +458,7 @@ export function createSwarmPageBoard(host) {
       await host.refresh();
       host.showResumeFailures(result);
     } catch (cause) {
-      host.error = cause.message;
+      host.error = failureText(cause);
     } finally {
       posting = false;
     }
@@ -774,7 +816,7 @@ export function createSwarmPageBoard(host) {
       void Promise.resolve(
         host.navigate(() => revealPost(Number(post[1]))),
       ).catch((cause) => {
-        if (!host.disposed) host.error = cause.message;
+        if (!host.disposed) host.error = failureText(cause);
       });
       return;
     }
@@ -793,7 +835,7 @@ export function createSwarmPageBoard(host) {
         void Promise.resolve(
           host.navigate(() => host.inspectParticipant(participant)),
         ).catch((cause) => {
-          if (!host.disposed) host.error = cause.message;
+          if (!host.disposed) host.error = failureText(cause);
         });
       return;
     }
@@ -816,7 +858,7 @@ export function createSwarmPageBoard(host) {
       /\.(avif|gif|jpe?g|mp3|mp4|ogg|png|svg|webm)(?:$|[?#])/i.test(url);
     void (
       isMedia ? host.client.openMedia(url) : host.client.openLink(url)
-    ).catch((cause) => (host.error = cause.message));
+    ).catch((cause) => (host.error = failureText(cause)));
   }
 
   return {
@@ -880,8 +922,8 @@ export function createSwarmPageBoard(host) {
     reset,
     reload,
     forgetPageReferences,
-    loadDiscussions,
-    loadBoard,
+    loadMoreDiscussions,
+    loadEarlierPosts,
     loadNewerPosts,
     jumpToNewest,
     chooseDiscussion,
