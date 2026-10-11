@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   flushSync,
   mount,
@@ -55,6 +55,29 @@ const menuItem = (label) =>
     (item) =>
       item.querySelector('.context-menu__label').textContent.trim() === label,
   );
+
+// The narrow page's picker: the trigger shows the chosen entry; the open
+// panel lists the entries by group.
+const picker = () => document.getElementById('swarm-picker');
+const pickerValue = () =>
+  picker()
+    .querySelector('.searchable-dropdown__trigger-label')
+    .textContent.trim();
+const pickerPanel = () => document.querySelector('.swarm-bar__panel');
+const pickerOption = (label) =>
+  [...pickerPanel().querySelectorAll('[role="option"]')].find(
+    (option) =>
+      option
+        .querySelector('.searchable-dropdown__option-label')
+        .textContent.trim() === label,
+  );
+
+async function pick(label) {
+  picker().click();
+  await vi.waitFor(() => expect(pickerOption(label)).toBeDefined());
+  pickerOption(label).click();
+  await tick();
+}
 
 // Opens the shown Run's menu in its header.
 async function openRunMenu() {
@@ -343,6 +366,125 @@ describe('SwarmPage overview', () => {
     await tick();
     flushSync();
     expect(button(NEW_RUN).getAttribute('aria-current')).toBeNull();
+  });
+
+  it("offers the pane's entries as one grouped picker that loads more in its footer", async () => {
+    const { bridge, operation } = createBridge();
+    overrideOperations(operation, {
+      'profiles.list': async ({ cursor }, fallback) =>
+        cursor
+          ? { entries: [{ ...profile, id: 'prf-b', name: 'Second swarm' }] }
+          : { ...(await fallback()), cursor: 'profiles-2' },
+      'swarms.list': ({ cursor }) =>
+        cursor
+          ? { entries: [{ id: 'swr-c', title: 'Archived', state: 'stopped' }] }
+          : {
+              entries: [
+                { id: 'swr-a', title: 'Investigate', state: 'running' },
+                { id: 'swr-b', title: 'Survey', state: 'interrupted' },
+              ],
+              cursor: 'swarms-2',
+            },
+    });
+    await render(bridge);
+    expect(pickerValue()).toBe(NEW_RUN);
+    expect(picker().getAttribute('aria-label')).toBe(
+      t('swarm.sidebar.picker', { current: NEW_RUN }),
+    );
+    picker().click();
+    await vi.waitFor(() => expect(pickerPanel()).not.toBeNull());
+    const labels = (selector) =>
+      [...pickerPanel().querySelectorAll(selector)].map((node) =>
+        node.textContent.trim(),
+      );
+    expect(labels('.searchable-dropdown__group-label')).toEqual([
+      t('swarm.profiles'),
+      ACTIVE_RUNS,
+      INACTIVE_RUNS,
+    ]);
+    expect(labels('.searchable-dropdown__option-label')).toEqual([
+      NEW_RUN,
+      'Research',
+      'Investigate',
+      'Survey',
+    ]);
+    // A Run's secondary text is its row's second line.
+    expect(
+      pickerOption('Survey')
+        .querySelector('.searchable-dropdown__option-meta')
+        .textContent.trim(),
+    ).toBe(t('swarm.state.interrupted'));
+    const footer = pickerPanel().querySelector('.searchable-dropdown__footer');
+    expect(footer.textContent.trim()).toBe(t('swarm.sidebar.more'));
+    footer.click();
+    await vi.waitFor(() =>
+      expect(labels('.searchable-dropdown__option-label')).toEqual([
+        NEW_RUN,
+        'Research',
+        'Second swarm',
+        'Investigate',
+        'Survey',
+        'Archived',
+      ]),
+    );
+    expect(operation).toHaveBeenCalledWith('profiles.list', {
+      limit: 100,
+      cursor: 'profiles-2',
+    });
+    expect(operation).toHaveBeenCalledWith('swarms.list', {
+      limit: 100,
+      cursor: 'swarms-2',
+    });
+    expect(
+      pickerPanel().querySelector('.searchable-dropdown__footer'),
+    ).toBeNull();
+  });
+
+  it('opens the chosen picker entry through the leave guards and follows what the page shows', async () => {
+    const { bridge } = createBridge();
+    await render(bridge);
+    await pick('Investigate');
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    expect(bridge.pushRoute).toHaveBeenLastCalledWith('/swarms/swr-a');
+    expect(pickerValue()).toBe('Investigate');
+    await pick('Research');
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-profile-editor')).not.toBeNull(),
+    );
+    expect(bridge.pushRoute).toHaveBeenLastCalledWith('/profiles/prf-a');
+    expect(pickerValue()).toBe('Research');
+    await pick(NEW_RUN);
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-profile-editor')).toBeNull(),
+    );
+    expect(pickerValue()).toBe(NEW_RUN);
+    // Back and Forward move the value with the shown place.
+    bridge.goTo('/swarms/swr-a');
+    await vi.waitFor(() => expect(pickerValue()).toBe('Investigate'));
+    // A changed new Swarm asks before the picker leaves it.
+    document
+      .querySelector(`.swarm-bar button[aria-label="${NEW_SWARM}"]`)
+      .click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('swarm-profile-name')).not.toBeNull(),
+    );
+    expect(pickerValue()).toBe(NEW_SWARM);
+    fill('swarm-profile-name', 'Unfinished');
+    await tick();
+    await pick('Investigate');
+    await vi.waitFor(() => expect(dialog()).not.toBeNull());
+    [...dialog().querySelectorAll('button')]
+      .find(
+        (node) => node.textContent.trim() === t('swarm.profile.keepEditing'),
+      )
+      .click();
+    await tick();
+    expect(document.getElementById('swarm-profile-name').value).toBe(
+      'Unfinished',
+    );
+    expect(pickerValue()).toBe(NEW_SWARM);
   });
 
   it('shows the route the host sends and pushes Swarm and tab choices as steps', async () => {
@@ -674,12 +816,22 @@ describe('Swarm Run start', () => {
 
 describe('Swarm Run controls', () => {
   it.each([
-    ['cancelled', []],
+    ['cancelled', 'the next Run', []],
     // An open Run whose participants all idle is stopped before deletion.
-    ['idle', ['swarms.stop']],
+    ['idle', 'the next Run', ['swarms.stop']],
+    // A narrow page hides the pane, so its picker takes the focus.
+    ['cancelled', 'the picker of a narrow page', []],
   ])(
-    'confirms deletion of a %s Run, keeps the profile, clears the selected Swarm and focuses the next Run',
-    async (state, before) => {
+    'confirms deletion of a %s Run, keeps the profile, clears the selected Swarm and focuses %s',
+    async (state, focus, before) => {
+      const narrow = focus === 'the picker of a narrow page';
+      if (narrow) {
+        // jsdom lays nothing out: the pane reports itself hidden.
+        Element.prototype.checkVisibility = function () {
+          return !this.closest('.swarm-pane');
+        };
+        onTestFinished(() => delete Element.prototype.checkVisibility);
+      }
       const detail = {
         ...structuredClone(swarm),
         state,
@@ -738,7 +890,7 @@ describe('Swarm Run controls', () => {
       expect(button('Research')).toBeDefined();
       await vi.waitFor(() =>
         expect(document.activeElement).toBe(
-          document.querySelector('[data-run-id="swr-b"]'),
+          narrow ? picker() : document.querySelector('[data-run-id="swr-b"]'),
         ),
       );
     },

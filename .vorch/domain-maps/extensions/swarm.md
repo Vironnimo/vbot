@@ -631,6 +631,15 @@ context-menu key or Shift+F10) only repeats actions reachable elsewhere: a
 Swarm's Edit, Start a Run (the start form with that Swarm, the goal focused) and
 Delete…, and a Run's menu as in its header. The pinned New Run row returns to
 the start form and is marked current while that form shows.
+At <=640px of iframe width a bar above the work area replaces the pane
+(`swarmSidebar.css`): one `SearchableDropdown` with the pane's entries, then
+New Swarm. Its entries are New Run, then the Swarms, Active Runs and Inactive
+Runs as labelled groups, each Swarm and Run with its row's second line under
+its name; while a new Swarm's editor shows, it has an entry of its own. The
+picker's value is what the work area shows, also after Back/Forward; choosing
+an entry does what clicking its row does, through the same navigation and
+leave guards, and the panel's footer loads the next page of each list that has
+one (`SwarmPage.test.js`).
 The form prefills the directory after Swarm selection and preserves manual edits
 during invalidation. Project defaults resolve through the catalog; unchanged
 defaults retain the explicit Project selection. A changed directory is sent as
@@ -822,7 +831,8 @@ participants as links to their Activity and, while others still work, carries
 Resume itself. Delete… is disabled with "Stop the Run first" while anything
 works; confirming deletion of an open Run whose participants are all inactive
 stops it first, then deletes. After a deletion, the deleted row's neighbour in
-the pane (or New Run) takes focus (`SwarmPage.test.js`).
+the pane (or New Run) takes focus, or the picker while a narrow page hides the
+pane (`SwarmPage.test.js`).
 The view is the page's scroller without a top inset: the header carries
 `--page-inset-top` as its own padding, so the tab row (`TabList` with
 `idPrefix="swarm-run"`) sticks at the scroller's top edge on the page

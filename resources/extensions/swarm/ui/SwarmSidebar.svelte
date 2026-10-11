@@ -7,6 +7,7 @@
     isContextMenuKey,
   } from '../../../../webui/src/components/ui/contextMenu.js';
   import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
+  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
   import { tooltip } from '../../../../webui/src/lib/tooltip.js';
   import {
     profileSummary,
@@ -22,9 +23,83 @@
   // and the Runs, open ones first. A row opens its Swarm or Run; its context
   // menu holds the same actions as the Run header's menu, the profile editor
   // and the start form, so nothing is reachable by right click alone.
+  // On a narrow page the bar after the pane replaces it: one picker with the
+  // same entries, whose value is what the work area shows, and New Swarm.
   let { model } = $props();
 
   const startVisible = $derived(!model.editor && !model.selectedSwarm);
+
+  // The picker's entries; choosing one does what clicking its row does.
+  const entries = $derived([
+    { value: 'start', label: t('swarm.newRun'), open: model.openStart },
+    // A new Swarm's editor has no row; while it shows, it has an entry.
+    ...(model.editor === 'new'
+      ? [
+          {
+            value: 'profile:new',
+            label: t('swarm.newProfile'),
+            group: t('swarm.profiles'),
+            open: () => model.navigate(() => model.openProfile()),
+          },
+        ]
+      : []),
+    ...model.profiles.map((profile) => ({
+      value: `profile:${profile.id}`,
+      label: profile.name,
+      secondaryLabel: profileSummary(profile),
+      group: t('swarm.profiles'),
+      open: () => model.navigate(() => model.openProfile(profile)),
+    })),
+    ...model.runGroups.flatMap((group) =>
+      group.entries.map((swarm) => ({
+        value: `run:${swarm.id}`,
+        label: runTitle(swarm),
+        secondaryLabel: runRowDetail(swarm, model.now),
+        group: group.label,
+        open: () => model.navigate(() => model.openSwarm(swarm.id)),
+      })),
+    ),
+  ]);
+
+  // What the work area shows, as the picker's value and its name; a Run
+  // beyond the loaded pages has no entry and names itself as placeholder.
+  const shown = $derived.by(() => {
+    if (model.editor === 'new')
+      return { value: 'profile:new', label: t('swarm.newProfile') };
+    if (model.editor) {
+      const value = `profile:${model.editor.id}`;
+      return { value, label: entryLabel(value) ?? model.editor.name };
+    }
+    if (model.selectedRun) {
+      const value = `run:${model.selectedRun.id}`;
+      return { value, label: entryLabel(value) ?? runTitle(model.selectedRun) };
+    }
+    return { value: 'start', label: t('swarm.newRun') };
+  });
+
+  function entryLabel(value) {
+    return entries.find((entry) => entry.value === value)?.label;
+  }
+
+  // The panel's footer loads the next page of each list that has one.
+  const moreLabel = $derived(
+    model.profilesCursor && model.swarmsCursor
+      ? t('swarm.sidebar.more')
+      : model.profilesCursor
+        ? t('swarm.profiles.more')
+        : model.swarmsCursor
+          ? t('swarm.swarms.more')
+          : '',
+  );
+
+  function loadMore() {
+    if (model.profilesCursor) void model.loadMoreProfiles();
+    if (model.swarmsCursor) void model.loadMoreSwarms();
+  }
+
+  function choose(value) {
+    void entries.find((entry) => entry.value === value)?.open();
+  }
 
   // The open row context menu, or null.
   let menu = $state(null);
@@ -41,22 +116,26 @@
   }
 </script>
 
+{#snippet newSwarmButton()}
+  <Button
+    variant="tertiary"
+    icon
+    ariaLabel={t('swarm.newProfile')}
+    tooltip={t('swarm.newProfile')}
+    loading={model.pending === 'new-profile'}
+    onClick={() => model.navigate(() => model.openProfile())}
+    ><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+      <path d="M7 1.5v11M1.5 7h11" />
+    </svg></Button
+  >
+{/snippet}
+
 <aside class="secondary-pane swarm-pane" aria-labelledby="swarm-pane-title">
   <div class="secondary-pane__header swarm-pane__header">
     <span id="swarm-pane-title" class="secondary-pane__title"
       >{t('swarm.profiles')}</span
     >
-    <Button
-      variant="tertiary"
-      icon
-      ariaLabel={t('swarm.newProfile')}
-      tooltip={t('swarm.newProfile')}
-      loading={model.pending === 'new-profile'}
-      onClick={() => model.navigate(() => model.openProfile())}
-      ><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
-        <path d="M7 1.5v11M1.5 7h11" />
-      </svg></Button
-    >
+    {@render newSwarmButton()}
   </div>
   <div class="secondary-pane__pinned swarm-pane__pinned">
     <Button
@@ -156,5 +235,21 @@
       >{/if}
   </div>
 </aside>
+
+<nav class="swarm-bar" aria-label={t('swarm.profiles')}>
+  <SearchableDropdown
+    id="swarm-picker"
+    value={shown.value}
+    options={entries}
+    placeholder={shown.label}
+    ariaLabel={t('swarm.sidebar.picker', { current: shown.label })}
+    triggerClass="swarm-bar__picker"
+    panelClass="swarm-bar__panel"
+    footerActionLabel={moreLabel}
+    onFooterAction={loadMore}
+    onValueChange={choose}
+  />
+  {@render newSwarmButton()}
+</nav>
 
 <ContextMenu {menu} onClose={() => (menu = null)} />
