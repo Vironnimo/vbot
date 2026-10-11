@@ -8,11 +8,13 @@
   gap: 16px;
   min-width: 0;
 }
-/* The page's scroller insets its content by --page-inset-top; the header
-   sticks above that inset, at the scroller's top edge. */
+/* The header sticks below what the Run shell makes stick above the panels
+   (--swarm-run-sticky-top, an offset below the scroller's top padding, as
+   the Board's newer-posts bar uses it); without that, at the scroller's top
+   edge, above the page's --page-inset-top. */
 .swarm-page .activity-head {
   position: sticky;
-  top: calc(-1 * var(--page-inset-top, 0px));
+  top: var(--swarm-run-sticky-top, calc(-1 * var(--page-inset-top, 0px)));
   z-index: 1;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
