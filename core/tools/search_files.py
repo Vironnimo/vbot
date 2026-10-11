@@ -869,6 +869,15 @@ def _directory_selected(
     return selected
 
 
+def _restart_past_the_end(query: SearchQuery, total: int) -> None:
+    """Show the first page when offset passes the last result, as after a changed query."""
+    if total and query.offset >= total:
+        query.notes.append(
+            f"offset {query.offset} is past the last result, so the first page is shown."
+        )
+        query.offset = 0
+
+
 @dataclass
 class _Outcome:
     page: Page
@@ -937,6 +946,7 @@ def _search(
     if query.mode in LIST_MODES:
         found.finish(query)
         total = len(found.entries)
+        _restart_past_the_end(query, total)
         return _Outcome(entry_page(found.entries, query), found, total, total, [])
 
     patterns = query.patterns
@@ -978,14 +988,17 @@ def _search(
                 "No file contents match pattern, so the files whose names match it were listed."
             )
             found.entries = named
+            _restart_past_the_end(query, len(named))
             return _Outcome(entry_page(named, query), found, len(named), len(named), patterns)
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:
             found.ignored.extend(ignored_scan(binary, query, scope, context, budget))
     if query.mode != "content":
+        _restart_past_the_end(query, len(found.entries))
         page = entry_page(found.entries, query)
         return _Outcome(page, found, len(found.entries), lines_total, patterns)
+    _restart_past_the_end(query, lines_total)
     window = content_window(found.entries, query.offset, query.limit)
     events: dict[tuple[int, bytes], list[dict[str, Any]]] = {}
     for index, scope in enumerate(scopes):

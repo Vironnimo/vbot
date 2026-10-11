@@ -395,8 +395,6 @@ def summary(
     whole_page = page.offset == 0 and end >= total
     if whole_page:
         text = f"Found {whole}."
-    elif page.returned == 0:
-        text = f"No results at offset {page.offset}; the search found {whole}."
     else:
         text = f"Showing {shown} {page.offset + 1}-{end} of {whole}."
     cut = page.cut

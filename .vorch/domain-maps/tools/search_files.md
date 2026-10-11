@@ -357,6 +357,10 @@ Paging:
 - Context never shows a match that the page leaves out.
 - Continuation repeats a live query, so file edits between pages or between the
   two phases can shift page boundaries.
+- An `offset` at or past the last result shows the first page, with a `note`
+  (`_restart_past_the_end`). Swarm Agents kept an offset after changing the
+  query and got only `No results at offset 80; the search found 11 ...`
+  (Sessions, 2026-10).
 - No matches is a success; its summary says how many files were searched.
 
 The display (`_display_details`) shows the user the `results` text, an info

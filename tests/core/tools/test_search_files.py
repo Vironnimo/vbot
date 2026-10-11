@@ -465,10 +465,12 @@ def test_summary_states_totals_and_the_continuation(project: Path) -> None:
     last = search(project, pattern="needle", path="src", offset=6)
     assert last["summary"] == "Showing matching lines 7-7 of 7 matching lines in 4 files."
     assert "next_offset" not in last
-    beyond = search(project, pattern="needle", path="src", offset=50)
-    assert beyond["summary"] == (
-        "No results at offset 50; the search found 7 matching lines in 4 files."
-    )
+    # An offset past the end, as after a query changed between pages, starts over.
+    beyond = search(project, pattern="needle", path="src", offset=7, limit=2)
+    assert (beyond["content"], beyond["next_offset"]) == (first["content"], 2)
+    assert "offset 7" in beyond["note"]
+    listed = search(project, path="src", offset=5)
+    assert listed["content"] == search(project, path="src")["content"] and listed["note"]
     counts = search(project, pattern="needle", path="src", output="count", limit=1)
     assert counts["summary"] == (
         "Showing files 1-1 of 7 matching lines in 4 files. Continue with offset 1."
