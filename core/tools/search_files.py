@@ -926,11 +926,11 @@ def _names_matching(
     cwd: Path,
     binary: Path,
     budget: SearchBudget,
-) -> tuple[list[Entry], list[Path]]:
+) -> tuple[list[Entry], _Found]:
     """Return the searched files whose name or shown path the patterns match.
 
-    The second value names the paths ignore files excluded from the listing,
-    which are the ones they excluded from the search.
+    The second value is the listing they were taken from; its ``ignored`` names
+    the paths ignore files excluded, which are the ones they excluded from the search.
     """
     listed = _Found()
     for index, scope in enumerate(scopes):
@@ -941,11 +941,78 @@ def _names_matching(
     try:
         matched = match_names(binary, query, patterns, names, context, budget)
     except SearchRefusedError:
-        return [], listed.ignored
+        return [], listed
     named = [
         entry for entry in listed.entries if entry.label in matched or entry.path.name in matched
     ]
-    return named, listed.ignored
+    return named, listed
+
+
+# One file name or path in a content pattern: words, "-" and "/", dots escaped or not.
+_FILE_NAME = re.compile(r"[\w\-/]+(?:\\?\.[\w\-]+)*")
+_EXTENSION = re.compile(r"[\w\-]\\?\.([\w\-]+)$")
+# Shown names of files whose names match a content pattern, before "and N more".
+_NAMED_FILES_SHOWN = 5
+
+
+def _file_name_alternatives(pattern: str) -> list[str] | None:
+    """Return the file names a content pattern lists, or ``None`` when it is no such list.
+
+    ``verify.py``, ``tools/corpus\\.py`` and ``(verify|corpus|fuzz)`` list names;
+    one word without an extension, such as an identifier, does not.
+    """
+    body = pattern.removeprefix("^").removesuffix("$")
+    group = re.fullmatch(r"\((?:\?:)?([^()]*)\)", body)
+    if group:
+        body = group.group(1)
+    alternatives = [
+        alternative.removeprefix("\\b").removesuffix("\\b").removeprefix("^").removesuffix("$")
+        for alternative in body.split("|")
+    ]
+    if not all(_FILE_NAME.fullmatch(alternative) for alternative in alternatives):
+        return None
+    if len(alternatives) == 1 and not _EXTENSION.search(alternatives[0]):
+        return None
+    return alternatives
+
+
+def _note_named_files(
+    context: ToolContext,
+    query: SearchQuery,
+    scopes: list[Scope],
+    cwd: Path,
+    binary: Path,
+    budget: SearchBudget,
+) -> None:
+    """Name the files a file-list search's pattern matches by name, as the Agent may mean them.
+
+    Without such files, a pattern naming an extension the searched files have
+    states that none has a matching name; other patterns get no note.
+    """
+    patterns = query.patterns
+    if len(patterns) != 1 or "--invert-match" in query.rg_args:
+        return
+    alternatives = _file_name_alternatives(patterns[0])
+    if alternatives is None:
+        return
+    named, listed = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
+    if budget.stopped or not listed.complete:
+        return
+    if named:
+        shown = ", ".join(entry.label for entry in named[:_NAMED_FILES_SHOWN])
+        rest = len(named) - _NAMED_FILES_SHOWN
+        more = f", and {rest} more (add --files to args to list them)" if rest > 0 else ""
+        query.notes.append(
+            f"The listed files contain text matching pattern; files whose names match it: "
+            f"{shown}{more}."
+        )
+        return
+    suffixes = {entry.path.suffix.casefold() for entry in listed.entries}
+    extensions = (_EXTENSION.search(alternative) for alternative in alternatives)
+    if any(match and f".{match.group(1).casefold()}" in suffixes for match in extensions):
+        query.notes.append(
+            "The listed files contain text matching pattern; no file name matches it."
+        )
 
 
 def _search(
@@ -1010,9 +1077,8 @@ def _search(
         and not budget.stopped
     ):
         # No content matches, so a pattern that matches file names was meant for them.
-        named, found.ignored = _names_matching(
-            context, query, scopes, patterns, cwd, binary, budget
-        )
+        named, listed = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
+        found.ignored = listed.ignored
         if named:
             query.mode = "list_files"
             query.notes.append(
@@ -1027,6 +1093,14 @@ def _search(
             found.ignored.extend(ignored_scan(binary, query, scope, context, budget))
     if query.mode != "content":
         _restart_past_the_end(query, len(found.entries))
+        if (
+            query.mode == "files_with_matches"
+            and lines_total
+            and not query.offset
+            and found.complete
+            and not budget.stopped
+        ):
+            _note_named_files(context, query, scopes, cwd, binary, budget)
         page = entry_page(found.entries, query)
         return _Outcome(page, found, len(found.entries), lines_total, patterns)
     _restart_past_the_end(query, lines_total)

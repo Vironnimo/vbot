@@ -146,7 +146,38 @@ async def test_a_content_search_without_matches_lists_files_whose_names_match(
     )
     # Content matches keep the search a content search.
     contents = await dispatch(project, {**arguments, "pattern": arguments["pattern"] + "|load"})
-    assert "note" not in contents["data"] and "matching line" in contents["data"]["summary"]
+    assert "matching line" in contents["data"]["summary"]
+    assert contents["data"].get("note") != result["data"]["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "named"),
+    [
+        # File names as a pattern find the files mentioning them; the note says which
+        # files have those names (Swarm Sessions, 2026-10).
+        ({"pattern": "app.py|verify.py", "output": "files"}, ["src/app.py"]),
+        ({"pattern": "(app|verify)", "output": "files"}, ["src/app.py"]),
+        ({"pattern": r"verify\.py", "output": "files"}, []),
+        # No claim about names: an identifier, an extension no searched file has, content output.
+        ({"pattern": "verify", "output": "files"}, None),
+        ({"pattern": "verify.py", "output": "files", "glob": "*.md"}, None),
+        ({"pattern": "notes.get|verify", "output": "files"}, None),
+        ({"pattern": "verify.py"}, None),
+    ],
+)
+async def test_a_file_list_search_for_file_names_names_the_files_with_those_names(
+    project: Path, arguments: dict, named: list[str] | None
+):
+    (project / "notes.md").write_text("Run app.py, then verify.py.\n")
+    result = await dispatch(project, arguments)
+    assert "notes.md" in result["data"]["content"]
+    if named is None:
+        assert "note" not in result["data"]
+        return
+    note = result["data"]["note"]
+    labels = ["src/app.py", "src/view.ts", "docs/guide.md", "notes.md"]
+    assert [label for label in labels if label in note] == named
 
 
 @pytest.mark.asyncio

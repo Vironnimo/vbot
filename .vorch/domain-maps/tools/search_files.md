@@ -129,6 +129,21 @@ Modes:
   and got only `No matches`; a note naming the matching files did not change
   its next call either (agent-eval 2026-10-10). Coverage:
   `test_search_files_arguments.py::test_a_content_search_without_matches_lists_files_whose_names_match`.
+- A files search (`output: "files"`) that does find contents, with one pattern
+  shaped like file names (`_file_name_alternatives`: alternatives of words, `-`,
+  `/` and dots, optionally in one group with anchors, and either an extension or
+  at least two alternatives, so `verify.py`, `tools/corpus\.py`,
+  `(verify|corpus|fuzz)`), also matches the searched files' names on its first
+  page (`_note_named_files`). Named files give the `note` `The listed files
+  contain text matching pattern; files whose names match it: <up to 5 labels>[,
+  and N more (add --files to args to list them)].` Without any, the `note` `The
+  listed files contain text matching pattern; no file name matches it.` appears
+  only when an alternative ends in an extension some searched file has, so
+  `config.get` or a glob-narrowed selection makes no claim. `-v` skips it.
+  Swarm Agents sent `verify.py|corpus.py|fuzz.py` with `output: "files"` to find
+  files that did not exist yet and read the files mentioning them as an answer
+  (Sessions, 2026-10). Coverage:
+  `test_a_file_list_search_for_file_names_names_the_files_with_those_names`.
 
 The owner normalizer repairs common encodings and wrappers. It also accepts field
 names from other search Tools and command-line habits when their meaning is exact
