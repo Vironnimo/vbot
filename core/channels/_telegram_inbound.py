@@ -229,14 +229,16 @@ class TelegramInboundBuffer:
         """End the delays and hand every still buffered album and comment to the conversation.
 
         The conversation outlives this adapter, so buffered turns are dispatched
-        now instead of dropped. A dispatch already under way ends with the adapter,
-        like any inbound handling it cancels.
+        now instead of dropped. Only the timers still waiting are cancelled: a flush
+        that already took its turn out of the buffer completes its hand-off, since
+        Telegram confirmed that update and would never deliver it again.
         """
-        background_tasks = list(self._tasks)
+        waiting_timers = [*self._album_tasks.values(), *self._forward_comment_tasks.values()]
         self._album_tasks.clear()
         self._forward_comment_tasks.clear()
-        for task in background_tasks:
+        for task in waiting_timers:
             task.cancel()
+        background_tasks = list(self._tasks)
         if background_tasks:
             await asyncio.gather(*background_tasks, return_exceptions=True)
 

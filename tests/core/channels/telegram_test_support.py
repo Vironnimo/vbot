@@ -302,6 +302,7 @@ def make_bot() -> SimpleNamespace:
         answer_callback_query=AsyncMock(),
         edit_message_text=AsyncMock(),
         edit_message_reply_markup=AsyncMock(),
+        shutdown=AsyncMock(),
     )
 
 
