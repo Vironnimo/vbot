@@ -296,6 +296,13 @@ _ESCAPED_QUOTE_HINT = (
     "(double quotes inside stay literal), or pass longer code through a here-string "
     "piped to the program, such as `@'...'@ | python -`."
 )
+# Bash's ways to put a single quote into a single-quoted string; PowerShell
+# doubles it instead.
+_BASH_QUOTE_IDIOMS = ("'\\''", "'\"'\"'")
+_BASH_QUOTE_HINT = (
+    "PowerShell has no '\\'' or '\"'\"' escape. Inside single quotes, write a single quote "
+    "twice, as in 'it''s'."
+)
 # A PowerShell here-string: @" or @' ends its line, and "@ or '@ starts a line.
 _HERE_STRING_OPENER = re.compile(r"@(['\"])[ \t]*\r?\n")
 # '' before a word is a quote doubled as in a single-quoted string; an empty
@@ -353,6 +360,8 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
             )
         if _BASH_SYNTAX.search(outside):
             return _BASH_SYNTAX_HINT
+        if _has_bash_quote_idiom(outside):
+            return _BASH_QUOTE_HINT
         return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
     if not _POWERSHELL or "SyntaxError" not in output:
         return None
@@ -361,9 +370,60 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
             'Inside a @"..."@ here-string, \\" stays a backslash and a quote. Write the '
             "quotes there without backslashes, or use @'...'@, which also keeps $ literal."
         )
+    if any(quote == "'" and _has_bash_quote_idiom(text) for quote, text in here_strings):
+        return (
+            "Inside a @'...'@ here-string, '\\'' and '\"'\"' stay as written. Write each quote "
+            "once there."
+        )
     if any(quote == "'" and _DOUBLED_QUOTE.search(text) for quote, text in here_strings):
         return "Inside a @'...'@ here-string, '' stays two quotes. Write each quote once there."
+    if _has_bash_quote_idiom(outside):
+        return _BASH_QUOTE_HINT
     return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
+
+
+def _has_bash_quote_idiom(text: str) -> bool:
+    return any(idiom in text for idiom in _BASH_QUOTE_IDIOMS)
+
+
+# A word of the command, between blanks, quotes, parentheses and separators.
+_COMMAND_WORD = re.compile(r"[^\s'\"(),;|&]++")
+# A program reports a wildcard word it was given; at most this many such words are checked.
+_NATIVE_GLOB_WORDS = 20
+
+
+def _hint_native_glob(failure: _Failure) -> str | None:
+    """Name the wildcard PowerShell passed to a program unexpanded.
+
+    Bash expands ``minidb/*.py`` before the program starts; PowerShell expands
+    wildcards only for its own cmdlets, so ``python -m py_compile minidb/*.py``
+    failed with ``[Errno 22] Invalid argument: 'minidb/*.py'``. A program that
+    reports the word as written was given it; a cmdlet reports the resolved path.
+    A quoted word was meant for the program, and git matches pathspecs itself.
+    """
+    command, output = failure.command, failure.output
+    if not _POWERSHELL or "ParserError" in output or "did not match any file" in output:
+        return None
+    words: dict[str, None] = {}
+    for match in _COMMAND_WORD.finditer(command):
+        word = match[0]
+        quoted = match.start() > 0 and command[match.start() - 1] in "'\""
+        if (
+            "*" in word
+            and not quoted
+            and not word.startswith("-")
+            and any(mark in word for mark in "/\\.")
+        ):
+            words[word] = None
+            if len(words) == _NATIVE_GLOB_WORDS:
+                break
+    for word in words:
+        if re.search(rf"(?:^|[\s'\"`]){re.escape(word)}(?=[\s'\"`:,]|$)", output, re.M):
+            return (
+                f"PowerShell passes `{word}` to programs as written, without expanding the "
+                f"wildcard. Pass the matching files instead: `(Get-ChildItem {word}).FullName`."
+            )
+    return None
 
 
 def _hint_dev_null(failure: _Failure) -> str | None:
@@ -388,6 +448,16 @@ _PYTHON_SCRIPT = re.compile(
     r"(?:-[A-Za-z]\w*\s+)*['\"]?([^\s;&|<>'\"]+\.py)\b",
     re.I | re.M,
 )
+
+
+# Python run with -m, which puts the working directory on the import path.
+_PYTHON_MODULE_RUN = re.compile(
+    r"(?:^|[\s;&|('\"])(?:[^\s;&|()'\"]*[/\\])?(?:python[\d.]*|py)(?:\.exe)?['\"]?\s+"
+    r"(?:-[A-Za-z]\w*\s+)*?-m(?=\s)",
+    re.I | re.M,
+)
+# A traceback frame; <string> and <stdin> are code passed with -c or on stdin.
+_TRACEBACK_FILE = re.compile(r'^[ \t]*File "([^"\n]*)"', re.M)
 
 
 def _hint_module_not_found(failure: _Failure) -> str | None:
@@ -416,6 +486,13 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
             "run its interpreter, otherwise install the package."
         )
     script = _script_in_subdirectory(failure.command, failure.output, workdir)
+    if script is None and _imported_elsewhere(failure, match.start()):
+        return (
+            f"'{name}' is in the working directory, but the Python process that could not "
+            "import it runs with another working directory or import path, such as a process "
+            "the command started. Start that process in the working directory, or add the "
+            "working directory to its PYTHONPATH."
+        )
     if script is None:
         return (
             f"'{name}' is in the working directory, but the working directory is not on "
@@ -433,6 +510,20 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
         f"working directory, where '{name}' is. Run it as a module from the working "
         f"directory instead: {run_as}."
     )
+
+
+def _imported_elsewhere(failure: _Failure, error_at: int) -> bool:
+    """Whether the failed import ran in a Python process outside the working directory.
+
+    Python run with -m, or code run with -c or from stdin, has the directory it
+    starts in on its import path. When such an import of a module in the working
+    directory fails, the process ran elsewhere: often a process the command
+    started, such as a test's subprocess. "Run it with -m" was then wrong advice.
+    """
+    if _PYTHON_MODULE_RUN.search(failure.command):
+        return True
+    frames = _TRACEBACK_FILE.findall(failure.output, 0, error_at)
+    return bool(frames) and frames[-1] in ("<string>", "<stdin>")
 
 
 def _in_workdir(module: str, workdir: Path) -> bool:
@@ -588,6 +679,7 @@ _OUTPUT_HINTS: tuple[Callable[[_Failure], str | None], ...] = (
     _hint_powershell_alias_flags,
     _hint_select_string_recurse,
     _hint_dev_null,
+    _hint_native_glob,
     _hint_module_not_found,
     _hint_already_exists,
     _hint_port_in_use,

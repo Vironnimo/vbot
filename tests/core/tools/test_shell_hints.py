@@ -253,17 +253,38 @@ def test_platform_specific_hints_follow_the_host_shell(
             "Get-ChildItem: Cannot find path 'C:\\nope' because it does not exist.",
             None,
         ),
+        # A program reports the wildcard it got unexpanded.
+        (
+            "python -m py_compile minidb/*.py minidb/storage/*.py",
+            "[Errno 22] Invalid argument: 'minidb/*.py'",
+            "PowerShell passes `minidb/*.py` to programs as written",
+        ),
+        # A cmdlet expands it and reports the resolved path; git and a quoted
+        # pattern match it themselves.
+        (
+            "Get-Content logs/*.log -Tail 5",
+            "Get-Content: Cannot find path 'C:\\work\\logs\\*.log' because it does not exist.",
+            None,
+        ),
+        ("git add src/*.py", "fatal: pathspec 'src/*.py' did not match any files", None),
+        ("rg -g '*.py' todo", "rg: *.py: No such file or directory (os error 2)", None),
     ],
 )
 def test_bash_habits_in_powershell_name_the_powershell_form(
-    command: str, output: str, expected: str | None
+    monkeypatch: pytest.MonkeyPatch, command: str, output: str, expected: str | None
 ) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
     hint = annotate_failure(command, 1, output)
 
     if expected is None:
         assert hint is None
     else:
         assert hint is not None and hint.startswith(expected)
+    if "*" in command:
+        # Bash expands wildcards before a program starts.
+        monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+        assert annotate_failure(command, 1, output) is None
 
 
 @pytest.mark.parametrize(
@@ -435,6 +456,18 @@ def test_hints_name_only_the_tools_the_agent_is_offered(
         ),
         # Quotes a here-string keeps literal and empty strings explain nothing.
         ("@'\nprint(''.join(parts))\nprint(\"a\\\"b\"\n'@ | python -", "SyntaxError: x", None),
+        # Bash's quote inside single quotes, in PowerShell's own code and in a here-string.
+        (
+            "Get-Content x | Where-Object { $_ -match 'it'\\''s' }",
+            "Unexpected token '\\''' in expression or statement.",
+            "PowerShell has no '\\'' or '\"'\"' escape.",
+        ),
+        (
+            "python -c @'\nprint('\"'\"'hi'\"'\"')\n'@",
+            "SyntaxError: invalid syntax",
+            "Inside a @'...'@ here-string, '\\'' and '\"'\"' stay as written.",
+        ),
+        ("python -c @'\nprint(\"it's\")\n'@", "SyntaxError: invalid syntax", None),
     ],
 )
 def test_bash_syntax_and_quoting_that_break_powershell_are_named(
@@ -567,6 +600,25 @@ def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -
             "Python cannot import 'shop.api': 'shop' is a single module, not a package, so it "
             "has no submodules. Import 'api' from the module that defines it.",
         ),
+        # Python run with -m, or code from -c or stdin, has the directory it starts in
+        # on its import path: the import failed in a process that ran elsewhere, such
+        # as one the command started, and -m is no fix.
+        (
+            "python -m unittest tests.test_crash",
+            "AssertionError: the writer failed; stderr=Traceback (most recent call last):\n"
+            '  File "<string>", line 3, in <module>\n'
+            "ModuleNotFoundError: No module named 'shop'\n",
+            True,
+            "runs with another working directory or import path",
+        ),
+        (
+            "cd tests; @'\nimport shop\n'@ | python -",
+            "Traceback (most recent call last):\n"
+            '  File "<stdin>", line 1, in <module>\n'
+            "ModuleNotFoundError: No module named 'shop'\n",
+            True,
+            "runs with another working directory or import path",
+        ),
     ],
 )
 def test_import_failures_name_where_python_looked(
@@ -574,4 +626,6 @@ def test_import_failures_name_where_python_looked(
 ) -> None:
     workdir = _project(tmp_path) if workdir_known else None
 
-    assert annotate_failure(command, 1, output, workdir=workdir) == expected
+    hint = annotate_failure(command, 1, output, workdir=workdir)
+
+    assert hint is not None and expected in hint
