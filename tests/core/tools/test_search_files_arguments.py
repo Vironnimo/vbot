@@ -207,6 +207,29 @@ async def test_file_list_output_for_a_pattern_matching_every_line_lists_every_fi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "content", "noted"),
+    [
+        ({"glob": "src"}, "src/app.py\nsrc/view.ts", True),
+        ({"glob": ["src/", "!*.ts"]}, "src/app.py", True),
+        ({"glob": "./docs", "pattern": "load"}, "docs/guide.md:1:Call load() first.", True),
+        ({"glob": "src", "path": "src"}, "src/app.py\nsrc/view.ts", True),
+        # A name that is no directory, an excluding glob and a directory listing stay as sent.
+        ({"glob": "missing"}, "", False),
+        ({"glob": "!src"}, "docs/guide.md", False),
+        ({"glob": "src", "args": ["--dirs"]}, "src/", False),
+    ],
+)
+async def test_a_glob_naming_a_directory_matches_the_files_below_it(
+    project: Path, arguments: dict, content: str, noted: bool
+):
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    assert result["data"].get("content", "") == content
+    assert ("note" in result["data"]) is noted
+
+
+@pytest.mark.asyncio
 async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path) -> None:
     (project / "notes.txt").write_text("match *.py files\n")
     result = await dispatch(project, {"pattern": "*.py", "args": ["-F"]})

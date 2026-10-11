@@ -213,6 +213,13 @@ letter as `[xX]`; `-t py` then finds `b.PY` (first-use probe, 2026-10).
 `--no-glob-case-insensitive` keeps ripgrep's case-sensitive types. Globs without `/` match
 names at any depth. A glob with `/` is anchored at the cwd scope and also at each
 searched directory root (`rg_globs`), and `./` anchors like `/`.
+ripgrep matches globs against files, so a glob that is exactly the name or path
+of a directory below the cwd or a root (`minidb`, `src/minidb/`) matched
+nothing; `_directory_globs` adds `**/minidb/**` (or `src/minidb/**`, `/x/**`
+for an anchored one) right after it, with a `note`. Excluding globs, globs with
+glob syntax and `--dirs` listings (which match directories already) stay as
+sent. Swarm Agents passed directories as `glob` and got `No files found.`
+(Sessions, 2026-10).
 
 Scopes (`_scopes`): roots inside the cwd share one run at the cwd, and each
 outside root gets its own run, so labels stay cwd-relative or absolute.

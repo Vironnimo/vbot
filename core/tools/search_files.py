@@ -562,6 +562,37 @@ def _glob_root(text: str, cwd: Path, query: SearchQuery) -> Path | None:
     return base
 
 
+_GLOB_SYNTAX = re.compile(r"[*?\[\]{}]")
+
+
+def _directory_globs(query: SearchQuery, roots: list[Path], cwd: Path) -> None:
+    """Also match the files below a directory that a glob names exactly.
+
+    ripgrep matches globs against files, so glob "minidb" matched nothing even
+    with a directory minidb. Such a glob also selects that directory's files,
+    with a note. Directory listings match globs against directories already.
+    """
+    if query.mode == "list_dirs":
+        return
+    bases = [cwd, *(root for root in roots if root.is_dir())]
+    globs: list[str] = []
+    for glob in query.globs:
+        globs.append(glob)
+        if glob.startswith("!") or _GLOB_SYNTAX.search(glob):
+            continue
+        name = glob.replace("\\", "/").removeprefix("./").strip("/")
+        if Path(name).is_absolute() or {"", ".", ".."} & set(name.split("/")):
+            continue
+        if not any((base / name).is_dir() for base in bases):
+            continue
+        if glob.startswith("/"):
+            globs.append(f"/{name}/**")
+        else:
+            globs.append(f"{name}/**" if "/" in name else f"**/{name}/**")
+        query.notes.append(f'glob "{glob}" names a directory, so the files below it were matched.')
+    query.globs = globs
+
+
 def _missing_root_message(raw: str, root: Path, cwd: Path) -> str:
     message = f"Path not found: {path_label(root, cwd)}"
     suggestions = corrected_paths(root, cwd)
@@ -1042,6 +1073,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                 + " Nothing was searched. Correct path, or omit it to search the working "
                 "directory.",
             )
+        _directory_globs(query, roots.paths, cwd)
         outcome = _search(context, query, roots.paths, cwd, binary, budget)
     except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
