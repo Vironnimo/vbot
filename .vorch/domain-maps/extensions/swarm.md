@@ -646,7 +646,8 @@ its name; while a new Swarm's editor shows, it has an entry of its own. The
 picker's value is what the work area shows, also after Back/Forward; choosing
 an entry does what clicking its row does, through the same navigation and
 leave guards, and the panel's footer loads the next page of each list that has
-one (`SwarmPage.test.js`).
+one. As the page's navigation, its panel may grow to 560px within the viewport
+(`SwarmPage.test.js`).
 The form prefills the directory after Swarm selection and preserves manual edits
 during invalidation. Project defaults resolve through the catalog; unchanged
 defaults retain the explicit Project selection. A changed directory is sent as

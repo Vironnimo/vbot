@@ -59,6 +59,17 @@ describe('computePanelPosition', () => {
     expect(
       computePanelPosition(trigger, { contentHeight: 300 }).placement,
     ).toBe('top');
+
+    // Room for more than the default cap: 240 by default, up to a caller's
+    // `maxHeight` within the viewport (800 - 130 - 12 = 658 below).
+    const high = triggerAt({ top: 100, bottom: 130 });
+    expect(computePanelPosition(high).optionsMaxHeight).toBe(240);
+    expect(
+      computePanelPosition(high, { maxHeight: 560 }).optionsMaxHeight,
+    ).toBe(560);
+    expect(
+      computePanelPosition(high, { maxHeight: 900 }).optionsMaxHeight,
+    ).toBe(800 - 130 - GAP);
   });
 
   it('right-aligns a wider floating menu and widens a narrow panel to its minimum within the viewport', () => {

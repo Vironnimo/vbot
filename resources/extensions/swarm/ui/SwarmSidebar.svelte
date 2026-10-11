@@ -29,6 +29,10 @@
 
   const startVisible = $derived(!model.editor && !model.selectedSwarm);
 
+  // The picker is the narrow page's navigation, so its panel may take most of
+  // the height below it rather than a form picker's few rows.
+  const PICKER_MAX_HEIGHT = 560;
+
   // The picker's entries; choosing one does what clicking its row does.
   const entries = $derived([
     { value: 'start', label: t('swarm.newRun'), open: model.openStart },
@@ -245,6 +249,7 @@
     ariaLabel={t('swarm.sidebar.picker', { current: shown.label })}
     triggerClass="swarm-bar__picker"
     panelClass="swarm-bar__panel"
+    panelMaxHeight={PICKER_MAX_HEIGHT}
     footerActionLabel={moreLabel}
     onFooterAction={loadMore}
     onValueChange={choose}

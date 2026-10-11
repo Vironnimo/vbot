@@ -9,6 +9,7 @@
 const EDGE_PADDING = 8;
 const OFFSET = 4;
 const MIN_HEIGHT = 96;
+// The scroll area's default cap; `computePanelPosition`'s `maxHeight` moves it.
 const MAX_HEIGHT = 240;
 const FLIP_THRESHOLD = 200;
 const STATUS_DOTS = new Set(['idle', 'running', 'unread']);
@@ -94,7 +95,9 @@ export function portal(node, target = document.body) {
  * the viewport. `reservedHeight` accounts for non-scrolling chrome (e.g. a
  * search header) when sizing the scroll area. Callers may supply a wider
  * `panelWidth` (or a `minWidth` floor for the trigger width) and align its end
- * edge to a compact trigger.
+ * edge to a compact trigger. `maxHeight` replaces the default cap of the
+ * scroll area, for a picker that serves as a page's navigation; the viewport
+ * still limits it.
  *
  * @returns {{ placement: 'top' | 'bottom', left: number, width: number,
  *             verticalRule: string, optionsMaxHeight: number }}
@@ -107,6 +110,7 @@ export function computePanelPosition(
     panelWidth = null,
     minWidth = 0,
     horizontalAlign = 'start',
+    maxHeight = MAX_HEIGHT,
   } = {},
 ) {
   const rect = triggerElement.getBoundingClientRect();
@@ -120,13 +124,13 @@ export function computePanelPosition(
     window.innerHeight - rect.bottom - OFFSET - EDGE_PADDING;
   const availableAbove = rect.top - OFFSET - EDGE_PADDING;
   // How tall the panel wants to be: the measured content (plus any reserved
-  // chrome such as a search header), capped to MAX_HEIGHT, when the caller can
+  // chrome such as a search header), capped to `maxHeight`, when the caller can
   // measure it; otherwise a fixed threshold. Flip above only when the panel
   // does not fit below AND there is more room above — so a trigger near the
   // viewport bottom opens upward instead of spilling off-screen.
   const desiredHeight =
     contentHeight != null
-      ? Math.min(contentHeight + reservedHeight, MAX_HEIGHT)
+      ? Math.min(contentHeight + reservedHeight, maxHeight)
       : FLIP_THRESHOLD;
   const useAbove =
     availableBelow < desiredHeight && availableAbove > availableBelow;
@@ -134,7 +138,7 @@ export function computePanelPosition(
   const available = useAbove ? availableAbove : availableBelow;
   const optionsMaxHeight = Math.max(
     MIN_HEIGHT,
-    Math.min(available - reservedHeight, MAX_HEIGHT),
+    Math.min(available - reservedHeight, maxHeight),
   );
 
   const triggerRight = rect.right ?? rect.left + rect.width;

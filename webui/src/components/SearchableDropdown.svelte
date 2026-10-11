@@ -43,6 +43,9 @@
     triggerContent = undefined,
     // The panel is at least this wide even under a narrower trigger.
     panelMinWidth = 0,
+    // A taller cap for the options than the default, for a picker that serves
+    // as a page's navigation; the viewport still limits it.
+    panelMaxHeight = undefined,
     panelClass = '',
     // Optional action row pinned under the options (e.g. the model pickers'
     // "show all models" toggle). Clicking it keeps the panel open so the
@@ -453,6 +456,7 @@
       computePanelPosition(triggerElement, {
         reservedHeight: SEARCH_HEADER_HEIGHT,
         minWidth: panelMinWidth,
+        maxHeight: panelMaxHeight,
       });
 
     panelPlacement = placement;
