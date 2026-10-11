@@ -9,10 +9,13 @@ Where. The evidence is the number of words copied correctly. Below 3, the copy m
 be exact up to spacing. From 3, it may misspell one word per 3 correct words, and a
 line the edit keeps may lack or add words the file's line has (a stale or
 misremembered context line), one word or sign per 2 correct words. From 12, it may
-also differ in other ways, with at least 4 correct words for each difference, but
-never by substituting or dropping a name: identifiers (an underscore, a digit or
-an inner capital) and names evidenced by call, declaration or member syntax name
-something else, such as a sibling function. A passage of 3 or more lines is placed as
+also differ in other ways, with at least 4 correct words for each difference. No
+difference may add, drop or substitute a name: identifiers (an underscore, a digit
+or an inner capital), names evidenced by call, declaration or member syntax, and
+the words between a call's or declaration's parentheses outside quotes (its
+arguments or parameters) name something else, such as a sibling function or
+another signature; an edit that copies ``def f(self, x)`` for the file's static
+``def f(x)`` misreads what it edits. A passage of 3 or more lines is placed as
 well by exactly copied first and last lines of at least 2 words each around similar
 lines, unless it contradicts a copied name the file actually holds. Each line keeps
 its place: a kept line must hold at least half of its file
@@ -122,6 +125,10 @@ _FOLD = str.maketrans({**_TYPOGRAPHIC_NORMALIZATION, **dict.fromkeys(_INVISIBLE,
 _EM_DASH = _TYPOGRAPHIC_NORMALIZATION["\u2014"]
 _HYPHENS = (["-"], ["-", "-"])
 _BACKSLASH = "\\"
+# Names: the signs that delimit a string or a bracketed group in code.
+_QUOTES = frozenset({'"', "'", "`"})
+_OPENING = frozenset("([{")
+_CLOSING = frozenset(")]}")
 _INLINE_SPACE = " \t"
 # ``moved``: spacing that differs in line breaks, which a change must not rest on.
 # ``alike``: a hyphen for an em dash, or a lone backslash only the copy holds.
@@ -332,13 +339,16 @@ def _code_names(text: _Text) -> set[int]:
 
     This is evidence in a copied locator, not a language parser. Calls,
     declarations and member/namespace access identify names that cannot simply
-    substitute for one another. Plain prose keeps its existing tolerance.
+    substitute for one another, and so do the words between a call's or
+    declaration's parentheses outside quotes: its arguments or parameters. Plain
+    prose keeps its existing tolerance.
     """
     tokens = text.tokens
     indices = [index for index, token in enumerate(tokens) if not _is_space(token.key)]
     names = {index for index in indices if _identifier(tokens[index].key)}
     declarations = {"def", "fn", "func", "function", "class", "struct", "enum", "trait"}
     modifiers = {"pub", "public", "private", "protected", "static", "async", "export", "abstract"}
+    openers: list[int] = []
     for position, index in enumerate(indices):
         token = tokens[index]
         if not _is_word(token.key) or token.key.isdigit():
@@ -347,6 +357,7 @@ def _code_names(text: _Text) -> set[int]:
             following = tokens[indices[position + 1]]
             if following.key == "(" and token.end == following.start:
                 names.add(index)
+                openers.append(position + 1)
             if (
                 position
                 and tokens[indices[position - 1]].key in declarations
@@ -354,6 +365,8 @@ def _code_names(text: _Text) -> set[int]:
                 and following.key in {"(", ":", "{", "<"}
             ):
                 names.add(index)
+                if following.key == "(":
+                    openers.append(position + 1)
         for width, separators in ((1, ["."]), (2, [":", ":"]), (2, ["-", ">"])):
             end = position + width + 1
             if end >= len(indices):
@@ -370,7 +383,44 @@ def _code_names(text: _Text) -> set[int]:
             ):
                 continue
             names.update((index, indices[end]))
+    for opener in dict.fromkeys(openers):
+        names.update(_argument_words(tokens, indices[opener:]))
     return names
+
+
+def _argument_words(tokens: Sequence[_Token], indices: Sequence[int]) -> Iterator[int]:
+    """The words within the parentheses opening at ``indices[0]``, outside quotes.
+
+    The parentheses may close on a later line or not within the text at all. A
+    word directly before a quote is a string prefix (``f"..."``), not a name.
+    """
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for position, index in enumerate(indices):
+        key = tokens[index].key
+        if escaped:
+            escaped = False
+        elif key == _BACKSLASH:
+            escaped = True
+        elif quote is not None:
+            quote = None if key == quote else quote
+        elif key in _QUOTES:
+            quote = key
+        elif key in _OPENING:
+            depth += 1
+        elif key in _CLOSING:
+            depth -= 1
+            if depth <= 0:
+                return
+        elif _is_word(key) and not key.isdigit():
+            following = tokens[indices[position + 1]] if position + 1 < len(indices) else None
+            if (
+                following is None
+                or following.key not in _QUOTES
+                or tokens[index].end != following.start
+            ):
+                yield index
 
 
 def _line_key(text: str) -> str:
@@ -916,8 +966,9 @@ def _anchored(file: _File, old: Sequence[str], start: int) -> bool:
 class _Placed:
     """A qualifying passage; ``text`` is None when the change does not fit it.
 
-    ``differed`` and ``kept_differed`` name replaced and kept lines that differed
-    from the copy, as (1-based line, the caller's copy of it).
+    ``differed`` names replaced lines that differed from the copy, as (1-based line,
+    the caller's copy of it); ``kept_differed`` names kept lines that differed, as
+    (1-based line once the edit is applied, the file's line as excerpt).
     """
 
     start: int
@@ -1097,7 +1148,9 @@ def _place_lines(
         if segment.kept:
             output.append(file.texts[first])
             if file.keys[first] != _line_key(old[segment.old]):
-                kept_differed.append((first + 1, old[segment.old]))
+                # The kept line is named where the edit leaves it.
+                excerpt = _excerpt(file.texts[first], old[segment.old])
+                kept_differed.append((start + segment.new + 1, excerpt))
             continue
         wanted = _read(file.ending.join(new[segment.new : segment.new + segment.added]))
         # How the copy escapes anywhere in the passage bars what every written line holds.
@@ -1234,7 +1287,7 @@ def _result(
         ((item.start, after_end),),
         differed=_excerpts(file, item.differed),
         respelled=item.respelled,
-        kept_differed=_excerpts(file, item.kept_differed),
+        kept_differed=item.kept_differed,
     )
 
 

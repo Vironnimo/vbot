@@ -367,8 +367,15 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   otherwise, one difference per 4 correct words, but never where either side of
   a difference names another target: lexical identifiers (underscore, digit, or
   inner capital), plus names evidenced by calls, declarations and member/namespace
-  access even when they are plain lowercase words. This evidence covers omitted
-  names too, so substring recovery cannot drop a row ID to find another row.
+  access even when they are plain lowercase words, and the words between a call's
+  or declaration's parentheses outside quotes (arguments and parameters). This
+  evidence covers omitted names too, so substring recovery cannot drop a row ID
+  to find another row, and it holds on kept lines: a kept line that adds or lacks
+  a name is not a stale context line but another signature or call (Swarm Run
+  2026-10: an `old_string` copying `def f(self, x)` for the file's
+  `@staticmethod` `def f(x)` was placed by the kept-line gap rule, and the
+  method inserted above it took the decorator from the original). Words in
+  quotes stay text.
   Misspellings still qualify under the rules below. Exactly copied first and last lines (3+ lines, 2+ words
   each) also place a passage around similar lines (SequenceMatcher ratio >= 0.5,
   or 0.7 when the anchor pair repeats), but cannot override a copied name that
@@ -420,7 +427,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   nothing is applied elsewhere and the hunk fails `text_not_found`. Warnings
   name each replaced line and each kept line that differed (`... was edited
   anyway; it read:` / `... was left as it reads:`, long lines from just before
-  the first difference) and each respelled word (`copy_warnings`). Tests:
+  the first difference) and each respelled word (`copy_warnings`). A replaced
+  line is numbered as it was; a kept line where the edit leaves it, so the
+  number matches the region shown above the note. Tests:
   `test_copy_match.py`, plus the
   patch, field, Skill and Wiki suites.
 - Only changed lines are emitted from the replacement; context lines keep their

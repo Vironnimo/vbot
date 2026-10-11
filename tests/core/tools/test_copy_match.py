@@ -88,6 +88,28 @@ def test_misspelling_in_a_changed_line_is_placed_by_exact_context() -> None:
                 ("+", "    return 1"),
             ],
         ),
+        # Parameters and arguments are names: one added or left out on a kept line
+        # names another signature or call (a decorator above it may not hold).
+        (
+            "    @staticmethod\n    def process(data, limit):\n        pass\n\nprocess(self)\n",
+            [
+                (" ", "    def process(self, data, limit):"),
+                ("-", "        pass"),
+                ("+", "        return 1"),
+            ],
+        ),
+        (
+            "def process(data, strict):\n    pass\n",
+            [(" ", "def process(data):"), ("-", "    pass"), ("+", "    return 1")],
+        ),
+        (
+            "    result = process(data, strict)\n    return result\n",
+            [
+                (" ", "    result = process(data)"),
+                ("-", "    return result"),
+                ("+", "    return result or None"),
+            ],
+        ),
         # Words under 4 characters, other digits, and words the file holds are not
         # misspellings.
         (
@@ -185,35 +207,31 @@ def test_a_change_next_to_another_difference_is_refused() -> None:
 
 
 @pytest.mark.parametrize(
-    ("content", "context", "expected"),
+    ("held", "context"),
     [
         # A stale or misremembered kept line may add or lack a few words.
-        (
-            "def process(data):\n    value = “x”\n    return True\n",
-            "def process(data, strict):",
-            "def process(data):\n    value = “y”\n    return True\n",
-        ),
-        (
-            "def process(data, strict):\n    value = “x”\n    return True\n",
-            "def process(data):",
-            "def process(data, strict):\n    value = “y”\n    return True\n",
-        ),
+        ("# Run the tests before you push.", "# Run all the tests before you push."),
+        ("# Run all the tests before you push.", "# Run the tests before you push."),
+        # Words in quotes are text, not names, even within a call.
+        ('log("Saving the file now")', 'log("Saving the file")'),
     ],
 )
-def test_kept_lines_may_lack_or_add_a_few_words(content: str, context: str, expected: str) -> None:
+def test_kept_lines_may_lack_or_add_a_few_words(held: str, context: str) -> None:
+    content = f"    value = “x”\n    return True\n{held}\n"
     lines = [
-        (" ", context),
         ("-", '    value = "x"'),
         ("+", '    value = "y"'),
+        ("+", "    count = 0"),
         (" ", "    return True"),
+        (" ", context),
     ]
 
     found = _applied(match_copied_edit(content, lines))
 
-    assert found.new_content == expected
+    assert found.new_content == f"    value = “y”\n    count = 0\n    return True\n{held}\n"
+    # The kept line is named where the edit leaves it.
     assert copy_warnings(found) == [
-        "Line 1 did not match your old text exactly and was left as it reads: "
-        + content.split("\n")[0]
+        f"Line 4 did not match your old text exactly and was left as it reads: {held}"
     ]
 
 
