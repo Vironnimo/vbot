@@ -34,7 +34,7 @@ INTERACTION_EXT_SOURCE = (
     "async def _toggle(event, responder):\n"
     "    await responder.answer()\n"
     "def register(api):\n"
-    "    api.register_interaction_handler('chk', _toggle)\n"
+    "    api.register_interaction_handler('tap', _toggle)\n"
 )
 
 
@@ -88,7 +88,7 @@ def _tap(runtime: Runtime) -> bool:
         chat_id="1",
         user_id="2",
         message_id="3",
-        data="chk:milk",
+        data="tap:milk",
         buttons=(),
     )
     handled = asyncio.run(
