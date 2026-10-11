@@ -14,8 +14,9 @@
   let { model } = $props();
 
   const busy = $derived(model.pending === 'settings');
+  const invalid = $derived(Object.keys(model.deliveryErrors).length > 0);
   const applyReason = $derived(
-    Object.keys(model.deliveryErrors).length
+    invalid
       ? t('swarm.communication.invalid')
       : model.deliveryChangeLines.length
         ? ''
@@ -55,7 +56,9 @@
             <p class="swarm-dialog__note">
               {t('swarm.communication.effect')}
             </p>{:else}<p class="swarm-dialog__note">
-              {t('swarm.communication.noChanges')}
+              {invalid
+                ? t('swarm.communication.invalidNote')
+                : t('swarm.communication.noChanges')}
             </p>{/if}
         </section>
         {#if model.settingsError}<Banner variant="error" role="alert"

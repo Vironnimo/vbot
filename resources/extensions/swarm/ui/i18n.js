@@ -152,6 +152,7 @@ export default Object.freeze({
   'swarm.communication.proposed': 'Proposed changes',
   'swarm.communication.noChanges': 'No changes to apply.',
   'swarm.communication.invalid': 'Correct the batching limits first',
+  'swarm.communication.invalidNote': 'Correct the batching limits first.',
   'swarm.communication.effect':
     'Changes affect pending and future delivery only. Already delivered message bodies are not replayed.',
   'swarm.applying': 'Applying…',

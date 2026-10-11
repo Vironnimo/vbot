@@ -931,6 +931,17 @@ describe('Swarm Run controls', () => {
     expect(changes()).toContain(routeChange);
     expect(changes()).not.toContain(invalidMessage);
     expect(button(t('swarm.apply')).disabled).toBe(true);
+    // With no valid change left, the note points to the limits.
+    await choose(
+      'swarm-live-delivery-main-receive',
+      t('swarm.delivery.receive.all'),
+    );
+    expect(changes()).toContain(t('swarm.communication.invalidNote'));
+    expect(changes()).not.toContain(t('swarm.communication.noChanges'));
+    await choose(
+      'swarm-live-delivery-main-receive',
+      t('swarm.delivery.receive.pull'),
+    );
     disclosure().click();
     await tick();
     expect(limitsShown()).toBe(true);
