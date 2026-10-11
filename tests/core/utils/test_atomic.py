@@ -38,9 +38,9 @@ def test_atomic_write_cleans_staging_file_after_success(tmp_path: Path) -> None:
     target = tmp_path / "settings.json"
     layout = DataDirectoryLayout(tmp_path)
 
-    atomic_write_text(target, "{}\n", data_dir=tmp_path)
+    atomic_write_text(target, "{\n}\n", data_dir=tmp_path)
 
-    assert target.read_text(encoding="utf-8") == "{}\n"
+    assert target.read_bytes() == b"{\n}\n"
     assert list(layout.atomic_temporary.iterdir()) == []
 
 

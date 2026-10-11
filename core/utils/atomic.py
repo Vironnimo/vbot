@@ -6,6 +6,8 @@ partially written file. On POSIX, the affected directory entries are also
 flushed after the replace. The temp file lives adjacent to the target by
 default (guaranteeing the same filesystem for the replace); pass ``data_dir``
 to stage it under the data directory's canonical atomic-temporary area instead.
+``atomic_write_text`` writes the text verbatim: newlines stay ``\n`` on every
+platform instead of turning into ``\r\n`` on Windows.
 Pass ``mode`` (e.g. ``0o600`` for secret control records) to create the temp
 file with those exact permissions and re-assert them on the target after the
 replace. On Windows a replace that fails because another program briefly holds
@@ -85,7 +87,7 @@ def atomic_write_text(
     """Atomically write ``text`` to ``target_path`` (see module docstring)."""
 
     def write(temp_path: Path) -> None:
-        with temp_path.open("w", encoding=encoding) as handle:
+        with temp_path.open("w", encoding=encoding, newline="\n") as handle:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())

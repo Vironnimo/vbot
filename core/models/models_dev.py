@@ -266,6 +266,7 @@ def write_canonical_models(
         json.dumps({"models": dict(projected)}, indent=2, sort_keys=True, ensure_ascii=False)
         + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     return canonical_path
 
@@ -299,6 +300,7 @@ def seed_canonical_overrides_structure(models_dir: Path) -> Path | None:
     overrides_path.write_text(
         json.dumps(seed, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     return overrides_path
 
@@ -368,6 +370,7 @@ def _refresh_provider_prices(
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",
+            newline="\n",
         )
 
 

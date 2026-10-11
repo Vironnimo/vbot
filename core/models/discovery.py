@@ -379,7 +379,9 @@ async def refresh_models(
             "models": final_models,
         }
         output_path.write_text(
-            json.dumps(output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            json.dumps(output_data, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
         )
     except (
         httpx.HTTPError,
