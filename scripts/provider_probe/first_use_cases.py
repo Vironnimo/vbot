@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from pathlib import Path
 from typing import Any
+
+from core.tools.search_files import interpret_search_call
 
 BASE_FILES = {
     "src/a.py": "alpha alpha\nbeta\nUPPER\n",
@@ -513,17 +514,22 @@ def assess(
                 scope = fixture.repo / "src"
                 absence_verified = False
                 for call in selected:
+                    if call["name"] != "search_files":
+                        continue
                     data = call["result"]["data"]
+                    # Results do not echo the query, so read it from the call.
+                    try:
+                        query = interpret_search_call(call["arguments"])
+                    except ValueError:
+                        continue
                     try:
                         covers_pattern = any(
-                            re.search(pattern, "retired_handler")
-                            for pattern in data.get("patterns", [])
+                            re.search(pattern, "retired_handler") for pattern in query.patterns
                         )
                     except re.error:
                         covers_pattern = False
-                    covers_scope = any(
-                        scope.is_relative_to(Path(root)) for root in data.get("searched_paths", [])
-                    )
+                    roots = [(fixture.cwd / root).resolve() for root in query.roots or ["."]]
+                    covers_scope = any(scope.is_relative_to(root) for root in roots)
                     absence_verified |= bool(
                         covers_pattern
                         and covers_scope

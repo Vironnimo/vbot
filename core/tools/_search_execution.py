@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import errno
 import io
 import json
 import os
@@ -21,7 +22,7 @@ import tempfile
 import threading
 import time
 import unicodedata
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -64,6 +65,9 @@ _DEBUG_MESSAGE_BYTES = 1024 * 1024
 # Defaults that differ from ripgrep's own; later args items override them.
 DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
 ALWAYS_EXCLUDED = "!.git"
+# Python bytecode caches, skipped like .git unless the call asks for them (``skips_caches``).
+CACHES_EXCLUDED = "!__pycache__"
+_CACHE_NAMES = ("__pycache__", ".pyc", ".pyo")
 # Arguments that select files by type; --type-add and --type-clear only define types.
 _FILE_TYPE_FILTERS = ("--type=", "--type-not=")
 
@@ -345,13 +349,28 @@ class SearchRefusedError(RuntimeError):
     """ripgrep refused the query; the message says how to correct it."""
 
 
-def rg_globs(globs: list[str], prefixes: list[str]) -> list[str]:
+def skips_caches(query: SearchQuery) -> bool:
+    """Whether the query skips ``__pycache__`` directories, as it does by default.
+
+    ``-u`` and ``--no-ignore`` include them, and so does a selecting glob that
+    names them or compiled Python files: once skipped, no later glob can select
+    the files inside. A root inside one is searched anyway, as by ripgrep.
+    """
+    if any(argument in {"--unrestricted", "--no-ignore"} for argument in query.rg_args):
+        return False
+    selecting = [glob for glob in query.globs if not glob.startswith("!")]
+    selecting += [arg for arg in query.rg_args if arg.startswith("--iglob=") and "=!" not in arg]
+    return not any(name in glob.casefold() for glob in selecting for name in _CACHE_NAMES)
+
+
+def rg_globs(globs: list[str], prefixes: list[str], *, skip_caches: bool = False) -> list[str]:
     """Return ripgrep glob arguments for one scope.
 
     A glob with a slash is tried relative to the scope's directory and relative
     to each searched root below it, so ``tests/*.py`` and ``*.py`` under the
     root ``tests`` both select ``tests/a.py``. ``./`` anchors like a leading
-    ``/``. ``.git`` is always excluded, after every other glob.
+    ``/``. ``.git`` is always excluded, and with ``skip_caches`` ``__pycache__``,
+    after every other glob.
     """
     arguments: list[str] = []
     for glob in globs:
@@ -366,6 +385,8 @@ def rg_globs(globs: list[str], prefixes: list[str]) -> list[str]:
             for prefix in prefixes:
                 variants.append(f"/{prefix}{body}" if body.startswith("/") else f"{prefix}/{body}")
         arguments.extend(f"--glob={'!' if negated else ''}{variant}" for variant in variants)
+    if skip_caches:
+        arguments.append(f"--glob={CACHES_EXCLUDED}")
     arguments.append(f"--glob={ALWAYS_EXCLUDED}")
     return arguments
 
@@ -374,7 +395,7 @@ def _base_arguments(query: SearchQuery, scope: Scope, *, globs: bool = True) -> 
     return [
         *DEFAULT_ARGUMENTS,
         *query.rg_args,
-        *(rg_globs(query.globs, scope.prefixes) if globs else []),
+        *(rg_globs(query.globs, scope.prefixes, skip_caches=skips_caches(query)) if globs else []),
     ]
 
 
@@ -482,7 +503,12 @@ def list_scan(
     """
     if directories:
         excluding = [glob for glob in query.globs if glob.startswith("!")]
-        selection = [*DEFAULT_ARGUMENTS, *query.rg_args, *rg_globs(excluding, scope.prefixes)]
+        skip_caches = skips_caches(query)
+        selection = [
+            *DEFAULT_ARGUMENTS,
+            *query.rg_args,
+            *rg_globs(excluding, scope.prefixes, skip_caches=skip_caches),
+        ]
         report = True
     else:
         selection = _base_arguments(query, scope)
@@ -691,6 +717,8 @@ _IO_ERROR = re.compile(
     r" \(os error (?P<code>\d+)\)$"
 )
 _PATTERN_ERRORS = ("regex parse error", "PCRE2: error compiling pattern")
+# OS error codes for a missing file: Windows' file and path not found, POSIX ENOENT.
+_NOT_FOUND = frozenset({2, 3}) if os.name == "nt" else frozenset({errno.ENOENT})
 
 
 def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
@@ -714,6 +742,9 @@ def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
         match = _IO_ERROR.match(message)
         if match is not None:
             code = int(match["code"])
+            if code in _NOT_FOUND and not os.path.lexists(scope.cwd / match["path"]):
+                # Deleted after the walk listed it, such as a SQLite journal: nothing to read.
+                continue
             error = OSError(None, None, None, code) if os.name == "nt" else OSError(code, "")
             label = _label(match["path"], scope, cwd)
             result.warnings.append(f"Could not read {label}: {os_error_reason(error)}.")
@@ -820,13 +851,58 @@ def _any_case(glob: str) -> str:
     return "".join(result)
 
 
-def explain_failure(message: str) -> str:
-    """Say what ripgrep refused and how to correct the call. Nothing was searched."""
+_REGEX_ERROR = re.compile(
+    r"regex parse error:\n {4}(?P<wrapped>[^\n]*)\n {4}(?P<pad> *)(?P<caret>\^+)\n"
+    r"error: (?P<kind>[^\n]+)"
+)
+
+
+def _pattern_error(message: str, patterns: Sequence[str]) -> tuple[str, str] | None:
+    """Restate a regex parse error against the pattern as sent.
+
+    ripgrep reports the error in its combined form ``(?:p1)|(?:p2)`` with the
+    caret placed for that form. Returns the error kind, and the offending pattern
+    over a caret line under the offending part; None when the error does not map
+    onto one pattern, such as a PCRE2 error or one about ripgrep's own wrapper.
+    """
+    match = _REGEX_ERROR.search(message)
+    if match is None or match["wrapped"] != "|".join(f"(?:{pattern})" for pattern in patterns):
+        return None
+    start = len(match["pad"])
+    begin = 0
+    for pattern in patterns:
+        begin += len("(?:")
+        if begin <= start < begin + len(pattern):
+            local = start - begin
+            width = min(len(match["caret"]), len(pattern) - local)
+            kind = match["kind"]
+            if kind.endswith("escape sequence"):
+                kind += f' "{pattern[local : local + width]}"'
+            return kind, f"    {pattern}\n    {' ' * local}{'^' * width}"
+        begin += len(pattern) + len(")|")
+    return None
+
+
+def explain_failure(message: str, patterns: Sequence[str] = ()) -> str:
+    """Say what ripgrep refused and how to correct the call. Nothing was searched.
+
+    *patterns* are the regular expressions the call sent, in ripgrep's order, so
+    a regex error can point at the pattern as sent.
+    """
     if any(marker in message for marker in _PATTERN_ERRORS):
+        advice = (
+            'To search literal text, add "-F" to args; otherwise correct the regular expression.'
+        )
+        mapped = _pattern_error(message, patterns)
+        if mapped is not None:
+            kind, shown = mapped
+            return (
+                "The pattern is not a valid regular expression (ripgrep syntax): "
+                f"{kind}. Nothing was searched.\n{shown}\n{advice}"
+            )
         return (
             "The pattern is not a valid regular expression (ripgrep syntax). Nothing was "
-            f"searched.\n{message}\n"
-            'To search literal text, add "-F" to args; otherwise correct the regular expression.'
+            f"searched.\n{message}\n{advice}"
         )
     if match := re.match(r"unrecognized flag (\S+)", message):
         return (

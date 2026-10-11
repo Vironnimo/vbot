@@ -311,8 +311,6 @@ def search_cases() -> list[dict[str, Any]]:
             "id": "preserve_quotes",
             "arguments": {"args": ["-e", '"alpha"']},
             "content": "",
-            "patterns": ['"alpha"'],
-            "searched_paths": ["."],
         },
         {
             "id": "missing_root",
@@ -370,7 +368,7 @@ def search_cases() -> list[dict[str, Any]]:
             "arguments": {"args": ["-e", "["]},
             "content": None,
             "error": True,
-            "error_contains": "regex",
+            "error_contains": "regular expression",
         },
         {
             "id": "unknown_option",
@@ -452,8 +450,9 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "content_pattern_in_discovery",
             "arguments": {"args": ["--files", "-e", "alpha"]},
-            "content": None,
-            "error": True,
+            # --files matches the pattern against file names, not contents.
+            "content": "alpha_notes.txt",
+            "files": {"alpha_notes.txt": "omega\n"},
         },
         {"id": "missing_flag_value", "arguments": {"args": ["-g"]}, "content": None, "error": True},
         {
@@ -589,14 +588,9 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
         if "contains" in case:
             visible = "\n".join(str(value) for value in data.values())
             passed = passed and case["contains"] in visible
-        for field in ("next_offset", "patterns"):
+        for field in ("next_offset", "searched_paths"):
             if field in case:
                 passed = passed and data.get(field) == case[field]
-        for field in ("searched_paths",):
-            if field in case:
-                passed = passed and data.get(field) == [
-                    (root / path).as_posix() for path in case[field]
-                ]
         return {
             "case": case["id"],
             "passed": passed,

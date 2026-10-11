@@ -441,20 +441,13 @@ def _read_video(label: str, media_type: str) -> JsonObject:
 
 def _list_directory(resolved: Path, arguments: JsonObject, label: str) -> JsonObject:
     """List a directory's entries; reading a directory never counts as reading a file."""
-    names: list[str] = []
     try:
-        with os.scandir(resolved) as entries:
-            for entry in entries:
-                try:
-                    is_directory = entry.is_dir()
-                except OSError:
-                    is_directory = False
-                names.append(entry.name + ("/" if is_directory else ""))
+        with os.scandir(resolved) as scan:
+            entries = list(scan)
     except OSError as error:
         return tool_failure("file_read_error", f"Could not list {label}: {os_error_reason(error)}.")
-    names.sort(key=lambda name: (name.casefold(), name))
     try:
-        return tool_success({"content": render_directory_listing(names, arguments, label)})
+        return tool_success({"content": render_directory_listing(entries, arguments, label)})
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
 

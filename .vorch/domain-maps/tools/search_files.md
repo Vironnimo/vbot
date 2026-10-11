@@ -34,7 +34,8 @@ without arguments returns, read NUL-separated so a name with a line break stays
 whole) and `unselected_names` (which entries of one directory that selection
 leaves out, from ripgrep's `--debug` skip reports). They call
 `native_lines` without a `ToolContext`, so only their budget stops the child, and
-keep the picker on the same selection as the Tool. `core/tools/_path_suggestions.py`
+keep the picker on the same selection as the Tool, `__pycache__` exclusion
+included (the picker marks cache directories as ignored). `core/tools/_path_suggestions.py`
 (shared with `read`) suggests similar paths. The async handler runs the whole
 operation through `run_tool_worker`.
 
@@ -84,15 +85,21 @@ Modes:
 
 - With no pattern, the call lists files. `{}` lists the working directory, and
   `glob` or `path` narrow it.
-- A pattern beside `--files` is rejected with the field that was sent.
-- A pattern beside `--dirs` filters directory names, with a `note`
-  (`name_patterns`). ripgrep matches them (`match_names`): the names go
+- A pattern beside `--files` or `--dirs` filters the listed names, with a
+  `note` (`name_patterns`, `_match_listed_names`): `--files` matches each file's
+  name and shown path, as the name fallback below does; `--dirs` matches
+  directory names. ripgrep matches them (`match_names`): the names go
   NUL-separated through `--null-data` with the query's matching flags (`-i`,
   `-S`, `-F`, `-w`, `-x`, `-v`, `-P`, `--engine`, ...), so the `pattern`
   description's "ripgrep syntax" holds and `-x` compares the whole name. A
   rejected pattern takes the content search's repairs (`pattern_retry`) and
-  otherwise its error, even when there are no directories. Agents sent `--dirs`
-  with `pattern: "^empty$"` (first-use probe, 2026-10).
+  otherwise its error, even when there are no entries. A single non-literal
+  pattern that matches every name (a glob such as `*` or `**/*`, or a regex
+  such as `.`, `.*` or `^(.*)$` without `-v`, `-x` or `-w`) lists everything
+  without a note, since matching it would list the same; a file name glob
+  (`*.ts`) selects as `glob`, with a note. Agents sent `--dirs` with
+  `pattern: "^empty$"` (first-use probe, 2026-10) and `--files` with
+  `pattern: "."` (Swarm Sessions, 2026-10), which was rejected until then.
 - `output: "count"` or context without a pattern is rejected.
 - Context with count or file-list output is dropped with a note (Sessions,
   2026-09: Agents sent `output: "files"` with `context: 3`).
@@ -102,6 +109,12 @@ Modes:
   single, non-literal pattern. Glob-shaped means: no whitespace or `()|^$+\`,
   plus a leading `*`, `**` or `/*.`. A pattern that matches every name (`*`,
   `**/*`, ...) lists all files.
+- With file-list output (`output: "files"`, `-l`), a single non-literal regex
+  that matches every line (`.`, `.*`, `^(.*)$`, `^`, ...) lists every file
+  instead, with a `note`, unless `-v`, `-x` or `-w` narrows it: ripgrep would
+  leave out empty and binary files and count lines nobody asked for. Swarm
+  Agents sent `pattern: "."` with `output: "files"` to list files (Sessions,
+  2026-10).
 - Any other pattern stays a content search, because lines can contain a file
   name too (an import of `app.py`). When a content, files or count search finds
   no match, the handler lists the searched files (same paths, globs and flags)
@@ -116,6 +129,21 @@ Modes:
   and got only `No matches`; a note naming the matching files did not change
   its next call either (agent-eval 2026-10-10). Coverage:
   `test_search_files_arguments.py::test_a_content_search_without_matches_lists_files_whose_names_match`.
+- A files search (`output: "files"`) that does find contents, with one pattern
+  shaped like file names (`_file_name_alternatives`: alternatives of words, `-`,
+  `/` and dots, optionally in one group with anchors, and either an extension or
+  at least two alternatives, so `verify.py`, `tools/corpus\.py`,
+  `(verify|corpus|fuzz)`), also matches the searched files' names on its first
+  page (`_note_named_files`). Named files give the `note` `The listed files
+  contain text matching pattern; files whose names match it: <up to 5 labels>[,
+  and N more (add --files to args to list them)].` Without any, the `note` `The
+  listed files contain text matching pattern; no file name matches it.` appears
+  only when an alternative ends in an extension some searched file has, so
+  `config.get` or a glob-narrowed selection makes no claim. `-v` skips it.
+  Swarm Agents sent `verify.py|corpus.py|fuzz.py` with `output: "files"` to find
+  files that did not exist yet and read the files mentioning them as an answer
+  (Sessions, 2026-10). Coverage:
+  `test_a_file_list_search_for_file_names_names_the_files_with_those_names`.
 
 The owner normalizer repairs common encodings and wrappers. It also accepts field
 names from other search Tools and command-line habits when their meaning is exact
@@ -137,6 +165,16 @@ Other rules:
 - A scalar `args` string that starts with an option and contains no backslash
   splits like a command line. One with backslashes asks for one argument per item
   and shows the split list as an example.
+- A scalar `args` string that broken list syntax wraps (`--files"]`,
+  `['--files']`, `[--dirs]`, `["-i", "-t", "ts"`) is read as its items
+  (`flag_list`, silently) when every item is a ripgrep flag or the value of the
+  valued flag before it, brackets, quotes and commas occur only around items,
+  and no backslash occurs. A valid JSON list is decoded first. Anything else
+  stays as it was: `[u]` remains a pattern operand, `["-e", "[ab]"` the
+  malformed-list error, since a bracket next to a value could belong to a regex
+  or glob class. Swarm Sessions (2026-10): `--files"]` failed as an unknown
+  flag, and `[--dirs]` beside a pattern became the root glob `/[--dirs]` and
+  answered "No matches in 0 searched files".
 - A `path` or `glob` string that is a JSON list of strings is that list.
 
 Roots (`_resolve_roots`):
@@ -174,14 +212,21 @@ Roots (`_resolve_roots`):
 Every ripgrep run gets `DEFAULT_ARGUMENTS`
 (`--no-config --hidden --no-require-git --glob-case-insensitive`), then the
 query's rg arguments, so later `args` override them (`--no-hidden`,
-`--no-glob-case-insensitive`). `--glob=!.git` always comes last. This gives the
-following selection:
+`--no-glob-case-insensitive`). `--glob=!.git` always comes last, preceded by
+`--glob=!__pycache__` unless the call asks for the caches (`skips_caches`). This
+gives the following selection:
 
 - hidden files are included;
 - `.gitignore`, `.ignore`, `.rgignore`, `.git/info/exclude` and the global Git
   excludes apply, also outside Git repositories;
 - binary files are skipped;
-- `.git` is never searched.
+- `.git` is never searched;
+- `__pycache__` directories are skipped unless `args` holds `-u`/`--no-ignore` or
+  a selecting glob names `__pycache__`, `.pyc` or `.pyo`. The exclusion is an
+  override glob, so no later glob can select the files inside; a root inside a
+  cache is still searched, as ripgrep searches explicit roots. Swarm review
+  (2026-10): `__pycache__` entries were 29% of the lines of whole-tree listings,
+  and Agents turned to shell listings instead.
 
 A positive glob overrides ignore rules, as in ripgrep. File types match names in
 any letter case while globs do (the default): ripgrep compares type globs
@@ -191,6 +236,13 @@ letter as `[xX]`; `-t py` then finds `b.PY` (first-use probe, 2026-10).
 `--no-glob-case-insensitive` keeps ripgrep's case-sensitive types. Globs without `/` match
 names at any depth. A glob with `/` is anchored at the cwd scope and also at each
 searched directory root (`rg_globs`), and `./` anchors like `/`.
+ripgrep matches globs against files, so a glob that is exactly the name or path
+of a directory below the cwd or a root (`minidb`, `src/minidb/`) matched
+nothing; `_directory_globs` adds `**/minidb/**` (or `src/minidb/**`, `/x/**`
+for an anchored one) right after it, with a `note`. Excluding globs, globs with
+glob syntax and `--dirs` listings (which match directories already) stay as
+sent. Swarm Agents passed directories as `glob` and got `No files found.`
+(Sessions, 2026-10).
 
 Scopes (`_scopes`): roots inside the cwd share one run at the cwd, and each
 outside root gets its own run, so labels stay cwd-relative or absolute.
@@ -262,7 +314,11 @@ Documented deviations from plain `rg`, all deliberate:
 Diagnostics (`_judge`):
 
 - IO errors (`(os error N)`) become English warnings that name the path, with
-  the reason from `file_state.os_error_reason`.
+  the reason from `file_state.os_error_reason`. A not-found error for a path
+  that no longer exists is dropped: the file was deleted between ripgrep's walk
+  and its read, so nothing is missing from the result. Swarm Sessions (2026-10)
+  marked results incomplete for vanished `*.sqlite-journal` files
+  (`test_a_file_deleted_during_the_search_is_no_read_failure`).
 - Link loops become warnings ("Skipped a link loop").
 - Any other diagnostic that starts with an existing path becomes a warning, for
   example an invalid ignore file.
@@ -275,8 +331,14 @@ Diagnostics (`_judge`):
   - unnecessary escapes before Unicode punctuation are removed;
   - the `note` names the change and `-F`.
 
-  When nothing applies, the call fails with the native message and the `-F`
-  correction.
+  When nothing applies, the call fails with the error kind, the offending
+  pattern as sent with a caret under the offending part, and the `-F`
+  correction (`explain_failure`, `_pattern_error`); an unrecognized escape is
+  named (`unrecognized escape sequence "\c"`). ripgrep reports the error in its
+  combined form `(?:p1)|(?:p2)` with the caret placed for it, which showed
+  Agents a pattern they never sent (Swarm Sessions, 2026-10). Errors that do
+  not map onto one pattern (PCRE2, a pattern with a line break, `-f` files)
+  keep ripgrep's message.
 - Windows junctions count as links, as in ripgrep's walker
   (`test_junctions_are_followed_only_on_request_or_as_explicit_roots`).
 
@@ -285,12 +347,13 @@ Diagnostics (`_judge`):
 A successful result has these fields:
 
 - `data.summary`: totals, the shown range and how to continue.
-- `content`: the result lines.
+- `content`: the result lines; absent when there are none (the `result_schema`
+  requires no field).
 - `next_offset`: set when more results exist.
 - `note`: present when interpretation changed the call.
 - `warnings`: at most 20.
-- `searched_paths`: present when a root is missing or nothing was found.
-- `patterns`: present when nothing was found; it lists the actual patterns.
+- `searched_paths`: present when a root is missing; it names the roots still
+  searched, as labels like the result paths.
 - `skipped`: present when nothing was found or the call lists entries, and ignore
   files (`.gitignore`, `.ignore`, `.rgignore`) excluded paths in the walk. It names
   the five shallowest, counts the rest and points to `-u`. ripgrep's `--debug`
@@ -331,7 +394,24 @@ Paging:
 - Context never shows a match that the page leaves out.
 - Continuation repeats a live query, so file edits between pages or between the
   two phases can shift page boundaries.
+- An `offset` at or past the last result shows the first page, with a `note`
+  (`_restart_past_the_end`). Swarm Agents kept an offset after changing the
+  query and got only `No results at offset 80; the search found 11 ...`
+  (Sessions, 2026-10).
 - No matches is a success; its summary says how many files were searched.
+  When selecting globs left no file (no file searched, or an empty listing)
+  and no type, depth, size or hidden-file flag narrowed the walk, the summary
+  names them instead (`_unmatched_globs`): `No file matches the glob
+  "verify.py".`, `No directory matches the globs "a", "b".` A listing that
+  matches a pattern against names keeps `No files found.`
+- Swarm review (2026-10) of 42 empty results: `searched_paths` held only the
+  absolute working directory, in another path form than the content lines;
+  `patterns` echoed the call; `content` was an empty string; and no result
+  named the glob that filtered everything out (`glob: ["verify.py"]` beside
+  `pattern: "verify.py"` answered `No matches in 0 searched files.`). Empty
+  results now carry the summary, and `skipped` when ignore files excluded
+  paths. The glob-shaped pattern notes repeated their advice on 19 calls and
+  now state only the repair.
 
 The display (`_display_details`) shows the user the `results` text, an info
 notice about the next page and each warning

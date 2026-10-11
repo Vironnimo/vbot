@@ -137,7 +137,7 @@ async def test_a_content_search_without_matches_lists_files_whose_names_match(
 ):
     result = await dispatch(project, arguments)
     if listed is None:
-        assert result["data"]["content"] == ""
+        assert "content" not in result["data"]
         assert "note" not in result["data"]
         return
     assert result["data"]["content"] == listed
@@ -146,7 +146,118 @@ async def test_a_content_search_without_matches_lists_files_whose_names_match(
     )
     # Content matches keep the search a content search.
     contents = await dispatch(project, {**arguments, "pattern": arguments["pattern"] + "|load"})
-    assert "note" not in contents["data"] and "matching line" in contents["data"]["summary"]
+    assert "matching line" in contents["data"]["summary"]
+    assert contents["data"].get("note") != result["data"]["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "named"),
+    [
+        # File names as a pattern find the files mentioning them; the note says which
+        # files have those names (Swarm Sessions, 2026-10).
+        ({"pattern": "app.py|verify.py", "output": "files"}, ["src/app.py"]),
+        ({"pattern": "(app|verify)", "output": "files"}, ["src/app.py"]),
+        ({"pattern": r"verify\.py", "output": "files"}, []),
+        # No claim about names: an identifier, an extension no searched file has, content output.
+        ({"pattern": "verify", "output": "files"}, None),
+        ({"pattern": "verify.py", "output": "files", "glob": "*.md"}, None),
+        ({"pattern": "notes.get|verify", "output": "files"}, None),
+        ({"pattern": "verify.py"}, None),
+    ],
+)
+async def test_a_file_list_search_for_file_names_names_the_files_with_those_names(
+    project: Path, arguments: dict, named: list[str] | None
+):
+    (project / "notes.md").write_text("Run app.py, then verify.py.\n")
+    result = await dispatch(project, arguments)
+    assert "notes.md" in result["data"]["content"]
+    if named is None:
+        assert "note" not in result["data"]
+        return
+    note = result["data"]["note"]
+    labels = ["src/app.py", "src/view.ts", "docs/guide.md", "notes.md"]
+    assert [label for label in labels if label in note] == named
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "listed", "noted"),
+    [
+        ({"args": ["--files"], "pattern": "app"}, "src/app.py", True),
+        ({"args": ["--files", "-e", "view"]}, "src/view.ts", True),
+        ({"args": ["--files"], "pattern": "^src/v"}, "src/view.ts", True),
+        ({"args": ["--files"], "pattern": "*.ts"}, "src/view.ts", True),
+        ({"args": ["--dirs"], "pattern": "^do"}, "docs/", True),
+        # A pattern that matches every name lists everything.
+        ({"args": ["--files"], "pattern": "."}, "src/app.py\nsrc/view.ts\ndocs/guide.md", False),
+        ({"args": ["--dirs"], "pattern": "*"}, "src/\ndocs/", False),
+        # Under -v or -F the same pattern matches no name.
+        ({"args": ["--files", "-v"], "pattern": "."}, "", True),
+        ({"args": ["--dirs", "-F"], "pattern": "*"}, "", True),
+    ],
+)
+async def test_a_pattern_beside_a_listing_matches_names(
+    project: Path, arguments: dict, listed: str, noted: bool
+):
+    os.utime(project / "docs", (1_000_000_000, 1_000_000_000))
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    assert result["data"].get("content", "") == listed
+    assert ("note" in result["data"]) is noted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "listed"),
+    [
+        ({"pattern": ".", "output": "files"}, True),
+        ({"pattern": "^(.*)$", "args": ["-l"]}, True),
+        # Under -x the pattern matches one-character lines only; count output counts lines.
+        ({"pattern": ".", "output": "files", "args": ["-x"]}, False),
+        ({"pattern": ".", "output": "count"}, False),
+    ],
+)
+async def test_file_list_output_for_a_pattern_matching_every_line_lists_every_file(
+    project: Path, arguments: dict, listed: bool
+):
+    (project / "empty.txt").write_text("")
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    if listed:
+        assert sorted(result["data"]["content"].splitlines()) == [
+            "docs/guide.md",
+            "empty.txt",
+            "src/app.py",
+            "src/view.ts",
+        ]
+        assert result["data"]["note"]
+    else:
+        assert "empty.txt" not in result["data"].get("content", "")
+        assert "note" not in result["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "content", "noted"),
+    [
+        ({"glob": "src"}, "src/app.py\nsrc/view.ts", True),
+        ({"glob": ["src/", "!*.ts"]}, "src/app.py", True),
+        ({"glob": "./docs", "pattern": "load"}, "docs/guide.md:1:Call load() first.", True),
+        ({"glob": "src", "path": "src"}, "src/app.py\nsrc/view.ts", True),
+        # A name that is no directory, an excluding glob and a directory listing stay as sent.
+        ({"glob": "missing"}, "", False),
+        ({"glob": "!src"}, "docs/guide.md", False),
+        ({"glob": "src", "args": ["--dirs"]}, "src/", False),
+    ],
+)
+async def test_a_glob_naming_a_directory_matches_the_files_below_it(
+    project: Path, arguments: dict, content: str, noted: bool
+):
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    assert result["data"].get("content", "") == content
+    assert ("note" in result["data"]) is noted
 
 
 @pytest.mark.asyncio
@@ -324,6 +435,27 @@ async def test_a_command_line_string_in_args_splits_into_arguments(project: Path
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "content"),
+    [
+        ({"args": '--files"]', "pattern": "."}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
+        ({"args": "['--files']", "path": "src"}, "src/app.py\nsrc/view.ts"),
+        ({"args": "[--dirs]", "pattern": "do"}, "docs/"),
+        ({"args": '["-i", "-t", "ts"', "pattern": "LOAD"}, "src/view.ts:1:export const load = 1;"),
+        # Text that is not only flags stays what it was: here a regex class, the pattern.
+        ({"args": "[u]", "path": "src"}, "src/app.py:3:    return os.name"),
+    ],
+)
+async def test_flags_wrapped_in_stray_list_syntax_are_those_flags(
+    project: Path, arguments: dict, content: str
+):
+    os.utime(project / "docs", (1_000_000_000, 1_000_000_000))
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    assert result["data"]["content"] == content
+
+
+@pytest.mark.asyncio
 async def test_a_command_line_string_with_backslashes_asks_for_one_argument_per_item(
     project: Path,
 ) -> None:
@@ -348,7 +480,7 @@ async def test_missing_explicit_roots_preserve_results_and_name_the_missing_path
     assert data["warnings"][0] == (
         f"Path not found: missing (relative to the working directory {tmp_path.as_posix()})."
     )
-    assert data["searched_paths"] == [(tmp_path / "src").as_posix()]
+    assert data["searched_paths"] == ["src"]
     assert data["content"] == ("src/a.py" if mode else "src/a.py:1:needle")
 
 
@@ -400,7 +532,7 @@ async def test_unbalanced_regex_characters_match_literally_with_a_note(
 
     result = await dispatch(tmp_path, {"args": [*options, pattern, "src"]})
 
-    assert result["data"]["content"] == content
+    assert result["data"].get("content", "") == content
     assert f'searched "{pattern}" as "{searched}"' in result["data"]["note"]
     assert "-F" in result["data"]["note"]
 
@@ -502,6 +634,35 @@ async def test_unicode_escape_repair_does_not_hide_unrelated_invalid_regex(tmp_p
     assert result["ok"] is False
     assert result["error"]["code"] == "search_error"
     assert "Nothing was searched." in result["error"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "shown", "column", "width"),
+    [
+        ({"pattern": r"tools\(\corpus|fuzz"}, r"tools\(\corpus|fuzz", 7, 2),
+        ({"pattern": "ok", "args": ["-e", r"y\q"]}, r"y\q", 1, 2),
+        ({"pattern": "[z-a]x", "args": ["--dirs"]}, "[z-a]x", 1, 3),
+        # A PCRE2 error has no caret to place: ripgrep's message stays.
+        ({"pattern": r"x(?<=\c", "args": ["-P"]}, None, 0, 0),
+    ],
+)
+async def test_a_regex_error_points_at_the_pattern_as_sent(
+    tmp_path, arguments, shown, column, width
+):
+    # ripgrep reports errors in its combined (?:p1)|(?:p2) form, with the caret placed there.
+    (tmp_path / "code").write_text("ok\n", encoding="utf-8")
+    result = await dispatch(tmp_path, arguments)
+
+    message = result["error"]["message"]
+    assert result["error"]["code"] == "search_error"
+    if shown is None:
+        assert "PCRE2" in message
+        return
+    assert "(?:" not in message
+    lines = message.splitlines()
+    caret = lines[lines.index(f"    {shown}") + 1]
+    assert caret == "    " + " " * column + "^" * width
 
 
 @pytest.mark.asyncio
@@ -635,13 +796,6 @@ _PATHS = "path must name a file or directory"
         # Contradictory modes.
         ({"args": ["--files", "--dirs"]}, "invalid_arguments", "Choose one of --files or --dirs"),
         (
-            {"args": ["--files", "-e", "needle"]},
-            "invalid_arguments",
-            "--files lists files by name and does not search their contents, so it cannot be "
-            'combined with -e. To select names, pass glob (such as "*.py"); to search '
-            "contents, remove --files.",
-        ),
-        (
             {"pattern": "a{2,1}", "args": ["--dirs"]},
             "search_error",
             "The pattern is not a valid regular expression (ripgrep syntax)",
@@ -696,6 +850,8 @@ _PATHS = "path must name a file or directory"
         ({"args": ["needle"], "argv": ["other"]}, None, "Conflicting values for args"),
         ({"args": r'["-e", "\bcall\("]'}, None, _LIST),
         ({"args": '["needle",]'}, None, _LIST),
+        # A value next to list syntax could hold a regex class: its brackets stay.
+        ({"args": '["-e", "[ab]"'}, None, _LIST),
     ],
 )
 async def test_ambiguous_or_unsupported_requests_reject_without_substitution(
@@ -742,8 +898,7 @@ async def test_path_discovery_case_scope_and_pagination(tmp_path):
     sensitive = await dispatch(
         tmp_path, {"args": ["--dirs", "--no-glob-case-insensitive", "-g", "empty"]}
     )
-    assert sensitive["data"]["content"] == ""
-    assert sensitive["data"]["summary"] == "No directories found."
+    assert "content" not in sensitive["data"]
     shallow = await dispatch(tmp_path, {"args": ["--dirs", "-d", "1"]})
     assert shallow["data"]["content"] == "nested/"
     files = {"args": ["--files", "-g", "*.py", "--sort=path"], "limit": 1}
@@ -783,16 +938,14 @@ async def test_paging_option_spellings_remain_literal_payloads(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_empty_result_reports_actual_cwd_and_literal_quotes(tmp_path):
+async def test_quotes_in_a_pattern_are_searched_literally_in_the_actual_cwd(tmp_path):
     workspace = tmp_path / "workspace"
     project = tmp_path / "project"
     workspace.mkdir()
     project.mkdir()
     (project / "events.ts").write_text("type Event = 'item:generated';\n")
     result = await dispatch(workspace, {"args": ['"item:generated"']}, cwd=project)
-    assert result["data"]["searched_paths"] == [project.as_posix()]
-    assert result["data"]["patterns"] == ['"item:generated"']
-    assert result["data"]["summary"] == "No matches in 1 searched file."
+    assert result["data"] == {"summary": "No matches in 1 searched file."}
     found = await dispatch(workspace, {"args": ["item:generated"]}, cwd=project)
     assert found["data"]["content"] == "events.ts:1:type Event = 'item:generated';"
 

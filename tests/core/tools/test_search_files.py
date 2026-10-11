@@ -95,7 +95,7 @@ def _all_pages(root: Path, arguments: dict[str, Any], limit: int) -> list[str]:
     offset = 0
     while True:
         data = search(root, **arguments, limit=limit, offset=offset)
-        if data["content"]:
+        if "content" in data:
             lines.extend(data["content"].split("\n"))
         if "next_offset" not in data:
             return lines
@@ -465,10 +465,12 @@ def test_summary_states_totals_and_the_continuation(project: Path) -> None:
     last = search(project, pattern="needle", path="src", offset=6)
     assert last["summary"] == "Showing matching lines 7-7 of 7 matching lines in 4 files."
     assert "next_offset" not in last
-    beyond = search(project, pattern="needle", path="src", offset=50)
-    assert beyond["summary"] == (
-        "No results at offset 50; the search found 7 matching lines in 4 files."
-    )
+    # An offset past the end, as after a query changed between pages, starts over.
+    beyond = search(project, pattern="needle", path="src", offset=7, limit=2)
+    assert (beyond["content"], beyond["next_offset"]) == (first["content"], 2)
+    assert "offset 7" in beyond["note"]
+    listed = search(project, path="src", offset=5)
+    assert listed["content"] == search(project, path="src")["content"] and listed["note"]
     counts = search(project, pattern="needle", path="src", output="count", limit=1)
     assert counts["summary"] == (
         "Showing files 1-1 of 7 matching lines in 4 files. Continue with offset 1."
@@ -477,8 +479,14 @@ def test_summary_states_totals_and_the_continuation(project: Path) -> None:
     assert files["summary"] == "Found 4 files with 7 matching lines."
     assert search(project, path="src")["summary"] == "Found 5 files, newest first."
     absent = search(project, pattern="absent", path="src")
+    # An empty result echoes neither the pattern nor the roots and has no empty content.
     assert absent["summary"] == "No matches in 5 searched files."
-    assert absent["patterns"] == ["absent"]
+    assert not {"content", "patterns", "searched_paths"} & absent.keys()
+    # Globs that select no file are named; globs that select files leave the count.
+    for arguments in ({"pattern": "needle"}, {}):
+        unmatched = search(project, path="src", glob=["verify.py", "*.md"], **arguments)
+        assert '"verify.py", "*.md"' in unmatched["summary"]
+    assert '"*.py"' not in search(project, pattern="absent", glob="*.py")["summary"]
 
 
 def test_file_lists_are_newest_first_unless_sorted(tmp_path: Path) -> None:
@@ -581,8 +589,33 @@ def test_roots_outside_the_working_directory_keep_absolute_labels(tmp_path: Path
     ],
 )
 def test_the_git_directory_is_never_searched(project: Path, arguments: dict[str, Any]) -> None:
-    content = search(project, **arguments, limit=10000)["content"]
+    content = search(project, **arguments, limit=10000).get("content", "")
     assert not any(line.startswith(".git/") for line in content.splitlines())
+
+
+@pytest.mark.parametrize(
+    ("arguments", "listed"),
+    [
+        ({}, {"pkg/a.py"}),
+        ({"pattern": "needle", "output": "files"}, {"pkg/a.py"}),
+        ({"args": ["--dirs"]}, {"pkg/"}),
+        ({"glob": "!*.txt"}, {"pkg/a.py"}),
+        # Asked for: -u, a glob naming the caches or their files, or a root inside one.
+        ({"args": ["-u"]}, {"pkg/a.py", "pkg/__pycache__/a.pyc", "__pycache__/note.txt"}),
+        ({"glob": "*.pyc"}, {"pkg/__pycache__/a.pyc"}),
+        ({"glob": "**/__pycache__/**"}, {"pkg/__pycache__/a.pyc", "__pycache__/note.txt"}),
+        ({"path": "pkg/__pycache__"}, {"pkg/__pycache__/a.pyc"}),
+    ],
+)
+def test_python_caches_are_skipped_unless_asked_for(
+    tmp_path: Path, arguments: dict[str, Any], listed: set[str]
+) -> None:
+    _write(
+        tmp_path,
+        {"pkg/a.py": "needle\n", "pkg/__pycache__/a.pyc": "needle\n", "__pycache__/note.txt": "x"},
+    )
+    content = search(tmp_path, **arguments)["content"]
+    assert set(content.splitlines()) == listed
 
 
 def test_long_lines_show_the_match_in_an_excerpt(tmp_path: Path) -> None:
@@ -594,7 +627,7 @@ def test_long_lines_show_the_match_in_an_excerpt(tmp_path: Path) -> None:
 
 
 def test_binary_files_and_encodings(project: Path, tmp_path: Path) -> None:
-    assert search(project, pattern="binary", path="data")["content"] == ""
+    assert "content" not in search(project, pattern="binary", path="data")
     assert search(project, pattern="binary", path="data", args=["-a"])["content"] == (
         "data/blob.bin:1:needle\x00binary"
     )
@@ -618,6 +651,29 @@ def test_link_loops_become_warnings_and_the_rest_is_searched(tmp_path: Path) -> 
     assert data["content"] == "link/a:1:needle"
     assert any("loop" in warning for warning in data["warnings"])
     assert data["summary"].endswith("The search is incomplete; see warnings.")
+
+
+def test_a_file_deleted_during_the_search_is_no_read_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ripgrep's walk listed a SQLite journal that was gone when it read it; any other
+    # read error, or a not-found error for a file that exists, still warns.
+    _write(tmp_path, {"a.txt": "needle\n", "locked.txt": "x\n"})
+    native_lines = execution.native_lines
+
+    def with_read_errors(*args: Any, outcome: Any = None, **kwargs: Any) -> Iterator[bytes]:
+        yield from native_lines(*args, outcome=outcome, **kwargs)
+        if outcome is not None:
+            outcome.diagnostics = "\n".join(
+                f"rg: {name}: IO error for operation on {name}: failed (os error {code})"
+                for name, code in (("gone.sqlite-journal", 2), ("locked.txt", 5), ("a.txt", 2))
+            )
+
+    monkeypatch.setattr(execution, "native_lines", with_read_errors)
+    data = search(tmp_path, pattern="needle")
+    assert data["content"] == "a.txt:1:needle"
+    warned = " ".join(data["warnings"])
+    assert "locked.txt" in warned and "a.txt" in warned and "gone" not in warned
 
 
 def test_junctions_are_followed_only_on_request_or_as_explicit_roots(tmp_path: Path) -> None:

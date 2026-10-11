@@ -44,6 +44,7 @@ from core.tools._search_query import (
     MAX_OFFSET,
     SearchArgumentError,
     SearchQuery,
+    flag_list,
     interpret,
 )
 from core.tools._search_results import (
@@ -88,19 +89,26 @@ def _repair_argument_array(value: Any) -> Any:
     A string that starts with an option is a command line such as
     "-F computeDamage( src"; it splits like one, with quotes grouping words.
     Backslashes would be shell escapes there but regex escapes here, so such a
-    string stays one argument.
+    string stays one argument. Flags that broken list syntax wraps, such as
+    '--files"]' or "['--files']", are those flags (``flag_list``); a valid JSON
+    list is decoded first, so its items keep every character.
     """
-    if isinstance(value, str) and value.lstrip().startswith("-") and "\\" not in value:
+    if not isinstance(value, str):
+        return value
+    encoded = re.match(r'^\s*\[\s*"', value) is not None
+    if encoded:
+        with contextlib.suppress(ValueError):
+            return load_json_value(value)
+    flags = flag_list(value)
+    if flags is not None:
+        return flags
+    if value.lstrip().startswith("-") and "\\" not in value:
         with contextlib.suppress(ValueError):
             words = shlex.split(value)
             if len(words) > 1:
                 return words
-    if not isinstance(value, str) or not re.match(r'^\s*\[\s*"', value):
+    if not encoded:
         return value
-    try:
-        return load_json_value(value)
-    except ValueError:
-        pass
 
     # In encoded regex lists, \( and \w often omit the JSON escape for the
     # backslash. Preserve that backslash; never change members of real arrays.
@@ -554,6 +562,37 @@ def _glob_root(text: str, cwd: Path, query: SearchQuery) -> Path | None:
     return base
 
 
+_GLOB_SYNTAX = re.compile(r"[*?\[\]{}]")
+
+
+def _directory_globs(query: SearchQuery, roots: list[Path], cwd: Path) -> None:
+    """Also match the files below a directory that a glob names exactly.
+
+    ripgrep matches globs against files, so glob "minidb" matched nothing even
+    with a directory minidb. Such a glob also selects that directory's files,
+    with a note. Directory listings match globs against directories already.
+    """
+    if query.mode == "list_dirs":
+        return
+    bases = [cwd, *(root for root in roots if root.is_dir())]
+    globs: list[str] = []
+    for glob in query.globs:
+        globs.append(glob)
+        if glob.startswith("!") or _GLOB_SYNTAX.search(glob):
+            continue
+        name = glob.replace("\\", "/").removeprefix("./").strip("/")
+        if Path(name).is_absolute() or {"", ".", ".."} & set(name.split("/")):
+            continue
+        if not any((base / name).is_dir() for base in bases):
+            continue
+        if glob.startswith("/"):
+            globs.append(f"/{name}/**")
+        else:
+            globs.append(f"{name}/**" if "/" in name else f"**/{name}/**")
+        query.notes.append(f'glob "{glob}" names a directory, so the files below it were matched.')
+    query.globs = globs
+
+
 def _missing_root_message(raw: str, root: Path, cwd: Path) -> str:
     message = f"Path not found: {path_label(root, cwd)}"
     suggestions = corrected_paths(root, cwd)
@@ -772,7 +811,7 @@ def _matching_names(
     binary: Path,
     budget: SearchBudget,
 ) -> set[str]:
-    """Match directory names as a content search matches lines, with the same pattern repairs."""
+    """Match listed names as a content search matches lines, with the same pattern repairs."""
     unique = list(dict.fromkeys(names))
     try:
         return match_names(binary, query, query.name_patterns, unique, context, budget)
@@ -861,13 +900,21 @@ def _directory_selected(
     return selected
 
 
+def _restart_past_the_end(query: SearchQuery, total: int) -> None:
+    """Show the first page when offset passes the last result, as after a changed query."""
+    if total and query.offset >= total:
+        query.notes.append(
+            f"offset {query.offset} is past the last result, so the first page is shown."
+        )
+        query.offset = 0
+
+
 @dataclass
 class _Outcome:
     page: Page
     found: _Found
     total: int
     lines_total: int
-    patterns: list[str]
 
 
 def _names_matching(
@@ -878,11 +925,11 @@ def _names_matching(
     cwd: Path,
     binary: Path,
     budget: SearchBudget,
-) -> tuple[list[Entry], list[Path]]:
+) -> tuple[list[Entry], _Found]:
     """Return the searched files whose name or shown path the patterns match.
 
-    The second value names the paths ignore files excluded from the listing,
-    which are the ones they excluded from the search.
+    The second value is the listing they were taken from; its ``ignored`` names
+    the paths ignore files excluded, which are the ones they excluded from the search.
     """
     listed = _Found()
     for index, scope in enumerate(scopes):
@@ -893,11 +940,78 @@ def _names_matching(
     try:
         matched = match_names(binary, query, patterns, names, context, budget)
     except SearchRefusedError:
-        return [], listed.ignored
+        return [], listed
     named = [
         entry for entry in listed.entries if entry.label in matched or entry.path.name in matched
     ]
-    return named, listed.ignored
+    return named, listed
+
+
+# One file name or path in a content pattern: words, "-" and "/", dots escaped or not.
+_FILE_NAME = re.compile(r"[\w\-/]+(?:\\?\.[\w\-]+)*")
+_EXTENSION = re.compile(r"[\w\-]\\?\.([\w\-]+)$")
+# Shown names of files whose names match a content pattern, before "and N more".
+_NAMED_FILES_SHOWN = 5
+
+
+def _file_name_alternatives(pattern: str) -> list[str] | None:
+    """Return the file names a content pattern lists, or ``None`` when it is no such list.
+
+    ``verify.py``, ``tools/corpus\\.py`` and ``(verify|corpus|fuzz)`` list names;
+    one word without an extension, such as an identifier, does not.
+    """
+    body = pattern.removeprefix("^").removesuffix("$")
+    group = re.fullmatch(r"\((?:\?:)?([^()]*)\)", body)
+    if group:
+        body = group.group(1)
+    alternatives = [
+        alternative.removeprefix("\\b").removesuffix("\\b").removeprefix("^").removesuffix("$")
+        for alternative in body.split("|")
+    ]
+    if not all(_FILE_NAME.fullmatch(alternative) for alternative in alternatives):
+        return None
+    if len(alternatives) == 1 and not _EXTENSION.search(alternatives[0]):
+        return None
+    return alternatives
+
+
+def _note_named_files(
+    context: ToolContext,
+    query: SearchQuery,
+    scopes: list[Scope],
+    cwd: Path,
+    binary: Path,
+    budget: SearchBudget,
+) -> None:
+    """Name the files a file-list search's pattern matches by name, as the Agent may mean them.
+
+    Without such files, a pattern naming an extension the searched files have
+    states that none has a matching name; other patterns get no note.
+    """
+    patterns = query.patterns
+    if len(patterns) != 1 or "--invert-match" in query.rg_args:
+        return
+    alternatives = _file_name_alternatives(patterns[0])
+    if alternatives is None:
+        return
+    named, listed = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
+    if budget.stopped or not listed.complete:
+        return
+    if named:
+        shown = ", ".join(entry.label for entry in named[:_NAMED_FILES_SHOWN])
+        rest = len(named) - _NAMED_FILES_SHOWN
+        more = f", and {rest} more (add --files to args to list them)" if rest > 0 else ""
+        query.notes.append(
+            f"The listed files contain text matching pattern; files whose names match it: "
+            f"{shown}{more}."
+        )
+        return
+    suffixes = {entry.path.suffix.casefold() for entry in listed.entries}
+    extensions = (_EXTENSION.search(alternative) for alternative in alternatives)
+    if any(match and f".{match.group(1).casefold()}" in suffixes for match in extensions):
+        query.notes.append(
+            "The listed files contain text matching pattern; no file name matches it."
+        )
 
 
 def _search(
@@ -916,10 +1030,21 @@ def _search(
     if query.mode == "list_files":
         for index, scope in enumerate(scopes):
             found.take(index, scope, list_scan(binary, query, scope, context, budget, cwd), cwd)
+        if query.name_patterns:
+            # Like a content search's name fallback, a pattern matches a name or a shown path.
+            names = [entry.label for entry in found.entries]
+            names += [entry.path.name for entry in found.entries]
+            matched = _matching_names(context, query, names, binary, budget)
+            found.entries = [
+                entry
+                for entry in found.entries
+                if entry.label in matched or entry.path.name in matched
+            ]
     if query.mode in LIST_MODES:
         found.finish(query)
         total = len(found.entries)
-        return _Outcome(entry_page(found.entries, query), found, total, total, [])
+        _restart_past_the_end(query, total)
+        return _Outcome(entry_page(found.entries, query), found, total, total)
 
     patterns = query.patterns
     try:
@@ -951,23 +1076,33 @@ def _search(
         and not budget.stopped
     ):
         # No content matches, so a pattern that matches file names was meant for them.
-        named, found.ignored = _names_matching(
-            context, query, scopes, patterns, cwd, binary, budget
-        )
+        named, listed = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
+        found.ignored = listed.ignored
         if named:
             query.mode = "list_files"
             query.notes.append(
                 "No file contents match pattern, so the files whose names match it were listed."
             )
             found.entries = named
-            return _Outcome(entry_page(named, query), found, len(named), len(named), patterns)
+            _restart_past_the_end(query, len(named))
+            return _Outcome(entry_page(named, query), found, len(named), len(named))
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:
             found.ignored.extend(ignored_scan(binary, query, scope, context, budget))
     if query.mode != "content":
+        _restart_past_the_end(query, len(found.entries))
+        if (
+            query.mode == "files_with_matches"
+            and lines_total
+            and not query.offset
+            and found.complete
+            and not budget.stopped
+        ):
+            _note_named_files(context, query, scopes, cwd, binary, budget)
         page = entry_page(found.entries, query)
-        return _Outcome(page, found, len(found.entries), lines_total, patterns)
+        return _Outcome(page, found, len(found.entries), lines_total)
+    _restart_past_the_end(query, lines_total)
     window = content_window(found.entries, query.offset, query.limit)
     events: dict[tuple[int, bytes], list[dict[str, Any]]] = {}
     for index, scope in enumerate(scopes):
@@ -988,7 +1123,7 @@ def _search(
         found.warnings.extend(warnings)
         events.update(((index, path), value) for path, value in scope_events.items())
     page = content_page(window, events, query)
-    return _Outcome(page, found, lines_total, lines_total, patterns)
+    return _Outcome(page, found, lines_total, lines_total)
 
 
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -1011,11 +1146,13 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                 + " Nothing was searched. Correct path, or omit it to search the working "
                 "directory.",
             )
+        _directory_globs(query, roots.paths, cwd)
         outcome = _search(context, query, roots.paths, cwd, binary, budget)
     except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
     except SearchRefusedError as error:
-        return tool_failure("search_error", explain_failure(str(error)))
+        patterns = query.patterns or query.name_patterns
+        return tool_failure("search_error", explain_failure(str(error), patterns))
     except SearchBoundError as error:
         # Only native runs raise it, and they start after query and cwd are set.
         return tool_failure("search_error", _bound_failure(error, query, cwd))
@@ -1058,13 +1195,12 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         data["note"] = " ".join(dict.fromkeys(query.notes))
     if warnings:
         data["warnings"] = warnings[:20]
-    if roots.missing or not outcome.total:
-        data["searched_paths"] = [path.as_posix() for path in roots.paths]
-    if not outcome.total and outcome.patterns:
-        data["patterns"] = outcome.patterns
+    if roots.missing:
+        data["searched_paths"] = [path_label(path, cwd) for path in roots.paths]
     if found.ignored and (not outcome.total or query.mode in LIST_MODES):
         data["skipped"] = _ignored_summary(found.ignored, cwd)
-    data["content"] = "\n".join(page.lines)
+    if page.lines:
+        data["content"] = "\n".join(page.lines)
     context.add_display_count(
         page.returned, "results", at_least="next_offset" in data or not complete
     )
@@ -1123,7 +1259,7 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
         _search_files_async,
         summary="Search file contents or find files by name.",
         family="files",
-        result_schema={"type": "object", "required": ["content"]},
+        result_schema={"type": "object"},
         display=ToolDisplay(parts_builder=_display_parts, detail_builder=_display_details),
         parallel_safe=True,
         open_input_schema=True,
@@ -1152,7 +1288,8 @@ Examples:
 
 Default selection: hidden files are searched, .gitignore and .ignore rules apply (also
 outside git repositories), binary files are skipped, and .git is always skipped. A
-glob that names files also selects files those rules exclude. Globs and file types
+glob that names files also selects files those rules exclude. __pycache__ is skipped
+unless -u is given or a glob names __pycache__ or .pyc files. Globs and file types
 match names in any letter case unless --no-glob-case-insensitive is given.
 
 Output: content shows path:line:text for matching lines and path-line-text for context
@@ -1181,8 +1318,8 @@ args items, one flag or value per item. Other ripgrep flags work as well:
   -d N                  descend at most N directory levels
   --max-filesize SIZE   skip larger files, such as 1M
   -E ENCODING / -a      read files in an encoding / search binary files as text
-  --files / --dirs      list files / list directories, empty directories included; with --dirs
-                        a pattern matches directory names
+  --files / --dirs      list files / list directories, empty directories included; a pattern
+                        matches their names
   --sort KEY / --sortr KEY
                         order ascending / descending by path, modified, accessed or created
 """

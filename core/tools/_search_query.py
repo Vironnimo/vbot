@@ -231,7 +231,7 @@ class SearchQuery:
     offset: int = 0
     pattern_operand: bool = False
     operand_roots: list[str] = field(default_factory=list)
-    # Regular expressions a --dirs listing matches against directory names.
+    # Regular expressions a --files or --dirs listing matches against the names it lists.
     name_patterns: list[str] = field(default_factory=list)
     reference_args: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -377,6 +377,10 @@ def _number(name: str, value: str, *, minimum: int, maximum: int, field_name: st
 _GLOB_EVERYTHING = frozenset({"*", "**", "*.*", "**/*", "./*", "./**"})
 _GLOB_SHAPE = re.compile(r"[^\s()|^$+\\]+")
 _NAME_GLOB = re.compile(r"[\w.\-/{},]*(?<![.\])])\*[\w.\-/*{},]*\.(?:\w{1,10}|\{[\w,]+\})")
+# A regex that matches every non-empty text, such as ".", ".*" or "^(.*)$".
+_REGEX_EVERYTHING = re.compile(r"\^?(?:\.[*+]?|\((?:\?:)?\.[*+]?\))\$?|\^|\$")
+# Flags under which such a regex no longer matches every name or line.
+_NARROWING_FLAGS = frozenset({"--invert-match", "--line-regexp", "--word-regexp"})
 
 
 def glob_shaped(pattern: str) -> bool:
@@ -386,6 +390,158 @@ def glob_shaped(pattern: str) -> bool:
     if pattern.startswith("*") or "**" in pattern or "/*." in pattern:
         return True
     return bool(_NAME_GLOB.fullmatch(pattern))
+
+
+def _matches_everything(query: SearchQuery, pattern: str) -> bool:
+    """Whether pattern, as the query matches it, matches every name and every non-empty line."""
+    if query.literal or not _REGEX_EVERYTHING.fullmatch(pattern):
+        return False
+    narrowing: set[str] = set()
+    for argument in query.rg_args:
+        if argument in _NARROWING_FLAGS:
+            narrowing.add(argument)
+        elif argument == "--no-invert-match":
+            narrowing.discard("--invert-match")
+    return not narrowing
+
+
+# ripgrep 15.1.0's long flags, their negations, and the ones vBot adds or reads as grep's.
+_LONG_FLAGS = frozenset(
+    {
+        *_VALUED,
+        *_SILENT,
+        *_IGNORED_WITH_NOTE,
+        *_BLOCKED,
+        *_REFERENCE,
+        *_OUTPUT_FLAGS,
+        *[
+            "auto-hybrid-regex",
+            "binary",
+            "case-sensitive",
+            "count-matches",
+            "crlf",
+            "dfa-size-limit",
+            "engine",
+            "files",
+            "files-without-match",
+            "fixed-strings",
+            "follow",
+            "glob-case-insensitive",
+            "hidden",
+            "ignore-case",
+            "ignore-file-case-insensitive",
+            "include-zero",
+            "invert-match",
+            "line-regexp",
+            "max-filesize",
+            "multiline",
+            "multiline-dotall",
+            "no-ignore",
+            "no-ignore-dot",
+            "no-ignore-exclude",
+            "no-ignore-files",
+            "no-ignore-global",
+            "no-ignore-parent",
+            "no-ignore-vcs",
+            "no-pcre2-unicode",
+            "no-require-git",
+            "no-unicode",
+            "null-data",
+            "one-file-system",
+            "only-matching",
+            "pcre2",
+            "regex-size-limit",
+            "search-zip",
+            "smart-case",
+            "sort-files",
+            "stop-on-nonmatch",
+            "text",
+            "type-list",
+            "unrestricted",
+            "word-regexp",
+            "no-auto-hybrid-regex",
+            "no-binary",
+            "no-crlf",
+            "no-encoding",
+            "no-fixed-strings",
+            "no-follow",
+            "no-glob-case-insensitive",
+            "no-hidden",
+            "no-ignore-file-case-insensitive",
+            "no-include-zero",
+            "no-invert-match",
+            "no-multiline",
+            "no-multiline-dotall",
+            "no-one-file-system",
+            "no-pcre2",
+            "no-pre",
+            "no-search-zip",
+            "no-sort-files",
+            "no-text",
+            "dirs",
+        ],
+    }
+)
+_LIST_SYNTAX = re.compile(r"""[\[\]"',]""")
+
+
+def flag_list(text: str) -> list[str] | None:
+    """Read args text that list syntax broke, such as '--files"]' or "['--files']".
+
+    Returns the items only when every one is a ripgrep flag, or the value of
+    the valued flag before it, and list syntax ([ ] " ' and commas) occurs only
+    around them; otherwise None. A value keeps every character but its quotes,
+    so one next to a bracket, which could belong to a regex or glob class,
+    fails the reading. So does text with a backslash, which could be a regex
+    escape.
+    """
+    if "\\" in text or not _LIST_SYNTAX.search(text):
+        return None
+    pieces = [piece for piece in re.split(r"[\s,]+", text) if piece.strip("[]\"'")]
+    items: list[str] = []
+    wanted = 0  # values still owed to the valued flag before
+    for index, piece in enumerate(pieces):
+        if wanted:
+            if index == len(pieces) - 1 and text.lstrip().startswith("["):
+                piece = piece.rstrip().removesuffix("]")
+            value = piece.strip("\"'")
+            if "[" in piece or "]" in piece or _LIST_SYNTAX.search(value):
+                return None
+            items.append(value)
+            wanted = 0
+            continue
+        item = piece.strip("[]\"'")
+        if _LIST_SYNTAX.search(item):
+            return None
+        wanted = _owed_values(item, pieces[len(items) + 1 :])
+        if wanted < 0:
+            return None
+        items.append(item)
+    return None if wanted else items
+
+
+def _owed_values(item: str, following: list[str]) -> int:
+    """Return how many next items the flag item takes as its value, or -1 if not a flag."""
+    if item.startswith("--"):
+        name, equals, _ = item[2:].partition("=")
+        if name not in _LONG_FLAGS:
+            return -1
+        return 1 if name in _VALUED and not equals else 0
+    if not item.startswith("-") or len(item) < 2:
+        return -1
+    for position, letter in enumerate(item[1:], start=2):
+        known = _SHORT_NAMES.get(letter)
+        if known is None:
+            return -1
+        if known not in _VALUED:
+            continue
+        if position < len(item):
+            return 0
+        if known == "encoding" and not (following and _is_encoding(following[0].strip("\"'"))):
+            # grep's -E (extended regex) is ripgrep's default syntax.
+            return 0
+        return 1
+    return 0
 
 
 def interpret(
@@ -533,22 +689,9 @@ def interpret(
     query.offset = _single(offsets, "offset", 0)
 
     if listing is not None:
-        if query.patterns and listing == "list_dirs":
-            # Directories have no contents to search, so a pattern can only mean names.
-            query.name_patterns, query.patterns = query.patterns, []
-            shown = " or ".join(f'"{text}"' for text in query.name_patterns)
-            query.notes.append(
-                f"--dirs lists directories without searching contents, so the pattern {shown} "
-                "was matched against directory names."
-            )
-        elif query.patterns:
-            sent = "pattern" if pattern is not None else "-e"
-            raise SearchArgumentError(
-                "--files lists files by name and does not search their contents, so it cannot "
-                f'be combined with {sent}. To select names, pass glob (such as "*.py"); to '
-                "search contents, remove --files."
-            )
         listed = "files" if listing == "list_files" else "directories"
+        if query.patterns:
+            _match_listed_names(query, listing)
         for written in [*output_flags, *([f'output "{output}"'] if output else [])]:
             query.notes.append(
                 f"{written} was ignored because --{listing.removeprefix('list_')} lists "
@@ -603,19 +746,55 @@ def _single(values: list[int], name: str, default: int) -> int:
     return values[0] if values else default
 
 
+def _match_listed_names(query: SearchQuery, listing: Mode) -> None:
+    """Apply a pattern sent with --files or --dirs to the names they list.
+
+    Listings have no contents to search, so a pattern can only mean names. One
+    that matches every name lists everything; a file name glob selects as glob.
+    """
+    listed = "files" if listing == "list_files" else "directories"
+    patterns, query.patterns = query.patterns, []
+    if len(patterns) == 1 and not query.literal:
+        only = patterns[0]
+        if only in _GLOB_EVERYTHING or _matches_everything(query, only):
+            return
+        if not query.globs and glob_shaped(only):
+            query.globs = [only]
+            query.notes.append(
+                f'pattern "{only}" is a name glob, so matching {listed} were listed.'
+            )
+            return
+    query.name_patterns = patterns
+    shown = " or ".join(f'"{text}"' for text in patterns)
+    kind = "file" if listing == "list_files" else "directory"
+    query.notes.append(
+        f"--{listing.removeprefix('list_')} lists {listed} without searching contents, so the "
+        f"pattern {shown} was matched against {kind} names."
+    )
+
+
 def _list_glob_shaped_pattern(
     query: SearchQuery, context_requested: bool, output: str | None
 ) -> None:
-    """Run a file name glob sent as the pattern as the file listing it asks for."""
+    """Run a file name glob sent as the pattern as the file listing it asks for.
+
+    A regex that matches every line also lists the files for file-list output:
+    ripgrep would leave out empty and binary files and count lines nobody asked for.
+    """
     pattern = query.patterns[0]
     if output == "count" or context_requested or query.only_matching:
         return
     if pattern in _GLOB_EVERYTHING:
         query.patterns = []
         query.mode = "list_files"
+        query.notes.append(f'pattern "{pattern}" matches every file name, so files were listed.')
+        return
+    if query.mode == "files_with_matches" and _matches_everything(query, pattern):
+        query.patterns = []
+        query.mode = "list_files"
         query.notes.append(
-            f'pattern "{pattern}" matches every file name, so files were listed. To search file '
-            "contents, put a regular expression in pattern."
+            f'pattern "{pattern}" matches every line, so files were listed, empty and binary '
+            "ones included."
         )
         return
     if query.globs or not glob_shaped(pattern):
@@ -623,7 +802,4 @@ def _list_glob_shaped_pattern(
     query.patterns = []
     query.mode = "list_files"
     query.globs = [pattern]
-    query.notes.append(
-        f'pattern "{pattern}" is a file name glob, so matching files were listed. To search '
-        "file contents, put a regular expression in pattern and the file filter in glob."
-    )
+    query.notes.append(f'pattern "{pattern}" is a file name glob, so matching files were listed.')

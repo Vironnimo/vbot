@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from core.tools._search_execution import decode_event_text
-from core.tools._search_query import SearchQuery
+from core.tools._search_query import LIST_MODES, SearchQuery
 from core.tools.search import MAX_OUTPUT_BYTES, display_search_path
 
 MAX_LINE_CHARS = 1000
@@ -359,6 +359,9 @@ def summary(
 ) -> str:
     """Say what was found, which part this page shows, and how to continue."""
     if total == 0:
+        unmatched = _unmatched_globs(query, files_searched)
+        if unmatched and complete:
+            return unmatched
         if query.mode == "list_dirs":
             found = "No directories found"
         elif query.mode == "list_files":
@@ -395,8 +398,6 @@ def summary(
     whole_page = page.offset == 0 and end >= total
     if whole_page:
         text = f"Found {whole}."
-    elif page.returned == 0:
-        text = f"No results at offset {page.offset}; the search found {whole}."
     else:
         text = f"Showing {shown} {page.offset + 1}-{end} of {whole}."
     cut = page.cut
@@ -416,3 +417,20 @@ def summary(
     if not complete:
         text += " The search is incomplete; see warnings."
     return text
+
+
+# Arguments besides globs that narrow which files the walk selects.
+_SELECTION_FLAGS = ("--type=", "--type-not=", "--max-depth=", "--max-filesize=", "--no-hidden")
+
+
+def _unmatched_globs(query: SearchQuery, files_searched: int | None) -> str | None:
+    """Name the selecting globs when no file matched them and nothing else narrowed the walk."""
+    selecting = [glob for glob in query.globs if not glob.startswith("!")]
+    listing = query.mode in LIST_MODES
+    if not selecting or query.name_patterns or (not listing and files_searched != 0):
+        return None
+    if any(argument.startswith(_SELECTION_FLAGS) for argument in query.rg_args):
+        return None
+    noun = "directory" if query.mode == "list_dirs" else "file"
+    names = ", ".join(json.dumps(glob, ensure_ascii=False) for glob in selecting)
+    return f"No {noun} matches the glob{'s' if len(selecting) > 1 else ''} {names}."

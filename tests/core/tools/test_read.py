@@ -162,10 +162,15 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     for folder in ("tests", "tests/deep", ".hidden", "node_modules"):
         tmp_path.joinpath(folder).mkdir()
         tmp_path.joinpath(folder, "corpus.py").write_text("x", encoding="utf-8")
+    modules = tmp_path / "modules"
+    modules.mkdir()
+    for name in ["ast.py", "lexer.py", "shell.py", "analyzer.py", "parsers.py", "parser.md"]:
+        modules.joinpath(name).write_text(name, encoding="utf-8")
 
     message = failure(await read(tmp_path, {"path": "ranked/settings.txt"}), "file_not_found")
     bounded = failure(await read(tmp_path, {"path": "many/settings.txt"}), "file_not_found")
     elsewhere = failure(await read(tmp_path, {"path": "corpus.py"}), "file_not_found")
+    module = failure(await read(tmp_path, {"path": "modules/parser.py"}), "file_not_found")
 
     # Same stem first, then files or directories beside it; never unrelated names
     # or the absolute path.
@@ -179,6 +184,9 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     assert (
         elsewhere == "File not found: corpus.py (similar: tests/corpus.py, tests/deep/corpus.py)."
     )
+    # A shared extension makes no name similar; the stem or the whole name has to be.
+    suggested = module.partition("(similar: ")[2].rstrip(").").split(", ")
+    assert suggested == ["modules/parser.md", "modules/parsers.py"]
 
 
 @pytest.mark.asyncio
@@ -201,8 +209,10 @@ async def test_a_missing_file_without_similar_names_names_the_listing_call(tmp_p
 async def test_a_directory_is_listed_and_paged_without_being_stamped(tmp_path: Path) -> None:
     folder = tmp_path / "folder"
     (folder / "Sub").mkdir(parents=True)
-    for name in ["b.txt", "a.py", ".hidden"]:
-        folder.joinpath(name).write_text(name, encoding="utf-8")
+    # Sizes: bytes below 1 KB, one decimal below 10 units, whole units from 10 up.
+    sizes = {"b.txt": 12 * 1024 + 300, "a.py": 1536, ".hidden": 7, "c.bin": 1024 * 1024 - 1}
+    for name, size in sizes.items():
+        folder.joinpath(name).write_bytes(b"x" * size)
     many = tmp_path / "many"
     many.mkdir()
     for index in range(1, 8):
@@ -215,13 +225,16 @@ async def test_a_directory_is_listed_and_paged_without_being_stamped(tmp_path: P
     last = await read(tmp_path, {"path": "many", "offset": -2})
     nothing = await read(tmp_path, {"path": "empty"})
 
-    assert content(listing) == "Directory folder/ (4 entries):\n.hidden\na.py\nb.txt\nSub/"
+    assert content(listing) == (
+        "Directory folder/ (5 entries):\n.hidden  7 B\na.py  1.5 KB\nb.txt  12 KB\n"
+        "c.bin  1.0 MB\nSub/"
+    )
     assert file_state.check_stale("session-1", folder.resolve()) is StaleReason.NEVER_READ
     assert content(first) == (
-        "Directory many/ (7 entries):\nf1.txt\nf2.txt\nf3.txt\n"
+        "Directory many/ (7 entries):\nf1.txt  1 B\nf2.txt  1 B\nf3.txt  1 B\n"
         "[Showing entries 1-3 of 7. Use offset=4 to continue.]"
     )
-    assert content(last) == "Directory many/ (7 entries):\nf6.txt\nf7.txt"
+    assert content(last) == "Directory many/ (7 entries):\nf6.txt  1 B\nf7.txt  1 B"
     assert content(nothing) == "empty/ is an empty directory."
 
 
