@@ -301,8 +301,14 @@ Diagnostics (`_judge`):
   - unnecessary escapes before Unicode punctuation are removed;
   - the `note` names the change and `-F`.
 
-  When nothing applies, the call fails with the native message and the `-F`
-  correction.
+  When nothing applies, the call fails with the error kind, the offending
+  pattern as sent with a caret under the offending part, and the `-F`
+  correction (`explain_failure`, `_pattern_error`); an unrecognized escape is
+  named (`unrecognized escape sequence "\c"`). ripgrep reports the error in its
+  combined form `(?:p1)|(?:p2)` with the caret placed for it, which showed
+  Agents a pattern they never sent (Swarm Sessions, 2026-10). Errors that do
+  not map onto one pattern (PCRE2, a pattern with a line break, `-f` files)
+  keep ripgrep's message.
 - Windows junctions count as links, as in ripgrep's walker
   (`test_junctions_are_followed_only_on_request_or_as_explicit_roots`).
 

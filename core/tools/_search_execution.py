@@ -22,7 +22,7 @@ import tempfile
 import threading
 import time
 import unicodedata
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -826,13 +826,58 @@ def _any_case(glob: str) -> str:
     return "".join(result)
 
 
-def explain_failure(message: str) -> str:
-    """Say what ripgrep refused and how to correct the call. Nothing was searched."""
+_REGEX_ERROR = re.compile(
+    r"regex parse error:\n {4}(?P<wrapped>[^\n]*)\n {4}(?P<pad> *)(?P<caret>\^+)\n"
+    r"error: (?P<kind>[^\n]+)"
+)
+
+
+def _pattern_error(message: str, patterns: Sequence[str]) -> tuple[str, str] | None:
+    """Restate a regex parse error against the pattern as sent.
+
+    ripgrep reports the error in its combined form ``(?:p1)|(?:p2)`` with the
+    caret placed for that form. Returns the error kind, and the offending pattern
+    over a caret line under the offending part; None when the error does not map
+    onto one pattern, such as a PCRE2 error or one about ripgrep's own wrapper.
+    """
+    match = _REGEX_ERROR.search(message)
+    if match is None or match["wrapped"] != "|".join(f"(?:{pattern})" for pattern in patterns):
+        return None
+    start = len(match["pad"])
+    begin = 0
+    for pattern in patterns:
+        begin += len("(?:")
+        if begin <= start < begin + len(pattern):
+            local = start - begin
+            width = min(len(match["caret"]), len(pattern) - local)
+            kind = match["kind"]
+            if kind.endswith("escape sequence"):
+                kind += f' "{pattern[local : local + width]}"'
+            return kind, f"    {pattern}\n    {' ' * local}{'^' * width}"
+        begin += len(pattern) + len(")|")
+    return None
+
+
+def explain_failure(message: str, patterns: Sequence[str] = ()) -> str:
+    """Say what ripgrep refused and how to correct the call. Nothing was searched.
+
+    *patterns* are the regular expressions the call sent, in ripgrep's order, so
+    a regex error can point at the pattern as sent.
+    """
     if any(marker in message for marker in _PATTERN_ERRORS):
+        advice = (
+            'To search literal text, add "-F" to args; otherwise correct the regular expression.'
+        )
+        mapped = _pattern_error(message, patterns)
+        if mapped is not None:
+            kind, shown = mapped
+            return (
+                "The pattern is not a valid regular expression (ripgrep syntax): "
+                f"{kind}. Nothing was searched.\n{shown}\n{advice}"
+            )
         return (
             "The pattern is not a valid regular expression (ripgrep syntax). Nothing was "
-            f"searched.\n{message}\n"
-            'To search literal text, add "-F" to args; otherwise correct the regular expression.'
+            f"searched.\n{message}\n{advice}"
         )
     if match := re.match(r"unrecognized flag (\S+)", message):
         return (

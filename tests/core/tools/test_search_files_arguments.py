@@ -584,6 +584,35 @@ async def test_unicode_escape_repair_does_not_hide_unrelated_invalid_regex(tmp_p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("arguments", "shown", "column", "width"),
+    [
+        ({"pattern": r"tools\(\corpus|fuzz"}, r"tools\(\corpus|fuzz", 7, 2),
+        ({"pattern": "ok", "args": ["-e", r"y\q"]}, r"y\q", 1, 2),
+        ({"pattern": "[z-a]x", "args": ["--dirs"]}, "[z-a]x", 1, 3),
+        # A PCRE2 error has no caret to place: ripgrep's message stays.
+        ({"pattern": r"x(?<=\c", "args": ["-P"]}, None, 0, 0),
+    ],
+)
+async def test_a_regex_error_points_at_the_pattern_as_sent(
+    tmp_path, arguments, shown, column, width
+):
+    # ripgrep reports errors in its combined (?:p1)|(?:p2) form, with the caret placed there.
+    (tmp_path / "code").write_text("ok\n", encoding="utf-8")
+    result = await dispatch(tmp_path, arguments)
+
+    message = result["error"]["message"]
+    assert result["error"]["code"] == "search_error"
+    if shown is None:
+        assert "PCRE2" in message
+        return
+    assert "(?:" not in message
+    lines = message.splitlines()
+    caret = lines[lines.index(f"    {shown}") + 1]
+    assert caret == "    " + " " * column + "^" * width
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("arguments", "expected", "output"),
     [
         ({"output": "count", "context": 2}, "code:2", "count"),

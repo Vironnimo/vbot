@@ -1046,7 +1046,8 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
     except SearchRefusedError as error:
-        return tool_failure("search_error", explain_failure(str(error)))
+        patterns = query.patterns or query.name_patterns
+        return tool_failure("search_error", explain_failure(str(error), patterns))
     except SearchBoundError as error:
         # Only native runs raise it, and they start after query and cwd are set.
         return tool_failure("search_error", _bound_failure(error, query, cwd))
