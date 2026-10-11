@@ -11,7 +11,7 @@ import re
 import signal
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast, override
 
@@ -290,6 +290,7 @@ async def create_subprocess_exec(
     stdout: int | None = None,
     stderr: int | None = None,
     limit: int = 2**16,
+    on_created: Callable[[int], None] | None = None,
     **popen_arguments: Any,
 ) -> asyncio.subprocess.Process:
     """``asyncio.create_subprocess_exec`` without OS process creation on the Event Loop.
@@ -301,6 +302,12 @@ async def create_subprocess_exec(
     ``Process`` behaves exactly like asyncio's. Other platforms and loops use
     asyncio's own transport. On every platform the returned process also
     signals its OS exit to :func:`wait_for_exit`.
+
+    *on_created* receives the new process id off the Event Loop, right after the
+    process was created and before the call returns; on Windows before the
+    process is attached to the loop, so a process created suspended
+    (``CREATE_SUSPENDED``) runs nothing until the hook resumes it. When the hook
+    raises, the process is killed and the error propagates.
     """
     loop = asyncio.get_running_loop()
     if os.name != "nt" or not isinstance(loop, getattr(asyncio, "ProactorEventLoop", ())):
@@ -314,9 +321,17 @@ async def create_subprocess_exec(
             stderr=stderr,
             **popen_arguments,
         )
+        if on_created is not None:
+            try:
+                await asyncio.to_thread(on_created, transport.get_pid())
+            except BaseException:
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    transport.kill()
+                transport.close()
+                raise
         return _ExitSignallingProcess(transport, protocol, loop)
     return await _create_windows_subprocess_exec(
-        loop, [program, *args], stdin, stdout, stderr, limit, popen_arguments
+        loop, [program, *args], stdin, stdout, stderr, limit, popen_arguments, on_created
     )
 
 
@@ -347,6 +362,7 @@ async def _create_windows_subprocess_exec(
     stderr: int | None,
     limit: int,
     popen_arguments: dict[str, Any],
+    on_created: Callable[[int], None] | None = None,
 ) -> asyncio.subprocess.Process:
     if sys.platform != "win32":
         raise RuntimeError("asyncio's Windows process pipes exist only on Windows")
@@ -359,6 +375,8 @@ async def _create_windows_subprocess_exec(
             argv, stdin=stdin, stdout=stdout, stderr=stderr, bufsize=0, **popen_arguments
         )
         started.append(popen)
+        if on_created is not None:
+            on_created(popen.pid)
         return popen
 
     try:
