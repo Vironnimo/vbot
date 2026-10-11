@@ -23,13 +23,19 @@ def _bounded_preview_indices(start: int, end: int) -> tuple[list[int], int]:
     return indices, count - len(indices)
 
 
-def _render_preview_line(line: str, line_number: int, focus_character: int | None) -> str:
+def preview_window(line: str, focus_character: int | None) -> tuple[int, int]:
+    """Return the part of ``line`` a preview shows: all of it, or a window around the focus."""
     if len(line) <= _PREVIEW_MAX_LINE_CHARS:
-        return f"{line_number}{LINE_NUMBER_GUTTER_SEPARATOR} {line}"
+        return 0, len(line)
     focus_index = max((focus_character or 1) - 1, 0)
     start = max(0, focus_index - _PREVIEW_MAX_LINE_CHARS // 3)
     end = min(len(line), start + _PREVIEW_MAX_LINE_CHARS)
-    start = max(0, end - _PREVIEW_MAX_LINE_CHARS)
+    return max(0, end - _PREVIEW_MAX_LINE_CHARS), end
+
+
+def render_preview_line(line: str, line_number: int, focus_character: int | None) -> str:
+    """Number a line like ``read``; a long one shows a window with an ``N:C|`` gutter."""
+    start, end = preview_window(line, focus_character)
     gutter = f"{line_number}"
     if start:
         gutter += f":{start + 1}"
@@ -46,7 +52,7 @@ def _render_preview_side(
 ) -> tuple[list[str], int]:
     indices, omitted = _bounded_preview_indices(start, end)
     return [
-        _render_preview_line(
+        render_preview_line(
             lines[index], index + 1, focus_character if index == focus_line else None
         )
         for index in indices

@@ -487,16 +487,21 @@ def _edit_failure(
 ) -> JsonObject:
     """Say that no edit was applied, why, and which edit to correct."""
     context.add_display_notice("error", str(error["message"]))
-    lines = [failure_text(error)]
     total = len(edits)
+    label = str(error.get("label", ""))
+    number = next((n for n in range(1, total + 1) if label == f"edit {n} of {total}"), None)
+    if number is not None and number > 1:
+        # The failed edit saw the text the earlier edits left, not the file.
+        written = [
+            {**item, "label": str(item["label"]).split(" of ")[0]}
+            for item in error.get("written") or []
+        ]
+        after = "edit 1" if number == 2 else f"edits 1-{number - 1}"
+        error = {**error, "after": after, "written": written}
+    lines = [failure_text(error)]
     if total == 1:
         lines.append("No file was changed.")
     else:
-        label = str(error.get("label", ""))
-        number = next((n for n in range(1, total + 1) if label == f"edit {n} of {total}"), None)
-        if number is not None and number > 1 and error.get("candidates"):
-            earlier = "edit 1" if number == 2 else f"edits 1-{number - 1}"
-            lines.append(f"Line numbers count the text as {earlier} left it.")
         none, every = (
             ("Neither edit was", "both edits")
             if total == 2

@@ -276,7 +276,8 @@ def _continuations(candidate: JsonObject) -> list[tuple[int, int]]:
     return positions
 
 
-def _difference_text(difference: JsonObject) -> list[str]:
+def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
+    """Name the first differing line; ``after`` names the earlier edits its text has."""
     source = "old_string" if difference["source"] == "old_string" else "the patch"
     # A line between + lines without a + prefix reads as unchanged; the report
     # names that reading, since the copy is often an added line missing its +.
@@ -289,18 +290,24 @@ def _difference_text(difference: JsonObject) -> list[str]:
         else []
     )
     if not difference.get("truncated"):
+        held = (
+            f": after {after}, line {difference['line']} reads"
+            if after
+            else f", line {difference['line']}: the file has"
+        )
         return [
-            f"First difference, line {difference['line']}: the file has "
-            f"{difference['file']!r} where {source} has {difference['copy']!r}.",
+            f"First difference{held} {difference['file']!r} "
+            f"where {source} has {difference['copy']!r}.",
             *unprefixed,
         ]
+    place = f"after {after}, line" if after else "file line"
     lines = [
-        f"First difference, file line {difference['line']}, "
+        f"First difference, {place} {difference['line']}, "
         f"character {difference['character']}; copied line {difference['copy_line']}, "
         f"character {difference['copy_character']} (excerpts truncated):"
     ]
     copy_label = "old_string" if source == "old_string" else "The patch"
-    for key, label in (("file", "File"), ("copy", copy_label)):
+    for key, label in (("file", "Line" if after else "File"), ("copy", copy_label)):
         start = difference[f"{key}_start"]
         end = start + len(difference[key]) - 1
         lines.append(
@@ -318,24 +325,72 @@ def _read_hint(error: JsonObject) -> str:
     return f' {model_tool_name("read")}(path="{error["path_label"]}") shows its current content.'
 
 
+def _written_text(error: JsonObject, shown: set[int]) -> list[str]:
+    """Name the earlier edits of the call that wrote lines the failure shows."""
+    parts = []
+    for item in error.get("written") or []:
+        first, last = int(item["first"]), int(item["last"])
+        if shown.intersection(range(first, last + 1)):
+            lines = f"line {first}" if first == last else f"lines {first}-{last}"
+            parts.append((str(item["label"]), lines))
+    if not parts:
+        return []
+    (label, lines), *rest = parts
+    sentence = f"{label[:1].upper()}{label[1:]} of this call wrote {lines}"
+    return [sentence + "".join(f"; {other} wrote {more}" for other, more in rest) + "."]
+
+
+def _span(first: int, last: int) -> str:
+    return f"line {first}" if first == last else f"lines {first}-{last}"
+
+
+def _split_text(parts: list[JsonObject], held: str) -> str:
+    """Say which lines of old_string are which separate lines of the file."""
+    places = [
+        f"its {_span(int(part['copy_first']), int(part['copy_last']))} "
+        f"{'is' if part['copy_first'] == part['copy_last'] else 'are'} "
+        f"{_span(int(part['first']), int(part['last']))}"
+        for part in parts
+    ]
+    joined = ", ".join(places[:-1]) + f" and {places[-1]}"
+    return (
+        f"old_string joins lines from different places {held}: {joined}. "
+        "Give each place its own edit."
+    )
+
+
 def failure_text(error: JsonObject) -> str:
-    """Render one failed change with the current text the next call needs."""
+    """Render one failed change with the current text the next call needs.
+
+    ``after`` names the earlier edits of the call whose text the failure shows in
+    place of the file; ``written`` the lines they wrote (see ``apply_hunks``).
+    """
     lines = [str(error["message"])]
     code = error.get("code")
     candidates = error.get("candidates") or []
+    after = str(error.get("after") or "")
+    held = f"in the file after {after}" if after else "in the file"
+    shown: set[int] = set()
+    for candidate in candidates:
+        first = int(candidate["line"])
+        shown.update(range(first, first + candidate["text"].count("\n") + 1))
     if code in _NOT_FOUND_CODES or code == "eof_not_found":
-        if candidates:
+        if error.get("split"):
+            lines.append(_split_text(error["split"], held))
+            lines.extend(_excerpts(candidates, error.get("path_label")))
+        elif candidates:
             if len(candidates) == 1:
                 first = int(candidates[0]["line"])
                 last = first + candidates[0]["text"].count("\n")
                 where = f"line {first}" if first == last else f"lines {first}-{last}"
-                lines.append(f"The closest text in the file, {where}:")
+                lines.append(f"The closest text {held}, {where}:")
             else:
-                lines.append("The closest texts in the file:")
+                lines.append(f"The closest texts {held}:")
             lines.extend(_excerpts(candidates, error.get("path_label")))
             difference = error.get("difference")
             if difference:
-                lines.extend(_difference_text(difference))
+                lines.extend(_difference_text(difference, after))
+                shown.add(int(difference["line"]))
         elif error.get("part_of"):
             part = error["part_of"]
             text = part["text"] if len(part["text"]) <= 80 else part["text"][:77] + "..."
@@ -360,16 +415,20 @@ def failure_text(error: JsonObject) -> str:
                 cause = "A line without + or - is unchanged, so it must match a line of the file."
             lines.append(f"The patch line {text!r} is not in the file. {cause}{_read_hint(error)}")
         elif error.get("path_label"):
-            lines.append(f"No similar text is in the file;{_read_hint(error)}")
+            lines.append(f"No similar text is {held};{_read_hint(error)}")
         present = error.get("already_present")
         if present:
+            lead = f"After {after}, the new text" if after else "The new text"
             lines.append(
-                f"The new text already occurs at line {present}; if this change was made "
+                f"{lead} already occurs at line {present}; if this change was made "
                 "earlier, nothing more is needed."
             )
+            shown.add(int(present))
+        lines.extend(_written_text(error, shown))
     elif code in _AMBIGUOUS_CODES and candidates:
-        lines.append("Where it occurs:")
+        lines.append(f"Where it occurs after {after}:" if after else "Where it occurs:")
         lines.extend(_excerpts(candidates, error.get("path_label")))
+        lines.extend(_written_text(error, shown))
     if error.get("content"):
         lines.append(str(error["content"]))
     if error.get("completed_paths"):
@@ -428,7 +487,9 @@ def _record_notices(
         for note in dict.fromkeys(report.notes):
             context.add_display_notice("info", note, subject=report.label)
         if report.syntax_warning:
-            context.add_display_notice("warning", report.syntax_warning, subject=report.label)
+            # The user sees the change itself; the error's first line names the spot.
+            message = report.syntax_warning.partition("\n")[0]
+            context.add_display_notice("warning", message, subject=report.label)
     for note in notes:
         context.add_display_notice("info", note)
     # A failure message names the file and change it is about.

@@ -137,7 +137,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   2026-10-10). Notes (recoveries, metadata drift) and syntax warnings follow as
   `Note:` / `Warning:` lines. Syntax warnings compare the initial and final
   Tool-written text; a created or fully replaced file reports any final syntax
-  error, even when the original was invalid.
+  error, even when the original was invalid. A warning for an error this call
+  caused is followed by the lines around the error (two above and below, numbered
+  like `read`, with a caret under the reported column when the parser names one;
+  `syntax_check._with_excerpt`); a warning for an error the file already had shows
+  none, since that error is not the Agent's to find now.
 - Mixed outcomes are a success led by counts (`N of M changes
   applied; K did not.`, or `fully applied; K only in part` when a write was
   incomplete) and the instruction to resend only unfinished changes; each failure
@@ -264,7 +268,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   copied line there, the nearby file line most similar (>= 0.50) to the start of
   the first copied line starts it (a reworded copy resembles its line; a copy
   that joins lines starts like the first of them, which whole-line similarity
-  missed once in a replay), else the window start does. Evidence:
+  missed once in a replay), else the window start does. Similarity compares
+  words first and characters second: `_EQ_OPS = frozenset({...})` shares more
+  signs with the file's `_RANGE_OPS = {...}` than with its own `_EQ_OPS = {...}`,
+  and the character ratio named the wrong line (Swarm Run 2026-10; the replay of
+  227 first differences in failed calls changed only that one). Evidence:
   the longest lines were often added text copied without `+`, so 43 of 133 failed
   hunks in one Swarm said `No similar text` although most copied lines were in
   the file, and 10 of 76 checkable first differences named a line one to seven
@@ -309,6 +317,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   `part_of` report: a new line written without `+` can also occur inside a
   longer file line, and calling it a fragment hides the missing `+`.
   `old_string` text is compared by its first difference instead.
+- A hunk that is not found leads with `X: the lines to replace were not found.`;
+  a hunk without `-` lines replaces nothing, so its lead is `X: the context
+  lines around the + lines were not found.` (`context_lines_not_found`, same code
+  `text_not_found`).
 - When the reported first difference is an unchanged line that only unchanged
   lines separate from `+` lines on both sides, or one right next to a `+` line,
   the report adds `That patch line has no + prefix, so it must already be in the
@@ -363,8 +375,15 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   otherwise, one difference per 4 correct words, but never where either side of
   a difference names another target: lexical identifiers (underscore, digit, or
   inner capital), plus names evidenced by calls, declarations and member/namespace
-  access even when they are plain lowercase words. This evidence covers omitted
-  names too, so substring recovery cannot drop a row ID to find another row.
+  access even when they are plain lowercase words, and the words between a call's
+  or declaration's parentheses outside quotes (arguments and parameters). This
+  evidence covers omitted names too, so substring recovery cannot drop a row ID
+  to find another row, and it holds on kept lines: a kept line that adds or lacks
+  a name is not a stale context line but another signature or call (Swarm Run
+  2026-10: an `old_string` copying `def f(self, x)` for the file's
+  `@staticmethod` `def f(x)` was placed by the kept-line gap rule, and the
+  method inserted above it took the decorator from the original). Words in
+  quotes stay text.
   Misspellings still qualify under the rules below. Exactly copied first and last lines (3+ lines, 2+ words
   each) also place a passage around similar lines (SequenceMatcher ratio >= 0.5,
   or 0.7 when the anchor pair repeats), but cannot override a copied name that
@@ -416,7 +435,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   nothing is applied elsewhere and the hunk fails `text_not_found`. Warnings
   name each replaced line and each kept line that differed (`... was edited
   anyway; it read:` / `... was left as it reads:`, long lines from just before
-  the first difference) and each respelled word (`copy_warnings`). Tests:
+  the first difference) and each respelled word (`copy_warnings`). A replaced
+  line is numbered as it was; a kept line where the edit leaves it, so the
+  number matches the region shown above the note. Tests:
   `test_copy_match.py`, plus the
   patch, field, Skill and Wiki suites.
 - Only changed lines are emitted from the replacement; context lines keep their
@@ -527,7 +548,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   its changed lines, not its whole content. A call that changed no file records no
   counts. Updates reuse syntax-delta warnings; Add uses full-file syntax warnings.
 - The display declares detail blocks: after the diffs, `patch_result` records one
-  notice per file note (`info`), syntax warning (`warning`) and net-effect note,
+  notice per file note (`info`), syntax warning (`warning`, its first line only:
+  the user sees the change itself) and net-effect note,
   and one `error` notice per failed change with its message alone - not the
   excerpts, difference and `read` continuations the Model's recovery needs. The user reads the
   Model's result text only in the raw call disclosure.
@@ -555,6 +577,8 @@ replacements still went through Delete File plus Add File (agent-eval
 |---|---|
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
+| Syntax warning excerpt (shared with `edit` and `write`): `Warning: Syntax check failed after this edit: SyntaxError: '(' was never closed (line 2, column 12)` followed by `1| ...`, `2| ...`, a caret line and `3| ...` | Real Sessions (2026-10) read 30-45 lines after a warning to find the line the error names; the excerpt shows it in the result. Only the error's own lines are shown, not more, so a result stays short. |
+| `context_lines_not_found`: `X: the context lines around the + lines were not found.` | A block that only adds lines was reported as `the lines to replace were not found`, which names lines the block does not have and points the Agent at text to replace instead of at its context lines (review of a Swarm Run, 2026-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
 
 ## Verification

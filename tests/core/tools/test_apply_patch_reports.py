@@ -215,16 +215,19 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
 
 
 @pytest.mark.parametrize(
-    ("body", "report"),
+    ("body", "lead", "report"),
     [
         (
             "@@\n-gamma delta epsilon zeta eta theta iota kappa lambda\n+changed",
+            "the lines to replace were not found.",
             "The patch line 'gamma delta epsilon zeta eta theta iota kappa lambda' is not in the "
             "file. A - line names a line to remove, so it must match a line of the file.",
         ),
-        # Session shape: new lines before the first + line were written without +.
+        # Session shape: new lines before the first + line were written without +. A block
+        # without - lines replaces nothing: what was not found are its context lines.
         (
             "@@\n        'gamma delta epsilon zeta eta theta',\n+    ):\n beta",
+            "the context lines around the + lines were not found.",
             "The patch line \"'gamma delta epsilon zeta eta theta',\" is not in the file. "
             "That patch line has no + prefix, so it must already be in the file; if it is new, "
             "start it with +.",
@@ -232,18 +235,21 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
         # An unchanged line away from + lines is not a new line missing its +.
         (
             "@@\n gamma delta epsilon zeta eta theta iota kappa\n-beta\n+changed",
+            "the lines to replace were not found.",
             "The patch line 'gamma delta epsilon zeta eta theta iota kappa' is not in the file. "
             "A line without + or - is unchanged, so it must match a line of the file.",
         ),
     ],
 )
-def test_missing_hunk_without_close_candidate_names_a_line_the_file_lacks(tmp_path, body, report):
+def test_missing_hunk_without_close_candidate_names_a_line_the_file_lacks(
+    tmp_path, body, lead, report
+):
     path = tmp_path / "file.txt"
     path.write_bytes(b"alpha\nbeta\n")
     result = apply(tmp_path, update(body))
     assert result["error"] == {
         "code": "text_not_found",
-        "message": f"file.txt: the lines to replace were not found.\n{report} "
+        "message": f"file.txt: {lead}\n{report} "
         'read(path="file.txt") shows its current content.\n'
         "No file was changed.",
     }
@@ -510,6 +516,33 @@ def test_first_difference_is_aligned_with_the_copied_lines(tmp_path, case):
             "First difference, line 44: the file has '    rest = tokens[1:]' where the patch "
             "has '    # An empty stream has no head, so it is rejected here with a clear message'."
         ) in text(result)
+
+
+def test_a_rewritten_line_is_compared_with_the_line_of_its_name(tmp_path):
+    # The copied EQ_OPS line shares more signs with RANGE_OPS than with its own line.
+    before = (
+        "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 21))
+        + '\nEQ_OPS = {"=", "=="}\nRANGE_OPS = {">", ">=", "<", "<="}\n\n\n'
+        "def check(op):\n    return op in EQ_OPS\n"
+    )
+    path = tmp_path / "file.py"
+    path.write_bytes(before.encode())
+    result = apply(
+        tmp_path,
+        update(
+            '@@\n-EQ_OPS = frozenset({"=", "==", "IS"})\n'
+            '-RANGE_OPS = frozenset({"<", "<=", ">", ">="})\n'
+            '+EQ_OPS = frozenset({"=", "=="})',
+            "file.py",
+        ),
+    )
+    message = text(result)
+    assert result["error"]["code"] == "text_not_found"
+    assert path.read_bytes() == before.encode()
+    # The window, then the first differing line: EQ_OPS at line 22, quoted as the file has it.
+    assert re.findall(r"\blines? (\d+(?:-\d+)?)", message) == ["22-23", "22"]
+    assert repr('EQ_OPS = {"=", "=="}') in message
+    assert repr('RANGE_OPS = {">", ">=", "<", "<="}') not in message
 
 
 def _read_calls(message):
