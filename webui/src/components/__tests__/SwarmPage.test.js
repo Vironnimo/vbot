@@ -24,19 +24,50 @@ import { t } from '../../lib/i18n.js';
 const NEW_RUN = t('swarm.newRun');
 const NEW_SWARM = t('swarm.newProfile');
 const START_RUN = t('swarm.startButton');
-const DELETE_RUN = t('swarm.deleteRun.title');
+const DELETE = t('swarm.menu.delete');
 const RESUME = t('swarm.resume');
 const STOP = t('swarm.stop');
 const ACTIVE_RUNS = t('swarm.runs.active');
 const INACTIVE_RUNS = t('swarm.runs.inactive');
 
+// A Run group of the pane by its heading; the group stays without Runs.
 const runGroup = (label) =>
-  document.querySelector(`nav[aria-label="${label}"]`);
+  [...document.querySelectorAll('.swarm-pane section')].find(
+    (section) => section.querySelector('h3').textContent.trim() === label,
+  );
+const runRows = (label) => runGroup(label).querySelectorAll('[data-run-id]');
 const dialog = () => document.querySelector('[role="dialog"]');
 const confirmDelete = () =>
   [...dialog().querySelectorAll('button')].find(
     (node) => node.textContent.trim() === t('common.delete'),
   );
+// A button of the shown Run's header by its text or accessible name.
+const headButton = (text) =>
+  [...document.querySelectorAll('.swarm-head button')].find((item) =>
+    (item.getAttribute('aria-label') || item.textContent).includes(text),
+  );
+const menuLabels = () =>
+  [...document.querySelectorAll('[role="menuitem"] .context-menu__label')].map(
+    (label) => label.textContent.trim(),
+  );
+const menuItem = (label) =>
+  [...document.querySelectorAll('[role="menuitem"]')].find(
+    (item) =>
+      item.querySelector('.context-menu__label').textContent.trim() === label,
+  );
+
+// Opens the shown Run's menu in its header.
+async function openRunMenu() {
+  headButton(t('swarm.run.actions', { title: 'Investigate' })).click();
+  await tick();
+}
+
+// Chooses `label` from the shown Run's menu.
+async function chooseRunAction(label) {
+  await openRunMenu();
+  menuItem(label).click();
+  await tick();
+}
 
 describe('SwarmPage overview', () => {
   it('shows a connection failure until the host initializes the page', async () => {
@@ -49,8 +80,9 @@ describe('SwarmPage overview', () => {
     flushSync();
     await vi.advanceTimersByTimeAsync(10_000);
     flushSync();
-    expect(document.querySelector('[role="alert"]')).not.toBeNull();
-    expect(button(t('common.refresh')).disabled).toBe(false);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      t('swarm.hostUnavailable'),
+    );
     bridge.show();
     await vi.advanceTimersByTimeAsync(0);
     flushSync();
@@ -72,7 +104,7 @@ describe('SwarmPage overview', () => {
     await tick();
     flushSync();
     expect(callsTo(operation, 'catalog')).toHaveLength(1);
-    expect(document.querySelector('input')).not.toBeNull();
+    expect(document.querySelector('.swarm-profile-editor')).not.toBeNull();
   });
 
   it('groups Runs by execution state under headed groups that explain when empty', async () => {
@@ -81,18 +113,23 @@ describe('SwarmPage overview', () => {
     overrideOperations(operation, { 'swarms.list': () => ({ entries }) });
     await render(bridge);
     const emptyText = (label) =>
-      runGroup(label).querySelector('p')?.textContent.trim();
-    const rows = (label) => runGroup(label).querySelectorAll('button');
+      runGroup(label)
+        .querySelector('.empty-state__description')
+        ?.textContent.trim();
+    const titles = (label) =>
+      [...runRows(label)].map((row) =>
+        row.querySelector('.swarm-row__name').textContent.trim(),
+      );
     for (const [label, empty] of [
       [ACTIVE_RUNS, t('swarm.runs.noActive')],
       [INACTIVE_RUNS, t('swarm.runs.noInactive')],
     ]) {
-      const section = runGroup(label).closest('section');
+      const section = runGroup(label);
       expect(
         document.getElementById(section.getAttribute('aria-labelledby'))
           .tagName,
       ).toBe('H3');
-      expect(rows(label)).toHaveLength(0);
+      expect(runRows(label)).toHaveLength(0);
       expect(emptyText(label)).toBe(empty);
     }
     entries = [
@@ -106,25 +143,46 @@ describe('SwarmPage overview', () => {
       'failed',
     ].map((state) => ({ id: state, title: `goal-${state}`, state }));
     bridge.invalidate();
-    await vi.waitFor(() => expect(rows(ACTIVE_RUNS)).toHaveLength(3));
-    expect([...rows(ACTIVE_RUNS)].map((row) => row.textContent.trim())).toEqual(
-      ['goal-preparing', 'goal-running', 'goal-stopping'],
-    );
-    expect(rows(INACTIVE_RUNS)).toHaveLength(5);
+    // Open Runs come first, a Run that needs the user among them.
+    await vi.waitFor(() => expect(runRows(ACTIVE_RUNS)).toHaveLength(5));
+    expect(titles(ACTIVE_RUNS)).toEqual([
+      'goal-preparing',
+      'goal-running',
+      'goal-stopping',
+      'goal-idle',
+      'goal-needs_attention',
+    ]);
+    expect(titles(INACTIVE_RUNS)).toEqual([
+      'goal-interrupted',
+      'goal-stopped',
+      'goal-failed',
+    ]);
+    // A row's second line names its state in words.
+    expect(
+      runRows(ACTIVE_RUNS)[4]
+        .querySelector('.swarm-row__detail')
+        .textContent.trim(),
+    ).toBe(t('swarm.state.needsAttention'));
     expect(emptyText(ACTIVE_RUNS)).toBeUndefined();
     expect(emptyText(INACTIVE_RUNS)).toBeUndefined();
     const profileRow = document.querySelector(
-      `nav[aria-label="${t('swarm.profiles')}"] button`,
+      `nav[aria-label="${t('swarm.profiles')}"] [data-profile-id]`,
     );
-    expect(profileRow.textContent.trim()).toBe('Research (2)');
-    expect(profileRow.children).toHaveLength(1);
-    expect(document.querySelector('.run-group strong')).toBeNull();
+    expect(profileRow.querySelector('.swarm-row__name').textContent).toBe(
+      'Research',
+    );
+    expect(profileRow.querySelector('.swarm-row__detail').textContent).toBe(
+      t('swarm.sidebar.profileSummary', {
+        size: t('swarm.participantCount', { count: 2 }),
+        models: 'model',
+      }),
+    );
     entries = entries.map((entry) =>
-      entry.id === 'running' ? { ...entry, state: 'idle' } : entry,
+      entry.id === 'running' ? { ...entry, state: 'stopped' } : entry,
     );
     bridge.invalidate();
-    await vi.waitFor(() => expect(rows(ACTIVE_RUNS)).toHaveLength(2));
-    expect(runGroup(INACTIVE_RUNS).textContent).toContain('goal-running');
+    await vi.waitFor(() => expect(runRows(ACTIVE_RUNS)).toHaveLength(4));
+    expect(titles(INACTIVE_RUNS)).toContain('goal-running');
   });
 
   const changed = (resource, id) => ({ resource, ids: [id], revision: 2 });
@@ -213,7 +271,7 @@ describe('SwarmPage overview', () => {
     },
   );
 
-  it('describes a Swarm by participants per Model and a Run by its Swarm and size', async () => {
+  it('describes a Swarm by participants per Model and a Run by its Swarm, state and size', async () => {
     const formation = {
       ...profile,
       participants: [
@@ -243,7 +301,7 @@ describe('SwarmPage overview', () => {
         label.textContent,
         label.nextElementSibling.textContent,
       ]);
-    button('Research (4)').focus();
+    document.querySelector('[data-profile-id="prf-a"]').focus();
     await vi.waitFor(() =>
       expect(tooltip()?.textContent).toContain('demo/other'),
     );
@@ -254,15 +312,17 @@ describe('SwarmPage overview', () => {
       [t('swarm.participantCount', { count: 3 }), 'demo/model'],
       [t('swarm.participantCount.one'), 'demo/other'],
     ]);
-    button('Investigate').focus();
+    document.querySelector('[data-run-id="swr-a"]').focus();
     await vi.waitFor(() =>
       expect(tooltip().querySelector('.app-tooltip__title').textContent).toBe(
         'Investigate',
       ),
     );
+    // A Run without a start time leaves out its start.
     expect(rows()).toEqual([
       [t('swarm.profile'), 'Research'],
-      [t('swarm.participants'), '4'],
+      [t('swarm.details.state'), t('swarm.state.running')],
+      [t('swarm.participants'), t('swarm.participantCount', { count: 4 })],
     ]);
   });
 
@@ -334,10 +394,12 @@ describe('SwarmPage overview', () => {
       'catalog-unavailable-test',
     );
     expect(button(NEW_SWARM).disabled).toBe(false);
+    // The failed step leaves the route at the start page it still shows.
+    await vi.waitFor(() => expect(bridge.route).toBe(''));
     button(NEW_SWARM).click();
-    await tick();
-    flushSync();
-    expect(document.querySelector('input')).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-profile-editor')).not.toBeNull(),
+    );
   });
 
   it('ignores old Swarm detail replies after selecting a new Swarm', async () => {
@@ -383,6 +445,103 @@ describe('SwarmPage overview', () => {
       t('swarm.board.mainDiscussion'),
     );
   });
+
+  it('offers the Run and Swarm actions on their pane rows', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    document.querySelector('[data-run-id="swr-a"]').dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20,
+      }),
+    );
+    await tick();
+    expect(
+      document.querySelector('[role="menu"]').getAttribute('aria-label'),
+    ).toBe(t('swarm.run.actions', { title: 'Investigate' }));
+    expect(menuLabels()).toEqual([
+      t('swarm.run.communication'),
+      t('swarm.run.details'),
+      DELETE,
+    ]);
+    // A working Run is stopped before it can be deleted.
+    expect(menuItem(DELETE).disabled).toBe(true);
+    menuItem(t('swarm.run.details')).click();
+    // Another Run's details load first; they name its ID with a copy action.
+    await vi.waitFor(() => expect(dialog()?.textContent).toContain('swr-a'));
+    expect(callsTo(operation, 'swarms.get')).toHaveLength(1);
+    expect(
+      dialog().querySelector(`[aria-label="${t('swarm.details.copyId')}"]`),
+    ).not.toBeNull();
+    bridge.back();
+    await tick();
+    expect(dialog()).toBeNull();
+    // From a shown Run, a Swarm's keyboard menu starts a Run of that Swarm.
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    document.querySelector('[data-profile-id="prf-a"]').dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'F10',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await tick();
+    expect(menuLabels()).toEqual([
+      t('common.edit'),
+      t('swarm.sidebar.startRun'),
+      DELETE,
+    ]);
+    menuItem(t('swarm.sidebar.startRun')).click();
+    await vi.waitFor(() =>
+      expect(document.activeElement?.id).toBe('swarm-goal'),
+    );
+    expect(document.querySelector('.swarm-head')).toBeNull();
+    expect(bridge.route).toBe('');
+  });
+
+  it("keeps a failed action's error through background refreshes until the next action starts", async () => {
+    const { bridge, operation } = createBridge();
+    let listFails = false;
+    overrideOperations(operation, {
+      'swarms.stop': () => {
+        throw new Error('test-owned stop failure');
+      },
+      'swarms.list': (_args, fallback) => {
+        if (listFails) throw new Error('test-owned list failure');
+        return fallback();
+      },
+    });
+    await openSwarm(bridge);
+    const notice = (role) =>
+      document.querySelector(`.swarm-notices [role="${role}"]`)?.textContent ??
+      '';
+    headButton(STOP).click();
+    await vi.waitFor(() =>
+      expect(notice('alert')).toContain('test-owned stop failure'),
+    );
+    // A failed refresh shows beside it with a way to retry ...
+    listFails = true;
+    bridge.invalidate();
+    await vi.waitFor(() =>
+      expect(notice('status')).toContain('test-owned list failure'),
+    );
+    expect(button(t('common.retry'))).toBeDefined();
+    expect(notice('alert')).toContain('test-owned stop failure');
+    // ... and the next successful refresh clears only its own error.
+    listFails = false;
+    bridge.invalidate();
+    await vi.waitFor(() => expect(notice('status')).toBe(''));
+    expect(notice('alert')).toContain('test-owned stop failure');
+    button(t('swarm.tabs.usage')).click();
+    await tick();
+    expect(notice('alert')).toBe('');
+  });
 });
 
 describe('Swarm Run start', () => {
@@ -401,7 +560,7 @@ describe('Swarm Run start', () => {
     await render(bridge);
     const input = directory();
     expect(input.value).toBe('C:/work');
-    const form = document.querySelector('.start');
+    const form = document.querySelector('.swarm-start');
     expect(
       [...form.querySelectorAll('[id]')]
         .map((el) => el.id)
@@ -437,8 +596,11 @@ describe('Swarm Run start', () => {
       ),
     );
     expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
+    // The started Run shows with its title focused.
     await vi.waitFor(() =>
-      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+      expect(document.activeElement).toBe(
+        document.querySelector('.swarm-head h2'),
+      ),
     );
     button(NEW_RUN).click();
     await tick();
@@ -471,7 +633,7 @@ describe('Swarm Run start', () => {
     expect(directory().value).toBe('C:/work');
   });
 
-  it('ignores stale Project lookups and prevents starting with a blank directory', async () => {
+  it('ignores stale Project lookups and names blank fields at Start', async () => {
     const { bridge, operation } = createBridge(projectProfile);
     let resolveCatalog;
     overrideOperations(operation, {
@@ -491,7 +653,22 @@ describe('Swarm Run start', () => {
     expect(directory().value).toBe('C:/work');
     fill('swarm-start-directory', '  ');
     await tick();
-    expect(button(START_RUN).disabled).toBe(true);
+    // Start names each blank field at the field and focuses the first.
+    button(START_RUN).click();
+    await vi.waitFor(() => expect(document.activeElement).toBe(directory()));
+    expect(directory().getAttribute('aria-invalid')).toBe('true');
+    expect(
+      document.getElementById('swarm-start-directory-error').textContent,
+    ).toBe(t('swarm.start.directoryRequired'));
+    expect(document.getElementById('swarm-goal-error').textContent).toBe(
+      t('swarm.start.goalRequired'),
+    );
+    expect(callsTo(operation, 'swarms.start')).toHaveLength(0);
+    // Editing a field clears its error.
+    fill('swarm-start-directory', 'C:/work');
+    await tick();
+    expect(document.getElementById('swarm-start-directory-error')).toBeNull();
+    expect(document.getElementById('swarm-goal-error')).not.toBeNull();
   });
 });
 
@@ -501,16 +678,23 @@ describe('Swarm Run controls', () => {
     // An open Run whose participants all idle is stopped before deletion.
     ['idle', ['swarms.stop']],
   ])(
-    'confirms deletion of a %s Run, keeps the profile and clears the selected Swarm',
+    'confirms deletion of a %s Run, keeps the profile, clears the selected Swarm and focuses the next Run',
     async (state, before) => {
-      const { bridge, operation } = createBridge(profile, {
+      const detail = {
         ...structuredClone(swarm),
         state,
         participants: swarm.participants.map((participant) => ({
           ...structuredClone(participant),
           state: 'idle',
         })),
-      });
+      };
+      const { bridge, operation } = createBridge(profile, detail);
+      const next = {
+        id: 'swr-b',
+        title: 'Second Run',
+        state: 'stopped',
+        participant_count: 2,
+      };
       let deleted = false;
       overrideOperations(operation, {
         'swarms.stop': () => ({ swarm_id: 'swr-a', state: 'stopped' }),
@@ -518,21 +702,25 @@ describe('Swarm Run controls', () => {
           deleted = true;
           return { deleted: true };
         },
-        'swarms.list': (_args, fallback) =>
-          deleted ? { entries: [], has_more: false } : fallback(),
+        'swarms.list': () => ({
+          entries: deleted
+            ? [next]
+            : [{ ...detail, participant_count: 2 }, next],
+          has_more: false,
+        }),
       });
       await openSwarm(bridge);
       await settle();
-      button(DELETE_RUN).click();
-      await tick();
-      expect(dialog().textContent).toContain(t('swarm.deleteRun.body'));
+      await chooseRunAction(DELETE);
+      expect(dialog().textContent).toContain(
+        t('swarm.deleteRun.body', { title: 'Investigate' }),
+      );
       // Back in the app dismisses the confirmation like Cancel.
       bridge.back();
       await tick();
       expect(dialog()).toBeNull();
       expect(callsTo(operation, 'swarms.delete')).toHaveLength(0);
-      button(DELETE_RUN).click();
-      await tick();
+      await chooseRunAction(DELETE);
       confirmDelete().click();
       await settle();
       expect(operation).toHaveBeenCalledWith('swarms.delete', {
@@ -548,6 +736,11 @@ describe('Swarm Run controls', () => {
       expect(button('Investigate')).toBeUndefined();
       expect(bridge.replaceRoute).toHaveBeenLastCalledWith('');
       expect(button('Research')).toBeDefined();
+      await vi.waitFor(() =>
+        expect(document.activeElement).toBe(
+          document.querySelector('[data-run-id="swr-b"]'),
+        ),
+      );
     },
   );
 
@@ -565,9 +758,8 @@ describe('Swarm Run controls', () => {
     });
     await openSwarm(bridge);
     await settle();
-    expect(button(RESUME)).toBeUndefined();
-    button(DELETE_RUN).click();
-    await tick();
+    expect(headButton(RESUME)).toBeUndefined();
+    await chooseRunAction(DELETE);
     confirmDelete().click();
     await settle();
     expect(dialog().textContent).toContain('Storage unavailable');
@@ -602,10 +794,20 @@ describe('Swarm Run controls', () => {
       await settle();
       const [shown, hidden] =
         action === 'stop' ? [STOP, RESUME] : [RESUME, STOP];
-      expect(button(hidden)).toBeUndefined();
-      // Deletion waits until nothing works any more.
-      expect(button(DELETE_RUN).disabled).toBe(action === 'stop');
-      button(shown).click();
+      expect(headButton(hidden)).toBeUndefined();
+      // Deletion waits until nothing works any more, and says so.
+      await openRunMenu();
+      expect(menuItem(DELETE).disabled).toBe(action === 'stop');
+      expect(
+        menuItem(DELETE).textContent.includes(t('swarm.deleteRun.stopFirst')),
+      ).toBe(action === 'stop');
+      document
+        .querySelector('[role="menu"]')
+        .dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        );
+      await tick();
+      headButton(shown).click();
       await tick();
       expect(operation).toHaveBeenCalledWith(
         `swarms.${action}`,
@@ -638,35 +840,76 @@ describe('Swarm Run controls', () => {
     );
   });
 
-  it('keeps failed participants visible while their peers are running', async () => {
+  it('keeps failed participants visible while their peers are running and opens their Activity', async () => {
     const detail = structuredClone(swarm);
     detail.participants[1].state = 'failed';
+    detail.participants.push({
+      ...structuredClone(detail.participants[0]),
+      id: 'prt-c',
+      display_name: 'Gamma',
+      state: 'interrupted',
+    });
     const { bridge } = createBridge(profile, detail);
     await openSwarm(bridge);
+    const banner = () => document.querySelector('.swarm-failed');
+    await vi.waitFor(() => expect(banner()?.textContent).toContain('Beta'));
+    expect(banner().getAttribute('role')).toBe('status');
+    expect(banner().querySelector('p').textContent.trim()).toBe(
+      `${t('swarm.participants.failed', { names: 'Beta and Gamma' })} ${t('swarm.participants.failedResume')}`,
+    );
+    // Stop stays the header's one action; the notice offers Resume.
+    expect(headButton(STOP)).toBeDefined();
+    expect(headButton(RESUME)).toBeUndefined();
+    const actions = [...banner().querySelectorAll('button')];
+    expect(actions.map((item) => item.textContent.trim())).toEqual([
+      'Beta',
+      'Gamma',
+      RESUME,
+    ]);
+    actions[0].click();
     await vi.waitFor(() =>
-      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-        'Beta',
+      expect(bridge.pushRoute).toHaveBeenLastCalledWith(
+        '/swarms/swr-a/participants',
       ),
     );
   });
 
-  it('does not autosave delivery changes and stops only on an explicit click', async () => {
+  it('applies communication settings only on Apply, keeps a failure in the dialog and stops only on an explicit click', async () => {
     const { bridge, operation } = createBridge();
+    let conflict = true;
+    overrideOperations(operation, {
+      'swarms.settings': () => {
+        if (!conflict) return { settings_revision: 4 };
+        conflict = false;
+        throw new Error('test-owned settings conflict');
+      },
+    });
     await openSwarm(bridge);
     await tick();
     flushSync();
-    button(t('swarm.communication.title')).click();
-    flushSync();
-    const select = document.querySelector('.communication select');
-    select.value = 'pull';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await tick();
+    await chooseRunAction(t('swarm.run.communication'));
+    await choose(
+      'swarm-live-delivery-main-receive',
+      t('swarm.delivery.receive.pull'),
+    );
     expect(callsTo(operation, 'swarms.settings')).toHaveLength(0);
-    expect(document.body.textContent).toContain(
-      t('swarm.communication.proposed'),
+    // The change reads in the fields' words.
+    expect(dialog().textContent).toContain(
+      t('swarm.communication.routeChange', {
+        route: t('swarm.delivery.route.main'),
+        setting: t('swarm.delivery.receive'),
+        before: t('swarm.delivery.receive.all'),
+        after: t('swarm.delivery.receive.pull'),
+      }),
     );
     button(t('swarm.apply')).click();
     await settle();
+    // A failed apply stays in the dialog for another try.
+    expect(dialog().textContent).toContain('test-owned settings conflict');
+    expect(document.querySelector('.swarm-notices')).toBeNull();
+    button(t('swarm.apply')).click();
+    await settle();
+    expect(callsTo(operation, 'swarms.settings')).toHaveLength(2);
     expect(operation).toHaveBeenCalledWith(
       'swarms.settings',
       expect.objectContaining({
@@ -674,10 +917,12 @@ describe('Swarm Run controls', () => {
         expected_revision: 3,
         delivery: expect.objectContaining({
           main: expect.objectContaining({ mode: 'pull' }),
+          coalesce_ms: 250,
         }),
       }),
     );
-    button(STOP).click();
+    expect(dialog()).toBeNull();
+    headButton(STOP).click();
     await tick();
     expect(operation).toHaveBeenCalledWith(
       'swarms.stop',

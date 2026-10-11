@@ -1,27 +1,32 @@
-/* The start page's goal form (RunStartForm.svelte). */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .start {
+/* The start page's goal form (RunStartForm.svelte): a centred page at the
+   configuration measure, like the profile editor, with Start at the end. */
+.swarm-page .swarm-start {
+  --page-measure: var(--content-max-narrow);
+}
+.swarm-page .swarm-start__header {
+  margin-bottom: 28px;
+}
+.swarm-page .swarm-start__fields {
   display: grid;
   gap: 20px;
-  max-width: var(--content-max-narrow);
-  margin-inline: auto;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .start
-  > button {
-  justify-self: start;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .start-profile {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: end;
+/* The Swarm picker with its Edit Swarm (or New Swarm) action. */
+.swarm-page .swarm-start__profile {
+  display: flex;
+  min-width: 0;
+  align-items: center;
   gap: 8px;
 }
-@media (max-width: 640px) {
-  /* The goal form's only header action is one icon: it stays beside the
-     title instead of taking its own row. */
-  .swarm-page .start > .view-header {
-    flex-direction: row;
-    align-items: flex-start;
-  }
+.swarm-page .swarm-start__profile > .dropdown {
+  min-width: 0;
+  flex: 1;
+}
+.swarm-page .swarm-start__profile > .btn-tertiary {
+  flex-shrink: 0;
+}
+.swarm-page .swarm-start__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 28px;
+  padding-bottom: 4px;
 }

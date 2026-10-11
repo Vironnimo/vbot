@@ -1,7 +1,8 @@
-/* Rules the page's areas share: the page and workspace layout, list rows
-   (the sidebar's and the Wiki's), section heads, panels and dialog copy.
-   Each area's own rules live in the stylesheet its component imports.
-   Markdown (`.msg-markdown`) keeps the app's own code block styling, so the
+/* Rules the page's areas share: the page and workspace layout, the page's
+   notices, list rows (the Wiki's), panels and preformatted text. Each area's
+   own rules live in the stylesheet its component imports; the dialogs render
+   outside the page and keep theirs in runDialogs.css. Markdown
+   (`.msg-markdown`) keeps the app's own code block styling, so the
    preformatted text rules skip it; tables are DataTable's or Markdown's. */
 body {
   margin: 0;
@@ -16,8 +17,8 @@ body {
   min-height: 0;
   overflow: hidden;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .secondary-list__item {
+/* `:where()` keeps these below the pane's and the Wiki's own row rules. */
+:where(.swarm-page) .secondary-list__item {
   width: 100%;
   text-align: left;
   padding: 10px 12px;
@@ -25,51 +26,40 @@ body {
   display: grid;
   gap: 6px;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .secondary-list__item.active {
+:where(.swarm-page) .secondary-list__item.active {
   color: var(--text-hi);
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .workspace {
+/* The work area: the page's notices above the shown view, which is its own
+   scroller (the start form, a Run or the profile editor). */
+.swarm-page .workspace {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
   min-height: 0;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .workspace
-  > .banner {
-  margin: 14px var(--page-inset-x) 0;
+/* Notices line up with the view's measure; the reserved gutters match the
+   scroller's below them. */
+.swarm-page .swarm-notices {
+  display: grid;
+  flex-shrink: 0;
+  gap: 8px;
+  overflow: hidden;
+  padding: 14px var(--page-inset-x) 0;
+  scrollbar-gutter: stable both-edges;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .content {
-  flex: 1;
-  min-width: 0;
-  overflow: auto;
-  padding: var(--page-inset-top) var(--page-inset-x) var(--page-inset-bottom);
+.swarm-page .swarm-notices > .banner {
+  width: 100%;
+  max-width: var(--content-max-narrow);
+  margin-inline: auto;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .section-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
+.swarm-page .swarm-notices > .banner > .btn-tertiary {
+  flex-shrink: 0;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .muted,
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .section-head
-  p {
+:where(.swarm-page) .muted {
   color: var(--text-med);
   margin: 4px 0;
   overflow-wrap: anywhere;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .panel {
   display: grid;
@@ -98,12 +88,6 @@ body {
   color: var(--text-hi);
   font-family: var(--font-mono);
   font-size: var(--fs-mono-sm);
-}
-.swarm-page-modal-copy,
-.swarm-page-communication {
-  display: grid;
-  gap: 16px;
-  padding: 0 18px 18px;
 }
 @media (max-width: 640px) {
   /* Narrow pages stack the pane above the work area. */

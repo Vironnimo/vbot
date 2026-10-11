@@ -1,32 +1,80 @@
-/* The selected Run's header and tabs (RunView.svelte). */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-head {
-  margin-bottom: 20px;
+/* The selected Run (RunView.svelte): a centred page at the configuration
+   measure, like the start form and the profile editor. The view is the
+   page's scroller without a top inset: the header carries the inset itself,
+   so the tabs can stick to the scroller's top edge while a panel scrolls.
+   Sticky bars inside the panels stick below the tabs at
+   `--swarm-run-sticky-top` (the tab row's height, set on the view). */
+.swarm-page {
+  --swarm-run-inset-top: var(--page-inset-top);
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-head
-  > div:first-child {
-  min-width: 0;
-  flex: 1;
+.swarm-page .swarm-run {
+  --page-measure: var(--content-max-narrow);
+  --page-inset-top: 0px;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-tabs {
+.swarm-page .swarm-head {
   display: flex;
-  align-items: center;
-  gap: 16px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-tabs
-  .tab-list {
-  flex: 1;
   min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-top: var(--swarm-run-inset-top);
 }
-.swarm-page .swarm-heading-title {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.swarm-page .swarm-heading h2 {
+.swarm-page .swarm-head__title {
+  max-width: 100%;
   overflow-wrap: anywhere;
+}
+.swarm-page .swarm-head__title:focus {
+  outline: none;
+}
+.swarm-page .swarm-head__title:focus-visible {
+  border-radius: var(--r-sm);
+  box-shadow: var(--focus-ring);
+}
+.swarm-page .swarm-head__summary {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.swarm-page .swarm-head__summary time {
+  cursor: default;
+}
+/* State, the lifecycle action and the Run's menu share one row under the
+   title, so a long title never pushes them aside. */
+.swarm-page .swarm-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.swarm-page .swarm-head + .swarm-failed {
+  margin-top: 20px;
+}
+.swarm-page .swarm-failed__name {
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+}
+.swarm-page .swarm-failed__name:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.swarm-page .swarm-failed__name:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.swarm-page .swarm-failed .btn-secondary {
+  flex-shrink: 0;
+}
+/* The tab row stays at the top while a panel scrolls; it covers what
+   scrolls beneath it. */
+.swarm-page .swarm-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-top: 20px;
+  background: var(--bg);
 }

@@ -606,15 +606,24 @@ After a successful Start (not a replay), a background task calls
 `temporary_agents.title_group` with the goal, then publishes a `swarms` change so
 the page refreshes; failures are logged and the Run continues, and `close()` cancels
 pending title tasks. Runs started before titles existed keep the goal-line title.
-The sidebar groups preparing/running/stopping records as Active runs;
-all other states, including idle and needs_attention, appear under Inactive runs.
-This presentation does not close an idle execution group or disable its Board wakes.
-Sidebar tooltips show a Swarm's participant count per Model (summed over formation
-rows) and a Run's title, Swarm name and participant count; `swarms.list` entries
-carry `name` from the profile snapshot for this (`SwarmPage.test.js`,
-`test_swarm_operations.py`).
-Swarm selection opens the editor; the pinned New run row returns to the goal form
-and is marked current while that form shows.
+The navigation pane (`SwarmSidebar.svelte`) lists the Swarms (profiles), then
+the Runs in two groups. Active Runs holds the open states (preparing, running,
+stopping, idle, needs_attention), so a Run that waits for messages or needs the
+user stays in view; Inactive Runs holds the rest (stopped, cancelled,
+interrupted, deleting, unknown). An empty group shows a compact EmptyState.
+This grouping does not close an idle execution group or disable its Board wakes.
+A Swarm row shows its name over its size and Model ("6 participants ·
+perf-model", or how many Models it mixes); a Run row shows a state dot and its
+title over its state and start ("Interrupted · 15 hours ago"). Row tooltips are
+details cards: a Swarm's participant count per Model (summed over formation
+rows, provider path muted), and a Run's whole title, Swarm, state, start moment
+and size; `swarms.list` entries carry `name` from the profile snapshot for this
+(`runPresentation.js`, `SwarmPage.test.js`, `test_swarm_operations.py`).
+A row opens its Swarm's editor or its Run. Its context menu (right click, the
+context-menu key or Shift+F10) only repeats actions reachable elsewhere: a
+Swarm's Edit, Start a Run (the start form with that Swarm, the goal focused) and
+Delete…, and a Run's menu as in its header. The pinned New Run row returns to
+the start form and is marked current while that form shows.
 The form prefills the directory after Swarm selection and preserves manual edits
 during invalidation. Project defaults resolve through the catalog; unchanged
 defaults retain the explicit Project selection. A changed directory is sent as
@@ -623,6 +632,10 @@ directory-only execution, without inferring Project identity from a path.
 Start validates the effective directory and catalog before creating Sessions.
 The stored profile and profile snapshot stay unchanged; `effective_configuration`
 records the Run directory and Project selection for Resume and request replay.
+On the page, Start first checks that a Swarm, a working directory and a goal
+are given: each missing one shows its error under its field until that field
+changes, and the first takes focus; the page's error banner is only for failed
+requests. A started Run shows with focus on its title.
 Evidence: `SwarmPage.test.js` and `test_swarm_start.py`.
 The Run directory and the profile editor's Directory are the shared `PathField`
 in directory mode with the page client's `listDirectory`, so both complete and
@@ -784,11 +797,28 @@ code, never by CHECK enums. New timestamps use the canonical UTC form
 The Store has no upgrade code. Saved profiles and Swarm snapshots are consumed as stored;
 input defaults are resolved when a profile is saved or previewed.
 
-The header offers one lifecycle action: Stop while the Swarm is preparing,
-running or stopping or any participant runs, otherwise Resume, so a failed
-participant beside running peers does not add a second button. Deletion is
-disabled while that action is Stop; confirming deletion of an open Run whose
-participants are all inactive stops it first, then deletes (`SwarmPage.test.js`).
+The Run view (`RunView.svelte`) is a centred page at the configuration measure
+(`--content-max-narrow`), like the start form. Its header names the Run by its
+title (the list entry's generated title, else the goal's first line as plain
+text), then the Swarm it started from, its start (relative, with the absolute
+moment as tooltip) and its size, then one row with the state chip, at most one
+lifecycle action and the Run's menu: Communication settings… (open Runs only),
+Run details and Delete…. The lifecycle action is Stop while the Swarm is
+preparing, running or stopping or any participant runs, otherwise Resume while
+a participant can resume (primary when the Run needs attention or was
+interrupted), so a failed participant beside running peers does not add a
+second button. A notice below the header names failed or interrupted
+participants as links to their Activity and, while others still work, carries
+Resume itself. Delete… is disabled with "Stop the Run first" while anything
+works; confirming deletion of an open Run whose participants are all inactive
+stops it first, then deletes. After a deletion, the deleted row's neighbour in
+the pane (or New Run) takes focus (`SwarmPage.test.js`).
+The view is the page's scroller without a top inset: the header carries
+`--page-inset-top` as its own padding, so the tab row (`TabList` with
+`idPrefix="swarm-run"`) sticks at the scroller's top edge on the page
+background while a panel scrolls. The view sets `--swarm-run-sticky-top` to the
+tab row's measured height; sticky bars inside the panels stick below it, and a
+revealed post keeps clear of it.
 The page offers confirmed deletion. `swarms.delete` marks a closed
 Swarm `deleting`, removes its bound participant Sessions through the host, then
 transactionally removes its Board, Wiki pages and revisions, participants, events
@@ -796,6 +826,14 @@ and request receipts.
 The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; the durable
 deletion marker blocks Resume, including request replay, and survives restart so
 a failed deletion can be retried. Tests: `test_swarm_operations.py`, `SwarmPage.test.js`.
+
+Page errors (`pageModel.svelte.js`): a failed user action shows in the page's
+error banner until the next user action starts; refreshes never clear it, so a
+background refresh cannot hide it unseen. A failed refresh shows its own banner
+with Retry until a later refresh succeeds; a host that has not initialized the
+page within 10 s shows there as an alert without Retry. Dialog actions
+(communication settings, deletions) keep their failure in the dialog for another
+try. The banners stay above the shown view while it scrolls (`SwarmPage.test.js`).
 
 Startup reconcile: after `recover_interrupted`, startup pages its participant groups
 (`temporary_agents.groups()`, API 10; group id = Swarm id) and archives each group
@@ -809,7 +847,7 @@ so a Swarm starting concurrently is never unknown. A failed archive is logged an
 retried at the next startup (`test_startup_archives_participant_sessions_of_swarms_missing_from_the_board`).
 
 A saved Swarm profile is deleted through `profiles.delete` from its editor's Advanced
-section or beside the goal form's Swarm selector, after the same kind of confirmation (failures
+section or its pane row's menu, after the same kind of confirmation (failures
 stay in the dialog for retry). Existing Runs keep their profile snapshots. Deletion
 sends the latest saved revision and closes the editor without the navigation flush,
 so an unsaved draft of the deleted profile is discarded, not saved again
@@ -817,9 +855,9 @@ so an unsaved draft of the deleted profile is discarded, not saved again
 
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_bundled_management.py` and `tests/cli/test_extensions_operations.py`.
 
-Private UI routing: `ui/SwarmPage.svelte` is the page root: it creates the page model, provides the navigation layer registry, lays out the sidebar, banners and the shown view, and mounts the dialogs beside `main` (the shared Modal renders in place). Shell components receive the page model: `SwarmSidebar.svelte`, `RunStartForm.svelte`, `RunView.svelte` (Run header, lifecycle actions, tabs, and the Wiki panel kept mounted per Swarm), `CommunicationDialog.svelte`, `RunSnapshotDialog.svelte`, `RunDeleteDialog.svelte` and `SwarmDeleteDialog.svelte` (deletes a saved profile). The tab components `RunBoard.svelte` (with `BoardComposer.svelte`), `RunActivity.svelte` and `RunUsage.svelte` receive their area object plus the page model for cross-area state and actions; `ParticipantChip.svelte` and `ParticipantAvatar.svelte` serve Board and Activity, and `SwarmIcon.svelte` draws the action icons. `pageModel.svelte.js` (`createSwarmPageModel`) retains the cross-area state - profile and Run lists, selection, tab and route, start form, lifecycle, deletion, communication settings, refresh dispatch and bridge lifetime - and exposes the areas as `model.board` (`pageBoard.svelte.js`: posts, paging, discussions, reveal, composer, content links), `model.activity` (`pageActivity.svelte.js`: participant History/replay subscriptions and context projection) and `model.usage` (`pageUsage.svelte.js`: the group usage report and its throttled reloads), each created with a small host interface from the model. `pagePresentation.js` holds display-only count/avatar helpers. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the Board area decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; its section components `ProfileParticipants.svelte`, `ProfileInstructions.svelte` and `ProfileAccess.svelte` edit the bound draft, `DeliverySettings.svelte` edits a delivery value for any caller, and `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Stylesheets are global within the page bundle and scoped by selector to the page root and to dialog content (`swarm-page-modal-copy`, `swarm-page-communication`): `swarmPage.css` holds the rules the areas share (page layout, list rows of the sidebar and the Wiki, section heads, panels and dialog copy; tables are `DataTable`'s or, in Markdown, styled as in Chat) and loads before the area stylesheets, which each component imports after its dependencies (`swarmSidebar.css`, `runStartForm.css`, `runView.css`, `runBoard.css`, `participantChip.css`, `boardComposer.css`, `runActivity.css`, `runUsage.css`, `communicationDialog.css`); `profileEditor.css` scopes the editor's own classes under `.swarm-profile-editor`, and the editor's dialogs use the shared Modal styles.
+Private UI routing: `ui/SwarmPage.svelte` is the page root: it creates the page model, provides the navigation layer registry, lays out the sidebar, banners and the shown view, and mounts the dialogs beside `main` (the shared Modal renders in place). Shell components receive the page model: `SwarmSidebar.svelte`, `RunStartForm.svelte`, `RunView.svelte` (Run header with state, lifecycle action and menu, the failed participants' notice, tabs, and the Wiki panel kept mounted per Swarm), `CommunicationDialog.svelte`, `RunDetailsDialog.svelte`, `RunDeleteDialog.svelte` and `SwarmDeleteDialog.svelte` (deletes a saved profile; both deletions confirm through the shared `ConfirmDialog`). The tab components `RunBoard.svelte` (with `BoardComposer.svelte`), `RunActivity.svelte` and `RunUsage.svelte` receive their area object plus the page model for cross-area state and actions; `ParticipantChip.svelte` and `ParticipantAvatar.svelte` serve Board and Activity, and `SwarmIcon.svelte` draws the action icons. `pageModel.svelte.js` (`createSwarmPageModel`) retains the cross-area state - profile and Run lists, selection, tab and route, start form, lifecycle, deletion, communication settings, refresh dispatch, page errors, focus requests and bridge lifetime - and exposes the areas as `model.board` (`pageBoard.svelte.js`: posts, paging, discussions, reveal, composer, content links), `model.activity` (`pageActivity.svelte.js`: participant History/replay subscriptions and context projection) and `model.usage` (`pageUsage.svelte.js`: the group usage report and its throttled reloads), each created with a small host interface from the model. `pagePresentation.js` holds display-only count/avatar helpers; `runPresentation.js` holds how the pane, the Run header and the Run dialogs present Runs and Swarms (titles, states in words and colour, summaries, details cards, communication-setting changes). `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the Board area decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; its section components `ProfileParticipants.svelte`, `ProfileInstructions.svelte` and `ProfileAccess.svelte` edit the bound draft, `DeliverySettings.svelte` edits a delivery value for any caller, and `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Stylesheets are global within the page bundle and scoped by selector to the page root; the Run and Swarm dialogs render outside it and keep their rules under their Modal class `swarm-dialog` (`runDialogs.css`): `swarmPage.css` holds the rules the areas share (page layout, list rows of the sidebar and the Wiki, section heads, panels and dialog copy; tables are `DataTable`'s or, in Markdown, styled as in Chat) and loads before the area stylesheets, which each component imports after its dependencies (`swarmSidebar.css`, `runStartForm.css`, `runView.css`, `runBoard.css`, `participantChip.css`, `boardComposer.css`, `runActivity.css`, `runUsage.css`, `runDialogs.css`); `profileEditor.css` scopes the editor's own classes under `.swarm-profile-editor`, and the editor's dialogs use the shared Modal styles.
 
-Page route (the page's place in the app history, `webui/app-shell.md` -> Navigation): `''` is the start page (Run form), `/swarms/<id>` the Board, `/swarms/<id>/<tab>` the Wiki, Participants and Usage tabs, and `/profiles/<id>` and `/profiles/new` the profile editor. Opening a Swarm, a profile or the start page pushes the target route and shows the route the host sends back. A tab switches at once and pushes the route it shows; this also applies to revealing a post, Wiki links and inspecting a participant. Deleting the shown Swarm or profile, saving a new profile, and a route the page cannot show replace the route with what the page shows; corrections wait until the newest route is shown. Showing another record closes the dialogs of the current record. Filters, search, the selected Wiki page, participant inspection and the editor's open disclosures are not part of the route. The page root provides the client's layer registry, so its dialogs (compose, settings, profile snapshot, delete confirmations, the profile editor's leave dialogs) close on Back/Forward before the route changes (`SwarmPage.test.js`).
+Page route (the page's place in the app history, `webui/app-shell.md` -> Navigation): `''` is the start page (Run form), `/swarms/<id>` the Board, `/swarms/<id>/<tab>` the Wiki, Participants and Usage tabs, and `/profiles/<id>` and `/profiles/new` the profile editor. Opening a Swarm, a profile or the start page pushes the target route and shows the route the host sends back. A tab switches at once and pushes the route it shows; this also applies to revealing a post, Wiki links and inspecting a participant. Deleting the shown Swarm or profile, saving a new profile, and a route the page cannot show replace the route with what the page shows; corrections wait until the newest route is shown. Showing another record closes the dialogs of the current record. Filters, search, the selected Wiki page, participant inspection and the editor's open disclosures are not part of the route. The page root provides the client's layer registry, so its dialogs (compose, communication settings, Run details, delete confirmations, the profile editor's leave dialogs) close on Back/Forward before the route changes (`SwarmPage.test.js`).
 
 Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`:
 each mounted page/panel has one refresh in flight and at most one pending pass,

@@ -214,7 +214,10 @@ describe('Swarm Board posts', () => {
       expect(document.querySelector('.board time')).not.toBeNull(),
     );
     const head = document.querySelector('.swarm-head');
-    expect(head.querySelector('h2').textContent).toBe('Research');
+    // The header names the Run by its goal's first line.
+    expect(head.querySelector('h2').textContent).toBe(
+      prompt.split('\n')[0].trim(),
+    );
     expect(head.textContent).not.toContain(prompt);
     expect(head.textContent).not.toContain('swr-a');
     expect(head.querySelector('.chip')).not.toBeNull();

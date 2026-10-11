@@ -1,5 +1,4 @@
 import { t, init } from '../../../../webui/src/lib/i18n.js';
-import { formatAbsoluteTime } from '../../../../webui/src/lib/timeText.js';
 import {
   canStop,
   participantState,
@@ -7,6 +6,14 @@ import {
   page,
   requestId,
 } from './pagePresentation.js';
+import {
+  deliveryChanges,
+  deliveryLimitError,
+  normalizeDelivery,
+  openRunStates,
+  runTitle,
+  settingsRunStates,
+} from './runPresentation.js';
 import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
 import { onMount, tick } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
@@ -20,11 +27,37 @@ import { createSwarmPageActivity } from './pageActivity.svelte.js';
 import { createSwarmPageBoard } from './pageBoard.svelte.js';
 import { createSwarmPageUsage } from './pageUsage.svelte.js';
 
+// How often relative times ("started 5 minutes ago") move on.
+const CLOCK_INTERVAL_MS = 60_000;
+
+// A Run in these states still works, so it cannot be deleted yet; the shown
+// Run also counts its running participants (`working`).
+const WORKING_RUN_STATES = ['preparing', 'running', 'stopping'];
+
+// The start form's fields in order, with the control each one focuses.
+const START_FIELDS = [
+  ['profile', 'swarm-start-profile'],
+  ['directory', 'swarm-start-directory'],
+  ['goal', 'swarm-goal'],
+];
+
+// What a failed refresh shows until a later one succeeds.
+const refreshFailure = (cause) =>
+  cause?.message
+    ? t('swarm.refreshError', { error: cause.message })
+    : t('swarm.loadError');
+
+// `list` followed by the entries of `more` it does not hold yet.
+function appendNew(list, more) {
+  const known = new Set(list.map((item) => item.id));
+  return [...list, ...more.filter((item) => !known.has(item.id))];
+}
+
 // The page's state across its areas: the profile and Run lists, the shown
 // Swarm or profile with its route and tab, the start form, Run lifecycle and
-// deletion, the communication settings draft, refreshes and the bridge
-// lifetime. The Board, Activity and Usage areas keep their own state and
-// requests in `board`, `activity` and `usage`.
+// deletion, the Run dialogs, refreshes and the bridge lifetime. The Board,
+// Activity and Usage areas keep their own state and requests in `board`,
+// `activity` and `usage`.
 export function createSwarmPageModel(host) {
   // Exists from the start, so the page root can hand its layer registry to
   // the page's dialogs before any of them mounts.
@@ -35,7 +68,19 @@ export function createSwarmPageModel(host) {
 
   let loading = $state(true);
 
+  // A failed user action. The next user action clears it when it starts;
+  // refreshes never do, so a background refresh cannot hide it unseen.
   let error = $state('');
+
+  // A failed refresh (or the host not answering at all), which the next
+  // successful refresh clears.
+  let refreshError = $state('');
+
+  // Whether the host has initialized the page.
+  let connected = $state(false);
+
+  // The moment relative times are measured from; it moves every minute.
+  let now = $state(Date.now());
 
   let profiles = $state([]);
 
@@ -51,6 +96,10 @@ export function createSwarmPageModel(host) {
 
   let swarmsCursor = $state(null);
 
+  let moreProfilesLoading = $state(false);
+
+  let moreSwarmsLoading = $state(false);
+
   let activeTab = $state('board');
 
   let editor = $state(null);
@@ -61,11 +110,16 @@ export function createSwarmPageModel(host) {
 
   let deleteError = $state('');
 
-  let settingsOpen = $state(false);
+  // The Run whose communication settings are open, the draft as the settings
+  // fields hand it back (batching limits as typed), and the dialog's error.
+  let settingsRun = $state(null);
 
   let deliveryDraft = $state(null);
 
-  let profileSnapshotOpen = $state(false);
+  let settingsError = $state('');
+
+  // The Run whose details are open.
+  let detailsRun = $state(null);
 
   let goal = $state('');
 
@@ -75,7 +129,14 @@ export function createSwarmPageModel(host) {
 
   let directoryLoading = $state(false);
 
+  // The start form's field errors: `profile`, `directory` and `goal`.
+  let startErrors = $state({});
+
   let pending = $state('');
+
+  // Where focus goes once a view shows: `{ kind: 'goal' }` for the start
+  // form's goal, `{ kind: 'run', id }` for a Run's header.
+  let focusRequest = $state(null);
 
   let profileEditor = $state(null);
 
@@ -94,6 +155,8 @@ export function createSwarmPageModel(host) {
   let swarmsRequest = 0;
 
   let directoryRequest = 0;
+
+  let dialogRequest = 0;
 
   let disposed = false;
 
@@ -144,10 +207,15 @@ export function createSwarmPageModel(host) {
       activeTab = 'board';
       syncRoute({ step: true });
     },
+    // A Wiki link from the Board; a page that cannot open shows why.
     async openWikiPage(id) {
-      openTab('wiki');
-      await tick();
-      await wikiPanel?.openPage(id);
+      try {
+        openTab('wiki');
+        await tick();
+        await wikiPanel?.openPage(id);
+      } catch (cause) {
+        if (!disposed) error = cause.message;
+      }
     },
     // A mention shows the participant's Activity, as its chip does.
     inspectParticipant: (participant) =>
@@ -279,14 +347,14 @@ export function createSwarmPageModel(host) {
     return true;
   }
 
-  // Dialogs act on the shown record, so showing another one closes them.
+  // Showing another place closes the dialogs, except one whose action is
+  // still running.
   function closeDialogs() {
     board.composeOpen = false;
-    settingsOpen = false;
-    profileSnapshotOpen = false;
-    if (pending === 'delete') return;
-    profileDeleteCandidate = null;
-    swarmDeleteCandidate = null;
+    dialogRequest += 1;
+    detailsRun = null;
+    closeSettings();
+    cancelDelete();
   }
 
   function showStart() {
@@ -297,7 +365,8 @@ export function createSwarmPageModel(host) {
     void selectRunProfile(selectedProfile);
   }
 
-  function newSwarm() {
+  // The start page, the pane's New Run entry.
+  function openStart() {
     return navigate(() => stepTo(''));
   }
 
@@ -308,6 +377,7 @@ export function createSwarmPageModel(host) {
   function showTab(tab) {
     if (tab === activeTab) return;
     activeTab = tab;
+    error = '';
     void loadVisibleTab().catch((cause) => {
       if (!disposed) error = cause.message;
     });
@@ -318,12 +388,22 @@ export function createSwarmPageModel(host) {
     syncRoute({ step: true });
   }
 
+  function clearStartErrors(...fields) {
+    if (fields.some((field) => startErrors[field]))
+      startErrors = Object.fromEntries(
+        Object.entries(startErrors).filter(
+          ([field]) => !fields.includes(field),
+        ),
+      );
+  }
+
   async function selectRunProfile(profile) {
     const request = ++directoryRequest;
     selectedProfile = profile;
     runDirectory = '';
     defaultDirectory = '';
     directoryLoading = false;
+    clearStartErrors('profile', 'directory');
     if (!profile) return;
     const directory = profile.working_directory;
     if (directory.kind === 'directory') {
@@ -345,30 +425,40 @@ export function createSwarmPageModel(host) {
     }
   }
 
+  // Open Runs (working, waiting for messages or needing the user) come
+  // first, so a Run that needs attention never hides among finished ones.
   const runGroups = $derived([
     {
       id: 'active',
       label: t('swarm.runs.active'),
       empty: t('swarm.runs.noActive'),
-      entries: swarms.filter((swarm) =>
-        ['preparing', 'running', 'stopping'].includes(swarm.state),
-      ),
+      entries: swarms.filter((swarm) => openRunStates.includes(swarm.state)),
     },
     {
       id: 'inactive',
       label: t('swarm.runs.inactive'),
       empty: t('swarm.runs.noInactive'),
-      entries: swarms.filter(
-        (swarm) => !['preparing', 'running', 'stopping'].includes(swarm.state),
-      ),
+      entries: swarms.filter((swarm) => !openRunStates.includes(swarm.state)),
     },
   ]);
 
-  // The header offers Stop while anything works and Resume otherwise, so one
-  // failed participant beside running peers does not add a second action.
+  // The shown Run as its list entry (title, Swarm name, start time) and its
+  // detail (state, participants, settings) together.
+  const selectedRun = $derived(
+    selectedSwarm
+      ? {
+          ...swarms.find((item) => item.id === selectedSwarm.id),
+          ...selectedSwarm,
+        }
+      : null,
+  );
+
+  // The header offers Stop while anything works and Resume otherwise; failed
+  // participants beside working peers get Resume in their notice instead of
+  // a second header action.
   const working = $derived(
     Boolean(selectedSwarm) &&
-      (['preparing', 'running', 'stopping'].includes(selectedSwarm.state) ||
+      (WORKING_RUN_STATES.includes(selectedSwarm.state) ||
         (selectedSwarm.participants ?? []).some(
           (participant) => participantState(participant) === 'running',
         )),
@@ -391,38 +481,34 @@ export function createSwarmPageModel(host) {
     { id: 'usage', label: t('swarm.tabs.usage') },
   ]);
 
-  // In the host's timezone, which `applyContext` makes the application zone.
-  const date = (value) => formatAbsoluteTime(value);
+  // Why Start cannot run now; the fields' own errors show on a click.
+  const startDisabledReason = $derived(
+    loading && !profiles.length
+      ? t('swarm.loading')
+      : !profiles.length
+        ? t('swarm.start.noProfiles')
+        : directoryLoading
+          ? t('swarm.start.directoryLoading')
+          : '',
+  );
 
-  const settingChanges = $derived(
-    deliveryDraft && selectedSwarm
-      ? [
-          ...['main', 'discussion', 'ping'].flatMap((route) =>
-            ['mode', 'wake_idle']
-              .filter(
-                (field) =>
-                  deliveryDraft[route]?.[field] !==
-                  selectedSwarm.delivery?.[route]?.[field],
-              )
-              .map((field) => ({
-                route,
-                field,
-                before: String(selectedSwarm.delivery?.[route]?.[field]),
-                after: String(deliveryDraft[route]?.[field]),
-              })),
-          ),
-          ...['coalesce_ms', 'batch_messages', 'batch_chars']
-            .filter(
-              (field) =>
-                deliveryDraft[field] !== selectedSwarm.delivery?.[field],
-            )
-            .map((field) => ({
-              route: t('swarm.communication.advanced'),
-              field,
-              before: String(selectedSwarm.delivery?.[field]),
-              after: String(deliveryDraft[field]),
-            })),
-        ]
+  // The settings draft with its batching limits as numbers, the limits
+  // outside their range, and the changes against the Run's settings.
+  const deliveryCheck = $derived(
+    deliveryDraft ? normalizeDelivery(deliveryDraft) : null,
+  );
+
+  const deliveryErrors = $derived(
+    deliveryCheck ? deliveryCheck.invalid.map(deliveryLimitError) : [],
+  );
+
+  const deliveryChangeLines = $derived(
+    settingsRun && deliveryCheck
+      ? deliveryChanges(
+          settingsRun.delivery,
+          deliveryCheck.value,
+          deliveryCheck.invalid,
+        )
       : [],
   );
 
@@ -438,14 +524,14 @@ export function createSwarmPageModel(host) {
 
   // Reloads everything the page shows. `background` marks a refresh no user
   // action asked for, which reloads a visible Usage report at most every
-  // USAGE_REFRESH_INTERVAL_MS (`pageUsage.svelte.js`).
+  // USAGE_REFRESH_INTERVAL_MS (`pageUsage.svelte.js`). A failure shows as
+  // `refreshError` until a later refresh succeeds.
   async function refresh({ background = false } = {}) {
     const request = ++overviewRequest;
     const selection = selectionRequest;
     // Invalidation must not unmount an active form or Run inspection.
     loading = loading && !editor;
     board.forgetPageReferences();
-    error = '';
     try {
       await Promise.all([loadProfiles(), loadSwarms()]);
       if (disposed || request !== overviewRequest) return;
@@ -455,12 +541,20 @@ export function createSwarmPageModel(host) {
         pending !== 'delete'
       )
         await selectSwarm(selectedSwarm.id, { silent: true, background });
+      if (disposed || request !== overviewRequest) return;
+      refreshError = '';
     } catch (cause) {
       if (disposed || request !== overviewRequest) return;
-      error = cause.message ?? t('swarm.loadError');
+      refreshError = refreshFailure(cause);
     } finally {
       if (!disposed && request === overviewRequest) loading = false;
     }
+  }
+
+  // The refresh error's Retry: a user action, so it also clears `error`.
+  function retry() {
+    error = '';
+    return refresh();
   }
 
   // Reloads what a coalesced burst of invalidations can affect: profiles for
@@ -478,7 +572,6 @@ export function createSwarmPageModel(host) {
         : null;
     if (selected && swarmChanged(changes, selected.id, 'wiki'))
       board.forgetPageReferences();
-    error = '';
     try {
       await Promise.all([
         changes.has('profiles') ? loadProfiles() : null,
@@ -491,9 +584,11 @@ export function createSwarmPageModel(host) {
             })
           : null,
       ]);
+      if (disposed || request !== changesRequest) return;
+      refreshError = '';
     } catch (cause) {
       if (disposed || request !== changesRequest) return;
-      error = cause.message ?? t('swarm.loadError');
+      refreshError = refreshFailure(cause);
     }
   }
 
@@ -532,7 +627,8 @@ export function createSwarmPageModel(host) {
   }
 
   // `changes` limits a background reload of the visible tab to what changed;
-  // `tab` is the tab to show with the Swarm.
+  // `tab` is the tab to show with the Swarm. A `silent` (background) reload
+  // leaves its failure to the refresh that ran it.
   async function selectSwarm(
     id,
     { silent = false, background = false, changes = null, tab = null } = {},
@@ -564,7 +660,9 @@ export function createSwarmPageModel(host) {
       }
       await loadVisibleTab(swarm, { background, changes });
     } catch (cause) {
-      if (!disposed && request === selectionRequest) error = cause.message;
+      if (disposed || request !== selectionRequest) return;
+      if (silent) throw cause;
+      error = cause.message;
     }
   }
 
@@ -580,24 +678,47 @@ export function createSwarmPageModel(host) {
       await (background ? usage.schedule(swarm) : usage.load(swarm));
   }
 
+  // The next page of a list, one request at a time. A reload of the list
+  // meanwhile drops the page, and entries the list already holds are not
+  // added twice.
   async function loadMoreProfiles() {
-    if (!profilesCursor) return;
-    const result = await call('profiles.list', {
-      limit: 100,
-      cursor: profilesCursor,
-    });
-    profiles = [...profiles, ...page(result)];
-    profilesCursor = result.cursor ?? null;
+    if (!profilesCursor || moreProfilesLoading) return;
+    const request = profilesRequest;
+    moreProfilesLoading = true;
+    error = '';
+    try {
+      const result = await call('profiles.list', {
+        limit: 100,
+        cursor: profilesCursor,
+      });
+      if (disposed || request !== profilesRequest) return;
+      profiles = appendNew(profiles, page(result));
+      profilesCursor = result.cursor ?? null;
+    } catch (cause) {
+      if (!disposed) error = cause.message;
+    } finally {
+      if (!disposed) moreProfilesLoading = false;
+    }
   }
 
   async function loadMoreSwarms() {
-    if (!swarmsCursor) return;
-    const result = await call('swarms.list', {
-      limit: 100,
-      cursor: swarmsCursor,
-    });
-    swarms = [...swarms, ...page(result)];
-    swarmsCursor = result.cursor ?? null;
+    if (!swarmsCursor || moreSwarmsLoading) return;
+    const request = swarmsRequest;
+    moreSwarmsLoading = true;
+    error = '';
+    try {
+      const result = await call('swarms.list', {
+        limit: 100,
+        cursor: swarmsCursor,
+      });
+      if (disposed || request !== swarmsRequest) return;
+      swarms = appendNew(swarms, page(result));
+      swarmsCursor = result.cursor ?? null;
+    } catch (cause) {
+      if (!disposed) error = cause.message;
+    } finally {
+      if (!disposed) moreSwarmsLoading = false;
+    }
   }
 
   async function saveProfile(profile) {
@@ -626,9 +747,12 @@ export function createSwarmPageModel(host) {
     return stepTo(`/profiles/${profile === 'new' ? 'new' : profile.id}`);
   }
 
+  // Opens the profile editor once the catalog it needs has loaded; only a
+  // new Swarm marks the pane's New Swarm action as busy meanwhile.
   async function showProfile(profile) {
     const request = ++selectionRequest;
-    pending = 'profile';
+    const opening = profile === 'new' ? 'new-profile' : 'profile';
+    pending = opening;
     error = '';
     try {
       const nextCatalog = (await call('catalog'))?.catalog ?? {};
@@ -642,13 +766,59 @@ export function createSwarmPageModel(host) {
     } catch (cause) {
       if (!disposed && request === selectionRequest) error = cause.message;
     } finally {
-      if (pending === 'profile') pending = '';
+      if (pending === opening) pending = '';
     }
   }
 
+  // The start form with `profile` chosen and its goal focused.
+  function startRunWith(profile) {
+    return navigate(async () => {
+      error = '';
+      startErrors = {};
+      void selectRunProfile(profile);
+      focusRequest = { kind: 'goal' };
+      if (editor || selectedSwarm) await stepTo('');
+    });
+  }
+
   function confirmProfileDelete(profile) {
+    error = '';
     deleteError = '';
     profileDeleteCandidate = profile;
+  }
+
+  function confirmRunDelete(run) {
+    error = '';
+    deleteError = '';
+    swarmDeleteCandidate = run;
+  }
+
+  // Closes a deletion confirmation unless its deletion is running.
+  function cancelDelete() {
+    if (pending === 'delete') return;
+    profileDeleteCandidate = null;
+    swarmDeleteCandidate = null;
+  }
+
+  // The pane row after the row of `id` (the one before it at the end of the
+  // pane), which takes focus once that row is gone. `kind` is 'run' or
+  // 'profile', after the rows' `data-run-id` and `data-profile-id`.
+  function paneNeighbor(kind, id) {
+    const key = `${kind}Id`;
+    const rows = [...document.querySelectorAll(`[data-${kind}-id]`)];
+    const index = rows.findIndex((row) => row.dataset[key] === id);
+    if (index < 0) return null;
+    return (rows[index + 1] ?? rows[index - 1])?.dataset[key] ?? null;
+  }
+
+  // Focuses the pane row of `id`, or New Run when there is none.
+  async function focusPaneRow(kind, id) {
+    await tick();
+    if (disposed) return;
+    const row = [...document.querySelectorAll(`[data-${kind}-id]`)].find(
+      (item) => item.dataset[`${kind}Id`] === id,
+    );
+    (row ?? document.querySelector('.swarm-new-run'))?.focus();
   }
 
   async function deleteProfile() {
@@ -656,6 +826,7 @@ export function createSwarmPageModel(host) {
     if (!candidate || pending) return;
     pending = 'delete';
     deleteError = '';
+    const next = paneNeighbor('profile', candidate.id);
     // An autosave may have advanced the revision while the dialog was open.
     const current =
       profiles.find((item) => item.id === candidate.id) ?? candidate;
@@ -674,6 +845,7 @@ export function createSwarmPageModel(host) {
       if (selectedProfile?.id === candidate.id) void selectRunProfile(null);
       profileDeleteCandidate = null;
       await refresh();
+      await focusPaneRow('profile', next);
     } catch (cause) {
       deleteError = cause.message;
     } finally {
@@ -686,6 +858,7 @@ export function createSwarmPageModel(host) {
     if (!candidate || pending) return;
     pending = 'delete';
     deleteError = '';
+    const next = paneNeighbor('run', candidate.id);
     try {
       // An open Run whose participants are all idle offers Resume, not Stop;
       // deletion closes it first because the Store deletes only stopped Runs.
@@ -704,6 +877,7 @@ export function createSwarmPageModel(host) {
       }
       swarmDeleteCandidate = null;
       await refresh();
+      await focusPaneRow('run', next);
     } catch (cause) {
       deleteError = cause.message;
     } finally {
@@ -711,16 +885,28 @@ export function createSwarmPageModel(host) {
     }
   }
 
+  // Validates the form, showing each problem at its field and focusing the
+  // first, then starts the Run and shows it with its header focused.
   async function startSwarm() {
     error = '';
-    if (!selectedProfile || !goal.trim()) {
-      error = t('swarm.start.validation');
+    const errors = {
+      profile: selectedProfile ? '' : t('swarm.start.profileRequired'),
+      directory:
+        directoryLoading || runDirectory.trim()
+          ? ''
+          : t('swarm.start.directoryRequired'),
+      goal: goal.trim() ? '' : t('swarm.start.goalRequired'),
+    };
+    startErrors = Object.fromEntries(
+      Object.entries(errors).filter(([, message]) => message),
+    );
+    const invalid = START_FIELDS.find(([field]) => errors[field]);
+    if (invalid) {
+      await tick();
+      document.getElementById(invalid[1])?.focus();
       return;
     }
-    if (directoryLoading || !runDirectory.trim()) {
-      error = t('swarm.start.directoryRequired');
-      return;
-    }
+    if (directoryLoading || pending) return;
     pending = 'start';
     try {
       const result = await call('swarms.start', {
@@ -734,13 +920,26 @@ export function createSwarmPageModel(host) {
           : { working_directory: runDirectory }),
       });
       goal = '';
+      const id = result.swarm_id ?? result.id;
+      focusRequest = { kind: 'run', id };
       await refresh();
-      await stepTo(swarmRoute(result.swarm_id ?? result.id));
+      await stepTo(swarmRoute(id));
     } catch (cause) {
       error = cause.message;
     } finally {
       pending = '';
     }
+  }
+
+  // Takes the focus request for `kind` (and the Run `id`), if one waits.
+  function takeFocus(kind, id = undefined) {
+    if (
+      focusRequest?.kind !== kind ||
+      (id !== undefined && focusRequest.id !== id)
+    )
+      return false;
+    focusRequest = null;
+    return true;
   }
 
   async function lifecycle(operation, participantId = null) {
@@ -779,48 +978,154 @@ export function createSwarmPageModel(host) {
     }
   }
 
-  function openDelivery() {
-    deliveryDraft = JSON.parse(JSON.stringify(selectedSwarm.delivery));
-    settingsOpen = true;
-  }
-
-  function changeDelivery(route, field, value) {
-    deliveryDraft = {
-      ...deliveryDraft,
-      [route]: { ...deliveryDraft[route], [field]: value },
+  // The actions of a Run, in its header menu and on its pane row: its
+  // communication settings and details, then its deletion once nothing in
+  // it works any more.
+  function runMenu(run) {
+    const busy =
+      run.id === selectedSwarm?.id
+        ? working
+        : WORKING_RUN_STATES.includes(run.state);
+    const open = settingsRunStates.includes(run.state);
+    return {
+      label: t('swarm.run.actions', { title: runTitle(run) }),
+      items: [
+        {
+          id: 'communication',
+          label: t('swarm.run.communication'),
+          group: 'run',
+          disabled: !open,
+          hint: open ? undefined : t('swarm.run.settingsClosed'),
+          onSelect: () => void openRunDialog('settings', run),
+        },
+        {
+          id: 'details',
+          label: t('swarm.run.details'),
+          group: 'run',
+          onSelect: () => void openRunDialog('details', run),
+        },
+        {
+          id: 'delete',
+          label: t('swarm.menu.delete'),
+          danger: true,
+          group: 'delete',
+          disabled: busy || Boolean(pending),
+          hint: busy ? t('swarm.deleteRun.stopFirst') : undefined,
+          onSelect: () => confirmRunDelete(run),
+        },
+      ],
     };
   }
 
-  function changeDeliverySetting(field, value) {
-    deliveryDraft = { ...deliveryDraft, [field]: Number(value) };
+  // The actions of a Swarm (profile) on its pane row.
+  function profileMenu(profile) {
+    return {
+      label: t('swarm.sidebar.profileActions', { name: profile.name }),
+      items: [
+        {
+          id: 'edit',
+          label: t('common.edit'),
+          group: 'profile',
+          onSelect: () => void navigate(() => openProfile(profile)),
+        },
+        {
+          id: 'start',
+          label: t('swarm.sidebar.startRun'),
+          group: 'profile',
+          onSelect: () => void startRunWith(profile),
+        },
+        {
+          id: 'delete',
+          label: t('swarm.menu.delete'),
+          danger: true,
+          group: 'delete',
+          disabled: Boolean(pending),
+          onSelect: () => confirmProfileDelete(profile),
+        },
+      ],
+    };
   }
 
+  // Opens a Run's communication settings or details. The shown Run has its
+  // detail at hand; another Run's (from its pane row) loads first.
+  async function openRunDialog(kind, run) {
+    const request = ++dialogRequest;
+    error = '';
+    let detail = selectedSwarm?.id === run.id ? selectedSwarm : null;
+    if (!detail) {
+      try {
+        detail = (await call('swarms.get', { swarm_id: run.id })).swarm;
+      } catch (cause) {
+        if (!disposed && request === dialogRequest) error = cause.message;
+        return;
+      }
+      if (disposed || request !== dialogRequest) return;
+    }
+    const record = {
+      ...swarms.find((item) => item.id === run.id),
+      ...detail,
+    };
+    if (kind === 'settings') openDelivery(record);
+    else detailsRun = record;
+  }
+
+  // A Run without delivery settings has nothing to edit.
+  function openDelivery(run) {
+    if (!run?.delivery) return;
+    deliveryDraft = JSON.parse(JSON.stringify(run.delivery));
+    settingsError = '';
+    settingsRun = run;
+  }
+
+  function changeDelivery(next) {
+    deliveryDraft = next;
+  }
+
+  function closeSettings() {
+    if (pending === 'settings') return;
+    settingsRun = null;
+    deliveryDraft = null;
+    settingsError = '';
+  }
+
+  // Applies the draft; a failure stays in the dialog for a retry. The shown
+  // Run takes its new settings at once, other Runs with their next refresh.
   async function applyDelivery() {
-    if (!selectedSwarm || !deliveryDraft) return;
+    const run = settingsRun;
+    const check = deliveryCheck;
+    if (!run || !check || check.invalid.length || pending) return;
     pending = 'settings';
+    settingsError = '';
     try {
-      const result = await call('swarms.settings', {
-        swarm_id: selectedSwarm.id,
-        delivery: JSON.parse(JSON.stringify(deliveryDraft)),
-        expected_revision: selectedSwarm.settings_revision,
+      await call('swarms.settings', {
+        swarm_id: run.id,
+        delivery: JSON.parse(JSON.stringify(check.value)),
+        expected_revision: run.settings_revision,
         request_id: requestId(),
       });
-      selectedSwarm =
-        result.swarm ??
-        (await call('swarms.get', { swarm_id: selectedSwarm.id })).swarm;
-      settingsOpen = false;
     } catch (cause) {
-      error = cause.message;
+      if (!disposed) settingsError = cause.message;
+      return;
     } finally {
       pending = '';
+    }
+    if (disposed) return;
+    closeSettings();
+    if (selectedSwarm?.id !== run.id) return;
+    try {
+      const swarm = (await call('swarms.get', { swarm_id: run.id })).swarm;
+      if (!disposed && selectedSwarm?.id === run.id) selectedSwarm = swarm;
+    } catch (cause) {
+      if (!disposed) refreshError = refreshFailure(cause);
     }
   }
 
   onMount(() => {
     const startupTimeout = setTimeout(() => {
       loading = false;
-      error = t('swarm.hostUnavailable');
+      refreshError = t('swarm.hostUnavailable');
     }, 10_000);
+    const clock = setInterval(() => (now = Date.now()), CLOCK_INTERVAL_MS);
     let initialized = false;
     const offContext = client.onContext((next) => {
       clearTimeout(startupTimeout);
@@ -828,6 +1133,9 @@ export function createSwarmPageModel(host) {
       const nextRoute = typeof next.route === 'string' ? next.route : '';
       if (!initialized) {
         initialized = true;
+        connected = true;
+        // The host answered after all.
+        refreshError = '';
         void applyRoute(nextRoute);
         void backgroundRefresh.run();
       } else if (nextRoute !== route) void applyRoute(nextRoute);
@@ -842,6 +1150,7 @@ export function createSwarmPageModel(host) {
       selectionRequest += 1;
       activity.destroy();
       clearTimeout(startupTimeout);
+      clearInterval(clock);
       offContext();
       offInvalidation();
       client.dispose();
@@ -865,6 +1174,15 @@ export function createSwarmPageModel(host) {
     set error(value) {
       error = value;
     },
+    get refreshError() {
+      return refreshError;
+    },
+    get connected() {
+      return connected;
+    },
+    get now() {
+      return now;
+    },
     get profiles() {
       return profiles;
     },
@@ -880,11 +1198,20 @@ export function createSwarmPageModel(host) {
     get selectedSwarm() {
       return selectedSwarm;
     },
+    get selectedRun() {
+      return selectedRun;
+    },
     get profilesCursor() {
       return profilesCursor;
     },
     get swarmsCursor() {
       return swarmsCursor;
+    },
+    get moreProfilesLoading() {
+      return moreProfilesLoading;
+    },
+    get moreSwarmsLoading() {
+      return moreSwarmsLoading;
     },
     get activeTab() {
       return activeTab;
@@ -896,54 +1223,63 @@ export function createSwarmPageModel(host) {
     get profileDeleteCandidate() {
       return profileDeleteCandidate;
     },
-    set profileDeleteCandidate(value) {
-      profileDeleteCandidate = value;
-    },
     get swarmDeleteCandidate() {
       return swarmDeleteCandidate;
-    },
-    set swarmDeleteCandidate(value) {
-      swarmDeleteCandidate = value;
     },
     get deleteError() {
       return deleteError;
     },
-    set deleteError(value) {
-      deleteError = value;
-    },
-    get settingsOpen() {
-      return settingsOpen;
-    },
-    set settingsOpen(value) {
-      settingsOpen = value;
+    get settingsRun() {
+      return settingsRun;
     },
     get deliveryDraft() {
       return deliveryDraft;
     },
-    get profileSnapshotOpen() {
-      return profileSnapshotOpen;
+    get deliveryErrors() {
+      return deliveryErrors;
     },
-    set profileSnapshotOpen(value) {
-      profileSnapshotOpen = value;
+    get deliveryChangeLines() {
+      return deliveryChangeLines;
+    },
+    get settingsError() {
+      return settingsError;
+    },
+    get detailsRun() {
+      return detailsRun;
+    },
+    closeDetails() {
+      detailsRun = null;
     },
     get goal() {
       return goal;
     },
     set goal(value) {
       goal = value;
+      clearStartErrors('goal');
     },
     get runDirectory() {
       return runDirectory;
     },
     set runDirectory(value) {
       runDirectory = value;
+      clearStartErrors('directory');
     },
     get directoryLoading() {
       return directoryLoading;
     },
+    get startErrors() {
+      return startErrors;
+    },
+    get startDisabledReason() {
+      return startDisabledReason;
+    },
     get pending() {
       return pending;
     },
+    get focusRequest() {
+      return focusRequest;
+    },
+    takeFocus,
     get profileEditor() {
       return profileEditor;
     },
@@ -963,7 +1299,7 @@ export function createSwarmPageModel(host) {
       return disposed;
     },
     navigate,
-    newSwarm,
+    openStart,
     selectRunProfile,
     call,
     get runGroups() {
@@ -978,24 +1314,26 @@ export function createSwarmPageModel(host) {
     get tabs() {
       return tabs;
     },
-    date,
-    get settingChanges() {
-      return settingChanges;
-    },
     refresh,
+    retry,
     openSwarm,
     loadMoreProfiles,
     loadMoreSwarms,
     saveProfile,
     openProfile,
+    startRunWith,
     confirmProfileDelete,
+    confirmRunDelete,
+    cancelDelete,
     deleteProfile,
     deleteSwarm,
     startSwarm,
     lifecycle,
-    openDelivery,
+    runMenu,
+    profileMenu,
+    openRunDialog,
     changeDelivery,
-    changeDeliverySetting,
+    closeSettings,
     applyDelivery,
     board,
     activity,
