@@ -648,6 +648,7 @@ async def command_terminal_result(
     terminal_id: str,
     *,
     wait_ended: str | None = None,
+    working: bool = False,
 ) -> JsonObject:
     """The current result of a command terminal, in the shape of a shell result.
 
@@ -660,14 +661,17 @@ async def command_terminal_result(
     A running command's ``next`` follows from how the wait ended
     (``matched``, ``timeout``, or no wait), unless the command is idle: then
     it is the idle text with the seconds it has been idle. A command that
-    sleeps on purpose is never idle.
+    sleeps on purpose is never idle. *working* marks a command that still
+    works on the Agent's input: its screen arrives once it goes idle.
     Raises ``TerminalManagerError`` for an unknown terminal or one that runs no
     command.
     """
     report, screen = await _report_with_screen(terminals, terminal_id)
     reason = {"matched": "matched", "timeout": "waited"}.get(wait_ended or "", "following")
+    if working:
+        reason = "working"
     idle_seconds = None
-    if not report.exited and reason != "matched" and not _sleeps(report.command):
+    if not report.exited and reason in {"following", "waited"} and not _sleeps(report.command):
         idle_seconds = await terminals.command_idle_seconds(terminal_id)
     data = _result_data(
         context,
@@ -885,14 +889,22 @@ def _running_text(
     *reason* is ``idle`` for a command that printed nothing and used no CPU
     (for *idle_seconds*), ``moved`` when the user moved it to the background;
     for a terminal call, ``matched`` when a wait matched its pattern,
-    ``waited`` when a wait timed out and ``following`` for a status or an
-    input; ``requested`` for a command started in the background; otherwise
-    the shell call handed the command off.
+    ``waited`` when a wait timed out, ``working`` for an input the command
+    still works on and ``following`` for a status or another input;
+    ``requested`` for a command started in the background; otherwise the
+    shell call handed the command off.
     """
     terminal_id = report.terminal_id
     limit = _limit_text(report)
     log = _log_text(report)
     follow_up = context.offers(_TERMINAL_TOOL)
+    if reason == "working":
+        # A command the Agent typed into also wakes it when it goes idle.
+        return (
+            f"The command is still working; {limit}.{log} Its screen arrives as a new message "
+            "once it goes idle, and its result when it exits; continue other work or end your "
+            f"turn. To wait for it now instead, call {_terminal_call('wait', terminal_id)}."
+        )
     if reason == "idle" and follow_up:
         silent = COMMAND_IDLE_SECONDS if idle_seconds is None else idle_seconds
         # Silence is also a sleep or a poll loop the command runs on purpose; "If it

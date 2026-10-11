@@ -619,14 +619,14 @@ class TerminalSession:
         """Wait until the program exits, its output matches *pattern*, it goes idle
         showing a new screen, or *deadline* (a ``monotonic`` time) passes.
 
-        A command exits when it ends; its wait ends only then, at a match,
-        or at the deadline. After a match, a command's wait lingers
-        briefly and ends ``exited`` when the command ends within that time.
-        Output printed before the call counts for
+        A command exits when it ends; until the Agent typed into it, its wait
+        ends only then, at a match, or at the deadline. After a match, a
+        command's wait lingers briefly and ends ``exited`` when the command
+        ends within that time. Output printed before the call counts for
         *pattern*, except output before the Agent's last input and that
-        input's echo. An interactive program went idle when an ``idle``
-        attention above *after_revision* exists; with *pattern* that does
-        not end the wait. *on_match* receives the line where the match starts.
+        input's echo. The program went idle when an ``idle`` attention above
+        *after_revision* exists; with *pattern* that does not end the wait.
+        *on_match* receives the line where the match starts.
         """
         command = self._command
         services = self._services
@@ -645,8 +645,7 @@ class TerminalSession:
                     return await self._linger_for_exit(command, deadline)
             attention = self._attention
             if (
-                command is None
-                and pattern is None
+                pattern is None
                 and attention is not None
                 and attention.kind == "idle"
                 and attention.revision > after_revision
@@ -1073,6 +1072,9 @@ class TerminalSession:
                 self._screen_revision += 1
                 # A wait's pattern matches what the program prints below this line.
                 await self._screen.mark_input()
+                # A command the Agent answers wakes it when it goes idle, as an
+                # interactive program does; its result still arrives when it ends.
+                self._activity.drive()
                 running = await self._running_before_input()
                 *typed, last = chunks
                 typed_at = self._services.monotonic()
@@ -1107,10 +1109,9 @@ class TerminalSession:
         error when the PTY refused the chunk.
         """
         self._note_activity()
-        # A command's result is delivered when it ends, not when it goes idle.
         restart, changed = self._activity.input(
             self._services.monotonic(),
-            notify=self._command is None,
+            notify=True,
             delivery_pending=self._delivery_pending(),
             running=running,
         )
@@ -1168,9 +1169,10 @@ class TerminalSession:
             self._screen_revision += 1
             self._note_activity()
             running = await self._running_before_input()
+            # The operator's input does not drive a command: its output stays its result.
             restart, changed = self._activity.input(
                 self._services.monotonic(),
-                notify=self.attachment is not None and self._command is None,
+                notify=self.attachment is not None and not self._activity.result_only,
                 delivery_pending=self._delivery_pending(),
                 running=running,
             )
@@ -1551,7 +1553,7 @@ class TerminalSession:
         )
         sampler = self._sample_task
         if (
-            self._observer is not None
+            self._process_tree() is not None
             and self._activity.cycle_open
             and (sampler is None or sampler.done())
         ):
@@ -1574,7 +1576,7 @@ class TerminalSession:
                 if settled == "activity":
                     self._quiet_boundaries += 1
                     self._signal_change()
-                if self._command is not None:
+                if self._activity.result_only:
                     # A command's output is its result, delivered when it ends.
                     if settled == "activity":
                         self._publish_state()
@@ -1646,14 +1648,18 @@ class TerminalSession:
             self._signal_change()
         return True
 
+    def _process_tree(self) -> ProcessTree | None:
+        """The tree a cycle samples: the command's, or the observed program's."""
+        return self._observer if self._command is None else self._command.tree
+
     async def _process_sample(self) -> ProcessSample | None:
-        """The program's processes now; None without an observer or when it failed."""
-        observer = self._observer
-        if observer is None:
+        """The program's processes now; None without a process tree or when it failed."""
+        tree = self._process_tree()
+        if tree is None:
             return None
         key = (self.terminal_id, "process_sample")
         try:
-            facts = await asyncio.to_thread(observer.facts)
+            facts = await asyncio.to_thread(tree.facts)
         except Exception:
             if _CONDITIONS.started(key):
                 _LOGGER.warning(
@@ -1675,7 +1681,7 @@ class TerminalSession:
         """The processes that run before input starts a cycle: a process started
         later is the cycle's work. The sample also starts the CPU measurement,
         so CPU work shows from the cycle's first periodic sample on."""
-        if self._command is not None:
+        if self._activity.result_only:
             return None
         sample = await self._process_sample()
         if sample is None:
