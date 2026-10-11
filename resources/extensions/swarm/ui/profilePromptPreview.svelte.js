@@ -1,4 +1,4 @@
-import { t, tOr } from '../../../../webui/src/lib/i18n.js';
+import { tOr } from '../../../../webui/src/lib/i18n.js';
 import { failureText } from './failureText.js';
 
 // The Swarm editor's prompt preview for one formation row: it requests the
@@ -39,14 +39,9 @@ export function createProfilePromptPreview(context) {
       if (request === previewRequest) previewBusy = false;
     }
   }
-  // Tool guidance blocks the core catalog has no title for.
-  const toolBlockTitles = {
-    'tool:project': () => t('swarm.profile.promptBlock.project'),
-    'tool:subagent': () => t('swarm.profile.promptBlock.subagent'),
-    'tool:bash': () => t('swarm.profile.promptBlock.bash'),
-  };
-  const blockTitle = (id) =>
-    tOr(`systemPrompt.blockTitle.${id}`, toolBlockTitles[id]?.() ?? id);
+  // A block the core catalog has no title for (a custom or third-party
+  // block) shows its id.
+  const blockTitle = (id) => tOr(`systemPrompt.blockTitle.${id}`, id);
 
   return {
     blockTitle,

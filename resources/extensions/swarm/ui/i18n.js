@@ -265,9 +265,6 @@ export default Object.freeze({
   'swarm.profile.dynamicPreview':
     'This text depends on the Model and the Project. Generate the preview below to see it.',
   'swarm.profile.blockUnavailable': 'Currently unavailable',
-  'swarm.profile.promptBlock.project': 'Project Tool guidance',
-  'swarm.profile.promptBlock.subagent': 'Subagent Tool guidance',
-  'swarm.profile.promptBlock.bash': 'Bash environment',
   'swarm.profile.reminders': 'Reminders during work',
   'swarm.profile.reminderHelp':
     'Short instructions participants receive when an event occurs, outside the System Prompt.',
