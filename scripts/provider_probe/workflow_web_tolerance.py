@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -83,6 +84,12 @@ async def web_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any])
     results = []
     with (
         TemporaryDirectory(prefix="vbot-web-tolerance-") as temporary,
+        # Public-target preflight runs before the mocked HTTP fetch. Keep its
+        # address checks real, but resolve the fixture without external DNS.
+        patch(
+            "core.tools._public_http._resolve_host_addresses",
+            AsyncMock(return_value=[ipaddress.ip_address("93.184.216.34")]),
+        ),
         patch("core.tools._public_http._fetch_with_retry", fetch),
         patch("core.tools._public_http._make_session", return_value=AsyncMock()),
     ):

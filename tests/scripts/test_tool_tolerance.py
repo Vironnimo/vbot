@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import socket
 from typing import Any, override
+from unittest.mock import Mock
 
 import pytest
 
@@ -163,8 +165,13 @@ def test_channel_probe_checks_actual_receiver_and_saved_notes() -> None:
     assert row["passed"], row
 
 
-def test_web_probe_checks_fetched_content_and_no_fetch_on_conflicts() -> None:
+def test_web_probe_checks_fetched_content_and_no_fetch_on_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from scripts.provider_probe.workflow_web_tolerance import web_case, web_tolerance_cases
+
+    dns = Mock(side_effect=socket.gaierror("DNS is unavailable in this offline probe"))
+    monkeypatch.setattr(socket, "getaddrinfo", dns)
 
     class Adapter:
         async def send(self, messages, **kwargs):
@@ -178,6 +185,7 @@ def test_web_probe_checks_fetched_content_and_no_fetch_on_conflicts() -> None:
     for case in web_tolerance_cases():
         row = asyncio.run(web_case(Adapter(), args, case))
         assert row["passed"], row
+    dns.assert_not_called()
 
 
 def test_ha_probe_checks_actual_service_target_and_payload() -> None:
