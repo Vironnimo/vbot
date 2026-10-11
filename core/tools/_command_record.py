@@ -321,6 +321,14 @@ class CommandRecord:
                 with contextlib.suppress(RuntimeError):
                     task.cancel()
         self._release()
+        # No process runs any longer: a call waiting for the end, or a handoff
+        # waiting for the finish, returns.
+        if self._ended_at is None:
+            self._ended_at = self._services.monotonic()
+        for event in (self._ended, self._finished):
+            # The flag is set first; waking a waiter fails only on a closed Event Loop.
+            with contextlib.suppress(RuntimeError):
+                event.set()
         return True
 
     def pending_tasks(self) -> list[asyncio.Task[Any]]:

@@ -15,10 +15,8 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from typing import Any
 
 import psutil  # type: ignore[import-untyped]
 import pytest
@@ -36,20 +34,24 @@ from core.tools.command_manager import (
     CommandManager,
     CommandNotFoundError,
     CommandNotStartedError,
-    CommandReport,
     CommandStopError,
 )
 from core.tools.process_tree import (
     ProcessTree,
-    ProcessTreeFacts,
-    ProcessTreeTracker,
     ProgramExit,
     RunningProcess,
     track_process_tree,
 )
-from tests.core.tools.terminal_manager_helpers import FakeClock
+from tests.core.tools.command_manager_helpers import (
+    OWNER,
+    FakeSink,
+    FakeTree,
+    Harness,
+    command_harness,
+    format_report,
+    turns,
+)
 
-OWNER = SessionAddress("project-a", "agent-a", "session-a")
 CHILD = SessionAddress("project-a", "sub-agent", "session-child")
 OTHER = SessionAddress("project-a", "agent-b", "session-b")
 GROUP = RunExecutionOwner("ext", "group-1", "participant", "generation", "epoch-1")
@@ -59,228 +61,10 @@ CONSOLE_HOST = RunningProcess(5002, "conhost.exe")
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Objects")
 
 
-def _format(report: CommandReport) -> str:
-    return f"{report.command_id} {report.status} {report.stop_reason} {report.exit_code}"
-
-
-async def _inline(function: Callable[..., Any], /, *args: Any) -> Any:
-    return function(*args)
-
-
-async def _turns(count: int = 40) -> None:
-    for _ in range(count):
-        await asyncio.sleep(0)
-
-
-# --- Fakes -----------------------------------------------------------------
-
-
-class FakeTree:
-    def __init__(self, process: FakeProcess) -> None:
-        self.process = process
-        self.running: list[RunningProcess] = [RunningProcess(process.pid, "shell")]
-        self.cpu_seconds = 0.0
-        self.started = 1
-        self.exits: list[ProgramExit] = []
-        self.terminate_error: OSError | None = None
-        self.terminations = 0
-        self.closed = False
-
-    def facts(self) -> ProcessTreeFacts:
-        return ProcessTreeFacts(
-            tuple(self.running), self.cpu_seconds, self.started, tuple(self.exits)
-        )
-
-    def exit_count(self) -> int:
-        return len(self.exits)
-
-    def terminate(self) -> None:
-        self.terminations += 1
-        if self.terminate_error is not None:
-            raise self.terminate_error
-        self.running.clear()
-        self.process.exit(1)
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class FakeProcess:
-    """A shell whose output, exit and leftover processes the test controls."""
-
-    def __init__(self, pid: int) -> None:
-        self.pid = pid
-        self.tree = FakeTree(self)
-        self._output: asyncio.Queue[bytes] = asyncio.Queue()
-        self._exit: asyncio.Future[int] = asyncio.get_running_loop().create_future()
-        self._eof = False
-        # POSIX: an interrupt reaches the process group; on Windows none is sent.
-        self.interruptible = False
-        self.exits_on_interrupt = False
-        self.interrupts = 0
-        self.released = False
-
-    async def read(self) -> bytes:
-        if self._eof:
-            return b""
-        data = await self._output.get()
-        self._eof = not data
-        return data
-
-    async def wait(self) -> int:
-        return await asyncio.shield(self._exit)
-
-    def interrupt(self) -> bool:
-        if not self.interruptible:
-            return False
-        self.interrupts += 1
-        if self.exits_on_interrupt:
-            self.tree.running.clear()
-            self.exit(130)
-        return True
-
-    def close_output(self) -> None:
-        self._output.put_nowait(b"")
-
-    def close(self) -> None:
-        self.released = True
-
-    # The test's side
-
-    def write(self, data: str | bytes) -> None:
-        self._output.put_nowait(data.encode() if isinstance(data, str) else data)
-
-    def exit(self, code: int, *, leftovers: Iterable[RunningProcess] = ()) -> None:
-        """The shell exits; *leftovers* keep running and hold the output pipe."""
-        self.tree.running = list(leftovers)
-        if not self._exit.done():
-            self._exit.set_result(code)
-        if all(process.name == "conhost.exe" for process in self.tree.running):
-            self._output.put_nowait(b"")
-
-    def end_leftovers(self) -> None:
-        self.tree.running.clear()
-        self._output.put_nowait(b"")
-
-
-class FakeLauncher:
-    def __init__(self) -> None:
-        self.processes: list[FakeProcess] = []
-        self.argv: list[list[str]] = []
-        # While set and not open, launches wait for it.
-        self.gate: asyncio.Event | None = None
-
-    async def __call__(
-        self,
-        argv: Sequence[str],
-        cwd: Path,
-        env: Mapping[str, str],
-        tracker: ProcessTreeTracker,
-    ) -> FakeProcess:
-        self.argv.append(list(argv))
-        if self.gate is not None:
-            await self.gate.wait()
-        process = FakeProcess(10_000 + len(self.processes))
-        self.processes.append(process)
-        return process
-
-
-class FakeSink:
-    """TriggerService's completion delivery; results stay pending until handed over."""
-
-    def __init__(self) -> None:
-        self.submissions: list[dict[str, Any]] = []
-        self.cancellations: list[str] = []
-        self.futures: list[asyncio.Future[None]] = []
-
-    def submit_completion(self, agent_id: str, session_id: str, **kwargs: Any) -> Awaitable[None]:
-        self.submissions.append({"agent_id": agent_id, "session_id": session_id, **kwargs})
-        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        self.futures.append(future)
-        return future
-
-    def cancel_completion(self, agent_id: str, session_id: str, **kwargs: Any) -> bool:
-        self.cancellations.append(kwargs["notice_id"])
-        return True
-
-    @property
-    def bodies(self) -> list[str]:
-        return [submission["body"] for submission in self.submissions]
-
-
-@dataclass
-class Harness:
-    manager: CommandManager
-    launcher: FakeLauncher
-    clock: FakeClock
-    sink: FakeSink
-    cwd: Path
-    changes: list[str] = field(default_factory=list)
-
-    async def launch(
-        self,
-        *,
-        owner: SessionAddress = OWNER,
-        run_id: str = "run-a",
-        on_output: Callable[[str], Awaitable[None]] | None = None,
-        execution_owner: RunExecutionOwner | None = None,
-    ) -> tuple[str, FakeProcess]:
-        handle = await self.manager.launch(
-            owner,
-            ["shell", "-c", "work"],
-            command="work",
-            description=None,
-            cwd=self.cwd,
-            env={},
-            origin_run_id=run_id,
-            formatter=_format,
-            execution_owner=execution_owner,
-            on_output=on_output,
-        )
-        process = self.launcher.processes[-1]
-        assert handle.pid == process.pid
-        return handle.command_id, process
-
-    async def advance(self, seconds: float, *, step: float = 0.25) -> None:
-        """Let *seconds* pass on the fake clock in steps, settling the loop at each."""
-        await _turns()
-        end = self.clock.now + seconds
-        while self.clock.now < end - 1e-9:
-            await self.clock.advance(min(step, end - self.clock.now))
-            await _turns()
-
-    async def finish(self, command_id: str) -> CommandReport:
-        """Let fake time pass until no process of the command runs."""
-        await _turns()
-        for _step in range(100):
-            report = self.manager.report(command_id)
-            if report.finished:
-                return report
-            await self.advance(0.25)
-        raise AssertionError(f"command {command_id} did not finish")
-
-
 @pytest_asyncio.fixture
 async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
-    clock = FakeClock()
-    launcher = FakeLauncher()
-    sink = FakeSink()
-    manager = CommandManager(
-        sink,
-        temporary_files=TemporaryFileManager(tmp_path / "data"),
-        launcher=launcher,
-        monotonic=clock.monotonic,
-        sleep=clock.sleep,
-        run_blocking=_inline,
-        max_live=3,
-    )
-    harness = Harness(manager, launcher, clock, sink, tmp_path)
-    manager.add_changed_callback(harness.changes.append)
-    manager.start()
-    try:
+    async with command_harness(tmp_path) as harness:
         yield harness
-    finally:
-        await manager.aclose()
 
 
 # --- Output ----------------------------------------------------------------
@@ -382,9 +166,9 @@ async def test_foreground_output_is_published_until_the_command_moves_to_the_bac
 
     command_id, process = await harness.launch(on_output=on_output)
     process.write("a\n")
-    await _turns()
+    await turns()
     process.write("b\n")
-    await _turns()
+    await turns()
     assert published == ["a"]
     await harness.advance(0.5)
     assert published == ["a", "a\nb"]
@@ -502,7 +286,7 @@ async def test_each_stop_kills_the_whole_tree_and_records_its_reason(
     assert (report.status, report.stop_reason) == ("stopped", reason)
     assert process.tree.terminations == 1 and process.tree.closed
     assert not harness.manager.has_execution_work(GROUP)
-    assert harness.sink.bodies == ([_format(report)] if delivered else [])
+    assert harness.sink.bodies == ([format_report(report)] if delivered else [])
 
 
 @pytest.mark.asyncio
@@ -540,7 +324,7 @@ async def test_a_stop_after_the_end_kills_the_leftovers_and_keeps_the_outcome(
     harness.manager.to_background(command_id, deliver=True)
     process.exit(3, leftovers=[SERVER])
     await harness.advance(3.25)
-    assert harness.sink.bodies == [_format(harness.manager.report(command_id))]
+    assert harness.sink.bodies == [format_report(harness.manager.report(command_id))]
 
     report = await harness.manager.stop(command_id, "agent")
 
@@ -613,7 +397,7 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
             "session_id": "session-child",
             "notice_id": f"command:{command_id}",
             "origin_run_id": "run-a",
-            "body": _format(report),
+            "body": format_report(report),
             "project_id": "project-a",
             "execution_owner": None,
             "wake": True,
@@ -678,7 +462,7 @@ async def test_acknowledging_a_shown_end_withdraws_a_result_not_yet_handed_over(
         for submission, future in zip(harness.sink.submissions, harness.sink.futures, strict=True)
     }
     deliveries[f"command:{handed_id}"].set_result(None)
-    await _turns()
+    await turns()
 
     harness.manager.acknowledge(pending_id)
     harness.manager.acknowledge(handed_id)
@@ -686,7 +470,7 @@ async def test_acknowledging_a_shown_end_withdraws_a_result_not_yet_handed_over(
 
     assert len(harness.sink.submissions) == 2
     assert harness.sink.cancellations == [f"command:{pending_id}"]
-    await _turns()
+    await turns()
     assert deliveries[f"command:{pending_id}"].cancelled()
 
 
@@ -738,9 +522,9 @@ async def test_run_cancel_stops_only_its_foreground_commands(harness: Harness) -
 async def test_a_cancelled_launch_leaves_no_command_behind(harness: Harness) -> None:
     harness.launcher.gate = asyncio.Event()
     launching = asyncio.ensure_future(harness.launch())
-    await _turns()
+    await turns()
     launching.cancel()
-    await _turns()
+    await turns()
     harness.launcher.gate.set()
 
     with pytest.raises(asyncio.CancelledError):
@@ -758,7 +542,7 @@ async def test_capacity_counts_running_commands_and_launches_in_progress(
     await harness.launch()
     harness.launcher.gate = asyncio.Event()
     pending = asyncio.ensure_future(harness.launch())
-    await _turns()
+    await turns()
 
     with pytest.raises(CommandCapacityError) as refused:
         await harness.launch()
@@ -784,9 +568,25 @@ async def test_shutdown_stops_every_command_and_delivers_background_results(
     reports = [harness.manager.report(i) for i in (foreground_id, background_id)]
     assert [report.stop_reason for report in reports] == ["shutdown", "shutdown"]
     assert foreground.tree.terminations == background.tree.terminations == 1
-    assert harness.sink.bodies == [_format(reports[1])]
+    assert harness.sink.bodies == [format_report(reports[1])]
     with pytest.raises(CommandNotStartedError):
         await harness.launch()
+
+
+@pytest.mark.asyncio
+async def test_closing_the_manager_kills_every_command_and_ends_the_waits_for_it(
+    harness: Harness,
+) -> None:
+    command_id, process = await harness.launch()
+    waiting = asyncio.ensure_future(harness.manager.wait(command_id, seconds=None))
+    finishing = asyncio.ensure_future(harness.manager.wait_finished(command_id))
+    await turns()
+
+    harness.manager.close()
+
+    assert await asyncio.wait_for(waiting, 1) == "ended"
+    await asyncio.wait_for(finishing, 1)
+    assert process.tree.terminations == 1
 
 
 @pytest.mark.asyncio
@@ -852,7 +652,7 @@ async def _launch_real(manager: CommandManager, tmp_path: Path, *argv: str) -> t
         cwd=tmp_path,
         env=_environment(),
         origin_run_id="run-a",
-        formatter=_format,
+        formatter=format_report,
     )
     return handle.command_id, handle.pid
 
@@ -955,7 +755,7 @@ async def test_a_tree_kill_from_outside_ends_the_command_like_any_end(
     report = manager.report(command_id)
     assert (report.status, report.exit_code, report.stop_reason) == ("failed", 1, None)
     assert not [pid for pid in pids if _alive(pid)]
-    assert sink.bodies == [_format(report)]
+    assert sink.bodies == [format_report(report)]
 
 
 @windows_only
