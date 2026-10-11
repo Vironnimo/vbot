@@ -569,7 +569,7 @@ async def test_wait_reads_seconds_and_refuses_disagreeing_timeouts(terminal: Ter
     )
 
 
-@pytest.mark.parametrize("ending", ["matched", "quiet", "exited"])
+@pytest.mark.parametrize("ending", ["matched", "quiet", "exited", "stopped"])
 @pytest.mark.asyncio
 async def test_wait_ends_at_the_exit_a_matching_line_or_quiet_output(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], ending: str
@@ -587,9 +587,12 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_quiet_output(
             {"action": "input", "terminal_id": terminal_id, "text": "go", "key": "enter"}
         )
         adapter.emit("done\r\n> ")
-    else:
+    elif ending == "exited":
         adapter.emit("bye\r\n")
         adapter.finish(4)
+    else:
+        # A program that was stopped did not exit on its own.
+        await terminal({"action": "kill", "terminal_id": terminal_id})
 
     result = await terminal(arguments)
 
@@ -602,6 +605,8 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_quiet_output(
             "level": "warning",
             "text": "The program exited with code 4.",
         }
+    elif ending == "stopped":
+        assert data["state"] == "stopped"
     else:
         assert data["state"] == "running"
 

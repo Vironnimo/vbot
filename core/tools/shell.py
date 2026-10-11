@@ -631,7 +631,8 @@ async def command_terminal_result(
     ``status`` (``running``, ``exited`` or ``stopped``) and, as they apply,
     ``terminal_id``, ``exit_code``, ``stopped_because``, ``output``,
     ``failed_programs``, ``still_running``, ``hint`` and ``next``, plus
-    ``wait_ended`` when given.
+    ``wait_ended`` when given (``stopped`` for an ``exited`` wait on a
+    command that was stopped).
     A running command's ``next`` follows from how the wait ended
     (``matched``, ``timeout``, or no wait), unless the command is idle: then
     it is the idle text with the seconds it has been idle. A command that
@@ -652,7 +653,9 @@ async def command_terminal_result(
         idle_seconds=idle_seconds,
     )
     if wait_ended is not None:
-        data["wait_ended"] = wait_ended
+        # A command that was stopped did not exit on its own; the end says so as the status does.
+        stopped = wait_ended == "exited" and data["status"] == "stopped"
+        data["wait_ended"] = "stopped" if stopped else wait_ended
     return data
 
 

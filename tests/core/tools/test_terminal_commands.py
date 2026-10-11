@@ -580,6 +580,9 @@ async def test_kill_stops_a_command_and_says_what_it_stopped(tools: Tools, befor
             "watching",
         )
         assert "note" not in result
+        # A wait on it says it was stopped, not that it exited.
+        waited = await tools.terminal({"action": "wait", "terminal_id": terminal_id})
+        assert (waited["status"], waited["wait_ended"]) == ("stopped", "stopped")
         tools.keep_results()
         await asyncio.sleep(0)
         assert tools.delivered() == []
