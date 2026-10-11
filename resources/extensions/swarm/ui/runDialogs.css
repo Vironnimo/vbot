@@ -104,9 +104,10 @@
   color: var(--text-hi);
   font-weight: 500;
 }
+/* As in Usage, only the Model id's provider path is muted. */
 .swarm-details__participant > .model-id {
   min-width: 0;
-  color: var(--text-med);
+  color: var(--text-hi);
   overflow-wrap: anywhere;
   text-align: right;
 }

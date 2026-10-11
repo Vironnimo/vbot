@@ -146,7 +146,7 @@ export default Object.freeze({
   'swarm.start.directoryLoading': 'Loading the working directory…',
   'swarm.deleteRun.body':
     'Permanently delete “{title}” with its Board, Wiki and participant Sessions? The Swarm is kept. This cannot be undone.',
-  'swarm.delete.body': 'Delete {name}? Existing Runs remain available.',
+  'swarm.delete.body': 'Delete “{name}”? Existing Runs remain available.',
   'swarm.communication.title': 'Communication settings',
   'swarm.communication.routeChange': '{route} · {setting}: {before} → {after}',
   'swarm.communication.change': '{setting}: {before} → {after}',
