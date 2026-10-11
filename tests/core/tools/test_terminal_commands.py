@@ -664,6 +664,58 @@ async def test_command_wait_ends_only_at_exit_match_or_timeout(tools: Tools, wor
 
 
 @pytest.mark.asyncio
+async def test_a_command_the_agent_typed_into_wakes_it_when_it_goes_idle(tools: Tools) -> None:
+    terminal_id, adapter, tree = await tools.background("sync-tool")
+    adapter.emit("Sync now? ")
+    await eventually(lambda: shows(tools, terminal_id, "Sync now?"))
+
+    # The answer starts work that outlasts the reply: the result says how its screen arrives.
+    typing = asyncio.ensure_future(
+        tools.terminal({"action": "input", "terminal_id": terminal_id, "text": "y", "key": "enter"})
+    )
+    await tools.run_clock(lambda: adapter.writes[-1:] == ["\r"], until=tools.clock.now + 5)
+    tree.running = (*tree.running, RunningProcess(7, "sync.exe"))
+    tree.started += 1
+    adapter.emit("y\r\nSyncing...\r\n")
+    # Output renders in real time: the clock moves on once it shows.
+    await eventually(lambda: shows(tools, terminal_id, "Syncing..."))
+    await tools.run_clock(typing, until=tools.clock.now + 10)
+    assert typing.result()["next"] == (
+        "The command is still working; it has no timeout. Its screen arrives as a new message "
+        "once it goes idle, and its result when it exits; continue other work or end your turn. "
+        f"To wait for it now instead, call {terminal_call('wait', terminal_id)}."
+    )
+    tools.keep_results()
+
+    # A wait without pattern ends when the work is done; the screen it shows is not delivered.
+    waiting = asyncio.ensure_future(tools.terminal({"action": "wait", "terminal_id": terminal_id}))
+    await eventually(lambda: tools.clock.sleeping)
+    adapter.emit("Synced 3 files.\r\nSync again? ")
+    await eventually(lambda: shows(tools, terminal_id, "Sync again?"))
+    tree.running = tree.running[:1]
+    await tools.run_clock(waiting, until=tools.clock.now + 10)
+    waited = waiting.result()
+    assert (waited["status"], waited["wait_ended"]) == ("running", "idle")
+    assert waited["output"].splitlines()[-2:] == ["Synced 3 files.", "Sync again?"]
+    assert len(tools.trigger.submissions) == 1
+    tools.keep_results()
+    await asyncio.sleep(0)
+    assert tools.delivered() == []
+
+    # Once the Agent ended its turn, output the program prints on its own wakes it too.
+    adapter.emit("\r\nRemote changed: 2 files\r\n\x07")
+    await eventually(lambda: shows(tools, terminal_id, "Remote changed"))
+    # Once delivered, nothing sleeps on the clock: a task tells the clock to stop.
+    arrived = asyncio.ensure_future(eventually(lambda: bool(tools.delivered())))
+    await tools.run_clock(arrived, until=tools.clock.now + 10)
+    [body] = tools.delivered()
+    assert body.startswith(
+        f"Terminal {terminal_id} (sync-tool) went idle; its program still runs. Screen:"
+    )
+    assert "Remote changed: 2 files" in body
+
+
+@pytest.mark.asyncio
 async def test_a_command_runs_while_processes_its_shell_left_running_work(tools: Tools) -> None:
     terminal_id, adapter, tree = await tools.background("report")
     adapter.emit("starting\r\n")

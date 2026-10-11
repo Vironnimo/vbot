@@ -1026,14 +1026,14 @@ class TerminalManager:
     ) -> WaitEnded:
         """Wait up to *seconds* until the program exits, prints a match, or goes idle.
 
-        A command's wait ends only when its shell exits, at a match, or after
-        *seconds*. An interactive program's wait also ends (``idle``) once
-        it went idle showing a new screen in an attention revision above
-        *after_revision* (default: the last one a durable result showed or
-        a delivery brought); with *pattern* that does not end its wait. Output
-        printed before the call counts for *pattern*, except output before the
-        Agent's last input and that input's echo. *on_match* receives the
-        line where a match starts.
+        Until the Agent typed into it, a command's wait ends only when the
+        command ends, at a match, or after *seconds*. Otherwise the wait also
+        ends (``idle``) once the program went idle showing a new screen in an
+        attention revision above *after_revision* (default: the last one a
+        durable result showed or a delivery brought); with *pattern* that
+        does not end its wait. Output printed before the call counts for
+        *pattern*, except output before the Agent's last input and that
+        input's echo. *on_match* receives the line where a match starts.
         """
         session = self._attached(terminal_id, owner)
         if after_revision is None:

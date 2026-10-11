@@ -832,6 +832,7 @@ async def _handle_input(
             context,
             terminal_id,
             wait_ended=ended if pattern is not None else None,
+            typed=pattern is None,
         )
     else:
         snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
@@ -894,16 +895,29 @@ async def _command_result(
     terminal_id: str,
     *,
     wait_ended: str | None = None,
+    typed: bool = False,
 ) -> JsonObject:
-    """The shell result of a command terminal; an end it shows is not delivered again."""
+    """The shell result of a command terminal; a screen, idle or end it shows is not
+    delivered again. *typed* marks the reply to the Agent's input."""
     # Imported here: the shell Tool owns the result of a command and imports the manager.
     from core.tools.shell import command_terminal_result
 
+    owner = _owner(context)
+    try:
+        # Taken first, so the result shows this screen or a newer one.
+        shown = await terminal_manager.snapshot(terminal_id, owner, lines=1, include_name=False)
+    except TerminalNotOwnedError:
+        shown = None
     data = await command_terminal_result(
-        terminal_manager, context, terminal_id, wait_ended=wait_ended
+        terminal_manager,
+        context,
+        terminal_id,
+        wait_ended=wait_ended,
+        working=typed and shown is not None and shown.get("state") == "working",
     )
+    if shown is not None:
+        _acknowledge_after_persistence(terminal_manager, context, owner, shown)
     if data.get("status") in {"exited", "stopped"}:
-        owner = _owner(context)
         context.after_result_persisted(
             lambda: terminal_manager.acknowledge_exit(terminal_id, owner)
         )
