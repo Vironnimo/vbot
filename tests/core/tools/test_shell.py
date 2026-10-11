@@ -340,6 +340,33 @@ async def test_long_output_keeps_head_and_tail_and_points_to_the_log_file(shell:
     assert len(log) == 500
 
 
+@pytest.mark.parametrize(
+    ("total", "omitted"),
+    # 500-character lines: 24 are a little over the 12,000-character budget and stay
+    # whole; of 30, the first 7 and the last 16 fill the budget.
+    [(24, 0), (30, 7)],
+)
+@pytest.mark.asyncio
+async def test_long_lines_keep_both_ends_of_the_output_within_its_budget(
+    shell: Shell, total: int, omitted: int
+) -> None:
+    lines = [f"{number:03d} " + "x" * 496 for number in range(total)]
+    call = shell.call({"command": "test"})
+    adapter, tree = await shell.started()
+    adapter.emit("".join(f"{line}\r\n" for line in lines))
+    await asyncio.sleep(0.05)
+    tree.shell_exits(0)
+
+    output = data(await call)["output"].splitlines()
+    if not omitted:
+        assert output == lines
+        return
+    # The output's end, where errors and summaries are, stays in view.
+    marker = output[7]
+    assert re.fullmatch(rf"\[\.\.\. {omitted} lines omitted; .*\]", marker), marker
+    assert output[:7] + output[8:] == lines[:7] + lines[-16:]
+
+
 @pytest.mark.asyncio
 async def test_running_output_is_the_newest_rows_and_its_log_file_has_every_row(
     shell: Shell,

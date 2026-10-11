@@ -140,19 +140,29 @@ async def test_finished_command_reports_transcript_exit_code_and_tree_facts(
     await eventually(lambda: tree.closed)
 
 
+@pytest.mark.parametrize(
+    ("total", "first_tail_line"),
+    # Fewer than 21 lines past the head and its 80 tail lines are kept, not left out.
+    [(500, 420), (141, 61), (140, 40)],
+)
 @pytest.mark.asyncio
-async def test_long_transcript_keeps_head_and_tail_and_counts_the_rest(harness: Harness) -> None:
+async def test_long_transcript_keeps_head_and_tail_and_counts_the_rest(
+    harness: Harness, total: int, first_tail_line: int
+) -> None:
     terminal_id, adapter, tree = await harness.start()
-    adapter.emit("".join(f"line {number}\r\n" for number in range(500)))
+    adapter.emit("".join(f"line {number}\r\n" for number in range(total)))
     await eventually(lambda: harness.manager.command_report(terminal_id).transcript.total_lines > 0)
     tree.shell_exits(0)
     await harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
 
     transcript = harness.manager.command_report(terminal_id).transcript
-    assert transcript.total_lines == 500
+    assert transcript.total_lines == total
     assert (transcript.head[0], transcript.head[-1]) == ("line 0", "line 39")
-    assert (transcript.tail[0], transcript.tail[-1]) == ("line 420", "line 499")
-    assert transcript.omitted_lines == 380
+    assert (transcript.tail[0], transcript.tail[-1]) == (
+        f"line {first_tail_line}",
+        f"line {total - 1}",
+    )
+    assert transcript.omitted_lines == first_tail_line - 40
 
 
 @pytest.mark.parametrize(

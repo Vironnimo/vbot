@@ -84,6 +84,9 @@ SHELL_DEFAULT_TIMEOUT_SECONDS = 600.0
 SHELL_OUTPUT_HEAD_CHARS = 4_000
 SHELL_OUTPUT_TAIL_CHARS = 8_000
 SHELL_OUTPUT_LINE_CHARS = 2_000
+# Output over the budget by at most this much is shown whole: a marker for a few
+# lines saves less than the read of the log file it invites.
+SHELL_OUTPUT_OMIT_MIN_CHARS = 1_000
 # A running command's result shows only its newest output; its log file has all of it.
 SHELL_RUNNING_OUTPUT_LINES = 20
 SHELL_RUNNING_OUTPUT_CHARS = 4_000
@@ -947,18 +950,46 @@ def command_output_text(report: CommandReport, *, screen: str = "") -> str:
     where = _full_output(report)
     head = [_shortened(line, where) for line in transcript.head]
     tail = [_shortened(line, where) for line in transcript.tail]
-    screen_lines = screen.splitlines()
-    tail.extend(_shortened(line, where) for line in screen_lines)
+    tail.extend(_shortened(line, where) for line in screen.splitlines())
     omitted = transcript.omitted_lines
-    head, dropped_head = _within(head, SHELL_OUTPUT_HEAD_CHARS, keep="start")
-    tail, dropped_tail = _within(tail, SHELL_OUTPUT_TAIL_CHARS, keep="end")
-    omitted += dropped_head + dropped_tail
+    if not omitted:
+        # One run of lines: where the transcript's head ends means nothing here.
+        head, tail = [], head + tail
+    head, tail, dropped = _head_and_tail(head, tail)
+    omitted += dropped
     lines = list(head)
     if omitted:
         noun = "line" if omitted == 1 else "lines"
         lines.append(f"[... {omitted:,} {noun} omitted{where} ...]")
     lines.extend(tail)
     return "\n".join(lines)
+
+
+def _head_and_tail(head: list[str], tail: list[str]) -> tuple[list[str], list[str], int]:
+    """*head* and *tail* within the output budget, and the number of lines left out.
+
+    *head* lines are kept from the start, *tail* lines from the end; with an
+    empty *head*, both ends of *tail* are kept. Each end gets at least its own
+    budget and the room the other end does not need. Output is left out only
+    where that saves more than ``SHELL_OUTPUT_OMIT_MIN_CHARS``.
+    """
+    budget = SHELL_OUTPUT_HEAD_CHARS + SHELL_OUTPUT_TAIL_CHARS
+    if _chars(head) + _chars(tail) <= budget + SHELL_OUTPUT_OMIT_MIN_CHARS:
+        return head, tail, 0
+    if not head:
+        kept_head, _ = _within(tail, SHELL_OUTPUT_HEAD_CHARS, keep="start")
+        rest = tail[len(kept_head) :]
+        kept_tail, _ = _within(rest, budget - _chars(kept_head), keep="end")
+        return kept_head, kept_tail, len(rest) - len(kept_tail)
+    head_budget = max(SHELL_OUTPUT_HEAD_CHARS, budget - _chars(tail))
+    kept_head, dropped_head = _within(head, head_budget, keep="start")
+    kept_tail, dropped_tail = _within(tail, budget - _chars(kept_head), keep="end")
+    return kept_head, kept_tail, dropped_head + dropped_tail
+
+
+def _chars(lines: list[str]) -> int:
+    """The characters *lines* take in the output, line breaks included."""
+    return sum(len(line) + 1 for line in lines)
 
 
 def _running_output_text(report: CommandReport, screen: str) -> str:
