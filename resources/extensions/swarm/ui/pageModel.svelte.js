@@ -26,6 +26,7 @@ import {
 import { createSwarmPageActivity } from './pageActivity.svelte.js';
 import { createSwarmPageBoard } from './pageBoard.svelte.js';
 import { createSwarmPageUsage } from './pageUsage.svelte.js';
+import { failureText } from './failureText.js';
 
 // How often relative times ("started 5 minutes ago") move on.
 const CLOCK_INTERVAL_MS = 60_000;
@@ -221,7 +222,7 @@ export function createSwarmPageModel(host) {
         await tick();
         await wikiPanel?.openPage(id);
       } catch (cause) {
-        if (!disposed) error = cause.message;
+        if (!disposed) error = failureText(cause);
       }
     },
     // A mention shows the participant's Activity, as its chip does.
@@ -278,7 +279,7 @@ export function createSwarmPageModel(host) {
   // back, which shows the place.
   function stepTo(next) {
     return client.pushRoute(next).catch((cause) => {
-      if (!disposed) error = cause.message;
+      if (!disposed) error = failureText(cause);
     });
   }
 
@@ -290,7 +291,7 @@ export function createSwarmPageModel(host) {
     if (!step && routeSettled !== routeRequest) return;
     void (step ? client.pushRoute(shown) : client.replaceRoute(shown)).catch(
       (cause) => {
-        if (!disposed) error = cause.message;
+        if (!disposed) error = failureText(cause);
       },
     );
   }
@@ -381,7 +382,7 @@ export function createSwarmPageModel(host) {
     activeTab = tab;
     error = '';
     void loadVisibleTab().catch((cause) => {
-      if (!disposed) error = cause.message;
+      if (!disposed) error = failureText(cause);
     });
   }
 
@@ -428,7 +429,7 @@ export function createSwarmPageModel(host) {
       if (disposed || request !== directoryRequest) return;
       directoryFailed = true;
       if (background) refreshFailed(cause);
-      else error = cause.message;
+      else error = failureText(cause);
     } finally {
       if (!disposed && request === directoryRequest) directoryLoading = false;
     }
@@ -573,7 +574,7 @@ export function createSwarmPageModel(host) {
     if (disposed) return;
     refreshFailures += 1;
     refreshError = cause?.message
-      ? t('swarm.refreshError', { error: cause.message })
+      ? t('swarm.refreshError', { error: failureText(cause) })
       : t('swarm.loadError');
   }
 
@@ -695,7 +696,7 @@ export function createSwarmPageModel(host) {
     } catch (cause) {
       if (disposed || request !== selectionRequest) return;
       if (silent) throw cause;
-      error = cause.message;
+      error = failureText(cause);
     }
   }
 
@@ -728,7 +729,7 @@ export function createSwarmPageModel(host) {
       profiles = appendNew(profiles, page(result));
       profilesCursor = result.cursor ?? null;
     } catch (cause) {
-      if (!disposed) error = cause.message;
+      if (!disposed) error = failureText(cause);
     } finally {
       if (!disposed) moreProfilesLoading = false;
     }
@@ -748,7 +749,7 @@ export function createSwarmPageModel(host) {
       swarms = appendNew(swarms, page(result));
       swarmsCursor = result.cursor ?? null;
     } catch (cause) {
-      if (!disposed) error = cause.message;
+      if (!disposed) error = failureText(cause);
     } finally {
       if (!disposed) moreSwarmsLoading = false;
     }
@@ -797,7 +798,7 @@ export function createSwarmPageModel(host) {
       editorKey += 1;
       editor = profile;
     } catch (cause) {
-      if (!disposed && request === selectionRequest) error = cause.message;
+      if (!disposed && request === selectionRequest) error = failureText(cause);
     } finally {
       if (pending === opening) pending = '';
     }
@@ -880,7 +881,7 @@ export function createSwarmPageModel(host) {
       await refresh();
       await focusPaneRow('profile', next);
     } catch (cause) {
-      deleteError = cause.message;
+      deleteError = failureText(cause);
     } finally {
       pending = '';
     }
@@ -912,7 +913,7 @@ export function createSwarmPageModel(host) {
       await refresh();
       await focusPaneRow('run', next);
     } catch (cause) {
-      deleteError = cause.message;
+      deleteError = failureText(cause);
     } finally {
       pending = '';
     }
@@ -958,7 +959,7 @@ export function createSwarmPageModel(host) {
       await refresh();
       await stepTo(swarmRoute(id));
     } catch (cause) {
-      error = cause.message;
+      error = failureText(cause);
     } finally {
       pending = '';
     }
@@ -988,7 +989,7 @@ export function createSwarmPageModel(host) {
       await refresh();
       showResumeFailures(result);
     } catch (cause) {
-      error = cause.message;
+      error = failureText(cause);
     } finally {
       pending = '';
     }
@@ -1089,7 +1090,7 @@ export function createSwarmPageModel(host) {
       try {
         detail = (await call('swarms.get', { swarm_id: run.id })).swarm;
       } catch (cause) {
-        if (!disposed && request === dialogRequest) error = cause.message;
+        if (!disposed && request === dialogRequest) error = failureText(cause);
         return;
       }
       if (disposed || request !== dialogRequest) return;
@@ -1137,7 +1138,7 @@ export function createSwarmPageModel(host) {
         request_id: requestId(),
       });
     } catch (cause) {
-      if (!disposed) settingsError = cause.message;
+      if (!disposed) settingsError = failureText(cause);
       return;
     } finally {
       pending = '';

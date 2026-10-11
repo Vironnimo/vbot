@@ -7,6 +7,7 @@ import {
   TERMINAL_RUN_EVENTS,
 } from '../../../../webui/src/lib/chatState.js';
 import { untrack } from 'svelte';
+import { failureText } from './failureText.js';
 
 // Why an interrupted Run stopped, as its summary's completion reason names
 // it; another reason counts as a plain interruption.
@@ -127,7 +128,7 @@ export function createSwarmPageActivity(host) {
   function readFailed(cause, background) {
     stale = true;
     if (background) host.model.refreshFailed(cause);
-    else host.model.error = cause.message;
+    else host.model.error = failureText(cause);
   }
 
   // Stops reading and following the inspected participant's Run while the
@@ -381,7 +382,7 @@ export function createSwarmPageActivity(host) {
         request === activityRequest &&
         read === historyRequest
       )
-        host.model.error = cause.message;
+        host.model.error = failureText(cause);
     } finally {
       if (
         !host.model.disposed &&
@@ -600,7 +601,7 @@ export function createSwarmPageActivity(host) {
       await host.model.client.cancelToolCall(groupId, runId, toolCallId);
     } catch (cause) {
       if (!host.model.disposed && request === activityRequest)
-        host.model.error = cause.message;
+        host.model.error = failureText(cause);
     }
   }
 

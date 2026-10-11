@@ -147,8 +147,7 @@
       footerActionLabel={board.discussionCursor
         ? t('swarm.board.moreDiscussions')
         : ''}
-      onFooterAction={() =>
-        board.loadDiscussions(swarm, board.discussionCursor)}
+      onFooterAction={board.loadMoreDiscussions}
       onValueChange={(value) => board.chooseDiscussion(value)}
     />
     <Button
@@ -329,11 +328,6 @@
     </ol>
     {#if board.boardCursor}<Button
         variant="secondary"
-        onClick={() =>
-          board.loadBoard(
-            model.selectedSwarm,
-            board.selectedDiscussion,
-            board.boardCursor,
-          )}>{t('swarm.board.more')}</Button
+        onClick={board.loadEarlierPosts}>{t('swarm.board.more')}</Button
       >{/if}{/if}
 </div>

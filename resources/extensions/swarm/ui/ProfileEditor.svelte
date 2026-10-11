@@ -29,6 +29,7 @@
   } from '../../../../webui/src/lib/compactionPolicy.js';
   import { buildModelSelectOptions } from '../../../../webui/src/lib/modelSelection.js';
   import DeliverySettings from './DeliverySettings.svelte';
+  import { failureText } from './failureText.js';
   import ProfileAccess from './ProfileAccess.svelte';
   import ProfileInstructions from './ProfileInstructions.svelte';
   import ProfileParticipants from './ProfileParticipants.svelte';
@@ -92,6 +93,10 @@
   // A new Swarm keeps its fields still while it is created.
   const busy = $derived(saving && !profile);
   let saveError = $state('');
+  // A shortcut a save found taken by another Swarm. It shows at its field
+  // until the shortcut changes; a changed one may be free, so the next save
+  // asks again.
+  let takenSlug = $state(null);
   // Field errors appear once a save found one and then follow the draft.
   let showValidation = $state(false);
   let advancedOpen = $state(false);
@@ -210,17 +215,26 @@
   }
 
   // Each problem a save would reject, in page order, keyed by its control.
+  // `saveOnly` marks a problem that does not keep a prompt preview from
+  // running.
   function validate(value) {
     const issues = [];
     if (!value.name.trim())
       issues.push({
         id: 'swarm-profile-name',
         message: t('swarm.profile.nameRequired'),
+        saveOnly: true,
       });
     if (value.slug?.trim() && !SHORTCUT_PATTERN.test(value.slug))
       issues.push({
         id: 'swarm-profile-slug',
         message: t('swarm.profile.shortcutValidation'),
+      });
+    else if (takenSlug !== null && value.slug === takenSlug)
+      issues.push({
+        id: 'swarm-profile-slug',
+        message: t('swarm.error.slug_unavailable'),
+        saveOnly: true,
       });
     value.participants.forEach((row, index) => {
       if (!row.model)
@@ -260,12 +274,11 @@
   }
 
   // A prompt preview needs what a save needs except the name, which the
-  // server fills in for an unnamed Swarm. Like a save the user asked for, a
-  // preview that cannot run shows the problems and moves focus to the first.
+  // server fills in for an unnamed Swarm, and a free shortcut. Like a save
+  // the user asked for, a preview that cannot run shows the problems and
+  // moves focus to the first.
   async function previewable() {
-    const issues = validate(draft).filter(
-      (issue) => issue.id !== 'swarm-profile-name',
-    );
+    const issues = validate(draft).filter((issue) => !issue.saveOnly);
     if (!issues.length) return true;
     showValidation = true;
     await focusField(issues[0].id);
@@ -301,6 +314,7 @@
       return false;
     }
     const submittedSnapshot = snapshot();
+    const submittedSlug = draft.slug ?? '';
     const creating = !profile;
     saving = true;
     try {
@@ -317,11 +331,20 @@
       showValidation = false;
       return true;
     } catch (cause) {
-      saveError = cause.message;
-      return false;
+      if (cause?.message !== 'slug_unavailable' || !submittedSlug.trim()) {
+        saveError = failureText(cause);
+        return false;
+      }
+      // Another Swarm uses the shortcut: a problem of its field, like those
+      // found before saving.
+      takenSlug = submittedSlug;
+      showValidation = true;
     } finally {
       saving = false;
     }
+    // Once the fields are enabled again.
+    if (reason === 'manual') await focusField('swarm-profile-slug');
+    return false;
   }
 
   const projects = $derived(catalog.projects ?? []);
@@ -473,7 +496,10 @@
                 autocomplete="off"
                 invalid={Boolean(fieldErrors['swarm-profile-slug'])}
                 aria-describedby={describedBy('swarm-profile-slug')}
-                onInput={(value) => (draft.slug = value)}
+                onInput={(value) => {
+                  draft.slug = value;
+                  takenSlug = null;
+                }}
               />
             </div>
           </div>

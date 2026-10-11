@@ -506,8 +506,9 @@ describe('SwarmPage overview', () => {
     const { bridge, operation } = createBridge();
     let listFails = false;
     overrideOperations(operation, {
+      // Operations fail with their error code as the message.
       'swarms.stop': () => {
-        throw new Error('test-owned stop failure');
+        throw new Error('swarm_closed');
       },
       'swarms.list': (_args, fallback) => {
         if (listFails) throw new Error('test-owned list failure');
@@ -516,22 +517,24 @@ describe('SwarmPage overview', () => {
     });
     await openSwarm(bridge);
     headButton(STOP).click();
-    await vi.waitFor(() =>
-      expect(notice('alert')).toContain('test-owned stop failure'),
-    );
-    // A failed refresh shows beside it with a way to retry ...
+    // A code shows in the page's words, never as the code ...
+    const stopFailure = t('swarm.error.swarm_closed');
+    await vi.waitFor(() => expect(notice('alert')).toContain(stopFailure));
+    expect(notice('alert')).not.toContain('swarm_closed');
+    // ... while other messages show as they are. A failed refresh shows
+    // beside it with a way to retry ...
     listFails = true;
     bridge.invalidate();
     await vi.waitFor(() =>
       expect(notice('status')).toContain('test-owned list failure'),
     );
     expect(button(t('common.retry'))).toBeDefined();
-    expect(notice('alert')).toContain('test-owned stop failure');
+    expect(notice('alert')).toContain(stopFailure);
     // ... and the next successful refresh clears only its own error.
     listFails = false;
     bridge.invalidate();
     await vi.waitFor(() => expect(notice('status')).toBe(''));
-    expect(notice('alert')).toContain('test-owned stop failure');
+    expect(notice('alert')).toContain(stopFailure);
     button(t('swarm.tabs.usage')).click();
     await tick();
     expect(notice('alert')).toBe('');
