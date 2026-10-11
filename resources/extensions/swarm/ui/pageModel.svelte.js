@@ -260,7 +260,13 @@ export function createSwarmPageModel(host) {
           ? 'new'
           : profiles.find((item) => item.id === target.profile);
       if (!profile) return profilesLoaded;
-      if (editor === profile || (editor?.id && editor.id === profile.id))
+      // By id: the editor and the list hold separate state proxies of a
+      // saved profile.
+      if (
+        profile === 'new'
+          ? editor === 'new'
+          : Boolean(editor?.id) && editor.id === profile.id
+      )
         return true;
       closeDialogs();
       await showProfile(profile);
