@@ -137,7 +137,7 @@ async def test_a_content_search_without_matches_lists_files_whose_names_match(
 ):
     result = await dispatch(project, arguments)
     if listed is None:
-        assert result["data"]["content"] == ""
+        assert "content" not in result["data"]
         assert "note" not in result["data"]
         return
     assert result["data"]["content"] == listed
@@ -203,7 +203,7 @@ async def test_a_pattern_beside_a_listing_matches_names(
     os.utime(project / "docs", (1_000_000_000, 1_000_000_000))
     result = await dispatch(project, arguments)
     assert result["ok"], result
-    assert result["data"]["content"] == listed
+    assert result["data"].get("content", "") == listed
     assert ("note" in result["data"]) is noted
 
 
@@ -233,7 +233,7 @@ async def test_file_list_output_for_a_pattern_matching_every_line_lists_every_fi
         ]
         assert result["data"]["note"]
     else:
-        assert "empty.txt" not in result["data"]["content"]
+        assert "empty.txt" not in result["data"].get("content", "")
         assert "note" not in result["data"]
 
 
@@ -480,7 +480,7 @@ async def test_missing_explicit_roots_preserve_results_and_name_the_missing_path
     assert data["warnings"][0] == (
         f"Path not found: missing (relative to the working directory {tmp_path.as_posix()})."
     )
-    assert data["searched_paths"] == [(tmp_path / "src").as_posix()]
+    assert data["searched_paths"] == ["src"]
     assert data["content"] == ("src/a.py" if mode else "src/a.py:1:needle")
 
 
@@ -532,7 +532,7 @@ async def test_unbalanced_regex_characters_match_literally_with_a_note(
 
     result = await dispatch(tmp_path, {"args": [*options, pattern, "src"]})
 
-    assert result["data"]["content"] == content
+    assert result["data"].get("content", "") == content
     assert f'searched "{pattern}" as "{searched}"' in result["data"]["note"]
     assert "-F" in result["data"]["note"]
 
@@ -898,8 +898,7 @@ async def test_path_discovery_case_scope_and_pagination(tmp_path):
     sensitive = await dispatch(
         tmp_path, {"args": ["--dirs", "--no-glob-case-insensitive", "-g", "empty"]}
     )
-    assert sensitive["data"]["content"] == ""
-    assert sensitive["data"]["summary"] == "No directories found."
+    assert "content" not in sensitive["data"]
     shallow = await dispatch(tmp_path, {"args": ["--dirs", "-d", "1"]})
     assert shallow["data"]["content"] == "nested/"
     files = {"args": ["--files", "-g", "*.py", "--sort=path"], "limit": 1}
@@ -939,16 +938,14 @@ async def test_paging_option_spellings_remain_literal_payloads(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_empty_result_reports_actual_cwd_and_literal_quotes(tmp_path):
+async def test_quotes_in_a_pattern_are_searched_literally_in_the_actual_cwd(tmp_path):
     workspace = tmp_path / "workspace"
     project = tmp_path / "project"
     workspace.mkdir()
     project.mkdir()
     (project / "events.ts").write_text("type Event = 'item:generated';\n")
     result = await dispatch(workspace, {"args": ['"item:generated"']}, cwd=project)
-    assert result["data"]["searched_paths"] == [project.as_posix()]
-    assert result["data"]["patterns"] == ['"item:generated"']
-    assert result["data"]["summary"] == "No matches in 1 searched file."
+    assert result["data"] == {"summary": "No matches in 1 searched file."}
     found = await dispatch(workspace, {"args": ["item:generated"]}, cwd=project)
     assert found["data"]["content"] == "events.ts:1:type Event = 'item:generated';"
 

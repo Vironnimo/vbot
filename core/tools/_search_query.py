@@ -787,10 +787,7 @@ def _list_glob_shaped_pattern(
     if pattern in _GLOB_EVERYTHING:
         query.patterns = []
         query.mode = "list_files"
-        query.notes.append(
-            f'pattern "{pattern}" matches every file name, so files were listed. To search file '
-            "contents, put a regular expression in pattern."
-        )
+        query.notes.append(f'pattern "{pattern}" matches every file name, so files were listed.')
         return
     if query.mode == "files_with_matches" and _matches_everything(query, pattern):
         query.patterns = []
@@ -805,7 +802,4 @@ def _list_glob_shaped_pattern(
     query.patterns = []
     query.mode = "list_files"
     query.globs = [pattern]
-    query.notes.append(
-        f'pattern "{pattern}" is a file name glob, so matching files were listed. To search '
-        "file contents, put a regular expression in pattern and the file filter in glob."
-    )
+    query.notes.append(f'pattern "{pattern}" is a file name glob, so matching files were listed.')

@@ -915,7 +915,6 @@ class _Outcome:
     found: _Found
     total: int
     lines_total: int
-    patterns: list[str]
 
 
 def _names_matching(
@@ -1045,7 +1044,7 @@ def _search(
         found.finish(query)
         total = len(found.entries)
         _restart_past_the_end(query, total)
-        return _Outcome(entry_page(found.entries, query), found, total, total, [])
+        return _Outcome(entry_page(found.entries, query), found, total, total)
 
     patterns = query.patterns
     try:
@@ -1086,7 +1085,7 @@ def _search(
             )
             found.entries = named
             _restart_past_the_end(query, len(named))
-            return _Outcome(entry_page(named, query), found, len(named), len(named), patterns)
+            return _Outcome(entry_page(named, query), found, len(named), len(named))
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:
@@ -1102,7 +1101,7 @@ def _search(
         ):
             _note_named_files(context, query, scopes, cwd, binary, budget)
         page = entry_page(found.entries, query)
-        return _Outcome(page, found, len(found.entries), lines_total, patterns)
+        return _Outcome(page, found, len(found.entries), lines_total)
     _restart_past_the_end(query, lines_total)
     window = content_window(found.entries, query.offset, query.limit)
     events: dict[tuple[int, bytes], list[dict[str, Any]]] = {}
@@ -1124,7 +1123,7 @@ def _search(
         found.warnings.extend(warnings)
         events.update(((index, path), value) for path, value in scope_events.items())
     page = content_page(window, events, query)
-    return _Outcome(page, found, lines_total, lines_total, patterns)
+    return _Outcome(page, found, lines_total, lines_total)
 
 
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -1196,13 +1195,12 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         data["note"] = " ".join(dict.fromkeys(query.notes))
     if warnings:
         data["warnings"] = warnings[:20]
-    if roots.missing or not outcome.total:
-        data["searched_paths"] = [path.as_posix() for path in roots.paths]
-    if not outcome.total and outcome.patterns:
-        data["patterns"] = outcome.patterns
+    if roots.missing:
+        data["searched_paths"] = [path_label(path, cwd) for path in roots.paths]
     if found.ignored and (not outcome.total or query.mode in LIST_MODES):
         data["skipped"] = _ignored_summary(found.ignored, cwd)
-    data["content"] = "\n".join(page.lines)
+    if page.lines:
+        data["content"] = "\n".join(page.lines)
     context.add_display_count(
         page.returned, "results", at_least="next_offset" in data or not complete
     )
@@ -1261,7 +1259,7 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
         _search_files_async,
         summary="Search file contents or find files by name.",
         family="files",
-        result_schema={"type": "object", "required": ["content"]},
+        result_schema={"type": "object"},
         display=ToolDisplay(parts_builder=_display_parts, detail_builder=_display_details),
         parallel_safe=True,
         open_input_schema=True,

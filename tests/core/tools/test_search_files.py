@@ -95,7 +95,7 @@ def _all_pages(root: Path, arguments: dict[str, Any], limit: int) -> list[str]:
     offset = 0
     while True:
         data = search(root, **arguments, limit=limit, offset=offset)
-        if data["content"]:
+        if "content" in data:
             lines.extend(data["content"].split("\n"))
         if "next_offset" not in data:
             return lines
@@ -479,8 +479,14 @@ def test_summary_states_totals_and_the_continuation(project: Path) -> None:
     assert files["summary"] == "Found 4 files with 7 matching lines."
     assert search(project, path="src")["summary"] == "Found 5 files, newest first."
     absent = search(project, pattern="absent", path="src")
+    # An empty result echoes neither the pattern nor the roots and has no empty content.
     assert absent["summary"] == "No matches in 5 searched files."
-    assert absent["patterns"] == ["absent"]
+    assert not {"content", "patterns", "searched_paths"} & absent.keys()
+    # Globs that select no file are named; globs that select files leave the count.
+    for arguments in ({"pattern": "needle"}, {}):
+        unmatched = search(project, path="src", glob=["verify.py", "*.md"], **arguments)
+        assert '"verify.py", "*.md"' in unmatched["summary"]
+    assert '"*.py"' not in search(project, pattern="absent", glob="*.py")["summary"]
 
 
 def test_file_lists_are_newest_first_unless_sorted(tmp_path: Path) -> None:
@@ -583,7 +589,7 @@ def test_roots_outside_the_working_directory_keep_absolute_labels(tmp_path: Path
     ],
 )
 def test_the_git_directory_is_never_searched(project: Path, arguments: dict[str, Any]) -> None:
-    content = search(project, **arguments, limit=10000)["content"]
+    content = search(project, **arguments, limit=10000).get("content", "")
     assert not any(line.startswith(".git/") for line in content.splitlines())
 
 
@@ -621,7 +627,7 @@ def test_long_lines_show_the_match_in_an_excerpt(tmp_path: Path) -> None:
 
 
 def test_binary_files_and_encodings(project: Path, tmp_path: Path) -> None:
-    assert search(project, pattern="binary", path="data")["content"] == ""
+    assert "content" not in search(project, pattern="binary", path="data")
     assert search(project, pattern="binary", path="data", args=["-a"])["content"] == (
         "data/blob.bin:1:needle\x00binary"
     )

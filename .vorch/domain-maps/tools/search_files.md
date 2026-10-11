@@ -347,12 +347,13 @@ Diagnostics (`_judge`):
 A successful result has these fields:
 
 - `data.summary`: totals, the shown range and how to continue.
-- `content`: the result lines.
+- `content`: the result lines; absent when there are none (the `result_schema`
+  requires no field).
 - `next_offset`: set when more results exist.
 - `note`: present when interpretation changed the call.
 - `warnings`: at most 20.
-- `searched_paths`: present when a root is missing or nothing was found.
-- `patterns`: present when nothing was found; it lists the actual patterns.
+- `searched_paths`: present when a root is missing; it names the roots still
+  searched, as labels like the result paths.
 - `skipped`: present when nothing was found or the call lists entries, and ignore
   files (`.gitignore`, `.ignore`, `.rgignore`) excluded paths in the walk. It names
   the five shallowest, counts the rest and points to `-u`. ripgrep's `--debug`
@@ -398,6 +399,19 @@ Paging:
   query and got only `No results at offset 80; the search found 11 ...`
   (Sessions, 2026-10).
 - No matches is a success; its summary says how many files were searched.
+  When selecting globs left no file (no file searched, or an empty listing)
+  and no type, depth, size or hidden-file flag narrowed the walk, the summary
+  names them instead (`_unmatched_globs`): `No file matches the glob
+  "verify.py".`, `No directory matches the globs "a", "b".` A listing that
+  matches a pattern against names keeps `No files found.`
+- Swarm review (2026-10) of 42 empty results: `searched_paths` held only the
+  absolute working directory, in another path form than the content lines;
+  `patterns` echoed the call; `content` was an empty string; and no result
+  named the glob that filtered everything out (`glob: ["verify.py"]` beside
+  `pattern: "verify.py"` answered `No matches in 0 searched files.`). Empty
+  results now carry the summary, and `skipped` when ignore files excluded
+  paths. The glob-shaped pattern notes repeated their advice on 19 calls and
+  now state only the repair.
 
 The display (`_display_details`) shows the user the `results` text, an info
 notice about the next page and each warning
