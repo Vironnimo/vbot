@@ -77,7 +77,13 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   `X already reads as this edit would leave it.` (`these edits`) when the edits
   leave the file as it was, such as a change and its reversal (the
   `already_applied` template).
-  Coverage: `test_edits_that_leave_the_file_as_it_is_say_so`. The
+  An edit whose `old_string` ends with a line break and whose non-empty
+  `new_string` does not joins the next line to its last line; when that line is
+  not blank and not the end of the file, a note quotes the joined line, at most
+  100 characters on each side of the join (`_joined_lines`). The edit applies as
+  sent: some joins are meant.
+  Coverage: `test_edits_that_leave_the_file_as_it_is_say_so`,
+  `test_an_edit_that_drops_a_final_line_break_names_the_joined_line`. The
   display shows the path and the shared `file_changes` diff and notices.
 - **Failures** use the engine's messages with `edit` wording where they name the
   Tool (`_EDIT_TEMPLATES`) and a closing that names the edit to fix
@@ -127,6 +133,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | Match report for edit K > 1: `The closest text in the file after edits 1-4, line 287:`, `First difference: after edits 1-4, line 287 reads '...' where old_string has '...'.`, `Edit 2 of this call wrote line 287.` | Replaces `the file has` plus a trailing `Line numbers count the text as edits 1-4 left it.`: the report said the file had `Param(1)` at line 287, which edit 2 of the same call had written; the file held `Param(0)` (Swarm Run 2026-10). The trailing sentence came after the text it qualified, and naming the edit shows that the failed edit's place overlaps a change the call already makes. |
 | Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |
+| Joined-line note: `new_string does not end with a line break as old_string does, so the next line now continues its last line: import a2 from 'a';import b from 'b';` | In the recorded Sessions (2026-10), 4 of 2751 edit items joined two non-empty lines this way, none on purpose; the result said only `Updated X (line N).`, since the written text was what the call sent. Three cost 2 to 3 more calls each to find and undo the join (reads, a failed edit, the fix); the fourth, a joined TypeScript import, stayed in the file. The quoted line is a ready `old_string` for the fix; no line number, because a later edit of the same call can move it. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 
 ## Verification

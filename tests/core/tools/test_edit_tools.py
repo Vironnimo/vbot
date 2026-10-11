@@ -122,6 +122,30 @@ async def test_edits_apply_in_order_as_one_change(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("old", "new", "joined"),
+    [
+        ("import a from 'a';\n", "import a2 from 'a';", "import a2 from 'a';import b from 'b';"),
+        # Only a blank line or the end of the file follows: no line joins.
+        ("import b from 'b';\n", "import b2 from 'b';", None),
+        ("end\n", "fin", None),
+    ],
+)
+async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
+    tmp_path, old, new, joined
+) -> None:
+    (tmp_path / "a.ts").write_bytes(b"import a from 'a';\nimport b from 'b';\n\nend\n")
+
+    result = await call(
+        tmp_path, {"path": "a.ts", "edits": [{"old_string": old, "new_string": new}]}, name="edit"
+    )
+
+    lines = text(result).split("\n")
+    assert len(lines) == (1 if joined is None else 2)
+    assert joined is None or lines[1].endswith(f": {joined}")
+
+
+@pytest.mark.asyncio
 async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> None:
     (tmp_path / "empty.txt").write_bytes(b"")
     created = await call(

@@ -243,7 +243,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             **values,
         )
     if found is not None:
-        return found.new_content, notes
+        return found.new_content, notes + _joined_lines(content, found)
     details = _not_found(content, old, source="old_string")
     present = None
     if new.strip() and new != old:
@@ -264,7 +264,10 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
                 **values,
             )
         if copied is not None:
-            return copied.new_content, _deviations(copy_warnings(copied))
+            return copied.new_content, [
+                *_deviations(copy_warnings(copied)),
+                *_joined_lines(content, copied),
+            ]
     raise _PatchError(
         "text_not_found",
         template="old_text_not_found",
@@ -272,6 +275,44 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         label=hunk.label,
         details=details,
     )
+
+
+def _joined_lines(content: str, found: FuzzyReplacement) -> list[str]:
+    """Note replacements that dropped the line break ending the text they replaced.
+
+    The line after such a replacement now continues its last line; a line break
+    or the end of the file there joins nothing.
+    """
+    text = found.new_content
+    joined = [
+        end
+        for (_, old_end), (start, end) in zip(found.before_spans, found.after_spans, strict=True)
+        if end > start
+        and content[old_end - 1 : old_end] in ("\n", "\r")
+        and text[end - 1] not in "\r\n"
+        and text[end : end + 1] not in ("", "\n", "\r")
+    ]
+    if not joined:
+        return []
+    at = joined[0]
+    first = max(text.rfind("\n", 0, at), text.rfind("\r", 0, at)) + 1
+    after = _BREAK.search(text, at)
+    # The joined line around the join: the end of the new text, then the next line.
+    head = text[first:at].lstrip()
+    tail = text[at : after.start() if after else len(text)].rstrip()
+    if len(head) > _JOINED_SIDE_CHARACTERS:
+        head = "..." + head[-_JOINED_SIDE_CHARACTERS:]
+    if len(tail) > _JOINED_SIDE_CHARACTERS:
+        tail = tail[:_JOINED_SIDE_CHARACTERS] + "..."
+    places = f" at {len(joined)} places, such as" if len(joined) > 1 else ""
+    return [_JOINED_NOTE.format(places=places, line=head + tail)]
+
+
+_JOINED_SIDE_CHARACTERS = 100
+_JOINED_NOTE = (
+    "new_string does not end with a line break as old_string does, so the next line "
+    "now continues its last line{places}: {line}"
+)
 
 
 # --- V4A line hunks --------------------------------------------------------------------
