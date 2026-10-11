@@ -31,6 +31,10 @@
 }
 
 :root {
+  /* Native control parts the styles do not paint (number spinners, date and
+     time picker icons, radios and checkboxes, autofill) follow the dark
+     theme instead of the browser's light default. */
+  color-scheme: dark;
   color: #f1ede6;
   background: #15130f;
   font-family: 'Geist', system-ui, sans-serif;
@@ -290,10 +294,20 @@ svg {
   stroke-width: 1.5;
 }
 
-/* The browser's search clear control is tinted blue; keep it neutral. */
+/* Embedded pages (Extension pages, HTML previews) keep the light scheme of a
+   page that declares none. A frame in the dark scheme makes the browser paint
+   an opaque white canvas behind every such page instead of leaving it
+   transparent over the frame's own background. Pages that load app.css
+   declare the dark scheme themselves. */
+iframe {
+  color-scheme: light;
+}
+
+/* The browser draws the search clear control in its own colors (white in the
+   dark scheme); keep it a neutral, muted gray. */
 input[type='search']::-webkit-search-cancel-button {
   cursor: pointer;
-  filter: grayscale(1) brightness(1.6);
+  filter: grayscale(1) brightness(0.65);
 }
 
 /* Keyboard-focus fallback for every element without its own focus style

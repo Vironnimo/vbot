@@ -6,7 +6,8 @@
   // the Project editor share this one presentation. `onContextMenu(groupId,
   // item, event)` offers a row's context menu (see AgentSelectionGroup), also
   // from a "⋯" button on every row, so a Skill's actions are found where it
-  // is seen.
+  // is seen. The panel carries its own layout styles because Extension pages
+  // render it without the Skills view's stylesheet.
   import { t } from '$lib/i18n.js';
   import AgentSelectionGroup, {
     filterSelectionItems,
@@ -63,7 +64,7 @@
 
 <div class={['skills-selection', className].filter(Boolean).join(' ')}>
   {#if total > 0 || autoAdd}
-    <div class="s-group-toolbar skills-selection__toolbar">
+    <div class="s-group-toolbar">
       <span class="s-group-toolbar__meta" aria-live="polite"
         >{t('skills.panel.count', { active, total })}</span
       >
@@ -82,7 +83,6 @@
       {#if showFilter && total > 1}
         <TextField
           type="search"
-          class="skills-selection__filter"
           value={query}
           placeholder={t('skills.panel.filterPlaceholder')}
           ariaLabel={t('skills.panel.filter')}
@@ -115,3 +115,25 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .skills-selection {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .skills-selection__auto {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-med);
+    font: 500 var(--fs-body-sm) / 1.4 var(--font-ui);
+    cursor: pointer;
+  }
+
+  .skills-selection__groups {
+    display: grid;
+    gap: 12px;
+  }
+</style>

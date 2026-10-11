@@ -421,31 +421,6 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.skills-selection {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-.skills-selection__toolbar {
-  flex-wrap: wrap;
-  gap: 8px 16px;
-}
-.skills-selection__auto {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-med);
-  font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
-  cursor: pointer;
-}
-.skills-selection__filter {
-  min-width: 180px;
-  margin-left: auto;
-}
-.skills-selection__groups {
-  display: grid;
-  gap: 12px;
-}
 .skills-access h4 {
   margin: 0 0 4px;
   font: 600 var(--fs-body-md)/1.4 var(--font-ui);

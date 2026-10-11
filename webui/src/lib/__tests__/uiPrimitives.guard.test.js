@@ -393,6 +393,11 @@ describe('UI primitive guard', () => {
     );
   });
 
+  it('renders native controls in the dark scheme but leaves embedded pages their own', () => {
+    expect(APP_CSS).toMatch(/^:root\s*\{[^}]*color-scheme:\s*dark;/m);
+    expect(APP_CSS).toMatch(/^iframe\s*\{[^}]*color-scheme:\s*light;/m);
+  });
+
   it('keeps secondary-list content equally inset on every edge', () => {
     expect(APP_CSS).toMatch(/\.secondary-list\s*\{\s*padding:\s*12px;/);
   });
