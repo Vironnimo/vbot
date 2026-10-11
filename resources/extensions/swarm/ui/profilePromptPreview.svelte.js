@@ -1,15 +1,17 @@
 import { t, tOr } from '../../../../webui/src/lib/i18n.js';
+
+// The Swarm editor's prompt preview for one formation row: it requests the
+// combined System Prompt of the current draft (`profiles.preview`), keeps
+// only the newest request's answer and tells whether the shown preview still
+// matches the draft. `context.ready()` resolves whether the draft can be
+// previewed; when it cannot, the editor shows the problems and nothing is
+// requested.
 export function createProfilePromptPreview(context) {
   let preview = $state(null);
-
   let previewSnapshot = $state('');
-
   let previewBusy = $state(false);
-
   let previewError = $state('');
-
   let previewFormation = $state(0);
-
   let previewRequest = 0;
 
   const previewCurrent = $derived(
@@ -17,10 +19,11 @@ export function createProfilePromptPreview(context) {
   );
 
   async function inspectPrompt() {
+    previewError = '';
+    if (!(await context.ready())) return;
     const request = ++previewRequest;
     const submitted = `${previewFormation}:${context.snapshot()}`;
     previewBusy = true;
-    previewError = '';
     try {
       const result = await context.bridgeClient.operation('profiles.preview', {
         profile: context.profilePayload(),
@@ -46,23 +49,15 @@ export function createProfilePromptPreview(context) {
 
   return {
     blockTitle,
+    inspectPrompt,
     get preview() {
       return preview;
-    },
-    set preview(value) {
-      preview = value;
     },
     get previewBusy() {
       return previewBusy;
     },
-    set previewBusy(value) {
-      previewBusy = value;
-    },
     get previewError() {
       return previewError;
-    },
-    set previewError(value) {
-      previewError = value;
     },
     get previewFormation() {
       return previewFormation;
@@ -72,9 +67,6 @@ export function createProfilePromptPreview(context) {
     },
     get previewCurrent() {
       return previewCurrent;
-    },
-    get inspectPrompt() {
-      return inspectPrompt;
     },
   };
 }

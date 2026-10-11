@@ -259,6 +259,19 @@
     document.getElementById(id)?.focus();
   }
 
+  // A prompt preview needs what a save needs except the name, which the
+  // server fills in for an unnamed Swarm. Like a save the user asked for, a
+  // preview that cannot run shows the problems and moves focus to the first.
+  async function previewable() {
+    const issues = validate(draft).filter(
+      (issue) => issue.id !== 'swarm-profile-name',
+    );
+    if (!issues.length) return true;
+    showValidation = true;
+    await focusField(issues[0].id);
+    return false;
+  }
+
   function profilePayload() {
     const payload = copy(draft);
     payload.name = payload.name.trim();
@@ -564,6 +577,7 @@
       {bridgeClient}
       {snapshot}
       payload={profilePayload}
+      {previewable}
     />
 
     <ProfileAccess bind:draft {catalog} />

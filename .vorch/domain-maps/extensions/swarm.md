@@ -80,7 +80,10 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   without asking.
   The Instructions section owns editable instructions, explicit block
   selection, event reminder switches and Model-specific combined previews with
-  the separately sent Tool definitions (shared `ToolDefinitionsPanel`). New
+  the separately sent Tool definitions (shared `ToolDefinitionsPanel`). A
+  preview needs what a save needs except the name (`profiles.preview` names an
+  unnamed draft "Preview"), so a missing or invalid setting shows its field
+  error and takes focus instead of sending a request. New
   profiles receive the complete default from `agent_text.py` through the editor
   catalog; Swarm no longer registers a separately appended orientation block.
   The visible value is saved as-is, including an intentionally empty value;

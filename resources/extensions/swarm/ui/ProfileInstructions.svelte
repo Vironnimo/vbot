@@ -4,7 +4,8 @@
   // participants receive, and a preview of the combined System Prompt for
   // one formation row. It edits the editor's bound draft; `snapshot()` and
   // `payload()` read the editor's current draft, so the preview covers
-  // unsaved changes.
+  // unsaved changes, and `previewable()` resolves whether that draft can be
+  // previewed (the editor shows its problems otherwise).
   import { SvelteSet } from 'svelte/reactivity';
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
@@ -23,6 +24,7 @@
     bridgeClient,
     snapshot,
     payload,
+    previewable,
   } = $props();
 
   const preview = createProfilePromptPreview({
@@ -34,6 +36,9 @@
     },
     get profilePayload() {
       return payload;
+    },
+    get ready() {
+      return previewable;
     },
   });
   // Blocks and reminders whose text is shown.

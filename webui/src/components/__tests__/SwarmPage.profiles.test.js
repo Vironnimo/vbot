@@ -123,13 +123,24 @@ describe('Swarm profile prompt', () => {
     });
     await openNewProfile(bridge);
     await choose('swarm-model-0', 'demo/model');
-    fill('swarm-directory', 'C:/work');
     fill('swarm-delivery-coalesce', '350');
     fill('swarm-instructions', 'unsaved-sentinel');
     document.querySelector('[aria-controls="swarm-preview"]').click();
     await tick();
     expect(document.getElementById('swarm-preview').hidden).toBe(false);
+    // A preview needs what a save needs except the name: a missing setting
+    // shows its error and takes focus instead of a request.
     button(GENERATE_PREVIEW).click();
+    await settle();
+    expect(callsTo(operation, 'profiles.preview')).toHaveLength(0);
+    expect(
+      document.getElementById('swarm-directory-error').textContent.trim(),
+    ).toBe(t('swarm.profile.directoryRequired'));
+    expect(document.activeElement?.id).toBe('swarm-directory');
+    fill('swarm-directory', 'C:/work');
+    await tick();
+    button(GENERATE_PREVIEW).click();
+    await tick();
     await tick();
     expect(operation).toHaveBeenCalledWith(
       'profiles.preview',
