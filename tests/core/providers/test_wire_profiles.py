@@ -633,6 +633,7 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     store.record_rejected_parameter("acme", "other", "m", "top_p")
     store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_p"))
     store.record_off_ignored("acme", "api-key", "m")
+    store.record_effort_updates_rejected("acme", "api-key", "m")
     store.flush()
     after = _resolve(profiles, "m")
 
@@ -654,6 +655,7 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
 
     reloaded = WireObservations.load(path, save_delay=None)
     assert reloaded.facts_for("acme", "api-key", "m") == store.facts_for("acme", "api-key", "m")
+    assert reloaded.facts_for("acme", "api-key", "m").effort_updates_rejected
     assert reloaded.forget("acme", model_id="unknown") == 1
     assert reloaded.facts_for("acme", "api-key", "m").reasoning_field == "reasoning_content"
     assert reloaded.forget("acme", "api-key") == 1
@@ -671,6 +673,7 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     store.record_rejected_parameter("acme", "api-key", "m", "temperature")
     store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_k"))
     store.record_off_ignored("acme", "api-key", "m")
+    store.record_effort_updates_rejected("acme", "api-key", "m")
     now[0] += timedelta(days=10)
     store.record_rejected_parameter("acme", "api-key", "m", "top_p")
     store.flush()

@@ -21,6 +21,7 @@ from core.providers.adapter import (
     tool_result_content_blocks,
     tool_result_text,
 )
+from core.providers.effort_updates import EFFORT_UPDATE_ROLE
 from core.providers.errors import ProviderError
 from core.providers.reasoning import (
     reasoning_token_count,
@@ -105,6 +106,9 @@ def _to_anthropic_message(
             "role": "user",
             "content": _to_anthropic_user_content(message.get("content", "")),
         }
+    if role == EFFORT_UPDATE_ROLE:
+        # A planned effort update: the Model answers at this effort from here on.
+        return {"role": "system", "content": [], "output_config": {"effort": message["effort"]}}
     return {
         "role": role,
         "content": _to_anthropic_text_content(message.get("content", "")),

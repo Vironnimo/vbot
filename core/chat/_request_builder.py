@@ -10,6 +10,13 @@ from typing import TYPE_CHECKING, Any
 
 from core.agents import skill_subject_id
 from core.attachments.images import ImageConverter
+from core.chat._effort_epoch import (
+    EffortPin,
+    EffortState,
+    ensure_effort_pin,
+    thinking_effort,
+    without_other_epoch_effort_changes,
+)
 from core.chat._message_history import finalize_checkpoint_guidance
 from core.chat._prompt_block_epoch import (
     PromptBlockPin,
@@ -158,18 +165,22 @@ def _live_session_tool_grants(
 
 
 def _fold_prompt_epoch(
-    pin: ToolEpochPin, prompt_blocks: PromptBlockPin, session_messages: list[ChatMessage]
-) -> tuple[ToolEpochView, list[ChatMessage]]:
-    """Return what the Model knows of its Tools and the history without other epochs' notes.
+    pin: ToolEpochPin,
+    prompt_blocks: PromptBlockPin,
+    effort: EffortPin,
+    session_messages: list[ChatMessage],
+) -> tuple[ToolEpochView, EffortState, list[ChatMessage]]:
+    """Return the epoch's Tool and effort state and the history without other epochs' notes.
 
-    Both walk the whole Session, so they run on a Chat worker.
+    They walk the whole Session, so they run on a Chat worker.
     """
-    return (
-        ToolEpochView.fold(pin, session_messages),
+    messages = without_other_epoch_effort_changes(
         without_other_epoch_prompt_block_changes(
             without_other_epoch_tool_changes(session_messages, pin.epoch), prompt_blocks.epoch
         ),
+        effort.epoch,
     )
+    return ToolEpochView.fold(pin, messages), EffortState.fold(effort, messages), messages
 
 
 SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
@@ -490,8 +501,22 @@ class RequestBuilder:
         prompt_blocks = await self._prompt_block_pin(
             agent, session, render_inputs, fresh=inputs.fresh_prompt_epoch
         )
-        tool_epoch, session_messages = await _CHAT_TRANSFORM_WORKERS.run(
-            _fold_prompt_epoch, pin, prompt_blocks, session_messages
+        effort_pin = (
+            EffortPin.start(
+                thinking_effort(agent)
+                if inputs.fresh_thinking_effort is None
+                else inputs.fresh_thinking_effort
+            )
+            if inputs.fresh_prompt_epoch
+            else await _CHAT_TRANSFORM_WORKERS.run(
+                ensure_effort_pin,
+                self._dependencies.sessions,
+                session.address,
+                thinking_effort(agent),
+            )
+        )
+        tool_epoch, effort, session_messages = await _CHAT_TRANSFORM_WORKERS.run(
+            _fold_prompt_epoch, pin, prompt_blocks, effort_pin, session_messages
         )
         # A temporary Session's capability Tools must be offered now; the first
         # request boundary announces any the Model does not know yet.
@@ -555,8 +580,8 @@ class RequestBuilder:
             request_block_definitions = tuple(rendered_blocks)
         prompt_read_paths: list[Path] = []
         # The System Prompt describes the pinned Tool list (``render_inputs``)
-        # and shows the pinned dynamic block texts, so it stays unchanged for
-        # the whole prompt epoch too.
+        # and shows the pinned dynamic block texts and thinking effort, so it
+        # stays unchanged for the whole prompt epoch too.
         system_prompt = await system_prompts.build_system_prompt_async(
             agent,
             agent_body=inputs.agent_body,
@@ -565,6 +590,7 @@ class RequestBuilder:
             read_paths=prompt_read_paths,
             pinned_blocks=prompt_blocks.texts(),
             request_block_definitions=request_block_definitions,
+            thinking_effort=effort.pin.effort,
             **render_inputs,
         )
         # Auto-injected prompt files (SOUL, pinned memory, project auto-load files,
@@ -601,6 +627,7 @@ class RequestBuilder:
                 tool_epoch,
                 prompt_blocks,
                 tool_loads,
+                effort,
             )
 
         current_user_message, read_media_outputs = await _CHAT_TRANSFORM_WORKERS.run(
@@ -655,6 +682,7 @@ class RequestBuilder:
             tool_epoch,
             prompt_blocks,
             tool_loads,
+            effort,
         )
 
     async def rebuild_live_request_state(

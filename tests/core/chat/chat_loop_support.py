@@ -427,6 +427,7 @@ class StubPrompts:
         session_tool_grants: Any = (),
         pinned_blocks: Any = None,
         request_block_definitions: Any = (),
+        thinking_effort: str | None = None,
     ) -> str:
         del agent_project_id, pinned_blocks
         self.effective_tool_name_calls.append(
@@ -438,6 +439,7 @@ class StubPrompts:
             {
                 "working_project_context": working_project_context,
                 "soul_context": soul_context,
+                "thinking_effort": thinking_effort,
                 "memory_files_context": memory_files_context,
             }
         )

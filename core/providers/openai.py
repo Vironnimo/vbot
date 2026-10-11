@@ -84,6 +84,7 @@ from core.providers._wire_learning import (
     stream_learning_from_rejections,
 )
 from core.providers.adapter import ModelLookup
+from core.providers.effort_updates import apply_effort_updates, effort_levels
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -617,6 +618,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         request_kwargs = dict(kwargs)
         profile = self.wire_profile(model_id)
         policy = profile_responses_policy(profile, self._catalog_model(model_id))
+        # A Model that takes effort updates keeps the effort its history started
+        # from and switches with a ``configuration_update`` item where it changed.
+        messages = apply_effort_updates(
+            messages,
+            request_kwargs,
+            effort_levels(profile.reasoning) if self.effort_updates(model_id) else None,
+        )
         reasoning_renderer = take_reasoning_renderer(profile, request_kwargs)
         # A wire that takes no output-token field (Codex) is never budgeted
         # locally: the reserve would abort a still-valid request (it sits at the
@@ -663,6 +671,17 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         if isinstance(instructions, str) and instructions.strip():
             return
         payload["instructions"] = OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS
+
+    @override
+    def effort_updates(self, model_id: str) -> bool:
+        """Whether the Model switches its effort with a Responses ``configuration_update``."""
+
+        profile = self.wire_profile(model_id)
+        return (
+            profile.protocol == "responses"
+            and profile.reasoning.effort_updates
+            and profile.reasoning.dialect == "responses_reasoning"
+        )
 
     def _uses_responses(self, model_id: str) -> bool:
         """Whether ``model_id``'s requests speak Responses on this Connection."""

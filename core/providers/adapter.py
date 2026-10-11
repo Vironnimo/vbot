@@ -407,6 +407,18 @@ class ProviderAdapter(ABC):
         """
         return self.wire_profile(model_id).request.list_announced_tools
 
+    def effort_updates(self, model_id: str) -> bool:
+        """Return whether a thinking effort change can reach ``model_id`` as an effort update.
+
+        True for a route that switches the effort mid-conversation, so a change
+        keeps its prompt cache (``core.providers.effort_updates``): Chat then
+        sends the history's effort updates with the effort it started from. An
+        Adapter whose codec renders effort updates returns the wire profile's
+        ``reasoning.effort_updates``; every other Adapter returns false.
+        """
+        del model_id
+        return False
+
     # ------------------------------------------------------------------
     # Reasoning render description
     # ------------------------------------------------------------------

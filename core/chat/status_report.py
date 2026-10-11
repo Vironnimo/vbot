@@ -600,6 +600,8 @@ def _learned_wire_facts_text(facts: ObservedFacts) -> str:
         parts.append(f"rejected reasoning efforts: {', '.join(facts.rejected_efforts)}")
     if facts.off_ignored:
         parts.append("reasoning off is ignored, so effort none sends the lowest level")
+    if facts.effort_updates_rejected:
+        parts.append("effort updates are rejected, so an effort change costs the prompt cache")
     return "; ".join(parts)
 
 

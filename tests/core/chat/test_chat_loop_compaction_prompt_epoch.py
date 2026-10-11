@@ -11,6 +11,7 @@ import pytest
 
 from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.chat import ChatMessage
+from core.chat._effort_epoch import EffortPin
 from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._tool_epoch import ToolEpochPin
@@ -26,6 +27,7 @@ from core.prompts.pinned_context import (
     PINNED_MEMORY_FILES_SLOT,
     PINNED_SKILL_CATALOG_SLOT,
     PINNED_SOUL_CONTEXT_SLOT,
+    PINNED_THINKING_EFFORT_SLOT,
     PINNED_TOOL_DEFINITIONS_SLOT,
     PINNED_WORKING_PROJECT_CONTEXT_SLOT,
     pinned_memory_files,
@@ -303,6 +305,35 @@ async def test_compaction_pins_the_current_dynamic_blocks_and_retires_their_note
     )
     assert next_run.request_state.prompt_blocks == pin
     assert await loop._requests.plan_prompt_block_change(next_run) is None
+
+
+@pytest.mark.asyncio
+async def test_compaction_pins_the_effort_the_runs_requests_use_now(
+    tmp_path: Path,
+) -> None:
+    # The new epoch's System Prompt shows the effort the Run's requests use now,
+    # also after a change during the Run that the Run's Agent does not know.
+    runtime = compaction_runtime(tmp_path)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    context = await run_context(
+        loop, Run(run_id="run-1", agent_id="coder", session_id=session.id), session
+    )
+    effort = context.request_state.effort
+    change = effort.plan("low", within_run=True)
+    assert change is not None
+    session.append(ChatMessage.note(change.note_content()))
+    context.request_state = replace(context.request_state, effort=effort.adopt(change))
+
+    rebuilt = await compact_context(loop, context)
+
+    pin = EffortPin.from_payload(
+        runtime.chat_sessions.prompt_pin(session.address, PINNED_THINKING_EFFORT_SLOT)
+    )
+    assert pin is not None and pin.epoch != effort.pin.epoch and pin.effort == "low"
+    assert (rebuilt.effort.pin, rebuilt.effort.current) == (pin, "low")
+    assert runtime.system_prompts.build_pin_calls[-1]["thinking_effort"] == "low"
 
 
 @pytest.mark.asyncio

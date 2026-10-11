@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
 
+from core.chat._effort_epoch import EffortState, effort_change_from_note
 from core.chat._message_history import reply_surface_from_note
 from core.chat._prompt_block_epoch import prompt_block_change_from_note
 from core.chat._tool_epoch import render_tool_change, tool_change_from_note
@@ -47,6 +48,12 @@ from core.providers.adapter import (
     neutralize_system_reminder_tags,
     normalize_tool_call_candidates,
 )
+from core.providers.effort_updates import (
+    EFFORT_BASE_KWARG,
+    effort_update_message,
+    is_effort_update,
+    without_effort_updates,
+)
 from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_POLICY,
     REASONING_REPLAY_FULL_HISTORY,
@@ -59,6 +66,7 @@ from core.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
     SKILL_AVAILABLE_NOTE_PREFIX,
     is_channel_message_note,
+    is_effort_change_note,
     is_prompt_block_change_note,
     is_skill_context_note,
     is_tool_change_note,
@@ -395,6 +403,31 @@ def _message_to_request_dict(
     if message.role == "user" and message.sender is not None:
         _apply_sender_attribution(data, message.sender)
     return data
+
+
+def route_effort(
+    effort: EffortState | None,
+    messages: list[JsonObject],
+    *,
+    adapter: Any,
+    model_id: str,
+    fallback: str | None,
+) -> tuple[list[JsonObject], JsonObject]:
+    """Return one request's messages and thinking effort keyword arguments for its route.
+
+    The request asks for the effort now in effect (*fallback*, the Agent's, for
+    a request without a Session's effort state). A route that takes effort
+    updates (``adapter.effort_updates``) also gets the effort the prompt epoch
+    started from and keeps the history's updates, so it can keep its prompt
+    cache; every other route gets no updates (``core.providers.effort_updates``).
+    """
+
+    current = fallback if effort is None else effort.current or None
+    if not any(is_effort_update(message) for message in messages):
+        return messages, {"thinking_effort": current}
+    if effort is not None and adapter.effort_updates(model_id):
+        return messages, {"thinking_effort": current, EFFORT_BASE_KWARG: effort.pin.effort}
+    return without_effort_updates(messages), {"thinking_effort": current}
 
 
 def model_facing_request(
@@ -1012,7 +1045,9 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
     user message at its chronological position — the trigger carrier rendered in
     place, right where the activation happened. Passive channel observations become
     separate, explicitly untrusted quoted-context user messages, never system
-    reminders. A malformed skill, Tool-change or prompt-block change note is
+    reminders. An effort change note becomes an effort update message at its
+    position (``core.providers.effort_updates``), which no reminder groups with.
+    A malformed skill, Tool-change, prompt-block or effort change note is
     dropped from the request (it stays in canonical Session history for debugging),
     and so is a ``loaded`` Tool-change note: the ``load_tools`` Result before it
     already showed the definition.
@@ -1040,6 +1075,12 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
         ):
             continue
         if is_prompt_block_change_note(note) and prompt_block_change_from_note(note) is None:
+            continue
+        if is_effort_change_note(note):
+            effort_change = effort_change_from_note(note)
+            if effort_change is not None:
+                flush_note_run()
+                request_messages.append(effort_update_message(effort_change.effort))
             continue
         if is_skill_context_note(note):
             payload = skill_context_note_payload(note)

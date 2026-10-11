@@ -8,6 +8,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
+from core.chat._effort_epoch import EffortState
 from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._step_outcomes import _ToolProgress
 from core.chat._stream_draft import StreamDraft
@@ -101,7 +102,9 @@ class RequestState:
     the System Prompt shows. ``tool_loads`` holds, per On-demand Tool the
     Model may load now, the ``loaded`` change a ``load_tools`` call records:
     its definition as the Run's primary route shows it (``None`` until a Tool
-    catalog was measured for this state).
+    catalog was measured for this state). ``effort`` holds the prompt epoch's
+    pinned thinking effort, which the System Prompt shows, and the effort the
+    requests use now (``None`` only without a Session request build).
     """
 
     messages: list[JsonObject]
@@ -112,6 +115,7 @@ class RequestState:
     tool_epoch: ToolEpochView | None = None
     prompt_blocks: PromptBlockPin | None = None
     tool_loads: Mapping[str, ToolChange] | None = None
+    effort: EffortState | None = None
 
     @property
     def loadable_tools(self) -> dict[str, JsonObject]:
@@ -549,6 +553,9 @@ class RequestBuildInputs:
     # With ``fresh_prompt_epoch``: On-demand Tools the new Tool pin lists anyway
     # (those the Agent called in the epoch a Compaction ended).
     keep_listed_tools: frozenset[str] = frozenset()
+    # With ``fresh_prompt_epoch``: the thinking effort the new epoch pins (the
+    # effort the Run's requests use now); ``None`` pins the Agent's.
+    fresh_thinking_effort: str | None = None
 
     @classmethod
     def from_context(
@@ -652,6 +659,56 @@ def _resolve_working_project(
     return project_cwd, resolve_prompt_project(dependencies.projects, working_project_id)
 
 
+async def resolve_run_agent(
+    dependencies: ChatLoopDependencies, run: Run, request: _RunRequest
+) -> Any:
+    """Resolve the Agent as the Run's Session runs it now, overrides included.
+
+    Raises :class:`ChatError` when a temporary Session no longer matches the Run.
+    """
+    project_id = run.project_id
+    temporary_binding = request.temporary_binding
+    if temporary_binding is not None:
+        if temporary_binding.address != SessionAddress(
+            project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
+        ):
+            raise ChatError(
+                "This Session no longer matches this Run. "
+                "Ask the user to resume it through its Extension."
+            )
+        return await dependencies.agent_resolver.resolve_temporary_agent_async(
+            temporary_binding.address,
+            generation_id=temporary_binding.generation_id,
+            session=temporary_binding.address,
+        )
+    if request.temporary_parent_binding is not None:
+        parent = request.temporary_parent_binding
+        owner = run.execution_owner
+        if (
+            owner is None
+            or owner.extension != parent.owner_name
+            or owner.group_id != parent.group_id
+            or owner.participant_id != parent.participant_id
+            or owner.generation_id != parent.generation_id
+            or run.agent_id != parent.address.agent_id
+            or run.project_id != parent.address.project_id
+        ):
+            raise ChatError(
+                "This Session no longer matches this Run. "
+                "Ask the user to resume it through its Extension."
+            )
+        return await dependencies.agent_resolver.resolve_temporary_agent_async(
+            parent.address,
+            generation_id=parent.generation_id,
+            session=SessionAddress(
+                project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
+            ),
+        )
+    return await dependencies.agent_resolver.resolve_agent_async(
+        project_id, run.agent_id, session_id=run.session_id
+    )
+
+
 async def create_run_execution_context(
     dependencies: ChatLoopDependencies,
     requests: RequestBuilder,
@@ -669,46 +726,7 @@ async def create_run_execution_context(
     temporary_binding = request.temporary_binding
     temporary_source = temporary_binding or request.temporary_parent_binding
     project_cwd: Path | None
-    if temporary_binding is not None:
-        if temporary_binding.address != SessionAddress(
-            project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
-        ):
-            raise ChatError(
-                "This Session no longer matches this Run. "
-                "Ask the user to resume it through its Extension."
-            )
-        agent = await dependencies.agent_resolver.resolve_temporary_agent_async(
-            temporary_binding.address,
-            generation_id=temporary_binding.generation_id,
-            session=temporary_binding.address,
-        )
-    elif request.temporary_parent_binding is not None:
-        parent = request.temporary_parent_binding
-        owner = run.execution_owner
-        if (
-            owner is None
-            or owner.extension != parent.owner_name
-            or owner.group_id != parent.group_id
-            or owner.participant_id != parent.participant_id
-            or owner.generation_id != parent.generation_id
-            or run.agent_id != parent.address.agent_id
-            or run.project_id != parent.address.project_id
-        ):
-            raise ChatError(
-                "This Session no longer matches this Run. "
-                "Ask the user to resume it through its Extension."
-            )
-        agent = await dependencies.agent_resolver.resolve_temporary_agent_async(
-            parent.address,
-            generation_id=parent.generation_id,
-            session=SessionAddress(
-                project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
-            ),
-        )
-    else:
-        agent = await dependencies.agent_resolver.resolve_agent_async(
-            project_id, run.agent_id, session_id=run.session_id
-        )
+    agent = await resolve_run_agent(dependencies, run, request)
     provider_id, connection_id = _resolve_agent_connection(dependencies, agent)
     _ensure_provider_exists(dependencies.providers, provider_id)
     _model_provider_id, model_id = _split_agent_model(agent.model)
