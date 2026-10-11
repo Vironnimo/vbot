@@ -575,13 +575,16 @@ def _participant(participant_id: str, model: str | None) -> OwnedSessionSummary:
 
 
 async def _group_title(
-    runtime: StubRuntime, *participants: OwnedSessionSummary, usage_recorder: Any = None
+    runtime: StubRuntime,
+    *participants: OwnedSessionSummary,
+    usage_recorder: Any = None,
+    source_text: str = "  Rework the\n parser   error recovery  ",
 ) -> str | None:
     service = SessionTitleService(cast(Any, runtime), usage_recorder=usage_recorder)
     return await service.generate_group_title(
         owner_name="swarm",
         group_id="swr_one",
-        source_text="  Rework the\n parser   error recovery  ",
+        source_text=source_text,
         participants=participants,
     )
 
@@ -641,13 +644,34 @@ async def test_group_title_without_title_model_picks_a_participant_model(
 
 
 @pytest.mark.asyncio
-async def test_disabled_group_title_generation_stores_local_title_only(manager) -> None:
+@pytest.mark.parametrize(
+    ("source_text", "expected"),
+    [
+        # A wrapped sentence stays one title.
+        ("  Rework the\n parser   error recovery  ", "Rework the parser error recovery"),
+        # A brief's heading is its title; the body after the blank line is not.
+        (
+            "\n## Release 2.4 readiness review\n \nWe plan to ship **2.4** next Tuesday.",
+            "Release 2.4 readiness review",
+        ),
+        (
+            "Check the docs folder for broken links and report them.",
+            "Check the docs folder for broken links…",
+        ),
+    ],
+    ids=["wrapped", "heading", "long"],
+)
+async def test_disabled_group_title_generation_stores_local_title_only(
+    manager, source_text, expected
+) -> None:
     runtime = StubRuntime(manager, enabled=False, adapters=[])
 
-    title = await _group_title(runtime, _participant("ada", "openai/small::main"))
+    title = await _group_title(
+        runtime, _participant("ada", "openai/small::main"), source_text=source_text
+    )
 
-    assert title == "Rework the parser error recovery"
-    assert await _stored_group_title(runtime) == "Rework the parser error recovery"
+    assert title == expected
+    assert await _stored_group_title(runtime) == expected
     assert runtime.adapter_calls == []
 
 

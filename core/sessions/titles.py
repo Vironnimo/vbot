@@ -56,6 +56,8 @@ TITLE_INPUT_HEAD_BYTES = 3 * 1024
 TITLE_INPUT_TAIL_BYTES = 2 * 1024
 TITLE_ATTACHMENT_METADATA_MAX_BYTES = 1024
 TITLE_OMISSION_MARKER = "\n\n[large middle section omitted]\n\n"
+_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
+_MARKDOWN_HEADING_MARKER = re.compile(r"^#{1,6}\s+")
 _TITLE_BLOCK_START = re.compile(r"\[\s*title\s*=", re.IGNORECASE)
 _TITLE_BLOCK = re.compile(r"\[\s*title\s*=([^\[\]]*)\]", re.IGNORECASE)
 _UNCLOSED_FINAL_TITLE_BLOCK = re.compile(r"\[\s*title\s*=([^\[\]\n]*)\s*\Z", re.IGNORECASE)
@@ -326,7 +328,9 @@ class SessionTitleService:
         """Title an Extension-owned execution group from its originating request.
 
         Mirrors Session titles: a local title is stored immediately, then the
-        shared title prompt may replace it. The configured Title Model wins;
+        shared title prompt may replace it. The local title comes from the
+        request's first paragraph, so a brief's heading does not run into its
+        body. The configured Title Model wins;
         otherwise the approximately cheapest participant Model by catalog price
         is used, falling back to the first participant. One attempt only; any
         failure keeps the local title. Returns the stored title, if any.
@@ -334,7 +338,7 @@ class SessionTitleService:
         if self._closed:
             return None
         sessions = self._runtime.chat_sessions
-        local_title = _local_title(source_text, [])
+        local_title = _local_group_title(source_text)
         if not local_title:
             return None
         await sessions.set_temporary_group_title_async(
@@ -574,6 +578,12 @@ def _local_title(text: str, attachment_lines: list[str]) -> str:
     if len(collapsed) <= LOCAL_TITLE_MAX_CHARACTERS:
         return collapsed
     return collapsed[: LOCAL_TITLE_MAX_CHARACTERS - 1].rstrip() + "…"
+
+
+def _local_group_title(text: str) -> str:
+    """Title a group request by its first paragraph, without a heading marker."""
+    paragraph = _PARAGRAPH_BREAK.split(text.strip(), maxsplit=1)[0]
+    return _local_title(_MARKDOWN_HEADING_MARKER.sub("", paragraph), [])
 
 
 def _title_input(text: str, attachment_lines: list[str]) -> str:

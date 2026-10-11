@@ -60,7 +60,9 @@ for explicit prompt composition; see `extensions/swarm.md` and
 `tests/core/runtime/test_runtime_extension_host.py`.
 
 Group titles: `temporary_agents.title_group(group_id, source_text)` stores a local
-title immediately, then lets the Runtime's shared Session title generator replace it
+title immediately (the request's first paragraph without a Markdown heading marker,
+bounded like a Session's local title, so a brief's heading does not run into its
+body), then lets the Runtime's shared Session title generator replace it
 (configured Title Model, else the approximately cheapest group participant Model by
 catalog input+output rate, else the first participant; one attempt, failures keep
 the local title). It awaits the Model call, so owners run it in the background.
