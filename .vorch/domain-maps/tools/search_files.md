@@ -84,15 +84,21 @@ Modes:
 
 - With no pattern, the call lists files. `{}` lists the working directory, and
   `glob` or `path` narrow it.
-- A pattern beside `--files` is rejected with the field that was sent.
-- A pattern beside `--dirs` filters directory names, with a `note`
-  (`name_patterns`). ripgrep matches them (`match_names`): the names go
+- A pattern beside `--files` or `--dirs` filters the listed names, with a
+  `note` (`name_patterns`, `_match_listed_names`): `--files` matches each file's
+  name and shown path, as the name fallback below does; `--dirs` matches
+  directory names. ripgrep matches them (`match_names`): the names go
   NUL-separated through `--null-data` with the query's matching flags (`-i`,
   `-S`, `-F`, `-w`, `-x`, `-v`, `-P`, `--engine`, ...), so the `pattern`
   description's "ripgrep syntax" holds and `-x` compares the whole name. A
   rejected pattern takes the content search's repairs (`pattern_retry`) and
-  otherwise its error, even when there are no directories. Agents sent `--dirs`
-  with `pattern: "^empty$"` (first-use probe, 2026-10).
+  otherwise its error, even when there are no entries. A single non-literal
+  pattern that matches every name (a glob such as `*` or `**/*`, or a regex
+  such as `.`, `.*` or `^(.*)$` without `-v`, `-x` or `-w`) lists everything
+  without a note, since matching it would list the same; a file name glob
+  (`*.ts`) selects as `glob`, with a note. Agents sent `--dirs` with
+  `pattern: "^empty$"` (first-use probe, 2026-10) and `--files` with
+  `pattern: "."` (Swarm Sessions, 2026-10), which was rejected until then.
 - `output: "count"` or context without a pattern is rejected.
 - Context with count or file-list output is dropped with a note (Sessions,
   2026-09: Agents sent `output: "files"` with `context: 3`).
@@ -102,6 +108,12 @@ Modes:
   single, non-literal pattern. Glob-shaped means: no whitespace or `()|^$+\`,
   plus a leading `*`, `**` or `/*.`. A pattern that matches every name (`*`,
   `**/*`, ...) lists all files.
+- With file-list output (`output: "files"`, `-l`), a single non-literal regex
+  that matches every line (`.`, `.*`, `^(.*)$`, `^`, ...) lists every file
+  instead, with a `note`, unless `-v`, `-x` or `-w` narrows it: ripgrep would
+  leave out empty and binary files and count lines nobody asked for. Swarm
+  Agents sent `pattern: "."` with `output: "files"` to list files (Sessions,
+  2026-10).
 - Any other pattern stays a content search, because lines can contain a file
   name too (an import of `app.py`). When a content, files or count search finds
   no match, the handler lists the searched files (same paths, globs and flags)

@@ -772,7 +772,7 @@ def _matching_names(
     binary: Path,
     budget: SearchBudget,
 ) -> set[str]:
-    """Match directory names as a content search matches lines, with the same pattern repairs."""
+    """Match listed names as a content search matches lines, with the same pattern repairs."""
     unique = list(dict.fromkeys(names))
     try:
         return match_names(binary, query, query.name_patterns, unique, context, budget)
@@ -916,6 +916,16 @@ def _search(
     if query.mode == "list_files":
         for index, scope in enumerate(scopes):
             found.take(index, scope, list_scan(binary, query, scope, context, budget, cwd), cwd)
+        if query.name_patterns:
+            # Like a content search's name fallback, a pattern matches a name or a shown path.
+            names = [entry.label for entry in found.entries]
+            names += [entry.path.name for entry in found.entries]
+            matched = _matching_names(context, query, names, binary, budget)
+            found.entries = [
+                entry
+                for entry in found.entries
+                if entry.label in matched or entry.path.name in matched
+            ]
     if query.mode in LIST_MODES:
         found.finish(query)
         total = len(found.entries)
@@ -1181,8 +1191,8 @@ args items, one flag or value per item. Other ripgrep flags work as well:
   -d N                  descend at most N directory levels
   --max-filesize SIZE   skip larger files, such as 1M
   -E ENCODING / -a      read files in an encoding / search binary files as text
-  --files / --dirs      list files / list directories, empty directories included; with --dirs
-                        a pattern matches directory names
+  --files / --dirs      list files / list directories, empty directories included; a pattern
+                        matches their names
   --sort KEY / --sortr KEY
                         order ascending / descending by path, modified, accessed or created
 """

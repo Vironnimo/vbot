@@ -231,7 +231,7 @@ class SearchQuery:
     offset: int = 0
     pattern_operand: bool = False
     operand_roots: list[str] = field(default_factory=list)
-    # Regular expressions a --dirs listing matches against directory names.
+    # Regular expressions a --files or --dirs listing matches against the names it lists.
     name_patterns: list[str] = field(default_factory=list)
     reference_args: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -377,6 +377,10 @@ def _number(name: str, value: str, *, minimum: int, maximum: int, field_name: st
 _GLOB_EVERYTHING = frozenset({"*", "**", "*.*", "**/*", "./*", "./**"})
 _GLOB_SHAPE = re.compile(r"[^\s()|^$+\\]+")
 _NAME_GLOB = re.compile(r"[\w.\-/{},]*(?<![.\])])\*[\w.\-/*{},]*\.(?:\w{1,10}|\{[\w,]+\})")
+# A regex that matches every non-empty text, such as ".", ".*" or "^(.*)$".
+_REGEX_EVERYTHING = re.compile(r"\^?(?:\.[*+]?|\((?:\?:)?\.[*+]?\))\$?|\^|\$")
+# Flags under which such a regex no longer matches every name or line.
+_NARROWING_FLAGS = frozenset({"--invert-match", "--line-regexp", "--word-regexp"})
 
 
 def glob_shaped(pattern: str) -> bool:
@@ -386,6 +390,19 @@ def glob_shaped(pattern: str) -> bool:
     if pattern.startswith("*") or "**" in pattern or "/*." in pattern:
         return True
     return bool(_NAME_GLOB.fullmatch(pattern))
+
+
+def _matches_everything(query: SearchQuery, pattern: str) -> bool:
+    """Whether pattern, as the query matches it, matches every name and every non-empty line."""
+    if query.literal or not _REGEX_EVERYTHING.fullmatch(pattern):
+        return False
+    narrowing: set[str] = set()
+    for argument in query.rg_args:
+        if argument in _NARROWING_FLAGS:
+            narrowing.add(argument)
+        elif argument == "--no-invert-match":
+            narrowing.discard("--invert-match")
+    return not narrowing
 
 
 def interpret(
@@ -533,22 +550,9 @@ def interpret(
     query.offset = _single(offsets, "offset", 0)
 
     if listing is not None:
-        if query.patterns and listing == "list_dirs":
-            # Directories have no contents to search, so a pattern can only mean names.
-            query.name_patterns, query.patterns = query.patterns, []
-            shown = " or ".join(f'"{text}"' for text in query.name_patterns)
-            query.notes.append(
-                f"--dirs lists directories without searching contents, so the pattern {shown} "
-                "was matched against directory names."
-            )
-        elif query.patterns:
-            sent = "pattern" if pattern is not None else "-e"
-            raise SearchArgumentError(
-                "--files lists files by name and does not search their contents, so it cannot "
-                f'be combined with {sent}. To select names, pass glob (such as "*.py"); to '
-                "search contents, remove --files."
-            )
         listed = "files" if listing == "list_files" else "directories"
+        if query.patterns:
+            _match_listed_names(query, listing)
         for written in [*output_flags, *([f'output "{output}"'] if output else [])]:
             query.notes.append(
                 f"{written} was ignored because --{listing.removeprefix('list_')} lists "
@@ -603,10 +607,41 @@ def _single(values: list[int], name: str, default: int) -> int:
     return values[0] if values else default
 
 
+def _match_listed_names(query: SearchQuery, listing: Mode) -> None:
+    """Apply a pattern sent with --files or --dirs to the names they list.
+
+    Listings have no contents to search, so a pattern can only mean names. One
+    that matches every name lists everything; a file name glob selects as glob.
+    """
+    listed = "files" if listing == "list_files" else "directories"
+    patterns, query.patterns = query.patterns, []
+    if len(patterns) == 1 and not query.literal:
+        only = patterns[0]
+        if only in _GLOB_EVERYTHING or _matches_everything(query, only):
+            return
+        if not query.globs and glob_shaped(only):
+            query.globs = [only]
+            query.notes.append(
+                f'pattern "{only}" is a name glob, so matching {listed} were listed.'
+            )
+            return
+    query.name_patterns = patterns
+    shown = " or ".join(f'"{text}"' for text in patterns)
+    kind = "file" if listing == "list_files" else "directory"
+    query.notes.append(
+        f"--{listing.removeprefix('list_')} lists {listed} without searching contents, so the "
+        f"pattern {shown} was matched against {kind} names."
+    )
+
+
 def _list_glob_shaped_pattern(
     query: SearchQuery, context_requested: bool, output: str | None
 ) -> None:
-    """Run a file name glob sent as the pattern as the file listing it asks for."""
+    """Run a file name glob sent as the pattern as the file listing it asks for.
+
+    A regex that matches every line also lists the files for file-list output:
+    ripgrep would leave out empty and binary files and count lines nobody asked for.
+    """
     pattern = query.patterns[0]
     if output == "count" or context_requested or query.only_matching:
         return
@@ -616,6 +651,14 @@ def _list_glob_shaped_pattern(
         query.notes.append(
             f'pattern "{pattern}" matches every file name, so files were listed. To search file '
             "contents, put a regular expression in pattern."
+        )
+        return
+    if query.mode == "files_with_matches" and _matches_everything(query, pattern):
+        query.patterns = []
+        query.mode = "list_files"
+        query.notes.append(
+            f'pattern "{pattern}" matches every line, so files were listed, empty and binary '
+            "ones included."
         )
         return
     if query.globs or not glob_shaped(pattern):

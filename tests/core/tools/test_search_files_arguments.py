@@ -150,6 +150,63 @@ async def test_a_content_search_without_matches_lists_files_whose_names_match(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "listed", "noted"),
+    [
+        ({"args": ["--files"], "pattern": "app"}, "src/app.py", True),
+        ({"args": ["--files", "-e", "view"]}, "src/view.ts", True),
+        ({"args": ["--files"], "pattern": "^src/v"}, "src/view.ts", True),
+        ({"args": ["--files"], "pattern": "*.ts"}, "src/view.ts", True),
+        ({"args": ["--dirs"], "pattern": "^do"}, "docs/", True),
+        # A pattern that matches every name lists everything.
+        ({"args": ["--files"], "pattern": "."}, "src/app.py\nsrc/view.ts\ndocs/guide.md", False),
+        ({"args": ["--dirs"], "pattern": "*"}, "src/\ndocs/", False),
+        # Under -v or -F the same pattern matches no name.
+        ({"args": ["--files", "-v"], "pattern": "."}, "", True),
+        ({"args": ["--dirs", "-F"], "pattern": "*"}, "", True),
+    ],
+)
+async def test_a_pattern_beside_a_listing_matches_names(
+    project: Path, arguments: dict, listed: str, noted: bool
+):
+    os.utime(project / "docs", (1_000_000_000, 1_000_000_000))
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    assert result["data"]["content"] == listed
+    assert ("note" in result["data"]) is noted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "listed"),
+    [
+        ({"pattern": ".", "output": "files"}, True),
+        ({"pattern": "^(.*)$", "args": ["-l"]}, True),
+        # Under -x the pattern matches one-character lines only; count output counts lines.
+        ({"pattern": ".", "output": "files", "args": ["-x"]}, False),
+        ({"pattern": ".", "output": "count"}, False),
+    ],
+)
+async def test_file_list_output_for_a_pattern_matching_every_line_lists_every_file(
+    project: Path, arguments: dict, listed: bool
+):
+    (project / "empty.txt").write_text("")
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    if listed:
+        assert sorted(result["data"]["content"].splitlines()) == [
+            "docs/guide.md",
+            "empty.txt",
+            "src/app.py",
+            "src/view.ts",
+        ]
+        assert result["data"]["note"]
+    else:
+        assert "empty.txt" not in result["data"]["content"]
+        assert "note" not in result["data"]
+
+
+@pytest.mark.asyncio
 async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path) -> None:
     (project / "notes.txt").write_text("match *.py files\n")
     result = await dispatch(project, {"pattern": "*.py", "args": ["-F"]})
@@ -634,13 +691,6 @@ _PATHS = "path must name a file or directory"
     [
         # Contradictory modes.
         ({"args": ["--files", "--dirs"]}, "invalid_arguments", "Choose one of --files or --dirs"),
-        (
-            {"args": ["--files", "-e", "needle"]},
-            "invalid_arguments",
-            "--files lists files by name and does not search their contents, so it cannot be "
-            'combined with -e. To select names, pass glob (such as "*.py"); to search '
-            "contents, remove --files.",
-        ),
         (
             {"pattern": "a{2,1}", "args": ["--dirs"]},
             "search_error",
