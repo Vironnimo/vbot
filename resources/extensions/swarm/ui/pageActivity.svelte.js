@@ -38,6 +38,10 @@ export function createSwarmPageActivity(host) {
   // tab shows. A hidden Activity keeps what it shows and catches up once when
   // the tab shows again.
   let paused = false;
+  // Whether a read for the inspected participant failed (its History, the
+  // catalog or its Run's subscription), so a refresh inspects it again
+  // instead of keeping what Activity shows.
+  let stale = false;
 
   function flushEvents() {
     clearTimeout(flushTimer);
@@ -113,7 +117,17 @@ export function createSwarmPageActivity(host) {
     inspectedParticipant = null;
     inspectionRequest = null;
     paused = false;
+    stale = false;
     settledRuns.clear();
+  }
+
+  // Shows a failed read for the inspected participant: one the page started
+  // on its own (`background`) as a refresh failure, one the user started as
+  // the page error.
+  function readFailed(cause, background) {
+    stale = true;
+    if (background) host.model.refreshFailed(cause);
+    else host.model.error = cause.message;
   }
 
   // Stops reading and following the inspected participant's Run while the
@@ -207,11 +221,14 @@ export function createSwarmPageActivity(host) {
     return participant.state === 'failed' ? 'not_started' : 'interrupted';
   });
 
+  // Reads the participant's History, or with History shown what is newer.
+  // `settled` marks a participant whose Run ended; `background` a read the
+  // page started on its own.
   async function reconcileActivity(
     request,
     swarmId,
     participant,
-    settled = false,
+    { settled = false, background = false } = {},
   ) {
     const read = ++historyRequest;
     const pageCount = historyPageCount;
@@ -313,7 +330,7 @@ export function createSwarmPageActivity(host) {
         request === activityRequest &&
         read === historyRequest
       )
-        host.model.error = cause.message;
+        readFailed(cause, background);
     } finally {
       if (
         !host.model.disposed &&
@@ -376,8 +393,11 @@ export function createSwarmPageActivity(host) {
   }
 
   // `preserve` keeps the shown History and the followed Run while the
-  // participant's Run identity and active state are unchanged; `catchUp`
-  // reconciles a resumed Activity even then.
+  // participant's Run identity and active state are unchanged and no read
+  // for it failed; `catchUp` reconciles a resumed Activity even then. An
+  // inspection the user starts opens the tab; one that does not `activate`
+  // it is the page's own (a refresh, the tab showing again), and its failed
+  // reads are refresh failures.
   async function inspectParticipant(
     participant,
     { activate = true, preserve = false, catchUp = false } = {},
@@ -386,10 +406,12 @@ export function createSwarmPageActivity(host) {
     if (activate) host.model.openTab('participants');
     // A hidden Activity catches up when its tab shows again.
     else if (paused) return;
+    const background = !activate;
     if (settledRuns.has(participant.lifecycle_run_id))
       participant = { ...participant, run_active: false };
     if (
       !catchUp &&
+      !stale &&
       preserve &&
       inspectedParticipant?.id === participant.id &&
       inspectedParticipant.lifecycle_run_id === participant.lifecycle_run_id &&
@@ -421,16 +443,15 @@ export function createSwarmPageActivity(host) {
         clearLiveRun();
     } else leaveActivity();
     inspectedParticipant = participant;
+    stale = false;
     const request = activityRequest;
     const swarmId = host.model.selectedSwarm.id;
     inspectionRequest = request;
     await Promise.all([
-      reconcileActivity(
-        request,
-        swarmId,
-        participant,
-        participant.run_active === false,
-      ),
+      reconcileActivity(request, swarmId, participant, {
+        settled: participant.run_active === false,
+        background,
+      }),
       host.model.catalog.models
         ? Promise.resolve()
         : host.model
@@ -439,7 +460,8 @@ export function createSwarmPageActivity(host) {
               host.model.catalog = result.catalog;
             })
             .catch((cause) => {
-              if (request === activityRequest) host.model.error = cause.message;
+              if (!host.model.disposed && request === activityRequest)
+                readFailed(cause, background);
             }),
     ]);
     if (inspectionRequest === request) inspectionRequest = null;
@@ -507,17 +529,23 @@ export function createSwarmPageActivity(host) {
         currentSubscription = null;
         if (history)
           history.participant = { ...participant, run_active: false };
-        void reconcileActivity(request, swarmId, participant, true);
+        // The Run ended on its own, so this read is the page's own.
+        void reconcileActivity(request, swarmId, participant, {
+          settled: true,
+          background: true,
+        });
       }
     };
     const off = host.model.client.onRunEvent((id, event) => {
       if (key === null) buffered.push([id, event]);
       else receive(id, event);
     });
+    // A failed unsubscribe shows only while its inspection is current, which
+    // leaves the page's own at the end of the Run (`receive`).
     const unsubscribe = (id) => {
       void host.model.client.unsubscribeRun(id).catch((cause) => {
         if (!host.model.disposed && request === activityRequest)
-          host.model.error = cause.message;
+          host.model.refreshFailed(cause);
       });
     };
     currentSubscription = () => {
@@ -533,7 +561,10 @@ export function createSwarmPageActivity(host) {
         off();
         if (request === activityRequest) {
           currentSubscription = null;
-          await reconcileActivity(request, swarmId, participant, true);
+          await reconcileActivity(request, swarmId, participant, {
+            settled: true,
+            background,
+          });
         }
         return;
       }
@@ -548,9 +579,9 @@ export function createSwarmPageActivity(host) {
       for (const [id, event] of buffered) receive(id, event);
     } catch (cause) {
       off();
-      if (request === activityRequest) {
+      if (!host.model.disposed && request === activityRequest) {
         currentSubscription = null;
-        host.model.error = cause.message;
+        readFailed(cause, background);
       }
     }
   }

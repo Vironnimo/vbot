@@ -8,6 +8,8 @@ import {
   profile,
   swarm,
   button,
+  headButton,
+  notice,
   createBridge,
   overrideOperations,
   callsTo,
@@ -40,11 +42,6 @@ const dialog = () => document.querySelector('[role="dialog"]');
 const confirmDelete = () =>
   [...dialog().querySelectorAll('button')].find(
     (node) => node.textContent.trim() === t('common.delete'),
-  );
-// A button of the shown Run's header by its text or accessible name.
-const headButton = (text) =>
-  [...document.querySelectorAll('.swarm-head button')].find((item) =>
-    (item.getAttribute('aria-label') || item.textContent).includes(text),
   );
 const menuLabels = () =>
   [...document.querySelectorAll('[role="menuitem"] .context-menu__label')].map(
@@ -518,9 +515,6 @@ describe('SwarmPage overview', () => {
       },
     });
     await openSwarm(bridge);
-    const notice = (role) =>
-      document.querySelector(`.swarm-notices [role="${role}"]`)?.textContent ??
-      '';
     headButton(STOP).click();
     await vi.waitFor(() =>
       expect(notice('alert')).toContain('test-owned stop failure'),
@@ -607,14 +601,28 @@ describe('Swarm Run start', () => {
     expect(directory().value).toBe('C:/work');
   });
 
-  it('resolves Project defaults, preserves their Project selection and replaces the default on Swarm selection', async () => {
+  it('resolves Project defaults also on Retry after a failed read, preserves their Project selection and replaces the default on Swarm selection', async () => {
     const { bridge, operation } = createBridge(projectProfile);
+    let catalogFails = true;
     overrideOperations(operation, {
       'profiles.list': () => ({ entries: [projectProfile, directoryProfile] }),
       'swarms.start': () => ({ swarm_id: swarm.id }),
+      catalog: (_args, fallback) => {
+        if (catalogFails) throw new Error('test-owned catalog failure');
+        return fallback();
+      },
     });
     await render(bridge);
+    // The page read the default on its own, so its failure is a refresh
+    // failure, which Retry reads again.
+    await vi.waitFor(() =>
+      expect(notice('status')).toContain('test-owned catalog failure'),
+    );
+    expect(notice('alert')).toBe('');
+    catalogFails = false;
+    button(t('common.retry')).click();
     await vi.waitFor(() => expect(directory().value).toBe('C:/project'));
+    await vi.waitFor(() => expect(notice('status')).toBe(''));
     // The completed default keeps its separator, yet stays the Project's.
     await pickFolder('swarm-start-directory', 'C:/p', 'project');
     expect(directory().value).toBe('C:/project/');

@@ -83,6 +83,22 @@ function button(text) {
   );
 }
 
+// A button of the shown Run's header by its text or accessible name.
+function headButton(text) {
+  return [...document.querySelectorAll('.swarm-head button')].find((item) =>
+    (item.getAttribute('aria-label') || item.textContent).includes(text),
+  );
+}
+
+// The text of the page's first notice with `role`, '' without one: 'alert'
+// shows a failed user action, 'status' a failed refresh with its Retry (or
+// the loading notice).
+function notice(role) {
+  return (
+    document.querySelector(`.swarm-notices [role="${role}"]`)?.textContent ?? ''
+  );
+}
+
 // The saved-profile editor's Save action, shown only while its draft is
 // unsaved (null otherwise).
 function saveButton() {
@@ -445,6 +461,8 @@ export {
   profile,
   swarm,
   button,
+  headButton,
+  notice,
   saveButton,
   saveStateText,
   createBridge,
