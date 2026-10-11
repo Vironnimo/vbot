@@ -162,6 +162,10 @@
     "ok": true,
     "contains": [
      "status: running",
+     "command_id: cmd_",
+     "background_tasks"
+    ],
+    "absent": [
      "terminal_id"
     ]
    }
@@ -178,6 +182,10 @@
     "ok": true,
     "contains": [
      "status: running",
+     "command_id: cmd_",
+     "background_tasks"
+    ],
+    "absent": [
      "terminal_id"
     ]
    }
@@ -222,7 +230,37 @@
    "expect": {
     "ok": false,
     "contains": [
-     "mode"
+     "mode asks for foreground but background asks for background"
+    ]
+   }
+  },
+  {
+   "name": "shell: mode background is read as run_in_background",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"import time; time.sleep(1)\"",
+    "mode": "background"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running",
+     "command_id: cmd_"
+    ]
+   }
+  },
+  {
+   "name": "shell: unknown mode is refused with run_in_background",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "mode": "turbo"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "is not a mode",
+     "run_in_background"
     ]
    }
   },
@@ -337,7 +375,7 @@
    }
   },
   {
-   "name": "shell: pty flag is ignored",
+   "name": "shell: pty flag runs with a note",
    "tool": "bash",
    "arguments": {
     "command": "python -c \"print('hello there')\"",
@@ -346,12 +384,13 @@
    "expect": {
     "ok": true,
     "contains": [
-     "hello there"
+     "hello there",
+     "pty has no effect"
     ]
    }
   },
   {
-   "name": "shell: timeout stops the command and names the retry",
+   "name": "shell: timeout moves the command to the background",
    "tool": "bash",
    "arguments": {
     "command": "python -c \"import time; time.sleep(5)\"",
@@ -360,14 +399,16 @@
    "expect": {
     "ok": true,
     "contains": [
-     "status: stopped",
-     "it was still running at the 1-second timeout",
-     "run it again with a larger timeout, or 0 for no limit"
+     "status: running",
+     "still running at its 1-second timeout and continues in the background as cmd_"
+    ],
+    "absent": [
+     "status: stopped"
     ]
    }
   },
   {
-   "name": "shell: non-zero exit is ok and names the failed program",
+   "name": "shell: non-zero exit is ok and carries the exit code",
    "tool": "bash",
    "arguments": {
     "command": "python -c \"import sys; print('about to fail'); sys.exit(3)\""
@@ -376,118 +417,231 @@
     "ok": true,
     "contains": [
      "status: exited",
-     "about to fail",
-     "python.exe exited with code 3"
+     "exit_code: 3",
+     "about to fail"
     ],
     "absent": [
-     "exit_code: 0"
+     "failed_programs"
     ]
    }
   },
   {
-   "name": "terminal: wait for a background command",
+   "name": "background_tasks: status of a background command that ended",
    "steps": [
     {
      "tool": "bash",
      "arguments": {
       "command": "python -c \"import time; time.sleep(1); print('work done')\"",
-      "mode": "background"
+      "run_in_background": true
      }
     },
     {
-     "tool": "terminal",
+     "tool": "bash",
      "arguments": {
-      "action": "wait",
-      "terminal_id": "$1.terminal_id",
-      "timeout_ms": 10000
+      "command": "python -c \"import time; time.sleep(3)\""
+     }
+    },
+    {
+     "tool": "background_tasks",
+     "arguments": {
+      "action": "status",
+      "id": "$1.command_id"
      }
     }
    ],
    "expect": {
     "ok": true,
     "contains": [
-     "work done",
+     "status: exited",
      "exit_code: 0",
-     "\"exited\":true"
+     "work done"
     ]
    }
   },
   {
-   "name": "terminal: wait sees a background server that keeps running",
+   "name": "background_tasks: status shows a running server's newest output",
    "steps": [
     {
      "tool": "bash",
      "arguments": {
-      "command": "python -u -c \"import time; print('server ready'); time.sleep(20)\"",
-      "mode": "background"
+      "command": "python -c \"import time; print('server ready'); time.sleep(20)\"",
+      "run_in_background": true
      }
     },
     {
-     "tool": "terminal",
+     "tool": "bash",
      "arguments": {
-      "action": "wait",
-      "terminal_id": "$1.terminal_id",
-      "timeout_ms": 10000
+      "command": "python -c \"import time; time.sleep(2)\""
+     }
+    },
+    {
+     "tool": "background_tasks",
+     "arguments": {
+      "action": "status",
+      "id": "$1.command_id"
      }
     }
    ],
    "expect": {
     "ok": true,
     "contains": [
+     "status: running",
      "server ready",
-     "\"exited\":false"
+     "keeps running"
     ]
    }
   },
   {
-   "name": "terminal: status of a running background command",
+   "name": "background_tasks: list shows a running background command",
    "steps": [
     {
      "tool": "bash",
      "arguments": {
       "command": "python -c \"import time; time.sleep(20)\"",
-      "mode": "background"
+      "run_in_background": true
+     }
+    },
+    {
+     "tool": "background_tasks",
+     "arguments": {
+      "action": "list"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "cmd_",
+     "running"
+    ]
+   }
+  },
+  {
+   "name": "background_tasks: stop a background command",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(30)\"",
+      "run_in_background": true
+     }
+    },
+    {
+     "tool": "background_tasks",
+     "arguments": {
+      "action": "stop",
+      "id": "$1.command_id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: stopped",
+     "you stopped it."
+    ]
+   }
+  },
+  {
+   "name": "background_tasks: KillShell shape without action only looks",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(30)\"",
+      "run_in_background": true
+     }
+    },
+    {
+     "tool": "background_tasks",
+     "arguments": {
+      "shell_id": "$1.command_id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running",
+     "action is missing, so the status is shown"
+    ]
+   }
+  },
+  {
+   "name": "background_tasks: wait is refused",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(30)\"",
+      "run_in_background": true
+     }
+    },
+    {
+     "tool": "background_tasks",
+     "arguments": {
+      "action": "wait",
+      "id": "$1.command_id",
+      "timeout": 600
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "contains": [
+     "nothing to wait for"
+    ]
+   }
+  },
+  {
+   "name": "background_tasks: input is refused",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(30)\"",
+      "run_in_background": true
+     }
+    },
+    {
+     "tool": "background_tasks",
+     "arguments": {
+      "action": "input",
+      "id": "$1.command_id",
+      "text": "y"
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "contains": [
+     "background commands get no input"
+    ]
+   }
+  },
+  {
+   "name": "terminal: refuses a background command's id",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(30)\"",
+      "run_in_background": true
      }
     },
     {
      "tool": "terminal",
      "arguments": {
       "action": "status",
-      "terminal_id": "$1.terminal_id"
+      "terminal_id": "$1.command_id"
      }
     }
    ],
    "expect": {
-    "ok": true,
+    "ok": false,
     "contains": [
-     "time.sleep(20)",
-     "\"exited\":false"
-    ]
-   }
-  },
-  {
-   "name": "terminal: kill a background command",
-   "steps": [
-    {
-     "tool": "bash",
-     "arguments": {
-      "command": "python -c \"import time; time.sleep(30)\"",
-      "mode": "background"
-     }
-    },
-    {
-     "tool": "terminal",
-     "arguments": {
-      "action": "kill",
-      "terminal_id": "$1.terminal_id"
-     }
-    }
-   ],
-   "expect": {
-    "ok": true,
-    "contains": [
-     "\"exited\":true",
-     "\"stop_reason\":\"agent\""
+     "is a background command, not a terminal",
+     "background_tasks"
     ]
    }
   },
@@ -646,7 +800,7 @@
     "ok": true,
     "contains": [
      "42",
-     "timed_out: false"
+     "key: enter"
     ]
    }
   },
@@ -704,7 +858,7 @@
    "expect": {
     "ok": false,
     "contains": [
-     "No terminal has the id term_missing",
+     "No terminal with the id term_missing is open",
      "Terminals attached"
     ]
    }

@@ -16,11 +16,11 @@ Case file (JSON)::
       "cases": [
         {"name": "read with an alias", "tool": "read", "arguments": {"file_path": "src/app.py"},
          "expect": {"ok": true, "contains": ["def main"]}},
-        {"name": "background then wait",
+        {"name": "background then status",
          "steps": [
            {"tool": "bash",
-            "arguments": {"command": "python -c \\"print(1)\\"", "mode": "background"}},
-           {"tool": "terminal", "arguments": {"action": "wait", "terminal_id": "$1.terminal_id"}}
+            "arguments": {"command": "python -c \\"print(1)\\"", "run_in_background": true}},
+           {"tool": "background_tasks", "arguments": {"action": "status", "id": "$1.command_id"}}
          ]},
         {"name": "edit", "tool": "apply_patch", "arguments": {"patch": "..."},
          "show": ["src/app.py"], "expect": {"files": {"src/app.py": "expected text"}}}
