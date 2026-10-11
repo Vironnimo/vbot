@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -26,7 +28,7 @@ from core.chat._tool_epoch import (
 from core.chat.messages import ToolCall, ToolCallRejection
 from core.chat.tool_dispatch import TOOL_REMOVED_ERROR_CODE
 from core.providers.adapter import TERMINAL_OUTCOME_OUTPUT_TRUNCATED
-from core.tools import ToolDefinitionChangeNote, tool_failure, tool_success
+from core.tools import tool_failure, tool_success
 
 JsonObject = dict[str, Any]
 
@@ -42,14 +44,14 @@ def _definition(name: str, description: str = "Probe.", **properties: Any) -> Js
 def _catalog(
     *offered: JsonObject,
     usable: tuple[str, ...] = (),
-    change_notes: dict[str, ToolDefinitionChangeNote] | None = None,
+    announce_changes: Mapping[str, tuple[str, ...]] | None = None,
     on_demand: dict[str, str] | None = None,
 ) -> LiveToolCatalog:
     return LiveToolCatalog(
         usable=frozenset({*usable, *(str(definition["name"]) for definition in offered)}),
         offered=offered,
         sources={str(definition["name"]): definition_source(definition) for definition in offered},
-        change_notes=change_notes or {},
+        announce_changes=announce_changes or {},
         on_demand=on_demand or {},
     )
 
@@ -119,7 +121,7 @@ def test_plan_announces_additions_removals_and_schema_changes_once() -> None:
         usable=("dormant",),
     )
 
-    # A description-only change stays silent; the capability decides the listed flag.
+    # A change the Tool does not name stays silent; the capability decides the listed flag.
     assert _plan(view, catalog) == [
         ("removed", "removed", False, False),
         ("added", "added", False, False),
@@ -138,7 +140,12 @@ def test_plan_announces_additions_removals_and_schema_changes_once() -> None:
     # A changed Tool is pinned only when the pinned list shows its previous definition.
     changed = _definition("kept", count={"type": "integer"})
     reshaped = _definition("added", path={"type": "integer"})
-    back = _catalog(changed, removed, reshaped)
+    back = _catalog(
+        changed,
+        removed,
+        reshaped,
+        announce_changes={"kept": ("parameters",), "added": ("parameters",)},
+    )
     assert _plan(view, back) == [
         ("changed", "kept", True, True),
         ("added", "removed", True, True),
@@ -172,56 +179,61 @@ def test_a_pinned_tool_enabled_again_keeps_its_last_announced_definition(unliste
     probe = _definition("probe", a={"type": "string"})
     view = ToolEpochView(pin=_pin(probe))
     changed = _definition("probe", b={"type": "integer"})
-    view = view.with_changes(view.plan(_catalog(changed), unlisted_tool_calls=unlisted))
+    announced = {"probe": ("parameters",)}
+    view = view.with_changes(
+        view.plan(_catalog(changed, announce_changes=announced), unlisted_tool_calls=unlisted)
+    )
     view = view.with_changes(view.plan(_catalog(usable=()), unlisted_tool_calls=unlisted))
     assert view.removed_names == frozenset({"probe"})
 
-    assert _plan(view, _catalog(changed), unlisted=unlisted) == [("added", "probe", True, True)]
-    view = view.with_changes(view.plan(_catalog(changed), unlisted_tool_calls=unlisted))
+    back = _catalog(changed, announce_changes=announced)
+    assert _plan(view, back, unlisted=unlisted) == [("added", "probe", True, True)]
+    view = view.with_changes(view.plan(back, unlisted_tool_calls=unlisted))
     assert view.definitions() == [changed]
     assert view.request_tools(list_announced=True) == [probe]
 
 
-def _describe_change(old: JsonObject, new: JsonObject) -> str | None:
-    if (old["description"], new["description"]) != ("Lists a and b.", "Lists a, b and c."):
-        return "unexpected definitions"
-    return " Remote Tool c was added. "
-
-
-def _failing_change_note(_old: JsonObject, _new: JsonObject) -> str | None:
-    raise RuntimeError("broken")
-
-
 @pytest.mark.parametrize(
-    ("change_note", "detail"),
+    ("announce", "announced"),
     [
-        (None, None),
-        (lambda _old, _new: None, None),
-        (lambda _old, _new: "  ", None),
-        (_failing_change_note, None),
-        (_describe_change, "Remote Tool c was added."),
+        ((), set()),
+        (("description",), {"description"}),
+        (("parameters",), {"limit", "added", "required"}),
+        (("parameters.limit",), {"limit"}),
+        (("parameters.text",), {"required"}),
     ],
-    ids=["no-note", "silent", "blank", "failing", "described"],
+    ids=["nothing", "description", "parameters", "one-parameter", "required"],
 )
-def test_a_change_that_keeps_the_parameters_is_announced_only_with_the_tools_text(
-    change_note: ToolDefinitionChangeNote | None, detail: str | None
+def test_a_tool_change_is_announced_only_for_the_parts_the_tool_names(
+    announce: tuple[str, ...], announced: set[str]
 ) -> None:
-    view = ToolEpochView(pin=_pin(_definition("probe", "Lists a and b.")))
-    notes = {} if change_note is None else {"probe": change_note}
-    described = _catalog(_definition("probe", "Lists a, b and c."), change_notes=notes)
-    reshaped = _catalog(
-        _definition("probe", "Lists a, b and c.", count={"type": "integer"}), change_notes=notes
+    known = _definition(
+        "probe",
+        "Lists a and b.",
+        limit={"type": "integer", "description": "Omit for 12 results."},
+        text={"type": "string"},
     )
+    view = ToolEpochView(pin=_pin(known))
+    edits = {
+        "description": lambda definition: definition.update(description="Lists a, b and c."),
+        "limit": lambda definition: definition["parameters"]["properties"]["limit"].update(
+            description="Omit for 7 results."
+        ),
+        "added": lambda definition: definition["parameters"]["properties"].update(
+            count={"type": "integer"}
+        ),
+        "required": lambda definition: definition["parameters"].update(required=["text"]),
+    }
 
-    def planned(catalog: LiveToolCatalog) -> list[tuple[str, str | None]]:
-        return [
-            (change.change, change.detail)
-            for change in view.plan(catalog, unlisted_tool_calls=True)
+    def changed(edit: Any) -> bool:
+        current = copy.deepcopy(known)
+        edit(current)
+        catalog = _catalog(current, announce_changes={"probe": announce})
+        return [change.change for change in view.plan(catalog, unlisted_tool_calls=True)] == [
+            "changed"
         ]
 
-    assert planned(described) == ([] if detail is None else [("changed", detail)])
-    # A schema change is announced either way; the Tool's text rides along.
-    assert planned(reshaped) == [("changed", detail)]
+    assert {part for part, edit in edits.items() if changed(edit)} == announced
 
 
 def test_on_demand_tools_are_known_by_name_until_a_silent_load_records_the_definition() -> None:

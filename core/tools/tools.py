@@ -11,7 +11,7 @@ import weakref
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from functools import wraps
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from core.tools._tool_context import (
     TOOL_ALLOWLIST_WILDCARD,
@@ -42,7 +42,6 @@ from core.tools._tool_definitions import (
     InvalidToolResultError,
     SessionToolUnavailableError,
     Tool,
-    ToolDefinitionChangeNote,
     ToolDefinitionProfile,
     ToolDefinitionProfileContext,
     ToolDefinitionProfileResolver,
@@ -51,6 +50,7 @@ from core.tools._tool_definitions import (
     ToolNotAllowedError,
     ToolNotFoundError,
     ToolReadinessPredicate,
+    definition_change_announced,
     tool_is_ready,
     tool_summary,
 )
@@ -249,7 +249,7 @@ class ToolRegistry:
         coerce_arguments: bool = True,
         argument_normalizer: Callable[[Any], Any] | None = None,
         definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
-        definition_change_note: ToolDefinitionChangeNote | None = None,
+        announce_changes: Sequence[str] = (),
     ) -> Tool:
         """Register a tool and return its immutable definition.
 
@@ -260,8 +260,8 @@ class ToolRegistry:
         precondition (surfaced by ``tool.list``) and ``readiness_retryable``
         whether the not-ready failure is transient; ``extension`` names the owning
         extension (``None`` for a built-in), set at extension-tool apply time.
-        ``definition_change_note`` lets a Tool announce a change of its
-        description to a Session that already knows it (see :class:`Tool`).
+        ``announce_changes`` names the parts of the definition whose change
+        reaches a Session that already knows the Tool (see :class:`Tool`).
         ``summary`` is the optional one-sentence, Model-facing text that lists
         the Tool where its full definition is not shown (:func:`tool_summary`).
         """
@@ -312,7 +312,8 @@ class ToolRegistry:
             coerce_arguments=coerce_arguments,
             argument_normalizer=argument_normalizer,
             definition_profile_resolver=definition_profile_resolver,
-            definition_change_note=definition_change_note,
+            # Tool validates and normalizes the entries into a tuple.
+            announce_changes=cast(tuple[str, ...], announce_changes),
         )
         self._tools = {**self._tools, name: tool}
         self.revision += 1
@@ -1159,9 +1160,9 @@ __all__ = [
     "ToolNotAllowedError",
     "ToolNotFoundError",
     "ToolPromptBlockRegistry",
-    "ToolDefinitionChangeNote",
     "ToolReadinessPredicate",
     "ToolRegistry",
+    "definition_change_announced",
     "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",
     "read_media_artifact",

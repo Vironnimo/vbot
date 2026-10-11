@@ -276,7 +276,7 @@ class MCPService:
                 "open_input_schema": True,
                 "requires_opt_in": True,
                 "argument_normalizer": browse_normalizer(parent),
-                "definition_change_note": self.catalogs.change_note(runner.id),
+                "announce_changes": ["description"],
             }
         ]
         for tool in (catalog or {}).get("tools", []):

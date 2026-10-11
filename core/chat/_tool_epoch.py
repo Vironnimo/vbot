@@ -20,7 +20,6 @@ a definition, which a silent ``loaded`` note records.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import uuid
@@ -31,7 +30,7 @@ from typing import Any, Literal, cast
 
 from core.chat.messages import ChatMessage, JsonObject
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX, is_tool_change_note
-from core.tools import ToolDefinitionChangeNote, is_tool_result_envelope, model_tool_name
+from core.tools import definition_change_announced, is_tool_result_envelope, model_tool_name
 from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
 from core.utils.logging import get_logger
 
@@ -106,8 +105,8 @@ class ToolChange:
     Tool of the epoch's pinned list: an addition makes it available again after
     a removal, and a change leaves its pinned definition in the Tool list.
     ``source`` fingerprints the Tool's registered definition so a
-    later change is recognized; ``detail`` is optional text a ``changed`` note
-    carries from the Tool's ``definition_change_note``.
+    later change is recognized; ``detail`` is optional text a stored ``changed``
+    note renders as its ``Change:`` line.
     """
 
     change: ToolChangeKind
@@ -261,8 +260,8 @@ class LiveToolCatalog:
     definitions a new prompt epoch would pin: the ready Tools after the route
     gates, in request order. ``sources`` fingerprints each usable Tool's
     registered definition. ``session_tool_grants`` are the Session's current
-    grants of session-scoped Tools. ``change_notes`` holds the
-    ``definition_change_note`` of each usable Tool that declares one.
+    grants of session-scoped Tools. ``announce_changes`` holds the
+    ``announce_changes`` of each usable Tool that declares any.
     ``on_demand`` maps each offered Tool the Agent's Tool list leaves to load
     on demand to its summary, in the order the System Prompt lists them.
     """
@@ -271,7 +270,7 @@ class LiveToolCatalog:
     offered: tuple[JsonObject, ...]
     sources: Mapping[str, str]
     session_tool_grants: tuple[str, ...] = ()
-    change_notes: Mapping[str, ToolDefinitionChangeNote] = field(default_factory=dict)
+    announce_changes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     on_demand: Mapping[str, str] = field(default_factory=dict)
 
     @cached_property
@@ -556,10 +555,10 @@ class ToolEpochView:
         ready and passes the route gates: a pinned Tool is available again, any
         other Tool is announced with its definition, listed in the request when
         the route (``unlisted_tool_calls`` false) drops calls to unlisted Tools.
-        A known Tool whose registered definition and parameters both changed is
-        announced as changed; a change that leaves the parameters as they are is
-        announced only when the Tool's ``definition_change_note`` returns text,
-        which the note carries as its detail.
+        A known Tool whose registered definition changed is announced as
+        changed only when a part named in its ``announce_changes`` differs from
+        the definition the Model knows; any other change waits for the next
+        prompt epoch, and dispatch keeps the known definition until then.
 
         An On-demand Tool the Model knows by name only is removed like any
         other; while it stays usable nothing is announced (its definition
@@ -689,8 +688,9 @@ class ToolEpochView:
         if source is None or source == known.source or known.definition is None:
             return None
         definition = _model_definition(offered)
-        detail = _change_detail(name, catalog.change_notes.get(name), known.definition, definition)
-        if detail is None and offered.get("parameters") == known.definition.get("parameters"):
+        if not definition_change_announced(
+            catalog.announce_changes.get(name, ()), known.definition, definition
+        ):
             return None
         return ToolChange(
             change="changed",
@@ -700,7 +700,6 @@ class ToolEpochView:
             definition=definition,
             listed=pinned,
             pinned=pinned,
-            detail=detail,
         )
 
 
@@ -758,26 +757,6 @@ def _not_run(content: object) -> bool:
         return False
     error = envelope.get("error")
     return isinstance(error, dict) and error.get("code") in _NOT_RUN_CODES
-
-
-def _change_detail(
-    name: str,
-    change_note: ToolDefinitionChangeNote | None,
-    known: JsonObject,
-    current: JsonObject,
-) -> str | None:
-    """Ask a Tool what changed between two of its definitions; ``None`` when silent."""
-
-    if change_note is None:
-        return None
-    try:
-        detail = change_note(copy.deepcopy(known), copy.deepcopy(current))
-    except Exception:
-        _LOGGER.warning("definition_change_note of Tool %s failed", name, exc_info=True)
-        return None
-    if not isinstance(detail, str) or not detail.strip():
-        return None
-    return detail.strip()
 
 
 def _model_definition(definition: JsonObject) -> JsonObject:

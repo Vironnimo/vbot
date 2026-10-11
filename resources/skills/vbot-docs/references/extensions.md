@@ -582,6 +582,10 @@ To read a payload later, a Tool call in the same Session passes its own `ToolCon
 
 An Agent that loads Tools on demand sees most of its Tools only as one line, `name: summary`, until it loads a Tool's full definition. Pass `summary="..."` to `api.register_tool(...)` (or the same field in a live Tool catalog) when the first sentence of your description does not tell a reader what the Tool is for, or is longer than about 160 characters. Write one sentence of at most 200 characters for the Model. Without it, vBot uses the description's first sentence. Declare `"api_version": 13` when you pass it.
 
+## Tool changes in a Session
+
+A Session keeps the Tool definitions it started with until it is compacted. When one of your Tools changes, for example because you publish a live Tool catalog again, Sessions that already know the Tool are told only if you pass `announce_changes` to `api.register_tool(...)` (or the same field in a live Tool catalog). List the parts whose change the Agent needs before its next call: `"description"`, `"parameters"`, or `"parameters.<name>"` for one parameter. vBot then sends those Sessions the new definition. Leave out changes your handler can explain when it is called, such as an option the current configuration no longer supports. Declare `"api_version": 14` when you pass it.
+
 ## Explicit Tool permission
 
 Pass `requires_opt_in=True` to `api.register_tool(...)` (or the same field in a live Tool catalog) when a configurable Tool must require an explicit per-Agent grant. Declare `api_version: 5` in the Extension manifest. This metadata is accepted only for configurable, non-internal, non-Session-scoped Tools.
