@@ -10,9 +10,14 @@ the same page. Both pages are set to UTF-8 before the command runs; the terminal
 decodes UTF-8.
 
 English output. PowerShell's own messages follow the Windows display language,
-and the numbers and dates it formats follow the user's regional format; the setup
-switches both cultures to en-US, so Agents and the failure hints read one wording,
-and a decimal comma (``6,5``) is never read as a list or a thousands separator.
+and the numbers and dates it formats and parses follow the user's regional format.
+The setup switches the messages to en-US, so Agents and the failure hints read one
+wording, and gives numbers a decimal point without grouping: a decimal comma
+(``6,5``) is never read as a list or a thousands separator, and an Agent's
+``[double]::Parse('3.14')`` reads 3.14 as PowerShell's own casts do, not 314. A
+German decimal string such as ``1,5`` then fails to parse instead of reading as
+15. Dates, day and month names and the list separator keep the user's format:
+under en-US, ``Get-Date '11.10.2026'`` read the user's date as November 10.
 Native programs keep the user's settings.
 
 Parsing after the setup. ``pwsh -Command`` parses its whole text before running
@@ -80,12 +85,18 @@ import re
 UTF8_CONSOLE_STATEMENT = (
     "[Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)"
 )
-# Messages, numbers and dates; new threads, such as ForEach-Object -Parallel
+# Messages in English; numbers with a decimal point and without grouping, in the
+# user's regional format otherwise. New threads, such as ForEach-Object -Parallel
 # runspaces, take the defaults.
-ENGLISH_CULTURE_STATEMENT = (
-    "[cultureinfo]::CurrentUICulture = [cultureinfo]::CurrentCulture = 'en-US'; "
-    "[cultureinfo]::DefaultThreadCurrentUICulture = "
-    "[cultureinfo]::DefaultThreadCurrentCulture = 'en-US'"
+CULTURE_STATEMENT = (
+    "& { $culture = [cultureinfo]::CurrentCulture.Clone(); "
+    "$numbers = $culture.NumberFormat; "
+    "$numbers.NumberDecimalSeparator = $numbers.CurrencyDecimalSeparator = "
+    "$numbers.PercentDecimalSeparator = '.'; "
+    "$numbers.NumberGroupSeparator = $numbers.CurrencyGroupSeparator = "
+    "$numbers.PercentGroupSeparator = ''; "
+    "[cultureinfo]::CurrentCulture = [cultureinfo]::DefaultThreadCurrentCulture = $culture; "
+    "[cultureinfo]::CurrentUICulture = [cultureinfo]::DefaultThreadCurrentUICulture = 'en-US' }"
 )
 ERROR_RECORD_BASELINE_STATEMENT = "$__vbotInitialError = $Error | Select-Object -First 1"
 POWERSHELL_ERROR_NOTE = (
@@ -151,7 +162,7 @@ UNIX_LINE_FILTERS_STATEMENT = "".join(
 SETUP_STATEMENT = "; ".join(
     (
         UTF8_CONSOLE_STATEMENT,
-        ENGLISH_CULTURE_STATEMENT,
+        CULTURE_STATEMENT,
         UNIX_LINE_FILTERS_STATEMENT,
         ERROR_RECORD_BASELINE_STATEMENT,
     )

@@ -186,13 +186,18 @@ _PRINTED_ERROR_TEXT = "; ".join(
         ),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, False, ("requires-sentinel",)),
-        # PowerShell's messages, numbers and dates are English whatever the display
-        # language and regional format.
+        # PowerShell's messages are English and its numbers take a decimal point
+        # without grouping, whatever the display language and regional format; dates
+        # keep the user's regional format.
         (
-            "'{0:N1} {1:d}' -f 6.5, [datetime]'2026-01-02'\nGet-Item does-not-exist",
+            "$own = [cultureinfo]::new((Get-Culture).Name, $true)\n"
+            "'{0:N1} {1} {2}' -f 1234.5, [double]::Parse('3.14'), "
+            "((Get-Date '2026-01-02').ToString('d') -ceq "
+            "[datetime]::new(2026, 1, 2).ToString('d', $own))\n"
+            "Get-Item does-not-exist",
             1,
             False,
-            ("6.5 1/2/2026", "Cannot find path", "does-not-exist"),
+            ("1234.5 3.14 True", "Cannot find path", "does-not-exist"),
         ),
         # A syntax error names the command's own line, in UTF-8, and runs nothing.
         (
