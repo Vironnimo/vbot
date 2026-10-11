@@ -7,7 +7,13 @@ import pytest
 
 from resources.extensions.swarm.agent_text import REPLAYED
 from resources.extensions.swarm.store import SwarmStoreError
-from resources.extensions.swarm.wiki_text import WIKI_OWN_REVISION
+from resources.extensions.swarm.wiki_text import (
+    WIKI_LIST_MATCHES,
+    WIKI_LIST_NO_MATCH,
+    WIKI_LIST_NO_WORD_MATCH,
+    WIKI_LIST_WORD_MATCHES,
+    WIKI_OWN_REVISION,
+)
 from tests.resources.extensions.swarm.swarm_test_support import (
     _swarm,
     continuation,
@@ -367,6 +373,20 @@ async def test_wiki_bounded_reads_search_and_frozen_pagination(board):
     assert following["data"]["content"].startswith(f'- "Page 1" ({page_ids[1]}), revision 1 by ')
     changed = await invoke(board, {**arguments, "query": "other"})
     assert changed["error"]["code"] == "invalid_cursor"
+    # A query no page contains as written finds the pages holding all of its
+    # words, in title or content; a phrase that occurs keeps its exact search.
+    found = await create(board, "The board contract names each interface.", "Page 3")
+    words = (await invoke(board, {"action": "list", "query": "interface, page"}))["data"]
+    assert words["pages"] == WIKI_LIST_WORD_MATCHES.format(query="interface, page", count=1)
+    assert words["content"].startswith(f'- "Page 3" ({found}), revision 1 by ')
+    phrase = (await invoke(board, {"action": "list", "query": "contract names"}))["data"]
+    assert phrase["pages"] == WIKI_LIST_MATCHES.format(query="contract names", count=1)
+    for query, header in [
+        ("interface missing", WIKI_LIST_NO_WORD_MATCH),
+        ("interfaces", WIKI_LIST_NO_MATCH),
+    ]:
+        missed = (await invoke(board, {"action": "list", "query": query}))["data"]
+        assert missed["pages"] == header.format(query=query)
 
 
 @pytest.mark.asyncio

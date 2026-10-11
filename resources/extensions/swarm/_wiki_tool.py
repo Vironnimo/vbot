@@ -457,7 +457,13 @@ class WikiCall:
 
     def _list(self, data: Json, arguments: Json) -> Json:
         entries, query = data["entries"], arguments.get("query")
-        if not entries:
+        if data.get("matched") == "words":
+            header = (
+                text.WIKI_LIST_WORD_MATCHES.format(query=query, count=len(entries))
+                if entries
+                else text.WIKI_LIST_NO_WORD_MATCH.format(query=query)
+            )
+        elif not entries:
             header = text.WIKI_LIST_NO_MATCH.format(query=query) if query else text.WIKI_LIST_NONE
         elif query:
             header = text.WIKI_LIST_MATCHES.format(query=query, count=len(entries))

@@ -193,7 +193,12 @@ of 12000, 5 of 53 Wiki reads in one Run showed only part of a page shorter than
 continuations bind their query and revision watermark; content continuations pin
 the requested revision. Search matches Unicode-casefolded titles and content; the
 folding runs in Python over the latest revisions because kernel read connections
-carry no custom SQL functions. An Agent `read` with `query` (Sessions, 2026-09)
+carry no custom SQL functions. A multi-word query that no page contains as written
+lists instead the pages holding all of its whitespace-separated words (edge
+punctuation stripped) in title or content, and says so in the header
+(`_store_wiki.py::_search`, Sessions, 2026-10); the choice is made at the
+continuation's revision watermark, so every page of one search uses the same mode,
+and the WebUI search gets the same fallback. An Agent `read` with `query` (Sessions, 2026-09)
 reads the page as asked and adds `found`, before `content`: up to 5 lines of the
 whole read revision containing the casefolded query, each with its line number and
 starting character (the `offset` unit), or the `list` call that searches all pages
@@ -1122,6 +1127,7 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.` | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10); the note corrects the belief after the post, without changing who receives it. |
 | Post result: `{names} has stopped and sees it only if the user resumes their work.` (and the plural) | An Agent that addresses a failed or cancelled peer otherwise waits for an answer that cannot come before a Resume (F4). |
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
+| `swarm_wiki` list: `No page contains "{query}" as written; pages containing all of its words, most recently changed first ({count} shown).` and `No page contains "{query}" or all of its words.` | Agents also send keywords where the search takes a phrase: the only missed search of one Run was a three-word query (F3, F6, Sessions, 2026-10). The fallback turns such a miss into a result instead of another search; the header says the phrase missed, so the Agent does not take the pages for exact matches. |
 
 ## Repository Profiles
 
