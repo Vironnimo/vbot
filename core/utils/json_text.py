@@ -1,19 +1,22 @@
-"""Read JSON text that Models write: repair an unambiguous slip, explain the rest.
+"""Read JSON text that Models write: repair two unambiguous slips, explain the rest.
 
-Models write Tool-call arguments as JSON text. A bare value (``"path": .``
-means ``"path": "."``) has only one reading and is repaired here. Every other
-break is explained for the error the Model reads: where it is, in which field,
-the text around it and how to write it.
+Models write Tool-call arguments as JSON text, and some Providers pass on an
+argument value they could not decode as text. Two slips have only one reading
+and are repaired here: a bare value (``"path": .`` means ``"path": "."``) and
+a ``"`` inside the text of a known field that should have been written ``\\"``.
+Every other break is explained for the error the Model reads: where it is, in
+which field, the text around it and how to write it.
 
 Callers decide whether a repaired text is the call that was meant: the Provider
-layer accepts only an object.
+layer accepts only an object, Tool argument decoding only a value its schema
+accepts.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 JsonPath = tuple[str | int, ...]
@@ -95,6 +98,53 @@ def _bare_value_span(text: str, error: json.JSONDecodeError) -> tuple[int, int] 
     if _BARE_VALUE_END.match(text, match.end()) is None:
         return None
     return error.pos, match.end()
+
+
+def escape_inner_quotes(text: str, fields: Collection[str]) -> str | None:
+    """Return ``text`` with the stray quotes inside its ``fields`` escaped, else ``None``.
+
+    Inside the string value of one of ``fields``, a ``"`` ends the text only
+    where JSON structure follows it: ``}``, ``]`` or ``:``, a comma before the
+    next string, object or array, a comma before one of ``fields`` that lost
+    its opening quote, or the end of ``text``. Every other ``"`` there belongs
+    to the text and is escaped. ``None`` means no quote was escaped.
+    """
+    names = "|".join(re.escape(name) for name in sorted(fields, key=len, reverse=True) if name)
+    if not names:
+        return None
+    opening = re.compile(rf'"(?:{names})"\s*:\s*"')
+    closing = re.compile(rf'"\s*(?:[}}\]:]|,\s*["{{\[]|,\s*(?:{names})"\s*:|\Z)')
+    parts: list[str] = []
+    position = 0
+    inside = False
+    escaped = 0
+    while position < len(text):
+        if not inside:
+            match = opening.match(text, position)
+            if match is not None:
+                parts.append(match.group())
+                position = match.end()
+                inside = True
+            else:
+                parts.append(text[position])
+                position += 1
+            continue
+        character = text[position]
+        if character == "\\" and position + 1 < len(text):
+            parts.append(text[position : position + 2])
+            position += 2
+            continue
+        if character == '"':
+            if closing.match(text, position) is not None:
+                parts.append(character)
+                inside = False
+            else:
+                parts.append('\\"')
+                escaped += 1
+        else:
+            parts.append(character)
+        position += 1
+    return "".join(parts) if escaped else None
 
 
 @dataclass(frozen=True)
@@ -399,6 +449,7 @@ def explain_json_break(
 __all__ = [
     "JsonBreak",
     "JsonPath",
+    "escape_inner_quotes",
     "explain_json_break",
     "field_label",
     "json_break",

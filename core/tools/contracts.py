@@ -19,6 +19,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
 from core.tools.model_names import model_tool_name
+from core.utils.json_text import escape_inner_quotes
 
 JsonObject = dict[str, Any]
 _TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
@@ -548,7 +549,14 @@ def _normalize_array_value(
             decoded = _load_json_value(value)
         except ToolContractError:
             raise
-        except TypeError, ValueError:
+        except json.JSONDecodeError:
+            repaired = _repaired_json_text(
+                value, schema, root_schema=root_schema, root_validator=root_validator
+            )
+            if isinstance(repaired, list):
+                return repaired
+            decoded = None
+        except TypeError, ValueError, RecursionError:
             decoded = None
         if isinstance(decoded, list):
             parsed = decoded
@@ -585,7 +593,12 @@ def _normalize_object_string(
         parsed = _load_json_value(value)
     except ToolContractError:
         raise
-    except TypeError, ValueError:
+    except json.JSONDecodeError:
+        repaired = _repaired_json_text(
+            value, schema, root_schema=root_schema, root_validator=root_validator
+        )
+        return repaired if isinstance(repaired, dict) else None
+    except TypeError, ValueError, RecursionError:
         return None
     if not isinstance(parsed, dict):
         return None
@@ -595,6 +608,118 @@ def _normalize_object_string(
         root_schema=root_schema,
         root_validator=root_validator,
     )
+
+
+def decode_json_argument(text: str, schema: JsonObject) -> Any:
+    """Return the value JSON ``text`` encodes for an argument whose schema is ``schema``.
+
+    Some Providers pass an argument they could not decode on as text, most
+    often because a ``"`` inside the text of one of its fields is not escaped.
+    When ``text`` is not JSON, the stray quotes inside the text of the
+    schema's fields are escaped (``core.utils.json_text.escape_inner_quotes``);
+    that reading counts only when it gives a value the schema accepts with no
+    undeclared fields. Otherwise the strict decoding error is raised, a
+    ``json.JSONDecodeError``. A repeated field raises ``ToolContractError``.
+    """
+    try:
+        return _load_json_value(text)
+    except json.JSONDecodeError:
+        repaired = _repaired_json_text(
+            text, schema, root_schema=schema, root_validator=Draft202012Validator(schema)
+        )
+        if repaired is _NOT_REPAIRED:
+            raise
+        return repaired
+
+
+_NOT_REPAIRED = object()
+
+
+def _repaired_json_text(
+    text: str,
+    schema: JsonObject,
+    *,
+    root_schema: JsonObject,
+    root_validator: Draft202012Validator,
+) -> Any:
+    """Return the schema-valid value ``text`` encodes once its stray quotes are escaped.
+
+    ``_NOT_REPAIRED`` when escaping changes nothing or the result is not a
+    value of ``schema`` with only declared fields.
+    """
+    repaired = escape_inner_quotes(text, _schema_field_names(schema, root_schema))
+    if repaired is None:
+        return _NOT_REPAIRED
+    try:
+        value = _normalize_schema_value(
+            _load_json_value(repaired),
+            schema,
+            root_schema=root_schema,
+            root_validator=root_validator,
+        )
+    except ValueError, RecursionError:
+        # Includes ToolContractError: a repeated field or an ambiguous encoding.
+        return _NOT_REPAIRED
+    if not root_validator.evolve(schema=schema).is_valid(value):
+        return _NOT_REPAIRED
+    if not _declared_fields_only(value, schema, root_schema):
+        return _NOT_REPAIRED
+    return value
+
+
+def _schema_field_names(schema: Any, root_schema: JsonObject, depth: int = 0) -> set[str]:
+    """Return every property name declared in ``schema`` and the schemas inside it."""
+    if not isinstance(schema, dict) or depth > _FIELD_NAME_DEPTH:
+        return set()
+    resolved = _resolve_schema_reference(schema, root_schema)
+    names: set[str] = set()
+    properties = resolved.get("properties")
+    nested: list[Any] = []
+    if isinstance(properties, dict):
+        names.update(properties)
+        nested.extend(properties.values())
+    for keyword in ("items", "additionalProperties"):
+        nested.append(resolved.get(keyword))
+    for keyword in ("prefixItems", "anyOf", "oneOf", "allOf"):
+        branches = resolved.get(keyword)
+        if isinstance(branches, list):
+            nested.extend(branches)
+    for child in nested:
+        names.update(_schema_field_names(child, root_schema, depth + 1))
+    return names
+
+
+_FIELD_NAME_DEPTH = 8
+
+
+def _declared_fields_only(value: Any, schema: Any, root_schema: JsonObject) -> bool:
+    """Whether every object in ``value`` uses only the fields its schema declares.
+
+    An object schema that lists ``properties`` and does not open itself with
+    ``additionalProperties`` or ``patternProperties`` counts as closed here,
+    as a Tool's root parameters do.
+    """
+    if not isinstance(schema, dict):
+        return True
+    resolved = _resolve_schema_reference(schema, root_schema)
+    if isinstance(value, dict):
+        properties = resolved.get("properties")
+        if not isinstance(properties, dict):
+            return True
+        closed = (
+            resolved.get("additionalProperties", False) is False
+            and "patternProperties" not in resolved
+        )
+        if closed and any(key not in properties for key in value):
+            return False
+        return all(
+            _declared_fields_only(item, properties.get(key), root_schema)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        items = resolved.get("items")
+        return all(_declared_fields_only(item, items, root_schema) for item in value)
+    return True
 
 
 def _normalize_object_value(
@@ -1041,4 +1166,5 @@ __all__ = [
     "ToolContract",
     "ToolContractError",
     "compile_tool_contract",
+    "decode_json_argument",
 ]

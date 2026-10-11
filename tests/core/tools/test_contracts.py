@@ -670,6 +670,50 @@ def test_ambiguous_encoding_fails_instead_of_choosing_a_value(
         contract.normalize_arguments(arguments)
 
 
+_CHANGE: JsonObject = {
+    "type": "object",
+    "properties": {"old": {"type": "string"}, "new": {"type": "string"}},
+    "required": ["old", "new"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("field", "text", "expected"),
+    [
+        pytest.param(
+            "changes",
+            '[{"old": "x = 1", "new": "x = f("a")"}, {"old": "say "hi"", "new": ""}]',
+            [{"old": "x = 1", "new": 'x = f("a")'}, {"old": 'say "hi"', "new": ""}],
+            id="array",
+        ),
+        pytest.param(
+            "change",
+            '{"old": "a "b" c", "new": "d"}',
+            {"old": 'a "b" c', "new": "d"},
+            id="object",
+        ),
+        # A comma and a quote after a quote are structure: no reading fits the schema.
+        pytest.param("change", '{"old": "f("a", "b")", "new": "x"}', None, id="comma-quote"),
+        pytest.param(
+            "change", '{"old": "a "b" c", "new": "d", "line": 2}', None, id="undeclared-field"
+        ),
+        pytest.param("change", '{"old": "a "b" c", "old": "d"}', None, id="repeated-field"),
+        pytest.param("change", '{"old": "a "b" \\_", "new": "d"}', None, id="other-break"),
+    ],
+)
+def test_unescaped_quotes_in_json_text_are_read_only_into_a_value_the_schema_accepts(
+    field: str, text: str, expected: Any
+) -> None:
+    contract = _open_contract({"changes": {"type": "array", "items": _CHANGE}, "change": _CHANGE})
+
+    if expected is not None:
+        assert contract.normalize_arguments({field: text}) == {field: expected}
+        return
+    with pytest.raises(ToolContractError):
+        contract.validate_arguments(contract.normalize_arguments({field: text}))
+
+
 # --- Owner-selected call repair ---------------------------------------------------
 
 
