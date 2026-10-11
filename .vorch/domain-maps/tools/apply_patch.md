@@ -268,7 +268,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   copied line there, the nearby file line most similar (>= 0.50) to the start of
   the first copied line starts it (a reworded copy resembles its line; a copy
   that joins lines starts like the first of them, which whole-line similarity
-  missed once in a replay), else the window start does. Evidence:
+  missed once in a replay), else the window start does. Similarity compares
+  words first and characters second: `_EQ_OPS = frozenset({...})` shares more
+  signs with the file's `_RANGE_OPS = {...}` than with its own `_EQ_OPS = {...}`,
+  and the character ratio named the wrong line (Swarm Run 2026-10; the replay of
+  227 first differences in failed calls changed only that one). Evidence:
   the longest lines were often added text copied without `+`, so 43 of 133 failed
   hunks in one Swarm said `No similar text` although most copied lines were in
   the file, and 10 of 76 checkable first differences named a line one to seven

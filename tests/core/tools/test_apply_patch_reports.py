@@ -475,6 +475,16 @@ FIRST_DIFFERENCE_CASES = {
         "+    return sorted(row.title for row in rows)",
         "First difference, line 24: the file has '    query = select(",
     ),
+    # A rewritten line is compared with the line of its name, not one sharing its signs.
+    "renamed": (
+        "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 21))
+        + '\nEQ_OPS = {"=", "=="}\nRANGE_OPS = {">", ">=", "<", "<="}\n\n\n'
+        "def check(op):\n    return op in EQ_OPS\n",
+        '@@\n-EQ_OPS = frozenset({"=", "==", "IS"})\n'
+        '-RANGE_OPS = frozenset({"<", "<=", ">", ">="})\n'
+        '+EQ_OPS = frozenset({"=", "=="})',
+        "First difference, line 22: the file has 'EQ_OPS = {",
+    ),
     # Long new lines without a prefix do not hide the copied ones.
     "hidden": (
         "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 40))

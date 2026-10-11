@@ -462,7 +462,9 @@ def _aligned_start(file_lines: list[str], start: int, wanted_lines: list[str], f
     bracket, occur too often to fix it. When the file holds none of the patch
     lines, patch line ``first`` belongs at the nearby file line most like its
     start: a reworded copy resembles its line, and a copy that joins lines
-    starts like the first of them.
+    starts like the first of them. Words decide before characters: lines that
+    differ in their names can share most of their signs (``_EQ_OPS = {...}`` and
+    ``_RANGE_OPS = {...}``).
     """
     span = len(wanted_lines) - first
     if span == 1:
@@ -482,16 +484,20 @@ def _aligned_start(file_lines: list[str], start: int, wanted_lines: list[str], f
             index = min(near, key=lambda index: (abs(index - expected), index))
             return max(1, index + 1 - (position - first))
     text = _loose(wanted_lines[first])
+    words = re.findall(r"\w+", text)
     expected = start - 1
-    scores = [
-        (SequenceMatcher(None, text[: len(line)], line).ratio(), index)
-        for index in range(max(0, expected - span), min(len(file_lines), expected + span + 1))
-        if len(line := _loose(file_lines[index])) >= 4 and re.search(r"\w", line)
-    ]
-    if not scores:
-        return start
-    similarity, index = max(scores, key=lambda score: (score[0], -abs(score[1] - expected)))
-    return index + 1 if similarity >= _SIMILAR_LINE else start
+    scores = []
+    for index in range(max(0, expected - span), min(len(file_lines), expected + span + 1)):
+        line = _loose(file_lines[index])
+        held = re.findall(r"\w+", line)
+        if len(line) < 4 or not held:
+            continue
+        # The copy's start against the whole line, by words and then by characters.
+        shared = SequenceMatcher(None, words[: len(held)], held, autojunk=False).ratio()
+        similarity = SequenceMatcher(None, text[: len(line)], line).ratio()
+        if max(shared, similarity) >= _SIMILAR_LINE:
+            scores.append((shared, similarity, -abs(index - expected), index))
+    return max(scores)[3] + 1 if scores else start
 
 
 def _normalize_newlines(text: str) -> str:
