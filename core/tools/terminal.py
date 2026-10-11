@@ -1411,7 +1411,7 @@ def _typed_input(arguments: JsonObject) -> str:
 
 
 def _terminal_state_text(item: Mapping[str, Any]) -> str:
-    state = item.get("state") or item.get("status")
+    state = item.get("state")
     exit_code = item.get("exit_code")
     if state == "exited" and isinstance(exit_code, int) and not isinstance(exit_code, bool):
         return f"exited with code {exit_code}"
@@ -1455,9 +1455,7 @@ def _terminal_detail_blocks(arguments: JsonObject, result: JsonObject | None) ->
         blocks.append(display_text("scrollback", source="result", path=("data", "history")))
     if "screen" in data:
         blocks.append(display_text("screen", source="result", path=("data", "screen")))
-    if "output" in data:
-        blocks.append(display_text("output", source="result", path=("data", "output")))
-    state = data.get("state") or data.get("status")
+    state = data.get("state")
     exit_code = data.get("exit_code")
     if state == "stopped":
         blocks.append(display_notice("info", "The program was stopped."))
