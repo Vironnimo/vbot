@@ -6,7 +6,8 @@ const USAGE_REFRESH_INTERVAL_MS = 10_000;
 
 // The selected Swarm's Usage report: one combined group report with its
 // participant rows. `host` is the page model's side: `call`, the shown
-// `selectedSwarm` and `activeTab`, `disposed` and the page `error`.
+// `selectedSwarm` and `activeTab`, `disposed`, and `refreshFailed`, which
+// shows the failure of a reload no refresh waits for.
 export function createSwarmPageUsage(host) {
   let report = $state(null);
 
@@ -60,6 +61,8 @@ export function createSwarmPageUsage(host) {
 
   // A background change reloads Usage at once when the last request is old
   // enough, otherwise when USAGE_REFRESH_INTERVAL_MS since it have passed.
+  // The refresh that calls this reports a failed reload at once; a later
+  // reload reports its own failure as a refresh failure.
   function schedule(swarm) {
     const wait = usageStartedAt + USAGE_REFRESH_INTERVAL_MS - Date.now();
     if (wait <= 0) return load(swarm);
@@ -67,12 +70,12 @@ export function createSwarmPageUsage(host) {
       usageTimer = null;
       if (host.disposed || host.activeTab !== 'usage' || !host.selectedSwarm)
         return;
-      void load(host.selectedSwarm).catch((cause) => {
-        if (!host.disposed) host.error = cause.message;
-      });
+      void load(host.selectedSwarm).catch(host.refreshFailed);
     }, wait);
   }
 
+  // Loads the report of `swarm`. A reply or failure that a newer load or
+  // another selected Swarm made stale is dropped.
   async function load(swarm = host.selectedSwarm) {
     if (!swarm) return;
     clearTimeout(usageTimer);
@@ -92,14 +95,13 @@ export function createSwarmPageUsage(host) {
       usageStartedAt = Date.now();
     }
     const flight = usageFlight;
+    const current = () =>
+      !host.disposed &&
+      request === usageRequest &&
+      host.selectedSwarm?.id === swarm.id;
     try {
       const result = await flight.promise;
-      if (
-        host.disposed ||
-        request !== usageRequest ||
-        host.selectedSwarm?.id !== swarm.id
-      )
-        return;
+      if (!current()) return;
       report = result;
       participantUsage = (swarm.participants ?? []).map((participant) => ({
         participant,
@@ -108,6 +110,8 @@ export function createSwarmPageUsage(host) {
             (row) => row.participant_id === participant.id,
           )?.activity ?? null,
       }));
+    } catch (cause) {
+      if (current()) throw cause;
     } finally {
       if (usageFlight === flight) usageFlight = null;
       if (!host.disposed && request === usageRequest) loading = false;

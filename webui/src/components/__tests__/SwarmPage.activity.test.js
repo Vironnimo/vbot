@@ -5,6 +5,8 @@ import {
   profile,
   swarm,
   button,
+  headButton,
+  notice,
   createBridge,
   overrideOperations,
   swarmWithRun,
@@ -412,6 +414,76 @@ describe('Swarm participant Activity', () => {
     expect(document.querySelectorAll('.history article')).toHaveLength(1);
     expect(document.querySelector('.history .streaming-text')).toBeNull();
   });
+
+  // The History read after a Run's end is the page's own, whether the Run's
+  // events or a refresh report the end.
+  it.each([
+    [
+      'its Run ends',
+      (bridge) =>
+        bridge.emitRun('stream-ends', {
+          type: 'run_completed',
+          run_id: 'run-ends',
+          sequence: 1,
+        }),
+    ],
+    [
+      'a refresh finds its Run ended',
+      (bridge, detail) => {
+        detail.participants[0].run_active = false;
+        bridge.invalidate();
+      },
+    ],
+  ])(
+    "shows a failed History read after %s as a refresh failure beside an action's error until Retry reads again",
+    async (_, endRun) => {
+      const detail = swarmWithRun('run-ends');
+      const { bridge, operation } = createBridge(profile, detail);
+      overrideOperations(operation, {
+        'swarms.stop': () => {
+          throw new Error('test-owned stop failure');
+        },
+      });
+      bridge.readHistory
+        .mockResolvedValueOnce({ messages: [], status: 'running' })
+        .mockRejectedValueOnce(new Error('test-owned history failure'))
+        .mockResolvedValue({
+          runs: [{ run_id: 'run-ends', status: 'completed', complete: true }],
+          messages: [
+            {
+              history_run_id: 'run-ends',
+              id: 'msg-ends',
+              role: 'assistant',
+              content: 'final-output-sentinel',
+              timestamp: '2026-09-08T09:00:00+00:00',
+            },
+          ],
+        });
+      bridge.subscribeRun.mockResolvedValue({
+        replay_through_sequence: 0,
+        subscription_id: 'stream-ends',
+      });
+      await openParticipant(bridge);
+      await vi.waitFor(() => expect(bridge.subscribeRun).toHaveBeenCalled());
+      headButton(t('swarm.stop')).click();
+      await vi.waitFor(() =>
+        expect(notice('alert')).toContain('test-owned stop failure'),
+      );
+      endRun(bridge, detail);
+      await vi.waitFor(() =>
+        expect(notice('status')).toContain('test-owned history failure'),
+      );
+      expect(notice('alert')).toContain('test-owned stop failure');
+      // Retry is a user action that reads History again.
+      button(t('common.retry')).click();
+      await vi.waitFor(() =>
+        expect(historyText()).toContain('final-output-sentinel'),
+      );
+      expect(bridge.readHistory).toHaveBeenCalledTimes(3);
+      await vi.waitFor(() => expect(notice('status')).toBe(''));
+      expect(notice('alert')).toBe('');
+    },
+  );
 });
 
 describe('Swarm participant History pages', () => {

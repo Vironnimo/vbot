@@ -5,6 +5,8 @@ import {
   profile,
   swarm,
   button,
+  headButton,
+  notice,
   createBridge,
   overrideOperations,
   callsTo,
@@ -242,6 +244,68 @@ describe('Swarm Usage refresh', () => {
     button(USAGE).click();
     await vi.advanceTimersByTimeAsync(0);
     expect(finishes).toHaveLength(2);
+  });
+
+  it("shows a failed scheduled reload beside an action's error until a refresh started after it, and Retry reloads at once", async () => {
+    const { bridge, operation } = createBridge();
+    let usageReply = (fallback) => fallback();
+    // A pending promise here holds the Swarm's reads until it resolves.
+    let hold = null;
+    overrideOperations(operation, {
+      'swarms.stop': () => {
+        throw new Error('test-owned stop failure');
+      },
+      'swarms.usage': (_args, fallback) => usageReply(fallback),
+      'swarms.get': async (_args, fallback) => {
+        await hold;
+        return fallback();
+      },
+    });
+    const change = (revision) => ({
+      resource: 'swarms',
+      ids: ['swr-a'],
+      revision,
+    });
+    await openSwarm(bridge);
+    vi.useFakeTimers();
+    button(USAGE).click();
+    await vi.waitFor(() => expect(tableRows().length).toBeGreaterThan(0));
+    headButton(t('swarm.stop')).click();
+    await vi.waitFor(() =>
+      expect(notice('alert')).toContain('test-owned stop failure'),
+    );
+    // A change soon after the report loaded schedules its reload ...
+    usageReply = () => {
+      throw new Error('test-owned usage failure');
+    };
+    bridge.invalidate(change(2));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(callsTo(operation, 'swarms.usage')).toHaveLength(1);
+    // ... which fails while a refresh that started before it is in flight.
+    let release;
+    hold = new Promise((resolve) => (release = resolve));
+    bridge.invalidate(change(3));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(callsTo(operation, 'swarms.usage')).toHaveLength(2);
+    expect(notice('status')).toContain('test-owned usage failure');
+    expect(button(t('common.retry'))).toBeDefined();
+    expect(notice('alert')).toContain('test-owned stop failure');
+    hold = null;
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notice('status')).toContain('test-owned usage failure');
+    // Retry is a user action that reloads the report without waiting.
+    usageReply = () => ({
+      usage: {
+        ...uniformReport(30),
+        participants: [uniformReport(30, 'prt-a'), uniformReport(30, 'prt-b')],
+      },
+    });
+    button(t('common.retry')).click();
+    await vi.waitFor(() => expect(notice('status')).toBe(''));
+    expect(callsTo(operation, 'swarms.usage')).toHaveLength(3);
+    expect(summary()).toEqual(['30', '30', '30']);
+    expect(notice('alert')).toBe('');
   });
 
   it('ignores a late Usage report from the previously selected Swarm', async () => {

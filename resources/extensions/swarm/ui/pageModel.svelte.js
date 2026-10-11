@@ -41,12 +41,6 @@ const START_FIELDS = [
   ['goal', 'swarm-goal'],
 ];
 
-// What a failed refresh shows until a later one succeeds.
-const refreshFailure = (cause) =>
-  cause?.message
-    ? t('swarm.refreshError', { error: cause.message })
-    : t('swarm.loadError');
-
 // `list` followed by the entries of `more` it does not hold yet.
 function appendNew(list, more) {
   const known = new Set(list.map((item) => item.id));
@@ -72,9 +66,14 @@ export function createSwarmPageModel(host) {
   // refreshes never do, so a background refresh cannot hide it unseen.
   let error = $state('');
 
-  // A failed refresh (or the host not answering at all), which the next
-  // successful refresh clears.
+  // A failed refresh, a failed read the page started on its own
+  // (`refreshFailed`), or the host not answering at all. A refresh that
+  // succeeds clears it unless something failed after that refresh started.
   let refreshError = $state('');
+
+  // Counts the failures shown as `refreshError`, so a refresh clears only
+  // those from before it started.
+  let refreshFailures = 0;
 
   // Whether the host has initialized the page.
   let connected = $state(false);
@@ -156,6 +155,10 @@ export function createSwarmPageModel(host) {
 
   let directoryRequest = 0;
 
+  // Whether the start form's default directory failed to load, so a refresh
+  // loads it again.
+  let directoryFailed = false;
+
   let dialogRequest = 0;
 
   let disposed = false;
@@ -235,12 +238,7 @@ export function createSwarmPageModel(host) {
     get disposed() {
       return disposed;
     },
-    get error() {
-      return error;
-    },
-    set error(value) {
-      error = value;
-    },
+    refreshFailed,
   });
 
   const backgroundRefresh = createPageRefresh(refreshChanges);
@@ -397,12 +395,16 @@ export function createSwarmPageModel(host) {
       );
   }
 
-  async function selectRunProfile(profile) {
+  // Chooses the start form's Swarm and loads its default directory, for a
+  // Project from the catalog. `background` marks a choice a refresh made, whose
+  // failure is a refresh failure.
+  async function selectRunProfile(profile, { background = false } = {}) {
     const request = ++directoryRequest;
     selectedProfile = profile;
     runDirectory = '';
     defaultDirectory = '';
     directoryLoading = false;
+    directoryFailed = false;
     clearStartErrors('profile', 'directory');
     if (!profile) return;
     const directory = profile.working_directory;
@@ -419,7 +421,10 @@ export function createSwarmPageModel(host) {
       );
       runDirectory = defaultDirectory = project?.cwd ?? '';
     } catch (cause) {
-      if (!disposed && request === directoryRequest) error = cause.message;
+      if (disposed || request !== directoryRequest) return;
+      directoryFailed = true;
+      if (background) refreshFailed(cause);
+      else error = cause.message;
     } finally {
       if (!disposed && request === directoryRequest) directoryLoading = false;
     }
@@ -529,6 +534,7 @@ export function createSwarmPageModel(host) {
   async function refresh({ background = false } = {}) {
     const request = ++overviewRequest;
     const selection = selectionRequest;
+    const failures = refreshFailures;
     // Invalidation must not unmount an active form or Run inspection.
     loading = loading && !editor;
     board.forgetPageReferences();
@@ -542,13 +548,23 @@ export function createSwarmPageModel(host) {
       )
         await selectSwarm(selectedSwarm.id, { silent: true, background });
       if (disposed || request !== overviewRequest) return;
-      refreshError = '';
+      if (failures === refreshFailures) refreshError = '';
     } catch (cause) {
       if (disposed || request !== overviewRequest) return;
-      refreshError = refreshFailure(cause);
+      refreshFailed(cause);
     } finally {
       if (!disposed && request === overviewRequest) loading = false;
     }
+  }
+
+  // Shows a failed refresh, or a failed read the page started on its own, as
+  // `refreshError`; a user action's `error` stays as it is.
+  function refreshFailed(cause) {
+    if (disposed) return;
+    refreshFailures += 1;
+    refreshError = cause?.message
+      ? t('swarm.refreshError', { error: cause.message })
+      : t('swarm.loadError');
   }
 
   // The refresh error's Retry: a user action, so it also clears `error`.
@@ -564,6 +580,7 @@ export function createSwarmPageModel(host) {
   async function refreshChanges(changes) {
     if (everythingChanged(changes)) return refresh({ background: true });
     const request = ++changesRequest;
+    const failures = refreshFailures;
     const selected =
       selectedSwarm &&
       pending !== 'delete' &&
@@ -585,10 +602,10 @@ export function createSwarmPageModel(host) {
           : null,
       ]);
       if (disposed || request !== changesRequest) return;
-      refreshError = '';
+      if (failures === refreshFailures) refreshError = '';
     } catch (cause) {
       if (disposed || request !== changesRequest) return;
-      refreshError = refreshFailure(cause);
+      refreshFailed(cause);
     }
   }
 
@@ -607,15 +624,19 @@ export function createSwarmPageModel(host) {
         profiles.find((item) => item.id === selectedProfile.id) ??
         profiles[0] ??
         null;
+    // Another chosen Swarm, or on the start page a default directory that
+    // changed or failed to load and that the user has not edited, loads the
+    // form's directory again.
     if (
       previousProfile?.id !== selectedProfile?.id ||
       (!editor &&
         !selectedSwarm &&
         sameServerPath(runDirectory, defaultDirectory) &&
-        JSON.stringify(previousProfile?.working_directory) !==
-          JSON.stringify(selectedProfile?.working_directory))
+        (directoryFailed ||
+          JSON.stringify(previousProfile?.working_directory) !==
+            JSON.stringify(selectedProfile?.working_directory)))
     )
-      void selectRunProfile(selectedProfile);
+      void selectRunProfile(selectedProfile, { background: true });
   }
 
   async function loadSwarms() {
@@ -649,8 +670,10 @@ export function createSwarmPageModel(host) {
       selectedSwarm = swarm;
       if (tab) activeTab = tab;
       if (!silent) editor = null;
+      // The inspected participant, also before its History loaded, so a
+      // refresh reads again what a failed read left out.
       const inspected = swarm.participants?.find(
-        (item) => item.id === activity.history?.participant.id,
+        (item) => item.id === activity.selectedParticipant?.id,
       );
       if (silent && inspected) {
         void activity.inspectParticipant(inspected, {
@@ -1116,7 +1139,7 @@ export function createSwarmPageModel(host) {
       const swarm = (await call('swarms.get', { swarm_id: run.id })).swarm;
       if (!disposed && selectedSwarm?.id === run.id) selectedSwarm = swarm;
     } catch (cause) {
-      if (!disposed) refreshError = refreshFailure(cause);
+      if (selectedSwarm?.id === run.id) refreshFailed(cause);
     }
   }
 
@@ -1177,6 +1200,7 @@ export function createSwarmPageModel(host) {
     get refreshError() {
       return refreshError;
     },
+    refreshFailed,
     get connected() {
       return connected;
     },

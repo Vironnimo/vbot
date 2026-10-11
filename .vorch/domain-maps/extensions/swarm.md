@@ -828,11 +828,26 @@ a failed deletion can be retried. Tests: `test_swarm_operations.py`, `SwarmPage.
 
 Page errors (`pageModel.svelte.js`): a failed user action shows in the page's
 error banner until the next user action starts; refreshes never clear it, so a
-background refresh cannot hide it unseen. A failed refresh shows its own banner
-with Retry until a later refresh succeeds; a host that has not initialized the
-page within 10 s shows there as an alert without Retry. Dialog actions
-(communication settings, deletions) keep their failure in the dialog for another
-try. The banners stay above the shown view while it scrolls (`SwarmPage.test.js`).
+background refresh cannot hide it unseen. Reads the user starts are user
+actions: choosing a participant or the start form's Swarm, opening the Board or
+Usage tab, loading earlier Activity, revealing a post, cancelling a Tool Call.
+A failed refresh shows its own banner with Retry, and so does a failed read the
+page starts on its own (`refreshFailed`), which never touches the error banner:
+Activity's reads for a refresh, for a Run that ended on its own and for its tab
+showing again (History, catalog, Run subscription and its release), the
+throttled Usage reload, the start form's default directory a refresh loads, and
+the Swarm re-read after saved communication settings. A refresh that succeeds
+clears that banner unless something failed after it started; a successful read
+outside a refresh does not. Refreshes read again what failed: Activity inspects
+the participant again instead of keeping what it shows, the start form reloads
+its default directory, and Usage reloads within its interval. Retry is a user
+action: it clears the error banner and runs a full refresh, which also reloads a
+visible Usage report at once. A reply made stale by a newer read or another
+selection shows in neither banner. A host that has not initialized the page
+within 10 s shows in the refresh banner as an alert without Retry. Dialog
+actions (communication settings, deletions) keep their failure in the dialog for
+another try. The banners stay above the shown view while it scrolls
+(`SwarmPage.test.js`, `SwarmPage.activity.test.js`, `SwarmPage.usage.test.js`).
 
 Startup reconcile: after `recover_interrupted`, startup pages its participant groups
 (`temporary_agents.groups()`, API 10; group id = Swarm id) and archives each group
@@ -898,7 +913,8 @@ changes and incremental Board reads, and to 1.9 with the 1 s interval;
 visible tab; selecting a tab loads its current data independently of hidden reports. Activity retains
 the existing History and live subscription while its participant's Run identity
 and active state are unchanged. A new Run or terminal state reconciles History through the generation/sequence append cursor, preserving older loaded pages;
-subscription failures remain retryable on a later invalidation. Activity reads
+after a failed History, catalog or subscription read, the next refresh inspects
+the participant again (Page errors). Activity reads
 History and follows its participant's Run only while its tab (`participants`)
 shows: hiding the tab ends the Run subscription and drops reads in flight, keeping what
 it shows; showing it again catches up once from the participant's current
