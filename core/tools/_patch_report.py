@@ -428,7 +428,9 @@ def _record_notices(
         for note in dict.fromkeys(report.notes):
             context.add_display_notice("info", note, subject=report.label)
         if report.syntax_warning:
-            context.add_display_notice("warning", report.syntax_warning, subject=report.label)
+            # The user sees the change itself; the error's first line names the spot.
+            message = report.syntax_warning.partition("\n")[0]
+            context.add_display_notice("warning", message, subject=report.label)
     for note in notes:
         context.add_display_notice("info", note)
     # A failure message names the file and change it is about.

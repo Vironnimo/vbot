@@ -479,7 +479,7 @@ def test_written_files_are_syntax_checked(tmp_path, original, name, content, war
     [
         ("x = 1\n", "@@\n-x = 1\n+x = 2", None),
         (
-            "x = 1\n",
+            "a = 1\nx = 1\nb = 2\n",
             "@@\n-x = 1\n+x = (1",
             "Warning: Syntax check failed after this edit: SyntaxError",
         ),
@@ -504,6 +504,11 @@ def test_edited_files_are_syntax_checked_without_blaming_earlier_errors(
         assert "Warning:" not in text(result)
     else:
         assert warning in text(result)
+    if warning and "after this edit" in warning:
+        # The lines around the error follow, numbered like read, with a caret under it.
+        shown = text(result).split("\n")
+        index = next(i for i, line in enumerate(shown) if line.startswith(warning))
+        assert shown[index + 1 :] == ["1| a = 1", "2| x = (1", "       ^", "3| b = 2"]
 
 
 def test_current_content_stamps_stats_and_notes_an_external_change(tmp_path):

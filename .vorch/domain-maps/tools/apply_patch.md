@@ -137,7 +137,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   2026-10-10). Notes (recoveries, metadata drift) and syntax warnings follow as
   `Note:` / `Warning:` lines. Syntax warnings compare the initial and final
   Tool-written text; a created or fully replaced file reports any final syntax
-  error, even when the original was invalid.
+  error, even when the original was invalid. A warning for an error this call
+  caused is followed by the lines around the error (two above and below, numbered
+  like `read`, with a caret under the reported column when the parser names one;
+  `syntax_check._with_excerpt`); a warning for an error the file already had shows
+  none, since that error is not the Agent's to find now.
 - Mixed outcomes are a success led by counts (`N of M changes
   applied; K did not.`, or `fully applied; K only in part` when a write was
   incomplete) and the instruction to resend only unfinished changes; each failure
@@ -527,7 +531,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   its changed lines, not its whole content. A call that changed no file records no
   counts. Updates reuse syntax-delta warnings; Add uses full-file syntax warnings.
 - The display declares detail blocks: after the diffs, `patch_result` records one
-  notice per file note (`info`), syntax warning (`warning`) and net-effect note,
+  notice per file note (`info`), syntax warning (`warning`, its first line only:
+  the user sees the change itself) and net-effect note,
   and one `error` notice per failed change with its message alone - not the
   excerpts, difference and `read` continuations the Model's recovery needs. The user reads the
   Model's result text only in the raw call disclosure.
@@ -555,6 +560,7 @@ replacements still went through Delete File plus Add File (agent-eval
 |---|---|
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
+| Syntax warning excerpt (shared with `edit` and `write`): `Warning: Syntax check failed after this edit: SyntaxError: '(' was never closed (line 2, column 12)` followed by `1| ...`, `2| ...`, a caret line and `3| ...` | Real Sessions (2026-10) read 30-45 lines after a warning to find the line the error names; the excerpt shows it in the result. Only the error's own lines are shown, not more, so a result stays short. |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
 
 ## Verification
