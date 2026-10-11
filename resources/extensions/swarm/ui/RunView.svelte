@@ -142,7 +142,7 @@
     </div>
   </header>
   {#if failed.length}
-    <Banner variant="error" role="status" class="swarm-failed">
+    <Banner variant="warn" role="status" class="swarm-failed">
       <p>
         {failedText[0]}{#each failedNames as part, index (index)}{#if part.text === undefined}<button
               type="button"
