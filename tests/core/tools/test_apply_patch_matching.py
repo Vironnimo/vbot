@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from core.tools._patch_report import edit_outcome
@@ -448,6 +450,71 @@ def test_code_name_edits_apply_to_their_target(tmp_path, original, body, expecte
 
     assert edit_outcome(result["data"]["content"]) == "applied"
     assert target.read_text(encoding="utf-8") == expected
+
+
+SIGNATURE = "    def affinity(bound: Any, scope: Scope) -> str | None:"
+COPY = "    def affinity(self, bound: Any, scope: Scope) -> str | None:"
+DECORATORS = "    @staticmethod\n    @lru_cache(\n        maxsize=2,\n    )\n"
+AFFINITY = SIGNATURE + "\n        return None\n"
+DERIVED = "    def derived(expr):\n        return 1\n\n"
+ADDED = "+    def derived(expr):\n+        return 1\n+\n"
+
+
+def _edit(old: str, new: str) -> dict:
+    return {"path": "a.py", "edits": [{"old_string": old, "new_string": new}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "arguments", "expected", "note"),
+    [
+        # Code added before a decorated definition goes above its decorators.
+        (
+            "edit",
+            _edit(SIGNATURE, DERIVED + SIGNATURE),
+            "class Binder:\n" + DERIVED + DECORATORS + AFFINITY,
+            ["5", "8", "9"],
+        ),
+        (
+            "apply_patch",
+            {"patch": update("@@\n" + ADDED + " " + SIGNATURE, "a.py")},
+            "class Binder:\n" + DERIVED + DECORATORS + AFFINITY,
+            ["5", "8", "9"],
+        ),
+        # Also from a copy of the definition's line that differs from it.
+        (
+            "edit",
+            _edit(COPY, DERIVED + COPY),
+            "class Binder:\n" + DERIVED + DECORATORS + AFFINITY,
+            ["5", "8", "9"],
+        ),
+        # Decorators the added lines end with stay directly on the definition.
+        (
+            "edit",
+            _edit(SIGNATURE, DERIVED + "    @traced\n" + SIGNATURE),
+            "class Binder:\n" + DERIVED + DECORATORS + "    @traced\n" + AFFINITY,
+            ["5", "8", "10"],
+        ),
+        # Lines that only add a decorator stay where they were written.
+        (
+            "edit",
+            _edit(SIGNATURE, "    @traced\n" + SIGNATURE),
+            "class Binder:\n" + DECORATORS + "    @traced\n" + AFFINITY,
+            None,
+        ),
+    ],
+)
+async def test_lines_added_before_a_decorated_definition_keep_its_decorators(
+    tmp_path, name, arguments, expected, note
+):
+    (tmp_path / "a.py").write_text("class Binder:\n" + DECORATORS + AFFINITY, encoding="utf-8")
+
+    result = await call(tmp_path, arguments, name=name)
+
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == expected
+    notes = [line for line in text(result).split("\n") if line.startswith("Note:")]
+    # The last note names where the decorators and their definition are now.
+    assert (re.findall(r"\d+", notes[-1]) if note else notes) == (note or [])
 
 
 @pytest.mark.parametrize(
