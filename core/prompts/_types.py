@@ -36,6 +36,8 @@ CORE_TOOLS_LIST_BLOCK_ID = "core:tools_list"
 CORE_SUBAGENT_ROLE_BLOCK_ID = "core:subagent_role"
 
 CORE_CHANNELS_BLOCK_ID = "core:channels"
+# The producer that lists the Agent's enabled Channels in ``core:channels``.
+CHANNEL_LIST_PRODUCER = "channel_list"
 
 CORE_SKILLS_BLOCK_ID = "core:skills"
 

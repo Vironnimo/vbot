@@ -30,7 +30,11 @@ ALL_FIELDS = {
 }
 
 
-def test_profile_offers_the_agents_enabled_channels(tmp_path: Path) -> None:
+def test_profile_offers_the_fields_of_the_agents_platforms_without_naming_channels(
+    tmp_path: Path,
+) -> None:
+    # The System Prompt lists the Agent's Channels; the definition stays the same
+    # while they change on the same platforms.
     tool = channel_send(
         tmp_path,
         make_channel_config(channel_id="tg-main"),
@@ -43,9 +47,8 @@ def test_profile_offers_the_agents_enabled_channels(tmp_path: Path) -> None:
 
     assert definition is not None
     assert definition == tool.definition()
-    assert definition["description"] == (
-        f"{CHANNEL_SEND_TOOL_DESCRIPTION} Channels: dc-team (Discord), tg-main (Telegram)."
-    )
+    assert definition["description"] == CHANNEL_SEND_TOOL_DESCRIPTION
+    assert "tg-main" not in str(definition) and "dc-team" not in str(definition)
     assert "final reply already reaches the chat you are answering" in definition["description"]
     parameters = definition["parameters"]
     # One Channel is enough to know where to send; the Tool asks when there are several.
@@ -53,7 +56,7 @@ def test_profile_offers_the_agents_enabled_channels(tmp_path: Path) -> None:
     assert "additionalProperties" not in str(parameters)
     properties = parameters["properties"]
     assert set(properties) == ALL_FIELDS
-    assert properties["channel_id"]["enum"] == ["dc-team", "tg-main"]
+    assert "enum" not in properties["channel_id"]
     button_fields = properties["buttons"]["items"]["items"]["properties"]
     assert all(field["description"] for field in [*properties.values(), *button_fields.values()])
 
@@ -111,8 +114,8 @@ def test_channel_ids_are_never_matched_loosely(tmp_path: Path, requested: str) -
     envelope = tool.call({"channel_id": requested, "message": "Hi", "platform_target": "123"})
 
     assert refused(envelope) == (
-        f'channel_send was not run: "channel_id" must be one of "tg-team-a"; '
-        f'received "{requested}".'
+        f'channel_send was not run: you have no Channel "{requested}"; your Channels are '
+        'tg-team-a (Telegram): {"channel_id":"tg-team-a","platform_target":"123","message":"Hi"}'
     )
     assert tool.sent() == []
 

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import hashlib
-import json
 import re
 from collections.abc import Awaitable
 from dataclasses import dataclass
@@ -254,40 +252,25 @@ def _platform_name(platform: str) -> str:
     return _PLATFORM_NAMES.get(platform, platform.title())
 
 
-def _channel_send_profile_parameters(configs: list[ChannelConfig]) -> JsonObject:
-    canonical_properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
+def _channel_send_definition_profile(platforms: list[str]) -> ToolDefinitionProfile:
+    """The definition for an Agent whose Channels run on *platforms*: their fields only.
+
+    The Channels themselves are listed in the System Prompt, not here.
+    """
     visible_fields = {
         field_name
-        for config in configs
-        for field_name in _CHANNEL_PROFILE_FIELDS.get(config.platform, ())
+        for platform in platforms
+        for field_name in _CHANNEL_PROFILE_FIELDS.get(platform, ())
     }
     properties = {
         name: copy.deepcopy(schema)
-        for name, schema in canonical_properties.items()
+        for name, schema in CHANNEL_SEND_TOOL_PARAMETERS["properties"].items()
         if name in visible_fields
     }
-    properties["channel_id"]["enum"] = sorted(config.id for config in configs)
-    return {"type": "object", "properties": properties}
-
-
-def _channel_send_profile_description(configs: list[ChannelConfig]) -> str:
-    available = ", ".join(
-        f"{config.id} ({_platform_name(config.platform)})"
-        for config in sorted(configs, key=lambda item: (item.platform, item.id))
-    )
-    return f"{CHANNEL_SEND_TOOL_DESCRIPTION} Channels: {available}."
-
-
-def _channel_send_definition_profile(configs: list[ChannelConfig]) -> ToolDefinitionProfile:
-    signature = json.dumps(
-        [(config.platform, config.id) for config in configs],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
     return ToolDefinitionProfile(
-        key=f"channels:{hashlib.sha256(signature).hexdigest()}",
-        description=_channel_send_profile_description(configs),
-        parameters=_channel_send_profile_parameters(configs),
+        key=f"platforms:{','.join(platforms)}",
+        description=CHANNEL_SEND_TOOL_DESCRIPTION,
+        parameters={"type": "object", "properties": properties},
     )
 
 
@@ -309,7 +292,7 @@ def _channel_send_profile_resolver(channel_service: ChannelService):
         configs = _owned_channels(channel_service, context.agent_id)
         if not configs:
             return None
-        return _channel_send_definition_profile(configs)
+        return _channel_send_definition_profile(sorted({config.platform for config in configs}))
 
     return resolve
 
@@ -366,8 +349,10 @@ def register_channel_send_tool(
         result_schema={"type": "object"},
         display=ToolDisplay(parts_builder=_channel_send_display_parts),
         definition_profile_resolver=_channel_send_profile_resolver(channel_service),
-        # The description lists the Agent's Channels, so a Session hears of a new one.
-        announce_changes=["description"],
+        # A Channel on another platform brings that platform's fields, such as
+        # buttons for Telegram; the Channel itself is announced by the System Prompt's
+        # channel list.
+        announce_changes=["parameters"],
     )
 
 
@@ -564,11 +549,7 @@ def _resolve_channel(
     channel_service: ChannelService, agent_id: str, arguments: JsonObject
 ) -> tuple[ChannelConfig, str | None, str | None]:
     """Return the Channel a call names, with the chat and thread a ``target`` carries."""
-    configs = channel_service.list_channels()
-    owned = sorted(
-        (config for config in configs if config.enabled and config.agent_id == agent_id),
-        key=lambda config: (config.platform, config.id),
-    )
+    owned = _owned_channels(channel_service, agent_id)
     chat: str | None = None
     thread: str | None = None
     references: list[str] = []
@@ -583,7 +564,7 @@ def _resolve_channel(
     resolved: list[ChannelConfig] = []
     explicit = arguments.get("channel_id")
     if isinstance(explicit, str):
-        resolved.append(_channel_config_for_agent(configs, explicit, agent_id))
+        resolved.append(_owned_channel(owned, explicit, arguments, agent_id))
     resolved.extend(_channel_by_reference(owned, item, arguments) for item in references)
     distinct = list({config.id: config for config in resolved}.values())
     if len(distinct) > 1:
@@ -632,6 +613,27 @@ def _split_target(
     return head, parts[1], parts[2] if len(parts) == 3 and parts[2] else None
 
 
+def _owned_channel(
+    owned: list[ChannelConfig], channel_id: str, arguments: JsonObject, agent_id: str
+) -> ChannelConfig:
+    """The Agent's enabled Channel with exactly this id; ids are never matched loosely."""
+    for config in owned:
+        if config.id == channel_id:
+            return config
+    if not owned:
+        raise ChannelNotFoundError(f"Agent {agent_id} has no enabled Channel to send through.")
+    raise ChannelSendRefusedError(
+        choice(
+            f'you have no Channel "{channel_id}"; your Channels are {_channel_listing(owned)}:',
+            [_call_for(arguments, config, None, None) for config in owned],
+        )
+    )
+
+
+def _channel_listing(owned: list[ChannelConfig]) -> str:
+    return ", ".join(f"{config.id} ({_platform_name(config.platform)})" for config in owned)
+
+
 def _channel_by_reference(
     owned: list[ChannelConfig], reference: str, arguments: JsonObject
 ) -> ChannelConfig:
@@ -643,7 +645,6 @@ def _channel_by_reference(
     matches = [config for config in owned if config.platform == platform]
     if len(matches) == 1:
         return matches[0]
-    listing = ", ".join(f"{config.id} ({_platform_name(config.platform)})" for config in owned)
     if matches:
         raise ChannelSendRefusedError(
             choice(
@@ -658,7 +659,7 @@ def _channel_by_reference(
     )
     raise ChannelSendRefusedError(
         choice(
-            f"you have {what}; your Channels are {listing}:",
+            f"you have {what}; your Channels are {_channel_listing(owned)}:",
             [_call_for(arguments, config, None, None) for config in owned],
         )
     )
@@ -911,22 +912,6 @@ def _send_target_from_session_metadata(
     thread_id_value = last_reply_target.get("thread_id")
     thread_id = optional_string(thread_id_value, field_name="last_reply_target.thread_id")
     return platform_target, thread_id
-
-
-def _channel_config_for_agent(
-    configs: list[ChannelConfig],
-    channel_id: str,
-    agent_id: str,
-) -> ChannelConfig:
-    for config in configs:
-        if config.id != channel_id:
-            continue
-        if config.agent_id != agent_id:
-            raise ChannelConfigError(
-                f"Channel {channel_id} belongs to agent {config.agent_id}, not {agent_id}"
-            )
-        return config
-    raise ChannelNotFoundError(f"Channel not found: {channel_id}")
 
 
 def _platform_target_from_channel_config(channel_config: ChannelConfig) -> str | None:

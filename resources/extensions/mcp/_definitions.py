@@ -21,9 +21,9 @@ SETTINGS_LOCATION = "Settings -> Integrations -> Extensions -> MCP connections"
 MCP_GUIDANCE = (
     "## MCP connections\n\n"
     "Each Tool named mcp_<id> connects to one MCP server, an external application or "
-    "service. Its description names the application and lists its tools. To use one of "
-    "those tools, call describe with the tool's name as target to get its arguments "
-    "schema, then call call with the same target and the arguments. Search without a "
+    "service. Its description names the application; its target parameter lists its tools. "
+    "To use one of those tools, call describe with the tool's name as target to get its "
+    "arguments schema, then call call with the same target and the arguments. Search without a "
     "query shows the server's guidance, resources and prompts; search with a query finds "
     "items by name and description. For a task without a dedicated tool, check "
     "general-purpose tools, for example one that runs code. A long result shows its "
@@ -32,20 +32,23 @@ MCP_GUIDANCE = (
 )
 
 # The connection Tool's description:
-# "MCP connection <id>[: <about>]. <usage> <tools>", where <about> is the user's
-# description of the connection or the server's title, and <tools> lists the remote
-# Tool names in server order (``_catalog.connection_description``).
+# "MCP connection <id>[: <about>]. <usage>", where <about> is the user's description
+# of the connection or the server's title (``_catalog.connection_description``).
 MCP_DESCRIPTION_USAGE = "Describe a tool for its arguments schema, then call it."
-MCP_DESCRIPTION_TOOLS = "Tools: {names}"
-MCP_DESCRIPTION_NO_TOOLS = "No tools reported yet; search lists them."
+# The connection's remote Tool names, in server order, end the description of its
+# ``target`` parameter (``_catalog.connection_parameters``): only a change of them
+# is announced to a Session, not one of the title or the user's description.
+MCP_TARGET_TOOLS = "Tools: {names}"
+MCP_TARGET_NO_TOOLS = "No tools reported yet; search lists them."
 MCP_MORE_NAMES = "... and {count} more"
-MCP_DESCRIPTION_MORE_TOOLS = MCP_MORE_NAMES + "; search lists all."
-# Characters of the server title and of the Tool name list the description shows.
+MCP_TARGET_MORE_TOOLS = MCP_MORE_NAMES + "; search lists all."
+# Characters of the server title the description shows.
 DESCRIPTION_TITLE_CHARACTERS = 80
 # Characters of the summary that lists the connection Tool while it is loaded on
 # demand; the Tool registry's limit for summaries.
 SUMMARY_CHARACTERS = 200
-DESCRIPTION_TOOLS_CHARACTERS = 3000
+# Characters of the Tool name list ``target`` shows.
+TARGET_TOOLS_CHARACTERS = 3000
 
 
 MCP_OPERATIONS = (

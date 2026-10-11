@@ -90,14 +90,14 @@ def test_pin_and_note_payloads_round_trip_with_their_entry_order() -> None:
             "instead:\n\n## Things\n\nWait 7 minutes.\n- a",
         ),
         (
-            RenderedBlock("## Shell\n\nKeys: A"),
-            RenderedBlock(""),
-            'The "Shell" section of your System Prompt no longer applies.',
+            _catalog(("a", "- a"), frame="## Things"),
+            RenderedBlock("", BlockCatalog(title="Things", entries=(), frame="## Things")),
+            'The "Things" section of your System Prompt no longer applies.',
         ),
         (
-            RenderedBlock(""),
-            RenderedBlock("## Shell\n\nKeys: A"),
-            "This section now applies in addition to your System Prompt:\n\n## Shell\n\nKeys: A",
+            RenderedBlock("", BlockCatalog(title="Things", entries=(), frame="## Things")),
+            _catalog(("a", "- a"), frame="## Things"),
+            "This section now applies in addition to your System Prompt:\n\n## Things\n- a",
         ),
         (
             RenderedBlock("x" * 100),

@@ -1,15 +1,17 @@
-"""What the connection Tool's description shows of each connection's catalog.
+"""What the connection Tool's definition shows of each connection's catalog.
 
-The description of ``mcp_<id>`` names the application and lists the names of its
-remote Tools. A catalog summary (server title and Tool names in server order) is
-kept per connection, in memory and in the Extension database ``catalog``, so a
-restart or reconnect publishes the same names before the server answers. Only a
-new catalog changes a summary; removing the connection drops it.
+The description of ``mcp_<id>`` names the application; its ``target`` parameter
+lists the names of its remote Tools. A catalog summary (server title and Tool
+names in server order) is kept per connection, in memory and in the Extension
+database ``catalog``, so a restart or reconnect publishes the same names before
+the server answers. Only a new catalog changes a summary; removing the connection
+drops it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import sqlite3
@@ -24,12 +26,13 @@ from core.utils.timestamps import utc_now_timestamp
 
 from ._definitions import (
     DESCRIPTION_TITLE_CHARACTERS,
-    DESCRIPTION_TOOLS_CHARACTERS,
-    MCP_DESCRIPTION_MORE_TOOLS,
-    MCP_DESCRIPTION_NO_TOOLS,
-    MCP_DESCRIPTION_TOOLS,
     MCP_DESCRIPTION_USAGE,
+    MCP_PARAMETERS,
+    MCP_TARGET_MORE_TOOLS,
+    MCP_TARGET_NO_TOOLS,
+    MCP_TARGET_TOOLS,
     SUMMARY_CHARACTERS,
+    TARGET_TOOLS_CHARACTERS,
 )
 
 CATALOG_DATABASE = "catalog"
@@ -66,23 +69,30 @@ def catalog_summary(catalog: dict[str, Any]) -> CatalogSummary:
     return CatalogSummary(title, tuple(str(tool["name"]) for tool in catalog.get("tools", [])))
 
 
-def connection_description(connection: str, about: str, tools: Sequence[str]) -> str:
+def connection_description(connection: str, about: str) -> str:
     """Render the connection Tool's description.
 
     *about* is the user's description of the connection, else the server's title;
-    empty leaves it out. *tools* are the remote Tool names in server order.
+    empty leaves it out.
     """
-    heading = _heading(connection, about)
+    return f"{_heading(connection, about)} {MCP_DESCRIPTION_USAGE}"
+
+
+def connection_parameters(tools: Sequence[str]) -> dict[str, Any]:
+    """Render the connection Tool's parameters: ``target`` lists *tools* in server order."""
     if not tools:
-        listing = MCP_DESCRIPTION_NO_TOOLS
+        listing = MCP_TARGET_NO_TOOLS
     else:
-        shown, hidden = _shown(tools, DESCRIPTION_TOOLS_CHARACTERS)
+        shown, hidden = _shown(tools, TARGET_TOOLS_CHARACTERS)
         names = ", ".join(shown)
         if hidden:
-            more = MCP_DESCRIPTION_MORE_TOOLS.format(count=hidden)
+            more = MCP_TARGET_MORE_TOOLS.format(count=hidden)
             names = f"{names}, {more}" if names else more
-        listing = MCP_DESCRIPTION_TOOLS.format(names=names)
-    return f"{heading} {MCP_DESCRIPTION_USAGE} {listing}"
+        listing = MCP_TARGET_TOOLS.format(names=names)
+    parameters = copy.deepcopy(MCP_PARAMETERS)
+    target = parameters["properties"]["target"]
+    target["description"] = f"{target['description']} {listing}"
+    return parameters
 
 
 def connection_summary(connection: str, about: str) -> str:
@@ -161,9 +171,13 @@ class CatalogSummaries:
     def description(self, connection: str, about: str | None) -> str:
         """The connection Tool's description; *about* is the user's description."""
         summary = self._summaries.get(connection)
-        tools = summary.tools if summary is not None else ()
         title = summary.title if summary is not None else ""
-        return connection_description(connection, about or title, tools)
+        return connection_description(connection, about or title)
+
+    def parameters(self, connection: str) -> dict[str, Any]:
+        """The connection Tool's parameters, listing its last known Tool names."""
+        summary = self._summaries.get(connection)
+        return connection_parameters(summary.tools if summary is not None else ())
 
     def summary(self, connection: str, about: str | None) -> str:
         """The connection Tool's summary; *about* is the user's description."""

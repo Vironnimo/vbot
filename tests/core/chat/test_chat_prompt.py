@@ -359,12 +359,13 @@ async def test_system_prompt_describes_the_pinned_tools_for_the_whole_epoch(
 async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     tmp_path: Path,
 ) -> None:
-    # The registered Projects and the Sub-Agent targets render once per prompt epoch.
-    # A Project or target added mid-epoch leaves the System Prompt byte-identical and
-    # reaches the Model at the next Run's start as one System Reminder; a Run after
-    # that announces nothing new.
+    # The registered Projects, the Sub-Agent targets and the Agent's Channels render
+    # once per prompt epoch. One of each added mid-epoch leaves the System Prompt
+    # byte-identical and reaches the Model at the next Run's start as one System
+    # Reminder; a Run after that announces nothing new.
     from types import SimpleNamespace
 
+    from core.channels import ChannelConfig
     from core.projects import ProjectStore
     from core.sessions import is_prompt_block_change_note
     from core.subagents import SubAgentPromptTarget
@@ -399,12 +400,26 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
         prompt_blocks,
     )
     agent = _agent(tmp_path / "workspace")
+
+    def channel(channel_id: str, chat_ids: list[str]) -> ChannelConfig:
+        return ChannelConfig(
+            id=channel_id,
+            platform="telegram",
+            agent_id=agent.id,
+            allowed_chat_ids=chat_ids,
+            token_env_var="TELEGRAM_BOT_TOKEN",
+        )
+
+    channels = [channel("tg-private", ["111"])]
     adapter = StubAdapter([{"content": text, "tool_calls": None} for text in ("1", "2", "3")])
     runtime: Any = StubRuntime(
         data_dir=tmp_path, agent=cast(Any, agent), adapter=adapter, tools=tools
     )
     runtime.system_prompts = _manager(
-        tmp_path, tools=tools, block_definitions=prompt_blocks.block_definitions()
+        tmp_path,
+        tools=tools,
+        channels=cast(Any, SimpleNamespace(list_channels=lambda: list(channels))),
+        block_definitions=prompt_blocks.block_definitions(),
     )
     runtime.chat_sessions.create(agent.id, session_id="s1")
     loop = build_chat_loop(runtime)
@@ -412,20 +427,25 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     await loop.send(agent.id, "First", session_id="s1")
     projects.create("web", "Web", tmp_path / "web")
     targets.append(SubAgentPromptTarget(agent_id="writer", name="Writer", description="Drafts."))
+    channels.append(channel("tg-group", ["111", "222"]))
     await loop.send(agent.id, "Second", session_id="s1")
     await loop.send(agent.id, "Third", session_id="s1")
 
     systems = [_system_message(adapter, request) for request in range(3)]
     assert systems[0] == systems[1] == systems[2]
     assert '<project id="vbot"' in systems[0] and "`reviewer`" in systems[0]
+    assert "- tg-private: telegram" in systems[0]
     assert '<project id="web"' not in systems[0] and "`writer`" not in systems[0]
+    assert "tg-group" not in systems[0]
     web_path = model_path((tmp_path / "web").resolve())
     web = f'<project id="web" name="Web" project_path="{web_path}" />'
     announcement = (
         "Registered Projects changed since your System Prompt listed them.\n"
         f"Added:\n{web}\n\n"
         "The Agent ids under Sub-Agents changed since your System Prompt listed them.\n"
-        "Added:\n- `writer` — Writer — Drafts."
+        "Added:\n- `writer` — Writer — Drafts.\n\n"
+        "Your configured channels changed since your System Prompt listed them.\n"
+        "Added:\n- tg-group: telegram (explicit target required)"
     )
     notes = [
         message
