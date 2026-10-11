@@ -29,7 +29,9 @@ from core.compaction.compaction import (
     carry_notes_into_checkpoint,
 )
 from core.sessions import (
+    EFFORT_CHANGE_NOTE_PREFIX,
     PROMPT_BLOCK_CHANGE_NOTE_PREFIX,
+    is_effort_change_note,
     is_prompt_block_change_note,
     is_tool_change_note,
 )
@@ -314,10 +316,11 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
 
 @pytest.mark.asyncio
 async def test_compaction_drops_the_change_notes_of_the_ending_epoch() -> None:
-    # The next prompt epoch pins every Tool and prompt block these notes announced.
+    # The next prompt epoch pins every Tool, prompt block and effort these notes announced.
     note = ChatMessage.note(ToolChange("removed", "probe", "epoch-1").note_content())
     block_note = ChatMessage.note(PROMPT_BLOCK_CHANGE_NOTE_PREFIX + "{}")
-    history = [user("u1", "First task"), note, block_note, assistant("a1", "Done")]
+    effort_note = ChatMessage.note(EFFORT_CHANGE_NOTE_PREFIX + "{}")
+    history = [user("u1", "First task"), note, block_note, effort_note, assistant("a1", "Done")]
 
     history.append(
         await compact(
@@ -330,7 +333,10 @@ async def test_compaction_drops_the_change_notes_of_the_ending_epoch() -> None:
     effective = effective_compaction_messages(history)
     assert [item.id for item in effective if item.role != "note"] == ["u1", "a1"]
     assert not any(
-        is_tool_change_note(item) or is_prompt_block_change_note(item) for item in effective
+        is_tool_change_note(item)
+        or is_prompt_block_change_note(item)
+        or is_effort_change_note(item)
+        for item in effective
     )
 
 
@@ -359,6 +365,11 @@ def _plain_note(note_id: str) -> ChatMessage:
             [ChatMessage.note(PROMPT_BLOCK_CHANGE_NOTE_PREFIX + "{}")],
             None,
             id="prompt-block-change-note",
+        ),
+        pytest.param(
+            [ChatMessage.note(EFFORT_CHANGE_NOTE_PREFIX + "{}")],
+            None,
+            id="effort-change-note",
         ),
         pytest.param(
             [message("n3", "note", f"{COMPACTION_SKILL_NOTE_PREFIX}[]")],

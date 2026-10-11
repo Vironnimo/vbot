@@ -45,11 +45,12 @@ _MAX_LIST_ENTRIES = 16
 
 Clock = Callable[[], datetime]
 # A rejection's identity within one target: ("parameter" | "exclusive" | "effort", name),
-# or _OFF_IGNORED; an exclusive group's name joins its parameters with ``+`` in the
-# order kept first.
+# _OFF_IGNORED or _EFFORT_UPDATES_REJECTED; an exclusive group's name joins its
+# parameters with ``+`` in the order kept first.
 _Rejection = tuple[str, str]
 _RejectionTimes = dict[str, dict[_Rejection, datetime]]
 _OFF_IGNORED: _Rejection = ("off", "ignored")
+_EFFORT_UPDATES_REJECTED: _Rejection = ("effort_updates", "rejected")
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,8 @@ class ObservedFacts:
     reasoning_returned: bool = False
     off_ignored: bool = False
     """The Model reasoned although the request turned reasoning off."""
+    effort_updates_rejected: bool = False
+    """The wire rejected a mid-conversation effort update for this Model."""
 
     def is_empty(self) -> bool:
         return self == _NO_FACTS
@@ -86,6 +89,8 @@ class ObservedFacts:
             )
         if rejection == _OFF_IGNORED:
             return replace(self, off_ignored=False)
+        if rejection == _EFFORT_UPDATES_REJECTED:
+            return replace(self, effort_updates_rejected=False)
         return replace(
             self, rejected_efforts=tuple(item for item in self.rejected_efforts if item != name)
         )
@@ -246,6 +251,20 @@ class WireObservations:
             rejection=_OFF_IGNORED,
         )
 
+    def record_effort_updates_rejected(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> None:
+        """The wire rejected a mid-conversation effort update for the Model."""
+
+        self._update(
+            provider_id,
+            connection_id,
+            model_id,
+            lambda facts: replace(facts, effort_updates_rejected=True),
+            "the wire rejects effort updates; an effort change sets the request effort",
+            rejection=_EFFORT_UPDATES_REJECTED,
+        )
+
     def forget(
         self,
         provider_id: str,
@@ -352,6 +371,7 @@ class WireObservations:
                     | {("exclusive", name) for name in updated.exclusive_parameters}
                     | {("effort", name) for name in updated.rejected_efforts}
                     | ({_OFF_IGNORED} if updated.off_ignored else set())
+                    | ({_EFFORT_UPDATES_REJECTED} if updated.effort_updates_rejected else set())
                 )
                 for evicted in [item for item in times if item not in kept]:
                     del times[evicted]
@@ -443,6 +463,8 @@ def _document(facts: Mapping[str, ObservedFacts], learned_at: _RejectionTimes) -
             entry["reasoning_returned"] = True
         if item.off_ignored:
             entry["off_ignored"] = _stamp(times.get(_OFF_IGNORED))
+        if item.effort_updates_rejected:
+            entry["effort_updates_rejected"] = _stamp(times.get(_EFFORT_UPDATES_REJECTED))
         if entry:
             targets[key] = entry
     return {"format_version": OBSERVATIONS_FORMAT_VERSION, "targets": targets}
@@ -481,10 +503,8 @@ def _read(
             if len(name.split(EXCLUSIVE_GROUP_SEPARATOR)) >= 2
         }
         efforts = _rejections(entry.get("rejected_efforts"), now)
-        stamp = entry.get("off_ignored")
-        off_ignored = _rejections({"ignored": stamp}, now).get("ignored")
-        if stamp in (None, False):
-            off_ignored = None
+        off_ignored = _flag(entry.get("off_ignored"), now)
+        effort_updates_rejected = _flag(entry.get("effort_updates_rejected"), now)
         times: dict[_Rejection, datetime] = {
             ("parameter", name): at for name, at in parameters.items()
         }
@@ -492,6 +512,8 @@ def _read(
         times.update({("effort", name): at for name, at in efforts.items()})
         if off_ignored is not None:
             times[_OFF_IGNORED] = off_ignored
+        if effort_updates_rejected is not None:
+            times[_EFFORT_UPDATES_REJECTED] = effort_updates_rejected
         if times:
             learned_at[key] = times
         facts[key] = ObservedFacts(
@@ -501,8 +523,17 @@ def _read(
             rejected_efforts=tuple(efforts),
             reasoning_returned=entry.get("reasoning_returned") is True,
             off_ignored=off_ignored is not None,
+            effort_updates_rejected=effort_updates_rejected is not None,
         )
     return facts, learned_at
+
+
+def _flag(stamp: Any, now: datetime) -> datetime | None:
+    """Read a learned flag's time; ``None`` when the flag is unset or expired."""
+
+    if stamp in (None, False):
+        return None
+    return _rejections({"flag": stamp}, now).get("flag")
 
 
 def _rejections(value: Any, now: datetime) -> dict[str, datetime]:

@@ -4,7 +4,8 @@ A Model that vBot has not verified can reject an optional request parameter
 (``temperature`` on a reasoning Model), a combination of them (``temperature``
 together with ``top_p``), a reasoning effort value (``minimal``
 where only ``low`` exists) or the explicit off switch of its reasoning dialect
-(``thinking: {type: disabled}`` on an always-thinking Model). Instead of failing
+(``thinking: {type: disabled}`` on an always-thinking Model) or a mid-conversation
+effort update (``core.providers.effort_updates``). Instead of failing
 every later request the same way, the codec records the rejection as a learned
 wire fact, rebuilds the request from the updated wire profile and retries.
 Learned facts feed the profile below every explicit Model entry, so later
@@ -115,14 +116,21 @@ _INLINE_REASONING_WATCH_CHARACTERS = 64 * 1024
 Models put it at the start, so a longer answer is no longer checked."""
 
 
+_EFFORT_UPDATE_REJECTION = re.compile(
+    r"messages\.\d+\.output_config|per-turn effort|configuration_update"
+)
+"""A rejection of an effort update names its carrier: a per-message Messages
+``output_config`` or a Responses ``configuration_update`` item."""
+
+
 @dataclass(frozen=True)
 class _Lesson:
     """One rejection attributed to what the request carried."""
 
-    kind: Literal["parameter", "exclusive", "effort"]
+    kind: Literal["parameter", "exclusive", "effort", "effort_updates"]
     rejected: tuple[str, ...]
     """The sampling parameter, the combined parameters (the one to keep first),
-    or the effort value (``none`` for the off switch)."""
+    the effort value (``none`` for the off switch), or nothing (effort updates)."""
     description: str
 
 
@@ -151,7 +159,9 @@ async def execute_learning_from_rejections[T](
       ladder (an explicit ``none`` outside the ladder becomes an omitted off);
     - the dialect's explicit off switch (``thinking: {type: disabled}``), named
       with its value next to a rejection marker, is recorded as a rejected
-      ``none`` effort, which turns the off render into omission.
+      ``none`` effort, which turns the off render into omission;
+    - an effort update the payload carries, named by its carrier, turns effort
+      updates off for the Model, so the request sends the effort now in effect.
 
     Parameters rejected or combined during this request stay removed even when
     an explicit Model entry keeps sending them. Every other error (auth, retryable, a
@@ -178,6 +188,8 @@ async def execute_learning_from_rejections[T](
             elif lesson.kind == "exclusive":
                 wire.observe_exclusive_parameters(model_id, lesson.rejected)
                 exclusive_groups.append(lesson.rejected)
+            elif lesson.kind == "effort_updates":
+                wire.observe_effort_updates_rejected(model_id)
             else:
                 wire.observe_rejected_effort(model_id, lesson.rejected[0])
             revised = await revise_request(
@@ -308,6 +320,8 @@ def _learn(detail: str, payload: Mapping[str, Any], profile: WireProfile) -> _Le
         return _Lesson("exclusive", named, f"parameters {listed} combined")
     if named and any(marker in lowered for marker in _PARAMETER_REJECTION_MARKERS):
         return _Lesson("parameter", named[:1], f"parameter {named[0]!r}")
+    if _EFFORT_UPDATE_REJECTION.search(lowered) and _carries_effort_update(payload):
+        return _Lesson("effort_updates", (), "effort updates")
     carriers = dialect_carriers(profile.reasoning.dialect)
     # Only a rejection that names the value this request sent is attributable;
     # anything vaguer must not teach every later request a narrower wire.
@@ -322,6 +336,20 @@ def _learn(detail: str, payload: Mapping[str, Any], profile: WireProfile) -> _Le
         switch = ".".join(carriers.off_switch)
         return _Lesson("effort", ("none",), f"reasoning off switch {switch}={carriers.off_value!r}")
     return None
+
+
+def _carries_effort_update(payload: Mapping[str, Any]) -> bool:
+    """Whether ``payload`` switches the effort mid-conversation."""
+
+    messages = payload.get("messages")
+    if isinstance(messages, list) and any(
+        isinstance(message, Mapping) and "output_config" in message for message in messages
+    ):
+        return True
+    items = payload.get("input")
+    return isinstance(items, list) and any(
+        isinstance(item, Mapping) and item.get("type") == "configuration_update" for item in items
+    )
 
 
 def _requests_off(payload: Mapping[str, Any], profile: WireProfile) -> bool:

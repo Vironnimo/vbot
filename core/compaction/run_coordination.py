@@ -304,6 +304,7 @@ class CompactionRunCoordinator:
                     active_model_id=request.active_model_id,
                     active_tools=request.request_state.tools,
                     active_thinking_effort=agent.thinking_effort,
+                    active_effort=request.request_state.effort,
                     estimate_factor=accounting.factor(request.active_target),
                     summary_model_reference=f"{request.summary_provider_id}/{request.summary_model_id}",
                     active_model_reference=f"{request.active_provider_id}/{request.active_model_id}",
@@ -565,6 +566,7 @@ class CompactionRunCoordinator:
                     active_model_id=target.model_id,
                     active_tools=tools,
                     active_thinking_effort=agent.thinking_effort,
+                    active_effort=current_state.effort,
                     minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
                     estimate_factor=accounting.factor(target),
                 )

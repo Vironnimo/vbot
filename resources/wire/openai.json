@@ -31,6 +31,13 @@
       "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
     }
   },
+  "rules": [
+    {
+      "when": {"ids": ["gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"], "connections": ["api-key"]},
+      "set": {"reasoning": {"effort_updates": true}},
+      "note": "Public Responses GPT-6 Models (not pro) take a configuration_update input item that switches the effort mid-conversation, so an effort change keeps the prompt cache. Documented, not verified live; a rejection is learned and turns the updates off."
+    }
+  ],
   "models": {
     "gpt-5.2": {
       "connections": {"api-key": {"protocol": "responses"}}

@@ -43,7 +43,11 @@ from core.chat.streaming import (
     decide_stream_recovery,
     iter_with_chunk_timeout,
 )
-from core.chat.wire_shaping import _assistant_message_from_response, model_facing_request
+from core.chat.wire_shaping import (
+    _assistant_message_from_response,
+    model_facing_request,
+    route_effort,
+)
 from core.performance import record_span, session_track
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
@@ -68,6 +72,7 @@ from core.utils.logging import get_logger
 from core.utils.retry import RetryNotice, caller_owns_retries
 
 if TYPE_CHECKING:
+    from core.chat._effort_epoch import EffortState
     from core.chat._stream_draft import StreamDraft
     from core.runs import Run
 
@@ -280,6 +285,7 @@ class WireRequestRunner:
         recovery: RecoveryBudget | None = None,
         message_id: str | None = None,
         on_tool_calls: ToolCallSink | None = None,
+        effort: EffortState | None = None,
     ) -> _AssistantStep:
         """Send one Model step; its Assistant messages name ``public_model``.
 
@@ -290,15 +296,18 @@ class WireRequestRunner:
         order; calls that arrive only with the end of the response are not
         passed. Once a call was passed, the stream is never replayed: a break
         keeps the output so far with exactly the passed calls (see
-        :data:`TOOL_CALLS_STREAM_RECOVERY_NOTE`).
+        :data:`TOOL_CALLS_STREAM_RECOVERY_NOTE`). ``effort`` is the Session's
+        thinking effort state; without it the request uses the Agent's effort.
         """
+        messages, effort_kwargs = route_effort(
+            effort, messages, adapter=adapter, model_id=model_id, fallback=agent.thinking_effort
+        )
         # The projection reads every request text, so it stays off the Event Loop.
         messages, tools = await _CHAT_TRANSFORM_WORKERS.run(model_facing_request, messages, tools)
-        request_context = _resolve_request_context_kwargs(
-            adapter,
-            run,
-            prompt_cache_affinity_id,
-        )
+        request_context = {
+            **_resolve_request_context_kwargs(adapter, run, prompt_cache_affinity_id),
+            **effort_kwargs,
+        }
         # Sampling reaches the wire only when configured; otherwise the
         # Provider's own default applies.
         temperature = agent.temperature
@@ -458,7 +467,6 @@ class WireRequestRunner:
                 model_id=model_id,
                 temperature=temperature,
                 top_p=top_p,
-                thinking_effort=agent.thinking_effort,
                 tools=tools,
                 **request_context,
             )
@@ -625,7 +633,6 @@ class WireRequestRunner:
             model_id=model_id,
             temperature=temperature,
             top_p=top_p,
-            thinking_effort=agent.thinking_effort,
             tools=tools,
             **(request_context or {}),
         )

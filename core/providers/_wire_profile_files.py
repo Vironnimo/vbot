@@ -238,6 +238,7 @@ PROFILE_SCHEMA: dict[str, Any] = {
             "minimum": _positive_int(nullable=False),
             "maximum": _positive_int(),
         },
+        "effort_updates": _bool(),
         "options": _MapOf(_Json()),
     },
     "response": {

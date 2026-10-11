@@ -266,6 +266,7 @@ class SystemPromptManager:
         pinned_blocks: Mapping[str, str] | None = None,
         request_block_definitions: Sequence[BlockDefinition] = (),
         block_details: list[JsonObject] | None = None,
+        thinking_effort: str | None = None,
     ) -> str:
         """Build the complete system prompt for an agent (the block-model path).
 
@@ -327,6 +328,10 @@ class SystemPromptManager:
         emits instead of rendering (Chat passes its prompt epoch's pinned texts,
         see :meth:`render_dynamic_blocks`); the gates still apply, and a dynamic
         block without a pinned text renders live.
+
+        ``thinking_effort`` is the effort the runtime block names (Chat passes its
+        prompt epoch's pinned effort, ``""`` for the provider default); ``None``
+        names the Agent's own (previews).
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
@@ -376,7 +381,7 @@ class SystemPromptManager:
             ),
             override_resolver=self._catalog.override_resolver(prompt_scope),
             producers=producers,
-            replacements=self._runtime_replacements(agent),
+            replacements=self._runtime_replacements(agent, thinking_effort),
             block_details=block_details,
         )
 
@@ -693,14 +698,19 @@ class SystemPromptManager:
             on_read=on_read,
         )
 
-    def _runtime_replacements(self, agent: PromptAgent) -> dict[str, str]:
+    def _runtime_replacements(
+        self, agent: PromptAgent, thinking_effort: str | None = None
+    ) -> dict[str, str]:
         """Return the build-time runtime-variable substitutions.
 
         Applied to every text block by the engine. The shared Runtime and Identity
         Environment resources carry these placeholders; treating them as build-time
         globals keeps replacement behavior uniform across resource-backed text blocks.
+        ``thinking_effort`` replaces the Agent's own effort (see
+        :meth:`build_system_prompt`).
         """
-        thinking_effort = agent.thinking_effort or "provider default"
+        effort = agent.thinking_effort if thinking_effort is None else thinking_effort
+        thinking_effort = effort or "provider default"
         return {
             "{server_hostname}": self._server_hostname or socket.gethostname(),
             "{vbot_version}": self._vbot_version,

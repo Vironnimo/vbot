@@ -440,6 +440,9 @@ class ReasoningWire:
     effort to a wire value; a mapped effort level that a known ladder
     (explicit or catalog levels) lacks snaps onto that ladder, any other mapped
     value is sent as is. ``snap`` breaks ties between equally distant rungs.
+    ``effort_updates`` marks a Model whose wire can switch the effort
+    mid-conversation (``core.providers.effort_updates``); an Adapter whose codec
+    renders no effort updates ignores it.
     """
 
     dialect: ReasoningDialect = "none"
@@ -455,6 +458,7 @@ class ReasoningWire:
     mandatory: bool = False
     budget_max: int | None = None
     budget: BudgetRule = field(default_factory=BudgetRule)
+    effort_updates: bool = False
     options: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
 
     @property

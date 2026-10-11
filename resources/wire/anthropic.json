@@ -30,6 +30,11 @@
       "when": {"ids": ["claude-fable-5", "claude-opus-4-7"]},
       "set": {"reasoning": {"off": "omit"}},
       "note": "These adaptive-only Models reject thinking type disabled, so the Agent effort none sends no thinking field."
+    },
+    {
+      "when": {"ids": ["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"]},
+      "set": {"reasoning": {"effort_updates": true}},
+      "note": "These Models switch the effort mid-conversation with a per-message output_config (beta mid-conversation-output-config-2026-07-01), so an effort change keeps the prompt cache. Live 2026-10-11 on api-key; claude-fable-5, claude-sonnet-5, claude-sonnet-4-6 and claude-opus-4-7 reject it; claude-mythos-5-1 is documented but was not reachable."
     }
   ],
   "models": {

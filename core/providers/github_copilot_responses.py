@@ -47,6 +47,7 @@ from core.providers.adapter import (
     tool_result_content_blocks,
     tool_result_text,
 )
+from core.providers.effort_updates import EFFORT_UPDATE_ROLE
 from core.providers.errors import (
     ProviderError,
 )
@@ -190,6 +191,12 @@ def _messages_to_responses_input(
                     message.get("content", ""),
                     document_media_types=document_media_types,
                 )
+            )
+            continue
+        if role == EFFORT_UPDATE_ROLE:
+            # A planned effort update: the Model reasons at this effort from here on.
+            input_items.append(
+                {"type": "configuration_update", "reasoning": {"effort": message["effort"]}}
             )
     return input_items
 

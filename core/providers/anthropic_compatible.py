@@ -77,11 +77,13 @@ from core.providers._wire_learning import (
     stream_learning_from_rejections,
 )
 from core.providers.adapter import (
+    JsonObject,
     ModelLookup,
     ProviderAdapter,
     normalize_tool_call_ids,
     resolve_request_input_budget,
 )
+from core.providers.effort_updates import apply_effort_updates, effort_levels, is_effort_update
 from core.providers.errors import NetworkError
 from core.providers.providers import (
     AuthConfig,
@@ -103,6 +105,13 @@ from core.utils.tokens import estimate_structured_tokens
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+
+ANTHROPIC_BETA_HEADER = "anthropic-beta"
+EFFORT_UPDATES_BETA = "mid-conversation-output-config-2026-07-01"
+"""The beta that admits a per-message ``output_config`` (an effort update)."""
+
+# Adaptive thinking without ``output_config``: no update can switch to or from it.
+_ANTHROPIC_MINIMAL_EFFORT = "minimal"
 
 __all__ = [
     "ANTHROPIC_ERROR_STOP_REASONS",
@@ -246,6 +255,34 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         return normalized
 
     @override
+    def effort_updates(self, model_id: str) -> bool:
+        """Whether the Model switches its effort with a per-message ``output_config``."""
+        reasoning = self.wire_profile(model_id).reasoning
+        return reasoning.effort_updates and reasoning.dialect == "anthropic_thinking"
+
+    @override
+    def _stable_request_headers(
+        self,
+        model_id: str,
+        request_kwargs: JsonObject,
+    ) -> dict[str, str]:
+        """Add the per-message effort beta for a Model that takes effort updates."""
+        headers = super()._stable_request_headers(model_id, request_kwargs)
+        if self.effort_updates(model_id):
+            configured = {**(self._config.extra_headers or {}), **headers}
+            betas = [
+                beta.strip()
+                for name, value in configured.items()
+                if name.lower() == ANTHROPIC_BETA_HEADER
+                for beta in value.split(",")
+                if beta.strip()
+            ]
+            for name in [name for name in headers if name.lower() == ANTHROPIC_BETA_HEADER]:
+                del headers[name]
+            headers[ANTHROPIC_BETA_HEADER] = ",".join(dict.fromkeys((*betas, EFFORT_UPDATES_BETA)))
+        return headers
+
+    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -255,7 +292,9 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
     ) -> int:
         """Estimate the Messages wire without counting duplicate readable thinking."""
         profile = self.wire_profile(model_id)
-        wire = _normalize_tool_call_ids(profile, [dict(message) for message in messages])
+        wire = _normalize_tool_call_ids(
+            profile, [dict(message) for message in messages if not is_effort_update(message)]
+        )
         system = _merge_anthropic_system_parts(
             [
                 message["content"]
@@ -310,6 +349,15 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         # do not clobber provider defaults below. Falsy-but-non-None values
         # (e.g. ``temperature=0.0``) must survive.
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        # A Model that takes effort updates keeps the effort its history started
+        # from and switches with a per-message ``output_config`` where it changed.
+        wire_messages = apply_effort_updates(
+            wire_messages,
+            request_kwargs,
+            effort_levels(profile.reasoning, unexpressed=(_ANTHROPIC_MINIMAL_EFFORT,))
+            if self.effort_updates(model_id)
+            else None,
+        )
         system_parts: list[str | list[dict[str, Any]]] = []
         conversation_messages: list[dict[str, Any]] = []
 

@@ -36,6 +36,7 @@ from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_a
 from core.prompts import ProjectPromptContext
 from core.prompts.pinned_context import (
     PINNED_DYNAMIC_BLOCKS_SLOT,
+    PINNED_THINKING_EFFORT_SLOT,
     PINNED_TOOL_DEFINITIONS_SLOT,
     pinned_agent_body,
     pinned_memory_files,
@@ -581,13 +582,19 @@ class ChatCompactionHost:
         prompt_refresh: object | None,
         live_request_messages: list[JsonObject] | None,
     ) -> tuple[ChatMessage, RequestState]:
+        # The new epoch pins the effort the Run's requests use now, which a
+        # change during the Run may have moved away from the Run's Agent.
+        effort = context.request_state.effort if context.request_state is not None else None
         return await self.project_post_compaction_request(
             agent=context.agent,
             session=context.session,
             session_messages=session_messages,
             checkpoint=checkpoint,
             context_tokens_before=context_tokens_before,
-            request_inputs=RequestBuildInputs.from_context(context, target),
+            request_inputs=replace(
+                RequestBuildInputs.from_context(context, target),
+                fresh_thinking_effort=effort.current if effort is not None else None,
+            ),
             prompt_refresh=prompt_refresh,
             active_target=target,
             accounting=context.context_usage,
@@ -627,10 +634,10 @@ def _prompt_epoch(
 ) -> PromptEpoch:
     """The prompt epoch a committed checkpoint starts: fresh pins and seen Skills.
 
-    The Tool pin and the dynamic block pin of the projected request always start
-    the new epoch, even when the rest of the prompt refresh failed: the
-    checkpoint drops the notes that announced their changes, so the old pins
-    would lose them.
+    The Tool pin, the dynamic block pin and the thinking effort pin of the
+    projected request always start the new epoch, even when the rest of the
+    prompt refresh failed: the checkpoint drops the notes that announced their
+    changes, so the old pins would lose them.
     """
     tool_epoch = request_state.tool_epoch
     prompt_blocks = request_state.prompt_blocks
@@ -640,6 +647,9 @@ def _prompt_epoch(
         ),
         PINNED_DYNAMIC_BLOCKS_SLOT: (
             prompt_blocks.to_payload() if prompt_blocks is not None else None
+        ),
+        PINNED_THINKING_EFFORT_SLOT: (
+            request_state.effort.pin.to_payload() if request_state.effort is not None else None
         ),
         # Compacted history keeps every remaining image until a limit retires it anew.
         PINNED_IMAGE_RETIREMENT_SLOT: None,

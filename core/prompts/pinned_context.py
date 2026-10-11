@@ -48,6 +48,11 @@ PINNED_TOOL_DEFINITIONS_SLOT = "pinned_tool_definitions"
 # the Model as a ``[prompt-block-change]`` note until a successful Compaction
 # replaces it.
 PINNED_DYNAMIC_BLOCKS_SLOT = "pinned_dynamic_blocks"
+# The thinking effort the epoch's first request used, plus the epoch key. The
+# runtime block shows it for the whole epoch; Chat resolves and reads this pin
+# (``core.chat._effort_epoch``), and a later change reaches the request as an
+# ``[effort-change]`` note until a successful Compaction replaces it.
+PINNED_THINKING_EFFORT_SLOT = "pinned_thinking_effort"
 # The verbatim prompt body of a Workspace-less Agent (a Project Config Agent's
 # imported body, a temporary participant's instructions), pinned like the SOUL
 # block so an edited Agent file cannot break the System Prompt prefix mid-epoch.

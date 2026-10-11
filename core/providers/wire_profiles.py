@@ -138,6 +138,12 @@ class WireBinding:
         if self.observations is not None:
             self.observations.record_off_ignored(self.provider_id, self.connection_id, model_id)
 
+    def observe_effort_updates_rejected(self, model_id: str) -> None:
+        if self.observations is not None:
+            self.observations.record_effort_updates_rejected(
+                self.provider_id, self.connection_id, model_id
+            )
+
 
 @dataclass(frozen=True)
 class _CacheEntry:
@@ -649,6 +655,8 @@ class _Resolution:
             # an ignored off can leak that reasoning into the answer: Agent
             # effort ``none`` asks for the lowest level instead.
             partial.setdefault("reasoning", {})["off"] = "lowest"
+        if facts.effort_updates_rejected:
+            partial.setdefault("reasoning", {})["effort_updates"] = False
         _merge_into(self.values, partial, PROFILE_SCHEMA, "", LAYER_OBSERVED, self.provenance)
         if narrowed_map is not None:
             # A rejected mapping must disappear, not merge with the earlier map.
@@ -779,6 +787,7 @@ def _build_reasoning(values: Mapping[str, Any]) -> ReasoningWire:
             "unset",
             "mandatory",
             "budget_max",
+            "effort_updates",
         )
         if key in values
     }

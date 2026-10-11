@@ -99,8 +99,10 @@ class StubPrompts:
         session_tool_grants: object = (),
         pinned_blocks: object = None,
         request_block_definitions: object = (),
+        thinking_effort: str | None = None,
     ) -> str:
         del agent_project_id, pinned_blocks, request_block_definitions, on_demand_tools
+        del thinking_effort
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
             return f"Custom system for {scope_agent_id}"

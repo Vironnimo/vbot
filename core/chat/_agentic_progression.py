@@ -12,13 +12,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.chat._boundaries import _finish_visible_boundary
+from core.chat._effort_epoch import thinking_effort
 from core.chat._queued_input import (
     persist_steering_input,
     rebuild_after_steering,
     transcribe_steering_audio,
 )
 from core.chat._request_history import _prepare_request_context, _prepare_tool_context
-from core.chat._run_state import RequestState, _AssistantStep
+from core.chat._run_state import RequestState, _AssistantStep, resolve_run_agent
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
@@ -124,6 +125,22 @@ class AgenticProgression:
         if run_limit is None:
             return self._max_tool_iterations
         return min(self._max_tool_iterations, run_limit)
+
+    async def _live_thinking_effort(self, context: _RunExecutionContext) -> str | None:
+        """Return the thinking effort the Run's Agent has now; ``None`` when unknown.
+
+        The Run's first request uses the Agent the Run resolved; every later
+        request resolves it again, so a change made during the Run reaches it.
+        """
+        run = context.run
+        if run.iteration_count == 0:
+            return thinking_effort(context.agent)
+        try:
+            agent = await resolve_run_agent(self._dependencies, run, context.request)
+        except Exception:
+            _LOGGER.debug("Keeping the thinking effort of run %s", run.id, exc_info=True)
+            return None
+        return thinking_effort(agent)
 
     @asynccontextmanager
     async def _assistant_persistence_boundary(
@@ -371,6 +388,9 @@ class AgenticProgression:
                     tool_catalog = await self._requests.live_tool_catalog(
                         context, known=tool_epoch.allowed_names, told=tool_epoch.known_names
                     )
+            # The Agent's thinking effort applies from the next request on; the
+            # System Prompt keeps showing the prompt epoch's pinned effort.
+            live_effort = await self._live_thinking_effort(context)
             boundary_notes: list[ChatMessage] = []
             async with self._dependencies.sessions.write_lock(session_address):
                 session.begin_defer_notes()
@@ -454,6 +474,14 @@ class AgenticProgression:
                         )
                         context.request_state = state
                         tools = state.tools
+                    if state.effort is not None and live_effort is not None:
+                        effort_change = state.effort.plan(
+                            live_effort, within_run=run.iteration_count > 0
+                        )
+                        if effort_change is not None:
+                            session.add_note(effort_change.note_content())
+                            state = replace(state, effort=state.effort.adopt(effort_change))
+                            context.request_state = state
                 finally:
                     await context.session_snapshot.flush_deferred_notes(session)
                 boundary_notes.extend(session.drain_pending_notes())
@@ -651,6 +679,7 @@ class AgenticProgression:
                             recovery=context.recovery,
                             message_id=assistant_message_id,
                             on_tool_calls=start_tool_calls if tool_round is not None else None,
+                            effort=state.effort,
                         )
                 except ProviderRequestTooLargeError as exc:
                     smaller = await _CHAT_TRANSFORM_WORKERS.run(

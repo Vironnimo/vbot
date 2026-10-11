@@ -111,6 +111,7 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 
 ## Reasoning
 
+- **Effort updates.** A rule in `resources/wire/openai.json` sets `reasoning.effort_updates: true` for `gpt-6-luna`, `gpt-6-sol` and `gpt-6.1-sol` on the `api-key` Connection, so an effort change rides as a `configuration_update` input item on the Platform `/responses` and keeps the prompt cache (`providers/request-policy.md` -> Effort updates). Documented, not verified live (no API key on 2026-10-11); a rejection is learned and turns updates off for the Model. The subscription Connection (Codex wire) has no such rule and sends none.
 - vBot `thinking_effort` and raw `reasoning_effort` use the selected Model's catalog ladder. Without one, the wire file's floor applies (Chat Completions `none/low/medium/high`, Responses `low/medium/high/xhigh`); a richer catalog preserves higher supported levels rather than clamping them globally. Both protocols plan the effort with `ReasoningWire.plan()`; Responses spells it in the `responses_reasoning` dialect (`reasoning: {effort, summary: auto}`, plus `include: [reasoning.encrypted_content]` for a Model known to reason).
 - Generic OpenAI-compatible gateways omit explicit `none`; the direct OpenAI provider may send `none` only when catalog data confirms reasoning support.
 - If injected `model_lookup` says reasoning is unsupported, reasoning request controls are stripped.

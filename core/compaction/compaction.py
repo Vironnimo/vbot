@@ -26,6 +26,7 @@ from core.chat.wire_shaping import (
     _notes_to_request_messages,
     model_facing_request,
     notes_missing_from_request,
+    route_effort,
 )
 from core.compaction._model_request import _send_streaming_model_request
 from core.compaction.errors import (
@@ -39,6 +40,7 @@ from core.providers.adapter import estimate_wire_request_input_tokens
 from core.sessions import (
     SessionAddress,
     current_skill_activation_contents,
+    is_effort_change_note,
     is_prompt_block_change_note,
     is_skill_context_note,
     is_tool_change_note,
@@ -49,6 +51,7 @@ from core.utils.tokens import estimate_message_tokens, estimate_request_input_to
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
+    from core.chat._effort_epoch import EffortState
     from core.usage import UsageRecorder
 
 TRIGGER_CONTEXT_RATIO = "context_ratio"
@@ -453,6 +456,7 @@ class CompactionService:
         active_model_id: str | None = None,
         active_tools: list[JsonObject] | None = None,
         active_thinking_effort: str | None = None,
+        active_effort: EffortState | None = None,
         minimum_reclaim_tokens: int = 0,
         estimate_factor: float = 1.0,
         summary_model_reference: str | None = None,
@@ -494,12 +498,10 @@ class CompactionService:
                 same_target = adapter is active_adapter and model_id == active_model_id
                 # Internal task, not the agent's voice: no sampling parameters,
                 # so the Provider's own defaults apply. On the active target the
-                # Run's reasoning setting stays, because a changed setting renders
-                # a different prompt and loses the Run's Provider prompt cache.
-                request_options: dict[str, Any] = {
-                    "model_id": model_id,
-                    "thinking_effort": active_thinking_effort if same_target else "",
-                }
+                # Run's reasoning setting stays (``active_effort``, else the
+                # Agent's), because a changed setting renders a different prompt
+                # and loses the Run's Provider prompt cache.
+                request_options: dict[str, Any] = {"model_id": model_id}
                 request_options.update(
                     adapter.request_context_kwargs(
                         agent_id=session_address.agent_id,
@@ -514,6 +516,14 @@ class CompactionService:
                     active_tools,
                     strip_reasoning=not same_target,
                 )
+                model_messages, effort_options = route_effort(
+                    active_effort if same_target else None,
+                    model_messages,
+                    adapter=adapter,
+                    model_id=model_id,
+                    fallback=active_thinking_effort if same_target else "",
+                )
+                request_options.update(effort_options)
                 if active_tools is not None:
                     request_options["tools"] = model_tools
                 reference = (
@@ -689,6 +699,7 @@ def _is_epoch_bound_note(message: ChatMessage) -> bool:
         )
         or is_tool_change_note(message)
         or is_prompt_block_change_note(message)
+        or is_effort_change_note(message)
     )
 
 
