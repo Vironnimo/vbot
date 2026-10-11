@@ -15,11 +15,16 @@ keeps only the entries whose names start with it, ignoring case, before the entr
 limit applies, so a large directory still yields every entry a typed name can reach.
 
 A directory that exists but cannot be read is ``unreadable``, never ``not_found``.
+
+Pickers also create a folder where the user is browsing (``create_directory``),
+under the same path rules and budget: one new folder with one name, inside an
+existing directory, never parents along the way and never an existing entry.
 """
 
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import stat
 import sys
@@ -30,6 +35,7 @@ from typing import Literal
 
 from core.utils.errors import VBotError
 from core.utils.file_status import is_link_status, stat_or_none
+from core.utils.ids import is_reserved_name
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -46,11 +52,14 @@ _ERROR_INVALID_NAME = 123
 
 type EntryKind = Literal["directory", "file"]
 type FailureReason = Literal["not_found", "not_a_directory", "unreadable", "timeout"]
+type CreationFailureReason = Literal[
+    "exists", "not_found", "not_a_directory", "denied", "invalid_name", "timeout", "failed"
+]
 
 # A listing that does not answer in time keeps its worker until the filesystem
 # answers; the worker only reads, so nobody waits for it.
 _POOL = BoundedWorkerPool(name="directory-listing", max_workers=4)
-_abandoned: set[asyncio.Task[DirectoryListing]] = set()
+_abandoned: set[asyncio.Task[DirectoryListing] | asyncio.Task[str]] = set()
 
 # Clock seam: tests move it to expire a listing's budget without waiting.
 _monotonic = time.monotonic
@@ -93,6 +102,14 @@ class DirectoryListingError(VBotError):
     def __init__(self, reason: FailureReason, message: str) -> None:
         super().__init__(message)
         self.reason: FailureReason = reason
+
+
+class DirectoryCreationError(VBotError):
+    """A folder could not be created; ``reason`` says why."""
+
+    def __init__(self, reason: CreationFailureReason, message: str) -> None:
+        super().__init__(message)
+        self.reason: CreationFailureReason = reason
 
 
 class ListingPathError(VBotError):
@@ -194,12 +211,8 @@ def _list(
             truncated=truncated,
             separator=os.sep,
         )
-    base = _root(root)
     parts = _relative_parts(path or "")
-    target = base.joinpath(*parts)
-    resolved = target.resolve()
-    if resolved != base and base not in resolved.parents:
-        raise ListingPathError(f'"{"/".join(parts)}" leads outside the listing root.')
+    target = _inside_root(_root(root), parts)
     relative = "/".join(parts)
     entries, truncated = _read(
         str(target),
@@ -215,6 +228,89 @@ def _list(
         truncated=truncated,
         separator=os.sep,
     )
+
+
+async def create_directory(path: str, name: str, *, root: str | None = None) -> str:
+    """Create the folder ``name`` inside the existing directory ``path``.
+
+    ``path`` follows :func:`list_directory` (absolute, ``~`` / ``~/...``, or with
+    ``root`` relative to it). ``name`` is one folder name the server's system
+    accepts. Returns the new folder's path in the listing form of ``path``.
+
+    Raises :class:`ListingPathError` for a path the request may not name and
+    :class:`DirectoryCreationError` when the folder cannot be created, also with
+    the reason ``timeout`` when the filesystem does not answer within the listing
+    budget; the folder may then still appear once the filesystem answers.
+    """
+    timeout_seconds = DIRECTORY_LISTING_TIMEOUT_SECONDS
+    task = asyncio.ensure_future(_POOL.run(_create, path, name, root=root))
+    try:
+        done, _pending = await asyncio.wait((task,), timeout=timeout_seconds)
+    except asyncio.CancelledError:
+        _abandon(task)
+        raise
+    if not done:
+        _abandon(task)
+        raise DirectoryCreationError(
+            "timeout", f"{path or root} did not answer in time; the folder may still appear."
+        )
+    return task.result()
+
+
+def _create(path: str, name: str, *, root: str | None) -> str:
+    if "\x00" in path or "\x00" in (root or ""):
+        raise ListingPathError("A path cannot contain a NUL character.")
+    _check_folder_name(name)
+    if root is None:
+        parent = _absolute(path)
+        shown_parent = PurePath(parent).as_posix()
+        shown = PurePath(parent, name).as_posix()
+    else:
+        parts = _relative_parts(path)
+        parent = str(_inside_root(_root(root), parts))
+        shown_parent = "/".join(parts) or "The listing root"
+        shown = "/".join([*parts, name])
+    try:
+        os.mkdir(os.path.join(parent, name))
+    except FileExistsError as error:
+        raise DirectoryCreationError("exists", f"{shown} already exists.") from error
+    except OSError as error:
+        raise _creation_failure(parent, shown_parent, name, error) from error
+    return shown
+
+
+def _check_folder_name(name: str) -> None:
+    """One name the server's system accepts; Windows also refuses its reserved names."""
+    separators = "/\\" if os.sep == "\\" else "/"
+    invalid = (
+        name in {"", ".", ".."}
+        or "\x00" in name
+        or any(separator in name for separator in separators)
+        or (sys.platform == "win32" and is_reserved_name(name))
+    )
+    if invalid:
+        raise DirectoryCreationError("invalid_name", f"{name!r} cannot name a folder here.")
+
+
+def _creation_failure(
+    parent: str, shown_parent: str, name: str, error: OSError
+) -> DirectoryCreationError:
+    if getattr(error, "winerror", None) == _ERROR_INVALID_NAME:
+        return DirectoryCreationError("invalid_name", f"{name!r} cannot name a folder here.")
+    if isinstance(error, (FileNotFoundError, NotADirectoryError)):
+        try:
+            status = stat_or_none(parent)
+        except OSError:
+            status = None
+        if status is not None and not stat.S_ISDIR(status.st_mode):
+            return DirectoryCreationError("not_a_directory", f"{shown_parent} is not a directory.")
+        return DirectoryCreationError("not_found", f"No such directory: {shown_parent}")
+    if isinstance(error, PermissionError) or error.errno == errno.EROFS:
+        return DirectoryCreationError(
+            "denied", f"A folder cannot be created in {shown_parent}: access is denied."
+        )
+    # The operating system's own text may be localized; the reason is what counts.
+    return DirectoryCreationError("failed", f"A folder could not be created in {shown_parent}.")
 
 
 def _places(needle: str) -> DirectoryListing:
@@ -256,6 +352,15 @@ def _root(root: str) -> Path:
     if not os.path.isabs(expanded):
         raise ListingPathError(f'The listing root "{root}" is not an absolute path.')
     return Path(expanded).resolve()
+
+
+def _inside_root(base: Path, parts: list[str]) -> Path:
+    """``base`` joined with ``parts``; refused when a link or junction leads outside it."""
+    target = base.joinpath(*parts)
+    resolved = target.resolve()
+    if resolved != base and base not in resolved.parents:
+        raise ListingPathError(f'"{"/".join(parts)}" leads outside the listing root.')
+    return target
 
 
 def _relative_parts(path: str) -> list[str]:
@@ -361,27 +466,30 @@ def _timeout(shown: str) -> DirectoryListingError:
     return DirectoryListingError("timeout", f"{shown} did not answer in time; try again later.")
 
 
-def _abandon(task: asyncio.Task[DirectoryListing]) -> None:
+def _abandon(task: asyncio.Task[DirectoryListing] | asyncio.Task[str]) -> None:
     _abandoned.add(task)
     task.add_done_callback(_settle_abandoned)
 
 
-def _settle_abandoned(task: asyncio.Task[DirectoryListing]) -> None:
+def _settle_abandoned(task: asyncio.Task[DirectoryListing] | asyncio.Task[str]) -> None:
     _abandoned.discard(task)
     if task.cancelled():
         return
     error = task.exception()
-    if error is not None and not isinstance(error, (DirectoryListingError, ListingPathError)):
-        _LOGGER.error("Directory listing failed after its caller stopped waiting", exc_info=error)
+    expected = (DirectoryListingError, DirectoryCreationError, ListingPathError)
+    if error is not None and not isinstance(error, expected):
+        _LOGGER.error("Directory operation failed after its caller stopped waiting", exc_info=error)
 
 
 __all__ = [
     "DIRECTORY_LISTING_LIMIT",
     "DIRECTORY_LISTING_TIMEOUT_SECONDS",
+    "DirectoryCreationError",
     "DirectoryEntry",
     "DirectoryListing",
     "DirectoryListingError",
     "ListingPathError",
+    "create_directory",
     "list_directory",
     "list_directory_sync",
 ]

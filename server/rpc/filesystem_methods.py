@@ -1,14 +1,19 @@
-"""Server filesystem browsing RPC handlers for path pickers."""
+"""Server filesystem browsing RPC handlers for path pickers: listing and new folders."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from core.utils.directory_listing import DirectoryListing, list_directory
+from core.utils.directory_listing import DirectoryListing, create_directory, list_directory
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _optional_bool, _optional_string, _reject_unsupported
+from server.rpc.validation import (
+    _optional_bool,
+    _optional_string,
+    _reject_unsupported,
+    _required_string,
+)
 
 JsonObject = dict[str, Any]
 
@@ -38,6 +43,26 @@ async def _list_filesystem(_state: Any, params: JsonObject) -> JsonObject:
     return _listing_payload(listing)
 
 
+async def _create_filesystem_directory(_state: Any, params: JsonObject) -> JsonObject:
+    """Create the folder ``name`` inside the directory ``path`` and return its path.
+
+    ``path`` follows ``filesystem.list`` (absolute, ``~`` or ``~/...``, or with
+    ``root`` relative to it, ``""`` being the root); the result's ``path`` has the
+    same form. An existing entry is never touched.
+    """
+    _reject_unsupported(params, {"path", "name", "root"}, "filesystem.create_directory")
+    path = params.get("path")
+    if not isinstance(path, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.path must be a string")
+    name = _required_string(params, "name")
+    root = _optional_string(params, "root")
+    try:
+        created = await create_directory(path, name, root=root)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"path": created}
+
+
 def _listing_payload(listing: DirectoryListing) -> JsonObject:
     payload: JsonObject = {
         "path": listing.path,
@@ -57,4 +82,7 @@ def _listing_payload(listing: DirectoryListing) -> JsonObject:
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return server filesystem browsing RPC handlers."""
 
-    return {"filesystem.list": _list_filesystem}
+    return {
+        "filesystem.list": _list_filesystem,
+        "filesystem.create_directory": _create_filesystem_directory,
+    }

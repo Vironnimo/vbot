@@ -413,6 +413,155 @@ describe('PathField', () => {
     expect(await browse()).toEqual([['Places'], ['//host/share/team', null]]);
   });
 
+  it('lists every folder anew and makes a new folder where it browses', async () => {
+    const listings = {
+      'C:/work': { entries: [dir('New folder'), dir('repo')] },
+      'C:/work/repo': { entries: [] },
+    };
+    const listDirectory = fakeServer(listings);
+    const createDirectory = vi.fn(async ({ path, name }) => {
+      if (name === 'repo') throw listingFailure('exists');
+      listings[path].entries.push(dir(name));
+      return { path: `${path}/${name}` };
+    });
+    render({ listDirectory, createDirectory, value: 'C:\\work\\repo' });
+
+    document.body.querySelector('.path-field__browse').click();
+    await settle();
+    const dialog = document.body.querySelector('.modal.path-browser');
+    const rows = () =>
+      [...dialog.querySelectorAll('.path-browser__row')].map((row) =>
+        row.textContent.trim(),
+      );
+    const button = (label) =>
+      dialog.querySelector(`.path-browser__bar [aria-label="${label}"]`);
+    const list = dialog.querySelector('[role="listbox"]');
+
+    // A folder made outside the dialog shows once its folder opens again.
+    press(list, 'Backspace');
+    await settle();
+    expect(rows()).toEqual(['New folder', 'repo']);
+    press(list, 'Enter');
+    await settle();
+    listings['C:/work'].entries.push(dir('outside'));
+    press(list, 'Backspace');
+    await settle();
+    expect(rows()).toEqual(['New folder', 'outside', 'repo']);
+
+    // The new folder's name avoids the listed ones; a taken name stays editable.
+    button('New folder').click();
+    await settle();
+    const name = dialog.querySelector('.path-browser__new input');
+    expect(name.value).toBe('New folder (2)');
+    expect(document.activeElement).toBe(name);
+    type(name, 'repo');
+    press(name, 'Enter');
+    await settle();
+    expect(
+      dialog.querySelector('.path-browser__new [role="alert"]').textContent,
+    ).toBe('Something with this name already exists here.');
+
+    // Escape closes the row, not the dialog.
+    expect(press(name, 'Escape').defaultPrevented).toBe(true);
+    expect(dialog.querySelector('.path-browser__new')).toBeNull();
+    expect(document.body.querySelector('.path-browser')).not.toBeNull();
+
+    button('New folder').click();
+    await settle();
+    const again = dialog.querySelector('.path-browser__new input');
+    type(again, '  drafts ');
+    press(again, 'Enter');
+    await settle();
+    expect(createDirectory).toHaveBeenLastCalledWith({
+      path: 'C:/work',
+      name: 'drafts',
+    });
+    expect(
+      dialog.querySelector('.path-browser__row.active').textContent.trim(),
+    ).toBe('drafts');
+    dialog.querySelector('.modal-footer .btn-primary').click();
+    flushSync();
+    expect(props.value).toBe('C:\\work\\drafts');
+
+    // File mode has nothing to put into an empty folder, and a field with
+    // its own listing makes no folders through the app's API.
+    props.mode = 'file';
+    flushSync();
+    document.body.querySelector('.path-field__browse').click();
+    await settle();
+    expect(document.body.querySelector('[aria-label="New folder"]')).toBeNull();
+  });
+
+  it('opens a typed or pasted path from the trail', async () => {
+    const listDirectory = fakeServer({
+      places: { path: '', entries: [dir('C:/')] },
+      'C:/work': { entries: [dir('repo'), file('notes.md')] },
+      'C:/work/repo': { entries: [] },
+      'C:/work/notes.md': listingFailure('not_a_directory'),
+    });
+    render({ listDirectory, mode: 'any' });
+
+    document.body.querySelector('.path-field__browse').click();
+    await settle();
+    const dialog = document.body.querySelector('.modal.path-browser');
+    const crumbs = () =>
+      [...dialog.querySelectorAll('.path-browser__crumb')].map((crumb) =>
+        crumb.textContent.trim(),
+      );
+    const list = dialog.querySelector('[role="listbox"]');
+
+    // Ctrl+L turns the trail into a field; a missing folder keeps it open.
+    press(list, 'l', { ctrlKey: true });
+    await settle();
+    const path = () => dialog.querySelector('.path-browser__path');
+    expect(document.activeElement).toBe(path());
+    type(path(), 'C:\\work\\gone');
+    press(path(), 'Enter');
+    await settle();
+    expect(dialog.querySelector('[role="alert"]').textContent).toBe(
+      'This folder does not exist.',
+    );
+    // The field stays for another try, over the places that were open.
+    expect(path().value).toBe('C:\\work\\gone');
+    expect(
+      [...dialog.querySelectorAll('.path-browser__row')].map((row) =>
+        row.textContent.trim(),
+      ),
+    ).toEqual(['C:\\']);
+
+    // A file opens its folder with the file highlighted.
+    type(path(), 'C:\\work\\notes.md');
+    press(path(), 'Enter');
+    await settle();
+    expect(path()).toBeNull();
+    expect(crumbs()).toEqual(['Places', 'C:', 'work']);
+    expect(
+      dialog.querySelector('.path-browser__row.active').textContent.trim(),
+    ).toBe('notes.md');
+
+    // A path pasted into the filter goes to the trail's field.
+    const filter = dialog.querySelector('.path-browser__filter');
+    filter.focus();
+    type(filter, 'C:\\work\\repo');
+    await settle();
+    expect(filter.value).toBe('');
+    expect(path().value).toBe('C:\\work\\repo');
+    press(path(), 'Enter');
+    await settle();
+    expect(crumbs()).toEqual(['Places', 'C:', 'work', 'repo']);
+
+    // A relative path starts at the open folder; the server resolves `..`.
+    press(dialog.querySelector('[role="listbox"]'), 'l', { ctrlKey: true });
+    await settle();
+    type(path(), '..');
+    press(path(), 'Enter');
+    await settle();
+    expect(listDirectory).toHaveBeenLastCalledWith({
+      path: 'C:/work/repo/..',
+      include_files: true,
+    });
+  });
+
   it('keeps a root, opens at the value and returns files relative to it', async () => {
     const listDirectory = fakeServer(
       {

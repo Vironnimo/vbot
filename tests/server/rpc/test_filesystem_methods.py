@@ -1,4 +1,4 @@
-"""The ``filesystem.list`` RPC: server directory listings for path pickers."""
+"""The ``filesystem`` RPCs: server directory listings and new folders for path pickers."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from server.rpc.methods import dispatch_rpc
 _DISPATCHER_LOGGER = "vbot.server.rpc.dispatcher"
 
 
-async def _call(params: dict[str, Any]) -> dict[str, Any]:
-    return await dispatch_rpc(object(), {"method": "filesystem.list", "params": params})
+async def _call(params: dict[str, Any], method: str = "filesystem.list") -> dict[str, Any]:
+    return await dispatch_rpc(object(), {"method": method, "params": params})
 
 
 @pytest.mark.asyncio
@@ -85,3 +85,27 @@ async def test_refusals_carry_a_stable_code_and_reason(
     # only a malformed request is worth a warning.
     levels = [record.levelno for record in caplog.records if record.name == _DISPATCHER_LOGGER]
     assert levels == [logging.DEBUG if routine else logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_creates_a_folder_and_refuses_an_existing_one_with_a_reason(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    create = "filesystem.create_directory"
+
+    absolute = await _call({"path": tmp_path.as_posix(), "name": "new"}, create)
+    relative = await _call({"path": "new", "name": "inner", "root": str(tmp_path)}, create)
+    with caplog.at_level(logging.DEBUG, logger=_DISPATCHER_LOGGER):
+        existing = await _call({"path": "", "name": "new", "root": str(tmp_path)}, create)
+    # A name the user chose that exists is a routine answer, not a warning.
+    levels = [record.levelno for record in caplog.records if record.name == _DISPATCHER_LOGGER]
+    malformed = await _call({"path": tmp_path.as_posix()}, create)
+
+    assert absolute == {"ok": True, "result": {"path": (tmp_path / "new").as_posix()}}
+    assert relative == {"ok": True, "result": {"path": "new/inner"}}
+    assert (existing["error"]["code"], existing["error"]["data"]) == (
+        "domain_error",
+        {"reason": "exists"},
+    )
+    assert levels == [logging.DEBUG]
+    assert malformed["error"]["code"] == "invalid_request"
