@@ -5,10 +5,11 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
+from core.tools.model_names import BASH_TOOL_NAME
 
 MEMORY_TOOL_NAME = "memory"
 BASH_TOOL_SETTINGS_KEY = "bash"
@@ -52,6 +53,9 @@ TOOL_CONSTRAINT_LIVE_CALL = "live_call"
 
 
 TOOL_ACCESS_FIELDS = frozenset({"mode", "allowed", "denied", "granted"})
+# Followed Tools a fixed Tool set lists beside their source: a followed Tool
+# joins a fixed set only when the set lists it.
+_COMPANION_TOOLS: tuple[tuple[str, str], ...] = ((BASH_TOOL_NAME, "background_tasks"),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +147,25 @@ def normalize_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolA
         names = ", ".join(overlap)
         raise ValueError(f"tool_access.allowed and tool_access.denied overlap: {names}")
     return ToolAccess(mode=mode, allowed=allowed, denied=denied, granted=granted)
+
+
+def list_companion_tools(tool_access: ToolAccess) -> ToolAccess:
+    """Return a fixed ``selected`` policy with each companion listed beside its source.
+
+    ``background_tasks`` reads and stops the commands ``bash`` leaves running, so a
+    fixed Tool set that lists ``bash`` lists it too, unless the policy denies it.
+    Other policies activate followed Tools on their own and stay unchanged.
+    """
+
+    if not tool_access.fixed or tool_access.mode != TOOL_ACCESS_MODE_SELECTED:
+        return tool_access
+    allowed = list(tool_access.allowed)
+    for source, companion in _COMPANION_TOOLS:
+        if source in allowed and companion not in allowed and companion not in tool_access.denied:
+            allowed.insert(allowed.index(source) + 1, companion)
+    if len(allowed) == len(tool_access.allowed):
+        return tool_access
+    return replace(tool_access, allowed=tuple(allowed))
 
 
 def resolve_tool_access(
@@ -400,6 +423,7 @@ __all__ = [
     "agent_tool_settings",
     "apply_agent_target_tool_visibility",
     "bash_allowed_env_keys",
+    "list_companion_tools",
     "memory_tool_enabled",
     "normalize_env_keys",
     "normalize_tool_access",

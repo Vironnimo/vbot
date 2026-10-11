@@ -85,6 +85,7 @@ from core.tools.availability import (
     TOOL_ACCESS_FIELDS,
     TOOL_ACCESS_MODE_SELECTED,
     ToolAccess,
+    list_companion_tools,
     normalize_env_keys,
     normalize_tool_access,
 )
@@ -744,10 +745,11 @@ def live_agent_tool_access(tool_access: ToolAccess) -> ToolAccess:
     """Return a Live Agent's Tool policy: the user's choice, with the Live Tools usable.
 
     The Live Tools need an opt-in on every Agent, which a Live Agent always has;
-    nothing activates beside the Tools the policy names.
+    nothing activates beside the Tools the policy names, which lists
+    ``background_tasks`` wherever it lists ``bash``.
     """
     granted = tuple(dict.fromkeys((*tool_access.granted, *LIVE_TOOL_NAMES)))
-    return replace(tool_access, granted=granted, fixed=True, live_call=True)
+    return list_companion_tools(replace(tool_access, granted=granted, fixed=True, live_call=True))
 
 
 def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:

@@ -12,6 +12,7 @@ from core.tools.availability import (
     ToolAccess,
     apply_agent_target_tool_visibility,
     bash_allowed_env_keys,
+    list_companion_tools,
     normalize_tool_access,
     resolve_tool_access,
     subagent_allowed_agents,
@@ -212,6 +213,35 @@ def test_a_fixed_selection_is_the_whole_tool_set() -> None:
         "mode": "selected",
         "allowed": list(allowed),
     }
+
+
+def test_a_fixed_selection_lists_background_tasks_beside_bash() -> None:
+    # A followed Tool joins a fixed set only when listed, so the set lists it.
+    tools = _catalog(
+        ("read", {}),
+        ("bash", {}),
+        ("background_tasks", {"activation": "follows", "activation_source": "bash"}),
+    )
+    policy = ToolAccess(mode="selected", allowed=("bash", "read"), fixed=True)
+
+    listed = list_companion_tools(policy)
+
+    assert listed == ToolAccess(
+        mode="selected", allowed=("bash", "background_tasks", "read"), fixed=True
+    )
+    assert resolve_tool_access(listed, tools, "off").allowed_tools == (
+        "background_tasks",
+        "bash",
+        "read",
+    )
+    # A denial stays; without bash, or where followers follow anyway, nothing changes.
+    for unchanged in (
+        ToolAccess(mode="selected", allowed=("bash",), denied=("background_tasks",), fixed=True),
+        ToolAccess(mode="selected", allowed=("read",), fixed=True),
+        ToolAccess(mode="selected", allowed=("bash",)),
+        ToolAccess(mode="all", fixed=True),
+    ):
+        assert list_companion_tools(unchanged) is unchanged
 
 
 def test_memory_activation_is_independent_of_selected_direct_tools() -> None:

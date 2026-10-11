@@ -121,6 +121,7 @@ def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: P
     registry = TemporaryAgentRegistry(sessions)
     config = _config(
         tmp_path,
+        tool_access=ToolAccess(mode="selected", allowed=("bash",), fixed=True),
         allowed_skills=["*"],
         fallback_models=["provider/fallback"],
         instructions="shared",
@@ -140,6 +141,9 @@ def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: P
     assert agent.workspace == ""
     assert agent.fallback_models == ["provider/fallback"]
     assert agent.prompt_blocks == ["core:agent_body", "core:skills"]
+    # A fixed Tool set offers background_tasks beside bash; the binding keeps the
+    # owner's list, so creating the same participant again stays idempotent.
+    assert agent.tool_access.allowed == ("bash", "background_tasks")
     assert not (tmp_path / "agents").exists()
     sessions.close()
 
@@ -152,6 +156,7 @@ def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: P
     restored_agent = reopened.resolve(restored.address, generation_id=restored.generation_id)
     assert restored_agent is not None
     assert restored_agent.prompt_blocks == agent.prompt_blocks
+    assert restored_agent.tool_access == agent.tool_access
     with pytest.raises(ChatSessionError):
         reopened.create(
             owner_name="extension",
