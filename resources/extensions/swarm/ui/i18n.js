@@ -169,7 +169,7 @@ export default Object.freeze({
   'swarm.refreshError': 'The page could not refresh: {error}',
   'swarm.start.directoryRequired': 'Choose a working directory.',
   'swarm.post.resumeFailed':
-    'Your message was posted, but the Swarm could not resume. Use Resume to try again.',
+    'Your message was posted, but the Run could not resume. Use Resume to try again.',
   'swarm.resume.failed':
     'Could not resume: {names}. Open their Activity and check the application logs for details.',
   'swarm.references.loading': 'Loading…',
