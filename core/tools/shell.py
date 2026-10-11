@@ -93,6 +93,13 @@ _SCREEN_ROWS = TERMINAL_MAX_ROWS
 # Windows rejects longer command lines.
 _WINDOWS_COMMAND_LINE_MAX_CHARS = 32_000
 _TERMINAL_TOOL = "terminal"
+# A command that sleeps prints nothing and uses no CPU while it waits on purpose,
+# as a command waiting for an answer does: Start-Sleep or its alias sleep, bash's
+# sleep, Python's time.sleep, cmd's timeout /t. Such a command is never idle.
+_SLEEP = re.compile(
+    r"(?<![\w-])(?:Start-Sleep|sleep)(?![\w-])|(?<![\w-])timeout(?:\.exe)?[ \t]+[/-]t\b",
+    re.IGNORECASE,
+)
 
 
 # Definition
@@ -534,12 +541,14 @@ class ShellTool:
                 },
             )
 
+        # Idleness hands a command off only to an Agent that can answer it, and
+        # never a command that sleeps on purpose.
+        idle = context.offers(_TERMINAL_TOOL) and not _sleeps(call.command)
         waiting = asyncio.ensure_future(
             self._terminals.wait_command(
                 terminal_id,
                 seconds=SHELL_HANDOFF_SECONDS,
-                # Idleness hands a command off only to an Agent that can answer it.
-                idle_seconds=COMMAND_IDLE_SECONDS if context.offers(_TERMINAL_TOOL) else None,
+                idle_seconds=COMMAND_IDLE_SECONDS if idle else None,
                 progress=progress,
             )
         )
@@ -625,14 +634,15 @@ async def command_terminal_result(
     ``wait_ended`` when given.
     A running command's ``next`` follows from how the wait ended
     (``matched``, ``timeout``, or no wait), unless the command is idle: then
-    it is the idle text with the seconds it has been idle.
+    it is the idle text with the seconds it has been idle. A command that
+    sleeps on purpose is never idle.
     Raises ``TerminalManagerError`` for an unknown terminal or one that runs no
     command.
     """
     report, screen = await _report_with_screen(terminals, terminal_id)
     reason = {"matched": "matched", "timeout": "waited"}.get(wait_ended or "", "following")
     idle_seconds = None
-    if not report.exited and reason != "matched":
+    if not report.exited and reason != "matched" and not _sleeps(report.command):
         idle_seconds = await terminals.command_idle_seconds(terminal_id)
     data = _result_data(
         context,
@@ -644,6 +654,15 @@ async def command_terminal_result(
     if wait_ended is not None:
         data["wait_ended"] = wait_ended
     return data
+
+
+def _sleeps(command: str) -> bool:
+    """Whether *command* sleeps, so its silence is no sign that it waits for an answer.
+
+    Poll loops with Start-Sleep were handed off as idle after 16 seconds with a
+    text that suggested a hang or a prompt; Agents killed them or polled them.
+    """
+    return _SLEEP.search(command) is not None
 
 
 async def _report_with_screen(
@@ -849,12 +868,16 @@ def _running_text(
     follow_up = context.offers(_TERMINAL_TOOL)
     if reason == "idle" and follow_up:
         silent = COMMAND_IDLE_SECONDS if idle_seconds is None else idle_seconds
+        # Silence is also a sleep or a poll loop the command runs on purpose; "If it
+        # hangs" made Agents kill healthy ones.
         return (
             f"The command in terminal {terminal_id} has printed nothing for "
             f"{_duration(silent)} and uses no CPU; {limit}.{log} If its output ends in "
             f'a question or prompt, answer it with terminal action "input", terminal_id '
-            f'"{terminal_id}", your answer as text, and key "enter". Otherwise it waits for '
-            f"something else, such as the network. {_RESULT_ARRIVES} If it hangs, stop it with "
+            f'"{terminal_id}", your answer as text, and key "enter". Otherwise it is waiting, '
+            f"such as in a sleep, a polling loop or on the network. {_RESULT_ARRIVES} "
+            f"Continue other work, or end your turn if your next step needs the result; "
+            f"{_NO_REPEAT} If what it waits for will not happen, stop it with "
             f"{_terminal_call('kill', terminal_id)}."
         )
     if reason in {"matched", "waited", "following"} and follow_up:

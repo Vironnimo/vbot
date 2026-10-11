@@ -398,6 +398,32 @@ async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
 
 
 @pytest.mark.parametrize(
+    "command",
+    [
+        "while (-not (Test-Path done.txt)) { Start-Sleep -Seconds 10 }",
+        "python -c 'import time; time.sleep(40)'",
+        "timeout /t 40 /nobreak",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_command_that_sleeps_is_never_idle(shell: Shell, command: str) -> None:
+    # Silent and without CPU use while it sleeps on purpose, as a poll loop is.
+    call = shell.call({"command": command})
+    adapter, tree = await shell.started()
+    adapter.emit("polling\r\n")
+    await shell.shows("polling")
+    terminal_id = shell.live_output[0]["terminal_id"]
+    await shell.run_clock(call, until=40)
+    assert not call.done()
+    # A terminal call on it follows it up instead of asking whether it waits for input.
+    status = await command_terminal_result(shell.manager, shell.context(), terminal_id)
+    assert status["next"].startswith("The command has run for 40 seconds and keeps running;")
+
+    tree.shell_exits(0)
+    assert data(await call)["status"] == "exited"
+
+
+@pytest.mark.parametrize(
     ("timeout", "limit"),
     [
         # The foreground default counts from the start, so 510 of 600 seconds remain.
