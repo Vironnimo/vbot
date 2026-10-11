@@ -8,13 +8,14 @@
   import './runDialogs.css';
 
   // A Run's live communication settings: the Swarm editor's delivery fields
-  // for `model.settingsRun`, the changes they make and Apply. A failed apply
-  // stays in the dialog for another try.
+  // for `model.settingsRun`, the valid changes they make and Apply. An
+  // invalid batching limit shows its error under its field and keeps Apply
+  // off. A failed apply stays in the dialog for another try.
   let { model } = $props();
 
   const busy = $derived(model.pending === 'settings');
   const applyReason = $derived(
-    model.deliveryErrors.length
+    Object.keys(model.deliveryErrors).length
       ? t('swarm.communication.invalid')
       : model.deliveryChangeLines.length
         ? ''
@@ -32,6 +33,7 @@
         <DeliverySettings
           idPrefix="swarm-live-delivery"
           value={model.deliveryDraft}
+          errors={model.deliveryErrors}
           disabled={busy}
           onChange={model.changeDelivery}
         />
@@ -43,13 +45,6 @@
           <h4 id="swarm-communication-changes" class="s-subhead__title">
             {t('swarm.communication.proposed')}
           </h4>
-          {#if model.deliveryErrors.length}<ul
-              class="swarm-communication__errors"
-            >
-              {#each model.deliveryErrors as message (message)}<li>
-                  {message}
-                </li>{/each}
-            </ul>{/if}
           {#if model.deliveryChangeLines.length}<ul
               class="swarm-communication__list"
             >
@@ -59,9 +54,7 @@
             </ul>
             <p class="swarm-dialog__note">
               {t('swarm.communication.effect')}
-            </p>{:else if !model.deliveryErrors.length}<p
-              class="swarm-dialog__note"
-            >
+            </p>{:else}<p class="swarm-dialog__note">
               {t('swarm.communication.noChanges')}
             </p>{/if}
         </section>

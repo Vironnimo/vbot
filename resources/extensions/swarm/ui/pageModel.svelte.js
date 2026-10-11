@@ -492,14 +492,20 @@ export function createSwarmPageModel(host) {
           : '',
   );
 
-  // The settings draft with its batching limits as numbers, the limits
-  // outside their range, and the changes against the Run's settings.
+  // The settings draft with its batching limits as numbers, the messages of
+  // the limits outside their range by field (shown under those fields), and
+  // the changes against the Run's settings.
   const deliveryCheck = $derived(
     deliveryDraft ? normalizeDelivery(deliveryDraft) : null,
   );
 
   const deliveryErrors = $derived(
-    deliveryCheck ? deliveryCheck.invalid.map(deliveryLimitError) : [],
+    Object.fromEntries(
+      (deliveryCheck?.invalid ?? []).map((limit) => [
+        limit.field,
+        deliveryLimitError(limit),
+      ]),
+    ),
   );
 
   const deliveryChangeLines = $derived(

@@ -412,7 +412,7 @@ describe('Swarm profile settings', () => {
     );
   });
 
-  it('saves when and how each route delivers Board messages', async () => {
+  it('saves when and how each route delivers Board messages and keeps an invalid limit at its field', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);
     await choose(
@@ -420,13 +420,48 @@ describe('Swarm profile settings', () => {
       t('swarm.delivery.receive.pull'),
     );
     document.getElementById('swarm-delivery-discussion-wake').click();
-    document.querySelector('[aria-controls="swarm-delivery-advanced"]').click();
+    const disclosure = () =>
+      document.querySelector('[aria-controls="swarm-delivery-advanced"]');
+    const limitsShown = () =>
+      !document.getElementById('swarm-delivery-advanced').hidden;
+    const batchMessages = () =>
+      document.getElementById('swarm-delivery-batch-messages');
+    const batchError = () =>
+      document.getElementById('swarm-delivery-batch-messages-error');
+    disclosure().click();
     await tick();
-    expect(document.getElementById('swarm-delivery-advanced').hidden).toBe(
-      false,
+    expect(limitsShown()).toBe(true);
+
+    // A save stops at an invalid limit: its error shows under its field, out
+    // of the closed disclosure, and nothing is saved until it is corrected.
+    fill('swarm-delivery-batch-messages', '0');
+    disclosure().click();
+    await tick();
+    expect(limitsShown()).toBe(false);
+    saveButton().click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.id).toBe('swarm-delivery-batch-messages'),
     );
+    expect(limitsShown()).toBe(true);
+    expect(batchError().textContent.trim()).toBe(
+      t('swarm.communication.invalidNumber', {
+        field: t('swarm.delivery.batchMessages'),
+        min: '1',
+        max: '100',
+      }),
+    );
+    expect(batchMessages().getAttribute('aria-invalid')).toBe('true');
+    expect(batchMessages().getAttribute('aria-describedby')).toBe(
+      'swarm-delivery-batch-messages-help swarm-delivery-batch-messages-error',
+    );
+    await expect(bridge.autosave.flush()).resolves.toBe(false);
+    expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
+    expect(batchMessages().value).toBe('0');
+    expect(batchError()).not.toBeNull();
     fill('swarm-delivery-batch-messages', '5');
     await tick();
+    expect(batchError()).toBeNull();
+    expect(batchMessages().getAttribute('aria-invalid')).toBeNull();
     await saveAndConfirm();
     expect(lastSaved(operation).delivery).toEqual({
       main: { mode: 'all', wake_idle: true },

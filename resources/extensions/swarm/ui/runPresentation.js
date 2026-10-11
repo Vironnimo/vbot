@@ -8,7 +8,9 @@ import { participantCount, participantTotal } from './pagePresentation.js';
 
 // How the navigation pane, the Run header and the Run dialogs present Runs
 // and Swarms (profiles): titles, states in words and colour, summaries,
-// details cards and the changes of a Run's communication settings.
+// details cards and the changes of a Run's communication settings; and the
+// batching limits of delivery settings, which the delivery fields, the Swarm
+// editor and the communication settings dialog check alike.
 
 // A placeholder value that marks where an element (a time, a button) stands
 // in a translation: `aroundSlot(t(key, { time: SLOT }))` splits the text there
@@ -245,8 +247,10 @@ export function runTooltip(swarm, nowMs = Date.now()) {
   };
 }
 
-// The batching limits of a Run's communication settings: their labels in
-// change lines and validation, their allowed range and how a value reads.
+// The batching limits of a `delivery` value (a Swarm's or a Run's
+// communication settings): their labels in change lines and errors, their
+// field's id after the caller's prefix (DeliverySettings.svelte), their
+// allowed range, which the server checks alike, and how a value reads.
 const number = (value) =>
   new Intl.NumberFormat(activeLocaleTag()).format(value);
 export const DELIVERY_LIMITS = Object.freeze([
@@ -319,8 +323,8 @@ const onOff = (value) =>
 // The changes from one `delivery` value to another, one readable line each:
 // "Main discussion · Receive messages: When idle → On request or when
 // waking", "Batch delay: 250 ms → 500 ms". `after` holds the limits as
-// numbers; the `invalid` limits (from `normalizeDelivery`) show as errors
-// instead.
+// numbers; the `invalid` limits (from `normalizeDelivery`) are left out, as
+// their fields show their errors.
 export function deliveryChanges(before, after, invalid = []) {
   if (!before || !after) return [];
   const lines = [];

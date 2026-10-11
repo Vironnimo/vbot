@@ -33,8 +33,9 @@
 }
 
 /* A field's validation message under its label; the control points here
-   with aria-describedby. */
-.swarm-profile-editor .swarm-profile-editor__error {
+   with aria-describedby. The delivery fields (DeliverySettings.svelte) show
+   it in a Run's communication settings dialog too, outside the editor. */
+:is(.swarm-profile-editor, .swarm-dialog) .swarm-profile-editor__error {
   margin: 4px 0 0;
   color: var(--red);
   font-size: var(--fs-body-sm);

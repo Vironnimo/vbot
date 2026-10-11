@@ -3,19 +3,22 @@
   // for each route (main discussion, joined discussions, direct mentions)
   // when its messages are received and whether a message starts an idle
   // participant, plus the batching limits behind one disclosure row. A Swarm
-  // and a Run's live communication settings share it; the caller owns saving.
-  // `onChange(next)` receives the complete next value. Number fields report
-  // their text as entered, so callers normalize numbers at their payload
-  // boundary. `idPrefix` keeps the element ids of several instances apart.
+  // and a Run's live communication settings share it; the caller owns saving
+  // and validation. `onChange(next)` receives the complete next value. Number
+  // fields report their text as entered, so callers normalize numbers at
+  // their payload boundary (`normalizeDelivery`). `errors` holds the message
+  // of each invalid batching limit by its field (`batch_messages`, ...), which
+  // shows under that field. `idPrefix` keeps the element ids of several
+  // instances apart: a limit's field is `${idPrefix}-${limit.id}`
+  // (DELIVERY_LIMITS).
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
   import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
+  import { DELIVERY_LIMITS } from './runPresentation.js';
 
-  let { value, onChange, disabled = false, idPrefix } = $props();
-
-  let advancedOpen = $state(false);
+  let { value, onChange, errors = {}, disabled = false, idPrefix } = $props();
 
   const routes = $derived([
     { id: 'main', label: t('swarm.delivery.route.main') },
@@ -27,32 +30,40 @@
     { value: 'idle', label: t('swarm.delivery.receive.idle') },
     { value: 'pull', label: t('swarm.delivery.receive.pull') },
   ]);
-  const limits = $derived([
-    {
-      field: 'coalesce_ms',
-      id: `${idPrefix}-coalesce`,
+  // The batching limits' field texts; their ids and ranges are
+  // DELIVERY_LIMITS', which the callers validate with.
+  const limitTexts = $derived({
+    coalesce_ms: {
       label: t('swarm.delivery.batchDelay'),
       description: t('swarm.delivery.batchDelayHelp'),
-      min: 0,
-      max: 5000,
     },
-    {
-      field: 'batch_messages',
-      id: `${idPrefix}-batch-messages`,
+    batch_messages: {
       label: t('swarm.delivery.batchMessages'),
       description: t('swarm.delivery.batchMessagesHelp'),
-      min: 1,
-      max: 100,
     },
-    {
-      field: 'batch_chars',
-      id: `${idPrefix}-batch-chars`,
+    batch_chars: {
       label: t('swarm.delivery.batchChars'),
       description: t('swarm.delivery.batchCharsHelp'),
-      min: 16000,
-      max: 128000,
     },
-  ]);
+  });
+  const limits = $derived(
+    DELIVERY_LIMITS.map((limit) => ({
+      ...limitTexts[limit.field],
+      field: limit.field,
+      id: `${idPrefix}-${limit.id}`,
+      min: limit.min,
+      max: limit.max,
+      error: errors[limit.field] ?? '',
+    })),
+  );
+  const holdsError = $derived(limits.some((limit) => limit.error));
+
+  // An error never hides behind the disclosure: it opens to show one and
+  // stays open while one remains.
+  let advancedOpen = $state(false);
+  $effect.pre(() => {
+    if (holdsError) advancedOpen = true;
+  });
 
   function setRoute(route, field, next) {
     onChange({ ...value, [route]: { ...value[route], [field]: next } });
@@ -123,7 +134,7 @@
       class="s-row s-row--compact s-disclosure-row"
       aria-expanded={advancedOpen}
       aria-controls={`${idPrefix}-advanced`}
-      onclick={() => (advancedOpen = !advancedOpen)}
+      onclick={() => (advancedOpen = holdsError || !advancedOpen)}
     >
       <span class="s-row-label" id={`${idPrefix}-advanced-label`}>
         <span
@@ -148,6 +159,15 @@
             <div class="s-row-desc" id={`${limit.id}-help`}>
               {limit.description}
             </div>
+            {#if limit.error}
+              <p
+                class="swarm-profile-editor__error"
+                id={`${limit.id}-error`}
+                role="alert"
+              >
+                {limit.error}
+              </p>
+            {/if}
           </div>
           <div class="s-row-control s-row-control--number">
             <TextField
@@ -159,7 +179,10 @@
               step="1"
               value={value[limit.field]}
               {disabled}
-              aria-describedby={`${limit.id}-help`}
+              invalid={Boolean(limit.error)}
+              aria-describedby={limit.error
+                ? `${limit.id}-help ${limit.id}-error`
+                : `${limit.id}-help`}
               onInput={(next) => onChange({ ...value, [limit.field]: next })}
             />
           </div>
