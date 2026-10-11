@@ -6,9 +6,8 @@
   // the Project editor share this one presentation. `onContextMenu(groupId,
   // item, event)` offers a row's context menu (see AgentSelectionGroup), also
   // from a "⋯" button on every row, so a Skill's actions are found where it
-  // is seen. The panel carries its own layout styles: it is also rendered
-  // outside the Skills view (Agent and Project editors, Extension pages),
-  // where the Skills view's stylesheet is not loaded.
+  // is seen. The panel carries its own layout styles because Extension pages
+  // render it without the Skills view's stylesheet.
   import { t } from '$lib/i18n.js';
   import AgentSelectionGroup, {
     filterSelectionItems,
