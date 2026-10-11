@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any
 
 from core.providers._tool_result_text import tool_result_envelope
+from core.utils.json_text import explain_json_break, quote_bare_values
 
 JsonObject = dict[str, Any]
 
@@ -32,7 +33,8 @@ TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD = "argument_sequence_length"
 
 INVALID_TOOL_CALL_NAME = "invalid_tool_call"
 
-MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 1200
+# Plain-text arguments are shown back up to this length; a JSON break shows its surroundings.
+MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 200
 
 
 def normalize_tool_call_candidates(
@@ -125,13 +127,13 @@ def normalize_tool_call_candidate(
 
     problems: list[str] = []
     if resolved_name == INVALID_TOOL_CALL_NAME and name != INVALID_TOOL_CALL_NAME:
-        problems.append("the Tool name is missing or is not a non-empty string")
+        problems.append("the Tool name is missing or is not a non-empty string.")
     if argument_error is not None:
         problems.append(argument_error)
 
     normalized_rejection = _normalized_existing_tool_call_rejection(rejection)
     if rejection is not None and normalized_rejection is None:
-        problems.append("the Provider supplied invalid Tool Call rejection metadata")
+        problems.append("the Provider supplied invalid Tool Call rejection metadata.")
 
     candidate: JsonObject = {
         "id": resolved_id,
@@ -145,19 +147,23 @@ def normalize_tool_call_candidate(
         candidate[TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD] = argument_sequence_index
         candidate[TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD] = argument_sequence_length
     if problems:
-        code = (
-            "malformed_tool_arguments"
-            if len(problems) == 1 and argument_error
-            else "malformed_tool_call"
-        )
-        detail = "; ".join(problems)
-        candidate[TOOL_CALL_REJECTION_FIELD] = {
-            "code": code,
-            "message": (
-                f"Tool Call {resolved_id!r} was rejected before execution because {detail}. "
+        detail = " ".join(problems)
+        if len(problems) == 1 and argument_error:
+            code = "malformed_tool_arguments"
+            message = (
+                f"{resolved_name} was not run: {argument_error}\n"
+                "Send the call again with its arguments as one JSON object."
+            )
+        else:
+            code = "malformed_tool_call"
+            message = (
+                f"Tool Call {resolved_id!r} was rejected before execution: {detail}\n"
                 "Reissue the complete Tool Call with a non-empty Tool name and arguments "
                 "encoded as one JSON object."
-            ),
+            )
+        candidate[TOOL_CALL_REJECTION_FIELD] = {
+            "code": code,
+            "message": message,
             "fingerprint": _tool_call_rejection_fingerprint(name, arguments, detail),
         }
     elif normalized_rejection is not None:
@@ -203,32 +209,27 @@ def _valid_argument_sequence_metadata(index: Any, length: Any) -> bool:
 
 
 def _normalize_tool_call_arguments(arguments: Any) -> tuple[JsonObject, str | None]:
+    """Return the arguments as a canonical object, or ``{}`` and what is wrong with them.
+
+    A text whose only flaw is bare values (``"path": .``) is read with those
+    values quoted, silently: the call has one reading.
+    """
     if arguments is None or (isinstance(arguments, str) and not arguments):
         return {}, None
     if isinstance(arguments, Mapping):
         normalized = dict(arguments)
     elif isinstance(arguments, str):
-        try:
-            decoded = json.loads(arguments)
-        except ValueError, RecursionError:
-            return {}, (
-                "the arguments contain malformed or incomplete JSON "
-                f"({len(arguments)} chars): {_preview_malformed_tool_arguments(arguments)}"
-            )
+        decoded, problem = _decode_arguments_text(arguments)
+        if problem is not None:
+            return {}, problem
         if not isinstance(decoded, Mapping):
-            return {}, (
-                "the arguments JSON decoded to "
-                f"{type(decoded).__name__}, but a JSON object is required"
-            )
+            return {}, f"its arguments are {_json_kind(decoded)}, not a JSON object."
         normalized = dict(decoded)
     else:
-        return {}, (
-            "the arguments must be a JSON object or an encoded JSON object, but received "
-            f"{type(arguments).__name__}"
-        )
+        return {}, f"its arguments arrived as {type(arguments).__name__}, not as a JSON object."
 
     if any(not isinstance(key, str) for key in normalized):
-        return {}, "the arguments object contains a non-string property name"
+        return {}, "its arguments have a field name that is not text."
     try:
         canonical_text = json.dumps(
             normalized,
@@ -239,8 +240,44 @@ def _normalize_tool_call_arguments(arguments: Any) -> tuple[JsonObject, str | No
         )
         canonical: JsonObject = json.loads(canonical_text)
     except (TypeError, ValueError, OverflowError, RecursionError) as error:
-        return {}, f"the arguments object is not JSON-serializable: {error}"
+        return {}, f"its arguments hold a value that is not JSON ({error})."
     return canonical, None
+
+
+def _decode_arguments_text(arguments: str) -> tuple[Any, str | None]:
+    try:
+        return json.loads(arguments), None
+    except json.JSONDecodeError as error:
+        repaired = quote_bare_values(arguments)
+        if repaired is not None:
+            decoded = json.loads(repaired)
+            if isinstance(decoded, Mapping):
+                return decoded, None
+        return None, _malformed_arguments_problem(arguments, error)
+    except ValueError, RecursionError:
+        return None, "its arguments are too large or too deeply nested to read as JSON."
+
+
+def _malformed_arguments_problem(arguments: str, error: json.JSONDecodeError) -> str:
+    found, explanation = explain_json_break(arguments, error)
+    if found.kind == "plain_text":
+        shown = arguments.strip()
+        if len(shown) > MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS:
+            shown = shown[:MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS] + "…"
+        return f"its arguments are plain text, not a JSON object:\n{shown}"
+    return f"its arguments are not valid JSON. {explanation}"
+
+
+def _json_kind(value: Any) -> str:
+    if isinstance(value, list):
+        return "a JSON array"
+    if isinstance(value, str):
+        return "a JSON string"
+    if isinstance(value, bool):
+        return "a JSON boolean"
+    if isinstance(value, int | float):
+        return "a JSON number"
+    return "JSON null"
 
 
 def _normalized_existing_tool_call_rejection(value: Any) -> JsonObject | None:
@@ -252,16 +289,6 @@ def _normalized_existing_tool_call_rejection(value: Any) -> JsonObject | None:
     if not all(isinstance(field, str) and field for field in (code, message, fingerprint)):
         return None
     return {"code": code, "message": message, "fingerprint": fingerprint}
-
-
-def _preview_malformed_tool_arguments(arguments_text: str) -> str:
-    if len(arguments_text) <= MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS:
-        return repr(arguments_text)
-    edge_length = MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS // 2
-    head = arguments_text[:edge_length]
-    tail = arguments_text[-edge_length:]
-    omitted_count = len(arguments_text) - (edge_length * 2)
-    return f"{head!r} ... <{omitted_count} chars omitted> ... {tail!r}"
 
 
 def _tool_call_rejection_fingerprint(name: Any, arguments: Any, detail: str) -> str:

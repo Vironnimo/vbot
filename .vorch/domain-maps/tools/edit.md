@@ -46,8 +46,15 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   refusal is `invalid_arguments` ending `No file was changed.`): `file_path`/
   `filename` -> `path`, `old_str`/`old_text`/`oldText` and the `new_*` twins,
   any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
-  or one of its items sent as JSON text (text that encodes no array or object is
-  refused: `edits arrived as text, not as an array. ...`); a flat `old_string`/`new_string` call is one edit; an item's
+  or one of its items sent as JSON text, also with unescaped `"` inside
+  `old_string`/`new_string` (`decode_json_argument`, the shared quote repair in
+  `tools.md` -> Shared argument repair, against the schema of an edit; 5 of 12
+  real stringified `edits` decoded this way, all as the reviewed reading). Text
+  that is not JSON at all is refused with `edits arrived as text, not as an
+  array. ...`; broken JSON text is refused with where it breaks (character,
+  item and field, the text around it, how to write it) and, for a break inside
+  a text, `If this text fails again, send one edit per call, or call write with
+  the whole file.` A flat `old_string`/`new_string` call is one edit; an item's
   own `path` is accepted when it names the call's file (or supplies the missing
   root path) and refused when it names another file. Refused before any effect,
   each naming the call to send: `edits` beside flat fields, a root `replace_all`
@@ -55,6 +62,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   an item that is not an object, an unknown item field, a field given twice with
   different values. Coverage:
   `test_other_edit_spellings_make_the_same_change`,
+  `test_edits_text_with_unescaped_quotes_runs_only_when_it_has_one_reading`,
   `test_open_or_misdirected_calls_say_which_call_to_send`.
 - **Semantics:** the call is one step of the shared pipeline run with `atomic=True`:
   every edit is planned in memory, in order, each against the text the edits before
@@ -111,6 +119,8 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
+| Broken `edits` JSON text: `edits is not valid JSON. At character N, <what breaks in which field>:` + the text around it + how to write it | The former `edits arrived as text, not as an array.` named no break, so the Model could not tell what to fix; 12 `edits` texts in the live Sessions failed this way, 7 of them still after the quote repair (tool review 2026-10-11). |
+| `If this text fails again, send one edit per call, or call write with the whole file.` | Only for a break inside a text (a quote, an escape, a line break): long code with quotes is what Models fail to escape; a smaller call or `write` avoids the nested JSON. Dispatch does not know whether the call repeats, so the sentence is conditional. |
 
 ## Verification
 

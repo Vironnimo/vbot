@@ -16,7 +16,8 @@ import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, override
 
-from core.tools.contracts import ToolContract, ToolContractError, _load_json_value, _same_json_value
+from core.tools._argument_repair import load_json_value, same_json_value
+from core.tools.contracts import ToolContract, ToolContractError
 
 
 def spelling(value: str) -> str:
@@ -110,7 +111,7 @@ def normalize_call_arguments(
     value = copy.deepcopy(arguments)
     if isinstance(value, str):
         try:
-            value = _load_json_value(value)
+            value = load_json_value(value)
         except ValueError as error:
             raise ToolContractError("Provide one JSON argument object.") from error
     if not isinstance(value, dict):
@@ -137,7 +138,7 @@ def normalize_call_arguments(
             if key not in properties and canonical_field(key) == key:
                 action = _formatted_name(key, actions)
                 if _format_key(key) in {"request", "arguments"} or action is not None:
-                    nested = _load_json_value(item) if isinstance(item, str) else item
+                    nested = load_json_value(item) if isinstance(item, str) else item
                     if isinstance(nested, dict) and (nested or action is not None):
                         result.extend(entries(nested, depth + 1))
                         if action is not None:
@@ -175,7 +176,7 @@ def normalize_call_arguments(
             # An empty value under a name that is not a parameter requests nothing.
             continue
         item = repaired[field]
-        if field in normalized and not _same_json_value(normalized[field], item):
+        if field in normalized and not same_json_value(normalized[field], item):
             (first_key, first), second = sent[field], (key, given)
             raise ToolContractError(
                 f"Conflicting values for {field}: {first_key} is {_shown(first)} and "
@@ -200,7 +201,7 @@ def _argument_object(value: Any) -> dict[str, Any] | None:
     """Return ``value`` as an object when it is one or is JSON text of one."""
     if isinstance(value, str) and value.lstrip().startswith("{"):
         try:
-            value = _load_json_value(value)
+            value = load_json_value(value)
         except ValueError, ToolContractError:
             return None
     return value if isinstance(value, dict) else None

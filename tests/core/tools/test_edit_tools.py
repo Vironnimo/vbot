@@ -173,6 +173,42 @@ async def test_other_edit_spellings_make_the_same_change(tmp_path, arguments) ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("edits", "content"),
+    [
+        pytest.param(
+            '[{"old_string": "x = 1", "new_string": "x = f("a")"}]', b'x = f("a")\n', id="array"
+        ),
+        pytest.param('{"old_string": "x = 1", "new_string": "x = "a""}', b'x = "a"\n', id="one"),
+        # Both have another reading than quotes inside new_string: nothing runs.
+        pytest.param(
+            '[{"old_string": "x = 1", "new_string": "x = f("a", "b")"}]', None, id="comma-quote"
+        ),
+        pytest.param(
+            '[{"old_string": "x = 1", "new_string": "x = "a"", "line": 2}]',
+            None,
+            id="undeclared-field",
+        ),
+        pytest.param('[{"old_string": "x = 1", "new_string": "x = \\_"}]', None, id="other"),
+    ],
+)
+async def test_edits_text_with_unescaped_quotes_runs_only_when_it_has_one_reading(
+    tmp_path, edits, content
+) -> None:
+    (tmp_path / "a.py").write_bytes(b"x = 1\n")
+
+    result = await call(tmp_path, {"path": "a.py", "edits": edits}, name="edit")
+
+    if content is not None:
+        assert result["ok"]
+        assert (tmp_path / "a.py").read_bytes() == content
+        return
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "new_string" in text(result)  # The error names the field the JSON breaks in.
+    assert (tmp_path / "a.py").read_bytes() == b"x = 1\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("edits", "message"),
     [
         (
@@ -474,10 +510,10 @@ async def test_failed_changes_change_nothing_and_say_what_to_send(
         ),
         pytest.param(
             "edit",
-            {"path": "a.txt", "edits": '[{"old_string": "one", "new_string": "1"'},
+            {"path": "a.txt", "edits": "one -> 1"},
             "edits arrived as text, not as an array. Send edits as an array of objects, each "
             "with old_string and new_string.",
-            id="edits-as-broken-json-text",
+            id="edits-as-plain-text",
         ),
         pytest.param(
             "edit",

@@ -240,9 +240,8 @@ def test_consecutive_argument_objects_become_sequential_sibling_calls(
     assert all("rejection" not in call for call in tool_calls)
 
 
-@pytest.mark.parametrize("size", [10, 5000], ids=["short", "abbreviated"])
-def test_malformed_tool_arguments_become_a_rejected_call(size: int) -> None:
-    fragment = '{"path":"todo.html","content":"' + "x" * size
+def test_malformed_tool_arguments_become_a_rejected_call() -> None:
+    fragment = '{"path":"todo.html","content":"' + "x" * 5000
 
     [tool_call] = (
         _accumulate(_tool_delta(fragment, name="write", id="call_abc"))
@@ -254,11 +253,9 @@ def test_malformed_tool_arguments_become_a_rejected_call(size: int) -> None:
     message = tool_call["rejection"]["message"]
     assert tool_call["arguments"] == {}
     assert tool_call["rejection"]["code"] == "malformed_tool_arguments"
-    assert "malformed or incomplete JSON" in message
-    assert (fragment in message) is (size == 10)
-    if size == 5000:
-        assert f"{len(fragment)} chars" in message
-        assert "chars omitted" in message
+    # The message says where the JSON breaks instead of echoing the whole text.
+    assert str(len(fragment)) in message
+    assert len(message) < 500
 
 
 def test_partial_fields_drop_an_in_flight_tool_call_without_raising() -> None:

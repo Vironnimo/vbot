@@ -30,7 +30,12 @@ from core.tools._patch_requests import APPLY_PATCH_TOOL_NAME, content_operation
 from core.tools._patch_syntax import _Hunk, _Operation, _Replacement, _same_path
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
-from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from core.tools.contracts import (
+    ToolContract,
+    ToolContractError,
+    compile_tool_contract,
+    decode_json_argument,
+)
 from core.tools.file_state import FileReadState
 from core.tools.model_names import model_tool_name
 from core.tools.tools import (
@@ -43,6 +48,7 @@ from core.tools.tools import (
     offload_tool_handler,
     tool_failure,
 )
+from core.utils.json_text import JsonPath, explain_json_break
 
 EDIT_TOOL_NAME = "edit"
 WRITE_TOOL_NAME = "write"
@@ -271,17 +277,63 @@ def normalize_edit_arguments(arguments: Any) -> Any:
     return normalized
 
 
+@cache
+def _edits_text_schemas() -> tuple[JsonObject, JsonObject]:
+    """Return the schemas of ``edits`` sent as JSON text: the array, and one edit alone."""
+    item = copy.deepcopy(EDIT_TOOL_PARAMETERS["properties"]["edits"]["items"])
+    item["properties"]["path"] = _TEXT
+    return {"type": "array", "items": item}, item
+
+
 def _edits_value(value: Any) -> Any:
-    """Return ``edits`` sent as JSON text as the array or object it encodes."""
+    """Return ``edits`` sent as JSON text as the array or object it encodes.
+
+    Text that is JSON except for unescaped quotes inside old_string or
+    new_string is read with those quotes escaped (``decode_json_argument``).
+    """
     if not isinstance(value, str):
         return value
-    decoded = _json_value(value)
+    array_schema, item_schema = _edits_text_schemas()
+    encoded = value.lstrip()[:1]
+    try:
+        decoded = decode_json_argument(value, item_schema if encoded == "{" else array_schema)
+    except json.JSONDecodeError as error:
+        if encoded not in ("[", "{"):
+            decoded = None
+        else:
+            raise ValueError(_broken_edits_text(value, error)) from None
+    except ToolContractError:
+        raise
+    except ValueError, RecursionError:
+        decoded = None
     if isinstance(decoded, list | dict):
         return decoded
     raise ValueError(
         "edits arrived as text, not as an array. Send edits as an array of objects, each with "
         "old_string and new_string."
     )
+
+
+def _broken_edits_text(text: str, error: json.JSONDecodeError) -> str:
+    """Say where ``edits`` stops being JSON and how to send it."""
+    found, explanation = explain_json_break(text, error, label=_edits_field)
+    lines = [f"edits is not valid JSON. {explanation}"]
+    if found.concerns_text:
+        write = model_tool_name(WRITE_TOOL_NAME)
+        lines.append(
+            "If this text fails again, send one edit per call, or call "
+            f"{write} with the whole file."
+        )
+    return "\n".join(lines)
+
+
+def _edits_field(path: JsonPath) -> str | None:
+    item = next((part for part in path if isinstance(part, int)), None)
+    field = next((part for part in reversed(path) if isinstance(part, str)), None)
+    where = f"edits item {item + 1}" if item is not None else None
+    if field is not None and where is not None:
+        return f"{field} in {where}"
+    return field or where
 
 
 def _json_value(text: str) -> Any:

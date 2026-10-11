@@ -409,7 +409,7 @@ async def test_failure_code_follows_the_phase_that_raised(
     )
 
     with caplog.at_level(logging.ERROR, logger="vbot.tools"):
-        result = await _run_one(registry, "probe")
+        result = await _run_one(registry, "probe", {"files": ["a.txt", "b.txt"]})
 
     assert result == failure
     assert effects == ([] if raised_by == "normalizer" else ["sent"])
