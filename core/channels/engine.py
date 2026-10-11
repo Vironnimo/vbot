@@ -160,8 +160,8 @@ class ChannelConversationEngine:
         self._stopped = False
         # Relays and deliveries that outlive the call that started them.
         self._tasks: set[asyncio.Task[Any]] = set()
-        # Durable records of admitted work; stop lets them finish instead of
-        # cancelling them, so no admitted item loses its notice.
+        # Durable records of admitted work and the Runs that answer it; stop
+        # lets them finish instead of cancelling either write.
         self._recordings: set[asyncio.Task[bool]] = set()
         self._command_dispatcher = command_dispatcher
         self._run_button_binding_registry = run_button_binding_registry
@@ -965,11 +965,7 @@ class ChannelConversationEngine:
                 queued.retry_keyboard if isinstance(queued, _QueuedInternalPrompt) else None
             ),
         )
-        recorded = asyncio.create_task(
-            self._owe(reply), name=f"channel:{self._config.id}:owe-reply"
-        )
-        self._recordings.add(recorded)
-        recorded.add_done_callback(self._recordings.discard)
+        recorded = self._record_reply(reply)
         return _PendingItem(reply_id=reply.id, created_at=reply.created_at, recorded=recorded)
 
     async def _owe_run_reply(
@@ -980,8 +976,6 @@ class ChannelConversationEngine:
         created_at = utc_now_timestamp()
         if pending is not None:
             pending.taken = True
-            if not await asyncio.shield(pending.recorded):
-                return None
             reply_id, created_at = pending.reply_id, pending.created_at
         reply = PendingReply(
             id=reply_id,
@@ -991,7 +985,23 @@ class ChannelConversationEngine:
             route=RouteFacts(agent_id=run.agent_id, session_id=run.session_id),
             run_id=run.id,
         )
-        return reply_id if await self._owe(reply) else None
+        recorded = self._record_reply(reply, after=pending.recorded if pending else None)
+        return reply_id if await asyncio.shield(recorded) else None
+
+    def _record_reply(
+        self, reply: PendingReply, *, after: asyncio.Task[bool] | None = None
+    ) -> asyncio.Task[bool]:
+        """Keep admission and Run writes ordered and alive until stop drains them."""
+
+        async def record() -> bool:
+            if after is not None and not await after:
+                return False
+            return await self._owe(reply)
+
+        recorded = asyncio.create_task(record(), name=f"channel:{self._config.id}:owe-reply")
+        self._recordings.add(recorded)
+        recorded.add_done_callback(self._recordings.discard)
+        return recorded
 
     async def _owe(self, reply: PendingReply) -> bool:
         try:

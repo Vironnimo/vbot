@@ -134,6 +134,7 @@ def _record_history(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("hold_run_write", [False, True], ids=["admission-write", "run-write"])
 @pytest.mark.parametrize(
     ("output", "ending", "reply"),
     [
@@ -148,13 +149,38 @@ def _record_history(
     ids=["shutdown-partial", "crash-partial", "crash-nothing", "completed", "cancelled"],
 )
 async def test_a_run_answer_an_ended_engine_owed_is_sent_once_from_session_history(
-    tmp_path: Path, output: str | None, ending: str | None, reply: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output: str | None,
+    ending: str | None,
+    reply: str,
+    hold_run_write: bool,
 ) -> None:
     runs = _Runs()
     engine, sessions, _trigger, first = make_engine(tmp_path, trigger_run=runs.trigger)
+    state = channel_state(tmp_path)
+    run_async = state.run_async
+    write_waiting, release_write = asyncio.Event(), asyncio.Event()
+
+    async def hold_write(function: Any, *args: Any, **kwargs: Any) -> Any:
+        if function == state.owe_reply and (args[1].run_id is not None) == hold_run_write:
+            write_waiting.set()
+            await release_write.wait()
+        return await run_async(function, *args, **kwargs)
+
+    monkeypatch.setattr(state, "run_async", hold_write)
     await engine.handle_inbound_text(make_conversation(), "hello")
     await asyncio.wait_for(runs.started.wait(), timeout=5)
-    await engine.stop()
+    await asyncio.wait_for(write_waiting.wait(), timeout=5)
+    # Stop while admission or its promotion to a Run answer is still being
+    # recorded. Drain the cancelled worker before letting that write finish.
+    worker = engine._chat_workers["12345"]
+    stopping = asyncio.create_task(engine.stop())
+    try:
+        await asyncio.gather(worker, return_exceptions=True)
+    finally:
+        release_write.set()
+        await stopping
     run_id = runs.runs[0].id
     sessions.get(_ADDRESS).start_run(run_id)
     _record_history(sessions, run_id, output, ending)
