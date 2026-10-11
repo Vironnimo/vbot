@@ -394,6 +394,7 @@ def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
             "profile_snapshot": _load(row["profile_snapshot"]),
             "effective_configuration": _load(row["effective_configuration"]),
             "state": row["state"],
+            "created_at": str(row["created_at"]),
             "delivery": _load(
                 connection.execute(
                     "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)

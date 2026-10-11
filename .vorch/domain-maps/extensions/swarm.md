@@ -799,7 +799,8 @@ The Run view (`RunView.svelte`) is a centred page at the configuration measure
 (`--content-max-narrow`), like the start form. Its header names the Run by its
 list entry's title (the canonical group title, else the goal's first line) as
 plain text, then the Swarm it started from, its start (relative, with the absolute
-moment as tooltip) and its size, then one row with the state chip, at most one
+moment as tooltip; `swarms.get` carries `created_at` too, so a Run opened by link
+outside the loaded list shows it) and its size, then one row with the state chip, at most one
 lifecycle action and the Run's menu: Communication settings… (open Runs only),
 Run details and Delete…. The lifecycle action is Stop while the Swarm is
 preparing, running or stopping or any participant runs, otherwise Resume while
