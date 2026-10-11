@@ -101,11 +101,22 @@ function wikiBridge() {
       has_more: false,
     }),
     wiki: (args) => {
-      if (args.action === 'list')
+      if (args.action === 'list') {
+        // A phrase no page holds lists the pages that hold all of its words.
+        const words = (args.query ?? '').toLowerCase().split(/\s+/);
+        const byWords =
+          !matches(args) &&
+          words.length > 1 &&
+          words.every((word) => matches({ ...args, query: word }));
         return {
-          entries: matches(args) ? [{ ...page, excerpt: page.content }] : [],
+          entries:
+            matches(args) || byWords
+              ? [{ ...page, excerpt: page.content }]
+              : [],
           has_more: false,
+          ...(byWords ? { matched: 'words' } : {}),
         };
+      }
       if (args.action === 'read')
         return {
           ...(args.revision ? version(args.revision) : page),
@@ -317,6 +328,26 @@ describe('Swarm Wiki pages', () => {
         expect.objectContaining({ action: 'list', query: 'findings' }),
       ),
     );
+  });
+
+  it('says when a search lists the pages holding all of its words', async () => {
+    const fixture = wikiBridge();
+    await openWikiTab(fixture);
+    await vi.waitFor(() => expect(button('Shared research')).toBeDefined());
+    const hint = t('swarm.wiki.matchedWords', { query: 'research shared' });
+    const index = () => document.querySelector('.wiki-index').textContent;
+    fill('wiki-search', 'research shared');
+    await vi.waitFor(() => expect(index()).toContain(hint));
+    expect(button('Shared research')).toBeDefined();
+    // A search the page holds as written lists it without the hint, which
+    // names the search it belongs to until the new list has arrived.
+    fill('wiki-search', 'shared research');
+    await vi.waitFor(() => expect(index()).not.toContain(hint));
+    expect(wikiCalls(fixture, 'list').at(-1)[1]).toMatchObject({
+      query: 'shared research',
+    });
+    expect(document.querySelector('.wiki-index [role="status"]')).toBeNull();
+    expect(button('Shared research')).toBeDefined();
   });
 
   it('searches once typing rests and clears a search without matches', async () => {

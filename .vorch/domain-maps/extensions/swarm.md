@@ -198,7 +198,9 @@ lists instead the pages holding all of its whitespace-separated words (edge
 punctuation stripped) in title or content, and says so in the header
 (`_store_wiki.py::_search`, Sessions, 2026-10); the choice is made at the
 continuation's revision watermark, so every page of one search uses the same mode,
-and the WebUI search gets the same fallback. An Agent `read` with `query` (Sessions, 2026-09)
+and the WebUI search gets the same fallback: `list` then carries `matched: "words"`,
+and `WikiIndex.svelte` names the search above the list as one no page holds as
+written, so the user does not take the pages for exact matches. An Agent `read` with `query` (Sessions, 2026-09)
 reads the page as asked and adds `found`, before `content`: up to 5 lines of the
 whole read revision containing the casefolded query, each with its line number and
 starting character (the `offset` unit), or the `list` call that searches all pages

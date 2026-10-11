@@ -28,6 +28,8 @@
   let next = $state.raw(null);
   let query = $state('');
   let shownQuery = $state('');
+  // The search no page held as written, whose words the listed pages hold.
+  let wordsMatch = $state('');
   let includeDeleted = $state(false);
   let listError = $state('');
   let selected = $state.raw(null);
@@ -141,6 +143,7 @@
   async function refresh({ keep = false } = {}) {
     const generation = ++listGeneration;
     const wanted = keep ? entries.length : 0;
+    const searched = shownQuery;
     try {
       let result = await call({
         action: 'list',
@@ -157,6 +160,7 @@
       loaded = true;
       listError = '';
       entries = list;
+      wordsMatch = result.matched === 'words' ? searched : '';
       next = result.next_call?.arguments ?? null;
       now = Date.now();
     } catch (cause) {
@@ -532,6 +536,7 @@
           more={Boolean(next)}
           {query}
           {shownQuery}
+          {wordsMatch}
           {includeDeleted}
           error={listError}
           selectedId={selected?.page_id ?? null}

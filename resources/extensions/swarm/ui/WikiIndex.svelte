@@ -22,6 +22,7 @@
     more,
     query,
     shownQuery,
+    wordsMatch,
     includeDeleted,
     error,
     selectedId,
@@ -138,6 +139,9 @@
       ></Banner
     >{/if}
   {#if entries.length}
+    {#if wordsMatch}<p class="wiki-index__status" role="status">
+        {t('swarm.wiki.matchedWords', { query: wordsMatch })}
+      </p>{/if}
     <nav class="wiki-pages" aria-label={t('swarm.wiki.pages')}>
       {#each entries as page (page.page_id)}
         {@const meta = rowMeta(page)}

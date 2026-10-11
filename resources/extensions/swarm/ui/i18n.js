@@ -347,6 +347,8 @@ export default Object.freeze({
   'swarm.wiki.search': 'Search pages',
   'swarm.wiki.noMatches': 'No matching pages',
   'swarm.wiki.noMatchesHelp': 'No page title or text contains “{query}”.',
+  'swarm.wiki.matchedWords':
+    'No page contains “{query}” as written. These pages contain all of its words.',
   'swarm.wiki.clearSearch': 'Clear search',
   'swarm.wiki.showDeleted': 'Show deleted pages',
   'swarm.wiki.loadMore': 'Load more pages',
