@@ -438,7 +438,7 @@ describe('SwarmPage overview', () => {
   });
 
   it('opens the chosen picker entry through the leave guards and follows what the page shows', async () => {
-    const { bridge } = createBridge();
+    const { bridge, operation } = createBridge();
     await render(bridge);
     await pick('Investigate');
     await vi.waitFor(() =>
@@ -460,7 +460,7 @@ describe('SwarmPage overview', () => {
     // Back and Forward move the value with the shown place.
     bridge.goTo('/swarms/swr-a');
     await vi.waitFor(() => expect(pickerValue()).toBe('Investigate'));
-    // A changed new Swarm asks before the picker leaves it.
+    // A new Swarm's editor has an entry of its own while it shows.
     document
       .querySelector(`.swarm-bar button[aria-label="${NEW_SWARM}"]`)
       .click();
@@ -468,20 +468,25 @@ describe('SwarmPage overview', () => {
       expect(document.getElementById('swarm-profile-name')).not.toBeNull(),
     );
     expect(pickerValue()).toBe(NEW_SWARM);
-    fill('swarm-profile-name', 'Unfinished');
+    // Leaving an edited Swarm by the picker saves it first, as the pane does.
+    await pick('Research');
+    await vi.waitFor(() =>
+      expect(document.getElementById('swarm-profile-name')?.value).toBe(
+        'Research',
+      ),
+    );
+    fill('swarm-profile-name', 'Before picking');
     await tick();
     await pick('Investigate');
-    await vi.waitFor(() => expect(dialog()).not.toBeNull());
-    [...dialog().querySelectorAll('button')]
-      .find(
-        (node) => node.textContent.trim() === t('swarm.profile.keepEditing'),
-      )
-      .click();
-    await tick();
-    expect(document.getElementById('swarm-profile-name').value).toBe(
-      'Unfinished',
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
     );
-    expect(pickerValue()).toBe(NEW_SWARM);
+    const calls = operation.mock.calls.map(([name]) => name);
+    expect(calls.lastIndexOf('profiles.save')).toBeGreaterThan(-1);
+    expect(calls.lastIndexOf('profiles.save')).toBeLessThan(
+      calls.lastIndexOf('swarms.get'),
+    );
+    expect(pickerValue()).toBe('Investigate');
   });
 
   it('shows the route the host sends and pushes Swarm and tab choices as steps', async () => {
