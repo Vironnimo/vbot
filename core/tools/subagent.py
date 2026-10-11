@@ -121,9 +121,10 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
 
 MESSAGE_PARENT_TOOL_DESCRIPTION = (
     "Send a message to your Parent Agent, the Agent that delegated your task, without ending "
-    "your turn. Use it for questions only your Parent Agent can decide and to answer its "
-    "messages. Results and status reports belong in your final answer, which vBot sends to "
-    "your Parent Agent."
+    "your turn. Use it to ask what only your Parent Agent can decide while you continue "
+    "other work, to report a finding that changes what your Parent Agent or its other "
+    "Sub-Agents are doing, and to answer its messages. Results and status reports belong in "
+    "your final answer, which vBot sends to your Parent Agent."
 )
 MESSAGE_PARENT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
