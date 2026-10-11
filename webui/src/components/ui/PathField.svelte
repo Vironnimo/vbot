@@ -15,7 +15,8 @@
   // while the value stays empty (Re-point starts near a missing folder).
   // Other props reach the TextField input (`id`, `aria-*`, `onkeydown`): the
   // field handles its own keys first and passes the rest on, so Enter still
-  // submits or adds unless it picks a highlighted suggestion.
+  // submits or adds unless it picks a highlighted suggestion. Without focus,
+  // a path longer than the field shows its end, the folder or file it names.
   import { onDestroy, tick } from 'svelte';
 
   import { listProjects, listServerDirectory } from '$lib/api.js';
@@ -99,6 +100,13 @@
   function isFocused() {
     const input = inputElement();
     return Boolean(input) && input.ownerDocument.activeElement === input;
+  }
+
+  // Scrolls an unfocused field to the end of its path; a focused one keeps
+  // the caret where the user put it.
+  function showPathEnd() {
+    const input = inputElement();
+    if (input && !isFocused()) input.scrollLeft = input.scrollWidth;
   }
 
   // The server lists only the names the typed prefix can complete to, so a
@@ -365,6 +373,8 @@
     if (!isFocused()) {
       const trimmed = trimTrailingSeparator(value);
       if (trimmed !== value) onInput(trimmed);
+      // Once the browser has moved the text back to its start.
+      setTimeout(showPathEnd);
     }
     callerBlur?.(event);
   }
@@ -399,6 +409,12 @@
 
   $effect(() => {
     if (disabled) stopSuggesting();
+  });
+
+  // A value set from outside (a chosen or loaded path) shows its end.
+  $effect(() => {
+    void value;
+    showPathEnd();
   });
 
   $effect(() => {

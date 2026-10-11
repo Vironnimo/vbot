@@ -183,6 +183,35 @@ describe('PathField', () => {
     expect(props.value).toBe('C:\\');
   });
 
+  it('shows the end of a long path while the field has no focus', async () => {
+    const input = render({ value: 'C:\\Users\\me' });
+    let scrolled = 0;
+    Object.defineProperty(input, 'scrollWidth', {
+      configurable: true,
+      value: 640,
+    });
+    Object.defineProperty(input, 'scrollLeft', {
+      configurable: true,
+      get: () => scrolled,
+      set: (next) => {
+        scrolled = next;
+      },
+    });
+
+    props.value = 'D:\\work\\a-folder-with-a-long-name';
+    flushSync();
+    expect(scrolled).toBe(640);
+
+    // Typing keeps the caret's place; leaving the field shows the end again.
+    input.focus();
+    scrolled = 0;
+    type(input, 'D:\\work\\a-folder-with-a-long-name\\sub');
+    expect(scrolled).toBe(0);
+    input.blur();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(scrolled).toBe(640);
+  });
+
   it('shows only the newest listing and says when a folder cannot be read', async () => {
     let finishSlow;
     const listDirectory = vi.fn(({ path }) => {
