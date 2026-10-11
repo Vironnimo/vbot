@@ -36,9 +36,14 @@ def _score(requested: Path, candidate: Path) -> tuple[int, float] | None:
     if candidate_stem == requested_stem:
         return 4, 1.0
 
-    name_ratio = SequenceMatcher(None, requested_name, candidate_name).ratio()
     stem_ratio = SequenceMatcher(None, requested_stem, candidate_stem).ratio()
-    ratio = max(name_ratio, stem_ratio)
+    if requested.suffix and requested.suffix.casefold() == candidate.suffix.casefold():
+        # A shared extension says nothing about which file was meant: parser.py
+        # is not like ast.py.
+        ratio = stem_ratio
+    else:
+        name_ratio = SequenceMatcher(None, requested_name, candidate_name).ratio()
+        ratio = max(name_ratio, stem_ratio)
     if requested_name.startswith(candidate_name) or candidate_name.startswith(requested_name):
         return 3, ratio
     if requested_name in candidate_name or candidate_name in requested_name:

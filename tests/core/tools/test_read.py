@@ -162,10 +162,15 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     for folder in ("tests", "tests/deep", ".hidden", "node_modules"):
         tmp_path.joinpath(folder).mkdir()
         tmp_path.joinpath(folder, "corpus.py").write_text("x", encoding="utf-8")
+    modules = tmp_path / "modules"
+    modules.mkdir()
+    for name in ["ast.py", "lexer.py", "shell.py", "analyzer.py", "parsers.py", "parser.md"]:
+        modules.joinpath(name).write_text(name, encoding="utf-8")
 
     message = failure(await read(tmp_path, {"path": "ranked/settings.txt"}), "file_not_found")
     bounded = failure(await read(tmp_path, {"path": "many/settings.txt"}), "file_not_found")
     elsewhere = failure(await read(tmp_path, {"path": "corpus.py"}), "file_not_found")
+    module = failure(await read(tmp_path, {"path": "modules/parser.py"}), "file_not_found")
 
     # Same stem first, then files or directories beside it; never unrelated names
     # or the absolute path.
@@ -179,6 +184,9 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     assert (
         elsewhere == "File not found: corpus.py (similar: tests/corpus.py, tests/deep/corpus.py)."
     )
+    # A shared extension makes no name similar; the stem or the whole name has to be.
+    suggested = module.partition("(similar: ")[2].rstrip(").").split(", ")
+    assert suggested == ["modules/parser.md", "modules/parsers.py"]
 
 
 @pytest.mark.asyncio
