@@ -27,6 +27,7 @@ from core.utils.logging import get_logger
 from ._board_tool import BoardCall, prepare_board_call
 from ._board_view import (
     Roster,
+    automatic_delivery,
     call_text,
     delivery_text,
     messages_text,
@@ -103,8 +104,9 @@ _BOARD_CHANGES = {
     "leave": ("discussions",),
 }
 # Accepted without being offered: a Participant's own identity copied from its
-# reminders, the single action of the inbox and state Tools, and explicit Board
-# recipients, which "@" before names in the post text replaces.
+# reminders, the single action of the inbox and state Tools, explicit Board
+# recipients, which "@" before names in the post text replaces, and the offset
+# other harnesses page with, which ``before`` replaces.
 UNADVERTISED_PARAMETERS: dict[str, Json] = {
     name: {
         **({"action": {"type": "string", "enum": [action]}} if action else {}),
@@ -115,6 +117,7 @@ UNADVERTISED_PARAMETERS: dict[str, Json] = {
             {
                 "recipients": {"type": "array", "items": {"type": "string"}},
                 "reply_to": {"type": "string"},
+                "offset": {"type": "integer"},
             }
             if name == "swarm_board"
             else {}
@@ -1300,6 +1303,7 @@ class SwarmExtension:
             Roster.of(swarm, binding.participant_id),
             swarm["main_discussion_id"],
             inbox=_inbox_available(binding),
+            automatic=automatic_delivery(swarm["delivery"]),
         )
         return PreparedSessionDelivery(
             prepared["receipt_id"],

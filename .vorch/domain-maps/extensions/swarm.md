@@ -186,11 +186,19 @@ the call's own page reference. Store-assigned numbers were chosen over page name
 that Agents pick: 3 of 11 pages were renamed in one Run, so a descriptive ID would
 go stale or break links in immutable posts, and the title already carries the
 meaning (Sessions, 2026-09). Agents choose how to organize them. List/search returns
-recent changes and excerpts; content and history reads are bounded. List/history
+recent changes and excerpts; content and history reads are bounded. A content read
+without `limit` shows up to 20000 characters, the most one read can: at a default
+of 12000, 5 of 53 Wiki reads in one Run showed only part of a page shorter than
+20000 characters (Sessions, 2026-10). List/history
 continuations bind their query and revision watermark; content continuations pin
 the requested revision. Search matches Unicode-casefolded titles and content; the
 folding runs in Python over the latest revisions because kernel read connections
-carry no custom SQL functions. An Agent `read` with `query` (Sessions, 2026-09)
+carry no custom SQL functions. A multi-word query that no page contains as written
+lists instead the pages holding all of its whitespace-separated words (edge
+punctuation stripped) in title or content, and says so in the header
+(`_store_wiki.py::_search`, Sessions, 2026-10); the choice is made at the
+continuation's revision watermark, so every page of one search uses the same mode,
+and the WebUI search gets the same fallback. An Agent `read` with `query` (Sessions, 2026-09)
 reads the page as asked and adds `found`, before `content`: up to 5 lines of the
 whole read revision containing the casefolded query, each with its line number and
 starting character (the `offset` unit), or the `list` call that searches all pages
@@ -303,7 +311,15 @@ may have meant `read`, so its error offers the exact read call beside repeating
 with text (an Agent that sent it gave up after the plain error, Sessions 2026-09).
 Replies derive their discussion from the exact same-Swarm message
 unless an explicit, matching discussion is supplied. Reads start with newest
-posts, chronological within each page. The Tool continues to older posts with
+posts, chronological within each page. A page's `new` field names the shown posts
+still pending for the reader (`pending` on Store page entries: a recipient row
+without `delivered_at`). When the newest page shows only delivered posts or the
+reader's own, it says none is new and that ending the reply is how to wait, with
+what starts the next Run (`_board_view.news_text`, from the routes' `wake_idle`).
+A page holding a post outside the reader's audience, which it may never have seen,
+makes no such claim. Agents re-read the newest page while waiting: 13 of 153
+newest-page reads of one Run showed no post beyond the reader's previous read
+(Sessions, 2026-10). The Tool continues to older posts with
 `before` (the oldest shown post number); Store read cursors remain accepted.
 The Board UI reverses each page for newest-first display and appends older pages
 below it; this presentation does not change the Store or Tool read order.
@@ -335,9 +351,24 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   wrapper objects, other harnesses' field and action names, an action implied by
   the supplied fields, placeholder values in optional fields, and echoed
   idempotency keys the handler derives. An action that belongs to another Swarm
-  Tool fails with a message naming that Tool.
+  Tool fails with a message naming that Tool. On `swarm_board`, `message` is an
+  alias of `message_id` when it holds a post reference and of `text` otherwise,
+  under the shared conflict rule: a differing second value fails, an equal one or a
+  placeholder beside the real text asks for nothing. It once replaced an explicit
+  `text` silently, so two posts of one Run saved "placeholder" and "ddl" as their
+  whole text (Sessions, 2026-10).
 - `_board_tool.py` checks Board calls. It drops fields that request nothing, such
-  as paging fields on post, with a `note`. It clamps `limit` above 100 with a note.
+  as paging fields on post or a field no action uses, with a `note`. It clamps
+  `limit` above 100 with a note. Read accepts the unadvertised `offset` that other
+  harnesses page with: it skips that many of the newest posts (`SwarmStore.read_posts`),
+  is dropped silently beside `message_id` like `limit`, and with a note beside
+  `before` or `cursor`, which already set where the page starts; 3 calls of one Run
+  sent it and were refused as no parameter (Sessions, 2026-10). A `post` with a
+  `title` and a `discussion_id` that names an existing discussion is saved without the
+  title, with a note: the post's target is clear, and the refusal cost one Agent its
+  introduction post (Sessions, 2026-10). Without a named, existing discussion such a
+  post may mean `create` and is refused. A `list` cursor that continues no list, such
+  as `"d1"`, lists from the start with a note, since listing has no effect.
   It rejects a field that another action would use, naming those actions. It
   corrects a read-only reference with a note when exactly one candidate exists:
   a close stored post id (`pst_...`), a close stored discussion id (`dsc_...`),
@@ -352,7 +383,13 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   (`[#N] Author (in ...; reply to #M; to ...)`), then its verbatim
   text, or its Opening in delivered text. Copyable continuation calls follow as
   JSON. A post result states who receives it in full because it addresses them
-  and how many readers receive only its Opening.
+  and how many readers receive only its Opening. It names addressed participants
+  whose work stopped (`failed`, `cancelled`, `interrupted` in the Swarm snapshot of
+  the call), who see the post only once the user resumes them, so the author does
+  not wait for their answer. A post or opening whose text writes `@all` or a
+  synonym (the `_EVERYONE` recipient words) that names no participant gets a note
+  that it addressed no one: 18 of 293 posts in one Run wrote `@all` (Sessions,
+  2026-10). Addressing stays unchanged: only `@` before a name addresses.
 
 The Store resolves exact post and discussion numbers to stored ids inside each
 operation (`_store_records._post_id`, `_discussion_id`); a value that is no
@@ -435,8 +472,12 @@ Agent text; the heading and "to you" convey why a post arrived. Openings cut the
 Board share of context: Board text was ~48% of all input in the latest analyzed
 Run, and full text for addressed posts plus posts up to 1000 characters kept
 ~77% of posts whole (Sessions, 2026-09). Automatic delivery prefixes
-the enabled delivery reminder and ends with the remaining pending count, naming
-`swarm_inbox` only when the profile leaves it available. Delivery batches are
+the enabled delivery reminder and ends with the remaining pending count. When every
+route delivers while running (mode `all`, `_board_view.automatic_delivery`), the
+count says the rest reaches the Agent without a call; otherwise it names
+`swarm_inbox` only when the Session offers it. A bare count sent Agents to fetch
+on the Board the posts that would have arrived at their next request anyway
+(Sessions, 2026-10). Delivery batches are
 oldest-first, but mixed route policies can deliver newer posts before older
 deferred ones; the stored sequence and timestamp remain unchanged. A batch holds
 at most `batch_messages` posts and `batch_chars` characters of delivered text:
@@ -459,11 +500,17 @@ of Inbox calls were empty, most of them directly after a post.
 `swarm_state` is read-only, with optional cursor and limit (default 100, above 100
 runs as 100 with a note), so one page holds a whole roster: all 4 cursor failures of
 one Swarm Run came from 21-23-participant Swarms paging at the former default of 20
-(Sessions, 2026-09). It returns readable fields: `you` (name, state), `pending`
-(count and how to receive it), `delivery` and `wake` (the route policies as
-sentences), `participants` (count by state), `more` with a copyable continuation,
-and a roster listing "- Name: state" that marks the reader "(you)"; a cursor keeps
-its place under another page size (`test_swarm_state_tool.py`). Participant ids stay out of all Agent text,
+(Sessions, 2026-09). It returns readable fields: `pending` (count and how it
+reaches the reader), `delivery` and `wake` (the route policies as sentences),
+`participants` (count by state, only beside a partial roster), `more` with a
+copyable continuation, and a roster listing "- Name: state" that marks the reader
+"(you)"; a cursor keeps its place under another page size
+(`test_swarm_state_tool.py`). When every route delivers while running, `pending`
+says so and replaces `delivery`. `wake` names the routes that start a Run of an idle
+participant: addressed posts at once, others within the longest Quiet period. The
+result once repeated the reader's always-`running` state, every route in both
+`delivery` and `wake`, the pacing rule and the totals the roster already shows; it
+averaged 1,069 characters over 61 calls of one Run (Sessions, 2026-10). Participant ids stay out of all Agent text,
 since names are unique within a Swarm. Participants cannot rename themselves. The Store shuffles a pool of 300 modern
 first names (`_participant_names.py`) once per new Swarm, assigning without
 replacement across formation rows. Larger Swarms use numbered suffixes after the
@@ -514,7 +561,9 @@ restart starts every participant unpaced. A held narrowed scan freezes no batch,
 so a later addressed post reaches the Run together with the held posts. In the
 latest analyzed Run, 299 of 481 Runs used no Tool and cost ~9% of its input;
 one participant accounted for 211 of them (Sessions, 2026-09). `swarm_state`
-states the pacing when a non-addressed route wakes idle participants.
+states the pacing only as its bound: when a non-addressed route wakes idle
+participants, its posts start a Run "within" the longest Quiet period
+(`_board_view.wake_text`).
 A wake announces (`wake_pending_seq`) only through the newest post of the first
 batch it will deliver when that exceeds the previous announcement, so posts
 beyond that batch trigger another wake after the Run instead of waiting for an
@@ -1057,16 +1106,28 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. `or answers` was dropped with the advertised `reply_to`. |
 | `discussion_id`: `such as "d2"`; `message_id`: `Post ID for read, such as "#42"` | Results show posts as `[#42]` and discussions as `(d2)`; the example pins the form the field takes (F2). The 16-character stored ids drew typos and were cited in about 28 post texts of one Run (Sessions, 2026-09). |
 | `swarm_wiki` `page_id`: `Page ID, such as "w3".` | Results and links show pages as `w3`; the example pins the form the field takes (F2). Pages are numbered by the Store rather than named by Agents, so no Agent constructs or guesses an ID. |
+| `swarm_wiki` `limit`: `With read: characters to show (default and maximum 20000).` | Says that an omitted limit already reads as much as possible, so Agents do not raise it (F6). The default was 12000: 5 of 53 reads in one Run cut a page shorter than 20000 characters and cost a continuation (Sessions, 2026-10). |
 | Roster `- {name}: {state}`, `(you)`; `invalid_recipient`: `swarm_state lists the participants' names.` | Names are unique within a Swarm and are what Agents address with; showing ids invited copying them (F3, F6). |
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |
 | `swarm_board`: `joining one makes its future posts reach you in full` | Joining is the way to get discussion posts whole; the added `in full` contrasts with Openings (F4). |
 | `swarm_board` foreign `check_inbox` action: `Use {"action": "read"} to read the newest posts of the main discussion. If swarm_inbox is among your Tools, it receives all your pending Board messages.` | Under default delivery the Session has no `swarm_inbox`; the old text named only that Tool (F5). |
 | `swarm_state` `limit`: `Maximum participants to list, at most 100. Omit to list up to 100.` | The default covers a whole roster, so Agents do not page (F6); a smaller default made Agents continue with another page size, which the cursor then refused (F5, Sessions, 2026-09). |
 | `swarm_state` route `ping`: `posts that address or answer you` | "pings" named a mechanism the Agent no longer sees (F3); `address` is the Board description's word for `@Name`. |
-| `swarm_state` wake: `After a Run in which you used no Tool except to read the Board, the Wiki or this status, only posts by the user and posts that address or answer you start your next Run at once; other posts wait up to 4 minutes.` | Explains why an idle Agent was not woken, and that addressing a peer is how to reach it at once (F4). Names the reads that do not count, matching `WakePacing.tools_used`. |
+| `swarm_state` wake: `When you are idle, posts that address or answer you start a Run at once; {routes} start one within {minutes} minutes.` (`When you are idle, {routes} start a Run within {minutes} minutes.` without the addressed route) | Says that addressing a peer is how to reach it at once (F4) and bounds the wait for other posts, in one sentence. It replaced a route list plus the pacing rule (which reads count as acting), which repeated the routes and made the field the longest of the result (F6, Sessions, 2026-10); the Agent cannot act on the rule itself. |
+| `swarm_state` pending, every route automatic: `{count} messages for you; they reach you automatically, also while you are running, so you need not read them on the Board.` (and the singular and none forms); the `delivery` field is then omitted | A bare count read as a to-do: Agents fetched on the Board the posts that would reach them at their next request (F4, Sessions, 2026-10). With every route automatic the delivery sentence only repeated this. Other policies keep `{count} messages for you.` beside the `delivery` field, or name `swarm_inbox` where the Session offers it. |
+| Read `new`: `{posts} are new to you.`, `All {count} posts shown are new to you.`; on the newest page with nothing new: `None of the posts shown is new to you. To wait for others, end your reply; a post that addresses or answers you starts your next Run at once.` | Agents re-read the newest page to check for news and spent a Run on it (F4, F6, Sessions, 2026-10); the marks spare comparing post numbers, and the second sentence names the way to wait. The wait sentence follows the routes that wake: without the addressed route it names the others and the Quiet bound, without any it says new messages start no Run. |
+| `swarm_state` fields `you` and `participants` (dropped, totals kept beside a partial roster) | `you` was always "running" for the caller and the roster marks "(you)"; totals repeat a complete roster (F6). |
+| Delivery reminder, every route automatic: `{count} more pending; they reach you automatically, so you need not read them on the Board.` (and `1 more pending; it reaches you ...`) | Same failure as the state count: `{count} more pending.` sent Agents to the Board for posts the next request delivers (F4, Sessions, 2026-10). Other policies keep the Inbox or bare form. |
+| `swarm_board`: `Messages for you reach you as the group's delivery settings allow, so you need not read the Board to receive them; posts you read here are not delivered again.` | Replaces `Pending messages among the posts you read count as received and are not delivered again.`, which presented reading as a way to receive pending messages (F4, Sessions, 2026-10). `as the group's delivery settings allow` keeps it true under idle or pull routes, where `swarm_state` names the way. |
 | Post result: `It reaches {names} in full because it addresses or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |
 | Post header: `to {names}` and delivered `[{count} more characters not shown. Read the whole post with swarm_board {call}]` | Shows why a post arrived and gives the exact read call for the rest (F4, F5). |
 | `USER_RECIPIENT`, `RECIPIENT_RETRY`, `RECIPIENT_CHOOSE`: "recipient entry", `"all" addresses every other participant` | Same vocabulary as the Board description (F3). |
+| Read `offset` notes and errors: `offset was ignored: {field} already sets where the page starts.`, `No posts in {discussion} beyond its {offset} newest.`, `offset {value} is not a post count. Send the number of newest posts to skip, 0 or more, or omit offset to read the newest posts. The call was not run.` | `offset` stays unadvertised (`before` is the advertised way to page back); these texts cover the calls that send it anyway. 3 reads with `offset` in one Run were refused (F2, Sessions, 2026-10). |
+| `title was ignored: posts have no title; only create uses one, to name a new discussion.` | The post was saved; the note says the title is gone and how a titled discussion is made (F4). Refusing such a post lost an Agent's introduction in one Run (Sessions, 2026-10). |
+| `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.` | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10); the note corrects the belief after the post, without changing who receives it. |
+| Post result: `{names} has stopped and sees it only if the user resumes their work.` (and the plural) | An Agent that addresses a failed or cancelled peer otherwise waits for an answer that cannot come before a Resume (F4). |
+| `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
+| `swarm_wiki` list: `No page contains "{query}" as written; pages containing all of its words, most recently changed first ({count} shown).` and `No page contains "{query}" or all of its words.` | Agents also send keywords where the search takes a phrase: the only missed search of one Run was a three-word query (F3, F6, Sessions, 2026-10). The fallback turns such a miss into a result instead of another search; the header says the phrase missed, so the Agent does not take the pages for exact matches. |
 
 ## Repository Profiles
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from bisect import bisect_right
+from collections.abc import Iterator
 from itertools import islice
 from typing import cast
 
@@ -32,6 +33,8 @@ from ._wiki_edit import EditMiss, apply_text_edit
 
 MUTATIONS = {"create", "update", "delete", "restore"}
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
+# Punctuation around a search word, as in a quoted phrase or a list of terms.
+_WORD_EDGE = "\"'.,;:!?()[]{}<>“”„‘’«»"
 _FIELDS = {
     "list": {"query", "include_deleted", "cursor", "limit"},
     "read": {"page_id", "revision", "offset", "limit"},
@@ -176,10 +179,33 @@ def _metadata(row: sqlite3.Row, numbers: dict[str, int]) -> Json:
     }
 
 
+def _search(rows: list[sqlite3.Row], query: str) -> tuple[list[str], Iterator[sqlite3.Row]]:
+    """Return the searched terms and the matching pages, lazily.
+
+    A query no page contains as written finds the pages that contain all of
+    its words, in title or content. More than one term means that fallback ran.
+    """
+
+    def containing(terms: list[str]) -> Iterator[sqlite3.Row]:
+        # Unicode case folding happens in Python: SQLite's lower() folds ASCII
+        # only, and the read connections carry no custom functions.
+        for row in rows:
+            title, content = row["title"].casefold(), row["content"].casefold()
+            if all(term in title or term in content for term in terms):
+                yield row
+
+    phrase = [query.casefold()] if query else []
+    words = [word.strip(_WORD_EDGE) for word in query.casefold().split()]
+    words = list(dict.fromkeys(filter(None, words)))
+    if len(words) > 1 and next(containing(phrase), None) is None:
+        return words, containing(words)
+    return phrase, containing(phrase)
+
+
 def _read(
     row: sqlite3.Row, arguments: Json, current_revision: int, numbers: dict[str, int]
 ) -> Json:
-    offset, limit = arguments.get("offset", 0), arguments.get("limit", 12000)
+    offset, limit = arguments.get("offset", 0), arguments.get("limit", 20000)
     content = row["content"]
     if offset > len(content):
         raise SwarmStoreError("invalid_arguments", field="offset")
@@ -295,31 +321,27 @@ def wiki(
                 (swarm_id, call["page_id"], high, limit + 1, offset),
             ).fetchall()
         else:
-            # Unicode case folding happens in Python: SQLite's lower() folds
-            # ASCII only, and the read connections carry no custom functions.
-            query = arguments.get("query", "").casefold()
             latest = connection.execute(
                 f"SELECT {ALIASED_WIKI_REVISION_COLUMNS} FROM wiki_revisions r "
                 "JOIN (SELECT page_id,MAX(id) AS latest FROM wiki_revisions "
                 "WHERE swarm_id=? AND id<=? GROUP BY page_id) p ON r.id=p.latest "
                 "WHERE (? OR r.deleted=0) ORDER BY r.id DESC",
                 (swarm_id, high, arguments.get("include_deleted", False)),
-            )
-            matches = (
-                row
-                for row in latest
-                if query in row["title"].casefold() or query in row["content"].casefold()
-            )
+            ).fetchall()
+            terms, matches = _search(latest, arguments.get("query", ""))
             rows = list(islice(matches, offset, offset + limit + 1))
         entries = []
         for row in rows[:limit]:
             value = _metadata(row, numbers)
             if action == "list":
-                query = arguments.get("query", "").casefold()
-                start = max(0, row["content"].casefold().find(query) - 80) if query else 0
+                content = row["content"].casefold()
+                found = [index for index in map(content.find, terms) if index >= 0]
+                start = max(0, min(found) - 80) if found else 0
                 value["excerpt"] = row["content"][start : start + 320]
             entries.append(value)
         result: Json = {"entries": entries, "has_more": len(rows) > limit}
+        if action == "list" and len(terms) > 1:
+            result["matched"] = "words"
         if result["has_more"]:
             result["next_call"] = {
                 "tool": "swarm_wiki",

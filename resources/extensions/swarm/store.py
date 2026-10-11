@@ -495,13 +495,25 @@ class SwarmStore:
         cursor: str | None = None,
         limit: int = 20,
         before: str | None = None,
+        offset: int = 0,
     ) -> Page:
+        """Read one post, or a page of a discussion's posts ending at its newest post.
+
+        ``before`` ends the page just below that post and ``cursor`` continues a
+        previous page; ``offset`` then skips that many more of the newest posts.
+        """
         if message_id is not None and (
-            discussion_id is not None or cursor is not None or limit != 20 or before is not None
+            discussion_id is not None
+            or cursor is not None
+            or limit != 20
+            or before is not None
+            or offset
         ):
             raise SwarmStoreError("invalid_arguments", field="message_id")
         if before is not None and cursor is not None:
             raise SwarmStoreError("invalid_arguments", field="before")
+        if type(offset) is not int or offset < 0:
+            raise SwarmStoreError("invalid_arguments", field="offset")
         return await self._run(
             _read_posts,
             swarm_id,
@@ -511,6 +523,7 @@ class SwarmStore:
             cursor,
             _limit(limit),
             before,
+            offset,
         )
 
     async def post_suggestions(self, swarm_id: str, value: str) -> list[Json]:

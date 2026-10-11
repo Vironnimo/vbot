@@ -31,37 +31,40 @@ _WRAPPERS = frozenset({"request", "arguments", "parameters", "params", "input", 
 # Idempotency keys are derived from the Tool Call; an echoed key requests nothing.
 _DERIVED = frozenset({"requestid", "idempotencykey"})
 
-_BOARD_FIELDS = SpellingAliases(
-    {
-        "text": ("body", "content", "message_text", "msg"),
-        "title": ("subject", "discussion_title", "thread_title"),
-        "message_id": ("post_id", "message_ids", "post_ids"),
-        "reply_to": (
-            "reply_to_id",
-            "reply_to_post",
-            "reply_to_post_id",
-            "reply_to_message",
-            "reply_to_message_id",
-            "in_reply_to",
-            "parent_id",
-            "parent_post_id",
-        ),
-        "discussion_id": ("discussion", "thread_id", "channel_id", "topic_id"),
-        "recipients": (
-            "recipient",
-            "to",
-            "ping",
-            "pings",
-            "mention",
-            "mentions",
-            "notify",
-            "participant_ids",
-            "recipient_ids",
-        ),
-        "before": ("before_id", "before_post", "before_post_id", "before_message_id", "older_than"),
-        "limit": ("count", "max", "max_results", "page_size", "limti"),
-    }
-)
+_BOARD_ALIASES: dict[str, tuple[str, ...]] = {
+    "text": ("body", "content", "message_text", "msg"),
+    "title": ("subject", "discussion_title", "thread_title"),
+    "message_id": ("post_id", "message_ids", "post_ids"),
+    "reply_to": (
+        "reply_to_id",
+        "reply_to_post",
+        "reply_to_post_id",
+        "reply_to_message",
+        "reply_to_message_id",
+        "in_reply_to",
+        "parent_id",
+        "parent_post_id",
+    ),
+    "discussion_id": ("discussion", "thread_id", "channel_id", "topic_id"),
+    "recipients": (
+        "recipient",
+        "to",
+        "ping",
+        "pings",
+        "mention",
+        "mentions",
+        "notify",
+        "participant_ids",
+        "recipient_ids",
+    ),
+    "before": ("before_id", "before_post", "before_post_id", "before_message_id", "older_than"),
+    "limit": ("count", "max", "max_results", "page_size", "limti"),
+}
+# "message" names a post to read when it holds a post ID, and a post's text otherwise.
+_BOARD_FIELDS = {
+    field: SpellingAliases({**_BOARD_ALIASES, field: (*_BOARD_ALIASES[field], "message")})
+    for field in ("text", "message_id")
+}
 _BOARD_ACTIONS = SpellingAliases(
     {
         "post": (
@@ -220,20 +223,27 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
     value = _prepare(arguments)
     if not isinstance(value, dict):
         return value
-    if "message" in value and "message" not in contract.input_schema["properties"]:
-        # A post ID ("#42" or a stored ID) names a post to read; other text is a message body.
-        message = value.pop("message")
-        reference = message.strip() if isinstance(message, str) else ""
-        is_post = reference.startswith("pst_") or (
-            reference.startswith("#") and post_number(reference) is not None
-        )
-        value["message_id" if is_post else "text"] = message
+    message = next(
+        (
+            item
+            for key, item in value.items()
+            if isinstance(key, str) and spelling(key) == "message"
+        ),
+        None,
+    )
+    reference = message.strip() if isinstance(message, str) else ""
+    is_post = reference.startswith("pst_") or (
+        reference.startswith("#") and post_number(reference) is not None
+    )
     normalized = _normalize(
         contract,
         value,
-        fields=_BOARD_FIELDS,
+        fields=_BOARD_FIELDS["message_id" if is_post else "text"],
         actions=_action_normalizer(_BOARD_ACTIONS, _BOARD_ELSEWHERE),
         optional=("discussion_id", "message_id", "reply_to", "before", "cursor", "limit"),
+        # A placeholder beside the real text, such as "message": "placeholder", asks for
+        # nothing; two different texts are refused as conflicting values.
+        placeholder_as_omitted=("text",),
     )
     if not isinstance(normalized, dict):
         return normalized
@@ -357,6 +367,7 @@ def _normalize(
     fields: Mapping[str, str],
     actions: Callable[[Any], Any],
     optional: tuple[str, ...],
+    placeholder_as_omitted: tuple[str, ...] = (),
 ) -> Any:
     normalized = normalize_call_arguments(
         contract,
@@ -364,6 +375,7 @@ def _normalize(
         enum_fields=("action",) if "action" in contract.input_schema["properties"] else (),
         field_aliases=fields,
         field_normalizers={"action": actions},
+        placeholder_as_omitted=placeholder_as_omitted,
     )
     if not isinstance(normalized, dict):
         return normalized

@@ -6,6 +6,14 @@ from dataclasses import replace
 import pytest
 
 from core.chat import ChatMessage
+from resources.extensions.swarm.agent_text import (
+    BOARD_ADDRESSED_STOPPED,
+    BOARD_NEW,
+    BOARD_NOTHING_NEW,
+    BOARD_PAGE_NEWEST,
+    BOARD_WAIT,
+    MENTION_EVERYONE,
+)
 from tests.resources.extensions.swarm.swarm_test_support import (
     _name,
     board_posts,
@@ -46,6 +54,7 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
         f"[{posted['data']['post_id']}] {author} (to you):\nfull text"
     )
     assert "(1 shown)" in read["data"]["page"]
+    assert read["data"]["new"] == BOARD_NEW["one"].format(posts=posted["data"]["post_id"])
     assert len(context._delivery_receipts) == 1
     receipt_id, content_hash, effect = context._delivery_receipts[0]
     assert not await board.store.reconcile_delivery(receipt_id)
@@ -64,6 +73,17 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
     )
     assert await board.store.reconcile_delivery(receipt_id)
     assert (await board.store.prepare_inbox_delivery(board.swarm["id"], peer))["entries"] == []
+    # Reading the newest posts again finds nothing new: ending the reply is how to wait.
+    again, _ = await call(board, {"action": "read"}, peer=1)
+    assert again["data"]["new"] == f"{BOARD_NOTHING_NEW} {BOARD_WAIT['addressed']}"
+    own, _ = await call(board, {"action": "read"})
+    assert own["data"]["new"] == again["data"]["new"]
+    # A post outside the reader's audience may be unknown to it, so no such claim is made.
+    created, _ = await call(board, {"action": "create", "title": "Side", "text": "aside"})
+    side, _ = await call(
+        board, {"action": "read", "discussion_id": created["data"]["discussion_id"]}, peer=1
+    )
+    assert side["data"]["content"].endswith(":\naside") and "new" not in side["data"]
     assert board.tools.get("swarm_board").catalog_visible is False
     assert board.tools.get("swarm_board").session_scoped
 
@@ -84,6 +104,10 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     opening = created["data"]["opening_post_id"]
     assert (discussion, opening) == ("d2", "#1")
     first, _ = await call(board, {"action": "list", "limit": 1})
+    # A value that continues no list, such as a discussion ID, lists from the start.
+    restarted, _ = await call(board, {"action": "list", "cursor": "d1", "limit": 1})
+    assert restarted["data"]["content"] == first["data"]["content"]
+    assert "note" in restarted["data"] and "note" not in first["data"]
     next_page, _ = await call(board, continuation(first["data"]["more"]))
     assert f'- {discussion} "Topic": joined, members: 1' in next_page["data"]["content"]
     joined, _ = await call(board, {"action": "join", "discussion_id": discussion}, peer=1)
@@ -320,6 +344,16 @@ async def test_create_retains_opening_and_announcement_for_inactive_peers(board)
     )
     assert created["ok"]
     assert len((await board.store.prepare_inbox_delivery(board.swarm["id"], peer))["entries"]) == 2
+    # The author learns that a stopped participant it addresses cannot answer for now.
+    one, two = _name(board, 1), _name(board, 2)
+    posted, _ = await dispatch(board, {"text": f"@{one} and @{two}, any news?"})
+    assert posted["data"]["delivery"] == " ".join(
+        (
+            "Queued for 2 participants.",
+            _reaches(one, two),
+            BOARD_ADDRESSED_STOPPED["one"].format(names=one),
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -370,16 +404,23 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
     assert read["data"]["content"] == (
         f"[{first}] {_name(board, 0)} (in the main discussion d1):\ninferred post"
     )
+    # A placeholder or a repeat beside the real text asks for nothing more.
+    for message, text in [("placeholder", "kept"), ("same", "same")]:
+        result, _ = await dispatch(board, {"action": "post", "message": message, "text": text})
+        assert result["ok"], result
     posts = await board_posts(board)
     assert [(post["text"], post["reply_to"]) for post in posts[:2]] == [
         ("inferred post", None),
         ("answer", posts[0]["id"]),
     ]
+    assert [post["text"] for post in posts[-2:]] == ["kept", "same"]
     topic = await board_posts(board, discussion_id=created["data"]["discussion_id"])
     assert [post["text"] for post in topic] == ["opening"]
     # The same repairs never pick one of two differing instructions.
     for arguments, message in [
         ({"text": "one", "body": "two"}, "text"),
+        ({"action": "post", "message": "ddl", "text": "real"}, "text"),
+        ({"action": "read", "message": first, "post_id": "#9"}, "message_id"),
         ({"action": "post", "arguments": {"action": "read"}}, "action"),
         ({"action": "status"}, "Use swarm_state to see participants"),
         ({"action": "check_inbox"}, 'Use {"action": "read"} to read the newest posts'),
@@ -408,6 +449,12 @@ async def test_board_addresses_participants_its_text_names_after_at_or_answers(b
         board, {"text": f"{one} fixed it, {two} and {ids[1]} confirmed; see x@{one} or @ {two}"}
     )
     assert mentioned["data"]["delivery"] == "Queued for 2 participants."
+    # "@all" addresses no one, and the author learns so; "x@all" is no mention at all.
+    everyone, _ = await dispatch(board, {"text": "@all, @Everyone and @ALL: status?"})
+    assert everyone["data"]["delivery"] == "Queued for 2 participants."
+    assert everyone["data"]["note"] == MENTION_EVERYONE.format(mentions="@all and @Everyone")
+    address, _ = await dispatch(board, {"text": "mail ops x@all.example"})
+    assert "note" not in address["data"]
     answer, _ = await dispatch(
         board, {"text": "done", "reply_to": named["data"]["post_id"]}, peer=2
     )
@@ -571,6 +618,20 @@ async def test_board_extra_targets_run_only_when_they_change_nothing(board):
     )
     listed = await board.store.list_discussions(board.swarm["id"], board.bindings[0].participant_id)
     assert sorted(row["title"] for row in listed.entries) == ["First", "Main", "Second", "Third"]
+    # A title beside an existing discussion names nothing new: the post is saved without it.
+    titled, _ = await dispatch(
+        board, {"action": "post", "discussion_id": existing, "title": "Heading", "text": "titled"}
+    )
+    assert titled["ok"] and "note" in titled["data"], titled
+    for arguments in [
+        {"action": "post", "title": "Heading", "text": "untargeted"},
+        {"action": "post", "discussion_id": "d9", "title": "Heading", "text": "untargeted"},
+    ]:
+        refused, _ = await dispatch(board, arguments)
+        assert refused["error"]["code"] == "invalid_arguments", refused
+    texts = [post["text"] for post in await board_posts(board, discussion_id=existing)]
+    assert "titled" in texts
+    assert "untargeted" not in {post["text"] for post in await board_posts(board)}
 
     target = first["data"]["opening_post_id"]
     # A post that names a post with message_id answers it, as with reply_to.
@@ -605,6 +666,19 @@ async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(boar
     clamped, _ = await dispatch(board, {"action": "read", "limit": 500})
     assert clamped["data"]["note"] == "limit 500 is above the maximum of 100; used 100."
     assert "(3 shown)" in clamped["data"]["page"]
+    # offset, as other harnesses page, skips that many of the newest posts.
+    skipped, _ = await dispatch(board, {"action": "read", "limit": 1, "offset": "1"})
+    assert skipped["data"]["content"].endswith(":\npost 1")
+    assert continuation(skipped["data"]["older"])["before"] == "#2"
+    beyond, _ = await dispatch(board, {"action": "read", "offset": 3})
+    assert beyond["ok"] and "content" not in beyond["data"]
+    # Beside a post or a page start, offset positions nothing.
+    one, _ = await dispatch(board, {"action": "read", "message_id": "#1", "offset": 2})
+    assert one["data"]["content"].endswith(":\npost 0") and "note" not in one["data"]
+    before, _ = await dispatch(board, {"action": "read", "before": "#3", "offset": 1})
+    assert before["data"]["content"].endswith(":\npost 1") and "note" in before["data"]
+    negative, _ = await dispatch(board, {"action": "read", "offset": -1})
+    assert negative["error"]["code"] == "invalid_arguments"
     ignored, _ = await dispatch(board, {"action": "post", "text": "paged", "limit": 5})
     assert ignored["data"]["note"] == "limit is not used by post and was ignored."
     assert "paged" in {post["text"] for post in await board_posts(board)}
@@ -621,8 +695,9 @@ async def test_board_results_read_as_plain_text(board):
     )
     await dispatch(board, {"text": "second"}, peer=1)
     read, _ = await dispatch(board, {"action": "read", "limit": 1}, peer=2)
+    page = BOARD_PAGE_NEWEST.format(discussion="the main discussion (d1)", count=1)
     assert visible(read) == (
-        "page: Newest posts of the main discussion (d1), oldest first (1 shown).\n"
+        f"page: {page}\nnew: {BOARD_NEW['one'].format(posts='#2')}\n"
         "older: Older posts exist. Continue with "
         '{"action": "read", "discussion_id": "d1", "before": "#2", "limit": 1}\n\n'
         f"[#2] {_name(board, 1)}:\nsecond"

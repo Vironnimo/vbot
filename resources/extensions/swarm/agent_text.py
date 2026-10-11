@@ -16,8 +16,9 @@ BOARD_DESCRIPTION = (
     "additional discussion when several Agents need to work through a specific problem "
     "together; creating it joins it and announces it in the main discussion. Every participant "
     "can read every discussion; joining one makes its future posts reach you in full and "
-    "returns its recent posts. Pending messages among the posts you read count as received "
-    "and are not delivered again."
+    "returns its recent posts. Messages for you reach you as the group's delivery settings "
+    "allow, so you need not read the Board to receive them; posts you read here are not "
+    "delivered again."
 )
 
 INBOX_DESCRIPTION = (
@@ -217,18 +218,29 @@ STATE_ONLY_STATUS = (
 MESSAGES_IN = "In {discussion}:"
 INBOX_MORE = "{count} more pending; call swarm_inbox again{arguments} to continue."
 DELIVERY_MORE = {
+    # Every route delivers while running: the rest follows without any call.
+    "automatic_one": "1 more pending; it reaches you automatically, so you need not read it on "
+    "the Board.",
+    "automatic_many": "{count} more pending; they reach you automatically, so you need not read "
+    "them on the Board.",
     "inbox": "{count} more pending; receive them with swarm_inbox.",
     "no_inbox": "{count} more pending.",
 }
 
 # swarm_state results.
-STATE_YOU = "{name}, {state}"
 STATE_PENDING = {
     "none": "No pending messages.",
     "one": "1 message for you; receive it with swarm_inbox.",
     "many": "{count} messages for you; receive them with swarm_inbox.",
     "one_no_inbox": "1 message for you.",
     "many_no_inbox": "{count} messages for you.",
+    # Every route delivers while running; this replaces the delivery field.
+    "none_automatic": "No pending messages; new ones reach you automatically, also while you "
+    "are running.",
+    "one_automatic": "1 message for you; it reaches you automatically, also while you are "
+    "running, so you need not read it on the Board.",
+    "many_automatic": "{count} messages for you; they reach you automatically, also while you "
+    "are running, so you need not read them on the Board.",
 }
 STATE_ROUTES = {
     "main": "main-discussion posts",
@@ -243,12 +255,12 @@ STATE_DELIVERY = {
 }
 STATE_WAKE = "{routes} start a Run when you are idle."
 STATE_NO_WAKE = "New messages do not start a Run when you are idle."
-STATE_WAKE_PACED = (
-    "After a Run in which you used no Tool except to read the Board, the Wiki or this status, "
-    "only posts by the user{addressed} start your next Run at once; other posts wait up to "
-    "{minutes} minutes."
+# Wake pacing holds other posts for up to the longest Quiet period.
+STATE_WAKE_PACED = "When you are idle, {routes} start a Run within {minutes} minutes."
+STATE_WAKE_ADDRESSED = (
+    "When you are idle, posts that address or answer you start a Run at once; {routes} start "
+    "one within {minutes} minutes."
 )
-STATE_WAKE_ADDRESSED = " and posts that address or answer you"
 STATE_PARTICIPANTS = "{count} ({totals})"
 STATE_ROSTER_HEADER = "Participants:"
 STATE_ROSTER_LINE = "- {name}{you}: {state}"
@@ -259,6 +271,11 @@ STATE_MORE = "More participants exist. Continue with {call}"
 LIMIT_CLAMPED = "limit {requested} is above the maximum of {maximum}; used {maximum}."
 CURSOR_AS_BEFORE = "cursor {value} is a post ID, so this shows the posts before it."
 FIELD_IGNORED = "{field} is not used by {action} and was ignored."
+OFFSET_IGNORED = "offset was ignored: {field} already sets where the page starts."
+POST_TITLE_IGNORED = (
+    "title was ignored: posts have no title; only create uses one, to name a new discussion."
+)
+LIST_CURSOR_RESTARTED = "cursor {value} does not continue a list, so this lists from the start."
 CREATE_IGNORES_ID = (
     'discussion_id "{value}" names no discussion and was ignored; the new discussion has its '
     "own ID."
@@ -289,6 +306,20 @@ BOARD_PAGE_BEFORE = "Posts before {before} in {discussion}, oldest first ({count
 BOARD_PAGE_EMPTY = "No posts in {discussion} yet."
 BOARD_PAGE_EMPTY_BEFORE = "No posts before {before} in {discussion}."
 BOARD_PAGE_OLDER = "Older posts of {discussion}, oldest first ({count} shown)."
+BOARD_PAGE_EMPTY_OFFSET = "No posts in {discussion} beyond its {offset} newest."
+# Posts pending for the reader are new to it; delivered and own posts are not.
+BOARD_NEW = {
+    "one": "{posts} is new to you.",
+    "many": "{posts} are new to you.",
+    "all": "All {count} posts shown are new to you.",
+}
+BOARD_NOTHING_NEW = "None of the posts shown is new to you."
+BOARD_WAIT = {
+    "addressed": "To wait for others, end your reply; a post that addresses or answers you "
+    "starts your next Run at once.",
+    "paced": "To wait for others, end your reply; {routes} start your next Run within "
+    "{minutes} minutes.",
+}
 BOARD_ONE_POST = "Post {post_id} in {discussion}."
 BOARD_OLDER = "Older posts exist. Continue with {call}"
 BOARD_MORE_DISCUSSIONS = "More discussions exist. Continue with {call}"
@@ -297,6 +328,14 @@ BOARD_QUEUED = "Queued for {participants}."
 BOARD_PARTICIPANTS = {"one": "1 participant", "many": "{count} participants"}
 BOARD_QUEUED_NONE = "No other participant receives it; it stays readable on the Board."
 BOARD_ADDRESSED = "It reaches {names} in full because it addresses or answers them."
+BOARD_ADDRESSED_STOPPED = {
+    "one": "{names} has stopped and sees it only if the user resumes their work.",
+    "many": "{names} have stopped and see it only if the user resumes their work.",
+}
+MENTION_EVERYONE = (
+    "{mentions} addressed no one. To address participants, write @ before each one's name, "
+    "as in @Name."
+)
 BOARD_OPENING = {
     "one": "1 participant receives only its opening lines and the call to read the rest.",
     "many": "{count} participants receive only its opening lines and the call to read the rest.",
@@ -385,9 +424,9 @@ FIELD_FOR_OTHER_ACTION = (
     "{action} does not use {field}, so the call may mean another action. Repeat it without "
     "{field}, or use an action that takes {field}: {actions}. The call was not run."
 )
-LIST_CURSOR_INVALID = (
-    "This cursor is not valid for this list: it is incomplete or belongs to another query. "
-    "Omit cursor to list from the start."
+OFFSET_INVALID = (
+    "offset {value} is not a post count. Send the number of newest posts to skip, 0 or more, "
+    "or omit offset to read the newest posts. The call was not run."
 )
 READ_CURSOR_INVALID = (
     "This cursor is not valid for this read: it is incomplete or belongs to another query. "

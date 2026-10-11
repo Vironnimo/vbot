@@ -72,7 +72,7 @@ WIKI_PARAMETERS: dict[str, Any] = {
         "limit": {
             "type": "integer",
             "description": (
-                "With read: characters to show (default 12000, at most 20000). With list or "
+                "With read: characters to show (default and maximum 20000). With list or "
                 "history: entries (default 20, at most 100)."
             ),
         },
@@ -131,6 +131,12 @@ WIKI_LIST_MATCHES = 'Pages containing "{query}", most recently changed first ({c
 WIKI_LIST_NONE = "The Wiki has no pages yet."
 WIKI_LIST_ONLY_DELETED = "The Wiki has only deleted pages. List them with {call}"
 WIKI_LIST_NO_MATCH = 'No page contains "{query}".'
+# A query no page contains as written lists the pages holding all of its words.
+WIKI_LIST_WORD_MATCHES = (
+    'No page contains "{query}" as written; pages containing all of its words, most '
+    "recently changed first ({count} shown)."
+)
+WIKI_LIST_NO_WORD_MATCH = 'No page contains "{query}" or all of its words.'
 WIKI_LIST_MORE = "More pages exist. Continue with {call}"
 WIKI_LIST_ENTRY = '- "{title}" ({page_id}), revision {revision} by {author}{deleted}'
 WIKI_ENTRY_DELETED = ", deleted"
