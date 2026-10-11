@@ -510,6 +510,40 @@ async def test_timeout_stops_the_command_and_says_how_to_let_it_finish(shell: Sh
     assert result["exit_code"] == 1
 
 
+@pytest.mark.parametrize(
+    ("command", "stage"),
+    [
+        ("python -m unittest 2>&1 | Select-Object -Last 25", "Select-Object -Last 25"),
+        # Select-Object -First passes each line on as it arrives.
+        ("python -m unittest 2>&1 | Select-Object -First 25", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_output_a_pipe_stage_holds_back_is_explained_while_running_and_after_a_stop(
+    shell: Shell, command: str, stage: str | None
+) -> None:
+    # The command prints nothing before its pipe stage passes its output on.
+    running_call = shell.call({"command": command}, terminal=False)
+    await shell.started()
+    await shell.run_clock(running_call, until=SHELL_HANDOFF_SECONDS)
+    running = data(await running_call)
+
+    stopped_call = shell.call({"command": command, "timeout": 5})
+    await eventually(lambda: len(shell.trees) == 2)
+    adapter, tree = shell.factory.adapters[-1], shell.trees[-1]
+    await shell.run_clock(stopped_call, until=shell.clock.now + 5)
+    await eventually(lambda: "\x03" in adapter.writes)
+    tree.shell_exits(1)
+    stopped = data(await stopped_call)
+
+    assert (running["status"], stopped["status"]) == ("running", "stopped")
+    for result in (running, stopped):
+        # Only a stage that holds output back is named, after the output.
+        assert (result["output"] != "") is (stage is not None)
+        if stage is not None:
+            assert stage in result["output"].splitlines()[-1]
+
+
 @pytest.mark.parametrize("request_kind", ["cancel", "background"])
 @pytest.mark.asyncio
 async def test_user_can_stop_the_command_or_move_it_to_the_background(

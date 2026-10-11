@@ -103,6 +103,17 @@ _SLEEP = re.compile(
     r"(?<![\w-])(?:Start-Sleep|sleep)(?![\w-])|(?<![\w-])timeout(?:\.exe)?[ \t]+[/-]t\b",
     re.IGNORECASE,
 )
+# A pipeline stage that passes nothing on before its input ends: the last lines,
+# a sort, a count or a group, or one string of everything. Output piped into it
+# reaches the terminal only once the command before the pipe has finished.
+_HOLDING_STAGE = re.compile(
+    r"(?<!\|)\|(?!\|)[ \t]*(?P<stage>"
+    r"(?:Select-Object|select)(?=[ \t])[^|;\n]*?[ \t]-l(?:a(?:st?)?)?(?=[ \t]|$)[^|;\n]*"
+    r"|(?:tail|sort|tac|wc|Sort-Object|Group-Object|group|Measure-Object|measure)"
+    r"(?=[ \t);}]|$)[^|;\n]*"
+    r"|Out-String(?=[ \t);}]|$)(?![^|;\n]*-Stream)[^|;\n]*)",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 # Definition
@@ -117,16 +128,21 @@ if sys.platform == "win32":
     )
     # How Agents start a program in the background without the Tool.
     _DETACHED_START = "Start-Process or a trailing &"
+    # How Agents cut a command's output themselves.
+    _TRIMMING = "Select-Object -First or -Last"
 else:
     _OPENING = (
         "Run a bash command in a new terminal and return its output and exit code. Use bash syntax."
     )
     _DETACHED_START = "nohup or a trailing &"
+    _TRIMMING = "head or tail"
 
 # The same for every Tool set: what happens to a long or waiting command, and how
 # to answer a prompt, the results say when it happens.
 SHELL_TOOL_DESCRIPTION = (
-    f"{_OPENING} When another tool covers the task, use it instead of a shell command."
+    f"{_OPENING} Long output keeps its first and last lines, and the result names a file "
+    f"with all of it, so there is no need to trim it with {_TRIMMING}. When another tool "
+    "covers the task, use it instead of a shell command."
 )
 
 _COMMAND_PARAMETER: JsonObject = {
@@ -962,6 +978,12 @@ def command_output_text(report: CommandReport, *, screen: str = "") -> str:
         noun = "line" if omitted == 1 else "lines"
         lines.append(f"[... {omitted:,} {noun} omitted{where} ...]")
     lines.extend(tail)
+    stage = _holding_stage(report.command) if report.stop_reason is not None else None
+    if stage is not None:
+        lines.append(
+            f"[Output piped into {stage} appears only once the command before the pipe has "
+            "finished; to see output as it arrives, run the command without that pipe.]"
+        )
     return "\n".join(lines)
 
 
@@ -1001,11 +1023,32 @@ def _running_output_text(report: CommandReport, screen: str) -> str:
     newest = [_shortened(line, where) for line in lines[-SHELL_RUNNING_OUTPUT_LINES:]]
     kept, _ = _within(newest, SHELL_RUNNING_OUTPUT_CHARS, keep="end")
     omitted = transcript.total_lines + len(screen_lines) - len(kept)
-    if not omitted:
-        return "\n".join(kept)
-    noun = "line" if omitted == 1 else "lines"
-    marker = f"[... {omitted:,} earlier {noun} omitted{where} ...]"
-    return "\n".join([marker, *kept])
+    if omitted:
+        noun = "line" if omitted == 1 else "lines"
+        kept.insert(0, f"[... {omitted:,} earlier {noun} omitted{where} ...]")
+    stage = _holding_stage(report.command)
+    if stage is not None:
+        log = " and in the log file" if report.transcript.log_path is not None else ""
+        kept.append(
+            f"[Output piped into {stage} appears here{log} only once the command before the "
+            "pipe has finished.]"
+        )
+    return "\n".join(kept)
+
+
+def _holding_stage(command: str) -> str | None:
+    """The last pipeline stage of *command* that holds its input until it ends.
+
+    Agents piped test runs into ``Select-Object -Last 25``: handed off after 90
+    seconds or stopped by the timeout, the result showed no output, and they
+    stopped commands that worked. The last such stage, since commands run their
+    long step last, after quick preparations.
+    """
+    stages = [match["stage"] for match in _HOLDING_STAGE.finditer(command)]
+    if not stages:
+        return None
+    stage = stages[-1].split(")", 1)[0].split("}", 1)[0].strip()
+    return stage if len(stage) <= 60 else f"{stage[:57]}..."
 
 
 def _full_output(report: CommandReport) -> str:
