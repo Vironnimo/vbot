@@ -570,7 +570,15 @@ def _hunk_not_found(content: str, hunk: _Hunk, section: _Section, path: object) 
             "removed": prefix == "-",
             "beside_additions": prefix == " " and _beside_additions(hunk.lines, absent),
         }
-    return _PatchError("text_not_found", path=path, label=hunk.label, details=details)
+    # A block that only adds lines replaces none; its context lines place it.
+    adds_only = not any(prefix == "-" for prefix, _ in hunk.lines)
+    return _PatchError(
+        "text_not_found",
+        template="context_lines_not_found" if adds_only else None,
+        path=path,
+        label=hunk.label,
+        details=details,
+    )
 
 
 def _splice(

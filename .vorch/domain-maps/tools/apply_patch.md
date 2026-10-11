@@ -317,6 +317,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   `part_of` report: a new line written without `+` can also occur inside a
   longer file line, and calling it a fragment hides the missing `+`.
   `old_string` text is compared by its first difference instead.
+- A hunk that is not found leads with `X: the lines to replace were not found.`;
+  a hunk without `-` lines replaces nothing, so its lead is `X: the context
+  lines around the + lines were not found.` (`context_lines_not_found`, same code
+  `text_not_found`).
 - When the reported first difference is an unchanged line that only unchanged
   lines separate from `+` lines on both sides, or one right next to a `+` line,
   the report adds `That patch line has no + prefix, so it must already be in the
@@ -574,6 +578,7 @@ replacements still went through Delete File plus Add File (agent-eval
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
 | Syntax warning excerpt (shared with `edit` and `write`): `Warning: Syntax check failed after this edit: SyntaxError: '(' was never closed (line 2, column 12)` followed by `1| ...`, `2| ...`, a caret line and `3| ...` | Real Sessions (2026-10) read 30-45 lines after a warning to find the line the error names; the excerpt shows it in the result. Only the error's own lines are shown, not more, so a result stays short. |
+| `context_lines_not_found`: `X: the context lines around the + lines were not found.` | A block that only adds lines was reported as `the lines to replace were not found`, which names lines the block does not have and points the Agent at text to replace instead of at its context lines (review of a Swarm Run, 2026-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
 
 ## Verification

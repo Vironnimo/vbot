@@ -116,6 +116,7 @@ _MESSAGES = {
         "enough surrounding text to tell it apart."
     ),
     "text_not_found": "{where}: the lines to replace were not found.",
+    "context_lines_not_found": "{where}: the context lines around the + lines were not found.",
     "old_text_not_found": "{where}: old_string was not found.",
     "eof_not_found": "{where}: the file does not end with the lines before *** End of File.",
     "not_after_hint": (
