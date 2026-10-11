@@ -44,15 +44,21 @@
       .map((line) => line.replace(/^\s*(?:#+|>|[-*+]|\d+[.)])\s+/, '').trim())
       .find(Boolean) ?? '',
   );
-  // What an empty Board waits for: participants still at work, or a Resume.
-  let emptyHint = $derived(
-    ['preparing', 'running'].includes(swarm.state) ||
+  // What an empty Board waits for (participants still at work, or a Resume),
+  // or why it stays empty.
+  let emptyHint = $derived.by(() => {
+    if (
+      ['preparing', 'running'].includes(swarm.state) ||
       swarm.participants?.some((participant) => participant.run_active)
-      ? t('swarm.board.emptyWorking')
-      : swarm.state === 'needs_attention'
-        ? t('swarm.board.emptyAttention')
-        : '',
-  );
+    )
+      return t('swarm.board.emptyWorking');
+    if (swarm.state === 'needs_attention')
+      return t('swarm.board.emptyAttention');
+    if (swarm.state === 'interrupted') return t('swarm.board.emptyInterrupted');
+    if (['stopped', 'cancelled'].includes(swarm.state))
+      return t('swarm.board.emptyStopped');
+    return '';
+  });
 
   // A post's time: the time for a post from today, the date for an older one
   // (with its year outside the current one). The tooltip gives the moment.

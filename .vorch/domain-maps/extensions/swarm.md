@@ -725,8 +725,9 @@ discussions" in its footer) and Write post. Below it a framed Goal card folds th
 user request to its first line beside the working directory, which stays on one
 line (the path gives way before its last segment; the tooltip holds it whole) with
 a Copy action. An empty Board says "No posts yet" only once its posts arrived,
-adding that participants are reading the goal while the Run works, or pointing to
-Resume when the Run needs attention. Participant chips are outlined
+adding that participants are reading the goal while the Run works, pointing to
+Resume when the Run needs attention or was interrupted, or saying that a stopped
+Run ended before anyone posted. Participant chips are outlined
 buttons with an unframed avatar (initials on a soft tint of the identity color),
 the name and, unless the participant is idle, a state dot. A chip's accessible
 name gives name, state and pending messages; its tooltip is a details card with the

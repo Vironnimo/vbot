@@ -282,10 +282,13 @@ describe('Swarm Board posts', () => {
     let finish;
     overrideOperations(operation, {
       'swarms.get': () => ({ swarm: { ...structuredClone(swarm), state } }),
+      // The first read waits for the test; later ones answer at once.
       'board.read': () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
+        finish
+          ? { entries: [], has_more: false }
+          : new Promise((resolve) => {
+              finish = resolve;
+            }),
     });
     await render(bridge);
     button('Investigate').click();
@@ -297,11 +300,16 @@ describe('Swarm Board posts', () => {
       expect(empty()?.textContent).toContain(t('swarm.board.empty')),
     );
     expect(empty().textContent).toContain(t('swarm.board.emptyWorking'));
-    state = 'needs_attention';
-    bridge.invalidate();
-    await vi.waitFor(() =>
-      expect(empty().textContent).toContain(t('swarm.board.emptyAttention')),
-    );
+    // A Run that ended says why its Board stayed empty.
+    for (const [next, hint] of [
+      ['needs_attention', 'swarm.board.emptyAttention'],
+      ['interrupted', 'swarm.board.emptyInterrupted'],
+      ['cancelled', 'swarm.board.emptyStopped'],
+    ]) {
+      state = next;
+      bridge.invalidate();
+      await vi.waitFor(() => expect(empty().textContent).toContain(t(hint)));
+    }
   });
 
   it('keeps participant avatars consistent across Board, Activity and remounts', async () => {
