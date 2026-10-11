@@ -370,7 +370,7 @@ def search_cases() -> list[dict[str, Any]]:
             "arguments": {"args": ["-e", "["]},
             "content": None,
             "error": True,
-            "error_contains": "regex",
+            "error_contains": "regular expression",
         },
         {
             "id": "unknown_option",
@@ -452,8 +452,9 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "content_pattern_in_discovery",
             "arguments": {"args": ["--files", "-e", "alpha"]},
-            "content": None,
-            "error": True,
+            # --files matches the pattern against file names, not contents.
+            "content": "alpha_notes.txt",
+            "files": {"alpha_notes.txt": "omega\n"},
         },
         {"id": "missing_flag_value", "arguments": {"args": ["-g"]}, "content": None, "error": True},
         {
