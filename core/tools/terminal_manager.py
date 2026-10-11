@@ -1085,7 +1085,11 @@ class TerminalManager:
         data: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
     ) -> dict[str, Any]:
-        """Write exact data or named terminal input and track generic PTY activity."""
+        """Write exact data or named terminal input and track generic PTY activity.
+
+        Input into a command ends its timeout; ``timeout_ended`` in the result
+        names the seconds it had, None when this input ended none.
+        """
         return await self._attached(terminal_id, owner).send_input(
             text=text,
             key=key,

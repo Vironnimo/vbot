@@ -834,6 +834,9 @@ async def _handle_input(
             wait_ended=ended if pattern is not None else None,
             typed=pattern is None,
         )
+        timeout_ended = sent.get("timeout_ended")
+        if isinstance(timeout_ended, int | float) and data.get("status") == "running":
+            notes.append(_timeout_ended_note(terminal_id, timeout_ended))
     else:
         snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
@@ -1091,6 +1094,17 @@ def _with_notes(data: JsonObject, notes: list[str]) -> JsonObject:
         existing = data.get("note")
         data["note"] = " ".join([*([existing] if isinstance(existing, str) else []), *notes])
     return data
+
+
+def _timeout_ended_note(terminal_id: str, seconds: float) -> str:
+    """The Agent's input ended a command's timeout: it runs until stopped."""
+    # Agents open unknown consoles through the shell with a short timeout, which
+    # then stopped the console mid-work; without it, stopping is the Agent's job.
+    return (
+        f"Your input removed the command's {seconds:g}-second timeout: it now runs until it "
+        f"exits or you stop it with terminal {_call('kill', terminal_id)} when you no longer "
+        "need it."
+    )
 
 
 def _capped_wait_note(*, command: bool) -> str:

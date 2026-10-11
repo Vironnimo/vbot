@@ -118,6 +118,7 @@ class CommandState:
         self.description = description
         self.workdir = workdir
         self.tree = tree
+        # None without a timeout, and once the Agent typed into the command.
         self.timeout_seconds = timeout_seconds
         self.formatter = formatter
         self.started_at = started_at
