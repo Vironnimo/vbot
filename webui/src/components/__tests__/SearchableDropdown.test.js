@@ -146,11 +146,12 @@ describe('SearchableDropdown', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it('renders option decorations and opens programmatically', async () => {
+  it('renders option decorations and an invalid choice and opens programmatically', async () => {
     mountedComponent = mount(SearchableDropdown, {
       target: document.body,
       props: {
         id: 'decorated-searchable-dropdown',
+        invalid: true,
         value: 'gamma',
         options: [
           {
@@ -178,6 +179,7 @@ describe('SearchableDropdown', () => {
 
     const trigger = document.querySelector('#decorated-searchable-dropdown');
     expect(trigger.querySelector('.tab-indicator--unread')).toBeTruthy();
+    expect(trigger.classList).toContain('dropdown-trigger--invalid');
 
     await mountedComponent.open();
     flushSync();

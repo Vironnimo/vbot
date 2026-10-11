@@ -30,6 +30,10 @@
     disabled = false,
     ariaLabel = '',
     ariaDescribedby = undefined,
+    // A choice a form found missing or wrong: the trigger takes an invalid
+    // field's red border. The error text is the caller's, linked through
+    // `ariaDescribedby`.
+    invalid = false,
     triggerClass = '',
     // Optional quick tooltip on the trigger (e.g. details of the selection).
     triggerTooltip = '',
@@ -635,6 +639,7 @@
     bind:this={triggerElement}
     {id}
     class="s-dropdown-trigger searchable-dropdown__trigger"
+    class:dropdown-trigger--invalid={invalid}
     type="button"
     {disabled}
     aria-label={ariaLabel || placeholder}

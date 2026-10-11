@@ -27,6 +27,10 @@
     // named by that label and its current value instead of ariaLabel.
     ariaLabelledby = undefined,
     ariaDescribedby = undefined,
+    // A choice a form found missing or wrong: the trigger takes an invalid
+    // field's red border. The error text is the caller's, linked through
+    // `ariaDescribedby`.
+    invalid = false,
     triggerClass = '',
     // Optional quick tooltip on the trigger (e.g. details of the selection).
     triggerTooltip = '',
@@ -432,6 +436,7 @@
     bind:this={triggerElement}
     {id}
     class="dropdown-trigger dropdown-primitive__trigger"
+    class:dropdown-trigger--invalid={invalid}
     type="button"
     {disabled}
     aria-label={ariaLabelledby ? undefined : ariaLabel || placeholder}

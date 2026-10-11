@@ -818,6 +818,12 @@ textarea::placeholder {
   border-color: var(--dropdown-focus-border);
 }
 
+/* Invalid choice: the red border wins over hover and the open state, as on
+   an invalid field (`.s-input--invalid`). */
+.dropdown-trigger--invalid {
+  border-color: var(--red) !important;
+}
+
 .dropdown-chevron {
   flex-shrink: 0;
   color: var(--text-lo);

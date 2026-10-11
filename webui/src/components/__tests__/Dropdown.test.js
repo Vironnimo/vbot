@@ -243,12 +243,13 @@ describe('Dropdown', () => {
     dateNow.mockRestore();
   });
 
-  it('renders status dots, count badges, markers and accessible names from option fields', async () => {
+  it('renders status dots, count badges, markers and accessible names from option fields, and an invalid choice', async () => {
     mountedComponent = mount(Dropdown, {
       target: document.body,
       props: {
         id: 'decorated-dropdown',
         ariaLabelledby: 'decorated-label',
+        invalid: true,
         value: 'beta',
         options: [
           {
@@ -278,6 +279,7 @@ describe('Dropdown', () => {
     );
     expect(trigger.hasAttribute('aria-label')).toBe(false);
     expect(trigger.querySelector('.tab-indicator--running')).toBeTruthy();
+    expect(trigger.classList).toContain('dropdown-trigger--invalid');
     trigger.click();
     await vi.waitFor(() => {
       expect(document.querySelectorAll('[role="option"]')).toHaveLength(3);
