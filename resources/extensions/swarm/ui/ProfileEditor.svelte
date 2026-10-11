@@ -97,8 +97,10 @@
   // until the shortcut changes; a changed one may be free, so the next save
   // asks again.
   let takenSlug = $state(null);
-  // Field errors appear once a save found one and then follow the draft.
-  let showValidation = $state(false);
+  // Field errors appear once a save ('save') or a prompt preview ('preview')
+  // found one and then follow the draft; a preview's show only the problems
+  // that keep it from running.
+  let validationShown = $state(null);
   let advancedOpen = $state(false);
   // A saved Swarm whose changes could not be saved on leaving.
   let pendingTransition = $state.raw(null);
@@ -108,9 +110,11 @@
 
   const hasChanges = () => snapshot() !== savedSnapshot;
   const fieldErrors = $derived(
-    showValidation
+    validationShown
       ? Object.fromEntries(
-          validate(draft).map((issue) => [issue.id, issue.message]),
+          validate(draft)
+            .filter((issue) => validationShown === 'save' || !issue.saveOnly)
+            .map((issue) => [issue.id, issue.message]),
         )
       : {},
   );
@@ -182,7 +186,7 @@
     autosave.cancelPendingTimer();
     draft = copy(savedProfile);
     saveError = '';
-    showValidation = false;
+    validationShown = null;
     action?.();
   }
 
@@ -203,7 +207,7 @@
     discardOpen = false;
     draft = copy(savedProfile);
     saveError = '';
-    showValidation = false;
+    validationShown = null;
     // Leaving may close the editor before its effects run again.
     onDraftChange(null);
     onCancel();
@@ -275,12 +279,12 @@
 
   // A prompt preview needs what a save needs except the name, which the
   // server fills in for an unnamed Swarm, and a free shortcut. Like a save
-  // the user asked for, a preview that cannot run shows the problems and
-  // moves focus to the first.
+  // the user asked for, a preview that cannot run shows its problems, and
+  // only those until a save shows all, and moves focus to the first.
   async function previewable() {
     const issues = validate(draft).filter((issue) => !issue.saveOnly);
     if (!issues.length) return true;
-    showValidation = true;
+    validationShown ??= 'preview';
     await focusField(issues[0].id);
     return false;
   }
@@ -309,7 +313,7 @@
     saveError = '';
     const issues = validate(draft);
     if (issues.length) {
-      showValidation = true;
+      validationShown = 'save';
       if (reason === 'manual') await focusField(issues[0].id);
       return false;
     }
@@ -328,7 +332,7 @@
         else draft.revision = saved.revision;
         savedSnapshot = snapshot(saved);
       }
-      showValidation = false;
+      validationShown = null;
       return true;
     } catch (cause) {
       if (cause?.message !== 'slug_unavailable' || !submittedSlug.trim()) {
@@ -338,7 +342,7 @@
       // Another Swarm uses the shortcut: a problem of its field, like those
       // found before saving.
       takenSlug = submittedSlug;
-      showValidation = true;
+      validationShown = 'save';
     } finally {
       saving = false;
     }
@@ -566,6 +570,7 @@
                     'swarm-project',
                     selectedProject ? 'swarm-project-help' : '',
                   )}
+                  invalid={Boolean(fieldErrors['swarm-project'])}
                   onValueChange={selectProject}
                 />
               </div>

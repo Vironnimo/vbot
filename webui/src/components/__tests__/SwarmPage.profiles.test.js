@@ -122,21 +122,26 @@ describe('Swarm profile prompt', () => {
       'profiles.preview': () => new Promise((resolve) => (complete = resolve)),
     });
     await openNewProfile(bridge);
-    await choose('swarm-model-0', 'demo/model');
     fill('swarm-delivery-coalesce', '350');
     fill('swarm-instructions', 'unsaved-sentinel');
     document.querySelector('[aria-controls="swarm-preview"]').click();
     await tick();
     expect(document.getElementById('swarm-preview').hidden).toBe(false);
-    // A preview needs what a save needs except the name: a missing setting
-    // shows its error and takes focus instead of a request.
+    // A preview needs what a save needs except the name: each missing
+    // setting shows its error, the first takes focus, and no request goes
+    // out. The name a save needs shows no error.
     button(GENERATE_PREVIEW).click();
     await settle();
     expect(callsTo(operation, 'profiles.preview')).toHaveLength(0);
+    const model = document.getElementById('swarm-model-0');
+    expect(document.activeElement).toBe(model);
+    expect(model.classList).toContain('dropdown-trigger--invalid');
     expect(
       document.getElementById('swarm-directory-error').textContent.trim(),
     ).toBe(t('swarm.profile.directoryRequired'));
-    expect(document.activeElement?.id).toBe('swarm-directory');
+    expect(document.getElementById('swarm-profile-name-error')).toBeNull();
+    await choose('swarm-model-0', 'demo/model');
+    expect(model.classList).not.toContain('dropdown-trigger--invalid');
     fill('swarm-directory', 'C:/work');
     await tick();
     button(GENERATE_PREVIEW).click();

@@ -181,6 +181,7 @@
               placeholder={t('swarm.profile.selectModel')}
               ariaLabel={t('swarm.profile.model')}
               ariaDescribedby={describedBy(modelId)}
+              invalid={Boolean(fieldErrors[modelId])}
               searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
               emptyLabel={t('agents.form.modelSearchEmpty')}
               footerActionLabel={modelFilterFooterLabel({

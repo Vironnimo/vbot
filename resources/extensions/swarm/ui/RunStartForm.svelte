@@ -44,12 +44,13 @@
         : t('swarm.noProfilesHelp')}
       error={model.startErrors.profile}
     >
-      {#snippet children({ labelId, describedBy })}
+      {#snippet children({ labelId, describedBy, invalid })}
         <div class="swarm-start__profile">
           <Dropdown
             id="swarm-start-profile"
             ariaLabelledby={labelId}
             ariaDescribedby={describedBy}
+            {invalid}
             value={model.selectedProfile?.id ?? ''}
             options={profileOptions}
             disabled={!model.profiles.length || model.pending === 'start'}

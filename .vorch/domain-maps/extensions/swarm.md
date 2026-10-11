@@ -84,8 +84,10 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   selection, event reminder switches and Model-specific combined previews with
   the separately sent Tool definitions (shared `ToolDefinitionsPanel`). A
   preview needs what a save needs except the name (`profiles.preview` names an
-  unnamed draft "Preview"), so a missing or invalid setting shows its field
-  error and takes focus instead of sending a request. New
+  unnamed draft "Preview") and a free shortcut, so a missing or invalid setting
+  shows its field error and takes focus instead of sending a request; until a
+  save shows every problem, the errors a preview shows leave out those only a
+  save has. New
   profiles receive the complete default from `agent_text.py` through the editor
   catalog; Swarm no longer registers a separately appended orientation block.
   The visible value is saved as-is, including an intentionally empty value;
