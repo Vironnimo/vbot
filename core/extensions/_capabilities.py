@@ -222,6 +222,7 @@ class ExtensionCapabilityInstaller:
                 argument_normalizer=declaration.argument_normalizer,
                 session_scoped=declaration.session_scoped,
                 activation=declaration.activation,
+                announce_changes=declaration.announce_changes,
             )
         except Exception as exc:
             _diagnose_capability(record, f"tool {name!r} registration failed: {exc}")

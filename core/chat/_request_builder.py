@@ -91,7 +91,6 @@ from core.tools import (
     Tool,
     ToolAccess,
     ToolContract,
-    ToolDefinitionChangeNote,
     ToolNotFoundError,
     edit_dialect,
     known_edit_dialect,
@@ -871,7 +870,7 @@ class RequestBuilder:
             session_tool_grants=session_tool_grants,
             ready_only=False,
         )
-        ready, sources, change_notes = await _CHAT_TRANSFORM_WORKERS.run(
+        ready, sources, announce_changes = await _CHAT_TRANSFORM_WORKERS.run(
             self._measure_tool_definitions, definitions
         )
         offered = await self._route_tool_definitions(
@@ -915,29 +914,31 @@ class RequestBuilder:
             offered=tuple(offered),
             sources=sources,
             session_tool_grants=tuple(session_tool_grants),
-            change_notes={name: note for name, note in change_notes.items() if name in usable},
+            announce_changes={
+                name: parts for name, parts in announce_changes.items() if name in usable
+            },
             on_demand=dict(on_demand),
         )
 
     def _measure_tool_definitions(
         self, definitions: Sequence[JsonObject]
-    ) -> tuple[list[JsonObject], dict[str, str], dict[str, ToolDefinitionChangeNote]]:
-        """Return the ready *definitions*, every fingerprint and change-note hook.
+    ) -> tuple[list[JsonObject], dict[str, str], dict[str, tuple[str, ...]]]:
+        """Return the ready *definitions*, every fingerprint and announced definition parts.
 
         Runs on a Chat worker: readiness checks and fingerprints cost time per Tool.
         """
         ready: list[JsonObject] = []
         sources: dict[str, str] = {}
-        change_notes: dict[str, ToolDefinitionChangeNote] = {}
+        announce_changes: dict[str, tuple[str, ...]] = {}
         for definition in definitions:
             name = str(definition["name"])
             tool = self._registered_tool(name)
             if tool is None or tool_is_ready(tool):
                 ready.append(definition)
             sources[name] = definition_source(definition)
-            if tool is not None and tool.definition_change_note is not None:
-                change_notes[name] = tool.definition_change_note
-        return ready, sources, change_notes
+            if tool is not None and tool.announce_changes:
+                announce_changes[name] = tool.announce_changes
+        return ready, sources, announce_changes
 
     def _registered_tool(self, name: str) -> Tool | None:
         try:

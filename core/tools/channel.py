@@ -366,6 +366,8 @@ def register_channel_send_tool(
         result_schema={"type": "object"},
         display=ToolDisplay(parts_builder=_channel_send_display_parts),
         definition_profile_resolver=_channel_send_profile_resolver(channel_service),
+        # The description lists the Agent's Channels, so a Session hears of a new one.
+        announce_changes=["description"],
     )
 
 

@@ -47,11 +47,6 @@ DESCRIPTION_TITLE_CHARACTERS = 80
 SUMMARY_CHARACTERS = 200
 DESCRIPTION_TOOLS_CHARACTERS = 3000
 
-# The detail of a Tool-change announcement when the connection's Tool names changed.
-MCP_TOOLS_ADDED = "Tools added on this connection: {names}."
-MCP_TOOLS_REMOVED = "Tools removed: {names}."
-# Characters of each name list in that detail.
-CHANGE_NOTE_NAMES_CHARACTERS = 1500
 
 MCP_OPERATIONS = (
     "catalog",
