@@ -6,7 +6,6 @@ import {
   getSession as requestGetSession,
   getSessionChangeStats as requestGetSessionChangeStats,
   inspectSubAgentWork as requestInspectSubAgentWork,
-  killTerminal as requestKillTerminal,
   listAgents as requestListAgents,
   listChatCommands as requestListChatCommands,
   listFiles as requestListFiles,
@@ -14,6 +13,7 @@ import {
   listSessionActivity as requestListSessionActivity,
   listSessions as requestListSessions,
   loadChatHistory as requestLoadChatHistory,
+  loadCommandOutput as requestLoadCommandOutput,
   loadLearningChanges as requestLoadLearningChanges,
   loadReflectionRuns as requestLoadReflectionRuns,
   markSessionRead as requestMarkSessionRead,
@@ -24,6 +24,7 @@ import {
   updateQueueItem as requestUpdateQueueItem,
   steerQueueItem as requestSteerQueueItem,
   stopAll as requestStopAll,
+  stopCommand as requestStopCommand,
   undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 import { t } from '../i18n.js';
@@ -108,7 +109,6 @@ function defaultChatOperations() {
     controlRun: (...args) => requestControlRun(...args),
     editChatMessage: (...args) => requestEditChatMessage(...args),
     inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
-    killTerminal: (...args) => requestKillTerminal(...args),
     listAgents: (...args) => requestListAgents(...args),
     listChatCommands: (...args) => requestListChatCommands(...args),
     listFiles: (...args) => requestListFiles(...args),
@@ -118,6 +118,7 @@ function defaultChatOperations() {
     getSession: (...args) => requestGetSession(...args),
     getSessionChangeStats: (...args) => requestGetSessionChangeStats(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
+    loadCommandOutput: (...args) => requestLoadCommandOutput(...args),
     loadLearningChanges: (...args) => requestLoadLearningChanges(...args),
     loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
     markSessionRead: (...args) => requestMarkSessionRead(...args),
@@ -129,6 +130,7 @@ function defaultChatOperations() {
     updateQueueItem: (...args) => requestUpdateQueueItem(...args),
     steerQueueItem: (...args) => requestSteerQueueItem(...args),
     stopAll: (...args) => requestStopAll(...args),
+    stopCommand: (...args) => requestStopCommand(...args),
     undoLearningChanges: (...args) => requestUndoLearningChanges(...args),
   };
 }
@@ -175,10 +177,11 @@ export function createChatController({
   const {
     applyCommandStatuses,
     applySubAgentStatusUpdates,
-    cancelCommand,
     cancelSubAgent,
+    loadCommandOutput,
     loadSubAgentWork,
     reconcileSubAgentRows,
+    stopCommand,
   } = childTasks;
   const activity = createChatActivity({
     chatState,
@@ -1116,7 +1119,6 @@ export function createChatController({
     applySessionInvalidations,
     applySubAgentStatusUpdates,
     cancelActiveRun,
-    cancelCommand,
     cancelSubAgent,
     cancelTool,
     controlRun,
@@ -1132,6 +1134,7 @@ export function createChatController({
     listSessions: (...args) => operations.listSessions(...args),
     loadAdoptedSelectionHistory,
     loadAgents,
+    loadCommandOutput,
     loadCommands,
     loadCurrentHistory,
     loadHistoryForSession,
@@ -1153,6 +1156,7 @@ export function createChatController({
       operations.setSessionAgentOverrides(...args),
     sendToNewSession,
     stopAll,
+    stopCommand,
     syncAgentActivity,
     syncSessionQueue,
     undoReflection: reflections.undo,

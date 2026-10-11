@@ -186,6 +186,8 @@ export {
   listQueue,
   cancelRun,
   stopAll,
+  stopCommand,
+  loadCommandOutput,
   controlRun,
   cancelToolCall,
   removeFromQueue,

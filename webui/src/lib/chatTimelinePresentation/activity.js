@@ -321,14 +321,14 @@ export const backgroundTasks = (
         continue;
       }
       tasks.push({
-        id: `command:${commandRowState.terminalId}`,
+        id: `command:${commandRowState.commandId}`,
         kind: 'command',
         tool: child,
         dotStatus: commandRowState.dotStatus,
         label: commandRowState.command,
         command: commandRowState.command,
         fullCommand: commandRowState.fullCommand,
-        terminalId: commandRowState.terminalId,
+        commandId: commandRowState.commandId,
         rowState: commandRowState,
         target: null,
         timeLabel: backgroundCommandToolStatusLabel(
@@ -387,13 +387,18 @@ export const activitySections = (tasks = [], reflectionRows = []) => {
   };
 };
 
-// Dot status of a handed-off command by its reported status.
+// Dot status of a background command by its reported status.
 const COMMAND_DOT_STATUSES = {
   running: 'running',
   completed: 'success',
   failed: 'failed',
   stopped: 'cancelled',
 };
+// A background command without a reported status has ended: the server
+// reports every command it still runs or knows the end of, so one it no longer
+// knows (an old command, or one vBot forgot after its end) never runs again.
+// Only how it ended is unknown.
+const COMMAND_DOT_ENDED = 'ended';
 
 function knownCommandStatus(value) {
   const status = trimmedString(value);
@@ -402,37 +407,39 @@ function knownCommandStatus(value) {
 
 // A `bash` Tool row whose command went on running in the background after the
 // call returned represents that command, not the call. The row state resolves
-// its terminal id and its status (live from `command_status_changed`, else
-// durable from History) so the dot and the time label follow the command.
-// Returns null for every other Tool row, and for a handed-off command whose
-// status is unknown, such as one vBot no longer runs: that row stays a plain
-// Tool row.
+// its command id and its status (live from `command_status_changed`, else
+// durable from History) so the dot and the time label follow the command; a
+// command with neither status has ended (`dotStatus` `ended`). Returns null
+// for every other Tool row, and in a view that follows no command statuses
+// (both maps null, such as the Swarm page's Activity): there the row stays a
+// plain Tool row.
 export const backgroundCommandRowState = (
   tool,
   backgroundCommandStatuses = {},
   commandStatuses = {},
 ) => {
-  if (toolNameForRunTool(tool) !== 'bash') {
+  if (
+    toolNameForRunTool(tool) !== 'bash' ||
+    (!isPlainObject(backgroundCommandStatuses) &&
+      !isPlainObject(commandStatuses))
+  ) {
     return null;
   }
   const envelope = parseJsonValue(tool.result);
   const data = isPlainObject(envelope?.data) ? envelope.data : {};
-  const terminalId = trimmedString(data.terminal_id);
-  if (data.status !== 'running' || !terminalId) {
+  const commandId = trimmedString(data.command_id);
+  if (data.status !== 'running' || !commandId) {
     return null;
   }
   const status =
-    knownCommandStatus(commandStatuses?.[terminalId]) ||
-    knownCommandStatus(backgroundCommandStatuses?.[terminalId]);
-  if (!status) {
-    return null;
-  }
+    knownCommandStatus(commandStatuses?.[commandId]) ||
+    knownCommandStatus(backgroundCommandStatuses?.[commandId]);
   const fullCommand = bashCommand(tool);
   return {
-    terminalId,
+    commandId,
     command: commandPreview(fullCommand),
     fullCommand,
-    dotStatus: COMMAND_DOT_STATUSES[status],
+    dotStatus: status ? COMMAND_DOT_STATUSES[status] : COMMAND_DOT_ENDED,
   };
 };
 
@@ -450,8 +457,8 @@ function commandPreview(command) {
   );
 }
 
-// Tooltip details behind a handed-off command row's status: the command's
-// state in words, its start and runtime while it runs, and its terminal id.
+// Tooltip details behind a background command row's status: the command's
+// state in words, its start and runtime while it runs, and its command id.
 export const backgroundCommandStatusDetails = (
   tool,
   rowState,
@@ -471,20 +478,24 @@ export const backgroundCommandStatusDetails = (
       })
     : [];
   rows.push({
-    label: t('chat.details.terminal'),
-    value: rowState.terminalId,
+    label: t('chat.details.commandId'),
+    value: rowState.commandId,
     mono: true,
   });
   return {
     title: running
       ? t('chat.toolState.background')
       : executionStateTitle(rowState.dotStatus),
-    text: running ? t('chat.toolState.backgroundHint') : '',
+    text: running
+      ? t('chat.toolState.backgroundHint')
+      : rowState.dotStatus === COMMAND_DOT_ENDED
+        ? t('chat.toolState.endedHint')
+        : '',
     rows,
   };
 };
 
-// Status label for a handed-off command row. While the command runs the label
+// Status label for a background command row. While the command runs the label
 // ticks from the Tool call's own start timestamp (the command starts with the
 // call, and this internal timing never reaches the Model). A stopped command
 // reads as cancelled; otherwise the label stays empty, since the command's

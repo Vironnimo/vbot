@@ -6,6 +6,7 @@ import {
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
+import { ApiClientError } from '../api/transport.js';
 import { t } from '../i18n.js';
 import {
   countTimelineTextOccurrences,
@@ -912,23 +913,72 @@ describe('Run controls and cancellation', () => {
     ]);
   });
 
-  it('stops a handed-off command by killing its terminal and shows it stopped', async () => {
-    const killTerminal = vi.fn().mockResolvedValue({});
+  it.each([
+    ['shows it stopped', { stopped: true }, 'stopped'],
+    [
+      'leaves an already ended command to its own status',
+      { stopped: false },
+      'running',
+    ],
+  ])(
+    'stops a handed-off command by its command id and %s',
+    async (_label, result, status) => {
+      const stopCommand = vi.fn().mockResolvedValue(result);
+      const { chatState, controller } = setupController({
+        operationOverrides: { stopCommand },
+      });
+      const sessionState = ensureSessionState(
+        chatState,
+        'builder@project-one',
+        'session-one',
+      );
+      controller.applyCommandStatuses({ cmd_one: 'running' });
+
+      await expect(
+        controller.stopCommand({ sessionState, commandId: 'cmd_one' }),
+      ).resolves.toBe(true);
+
+      expect(stopCommand).toHaveBeenCalledWith('session-one', 'cmd_one');
+      expect(chatState.commandStatuses).toEqual({ cmd_one: status });
+    },
+  );
+
+  it("reads a command's output, follows its status and tells when the command is gone", async () => {
+    const loadCommandOutput = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'completed', output: 'done' })
+      .mockRejectedValueOnce(
+        new ApiClientError('command_not_found', 'Unknown command'),
+      )
+      .mockRejectedValueOnce(new ApiClientError('network_error', 'Offline'));
     const { chatState, controller } = setupController({
-      operationOverrides: { killTerminal },
+      operationOverrides: { loadCommandOutput },
     });
     const sessionState = ensureSessionState(
       chatState,
       'builder@project-one',
       'session-one',
     );
-    controller.applyCommandStatuses({ term_one: 'running' });
+    controller.applyCommandStatuses({ cmd_one: 'running' });
+    const read = () =>
+      controller.loadCommandOutput({ sessionState, commandId: 'cmd_one' });
 
-    await expect(
-      controller.cancelCommand({ sessionState, terminalId: 'term_one' }),
-    ).resolves.toBe(true);
-
-    expect(killTerminal).toHaveBeenCalledWith('term_one');
-    expect(chatState.commandStatuses).toEqual({ term_one: 'stopped' });
+    await expect(read()).resolves.toEqual({
+      ok: true,
+      status: 'completed',
+      output: 'done',
+    });
+    expect(loadCommandOutput).toHaveBeenCalledWith('session-one', 'cmd_one');
+    expect(chatState.commandStatuses).toEqual({ cmd_one: 'completed' });
+    await expect(read()).resolves.toEqual({
+      ok: false,
+      error: 'Unknown command',
+      gone: true,
+    });
+    await expect(read()).resolves.toEqual({
+      ok: false,
+      error: 'Offline',
+      gone: false,
+    });
   });
 });

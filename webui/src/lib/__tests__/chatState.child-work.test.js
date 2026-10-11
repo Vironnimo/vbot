@@ -216,7 +216,7 @@ describe('Sub-Agent work', () => {
       status: 'completed',
       running: [
         { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
-        { kind: 'command', id: 'term_1', label: 'npm run dev' },
+        { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
         { kind: 'unknown', id: 'x', label: 'dropped' },
       ],
     });
@@ -239,7 +239,7 @@ describe('Sub-Agent work', () => {
     expect(chatState.subAgentWork).toEqual({
       'sub-work': [
         { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
-        { kind: 'command', id: 'term_1', label: 'npm run dev' },
+        { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
       ],
     });
     expect(chatState.subAgentStatuses).toMatchObject({
@@ -538,24 +538,24 @@ describe('handed-off command statuses', () => {
   it('applies live command statuses without letting a stale running undo an end', () => {
     const { chatState, controller } = setupController();
 
-    controller.applyCommandStatuses({ term_one: 'running' });
+    controller.applyCommandStatuses({ cmd_one: 'running' });
     controller.applyCommandStatuses({
-      term_one: 'running',
-      term_two: 'running',
+      cmd_one: 'running',
+      cmd_two: 'running',
     });
     controller.applyCommandStatuses({
-      term_one: 'completed',
-      term_two: 'running',
+      cmd_one: 'completed',
+      cmd_two: 'running',
     });
     // A map that still holds an older `running` changes nothing known to end.
     controller.applyCommandStatuses({
-      term_one: 'running',
-      term_two: 'failed',
+      cmd_one: 'running',
+      cmd_two: 'failed',
     });
 
     expect(chatState.commandStatuses).toEqual({
-      term_one: 'completed',
-      term_two: 'failed',
+      cmd_one: 'completed',
+      cmd_two: 'failed',
     });
   });
 });

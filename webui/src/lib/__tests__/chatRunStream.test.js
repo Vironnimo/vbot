@@ -335,8 +335,8 @@ describe('live Run events of the displayed Session', () => {
           sequence: 3,
           payload: {
             tool_call_id: 'call-one',
-            terminal_id: 'term_one',
-            screen: 'screen-one',
+            command_id: 'cmd_one',
+            output: 'output-one',
           },
         },
       );
@@ -352,7 +352,7 @@ describe('live Run events of the displayed Session', () => {
 
       expect(tool()).toMatchObject({
         toolCallId: 'call-one',
-        output: 'screen-one',
+        output: 'output-one',
       });
     });
 

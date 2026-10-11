@@ -634,7 +634,7 @@ describe('ChatAssistantRun', () => {
             error: null,
             data: {
               status: 'running',
-              terminal_id: 'term_one',
+              command_id: 'cmd_one',
               output: 'VITE ready in 830ms',
               next: 'The result arrives as a new message.',
             },
@@ -646,27 +646,33 @@ describe('ChatAssistantRun', () => {
     it.each([
       [
         'keeps the row running and ticking while the command runs',
-        { backgroundCommandStatuses: { term_one: 'running' } },
+        { backgroundCommandStatuses: { cmd_one: 'running' } },
         ['running', 'done'],
         () => '30m 0s',
       ],
       [
         'follows the live status before the durable one',
         {
-          backgroundCommandStatuses: { term_one: 'running' },
-          commandStatuses: { term_one: 'stopped' },
+          backgroundCommandStatuses: { cmd_one: 'running' },
+          commandStatuses: { cmd_one: 'stopped' },
         },
         ['cancelled', 'running'],
         () => t('chat.toolCancelled'),
       ],
       [
         'settles the dot from durable History without inventing a runtime',
-        { backgroundCommandStatuses: { term_one: 'completed' } },
+        { backgroundCommandStatuses: { cmd_one: 'completed' } },
         ['done', 'running'],
         () => '',
       ],
       [
-        'shows a command vBot no longer runs as a plain Tool row',
+        'shows a command the server no longer reports as ended',
+        { backgroundCommandStatuses: {}, commandStatuses: {} },
+        ['ended', 'running'],
+        () => '',
+      ],
+      [
+        'keeps a plain Tool row in a view that follows no commands',
         {},
         ['done', 'running'],
         () => '1.0s',

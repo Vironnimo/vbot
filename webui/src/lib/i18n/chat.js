@@ -215,11 +215,14 @@ export default Object.freeze({
   'chat.toolState.background': 'Running in the background',
   'chat.toolState.backgroundHint':
     'vBot watches the command. Its result reaches the Agent as a new message when it ends.',
+  'chat.toolState.ended': 'Ended',
+  'chat.toolState.endedHint':
+    'The command no longer runs; how it ended is not known.',
   'chat.details.started': 'Started',
   'chat.details.finished': 'Finished',
   'chat.details.duration': 'Duration',
   'chat.details.runningFor': 'Running for',
-  'chat.details.terminal': 'Terminal',
+  'chat.details.commandId': 'Command ID',
   'chat.details.latestTool': 'Latest Tool',
   'chat.details.runningSubAgent': 'Sub-Agent working',
   'chat.details.runningCommand': 'Command running',
@@ -313,7 +316,16 @@ export default Object.freeze({
   'chat.activity.status.failed': 'Failed',
   'chat.activity.status.cancelled': 'Cancelled',
   'chat.activity.status.interrupted': 'Interrupted',
+  'chat.activity.status.ended': 'Ended',
   'chat.activity.status.unknown': 'Unknown',
+  'chat.activity.commandOutput.title': 'Output',
+  'chat.activity.commandOutput.aria': 'Output of {command}',
+  'chat.activity.commandOutput.loading': 'Loading the output…',
+  'chat.activity.commandOutput.empty': 'No output',
+  'chat.activity.commandOutput.loadError':
+    'The output could not be loaded. {message}',
+  'chat.activity.commandOutput.gone':
+    "vBot no longer keeps this command's output.",
   'chat.activity.reflectionScope.memory': 'Memory reflection',
   'chat.activity.reflectionScope.skill': 'Skill reflection',
   'chat.activity.reflectionScope.combined': 'Memory & skill reflection',

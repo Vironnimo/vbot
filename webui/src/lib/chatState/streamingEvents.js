@@ -259,9 +259,9 @@ function appendCompressedToolCallDeltaEvent(sessionState, event) {
   ];
 }
 
-// Each Tool output event carries the command's whole current screen, which
-// replaces the previous one, so only ONE event per (run, tool call) is
-// retained: its payload is the latest screen, while its sequence span still
+// Each Tool output event carries the command's newest output lines, which
+// replace the previous ones, so only ONE event per (run, tool call) is
+// retained: its payload is the latest output, while its sequence span still
 // covers every event it absorbed for gap detection. The live run projection
 // replays every retained event on each render, so retaining each event would
 // make the rebuild cost grow with the command's runtime. A tool call id is
@@ -269,7 +269,7 @@ function appendCompressedToolCallDeltaEvent(sessionState, event) {
 function retainLatestToolOutputEvent(sessionState, event) {
   const payload = event.payload ?? {};
   const toolCallId = payload.tool_call_id ?? payload.id;
-  if (!toolCallId || typeof payload.screen !== 'string') {
+  if (!toolCallId || typeof payload.output !== 'string') {
     return;
   }
 
@@ -281,7 +281,7 @@ function retainLatestToolOutputEvent(sessionState, event) {
   );
   if (existingEvent) {
     const latestSequence = streamEventLatestSequence(existingEvent);
-    // A replayed older screen never replaces a newer one.
+    // A replayed older output never replaces a newer one.
     if (
       !Number.isFinite(event.sequence) ||
       !Number.isFinite(latestSequence) ||

@@ -31,7 +31,7 @@ import {
 import { createRunEventFeed } from './runEventFeed.svelte.js';
 import { appendSessionInvalidation } from './sessionInvalidation.js';
 
-// The live statuses of handed-off shell commands, oldest evicted first.
+// The live statuses of background shell commands, oldest evicted first.
 // ChatView re-applies the whole map, so no per-event bookkeeping is needed.
 const MAX_COMMAND_STATUSES = 200;
 const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
@@ -90,7 +90,7 @@ export function createAppControllerState() {
     // The server's background activity list: loaded on every connection,
     // then replaced by each `activity_status` push.
     backgroundActivity: [],
-    // Handed-off shell command status by terminal id, from
+    // Background shell command status by command id, from
     // `command_status_changed` (bounded, newest last).
     commandStatuses: {},
     serverNoticeState: '',
@@ -238,17 +238,17 @@ export function createAppController({
       return;
     }
     if (event.type === 'command_status_changed') {
-      const terminalId = event.payload?.terminal_id;
+      const commandId = event.payload?.command_id;
       const status = event.payload?.status;
       if (
-        typeof terminalId === 'string' &&
-        terminalId &&
+        typeof commandId === 'string' &&
+        commandId &&
         typeof status === 'string' &&
         status
       ) {
         state.commandStatuses = mergeBoundedEntries(
           state.commandStatuses,
-          { [terminalId]: status },
+          { [commandId]: status },
           MAX_COMMAND_STATUSES,
         ).entries;
       }

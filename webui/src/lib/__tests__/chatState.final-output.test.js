@@ -481,8 +481,8 @@ describe('final assistant output', () => {
       sequence: 2,
       payload: {
         tool_call_id: 'call-one',
-        terminal_id: 'term_one',
-        screen: 'hello',
+        command_id: 'cmd_one',
+        output: 'hello',
       },
     });
     appendRunEvent(sessionState, {

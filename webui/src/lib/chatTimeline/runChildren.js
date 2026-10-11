@@ -297,8 +297,8 @@ export function mergeToolStarted(assistantRun, event) {
   syncAssistantRunCollections(assistantRun);
 }
 
-// A Tool output event carries the command's current screen, which replaces
-// the live output shown so far.
+// A Tool output event carries the command's newest output lines, which
+// replace the live output shown so far.
 export function mergeToolOutput(assistantRun, event) {
   const payload = event.payload ?? {};
   const toolCallId = payload.tool_call_id ?? payload.id;
@@ -311,7 +311,7 @@ export function mergeToolOutput(assistantRun, event) {
     },
   );
   tool.toolCallId = toolCallId ?? tool.toolCallId;
-  tool.output = typeof payload.screen === 'string' ? payload.screen : '';
+  tool.output = typeof payload.output === 'string' ? payload.output : '';
   tool.events = [...tool.events, event];
   syncAssistantRunCollections(assistantRun);
 }
@@ -453,7 +453,7 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
     resultEvent: null,
     timing: null,
     durationMs: null,
-    // The latest live output (the command's current screen) while it runs.
+    // The latest live output (the command's newest lines) while it runs.
     output: '',
     events: [],
   };

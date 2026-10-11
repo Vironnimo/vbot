@@ -25,11 +25,13 @@ const SUBAGENT_WORK_KINDS = new Set(['subagent', 'command', 'terminal']);
 const COMMAND_STATUS_RUNNING = 'running';
 const COMMAND_STATUS_STOPPED = 'stopped';
 const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
+const RPC_ERROR_COMMAND_NOT_FOUND = 'command_not_found';
 
 // Internal child-task lifecycle: the bounded Sub-Agent status cache,
-// exact-work inspection, Sub-Agent cancellation and the live statuses of
-// handed-off shell commands. A Sub-Agent's answers reach the Parent Session as
-// delivered messages, so no result is fetched here.
+// exact-work inspection, Sub-Agent cancellation, and the live statuses,
+// stopping and output of background shell commands. A Sub-Agent's answers
+// reach the Parent Session as delivered messages, so no result is fetched
+// here.
 export function createChatChildTasks({ chatState, operations, errorMessage }) {
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
@@ -313,21 +315,28 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     ).entries;
   }
 
-  // A handed-off command is stopped by killing its terminal. The server then
-  // reports `stopped` itself; showing it at once only anticipates that, and
-  // never replaces an end the command already reached.
-  async function cancelCommand({ sessionState, terminalId = '' } = {}) {
-    const normalizedTerminalId = trimmedString(terminalId);
-    if (!sessionState || !normalizedTerminalId) {
+  // Stops a background command of the Session for the user; its Agent then
+  // receives the stopped result. The server reports `stopped` itself; showing
+  // it at once only anticipates that, and never replaces an end the command
+  // already reached. A command that had already ended keeps its own end.
+  async function stopCommand({ sessionState, commandId = '' } = {}) {
+    const normalizedCommandId = trimmedString(commandId);
+    if (!sessionState?.sessionId || !normalizedCommandId) {
       return false;
     }
 
     sessionState.actionError = '';
     try {
-      await operations.killTerminal(normalizedTerminalId);
-      const known = chatState.commandStatuses[normalizedTerminalId];
-      if (!known || known === COMMAND_STATUS_RUNNING) {
-        setCommandStatuses({ [normalizedTerminalId]: COMMAND_STATUS_STOPPED });
+      const result = await operations.stopCommand(
+        sessionState.sessionId,
+        normalizedCommandId,
+      );
+      const known = chatState.commandStatuses[normalizedCommandId];
+      if (
+        result?.stopped === true &&
+        (!known || known === COMMAND_STATUS_RUNNING)
+      ) {
+        setCommandStatuses({ [normalizedCommandId]: COMMAND_STATUS_STOPPED });
       }
       return true;
     } catch (error) {
@@ -335,6 +344,37 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
         'chat.cancelBackgroundTaskError',
       )} ${errorMessage(error)}`;
       return false;
+    }
+  }
+
+  // Reads a background command's status and newest output for the Activity
+  // panel's output view. The status the read reports joins the live statuses
+  // under their rule (a known end is never undone). Resolves to
+  // `{ ok: true, status, output }`, or `{ ok: false, error, gone }` when the
+  // read failed; `gone` means the server no longer knows the command.
+  async function loadCommandOutput({ sessionState, commandId = '' } = {}) {
+    const normalizedCommandId = trimmedString(commandId);
+    if (!sessionState?.sessionId || !normalizedCommandId) {
+      return { ok: false, error: '', gone: true };
+    }
+    try {
+      const result = await operations.loadCommandOutput(
+        sessionState.sessionId,
+        normalizedCommandId,
+      );
+      const status = trimmedString(result?.status);
+      applyCommandStatuses({ [normalizedCommandId]: status });
+      return {
+        ok: true,
+        status,
+        output: typeof result?.output === 'string' ? result.output : '',
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: errorMessage(error),
+        gone: error?.code === RPC_ERROR_COMMAND_NOT_FOUND,
+      };
     }
   }
 
@@ -368,18 +408,18 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   }
 
   // The View forwards App's bounded live map of `command_status_changed`
-  // statuses (terminal id -> status) on every change; applying it again is
+  // statuses (command id -> status) on every change; applying it again is
   // idempotent. A command never runs again once it ended, so a `running` the
   // map still holds cannot undo a known end, such as a stop shown right after
-  // a successful cancel.
+  // a successful stop request.
   function applyCommandStatuses(statuses) {
     if (!isRecord(statuses)) {
       return;
     }
     const updates = {};
-    for (const [terminalId, value] of Object.entries(statuses)) {
+    for (const [commandId, value] of Object.entries(statuses)) {
       const status = trimmedString(value);
-      const known = chatState.commandStatuses[terminalId];
+      const known = chatState.commandStatuses[commandId];
       if (
         !status ||
         status === known ||
@@ -387,7 +427,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
       ) {
         continue;
       }
-      updates[terminalId] = status;
+      updates[commandId] = status;
     }
     if (Object.keys(updates).length > 0) {
       setCommandStatuses(updates);
@@ -397,10 +437,11 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   return {
     applyCommandStatuses,
     applySubAgentStatusUpdates,
-    cancelCommand,
     cancelSubAgent,
+    loadCommandOutput,
     loadSubAgentWork,
     reconcileSubAgentRows,
+    stopCommand,
     dispose() {
       subAgentWorkInflightIds.clear();
       subAgentStatusInflightKeys.clear();

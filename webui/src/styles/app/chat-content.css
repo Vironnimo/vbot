@@ -364,7 +364,9 @@
   color: var(--amber);
 }
 
-.te-dot.cancelled {
+/* A background command that ended without a known outcome: neutral. */
+.te-dot.cancelled,
+.te-dot.ended {
   color: var(--text-lo);
 }
 

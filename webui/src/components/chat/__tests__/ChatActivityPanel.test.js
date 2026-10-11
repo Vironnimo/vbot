@@ -46,7 +46,7 @@ function subAgentTask({
   };
 }
 
-// A `bash` call whose command went on running in terminal `term_<id>`.
+// A `bash` call whose command `cmd_<id>` went on running in the background.
 function backgroundCommandTask({ id, command, ...fields }) {
   return {
     type: 'tool_call',
@@ -60,7 +60,7 @@ function backgroundCommandTask({ id, command, ...fields }) {
       error: null,
       data: {
         status: 'running',
-        terminal_id: `term_${id}`,
+        command_id: `cmd_${id}`,
         output: '',
         next: 'The result arrives as a new message.',
       },
@@ -182,8 +182,8 @@ describe('ChatActivityPanel', () => {
   }
 
   // Sub-Agent Runs in every state (the running one listed last), a message to
-  // one of them, and two background commands (one failed through its tracked
-  // status).
+  // one of them, and three background commands (one failed through its
+  // tracked status, one the server no longer reports).
   function sessionTasks() {
     const tasks = {
       completed: subAgentTask({
@@ -230,6 +230,10 @@ describe('ChatActivityPanel', () => {
         description: 'Sidebar work',
         status: 'running',
       }),
+      endedBash: backgroundCommandTask({
+        id: 'bash-ended',
+        command: 'npm run lint',
+      }),
       failedBash: backgroundCommandTask({
         id: 'bash-failed',
         command: 'npm test',
@@ -244,8 +248,8 @@ describe('ChatActivityPanel', () => {
       props: {
         timelineItems: [runItem(Object.values(tasks))],
         backgroundCommandStatuses: {
-          'term_bash-failed': 'failed',
-          'term_bash-running': 'running',
+          'cmd_bash-failed': 'failed',
+          'cmd_bash-running': 'running',
         },
       },
     };
@@ -283,6 +287,8 @@ describe('ChatActivityPanel', () => {
     ]);
     expect(sectionRows(finished)).toEqual([
       ['npm test', bash, 'failed'],
+      // A command without a reported status has ended, never runs.
+      ['npm run lint', bash, 'ended'],
       ['tester', subagent, 'failed'],
       ['writer', subagent, 'cancelled'],
       ['reviewer', subagent, 'success'],
@@ -327,12 +333,14 @@ describe('ChatActivityPanel', () => {
     expect(cards).toMatchObject({
       'npm run dev': t('chat.copyCommand'),
       'npm test': t('chat.copyCommand'),
+      'npm run lint': t('chat.copyCommand'),
     });
 
     // Bash rows are plain rows that show their command and kind.
     for (const [command, statusKey] of [
       ['npm run dev', 'running'],
       ['npm test', 'failed'],
+      ['npm run lint', 'ended'],
     ]) {
       const row = rowContaining(command);
       expect(row.tagName).toBe('DIV');
@@ -368,12 +376,12 @@ describe('ChatActivityPanel', () => {
     const { tasks, props } = sessionTasks();
     const onNavigateToSubAgent = vi.fn();
     const onCancelSubAgent = vi.fn();
-    const onCancelBackgroundCommand = vi.fn();
+    const onStopBackgroundCommand = vi.fn();
     openPanel({
       ...props,
       onNavigateToSubAgent,
       onCancelSubAgent,
-      onCancelBackgroundCommand,
+      onStopBackgroundCommand,
     });
 
     const subAgentCancel = document.querySelector(
@@ -403,8 +411,8 @@ describe('ChatActivityPanel', () => {
     bashCancel.click();
     await Promise.resolve();
     expect(onCancelSubAgent).toHaveBeenCalledWith({ tool: tasks.running });
-    expect(onCancelBackgroundCommand).toHaveBeenCalledWith({
-      terminalId: 'term_bash-running',
+    expect(onStopBackgroundCommand).toHaveBeenCalledWith({
+      commandId: 'cmd_bash-running',
     });
     expect(onNavigateToSubAgent).toHaveBeenCalledTimes(1);
   });
@@ -466,7 +474,7 @@ describe('ChatActivityPanel', () => {
           runItem([bash], 'history-run'),
           runItem([{ ...bash, id: 'live-tool' }], 'live-run'),
         ],
-        backgroundCommandStatuses: { term_overlap: commandStatus },
+        backgroundCommandStatuses: { cmd_overlap: commandStatus },
       });
 
       expect(taskRows()).toHaveLength(1);
@@ -808,10 +816,10 @@ describe('ChatActivityPanel', () => {
       ],
       // The live status wins over the durable one recorded in History.
       backgroundCommandStatuses: {
-        term_stopped: 'running',
-        term_ticking: 'running',
+        cmd_stopped: 'running',
+        cmd_ticking: 'running',
       },
-      commandStatuses: { term_stopped: 'stopped' },
+      commandStatuses: { cmd_stopped: 'stopped' },
       reflectionTasks: [],
     });
 
@@ -829,5 +837,112 @@ describe('ChatActivityPanel', () => {
     expect(
       runningRow.querySelector('.chat-activity__task-time'),
     ).not.toBeNull();
+  });
+
+  describe('command output', () => {
+    const REFRESH_MS = 2000;
+    const runningCommand = (props = {}) => ({
+      timelineItems: [
+        runItem([backgroundCommandTask({ id: 'dev', command: 'npm run dev' })]),
+      ],
+      backgroundCommandStatuses: { cmd_dev: 'running' },
+      ...props,
+    });
+    const outputToggle = () =>
+      [...document.querySelectorAll('button')].find(
+        (button) =>
+          button.getAttribute('aria-label') ===
+          t('chat.activity.commandOutput.aria', { command: 'npm run dev' }),
+      );
+    const outputView = () => {
+      const id = outputToggle().getAttribute('aria-controls');
+      return id ? document.getElementById(id) : null;
+    };
+    const shownOutput = () =>
+      outputView()?.querySelector('pre')?.textContent ?? null;
+    const settle = async (ms = 0) => {
+      await vi.advanceTimersByTimeAsync(ms);
+      flushSync();
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    it('reads the output when opened and every 2 seconds while the command runs, until closed or unmounted', async () => {
+      const load = vi.fn(async () => ({
+        ok: true,
+        status: 'running',
+        output: `line ${load.mock.calls.length}`,
+      }));
+      openPanel(runningCommand({ onLoadCommandOutput: load }));
+
+      expect(outputToggle().getAttribute('aria-expanded')).toBe('false');
+      expect(outputView()).toBeNull();
+      outputToggle().click();
+      await settle();
+
+      expect(outputToggle().getAttribute('aria-expanded')).toBe('true');
+      expect(load).toHaveBeenCalledWith('cmd_dev');
+      expect(shownOutput()).toBe('line 1');
+      await settle(REFRESH_MS);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(shownOutput()).toBe('line 2');
+
+      outputToggle().click();
+      await settle(REFRESH_MS * 3);
+      expect(outputView()).toBeNull();
+      expect(load).toHaveBeenCalledTimes(2);
+
+      outputToggle().click();
+      await settle();
+      expect(load).toHaveBeenCalledTimes(3);
+      await unmount(mountedComponent);
+      mountedComponent = null;
+      await vi.advanceTimersByTimeAsync(REFRESH_MS * 3);
+      expect(load).toHaveBeenCalledTimes(3);
+    });
+
+    it('stops reading once the command ended and keeps its final output', async () => {
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, status: 'running', output: '' })
+        .mockResolvedValue({ ok: true, status: 'completed', output: 'done' });
+      openPanel(runningCommand({ onLoadCommandOutput: load }));
+
+      outputToggle().click();
+      await settle();
+      expect(outputView().textContent).toContain(
+        t('chat.activity.commandOutput.empty'),
+      );
+      await settle(REFRESH_MS);
+      await settle(REFRESH_MS * 3);
+
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(shownOutput()).toBe('done');
+    });
+
+    it('shows a failed read in place and stops for a command the server no longer knows', async () => {
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, error: 'Offline', gone: false })
+        .mockResolvedValue({ ok: false, error: 'Unknown', gone: true });
+      openPanel(runningCommand({ onLoadCommandOutput: load }));
+
+      outputToggle().click();
+      await settle();
+      expect(outputView().querySelector('[role="alert"]').textContent).toBe(
+        t('chat.activity.commandOutput.loadError', { message: 'Offline' }),
+      );
+
+      // While the command runs, the next read tries again.
+      await settle(REFRESH_MS);
+      await settle(REFRESH_MS * 3);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(outputView().querySelector('[role="alert"]')).toBeNull();
+      expect(outputView().textContent).toContain(
+        t('chat.activity.commandOutput.gone'),
+      );
+    });
   });
 });
