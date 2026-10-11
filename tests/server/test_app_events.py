@@ -24,22 +24,34 @@ JsonObject = dict[str, Any]
 class _RecordingTerminalManager(StubTerminalManager):
     def __init__(self) -> None:
         self.changed_callbacks: list[Callable[[str], None]] = []
-        self.statuses: dict[str, str] = {}
 
     @override
     def add_changed_callback(self, callback: Callable[[str], None]) -> Any:
         self.changed_callbacks.append(callback)
         return lambda: self.changed_callbacks.remove(callback)
 
-    @override
-    def command_status(self, terminal_id: str) -> str | None:
-        return self.statuses.get(terminal_id)
+
+class _RecordingCommandManager:
+    """The CommandManager's change callbacks and the statuses they report."""
+
+    def __init__(self) -> None:
+        self.changed_callbacks: list[Callable[[str], None]] = []
+        self.statuses: dict[str, str] = {}
+
+    def add_changed_callback(self, callback: Callable[[str], None]) -> Any:
+        self.changed_callbacks.append(callback)
+        return lambda: self.changed_callbacks.remove(callback)
+
+    def status(self, command_id: str) -> str | None:
+        return self.statuses.get(command_id)
 
 
 def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     runtime = StubRuntime(tmp_path, StubAdapter())
     terminal_manager = _RecordingTerminalManager()
     runtime.terminal_manager = terminal_manager
+    command_manager = _RecordingCommandManager()
+    runtime.command_manager = command_manager  # type: ignore[assignment]
     cron_service = CronService(cast(Any, SimpleNamespace()), tmp_path)
     runtime.cron_service = cron_service  # type: ignore[attr-defined]
     address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
@@ -100,22 +112,27 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
             )
         )
 
-        def terminal_changed(terminal_id: str, status: str | None) -> Callable[[], None]:
+        terminal_events = publishes(lambda: terminal_manager.changed_callbacks[0]("term_one"))
+
+        def command_changed(command_id: str, status: str | None) -> Callable[[], None]:
             def change() -> None:
-                if status is not None:
-                    terminal_manager.statuses[terminal_id] = status
-                terminal_manager.changed_callbacks[0](terminal_id)
+                if status is None:
+                    command_manager.statuses.pop(command_id, None)
+                else:
+                    command_manager.statuses[command_id] = status
+                command_manager.changed_callbacks[0](command_id)
 
             return change
 
-        # A handed-off command's status is published once per change.
+        # A background command's status is published once per change; a
+        # forgotten command publishes nothing.
         command_events = [
-            publishes(terminal_changed(terminal_id, status))
-            for terminal_id, status in (
-                ("term_one", "running"),
-                ("term_one", "running"),
-                ("term_one", "completed"),
-                ("term_manual", None),
+            publishes(command_changed(command_id, status))
+            for command_id, status in (
+                ("cmd_one", "running"),
+                ("cmd_one", "running"),
+                ("cmd_one", "completed"),
+                ("cmd_one", None),
             )
         ]
         # An Agent's Skill authoring Tool reports its package changes.
@@ -143,23 +160,20 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     assert read_events == [("resource_changed", {"kind": "sessions", "scope": read_scope})]
     assert cron_events == [("resource_changed", {"kind": "cron"})]
 
-    def terminals_changed(terminal_id: str) -> tuple[str, JsonObject]:
-        return ("resource_changed", {"kind": "terminals", "scope": {"terminal_id": terminal_id}})
+    assert terminal_events == [
+        ("resource_changed", {"kind": "terminals", "scope": {"terminal_id": "term_one"}})
+    ]
 
     def status_changed(status: str) -> tuple[str, JsonObject]:
-        return ("command_status_changed", {"terminal_id": "term_one", "status": status})
+        return ("command_status_changed", {"command_id": "cmd_one", "status": status})
 
-    assert command_events == [
-        [terminals_changed("term_one"), status_changed("running")],
-        [terminals_changed("term_one")],
-        [terminals_changed("term_one"), status_changed("completed")],
-        [terminals_changed("term_manual")],
-    ]
+    assert command_events == [[status_changed("running")], [], [status_changed("completed")], []]
     assert skill_events == [("resource_changed", {"kind": "skills"})]
     assert model_events == [("resource_changed", {"kind": "models"})]
     assert index_events == [("recall_index_status", index_status.to_dict())]
     # App shutdown releases the bridges.
     assert terminal_manager.changed_callbacks == []
+    assert command_manager.changed_callbacks == []
     assert runtime.skill_changed_callbacks == []
     assert runtime.model_catalog_changed_callbacks == []
     assert runtime.recall.listeners == []

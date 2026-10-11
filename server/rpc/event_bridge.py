@@ -155,15 +155,15 @@ def _publish_provider_auth_completed_event(
     )
 
 
-def publish_command_status_changed(state: Any, terminal_id: str, status: str) -> None:
-    """Forward the new status of a handed-off shell command to accessors.
+def publish_command_status_changed(state: Any, command_id: str, status: str) -> None:
+    """Forward the new status of a background shell command to accessors.
 
     ``status`` is ``running``, ``completed``, ``failed`` or ``stopped``, as in
     the ``background_command_statuses`` of ``chat.history``.
     """
     state.event_bus.publish(
         COMMAND_STATUS_CHANGED_EVENT,
-        {"terminal_id": terminal_id, "status": status},
+        {"command_id": command_id, "status": status},
     )
 
 

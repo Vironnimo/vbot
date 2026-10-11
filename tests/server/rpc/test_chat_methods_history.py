@@ -53,14 +53,14 @@ class _HistoryAgents:
         return SimpleNamespace(compaction_policy=self.compaction_policy, model=self.model)
 
 
-class _Terminals:
-    """The commands the TerminalManager still knows, by terminal id."""
+class _Commands:
+    """The background commands the CommandManager still knows, by command id."""
 
     def __init__(self) -> None:
         self.statuses: dict[str, str] = {}
 
-    def command_status(self, terminal_id: str) -> str | None:
-        return self.statuses.get(terminal_id)
+    def status(self, command_id: str) -> str | None:
+        return self.statuses.get(command_id)
 
 
 @dataclass
@@ -94,7 +94,7 @@ def history(tmp_path: Path) -> Iterator[_History]:
                 load_compaction_settings=lambda: normalize_compaction_settings(None)
             ),
             chat_sessions=sessions,
-            terminal_manager=_Terminals(),
+            command_manager=_Commands(),
             memory=memory,
             learning_changes=LearningChanges(
                 memory=memory,
@@ -125,23 +125,21 @@ def _summary(run_id: str, message_id: str) -> ChatMessage:
     )
 
 
-def _handed_off_command(session: ChatSession, call_id: str, terminal_id: str) -> None:
+def _handed_off_command(session: ChatSession, call_id: str, command_id: str) -> None:
     append_tool_fixture(
         session,
         ChatMessage.tool(
             tool_call_id=call_id,
             name="bash",
-            content=json.dumps(
-                tool_success({"status": "running", "terminal_id": terminal_id, "output": ""})
-            ),
+            content=json.dumps(tool_success({"status": "running", "command_id": command_id})),
         ),
     )
 
 
-def _delivery_note(terminal_id: str, exit_code: int) -> str:
+def _delivery_note(command_id: str, exit_code: int) -> str:
     return (
         "Background results\n\n"
-        f"The command in terminal {terminal_id} (make) exited with code {exit_code}.\n"
+        f"The background command {command_id} (make) exited with code {exit_code} after 4 s.\n"
         "Output: (none)"
     )
 
@@ -405,29 +403,29 @@ async def test_history_reports_background_command_statuses_of_the_records_it_ret
     history: _History,
 ) -> None:
     session = history.session()
-    _handed_off_command(session, "bash-one", "term_one")
-    _handed_off_command(session, "bash-two", "term_two")
-    _handed_off_command(session, "bash-three", "term_gone")
-    session.add_note(_delivery_note("term_two", 3))
+    _handed_off_command(session, "bash-one", "cmd_one")
+    _handed_off_command(session, "bash-two", "cmd_two")
+    _handed_off_command(session, "bash-three", "cmd_gone")
+    session.add_note(_delivery_note("cmd_two", 3))
     session.add_note("Skill context: unrelated")
-    terminals = history.state.runtime.terminal_manager
-    # term_one exited, its result not yet delivered; vBot restarted since term_gone ran.
-    terminals.statuses = {"term_one": "completed", "term_two": "failed"}
+    commands = history.state.runtime.command_manager
+    # cmd_one exited, its result not yet delivered; vBot restarted since cmd_gone ran.
+    commands.statuses = {"cmd_one": "completed", "cmd_two": "failed"}
 
     # A replacement read carries the complete map: deliveries applied, running
-    # commands at their current status, commands no terminal runs dropped.
+    # commands at their current status, commands the manager does not know dropped.
     first = await history.read(limit=1)
     assert first["background_command_statuses"] == {
-        "term_one": "completed",
-        "term_two": "failed",
+        "cmd_one": "completed",
+        "cmd_two": "failed",
     }
     assert all(message["role"] != "note" for message in first["messages"])
 
     # An incremental read carries only the appended records' statuses.
-    session.add_note(_delivery_note("term_one", 0))
+    session.add_note(_delivery_note("cmd_one", 0))
     delta = await history.read(after=first["next_after"])
     assert delta["incremental"] is True
-    assert delta["background_command_statuses"] == {"term_one": "completed"}
+    assert delta["background_command_statuses"] == {"cmd_one": "completed"}
 
     # An older page carries none.
     older = await history.read(before=first["next_before"])

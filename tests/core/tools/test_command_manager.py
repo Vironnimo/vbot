@@ -385,6 +385,9 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
 
     moved = harness.manager.to_background(command_id, deliver=True)
 
+    # Reported at once: the server publishes `running` before the shell call's
+    # result that hands the command off.
+    assert harness.changes == [command_id]
     assert (moved.ended, moved.background, moved.delivers_result) == (False, True, True)
     assert harness.manager.status(command_id) == "running"
     assert [row.owner for row in harness.manager.commands([OWNER, CHILD])] == [CHILD]

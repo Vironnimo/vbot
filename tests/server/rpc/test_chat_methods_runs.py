@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -14,9 +15,20 @@ from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import ToolContext, tool_success
 from server.file_delivery import FileDelivery
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_RUN_NOT_FOUND
+from server.rpc.errors import (
+    RPC_ERROR_COMMAND_NOT_FOUND,
+    RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_RUN_NOT_FOUND,
+)
 from tests.core.runs.runs_test_support import RunTimelines
 from tests.core.sessions.history_fixtures import complete_run
+from tests.core.tools.command_manager_helpers import (
+    OWNER,
+    Harness,
+    command_harness,
+    format_report,
+    turns,
+)
 from tests.server.rpc.chat_methods_test_support import call
 from tests.server.rpc_test_support import JsonObject, StubAdapter, make_state
 
@@ -181,6 +193,80 @@ async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped()
     assert stopped == [SessionAddress(project_id="vbot", agent_id="builder", session_id="s1")]
 
 
+def _commands_state(commands: Harness) -> SimpleNamespace:
+    return SimpleNamespace(runtime=SimpleNamespace(command_manager=commands.manager))
+
+
+async def _background_command(commands: Harness) -> tuple[str, Any]:
+    command_id, process = await commands.launch()
+    commands.manager.to_background(command_id, deliver=True)
+    return command_id, process
+
+
+@pytest.mark.asyncio
+async def test_stop_command_stops_a_background_command_for_the_user(tmp_path: Path) -> None:
+    async with command_harness(tmp_path) as commands:
+        state = _commands_state(commands)
+        running, _process = await _background_command(commands)
+        ended, process = await _background_command(commands)
+        process.exit(0)
+        await commands.finish(ended)
+
+        stopped = await call(
+            state, "chat.stop_command", session_id=OWNER.session_id, command_id=running
+        )
+        report = await commands.finish(running)
+        late = await call(state, "chat.stop_command", session_id=OWNER.session_id, command_id=ended)
+
+    assert stopped == {"ok": True, "result": {"stopped": True}}
+    assert (report.status, report.stop_reason) == ("stopped", "user")
+    # The Agent learns that the user stopped it.
+    assert commands.sink.bodies[-1] == format_report(report)
+    # A command that had ended keeps its own end.
+    assert late == {"ok": True, "result": {"stopped": False}}
+    assert commands.manager.report(ended).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_command_output_reads_the_status_and_the_newest_200_lines(tmp_path: Path) -> None:
+    async with command_harness(tmp_path) as commands:
+        state = _commands_state(commands)
+        command_id, process = await _background_command(commands)
+        process.write("".join(f"line {index}\n" for index in range(1, 206)))
+        await turns()
+
+        response = await call(
+            state, "chat.command_output", session_id=OWNER.session_id, command_id=command_id
+        )
+
+    assert response["ok"] is True, response
+    assert response["result"]["status"] == "running"
+    lines = response["result"]["output"].splitlines()
+    assert (len(lines), lines[0], lines[-1]) == (200, "line 6", "line 205")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.stop_command", "chat.command_output"])
+@pytest.mark.parametrize("case", ["unknown", "other-session", "foreground"])
+async def test_command_rpcs_see_only_the_sessions_background_commands(
+    tmp_path: Path, method: str, case: str
+) -> None:
+    async with command_harness(tmp_path) as commands:
+        state = _commands_state(commands)
+        command_id, _process = await commands.launch()
+        if case != "foreground":
+            commands.manager.to_background(command_id, deliver=True)
+        session_id = "session-other" if case == "other-session" else OWNER.session_id
+        requested = "cmd_unknown" if case == "unknown" else command_id
+
+        response = await call(state, method, session_id=session_id, command_id=requested)
+        status = commands.manager.report(command_id).status
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == RPC_ERROR_COMMAND_NOT_FOUND
+    assert status == "running"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params", "unsupported"),
@@ -192,6 +278,16 @@ async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped()
             "extra",
         ),
         ("chat.stop_all", {"agent_id": "coder", "session_id": "s1", "run_id": "any"}, "run_id"),
+        (
+            "chat.stop_command",
+            {"agent_id": "coder", "session_id": "s1", "command_id": "cmd_one"},
+            "agent_id",
+        ),
+        (
+            "chat.command_output",
+            {"session_id": "s1", "command_id": "cmd_one", "lines": 10},
+            "lines",
+        ),
     ],
 )
 async def test_run_controls_reject_unsupported_params(

@@ -82,6 +82,7 @@ def _initialize_app_state(
         app.state
     )
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
+    app.state.command_status_bridge_unsubscribe = _register_command_status_bridge(app.state)
     app.state.activity = ActivityMonitor(
         runtime,
         lambda activities: app.state.event_bus.publish(
@@ -258,19 +259,11 @@ def _unregister_model_catalog_change_bridge(state: Any) -> None:
 
 
 def _register_terminal_change_bridge(state: Any) -> Any:
-    terminals = state.runtime.terminal_manager
-    command_statuses: dict[str, str] = {}
-
-    def forward(terminal_id: str) -> None:
-        publish_resource_changed(state, RESOURCE_KIND_TERMINALS, scope={"terminal_id": terminal_id})
-        status = terminals.command_status(terminal_id)
-        if status is None:
-            command_statuses.pop(terminal_id, None)
-        elif command_statuses.get(terminal_id) != status:
-            command_statuses[terminal_id] = status
-            publish_command_status_changed(state, terminal_id, status)
-
-    return terminals.add_changed_callback(forward)
+    return state.runtime.terminal_manager.add_changed_callback(
+        lambda terminal_id: publish_resource_changed(
+            state, RESOURCE_KIND_TERMINALS, scope={"terminal_id": terminal_id}
+        )
+    )
 
 
 def _unregister_terminal_change_bridge(state: Any) -> None:
@@ -278,6 +271,33 @@ def _unregister_terminal_change_bridge(state: Any) -> None:
     if unsubscribe is not None:
         unsubscribe()
     state.terminal_change_bridge_unsubscribe = None
+
+
+def _register_command_status_bridge(state: Any) -> Any:
+    """Publish each new status of a background command, once per change.
+
+    The manager reports a command as it moves to the background, so ``running``
+    reaches accessors before the shell call's result that hands it off.
+    """
+    commands = state.runtime.command_manager
+    published: dict[str, str] = {}
+
+    def forward(command_id: str) -> None:
+        status = commands.status(command_id)
+        if status is None:
+            published.pop(command_id, None)
+        elif published.get(command_id) != status:
+            published[command_id] = status
+            publish_command_status_changed(state, command_id, status)
+
+    return commands.add_changed_callback(forward)
+
+
+def _unregister_command_status_bridge(state: Any) -> None:
+    unsubscribe = state.command_status_bridge_unsubscribe
+    if unsubscribe is not None:
+        unsubscribe()
+    state.command_status_bridge_unsubscribe = None
 
 
 def _register_recall_index_status_bridge(state: Any) -> Any:

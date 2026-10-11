@@ -31,6 +31,13 @@ from core.sessions import (
     WorkingProjectChoice,
     new_session_id,
 )
+from core.tools.command_manager import (
+    COMMAND_RECENT_LINES,
+    CommandManager,
+    CommandNotFoundError,
+    CommandReport,
+    CommandStopError,
+)
 from core.tools.shell import (
     COMMAND_STATUS_NOTE_MARKER,
     COMMAND_STATUS_TOOL_NAMES,
@@ -42,6 +49,7 @@ from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_QUEUE
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
+    RPC_ERROR_COMMAND_NOT_FOUND,
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_QUEUE_ITEM_NOT_FOUND,
     RPC_ERROR_QUEUE_ITEM_STEERING,
@@ -441,17 +449,17 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
 def _current_command_statuses(state: Any, statuses: JsonObject) -> JsonObject:
     """Replace each recorded ``running`` status by the command's current one.
 
-    A command no terminal runs any longer ended without a delivered result
-    (vBot restarted), so it has no status to show.
+    A command the command manager no longer knows ended without a delivered
+    result (vBot restarted), so it has no status to show.
     """
-    terminals = state.runtime.terminal_manager
+    commands = state.runtime.command_manager
     current: JsonObject = {}
-    for terminal_id, status in statuses.items():
+    for command_id, status in statuses.items():
         if status == "running":
-            status = terminals.command_status(terminal_id)
+            status = commands.status(command_id)
             if status is None:
                 continue
-        current[terminal_id] = status
+        current[command_id] = status
     return current
 
 
@@ -1049,6 +1057,51 @@ async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True, "stopped": stopped}
 
 
+def _session_command(state: Any, params: JsonObject, method: str) -> CommandReport:
+    """The background command ``command_id`` of the Session ``session_id``.
+
+    Raises ``command_not_found`` for an unknown or forgotten id, a command of
+    another Session and a command still inside its shell call.
+    """
+    _reject_unsupported(params, {"session_id", "command_id"}, method)
+    session_id = _required_string(params, "session_id")
+    command_id = _required_string(params, "command_id")
+    commands: CommandManager = state.runtime.command_manager
+    try:
+        report = commands.report(command_id)
+    except CommandNotFoundError:
+        report = None
+    if report is None or not report.background or report.owner.session_id != session_id:
+        raise RpcError(
+            RPC_ERROR_COMMAND_NOT_FOUND,
+            f"No background command {command_id} runs or ran recently in this Session.",
+            routine=True,
+        )
+    return report
+
+
+async def _stop_command_chat(state: Any, params: JsonObject) -> JsonObject:
+    """Stop a background command for the user; its Agent receives the stopped result.
+
+    ``stopped`` is false when the command had ended or another stop came first.
+    """
+    report = _session_command(state, params, "chat.stop_command")
+    if report.finished:
+        return {"stopped": False}
+    try:
+        stopped = await state.runtime.command_manager.stop(report.command_id, "user")
+    except CommandStopError as exc:
+        raise _map_expected_error(exc) from exc
+    return {"stopped": stopped.stop_reason == "user"}
+
+
+def _command_output_chat(state: Any, params: JsonObject) -> JsonObject:
+    """A background command's status and its newest clean output lines."""
+    report = _session_command(state, params, "chat.command_output")
+    output = state.runtime.command_manager.latest_output(report.command_id, COMMAND_RECENT_LINES)
+    return {"status": report.status, "output": output}
+
+
 async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "run_id", "tool_call_id"}, "chat.cancel_tool_call")
 
@@ -1264,6 +1317,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.cancel": _cancel_chat,
         "chat.stop_all": _stop_all_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
+        "chat.stop_command": _stop_command_chat,
+        "chat.command_output": _command_output_chat,
         "chat.control_run": _control_run_chat,
         "chat.queue_steer": _chat_queue_steer,
         "chat.queue_list": _chat_queue_list,
