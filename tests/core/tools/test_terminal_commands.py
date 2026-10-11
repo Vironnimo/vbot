@@ -15,8 +15,8 @@ import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.tools._terminal_command import CommandReport
-from core.tools._terminal_process_tree import ProgramExit, RunningProcess
 from core.tools.model_names import SHELL_MODEL_NAME
+from core.tools.process_tree import ProgramExit, RunningProcess
 from core.tools.shell import SHELL_TOOL_NAME, register_shell_tool
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import (

@@ -48,12 +48,6 @@ from ._terminal_command import (
     StopReason,
 )
 from ._terminal_launch import ShellLaunch, interactive_shell, shell_launch
-from ._terminal_process_tree import (
-    ProcessTree,
-    ProcessTreeTracker,
-    observe_process_tree,
-    track_process_tree,
-)
 from ._terminal_render_host import TerminalRenderHost
 from ._terminal_session import (
     CommandWaitOutcome,
@@ -107,6 +101,12 @@ from ._terminal_state import (
     _utc_now,
     _validate_dimensions,
     _validate_owner,
+)
+from .process_tree import (
+    ProcessTree,
+    ProcessTreeTracker,
+    observe_process_tree,
+    track_process_tree,
 )
 
 _LOGGER = get_logger("tools.terminal_manager")

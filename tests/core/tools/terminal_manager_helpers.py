@@ -16,7 +16,7 @@ import pytest_asyncio
 
 import core.tools._terminal_session as terminal_session
 import core.tools.terminal_manager as terminal_manager_module
-from core.tools._terminal_process_tree import (
+from core.tools.process_tree import (
     ProcessTreeFacts,
     ProgramExit,
     RunningProcess,

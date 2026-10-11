@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterator
 
 import pytest
 
-from core.tools._terminal_process_tree import ProcessTree, ProcessTreeFacts, track_process_tree
+from core.tools.process_tree import ProcessTree, ProcessTreeFacts, track_process_tree
 
 # Real processes: the contract is the operating system's. Each root waits for a
 # line before it starts children, so the tracker is in place first.

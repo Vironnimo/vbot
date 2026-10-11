@@ -50,8 +50,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
-from ._terminal_command import COMMAND_IDLE_CPU_SECONDS
 from ._terminal_state import TerminalState
+from .process_tree import IDLE_CPU_SECONDS
 
 _Phase = Literal["starting", "ready", "repainting", "working", "exited", "error"]
 _Origin = Literal["start", "input", "output"]
@@ -439,7 +439,7 @@ class TerminalActivity:
             return True
         first, last = window[0], window[-1]
         return (
-            abs(last.cpu_seconds - first.cpu_seconds) <= COMMAND_IDLE_CPU_SECONDS
+            abs(last.cpu_seconds - first.cpu_seconds) <= IDLE_CPU_SECONDS
             and last.started == first.started
         )
 

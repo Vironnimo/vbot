@@ -29,18 +29,15 @@ from ._terminal_activity import (
     TerminalActivity,
 )
 from ._terminal_command import (
-    COMMAND_IDLE_CPU_SECONDS,
     COMMAND_IDLE_SECONDS,
     COMMAND_LEFTOVER_QUIET_SECONDS,
     COMMAND_LOG_REFRESH_SECONDS,
     COMMAND_STOP_GRACE_SECONDS,
-    COMMAND_TREE_POLL_SECONDS,
     CommandReport,
     CommandState,
     StopReason,
 )
 from ._terminal_input import input_chunks
-from ._terminal_process_tree import ProcessTree, ProcessTreeFacts
 from ._terminal_render_host import TerminalScreen
 from ._terminal_state import (
     TERMINAL_DELIVERY_TAIL_LINES,
@@ -64,6 +61,7 @@ from ._terminal_state import (
     _utc_now,
     _validate_dimensions,
 )
+from .process_tree import IDLE_CPU_SECONDS, TREE_POLL_SECONDS, ProcessTree, ProcessTreeFacts
 
 _LOGGER = get_logger("tools.terminal_manager")
 _READ_CHUNK_CHARS = 4096
@@ -529,7 +527,7 @@ class TerminalSession:
         if facts is None or activity != self._activity_count:
             return False
         if (
-            abs(facts.cpu_seconds - quiet.cpu_seconds) > COMMAND_IDLE_CPU_SECONDS
+            abs(facts.cpu_seconds - quiet.cpu_seconds) > IDLE_CPU_SECONDS
             or facts.started != quiet.started_processes
         ):
             # CPU time or a new process is work, and so is an exit that took its
@@ -828,7 +826,7 @@ class TerminalSession:
             return not read_timed_out and now - self._tree_dead_at < _COMMAND_DRAIN_SECONDS
         if now < self._next_tree_poll:
             return True
-        self._next_tree_poll = now + COMMAND_TREE_POLL_SECONDS
+        self._next_tree_poll = now + TREE_POLL_SECONDS
         facts = await asyncio.to_thread(command.tree_facts)
         # A tree that cannot be inspected now may still run.
         if facts is None:
@@ -881,7 +879,7 @@ class TerminalSession:
         while not self._tree_killed.is_set():
             if await self._processes_ended():
                 return
-            await self._wait_or_sleep(self._tree_killed, COMMAND_TREE_POLL_SECONDS)
+            await self._wait_or_sleep(self._tree_killed, TREE_POLL_SECONDS)
 
     async def _processes_ended(self) -> bool:
         """Whether every process of the Session has ended; False while that is unknown."""

@@ -1,6 +1,7 @@
 """Every process a command starts: liveness, CPU time, child exit codes and the kill.
 
-A command's shell is the root of a process tree whose members can outlive it,
+Shared by the shell's ``CommandManager`` and the interactive terminals. A
+command's shell is the root of a process tree whose members can outlive it,
 detach from it (``Start-Process``, ``nohup``, ``&``) or fail while the shell
 reports success. ``track_process_tree`` captures the tree right after the
 root starts:
@@ -9,8 +10,10 @@ root starts:
   creates; children that explicitly break away (``CREATE_BREAKAWAY_FROM_JOB``)
   leave it, which the vBot update handoff needs. Job notifications record the
   exit codes of the root's direct children, so a native program's failure is a
-  fact even when PowerShell reduces it to exit code 1. A process the root
-  creates in the moment between its start and the job assignment escapes.
+  fact even when PowerShell reduces it to exit code 1. A root that already runs
+  when it is tracked can create a process in the moment before the job
+  assignment, which escapes; a root created suspended and resumed only after
+  tracking has no such moment.
 - POSIX: the root is a session leader; the tree is every process of its
   session. A process that starts its own session (``setsid``, daemons) leaves.
 
@@ -39,6 +42,13 @@ from pathlib import PurePath
 from typing import Any, Protocol, cast
 
 import psutil  # type: ignore[import-untyped]
+
+# CPU time a whole tree may use within a quiet or idle window and still count
+# as quiet: a trace, not work.
+IDLE_CPU_SECONDS = 0.15
+# How often an owner whose output ended - a command's after its shell exited -
+# checks whether the tree's processes ended.
+TREE_POLL_SECONDS = 1.0
 
 _TERMINATE_CONFIRM_SECONDS = 5.0
 _TERMINATE_POLL_SECONDS = 0.05
@@ -594,6 +604,8 @@ def _image_name(kernel32: Any, handle: Any) -> str:
 
 
 __all__ = [
+    "IDLE_CPU_SECONDS",
+    "TREE_POLL_SECONDS",
     "ProcessTree",
     "ProcessTreeFacts",
     "ProcessTreeTracker",

@@ -23,8 +23,8 @@ from core.projects import ProjectNotFoundError
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import shell as shell_module
 from core.tools import terminal_manager
-from core.tools._terminal_process_tree import ProgramExit, RunningProcess
 from core.tools.model_names import SHELL_MODEL_NAME
+from core.tools.process_tree import ProgramExit, RunningProcess
 from core.tools.shell import (
     SHELL_HANDOFF_SECONDS,
     SHELL_TOOL_DESCRIPTION,

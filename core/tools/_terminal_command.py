@@ -28,7 +28,7 @@ from typing import BinaryIO, Literal
 
 from core.storage.temp_files import TemporaryFileLease
 
-from ._terminal_process_tree import ProcessTree, ProcessTreeFacts, ProgramExit, RunningProcess
+from .process_tree import ProcessTree, ProcessTreeFacts, ProgramExit, RunningProcess
 
 COMMAND_TEMPORARY_CATEGORY = "commands"
 COMMAND_HEAD_LINES = 40
@@ -45,15 +45,9 @@ COMMAND_LOG_REFRESH_SECONDS = 1.0
 COMMAND_STOP_GRACE_SECONDS = 3.0
 # A command that prints nothing and uses no CPU this long is idle.
 COMMAND_IDLE_SECONDS = 15.0
-# CPU time the whole tree may use within the idle window and still count as idle.
-COMMAND_IDLE_CPU_SECONDS = 0.15
 # After the shell exited, processes it left running that print nothing, start
 # nothing and use no CPU this long end the command: they wait, like a server.
 COMMAND_LEFTOVER_QUIET_SECONDS = 2.0
-# How often a session whose output ended - a command's after its shell exited -
-# checks whether its processes ended.
-COMMAND_TREE_POLL_SECONDS = 1.0
-
 StopReason = Literal["timeout", "user", "agent", "run_cancelled", "shutdown"]
 
 
