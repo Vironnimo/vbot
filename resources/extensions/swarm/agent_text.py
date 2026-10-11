@@ -16,8 +16,9 @@ BOARD_DESCRIPTION = (
     "additional discussion when several Agents need to work through a specific problem "
     "together; creating it joins it and announces it in the main discussion. Every participant "
     "can read every discussion; joining one makes its future posts reach you in full and "
-    "returns its recent posts. Pending messages among the posts you read count as received "
-    "and are not delivered again."
+    "returns its recent posts. Messages for you reach you as the group's delivery settings "
+    "allow, so you need not read the Board to receive them; posts you read here are not "
+    "delivered again."
 )
 
 INBOX_DESCRIPTION = (
@@ -217,18 +218,29 @@ STATE_ONLY_STATUS = (
 MESSAGES_IN = "In {discussion}:"
 INBOX_MORE = "{count} more pending; call swarm_inbox again{arguments} to continue."
 DELIVERY_MORE = {
+    # Every route delivers while running: the rest follows without any call.
+    "automatic_one": "1 more pending; it reaches you automatically, so you need not read it on "
+    "the Board.",
+    "automatic_many": "{count} more pending; they reach you automatically, so you need not read "
+    "them on the Board.",
     "inbox": "{count} more pending; receive them with swarm_inbox.",
     "no_inbox": "{count} more pending.",
 }
 
 # swarm_state results.
-STATE_YOU = "{name}, {state}"
 STATE_PENDING = {
     "none": "No pending messages.",
     "one": "1 message for you; receive it with swarm_inbox.",
     "many": "{count} messages for you; receive them with swarm_inbox.",
     "one_no_inbox": "1 message for you.",
     "many_no_inbox": "{count} messages for you.",
+    # Every route delivers while running; this replaces the delivery field.
+    "none_automatic": "No pending messages; new ones reach you automatically, also while you "
+    "are running.",
+    "one_automatic": "1 message for you; it reaches you automatically, also while you are "
+    "running, so you need not read it on the Board.",
+    "many_automatic": "{count} messages for you; they reach you automatically, also while you "
+    "are running, so you need not read them on the Board.",
 }
 STATE_ROUTES = {
     "main": "main-discussion posts",
@@ -243,12 +255,12 @@ STATE_DELIVERY = {
 }
 STATE_WAKE = "{routes} start a Run when you are idle."
 STATE_NO_WAKE = "New messages do not start a Run when you are idle."
-STATE_WAKE_PACED = (
-    "After a Run in which you used no Tool except to read the Board, the Wiki or this status, "
-    "only posts by the user{addressed} start your next Run at once; other posts wait up to "
-    "{minutes} minutes."
+# Wake pacing holds other posts for up to the longest Quiet period.
+STATE_WAKE_PACED = "When you are idle, {routes} start a Run within {minutes} minutes."
+STATE_WAKE_ADDRESSED = (
+    "When you are idle, posts that address or answer you start a Run at once; {routes} start "
+    "one within {minutes} minutes."
 )
-STATE_WAKE_ADDRESSED = " and posts that address or answer you"
 STATE_PARTICIPANTS = "{count} ({totals})"
 STATE_ROSTER_HEADER = "Participants:"
 STATE_ROSTER_LINE = "- {name}{you}: {state}"

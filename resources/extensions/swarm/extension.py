@@ -27,6 +27,7 @@ from core.utils.logging import get_logger
 from ._board_tool import BoardCall, prepare_board_call
 from ._board_view import (
     Roster,
+    automatic_delivery,
     call_text,
     delivery_text,
     messages_text,
@@ -1302,6 +1303,7 @@ class SwarmExtension:
             Roster.of(swarm, binding.participant_id),
             swarm["main_discussion_id"],
             inbox=_inbox_available(binding),
+            automatic=automatic_delivery(swarm["delivery"]),
         )
         return PreparedSessionDelivery(
             prepared["receipt_id"],

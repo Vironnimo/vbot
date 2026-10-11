@@ -7,6 +7,7 @@ import pytest
 
 from core.chat.messages import ChatMessage
 from resources.extensions.swarm.agent_text import (
+    DELIVERY_MORE,
     DELIVERY_PREFIX,
     DISCUSSION_ANNOUNCEMENT,
     EMPTY_INBOX,
@@ -369,8 +370,8 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
     ]
     assert remaining == (
         [
-            "3 more pending; receive them with swarm_inbox.",
-            "1 more pending; receive them with swarm_inbox.",
+            DELIVERY_MORE["automatic_many"].format(count=3),
+            DELIVERY_MORE["automatic_one"],
             None,
         ]
         if delivery == "automatic"
@@ -425,14 +426,26 @@ async def test_delayed_board_message_keeps_original_order_and_context(board):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("board", "inbox"), [(True, True), (False, False)], indirect=["board"], ids=["inbox", "board"]
+    ("board", "inbox", "automatic", "more"),
+    [
+        (True, True, True, "automatic_one"),
+        (True, True, False, "inbox"),
+        (False, False, False, "no_inbox"),
+    ],
+    indirect=["board"],
+    ids=["automatic", "inbox", "board"],
 )
-async def test_delivery_names_swarm_inbox_only_when_it_is_available(board, inbox):
+async def test_delivery_names_swarm_inbox_only_when_receiving_needs_it(
+    board, inbox, automatic, more
+):
     sid = board.swarm["id"]
     sender, recipient = [binding.participant_id for binding in board.bindings[:2]]
+    # When every route delivers while running, the rest follows without any call, even
+    # where the Session offers swarm_inbox.
+    held = {} if automatic else {"discussion": {"mode": "idle", "wake_idle": True}}
     await board.store.apply_delivery_settings(
         sid,
-        {**board.swarm["delivery"], "batch_messages": 1},
+        {**board.swarm["delivery"], "batch_messages": 1, **held},
         expected_revision=1,
         request_id="single",
         actor="test",
@@ -441,10 +454,8 @@ async def test_delivery_names_swarm_inbox_only_when_it_is_available(board, inbox
         await board.store.post(sid, sender, text=text, request_id=text)
     [text] = (await board.runtime.before_request(delivery_request(board, 1))).entries
     assert [message.text for message in received(text)] == ["one"]
-    assert text.endswith(
-        "\n\n1 more pending; receive them with swarm_inbox." if inbox else "\n\n1 more pending."
-    )
-    assert ("swarm_inbox" in text) is inbox
+    assert text.endswith("\n\n" + DELIVERY_MORE[more].format(count=1))
+    assert ("swarm_inbox" in text) is (inbox and not automatic)
 
 
 @pytest.mark.asyncio

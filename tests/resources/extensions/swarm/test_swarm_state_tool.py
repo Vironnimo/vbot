@@ -5,6 +5,12 @@ from dataclasses import replace
 import pytest
 
 from core.tools import ToolContractError
+from resources.extensions.swarm.agent_text import (
+    STATE_DELIVERY,
+    STATE_PENDING,
+    STATE_ROUTES,
+    STATE_WAKE_ADDRESSED,
+)
 from tests.resources.extensions.swarm.swarm_test_support import (
     _name,
     continuation,
@@ -33,6 +39,11 @@ async def test_state_guidance_reaches_native_model_definition(board):
 async def test_status_delivery_policy_and_pending_messages_enable_direct_receiving(board, inbox):
     peer = board.bindings[1].participant_id
     await board.store.post(board.swarm["id"], peer, text="Question", request_id="pending")
+    # When every route delivers while running, the pending line says the message needs no
+    # call, whether or not the Session offers swarm_inbox, and replaces the delivery field.
+    automatic, _ = await dispatch(board, {}, name="swarm_state")
+    assert set(automatic["data"]) == {"pending", "wake", "content"}
+    assert automatic["data"]["pending"] == STATE_PENDING["one_automatic"]
     swarm = await board.store.get_swarm(board.swarm["id"])
     await board.store.apply_delivery_settings(
         swarm["id"],
@@ -46,29 +57,25 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
         actor="test",
     )
     result, _ = await dispatch(board, {}, name="swarm_state")
-    # Participants know one another by name only.
+    # Participants know one another by name only; the roster marks the reader and is
+    # complete, so neither the reader's state nor state totals repeat it.
     roster = "\n".join(
         f"- {_name(board, peer)}{' (you)' if peer == 0 else ''}: idle"
         for peer in range(len(board.bindings))
     )
-    pending = (
-        "pending: 1 message for you; receive it with swarm_inbox."
-        if inbox
-        else "pending: 1 message for you."
+    pending = "pending: " + STATE_PENDING["one" if inbox else "one_no_inbox"]
+    main = STATE_DELIVERY["on_request" if inbox else "on_request_no_inbox"].format(
+        routes="Main-discussion posts"
     )
-    main = "only through swarm_inbox" if inbox else "only when you read them with swarm_board"
-    assert visible(result) == (
-        f"you: {_name(board, 0)}, idle\n"
-        f"{pending}\n"
-        "delivery: Posts that address or answer you reach you automatically, also while you are "
-        "running. Posts in discussions you joined reach you automatically when you are idle. "
-        f"Main-discussion posts reach you {main}.\n"
-        "wake: Posts in discussions you joined and posts that address or answer you start a Run "
-        "when you are idle. After a Run in which you used no Tool except to read the Board, the "
-        "Wiki or this status, only posts by the user and posts that address or answer you start "
-        "your next Run at once; other posts wait up to 4 minutes.\n"
-        f"participants: 3 (3 idle)\n\nParticipants:\n{roster}"
+    lines = visible(result).split("\n")
+    assert lines[0] == pending
+    assert lines[1].startswith("delivery: ") and lines[1].endswith(main)
+    # Wake pacing delays the routes that do not address the reader, up to the longest Quiet
+    # period.
+    assert lines[2] == "wake: " + STATE_WAKE_ADDRESSED.format(
+        routes=STATE_ROUTES["discussion"], minutes=4
     )
+    assert "\n".join(lines[3:]) == f"\nParticipants:\n{roster}"
     if inbox:
         delivered, _ = await dispatch(board, {}, name="swarm_inbox")
         assert [
@@ -76,7 +83,7 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
         ] == [(_name(board, 1), "Question")]
         # The Inbox receipt was never saved with a Tool Result, so the post stays pending.
         again, _ = await dispatch(board, {}, name="swarm_state")
-        assert visible(again).splitlines()[1] == pending
+        assert visible(again).splitlines()[0] == pending
 
 
 @pytest.mark.asyncio
@@ -114,6 +121,8 @@ async def test_status_pages_only_report_automatic_activity(board):
         "data"
     ]
     assert first["content"] == f"Participants:\n- {_name(board, 0)} (you): idle"
+    # Beside a partial roster, totals cover the participants it does not list.
+    assert first["participants"] == "3 (3 idle)"
     assert first["more"].startswith("More participants exist. Continue with ")
     follow = continuation(first["more"])
     assert set(follow) == {"limit", "cursor"} and follow["limit"] == 1
@@ -129,6 +138,7 @@ async def test_status_pages_only_report_automatic_activity(board):
     assert "more" not in changed
     whole = (await board.tools.dispatch(context, {}, allowed_tools=["swarm_state"]))["data"]
     assert whole["content"].count("\n- ") == 3 and "more" not in whole
+    assert "participants" not in whole
     clamped = (await board.tools.dispatch(context, {"limit": 500}, allowed_tools=["swarm_state"]))[
         "data"
     ]

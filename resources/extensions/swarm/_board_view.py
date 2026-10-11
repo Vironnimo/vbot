@@ -307,51 +307,92 @@ def messages_text(posts: Iterable[Json], roster: Roster, main_id: str) -> str:
     return "\n\n".join(blocks)
 
 
+_ROUTES = ("main", "discussion", "ping")
+# Wake pacing holds posts on other routes for up to the longest Quiet period.
+_QUIET_MINUTES = round(QUIET_SECONDS[-1] / 60)
+
+
+def automatic_delivery(settings: Mapping[str, Any]) -> bool:
+    """Whether every route delivers while the participant runs, so pending posts need no call."""
+
+    return all(settings[route]["mode"] == "all" for route in _ROUTES)
+
+
 def delivery_text(
-    prefix: str, posts: Sequence[Json], remaining: int, roster: Roster, main_id: str, *, inbox: bool
+    prefix: str,
+    posts: Sequence[Json],
+    remaining: int,
+    roster: Roster,
+    main_id: str,
+    *,
+    inbox: bool,
+    automatic: bool,
 ) -> str:
-    """Render one automatic delivery: guidance, messages, and what remains pending."""
+    """Render one automatic delivery: guidance, messages, and what remains pending.
+
+    With ``automatic``, every route delivers while the participant runs, so the
+    rest follows without a call.
+    """
 
     parts = [prefix, messages_text(posts, roster, main_id)]
     if remaining:
-        parts.append(text.DELIVERY_MORE["inbox" if inbox else "no_inbox"].format(count=remaining))
+        key = (
+            ("automatic_one" if remaining == 1 else "automatic_many")
+            if automatic
+            else "inbox"
+            if inbox
+            else "no_inbox"
+        )
+        parts.append(text.DELIVERY_MORE[key].format(count=remaining))
     return "\n\n".join(part for part in parts if part)
 
 
-def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
-    """Render participant status as readable fields and a roster listing."""
+def wake_text(routes: Sequence[str]) -> str:
+    """Say which posts start a Run of the idle participant, and how soon."""
 
-    you = status["self"]
-    count = status["pending_count"]
-    if not count:
-        pending = text.STATE_PENDING["none"]
-    else:
-        key = ("one" if count == 1 else "many") + ("" if inbox else "_no_inbox")
-        pending = text.STATE_PENDING[key].format(count=count)
-    delivery = " ".join(
-        text.STATE_DELIVERY[
-            mode if inbox or mode != "on_request" else "on_request_no_inbox"
-        ].format(routes=_routes(routes, capital=True))
-        for mode, routes in status["delivery"].items()
+    if not routes:
+        return text.STATE_NO_WAKE
+    paced = [route for route in routes if route not in ADDRESSED_ROUTES]
+    if not paced:
+        return text.STATE_WAKE.format(routes=_routes(routes, capital=True))
+    template = (
+        text.STATE_WAKE_ADDRESSED if ADDRESSED_ROUTES & set(routes) else text.STATE_WAKE_PACED
     )
-    wake = status["wake_on_messages"]
-    wake_text = text.STATE_WAKE.format(routes=_routes(wake, capital=True)) if wake else ""
-    if set(wake) - ADDRESSED_ROUTES:
-        wake_text += " " + text.STATE_WAKE_PACED.format(
-            addressed=text.STATE_WAKE_ADDRESSED if "ping" in wake else "",
-            minutes=round(QUIET_SECONDS[-1] / 60),
+    return template.format(routes=_routes(paced, capital=False), minutes=_QUIET_MINUTES)
+
+
+def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
+    """Render participant status as readable fields and a roster listing.
+
+    The roster marks the reader, so its own state needs no field. When every
+    route delivers while running, the pending line says so instead of a delivery
+    field; state totals appear only beside a partial roster.
+    """
+
+    count = status["pending_count"]
+    amount = "none" if not count else "one" if count == 1 else "many"
+    automatic = set(status["delivery"]) == {"automatic"}
+    if automatic:
+        key = f"{amount}_automatic"
+    elif not count or inbox:
+        key = amount
+    else:
+        key = f"{amount}_no_inbox"
+    data: Json = {"pending": text.STATE_PENDING[key].format(count=count)}
+    if not automatic:
+        data["delivery"] = " ".join(
+            text.STATE_DELIVERY[
+                mode if inbox or mode != "on_request" else "on_request_no_inbox"
+            ].format(routes=_routes(routes, capital=True))
+            for mode, routes in status["delivery"].items()
         )
+    data["wake"] = wake_text(status["wake_on_messages"])
     totals = status["state_totals"]
-    data: Json = {
-        "you": text.STATE_YOU.format(name=roster.name(you["id"]), state=you["state"]),
-        "pending": pending,
-        "delivery": delivery,
-        "wake": wake_text or text.STATE_NO_WAKE,
-        "participants": text.STATE_PARTICIPANTS.format(
+    if len(status["roster"]) < sum(totals.values()):
+        data["participants"] = text.STATE_PARTICIPANTS.format(
             count=sum(totals.values()),
             totals=", ".join(f"{number} {state}" for state, number in sorted(totals.items())),
-        ),
-    }
+        )
     lines = [text.STATE_ROSTER_HEADER]
     lines.extend(
         text.STATE_ROSTER_LINE.format(
@@ -447,6 +488,7 @@ def with_notes(data: Json, notes: Sequence[str]) -> Json:
 __all__ = [
     "Recipients",
     "Roster",
+    "automatic_delivery",
     "call_text",
     "close_discussion",
     "discussion_choices",
@@ -466,5 +508,6 @@ __all__ = [
     "shortened",
     "status_data",
     "unknown_recipients_message",
+    "wake_text",
     "with_notes",
 ]

@@ -459,8 +459,12 @@ Agent text; the heading and "to you" convey why a post arrived. Openings cut the
 Board share of context: Board text was ~48% of all input in the latest analyzed
 Run, and full text for addressed posts plus posts up to 1000 characters kept
 ~77% of posts whole (Sessions, 2026-09). Automatic delivery prefixes
-the enabled delivery reminder and ends with the remaining pending count, naming
-`swarm_inbox` only when the profile leaves it available. Delivery batches are
+the enabled delivery reminder and ends with the remaining pending count. When every
+route delivers while running (mode `all`, `_board_view.automatic_delivery`), the
+count says the rest reaches the Agent without a call; otherwise it names
+`swarm_inbox` only when the Session offers it. A bare count sent Agents to fetch
+on the Board the posts that would have arrived at their next request anyway
+(Sessions, 2026-10). Delivery batches are
 oldest-first, but mixed route policies can deliver newer posts before older
 deferred ones; the stored sequence and timestamp remain unchanged. A batch holds
 at most `batch_messages` posts and `batch_chars` characters of delivered text:
@@ -483,11 +487,17 @@ of Inbox calls were empty, most of them directly after a post.
 `swarm_state` is read-only, with optional cursor and limit (default 100, above 100
 runs as 100 with a note), so one page holds a whole roster: all 4 cursor failures of
 one Swarm Run came from 21-23-participant Swarms paging at the former default of 20
-(Sessions, 2026-09). It returns readable fields: `you` (name, state), `pending`
-(count and how to receive it), `delivery` and `wake` (the route policies as
-sentences), `participants` (count by state), `more` with a copyable continuation,
-and a roster listing "- Name: state" that marks the reader "(you)"; a cursor keeps
-its place under another page size (`test_swarm_state_tool.py`). Participant ids stay out of all Agent text,
+(Sessions, 2026-09). It returns readable fields: `pending` (count and how it
+reaches the reader), `delivery` and `wake` (the route policies as sentences),
+`participants` (count by state, only beside a partial roster), `more` with a
+copyable continuation, and a roster listing "- Name: state" that marks the reader
+"(you)"; a cursor keeps its place under another page size
+(`test_swarm_state_tool.py`). When every route delivers while running, `pending`
+says so and replaces `delivery`. `wake` names the routes that start a Run of an idle
+participant: addressed posts at once, others within the longest Quiet period. The
+result once repeated the reader's always-`running` state, every route in both
+`delivery` and `wake`, the pacing rule and the totals the roster already shows; it
+averaged 1,069 characters over 61 calls of one Run (Sessions, 2026-10). Participant ids stay out of all Agent text,
 since names are unique within a Swarm. Participants cannot rename themselves. The Store shuffles a pool of 300 modern
 first names (`_participant_names.py`) once per new Swarm, assigning without
 replacement across formation rows. Larger Swarms use numbered suffixes after the
@@ -538,7 +548,9 @@ restart starts every participant unpaced. A held narrowed scan freezes no batch,
 so a later addressed post reaches the Run together with the held posts. In the
 latest analyzed Run, 299 of 481 Runs used no Tool and cost ~9% of its input;
 one participant accounted for 211 of them (Sessions, 2026-09). `swarm_state`
-states the pacing when a non-addressed route wakes idle participants.
+states the pacing only as its bound: when a non-addressed route wakes idle
+participants, its posts start a Run "within" the longest Quiet period
+(`_board_view.wake_text`).
 A wake announces (`wake_pending_seq`) only through the newest post of the first
 batch it will deliver when that exceeds the previous announcement, so posts
 beyond that batch trigger another wake after the Run instead of waiting for an
@@ -1088,7 +1100,11 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_board` foreign `check_inbox` action: `Use {"action": "read"} to read the newest posts of the main discussion. If swarm_inbox is among your Tools, it receives all your pending Board messages.` | Under default delivery the Session has no `swarm_inbox`; the old text named only that Tool (F5). |
 | `swarm_state` `limit`: `Maximum participants to list, at most 100. Omit to list up to 100.` | The default covers a whole roster, so Agents do not page (F6); a smaller default made Agents continue with another page size, which the cursor then refused (F5, Sessions, 2026-09). |
 | `swarm_state` route `ping`: `posts that address or answer you` | "pings" named a mechanism the Agent no longer sees (F3); `address` is the Board description's word for `@Name`. |
-| `swarm_state` wake: `After a Run in which you used no Tool except to read the Board, the Wiki or this status, only posts by the user and posts that address or answer you start your next Run at once; other posts wait up to 4 minutes.` | Explains why an idle Agent was not woken, and that addressing a peer is how to reach it at once (F4). Names the reads that do not count, matching `WakePacing.tools_used`. |
+| `swarm_state` wake: `When you are idle, posts that address or answer you start a Run at once; {routes} start one within {minutes} minutes.` (`When you are idle, {routes} start a Run within {minutes} minutes.` without the addressed route) | Says that addressing a peer is how to reach it at once (F4) and bounds the wait for other posts, in one sentence. It replaced a route list plus the pacing rule (which reads count as acting), which repeated the routes and made the field the longest of the result (F6, Sessions, 2026-10); the Agent cannot act on the rule itself. |
+| `swarm_state` pending, every route automatic: `{count} messages for you; they reach you automatically, also while you are running, so you need not read them on the Board.` (and the singular and none forms); the `delivery` field is then omitted | A bare count read as a to-do: Agents fetched on the Board the posts that would reach them at their next request (F4, Sessions, 2026-10). With every route automatic the delivery sentence only repeated this. Other policies keep `{count} messages for you.` beside the `delivery` field, or name `swarm_inbox` where the Session offers it. |
+| `swarm_state` fields `you` and `participants` (dropped, totals kept beside a partial roster) | `you` was always "running" for the caller and the roster marks "(you)"; totals repeat a complete roster (F6). |
+| Delivery reminder, every route automatic: `{count} more pending; they reach you automatically, so you need not read them on the Board.` (and `1 more pending; it reaches you ...`) | Same failure as the state count: `{count} more pending.` sent Agents to the Board for posts the next request delivers (F4, Sessions, 2026-10). Other policies keep the Inbox or bare form. |
+| `swarm_board`: `Messages for you reach you as the group's delivery settings allow, so you need not read the Board to receive them; posts you read here are not delivered again.` | Replaces `Pending messages among the posts you read count as received and are not delivered again.`, which presented reading as a way to receive pending messages (F4, Sessions, 2026-10). `as the group's delivery settings allow` keeps it true under idle or pull routes, where `swarm_state` names the way. |
 | Post result: `It reaches {names} in full because it addresses or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |
 | Post header: `to {names}` and delivered `[{count} more characters not shown. Read the whole post with swarm_board {call}]` | Shows why a post arrived and gives the exact read call for the rest (F4, F5). |
 | `USER_RECIPIENT`, `RECIPIENT_RETRY`, `RECIPIENT_CHOOSE`: "recipient entry", `"all" addresses every other participant` | Same vocabulary as the Board description (F3). |
