@@ -13,7 +13,7 @@ import pytest
 import respx
 
 from core.tools.contracts import ToolContractError
-from core.tools.tools import ToolRegistry
+from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
 from core.tools.web_search import (
     WEB_SEARCH_TOOL_DESCRIPTION,
     WEB_SEARCH_TOOL_NAME,
@@ -105,6 +105,18 @@ def test_registration_advertises_the_search_fields_without_credentials() -> None
     strings = _schema_strings(WEB_SEARCH_TOOL_PARAMETERS)
     for key in ("BRAVE", "TAVILY", "EXA", "SERPER", "FIRECRAWL", "PERPLEXITY"):
         assert all(f"{key}_API_KEY" not in value for value in strings)
+
+
+@pytest.mark.parametrize(("settings", "named_count"), [({"default_count": 7}, "7"), (None, "12")])
+def test_the_agent_sees_the_configured_result_count(settings: Any, named_count: str) -> None:
+    registry = web_search_registry(settings)
+
+    [definition] = registry.provider_definitions(
+        ["web_search"], profile_context=ToolDefinitionProfileContext(agent_id="agent")
+    )
+    count = definition["parameters"]["properties"]["count"]
+    assert named_count in count["description"]
+    assert "default" not in count
 
 
 def test_row_shows_the_description_or_the_search_words() -> None:
