@@ -10,9 +10,12 @@ in the Session ends forwarding.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
@@ -37,8 +40,26 @@ from tests.core.subagents.subagents_test_support import (
 from tests.core.subagents.subagents_test_support import (
     harness as harness,
 )
+from tests.core.tools.command_manager_helpers import Harness as CommandHarness
+from tests.core.tools.command_manager_helpers import command_harness
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture
+async def commands(harness: SubAgentHarness, tmp_path: Path) -> AsyncIterator[CommandHarness]:
+    """Background commands of the harness's Sessions, on fake processes."""
+    async with command_harness(tmp_path) as subject:
+        harness.runtime.command_manager = subject.manager
+        yield subject
+
+
+async def _background_command(
+    commands: CommandHarness, owner: SessionAddress, description: str
+) -> str:
+    command_id, _process = await commands.launch(owner=owner, description=description)
+    commands.manager.to_background(command_id, deliver=True)
+    return command_id
 
 
 async def test_run_starts_a_linked_subagent_in_the_background(harness: SubAgentHarness) -> None:
@@ -351,18 +372,27 @@ async def test_a_stopped_turn_forwards_its_latest_progression_outcome(
     assert ("Follow-up fixed." if progression == "steering-answer" else "All fixed.") in body
 
 
-async def test_answer_names_working_subagents_of_the_subagent(harness: SubAgentHarness) -> None:
+async def test_answer_names_the_work_the_subagent_still_runs(
+    harness: SubAgentHarness, commands: CommandHarness
+) -> None:
     outer = await harness.spawn("outer")
     await harness.settle()
     outer_session = harness.subagent_session(outer["id"])
     harness.loop.hold("inner")
     inner = await harness.spawn("inner", session=outer_session)
+    tests = await _background_command(commands, outer_session, "Run the tests")
+    ended = await _background_command(commands, outer_session, "Build")
+    commands.launcher.processes[-1].exit(0)
+    await commands.finish(ended)
 
     await harness.start_turn(outer_session, "status please")
     await harness.until(lambda: len(harness.triggers.to(harness.parent)) == 2)
 
     body = harness.triggers.to(harness.parent)[1].body
-    assert f"Still running for this Sub-Agent: Sub-Agent {inner['id']} (Do inner)." in body
+    assert (
+        f"Still running for this Sub-Agent: background command {tests} (Run the tests); "
+        f"Sub-Agent {inner['id']} (Do inner)."
+    ) in body
 
 
 async def test_answer_names_the_parents_other_subagents_whose_answers_are_still_to_come(
@@ -482,12 +512,15 @@ async def test_list_shows_the_whole_tree(harness: SubAgentHarness) -> None:
     assert "note" in result["data"]
 
 
-async def test_inspect_reports_the_work_a_subagent_still_runs(harness: SubAgentHarness) -> None:
+async def test_inspect_reports_the_work_a_subagent_still_runs(
+    harness: SubAgentHarness, commands: CommandHarness
+) -> None:
     outer = await harness.spawn("outer")
     await harness.settle()
     outer_session = harness.subagent_session(outer["id"])
     harness.loop.hold("inner")
     inner = await harness.spawn("inner", session=outer_session)
+    tests = await _background_command(commands, outer_session, "Run the tests")
 
     projection = await harness.coordinator.inspect(
         outer_session.agent_id, outer_session.session_id, outer["id"]
@@ -495,7 +528,10 @@ async def test_inspect_reports_the_work_a_subagent_still_runs(harness: SubAgentH
 
     assert projection is not None
     assert projection["status"] == "completed"
-    assert projection["running"] == [{"kind": "subagent", "id": inner["id"], "label": "Do inner"}]
+    assert projection["running"] == [
+        {"kind": "command", "id": tests, "label": "Run the tests"},
+        {"kind": "subagent", "id": inner["id"], "label": "Do inner"},
+    ]
 
 
 @pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
@@ -595,6 +631,40 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
 
     again = await harness.call({"action": "cancel", "id": inner["id"]})
     assert again["error"]["code"] == "subagent_not_running"
+
+
+@pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
+async def test_a_tree_stop_stops_its_background_commands_without_delivery(
+    harness: SubAgentHarness, commands: CommandHarness, user_stop: bool
+) -> None:
+    child = await harness.spawn("child")
+    await harness.settle()
+    child_session = harness.subagent_session(child["id"])
+    own = await _background_command(commands, harness.parent, "Serve")
+    childs = await _background_command(commands, child_session, "Run the tests")
+    ended = await _background_command(commands, child_session, "Build")
+    commands.launcher.processes[-1].exit(0)
+    await commands.finish(ended)
+
+    if user_stop:
+        # Stop all: the Session's own commands and those of every Sub-Agent below it.
+        assert await harness.coordinator.stop_tree(harness.parent) == 2
+        stopped = [own, childs]
+    else:
+        result = await harness.call({"action": "cancel", "id": child["id"]})
+        assert result["data"]["status"] == "cancelled"
+        stopped = [childs]
+
+    for command_id in stopped:
+        report = await commands.finish(command_id)
+        assert (report.status, report.stop_reason) == ("stopped", "scope")
+    if not user_stop:
+        assert commands.manager.status(own) == "running"
+    # A stopped tree delivers nothing, also not a result that was still due.
+    assert [submission["notice_id"] for submission in commands.sink.submissions] == [
+        f"command:{ended}"
+    ]
+    assert commands.sink.cancellations == [f"command:{ended}"]
 
 
 async def test_stop_all_includes_a_child_whose_admission_is_in_flight(

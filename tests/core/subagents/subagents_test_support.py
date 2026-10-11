@@ -254,6 +254,8 @@ class SubAgentHarness:
             storage=self.storage,
             chat_loop=self.loop,
             terminal_manager=None,
+            # Tests that need background commands set a CommandManager here.
+            command_manager=None,
         )
         self.triggers = RecordingTriggerService()
         self.coordinator = SubAgentCoordinator(cast(Any, self.runtime), self.triggers)

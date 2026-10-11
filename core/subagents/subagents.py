@@ -838,6 +838,7 @@ class SubAgentCoordinator:
         sessions = self._runtime.chat_sessions
         manager = self._runtime.chat_run_manager
         terminals = self._runtime.terminal_manager
+        commands = self._runtime.command_manager
         stopped = 0
         runs: list[Run] = []
         # A child start already in flight must finish before the tree is read.
@@ -878,6 +879,11 @@ class SubAgentCoordinator:
                 if running:
                     stopped += len(running)
                     await terminals.close_scope(owner)
+            if commands is not None:
+                # Commands still inside their call end with the cancelled Run;
+                # only background ones count as work of their own.
+                stopped += sum(1 for report in commands.commands([address]) if not report.finished)
+                await commands.close_scope(address)
         if runs:
             await asyncio.gather(*(_run_end(run) for run in runs))
         return stopped
