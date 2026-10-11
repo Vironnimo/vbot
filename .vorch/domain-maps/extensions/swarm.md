@@ -335,7 +335,12 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   wrapper objects, other harnesses' field and action names, an action implied by
   the supplied fields, placeholder values in optional fields, and echoed
   idempotency keys the handler derives. An action that belongs to another Swarm
-  Tool fails with a message naming that Tool.
+  Tool fails with a message naming that Tool. On `swarm_board`, `message` is an
+  alias of `message_id` when it holds a post reference and of `text` otherwise,
+  under the shared conflict rule: a differing second value fails, an equal one or a
+  placeholder beside the real text asks for nothing. It once replaced an explicit
+  `text` silently, so two posts of one Run saved "placeholder" and "ddl" as their
+  whole text (Sessions, 2026-10).
 - `_board_tool.py` checks Board calls. It drops fields that request nothing, such
   as paging fields on post, with a `note`. It clamps `limit` above 100 with a note.
   It rejects a field that another action would use, naming those actions. It

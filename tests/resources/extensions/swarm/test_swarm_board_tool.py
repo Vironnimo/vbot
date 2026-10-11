@@ -370,16 +370,23 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
     assert read["data"]["content"] == (
         f"[{first}] {_name(board, 0)} (in the main discussion d1):\ninferred post"
     )
+    # A placeholder or a repeat beside the real text asks for nothing more.
+    for message, text in [("placeholder", "kept"), ("same", "same")]:
+        result, _ = await dispatch(board, {"action": "post", "message": message, "text": text})
+        assert result["ok"], result
     posts = await board_posts(board)
     assert [(post["text"], post["reply_to"]) for post in posts[:2]] == [
         ("inferred post", None),
         ("answer", posts[0]["id"]),
     ]
+    assert [post["text"] for post in posts[-2:]] == ["kept", "same"]
     topic = await board_posts(board, discussion_id=created["data"]["discussion_id"])
     assert [post["text"] for post in topic] == ["opening"]
     # The same repairs never pick one of two differing instructions.
     for arguments, message in [
         ({"text": "one", "body": "two"}, "text"),
+        ({"action": "post", "message": "ddl", "text": "real"}, "text"),
+        ({"action": "read", "message": first, "post_id": "#9"}, "message_id"),
         ({"action": "post", "arguments": {"action": "read"}}, "action"),
         ({"action": "status"}, "Use swarm_state to see participants"),
         ({"action": "check_inbox"}, 'Use {"action": "read"} to read the newest posts'),
