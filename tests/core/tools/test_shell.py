@@ -397,12 +397,17 @@ async def test_running_output_is_the_newest_rows_and_its_log_file_has_every_row(
     assert Path(path).read_text(encoding="utf-8").splitlines() == rows
 
 
+@pytest.mark.parametrize(
+    "command",
+    # The word sleep in a file name or an argument is no sleep.
+    ["read-name", "Get-Content sleep.txt; Read-Host 'Sleep now'"],
+)
 @pytest.mark.asyncio
 async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
-    shell: Shell,
+    shell: Shell, command: str
 ) -> None:
     # Silent and without CPU use, as a command waiting for input is.
-    call = shell.call({"command": "read-name"})
+    call = shell.call({"command": command})
     _adapter, tree = await shell.started()
     await shell.run_clock(call, until=SHELL_HANDOFF_SECONDS)
 
@@ -430,6 +435,7 @@ async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
         "while (-not (Test-Path done.txt)) { Start-Sleep -Seconds 10 }",
         "python -c 'import time; time.sleep(40)'",
         "timeout /t 40 /nobreak",
+        "until test -f done; do sleep 5; done",
     ],
 )
 @pytest.mark.asyncio
