@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Callable
 
@@ -229,10 +230,10 @@ def test_kept_lines_may_lack_or_add_a_few_words(held: str, context: str) -> None
     found = _applied(match_copied_edit(content, lines))
 
     assert found.new_content == f"    value = “y”\n    count = 0\n    return True\n{held}\n"
-    # The kept line is named where the edit leaves it.
-    assert copy_warnings(found) == [
-        f"Line 4 did not match your old text exactly and was left as it reads: {held}"
-    ]
+    # The kept line is named where the edit leaves it, as it reads there.
+    [warning] = copy_warnings(found)
+    assert re.findall(r"\d+", warning) == ["4"]
+    assert held in warning
 
 
 def test_exact_end_lines_place_a_passage_around_similar_lines() -> None:

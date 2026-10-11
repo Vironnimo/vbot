@@ -481,16 +481,6 @@ FIRST_DIFFERENCE_CASES = {
         "+    return sorted(row.title for row in rows)",
         "First difference, line 24: the file has '    query = select(",
     ),
-    # A rewritten line is compared with the line of its name, not one sharing its signs.
-    "renamed": (
-        "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 21))
-        + '\nEQ_OPS = {"=", "=="}\nRANGE_OPS = {">", ">=", "<", "<="}\n\n\n'
-        "def check(op):\n    return op in EQ_OPS\n",
-        '@@\n-EQ_OPS = frozenset({"=", "==", "IS"})\n'
-        '-RANGE_OPS = frozenset({"<", "<=", ">", ">="})\n'
-        '+EQ_OPS = frozenset({"=", "=="})',
-        "First difference, line 22: the file has 'EQ_OPS = {",
-    ),
     # Long new lines without a prefix do not hide the copied ones.
     "hidden": (
         "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 40))
@@ -526,6 +516,33 @@ def test_first_difference_is_aligned_with_the_copied_lines(tmp_path, case):
             "First difference, line 44: the file has '    rest = tokens[1:]' where the patch "
             "has '    # An empty stream has no head, so it is rejected here with a clear message'."
         ) in text(result)
+
+
+def test_a_rewritten_line_is_compared_with_the_line_of_its_name(tmp_path):
+    # The copied EQ_OPS line shares more signs with RANGE_OPS than with its own line.
+    before = (
+        "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 21))
+        + '\nEQ_OPS = {"=", "=="}\nRANGE_OPS = {">", ">=", "<", "<="}\n\n\n'
+        "def check(op):\n    return op in EQ_OPS\n"
+    )
+    path = tmp_path / "file.py"
+    path.write_bytes(before.encode())
+    result = apply(
+        tmp_path,
+        update(
+            '@@\n-EQ_OPS = frozenset({"=", "==", "IS"})\n'
+            '-RANGE_OPS = frozenset({"<", "<=", ">", ">="})\n'
+            '+EQ_OPS = frozenset({"=", "=="})',
+            "file.py",
+        ),
+    )
+    message = text(result)
+    assert result["error"]["code"] == "text_not_found"
+    assert path.read_bytes() == before.encode()
+    # The window, then the first differing line: EQ_OPS at line 22, quoted as the file has it.
+    assert re.findall(r"\blines? (\d+(?:-\d+)?)", message) == ["22-23", "22"]
+    assert repr('EQ_OPS = {"=", "=="}') in message
+    assert repr('RANGE_OPS = {">", ">=", "<", "<="}') not in message
 
 
 def _read_calls(message):

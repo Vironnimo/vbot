@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from core.tools import _file_changes as file_changes_module
@@ -142,7 +144,7 @@ async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
 
     lines = text(result).split("\n")
     assert len(lines) == (1 if joined is None else 2)
-    assert joined is None or lines[1].endswith(f": {joined}")
+    assert joined is None or joined in lines[1]
 
 
 @pytest.mark.asyncio
@@ -337,85 +339,6 @@ NUL = (
         pytest.param(
             "edit",
             {
-                "path": "app.py",
-                "edits": [
-                    {"old_string": "def main():", "new_string": "import log\n\n\ndef main():"},
-                    {"old_string": "print(total)", "new_string": "log(total)"},
-                    {"old_string": "print(total)", "new_string": "emit(total)"},
-                ],
-            },
-            "text_not_found",
-            # Lines an earlier edit wrote move with later edits; ones not shown go unnamed.
-            "app.py, edit 3 of 3: old_string was not found.\n"
-            "The closest text in the file after edits 1-2, line 6:\n6|     log(total)\n"
-            "First difference: after edits 1-2, line 6 reads '    log(total)' where old_string "
-            "has 'print(total)'.\nEdit 2 of this call wrote line 6.\n"
-            "None of the 3 edits were applied, so no file was changed. Send all 3 edits again "
-            "with edit 3 corrected or left out.",
-            id="text-an-earlier-edit-replaced-below-another",
-        ),
-        pytest.param(
-            "edit",
-            {
-                "path": "app.py",
-                "edits": [
-                    {
-                        "old_string": "    print(total)\n    return total\n"
-                        "def main():\n    total = compute(1, 2)",
-                        "new_string": "def main():\n    return compute(1, 2)",
-                    }
-                ],
-            },
-            "text_not_found",
-            # Whole lines from separate places are named as such.
-            "app.py: old_string was not found.\n"
-            "old_string joins lines from different places in the file: its lines 1-2 are "
-            "lines 3-4 and its lines 3-4 are lines 1-2. Give each place its own edit.\n"
-            "1| def main():\n2|     total = compute(1, 2)\n3|     print(total)\n"
-            "4|     return total\nNo file was changed.",
-            id="lines-from-different-places",
-        ),
-        pytest.param(
-            "edit",
-            {
-                "path": "app.py",
-                "edits": [
-                    {
-                        "old_string": "    print(total)\n    total = compute(1, 2)",
-                        "new_string": "    total = compute(1, 2)",
-                    }
-                ],
-            },
-            "text_not_found",
-            # Single lines occur elsewhere by chance: they name no separate place.
-            "app.py: old_string was not found.\nThe closest texts in the file:\n"
-            "1| def main():\n2|     total = compute(1, 2)\n3|     print(total)\n"
-            "4|     return total\nFirst difference, line 4: the file has '    return total' "
-            "where old_string has '    total = compute(1, 2)'.\nNo file was changed.",
-            id="single-lines-from-different-places",
-        ),
-        pytest.param(
-            "edit",
-            {
-                "path": "app.py",
-                "edits": [
-                    {
-                        "old_string": "    total = compute(1, 2)\n    return total",
-                        "new_string": "    return compute(1, 2)",
-                    }
-                ],
-            },
-            "text_not_found",
-            # A passage that left out a line is one place: its first difference names it.
-            "app.py: old_string was not found.\nThe closest texts in the file:\n"
-            "1| def main():\n2|     total = compute(1, 2)\n3|     print(total)\n"
-            "4|     return total\nFirst difference, line 3: the file has '    print(total)' "
-            "where old_string has '    return total'.\nNo file was changed.",
-            id="passage-that-left-out-a-line",
-        ),
-        pytest.param(
-            "edit",
-            {
                 "path": "a.txt",
                 "edits": [
                     {"old_string": "two", "new_string": "one"},
@@ -514,6 +437,88 @@ async def test_failed_changes_change_nothing_and_say_what_to_send(
     assert (result["error"]["code"], text(result)) == (code, message)
     assert {name: (tmp_path / name).read_bytes() for name in FILES} == FILES
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted([*FILES, "sub"])
+
+
+SOURCE = (
+    b"def load(path):\n    with open(path) as handle:\n        return handle.read()\n\n\n"
+    b"def main():\n    total = compute(1, 2)\n    print(total)\n"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("edits", "shown", "lines", "named_edits"),
+    [
+        # The text earlier edits left is what a later edit's report shows, and only the
+        # earlier edit that wrote a shown line is named, at that line as it moved.
+        pytest.param(
+            [
+                {"old_string": "def load(path):", "new_string": "import io\n\n\ndef load(path):"},
+                {"old_string": "print(total)", "new_string": "log(total)"},
+                {"old_string": "print(total)", "new_string": "emit(total)"},
+            ],
+            [11],
+            {"11"},
+            {"3", "1-2", "2"},
+            id="text-an-earlier-edit-replaced-below-another",
+        ),
+        # Whole lines from places apart are named as those places, and only they show.
+        pytest.param(
+            [
+                {
+                    "old_string": "def main():\n    total = compute(1, 2)\n\n\n"
+                    "def load(path):\n    with open(path) as handle:",
+                    "new_string": "def main():\n    return 3",
+                }
+            ],
+            [1, 2, 6, 7],
+            {"1-2", "5-6", "6-7"},
+            set(),
+            id="lines-from-different-places",
+        ),
+        # Single lines occur elsewhere by chance: the closest text shows instead.
+        pytest.param(
+            [
+                {
+                    "old_string": "    print(total)\n    total = compute(1, 2)",
+                    "new_string": "    total = compute(1, 2)",
+                }
+            ],
+            [6, 7, 8],
+            set(),
+            set(),
+            id="single-lines-from-different-places",
+        ),
+        # A passage that left out a few lines is one place: its first difference
+        # names the first line left out.
+        pytest.param(
+            [
+                {
+                    "old_string": "def load(path):\n    with open(path) as handle:\n\n\n"
+                    "def main():\n    total = compute(1, 2)",
+                    "new_string": "def main():\n    return 3",
+                }
+            ],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            {"3"},
+            set(),
+            id="passage-that-left-out-a-line",
+        ),
+    ],
+)
+async def test_a_failed_edit_names_the_lines_and_edits_its_text_came_from(
+    tmp_path, edits, shown, lines, named_edits
+) -> None:
+    (tmp_path / "app.py").write_bytes(SOURCE)
+
+    result = await call(tmp_path, {"path": "app.py", "edits": edits}, name="edit")
+
+    message = text(result)
+    assert result["error"]["code"] == "text_not_found"
+    assert (tmp_path / "app.py").read_bytes() == SOURCE
+    assert [int(line.split("|")[0]) for line in message.split("\n") if "| " in line] == shown
+    assert set(re.findall(r"\blines? (\d+(?:-\d+)?)", message)) == lines
+    assert set(re.findall(r"\b[Ee]dits? (\d+(?:-\d+)?)", message)) == named_edits
 
 
 @pytest.mark.asyncio

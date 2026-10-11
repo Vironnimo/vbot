@@ -508,7 +508,10 @@ def test_edited_files_are_syntax_checked_without_blaming_earlier_errors(
         # The lines around the error follow, numbered like read, with a caret under it.
         shown = text(result).split("\n")
         index = next(i for i, line in enumerate(shown) if line.startswith(warning))
-        assert shown[index + 1 :] == ["1| a = 1", "2| x = (1", "       ^", "3| b = 2"]
+        numbered = [line for line in shown[index + 1 :] if "| " in line]
+        assert numbered == ["1| a = 1", "2| x = (1", "3| b = 2"]
+        caret = next(line for line in shown[index + 1 :] if line.strip() == "^")
+        assert caret.index("^") == numbered[1].index("(")
 
 
 def test_current_content_stamps_stats_and_notes_an_external_change(tmp_path):
