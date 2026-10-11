@@ -650,13 +650,16 @@ during invalidation. Project defaults resolve through the catalog; unchanged
 defaults retain the explicit Project selection. A changed directory is sent as
 the optional absolute-path `swarms.start.working_directory` argument and selects
 directory-only execution, without inferring Project identity from a path.
-Start validates the effective directory and catalog before creating Sessions.
+Start validates the effective directory and catalog before creating Sessions;
+a directory that names no existing absolute folder, also a Project's folder that
+is gone, fails with `directory_not_found`.
 The stored profile and profile snapshot stay unchanged; `effective_configuration`
 records the Run directory and Project selection for Resume and request replay.
 On the page, Start first checks that a Swarm, a working directory and a goal
 are given: each missing one shows its error under its field until that field
 changes, and the first takes focus; the page's error banner is only for failed
-requests. A started Run shows with focus on its title.
+requests. A folder the server does not find (`directory_not_found`) shows under
+the directory field the same way. A started Run shows with focus on its title.
 Evidence: `SwarmPage.test.js` and `test_swarm_start.py`.
 The Run directory and the profile editor's Directory are the shared `PathField`
 in directory mode with the page client's `listDirectory`, so both complete and
@@ -889,7 +892,9 @@ operation's, which `WIKI_ERRORS` already words on the server (shared with the
 Tool results). A new code the page can return belongs in that map. A shortcut
 another Swarm uses (`slug_unavailable` on a profile save) shows under the
 shortcut field instead of the editor's banner, as a field error, until the
-shortcut changes (`SwarmPage.profiles.test.js`).
+shortcut changes (`SwarmPage.profiles.test.js`); so does a Run directory the
+server does not find (`directory_not_found` on Start) under the start form's
+directory field (`SwarmPage.test.js`).
 
 Startup reconcile: after `recover_interrupted`, startup pages its participant groups
 (`temporary_agents.groups()`, API 10; group id = Swarm id) and archives each group

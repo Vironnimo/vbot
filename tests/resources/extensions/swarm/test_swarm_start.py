@@ -141,8 +141,17 @@ async def test_run_rejects_invalid_directory_before_creating_sessions(lifecycle,
         },
         expected_revision=None,
     )
-    for index, value in enumerate([None, 42, "", "relative", str(tmp_path / "missing"), str(file)]):
-        with pytest.raises(ValueError, match="^invalid_arguments$"):
+    # A value that names no existing absolute folder has its own code.
+    cases = [
+        (None, "invalid_arguments"),
+        (42, "invalid_arguments"),
+        ("", "invalid_arguments"),
+        ("relative", "directory_not_found"),
+        (str(tmp_path / "missing"), "directory_not_found"),
+        (str(file), "directory_not_found"),
+    ]
+    for index, (value, code) in enumerate(cases):
+        with pytest.raises(ValueError, match=f"^{code}$"):
             await lifecycle.service.operation(
                 "swarms.start",
                 {

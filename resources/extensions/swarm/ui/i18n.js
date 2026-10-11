@@ -173,6 +173,8 @@ export default Object.freeze({
   'swarm.loadError': 'The Swarm page could not load.',
   'swarm.refreshError': 'The page could not refresh: {error}',
   // A failed Swarm operation by its error code (failureText.js).
+  'swarm.error.directory_not_found':
+    'No folder exists at this path. Enter the full path of an existing folder.',
   'swarm.error.invalid_arguments':
     'vBot could not accept this request. Check your entries and try again.',
   'swarm.error.message_not_found': 'That post is not on this Run’s Board.',

@@ -827,6 +827,18 @@ describe('Swarm Run start', () => {
     await tick();
     expect(document.getElementById('swarm-start-directory-error')).toBeNull();
     expect(document.getElementById('swarm-goal-error')).not.toBeNull();
+    // A folder the server does not find is a problem of its field too.
+    fill('swarm-start-directory', 'C:/missing');
+    fill('swarm-goal', 'goal');
+    await tick();
+    operation.mockRejectedValueOnce(new Error('directory_not_found'));
+    button(START_RUN).focus();
+    button(START_RUN).click();
+    await vi.waitFor(() => expect(document.activeElement).toBe(directory()));
+    expect(
+      document.getElementById('swarm-start-directory-error').textContent,
+    ).toBe(t('swarm.error.directory_not_found'));
+    expect(notice('alert')).toBe('');
   });
 });
 

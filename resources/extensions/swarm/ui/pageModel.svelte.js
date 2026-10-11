@@ -947,6 +947,7 @@ export function createSwarmPageModel(host) {
     }
     if (directoryLoading || pending) return;
     pending = 'start';
+    let missingDirectory = false;
     try {
       const result = await call('swarms.start', {
         profile_id: selectedProfile.id,
@@ -964,9 +965,17 @@ export function createSwarmPageModel(host) {
       await refresh();
       await stepTo(swarmRoute(id));
     } catch (cause) {
-      error = failureText(cause);
+      // A folder the server does not find is a problem of its field.
+      missingDirectory = cause?.message === 'directory_not_found';
+      if (missingDirectory) startErrors = { directory: failureText(cause) };
+      else error = failureText(cause);
     } finally {
       pending = '';
+    }
+    // Once the fields are enabled again.
+    if (missingDirectory) {
+      await tick();
+      document.getElementById('swarm-start-directory')?.focus();
     }
   }
 

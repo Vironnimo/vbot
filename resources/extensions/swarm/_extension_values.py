@@ -84,11 +84,16 @@ def _pagination_arguments(arguments: Json) -> Json:
 
 
 async def _profile_cwd(profile: Json, catalog: Json) -> tuple[Path, str | None]:
+    """The Run directory and Project id of ``profile``.
+
+    A path that names no existing absolute folder, also a Project's folder
+    that is gone, fails with ``directory_not_found``.
+    """
     working = profile["working_directory"]
     if working["kind"] == "directory":
         path = Path(working["path"])
         if not path.is_absolute() or not await run_tool_worker(lambda: path.is_dir()):
-            raise SwarmStoreError("invalid_arguments", field="working_directory")
+            raise SwarmStoreError("directory_not_found", field="working_directory")
         return path, None
     project = next(
         (item for item in catalog.get("projects", []) if item.get("id") == working["project_id"]),
@@ -98,7 +103,7 @@ async def _profile_cwd(profile: Json, catalog: Json) -> tuple[Path, str | None]:
         raise SwarmStoreError("invalid_arguments", field="working_directory")
     path = Path(project["cwd"])
     if not await run_tool_worker(lambda: path.is_dir()):
-        raise SwarmStoreError("invalid_arguments", field="working_directory")
+        raise SwarmStoreError("directory_not_found", field="working_directory")
     return path, working["project_id"]
 
 

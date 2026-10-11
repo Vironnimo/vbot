@@ -7,6 +7,7 @@ import { t } from '../../../../webui/src/lib/i18n.js';
 
 // The codes a user can run into on this page, each with its own text.
 const CODE_TEXTS = {
+  directory_not_found: () => t('swarm.error.directory_not_found'),
   invalid_arguments: () => t('swarm.error.invalid_arguments'),
   message_not_found: () => t('swarm.error.message_not_found'),
   participant_not_resumable: () => t('swarm.error.participant_not_resumable'),
