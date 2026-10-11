@@ -249,7 +249,7 @@ def test_agent_without_workspace_never_reads_server_cwd(
 def test_channels_block_renders_only_with_an_enabled_channel_of_this_agent(
     workspace: Path, tmp_path: Path
 ) -> None:
-    # Without such a Channel the whole block gates out (owner "channel").
+    # Without such a Channel the channel list is empty and the whole block with it.
     agent = _agent(workspace, allowed_tools=["read"])
 
     def prompt(channels: StubChannels | None) -> str:

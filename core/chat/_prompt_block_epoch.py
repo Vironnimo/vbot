@@ -1,10 +1,11 @@
-"""Prompt-epoch Tool and Extension prompt blocks: their pinned texts and the changes told since.
+"""Prompt-epoch dynamic prompt blocks: their pinned texts and the changes told since.
 
 Tool and Extension dynamic blocks (``render`` blocks: the registered Projects,
-the Sub-Agent targets, the Shell environment keys, Extension blocks) render
-from live state. So that every request of a prompt epoch shows the same System
-Prompt, the epoch's first request pins their texts (:class:`PromptBlockPin`) and
-every later request shows those; a successful Compaction starts the next epoch
+the Sub-Agent targets, the Shell environment keys, Extension blocks) and the
+``core:channels`` block, which lists the Agent's Channels, render from live
+state. So that every request of a prompt epoch shows the same System Prompt, the
+epoch's first request pins their texts (:class:`PromptBlockPin`) and every later
+request shows those; a successful Compaction starts the next epoch
 with fresh texts. A change in between reaches the Model at the start of the next
 Run as one ``[prompt-block-change]`` note: a System Reminder that lists the
 changed entries of a catalog block, or carries the current text of any other
@@ -226,17 +227,19 @@ def ensure_prompt_block_pin(
 
 
 def _describe_change(before: RenderedBlock, after: RenderedBlock) -> str:
-    old, new = before.catalog, after.catalog
-    if old is not None and new is not None and (old.title, old.frame) == (new.title, new.frame):
-        described = _describe_entries(new.title, old.entries, new.entries)
-        if described is not None:
-            return described
     text = after.text.strip()
+    # A block that starts or stops showing is told whole: its entries alone
+    # would leave out the rest of its text.
     if not before.text.strip():
         return _SECTION_ADDED.format(text=text)
     section = _section_name(before.text)
     if not text:
         return _SECTION_REMOVED.format(section=section)
+    old, new = before.catalog, after.catalog
+    if old is not None and new is not None and (old.title, old.frame) == (new.title, new.frame):
+        described = _describe_entries(new.title, old.entries, new.entries)
+        if described is not None:
+            return described
     return _SECTION_CHANGED.format(section=section, text=text)
 
 
