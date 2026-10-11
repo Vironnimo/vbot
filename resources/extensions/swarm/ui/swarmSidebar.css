@@ -1,52 +1,124 @@
-/* The page's navigation pane (SwarmSidebar.svelte). */
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .secondary-pane {
-  flex-shrink: 0;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .secondary-pane__header {
-  align-items: center;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .sidebar-title {
-  min-width: 0;
-  font-weight: 400;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-/* "New run" opens the goal form, the page's home: a pinned navigation row
-   below the pane header, like the Agents pane's Shared defaults entry. The
-   list below holds the Swarms, then the Run groups under group headings. */
-.swarm-page .swarm-pane-scroll {
-  padding: 12px;
-  scrollbar-gutter: auto;
-}
-.swarm-page .swarm-pane-scroll .secondary-list {
-  padding: 0;
-}
-.swarm-page .swarm-pane-scroll .run-group {
+/* The page's navigation pane (SwarmSidebar.svelte): New Run pinned below the
+   header like the Agents pane's Shared defaults entry, then the Swarms and
+   the Run groups. Rows follow the Agents and Scheduled Tasks panes: a name
+   line and a muted detail line, a Run's led by its state dot. */
+.swarm-page .swarm-pane__group + .swarm-pane__group {
   margin-top: 16px;
 }
-.swarm-page .run-group__empty {
-  margin: 0;
-  padding: 6px 12px;
-  color: var(--text-lo);
+.swarm-page .swarm-pane__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.swarm-page .swarm-pane__more {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+.swarm-page .swarm-row {
+  display: flex;
+  min-width: 0;
+  padding: 8px 10px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.swarm-page .swarm-row__inner {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+.swarm-page .swarm-row__head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.swarm-page .swarm-row__name {
+  overflow: hidden;
+  color: var(--text-hi);
   font-size: var(--fs-body-sm);
+  font-weight: 500;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swarm-page .swarm-row__detail {
+  overflow: hidden;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A Run's detail lines up with its title, past the dot. */
+.swarm-page .swarm-row__head + .swarm-row__detail {
+  padding-left: 15px;
+}
+/* The state dot carries the colour of the Run's state chip. */
+.swarm-page .swarm-row__dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-lo);
+}
+.swarm-page .swarm-row__dot--warn {
+  background: var(--amber);
+}
+.swarm-page .swarm-row__dot--success {
+  background: var(--green);
+}
+.swarm-page .swarm-row__dot--error {
+  background: var(--red);
 }
 @media (max-width: 640px) {
-  /* Above the work area, the pane keeps its natural height until the
-     cap, then its lists scroll inside it; the work area keeps the
-     remaining height and its own scroll. */
-  .swarm-page > .secondary-pane {
+  /* A narrow page puts the pane above the work area as the Agents pane
+     does: the title, New Swarm and New Run share one row, and each list
+     becomes a shelf of cards that scrolls sideways. */
+  .swarm-page > .swarm-pane {
+    display: grid;
     width: 100%;
     min-width: 0;
-    max-height: min(45vh, 400px);
+    grid-template-columns: minmax(0, 1fr) auto;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
-  .swarm-page .secondary-pane__pinned {
-    padding-bottom: 8px;
+  .swarm-page .swarm-pane__header {
+    min-width: 0;
+    min-height: 0;
+    padding: 8px 12px;
+  }
+  .swarm-page .swarm-pane__pinned {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 8px 12px 8px 0;
+  }
+  .swarm-page .swarm-pane__pinned .secondary-pane__pinned-item {
+    width: auto;
+  }
+  .swarm-page .swarm-pane__scroll {
+    grid-column: 1 / -1;
+    max-height: min(40vh, 300px);
+    padding: 8px 12px 12px;
+  }
+  .swarm-page .swarm-pane__group + .swarm-pane__group {
+    margin-top: 8px;
+  }
+  .swarm-page .swarm-pane__group > .secondary-list__group {
+    margin: 0 2px 6px;
+  }
+  .swarm-page .swarm-pane__list {
+    flex-direction: row;
+    gap: 8px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+  .swarm-page .swarm-pane__list > .swarm-row {
+    width: 180px;
+    flex: 0 0 180px;
   }
 }

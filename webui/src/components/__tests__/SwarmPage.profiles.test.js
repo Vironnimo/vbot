@@ -633,7 +633,11 @@ describe('Swarm profile saving', () => {
     );
     expect(document.querySelector('.editor')).toBeNull();
     expect(document.querySelector('.swarm-head h2').textContent).toBe(
-      'Research',
+      'Investigate',
+    );
+    // The Run names the Swarm it started from, not the edited profile.
+    expect(document.querySelector('.swarm-head__summary').textContent).toMatch(
+      /^Research · /u,
     );
   });
 

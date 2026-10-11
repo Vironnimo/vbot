@@ -96,38 +96,6 @@ export const participantCount = (count) =>
     ? t('swarm.participantCount.one')
     : t('swarm.participantCount', { count });
 
-// Sidebar row tooltips: a Swarm's formation per Model, a Run's Swarm and size.
-export function profileTooltip(profile) {
-  const perModel = new Map();
-  for (const row of profile.participants ?? [])
-    perModel.set(row.model, (perModel.get(row.model) ?? 0) + row.count);
-  return {
-    title: profile.name,
-    rows: [...perModel].map(([model, count]) => ({
-      label: participantCount(count),
-      value: model,
-    })),
-    placement: 'right',
-  };
-}
-
-export const runTitle = (swarm) =>
-  swarm.title || swarm.prompt?.split(/\r?\n/)[0] || swarm.id;
-
-export function runTooltip(swarm) {
-  return {
-    title: runTitle(swarm),
-    rows: [
-      { label: t('swarm.profile'), value: swarm.name },
-      {
-        label: t('swarm.participants'),
-        value: swarm.participant_count,
-      },
-    ],
-    placement: 'right',
-  };
-}
-
 export const page = (value) =>
   Array.isArray(value) ? value : (value?.entries ?? value?.items ?? []);
 

@@ -1,0 +1,146 @@
+/* The page's Run and Swarm dialogs (CommunicationDialog.svelte,
+   RunDetailsDialog.svelte, RunDeleteDialog.svelte, SwarmDeleteDialog.svelte).
+   They render outside the page, so their rules are not scoped to
+   `.swarm-page`. A long dialog scrolls inside its body while the header and
+   footer stay. */
+.modal.swarm-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(600px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+}
+.modal.swarm-dialog .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+/* What the dialog acts on: a Run's title, or what names the target of a
+   deletion besides its title. */
+.swarm-dialog__target {
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.swarm-dialog__note {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+.swarm-dialog__meta {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+/* Communication settings: the proposed changes under the fields. */
+.swarm-communication__changes {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.swarm-communication__list,
+.swarm-communication__errors {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+.swarm-communication__list {
+  color: var(--text-hi);
+}
+.swarm-communication__errors {
+  color: var(--red);
+}
+/* Run details: the Run's facts, its participants and the Swarm snapshot it
+   started from. */
+.swarm-details__facts {
+  margin: 0;
+}
+.swarm-details__fact {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+}
+.swarm-details__fact dt {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+.swarm-details__fact dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.swarm-details__id {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.swarm-details__id code {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  overflow-wrap: anywhere;
+}
+.swarm-details__participants {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.swarm-details__participant {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: var(--fs-body-sm);
+}
+.swarm-details__participant > :first-child {
+  color: var(--text-hi);
+  font-weight: 500;
+}
+.swarm-details__participant > .model-id {
+  min-width: 0;
+  color: var(--text-med);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+.swarm-details__snapshot > summary {
+  color: var(--text-hi);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+/* The copy action sits in the snapshot's top corner, clear of its text. */
+.swarm-details__snapshot-body {
+  position: relative;
+  margin-top: 10px;
+}
+.swarm-details__snapshot-body > .copy-button {
+  position: absolute;
+  top: 6px;
+  right: 14px;
+}
+.swarm-details__snapshot-body > pre {
+  overflow: auto;
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 52px 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

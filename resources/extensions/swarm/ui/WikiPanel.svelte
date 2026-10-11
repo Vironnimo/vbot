@@ -515,7 +515,8 @@
     class="panel wiki-panel"
     data-view={view}
     role="tabpanel"
-    aria-label={t('swarm.wiki.title')}
+    id="swarm-run-panel-wiki"
+    aria-labelledby="swarm-run-tab-wiki"
   >
     <div class="wiki-layout">
       <div class="wiki-index" bind:this={indexPane}>

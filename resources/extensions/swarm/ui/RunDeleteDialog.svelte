@@ -1,33 +1,26 @@
 <script>
   import { t } from '../../../../webui/src/lib/i18n.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import ConfirmDialog from '../../../../webui/src/components/ui/ConfirmDialog.svelte';
+  import { runTarget, runTitle } from './runPresentation.js';
+  import './runDialogs.css';
 
-  // Confirms deleting the Run in `model.swarmDeleteCandidate`.
+  // Confirms deleting the Run in `model.swarmDeleteCandidate`, named by its
+  // title, start and size. The dialog stays open while the deletion runs and
+  // shows its failure for another try.
   let { model } = $props();
 </script>
 
-{#if model.swarmDeleteCandidate}<Modal
+{#if model.swarmDeleteCandidate}<ConfirmDialog
     title={t('swarm.deleteRun.title')}
-    closeDisabled={model.pending === 'delete'}
-    onClose={() => (model.swarmDeleteCandidate = null)}
-    >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
-        <p>{model.swarmDeleteCandidate.prompt}</p>
-        <p>
-          {t('swarm.deleteRun.body')}
-        </p>
-        {#if model.deleteError}<Banner variant="error"
-            >{model.deleteError}</Banner
-          >{/if}
-      </div>{/snippet}{#snippet footer()}<Button
-        variant="secondary"
-        disabled={model.pending === 'delete'}
-        onClick={() => (model.swarmDeleteCandidate = null)}
-        >{t('common.cancel')}</Button
-      ><Button
-        variant="danger"
-        loading={model.pending === 'delete'}
-        onClick={model.deleteSwarm}>{t('common.delete')}</Button
-      >{/snippet}</Modal
+    body={t('swarm.deleteRun.body', {
+      title: runTitle(model.swarmDeleteCandidate),
+    })}
+    confirmLabel={t('common.delete')}
+    busy={model.pending === 'delete'}
+    error={model.deleteError}
+    onConfirm={model.deleteSwarm}
+    onCancel={model.cancelDelete}
+    >{#snippet bodyExtra()}<p class="swarm-dialog__meta">
+        {runTarget(model.swarmDeleteCandidate, model.now)}
+      </p>{/snippet}</ConfirmDialog
   >{/if}

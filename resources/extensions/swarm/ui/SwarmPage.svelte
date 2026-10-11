@@ -1,6 +1,7 @@
 <script>
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
+  import Button from '../../../../webui/src/components/ui/Button.svelte';
   import ProfileEditor from './ProfileEditor.svelte';
   import { provideNavigation } from '../../../../webui/src/lib/navigation.svelte.js';
   import { createSwarmPageModel } from './pageModel.svelte.js';
@@ -13,7 +14,7 @@
   import RunDeleteDialog from './RunDeleteDialog.svelte';
   import SwarmDeleteDialog from './SwarmDeleteDialog.svelte';
   import CommunicationDialog from './CommunicationDialog.svelte';
-  import RunSnapshotDialog from './RunSnapshotDialog.svelte';
+  import RunDetailsDialog from './RunDetailsDialog.svelte';
 
   let { bridgeClient = null } = $props();
   const model = createSwarmPageModel({
@@ -30,11 +31,26 @@
 <main class="swarm-page">
   <SwarmSidebar {model} />
   <div class="workspace">
-    {#if model.error}<Banner variant="error" role="alert">{model.error}</Banner
-      >{/if}
-    {#if model.loading}<Banner variant="info" role="status"
-        >{t('swarm.loading')}</Banner
-      >{/if}
+    <!-- The page's notices stay above the shown view while it scrolls. -->
+    {#if model.error || model.refreshError || model.loading}<div
+        class="swarm-notices"
+      >
+        {#if model.error}<Banner variant="error" role="alert"
+            >{model.error}</Banner
+          >{/if}
+        {#if model.refreshError}<Banner
+            variant="error"
+            role={model.connected ? 'status' : 'alert'}
+            ><p>{model.refreshError}</p>
+            {#if model.connected}<Button
+                variant="tertiary"
+                onClick={model.retry}>{t('common.retry')}</Button
+              >{/if}</Banner
+          >{/if}
+        {#if model.loading}<Banner variant="info" role="status"
+            >{t('swarm.loading')}</Banner
+          >{/if}
+      </div>{/if}
     {#if model.editor}
       {#key model.editorKey}
         <ProfileEditor
@@ -43,17 +59,13 @@
           catalog={model.catalog}
           bridgeClient={model.client}
           onSave={model.saveProfile}
-          onCancel={model.newSwarm}
+          onCancel={model.openStart}
           onDelete={model.confirmProfileDelete}
         />
       {/key}
-    {:else}
-      <section class="content">
-        {#if model.selectedSwarm}<RunView {model} />{:else}<RunStartForm
-            {model}
-          />{/if}
-      </section>
-    {/if}
+    {:else if model.selectedSwarm}<RunView {model} />{:else}<RunStartForm
+        {model}
+      />{/if}
   </div>
 </main>
 
@@ -62,4 +74,4 @@
 <RunDeleteDialog {model} />
 <SwarmDeleteDialog {model} />
 <CommunicationDialog {model} />
-<RunSnapshotDialog {model} />
+<RunDetailsDialog {model} />

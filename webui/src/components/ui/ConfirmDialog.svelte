@@ -6,7 +6,13 @@
   // both close paths through `onCancel` so overlay-click, Escape, and × all
   // resolve as a cancel. The confirm button carries the action verb and renders
   // in the `danger` variant for irreversible actions.
+  //
+  // A caller that waits for the confirmed action keeps the dialog open with
+  // `busy` while it runs (the confirm button shows progress and the dialog
+  // cannot be closed, so the action cannot run twice) and passes a failure as
+  // `error`, shown inside the dialog so the user can retry or cancel.
 
+  import Banner from './Banner.svelte';
   import Button from './Button.svelte';
   import Modal from './Modal.svelte';
 
@@ -26,6 +32,8 @@
     confirmLabel,
     cancelLabel = t('common.cancel'),
     danger = true,
+    busy = false,
+    error = '',
     onConfirm = noop,
     onCancel = noop,
   } = $props();
@@ -37,16 +45,23 @@
   let confirmVariant = $derived(danger ? 'danger' : 'primary');
 </script>
 
-<Modal {title} labelledById={titleId} onClose={onCancel}>
+<Modal {title} labelledById={titleId} closeDisabled={busy} onClose={onCancel}>
   {#snippet body()}
     <div class="modal-body">
       <p>{bodyText}</p>
       {@render bodyExtra?.()}
+      {#if error}
+        <Banner variant="error" role="alert">{error}</Banner>
+      {/if}
     </div>
   {/snippet}
 
   {#snippet footer()}
-    <Button variant="secondary" onClick={onCancel}>{cancelLabel}</Button>
-    <Button variant={confirmVariant} onClick={onConfirm}>{confirmLabel}</Button>
+    <Button variant="secondary" disabled={busy} onClick={onCancel}
+      >{cancelLabel}</Button
+    >
+    <Button variant={confirmVariant} loading={busy} onClick={onConfirm}
+      >{confirmLabel}</Button
+    >
   {/snippet}
 </Modal>
