@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,10 +15,11 @@ from telegram.error import NetworkError
 import core.channels._telegram_inbound as telegram_inbound
 from core.attachments import AttachmentStore
 from core.channels._telegram_transport import _INBOUND_FILE_READ_TIMEOUT_SECONDS
+from core.channels.telegram import TelegramChannelAdapter
 from core.chat import MessageSender
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 
-from .engine_test_support import make_completed_run
+from .engine_test_support import QUEUE_DRAIN_TIMEOUT_SECONDS, make_completed_run
 from .telegram_test_support import (
     PNG_BYTES,
     GatedAccessRegistry,
@@ -432,16 +434,22 @@ async def test_a_late_album_item_does_not_cancel_the_batch_already_dispatching(
 
 
 @pytest.mark.asyncio
-async def test_stop_cancels_a_forwarding_comment_already_dispatching(
+async def test_stop_completes_a_forwarding_comment_already_dispatching(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     clock = ManualClock()
     registry = GatedAccessRegistry()
-    adapter, _sessions, trigger, _bot = make_adapter(
+    trigger = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: make_completed_run(
+            output_text="ok", session_id=_GROUP_SESSION
+        )
+    )
+    adapter, _sessions, _trigger, _bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[-10001],
         response_mode="all",
+        trigger_run=trigger,
         access_registry=registry,
         clock=clock,
     )
@@ -451,11 +459,18 @@ async def test_stop_cancels_a_forwarding_comment_already_dispatching(
     )
     await clock.advance(_SETTLE_WINDOW)
     await registry.entered.wait()
-    await adapter.stop()
+    # Only the adapter stops; the conversation engine outlives it, as in production.
+    stopping = asyncio.create_task(TelegramChannelAdapter.stop(adapter))
+    await asyncio.sleep(0)
+    registry.release.set()
+    await asyncio.wait_for(stopping, timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
 
-    # The dispatch had left the settle window, and stop still owned and ended it.
-    assert registry.cancelled.is_set()
-    trigger.assert_not_awaited()
+    # The dispatch had taken the comment out of the settle window, and Telegram
+    # had confirmed its update: stop lets it reach the conversation.
+    assert not registry.cancelled.is_set()
+    await drain_chat_queue(adapter, -10001)
+    assert [awaited.args[1] for awaited in trigger.await_args_list] == ["question"]
+    await adapter.stop()
 
 
 @pytest.mark.asyncio
