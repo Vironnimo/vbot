@@ -36,8 +36,31 @@ export function listServerDirectory(
   return rpc('filesystem.list', params, options);
 }
 
+// Creates the folder `name` inside the directory `path` (the same forms as a
+// listing's `path`, with `root` relative to it) and resolves to `{path}`, the
+// new folder's path in that form. The params keep the RPC's own shape too.
+export function createServerDirectory({ path, name, root } = {}, options = {}) {
+  const method = 'filesystem.create_directory';
+  if (typeof path !== 'string') {
+    throw invalidRequest(method, 'Directory path must be a string');
+  }
+  if (typeof name !== 'string' || name === '') {
+    throw invalidRequest(method, 'Folder name must be a non-empty string');
+  }
+  if (root !== undefined && (typeof root !== 'string' || root === '')) {
+    throw invalidRequest(method, 'Directory root must be a non-empty string');
+  }
+  const params = { path, name };
+  if (root !== undefined) params.root = root;
+  return rpc(method, params, options);
+}
+
 function invalidListing(message) {
+  return invalidRequest('filesystem.list', message);
+}
+
+function invalidRequest(method, message) {
   return new ApiClientError(RPC_ERROR_INVALID_CLIENT_REQUEST, message, {
-    method: 'filesystem.list',
+    method,
   });
 }

@@ -362,4 +362,22 @@ export default Object.freeze({
   'pathPicker.failure.outsideRoot':
     'This folder lies outside {root}, so it cannot be opened here.',
   'pathPicker.failure.failed': 'The folder could not be listed.',
+  'pathPicker.refresh': 'Refresh',
+  'pathPicker.editPath': 'Type a path',
+  'pathPicker.editPathHint': 'Type a path (Ctrl+L)',
+  'pathPicker.pathInput': 'Folder path to open',
+  'pathPicker.newFolder': 'New folder',
+  'pathPicker.newFolderDefault': 'New folder',
+  'pathPicker.newFolderName': 'Name of the new folder',
+  'pathPicker.create': 'Create',
+  'pathPicker.createFailure.exists':
+    'Something with this name already exists here.',
+  'pathPicker.createFailure.invalidName':
+    'This name cannot be used for a folder here.',
+  'pathPicker.createFailure.denied':
+    'vBot is not allowed to create a folder here.',
+  'pathPicker.createFailure.gone': 'This folder no longer exists.',
+  'pathPicker.createFailure.timeout':
+    'The folder did not answer in time. The new folder may still appear; refresh to check.',
+  'pathPicker.createFailure.failed': 'The folder could not be created.',
 });

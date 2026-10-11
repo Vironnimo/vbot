@@ -348,6 +348,45 @@ export function listingFailureText(reason, { root = '' } = {}) {
 }
 
 /**
+ * The sentence for a failed `filesystem.create_directory`. With the `root` a
+ * picker keeps to, a refused folder is one that lies outside it.
+ */
+export function creationFailureText(error, { root = '' } = {}) {
+  switch (error?.details?.data?.reason) {
+    case 'exists':
+      return t('pathPicker.createFailure.exists');
+    case 'invalid_name':
+      return t('pathPicker.createFailure.invalidName');
+    case 'denied':
+      return t('pathPicker.createFailure.denied');
+    case 'not_found':
+    case 'not_a_directory':
+      return t('pathPicker.createFailure.gone');
+    case 'timeout':
+      return t('pathPicker.createFailure.timeout');
+    default:
+      return error?.code === 'invalid_request'
+        ? listingFailureText('invalid', { root })
+        : t('pathPicker.createFailure.failed');
+  }
+}
+
+/**
+ * A name for a new folder that no listed entry has, case-insensitively:
+ * `base`, else `base (2)`, `base (3)`, ... as desktop file managers do.
+ */
+export function unusedFolderName(base, entries) {
+  const taken = new Set(
+    (entries ?? []).map((entry) => entry.name.toLowerCase()),
+  );
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let number = 2; ; number += 1) {
+    const name = `${base} (${number})`;
+    if (!taken.has(name.toLowerCase())) return name;
+  }
+}
+
+/**
  * Per-picker memory of listings: per folder (path, root and file inclusion)
  * and name `prefix`, a listing is requested once. A folder that failed fails
  * for every prefix, and a complete (not truncated) listing answers every

@@ -5,6 +5,10 @@
   // and Browse… opens PathBrowserDialog. `listDirectory` takes and returns the
   // `filesystem.list` params and result; it defaults to the WebUI API, and an
   // isolated Extension page passes its host bridge instead.
+  // `createDirectory` (filesystem.create_directory params and result) lets the
+  // dialog make new folders; it defaults to the WebUI API only together with
+  // the default listing, so a page that passes its own listing and no
+  // creation gets a dialog without New folder.
   //
   // `mode` ('directory' | 'file' | 'any') says what can be chosen. With an
   // absolute `root`, completion and browsing stay inside it and chosen values
@@ -19,7 +23,11 @@
   // a path longer than the field shows its end, the folder or file it names.
   import { onDestroy, tick } from 'svelte';
 
-  import { listProjects, listServerDirectory } from '$lib/api.js';
+  import {
+    createServerDirectory,
+    listProjects,
+    listServerDirectory,
+  } from '$lib/api.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -53,6 +61,7 @@
     root = '',
     startPath = '',
     listDirectory = null,
+    createDirectory = null,
     projectShortcuts = false,
     id = '',
     variant = 'default',
@@ -546,6 +555,8 @@
     {value}
     {startPath}
     listDirectory={(params) => (listDirectory ?? listServerDirectory)(params)}
+    createDirectory={createDirectory ??
+      (listDirectory ? null : (params) => createServerDirectory(params))}
     loadShortcuts={projectShortcuts ? loadProjectShortcuts : null}
     onSelect={chooseFromBrowser}
     onClose={() => (browsing = false)}

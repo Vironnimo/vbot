@@ -13,6 +13,14 @@
   // highlighted entry, or else the open folder (directory and any modes).
   // Typing a filter highlights its first match, so Enter opens that one.
   //
+  // Every navigation lists the folder anew, so folders made or removed
+  // meanwhile show up; Refresh (F5) lists the open one again. Clicking the
+  // trail's free space or Ctrl+L turns it into a path field, as an address bar
+  // does, and a path typed or pasted into the filter moves there too. With
+  // `createDirectory` (filesystem.create_directory params and result), New
+  // folder adds a folder to the open one and highlights it, so Select takes
+  // it; file mode, where a new empty folder holds nothing to choose, has none.
+  //
   // The dialog is moved to <body> before it renders, so the form dialog it
   // may open from neither styles nor submits it; Modal keeps only the newest
   // dialog answering Escape and Tab.
@@ -24,15 +32,19 @@
   import {
     breadcrumbTrail,
     browseStartPaths,
-    createListingCache,
+    creationFailureText,
     filterEntries,
+    isAbsolutePath,
     joinPath,
     listingErrorReason,
     listingFailureText,
+    listingPathFor,
     normalizeServerPath,
     parentMayList,
     parentPath,
     toNativePath,
+    trimTrailingSeparator,
+    unusedFolderName,
   } from '$lib/pathPicker.js';
   import Button from './Button.svelte';
   import Modal from './Modal.svelte';
@@ -50,12 +62,11 @@
     value = '',
     startPath = '',
     listDirectory,
+    createDirectory = null,
     loadShortcuts = null,
     onSelect = noop,
     onClose = noop,
   } = $props();
-
-  const listings = createListingCache((params) => listDirectory(params));
 
   let portaled = $state(false);
   let listElement = $state();
@@ -75,6 +86,16 @@
   let filter = $state('');
   let showHidden = $state(false);
   let activeKey = $state('');
+  // The trail as a path field: its text and why the last path did not open.
+  let editingPath = $state(false);
+  let pathText = $state('');
+  let pathFailure = $state('');
+  // The new folder row: its name, why it was not created, and a pending
+  // request.
+  let creating = $state(false);
+  let newName = $state('');
+  let createFailure = $state('');
+  let createBusy = $state(false);
   let loadToken = 0;
   let initialFocusDone = false;
 
@@ -113,6 +134,10 @@
         : toNativePath(chosenPath, separator),
   );
   let canGoUp = $derived(view === 'folder' && (root ? target !== '' : true));
+  let canCreate = $derived(Boolean(createDirectory) && mode !== 'file');
+  let rootText = $derived(
+    root && toNativePath(normalizeServerPath(root), separator),
+  );
   let emptyText = $derived(
     folderReady && rows.length === 0
       ? filter.trim()
@@ -124,6 +149,8 @@
   );
 
   const rowId = (index) => `${componentId}-row-${index}`;
+  const pathInputId = `${componentId}-path`;
+  const newNameId = `${componentId}-new-name`;
 
   function placeRows() {
     const result = [];
@@ -188,10 +215,7 @@
   // Opens a folder and resolves to null, or to why it did not open: a
   // `listingErrorReason`, or 'superseded' once a newer navigation started. A
   // quiet attempt (a start candidate) changes nothing when it fails.
-  async function openFolder(
-    path,
-    { highlight = '', refresh = false, quiet = false } = {},
-  ) {
+  async function openFolder(path, { highlight = '', quiet = false } = {}) {
     const token = ++loadToken;
     if (!quiet) {
       view = 'folder';
@@ -199,11 +223,13 @@
       target = path;
       filter = '';
       activeKey = '';
+      closeNewFolder();
       focusList();
     }
     try {
-      const result = await listings.list(listingParams(path), { refresh });
+      const result = await listDirectory(listingParams(path));
       if (token !== loadToken) return 'superseded';
+      closeNewFolder();
       listing = result;
       separator = result?.separator === '\\' ? '\\' : '/';
       view = 'folder';
@@ -226,17 +252,18 @@
     }
   }
 
-  async function openPlaces({ refresh = false } = {}) {
+  async function openPlaces() {
     const token = ++loadToken;
     view = 'places';
     status = 'loading';
     target = '';
     filter = '';
     activeKey = '';
+    closeNewFolder();
     focusList();
     try {
       const [result, found] = await Promise.all([
-        listings.list({ path: null }, { refresh }),
+        listDirectory({ path: null }),
         shortcutsOnce(),
       ]);
       if (token !== loadToken) return;
@@ -253,9 +280,7 @@
   function showFailure(reason) {
     status = 'error';
     retryable = reason !== 'invalid';
-    failure = listingFailureText(reason, {
-      root: root && toNativePath(normalizeServerPath(root), separator),
-    });
+    failure = listingFailureText(reason, { root: rootText });
   }
 
   let shortcutRequest = null;
@@ -286,14 +311,165 @@
     await openStart();
   }
 
-  function retry() {
+  // Lists the open folder (or the places) again, keeping the highlight.
+  function refresh() {
     if (view === 'places') {
-      void openPlaces({ refresh: true });
+      void openPlaces();
     } else {
-      void openFolder(target, { refresh: true });
+      void openFolder(target, { highlight: activeEntry?.name ?? '' });
     }
   }
 
+  // `text` replaces the open folder's path, with the caret at its end.
+  function startPathEdit(text = null) {
+    if (editingPath && text === null) return;
+    pathText =
+      text ??
+      (view === 'folder'
+        ? root
+          ? target
+          : toNativePath(target, separator)
+        : '');
+    pathFailure = '';
+    editingPath = true;
+    void tick().then(() => {
+      const input = document.getElementById(pathInputId);
+      input?.focus();
+      if (text === null) {
+        input?.select();
+      } else {
+        input?.setSelectionRange(text.length, text.length);
+      }
+    });
+  }
+
+  function endPathEdit() {
+    editingPath = false;
+    pathFailure = '';
+    focusList();
+  }
+
+  // Opens the typed folder, or where files can be chosen a file's folder
+  // with the file highlighted. A path that does not open keeps the field.
+  async function goToTypedPath() {
+    const text = trimTrailingSeparator(pathText.trim());
+    if (!text) {
+      endPathEdit();
+      void openStart();
+      return;
+    }
+    // Without a root, a relative path starts at the open folder.
+    const relative = !root && view === 'folder' && !isAbsolutePath(text);
+    const path = listingPathFor(relative ? joinPath(target, text) : text, {
+      root,
+    });
+    if (path === null) {
+      pathFailure = listingFailureText('invalid', { root: rootText });
+      return;
+    }
+    let reason = await openFolder(path, { quiet: true });
+    if (reason === 'not_a_directory' && mode !== 'directory') {
+      const parent = parentPath(path, { relative: Boolean(root) });
+      if (parent !== null) {
+        reason = await openFolder(parent, {
+          highlight: path.slice(path.lastIndexOf('/') + 1),
+          quiet: true,
+        });
+      }
+    }
+    if (reason === 'superseded') return;
+    if (reason === null) {
+      endPathEdit();
+    } else {
+      pathFailure = listingFailureText(reason, { root: rootText });
+    }
+  }
+
+  function handlePathKey(event) {
+    if (event.isComposing) return;
+    if (event.key === 'Enter') {
+      void goToTypedPath();
+    } else if (event.key === 'Escape') {
+      // The field closes; the dialog stays.
+      endPathEdit();
+    } else {
+      return;
+    }
+    event.preventDefault();
+  }
+
+  function startNewFolder() {
+    if (!canCreate || !folderReady) return;
+    newName = unusedFolderName(
+      t('pathPicker.newFolderDefault'),
+      listing?.entries,
+    );
+    createFailure = '';
+    creating = true;
+    void tick().then(() => {
+      const input = document.getElementById(newNameId);
+      input?.focus();
+      input?.select();
+    });
+  }
+
+  function closeNewFolder() {
+    creating = false;
+    createFailure = '';
+  }
+
+  function cancelNewFolder() {
+    closeNewFolder();
+    focusList();
+  }
+
+  async function createFolder() {
+    const name = newName.trim();
+    if (!name || createBusy || !folderReady) return;
+    const folder = listing.path;
+    const token = loadToken;
+    createBusy = true;
+    createFailure = '';
+    try {
+      await createDirectory({ path: folder, name, ...(root ? { root } : {}) });
+      if (token === loadToken) await openFolder(folder, { highlight: name });
+    } catch (error) {
+      if (token === loadToken) {
+        createFailure = creationFailureText(error, { root: rootText });
+      }
+    } finally {
+      createBusy = false;
+    }
+  }
+
+  function handleNewNameKey(event) {
+    if (event.isComposing) return;
+    if (event.key === 'Enter') {
+      void createFolder();
+    } else if (event.key === 'Escape') {
+      // The row closes; the dialog stays.
+      cancelNewFolder();
+    } else {
+      return;
+    }
+    event.preventDefault();
+  }
+
+  // Shortcuts anywhere in the dialog's body, as in desktop file dialogs.
+  function handleBodyKey(event) {
+    if (event.isComposing || event.defaultPrevented) return;
+    const command = event.ctrlKey || event.metaKey;
+    if (event.key === 'F5' && !command && !event.altKey) {
+      refresh();
+    } else if (command && !event.altKey && event.key.toLowerCase() === 'l') {
+      startPathEdit();
+    } else if (event.altKey && !command && event.key === 'ArrowUp') {
+      goUp();
+    } else {
+      return;
+    }
+    event.preventDefault();
+  }
   function goUp() {
     if (!canGoUp) return;
     const parent = parentPath(target, { relative: Boolean(root) });
@@ -427,7 +603,9 @@
   {#if portaled}
     <Modal {title} class="path-browser" {onClose}>
       {#snippet body()}
-        <div class="modal-body path-browser__body">
+        <!-- Shortcuts only: every key it handles has a control too. -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="modal-body path-browser__body" onkeydown={handleBodyKey}>
           <div class="path-browser__bar">
             <Button
               variant="tertiary"
@@ -453,48 +631,134 @@
                 />
               </svg>
             </Button>
-            <nav
-              bind:this={trailElement}
-              class="path-browser__trail"
-              aria-label={t('pathPicker.trail')}
+            {#if editingPath}
+              <TextField
+                id={pathInputId}
+                variant="modal"
+                code
+                class="path-browser__path"
+                value={pathText}
+                ariaLabel={t('pathPicker.pathInput')}
+                invalid={Boolean(pathFailure)}
+                onInput={(next) => {
+                  pathText = next;
+                  pathFailure = '';
+                }}
+                onkeydown={handlePathKey}
+                onblur={() => {
+                  if (!pathFailure) editingPath = false;
+                }}
+              />
+            {:else}
+              <div class="path-browser__address">
+                <nav
+                  bind:this={trailElement}
+                  class="path-browser__trail"
+                  aria-label={t('pathPicker.trail')}
+                >
+                  <ol>
+                    {#if !root}
+                      <li>
+                        {#if view === 'places'}
+                          <span
+                            class="path-browser__crumb"
+                            aria-current="location"
+                            >{t('pathPicker.places')}</span
+                          >
+                        {:else}
+                          <button
+                            type="button"
+                            class="path-browser__crumb"
+                            onclick={() => openPlaces()}
+                            >{t('pathPicker.places')}</button
+                          >
+                        {/if}
+                      </li>
+                    {/if}
+                    {#each crumbs as crumb, index (crumb.path)}
+                      <li>
+                        {#if index === crumbs.length - 1}
+                          <span
+                            class="path-browser__crumb path-browser__crumb--path"
+                            aria-current="location">{crumb.label}</span
+                          >
+                        {:else}
+                          <button
+                            type="button"
+                            class="path-browser__crumb path-browser__crumb--path"
+                            onclick={() => openFolder(crumb.path)}
+                            >{crumb.label}</button
+                          >
+                        {/if}
+                      </li>
+                    {/each}
+                  </ol>
+                </nav>
+                <!-- The trail's free space, as in an address bar. -->
+                <button
+                  type="button"
+                  tabindex="-1"
+                  class="path-browser__type-path"
+                  aria-label={t('pathPicker.editPath')}
+                  use:tooltip={{ text: t('pathPicker.editPathHint') }}
+                  onclick={() => startPathEdit()}
+                ></button>
+              </div>
+            {/if}
+            <Button
+              variant="tertiary"
+              icon
+              ariaLabel={t('pathPicker.refresh')}
+              tooltip={t('pathPicker.refresh')}
+              disabled={status === 'loading'}
+              onClick={refresh}
             >
-              <ol>
-                {#if !root}
-                  <li>
-                    {#if view === 'places'}
-                      <span class="path-browser__crumb" aria-current="location"
-                        >{t('pathPicker.places')}</span
-                      >
-                    {:else}
-                      <button
-                        type="button"
-                        class="path-browser__crumb"
-                        onclick={() => openPlaces()}
-                        >{t('pathPicker.places')}</button
-                      >
-                    {/if}
-                  </li>
-                {/if}
-                {#each crumbs as crumb, index (crumb.path)}
-                  <li>
-                    {#if index === crumbs.length - 1}
-                      <span
-                        class="path-browser__crumb path-browser__crumb--path"
-                        aria-current="location">{crumb.label}</span
-                      >
-                    {:else}
-                      <button
-                        type="button"
-                        class="path-browser__crumb path-browser__crumb--path"
-                        onclick={() => openFolder(crumb.path)}
-                        >{crumb.label}</button
-                      >
-                    {/if}
-                  </li>
-                {/each}
-              </ol>
-            </nav>
+              <svg
+                viewBox="0 0 16 16"
+                width="15"
+                height="15"
+                aria-hidden="true"
+              >
+                <path
+                  d="M13 8a5 5 0 1 1-1.46-3.54M13 2.5v2.5h-2.5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </Button>
+            {#if canCreate}
+              <Button
+                variant="tertiary"
+                icon
+                ariaLabel={t('pathPicker.newFolder')}
+                tooltip={t('pathPicker.newFolder')}
+                disabled={!folderReady || creating}
+                onClick={startNewFolder}
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  width="15"
+                  height="15"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75zM8 7v4M6 9h4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </Button>
+            {/if}
           </div>
+          {#if editingPath && pathFailure}
+            <p class="path-browser__error" role="alert">{pathFailure}</p>
+          {/if}
 
           {#if view === 'folder'}
             <div class="path-browser__tools">
@@ -505,7 +769,13 @@
                 placeholder={t('pathPicker.filterPlaceholder')}
                 ariaLabel={t('pathPicker.filter')}
                 disabled={!folderReady}
-                onInput={(next) => {
+                onInput={(next, event) => {
+                  // A path typed or pasted here is one to go to.
+                  if (isAbsolutePath(next.trim())) {
+                    event.currentTarget.value = filter;
+                    startPathEdit(next.trim());
+                    return;
+                  }
                   filter = next;
                   highlightFirstMatch();
                 }}
@@ -534,9 +804,77 @@
               <div class="path-browser__state" role="alert">
                 <p>{failure}</p>
                 {#if retryable}
-                  <Button variant="secondary" onClick={retry}
+                  <Button variant="secondary" onClick={refresh}
                     >{t('common.retry')}</Button
                   >
+                {/if}
+              </div>
+            {/if}
+            {#if creating && folderReady}
+              <div class="path-browser__new">
+                <div class="path-browser__new-row">
+                  <svg
+                    class="path-browser__icon"
+                    viewBox="0 0 16 16"
+                    width="14"
+                    height="14"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75z"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.3"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                  <TextField
+                    id={newNameId}
+                    variant="modal"
+                    code
+                    class="path-browser__new-name"
+                    value={newName}
+                    ariaLabel={t('pathPicker.newFolderName')}
+                    invalid={Boolean(createFailure)}
+                    onInput={(next) => {
+                      newName = next;
+                      createFailure = '';
+                    }}
+                    onkeydown={handleNewNameKey}
+                  />
+                  <Button
+                    variant="primary"
+                    loading={createBusy}
+                    disabled={!newName.trim()}
+                    onClick={createFolder}>{t('pathPicker.create')}</Button
+                  >
+                  <Button
+                    variant="tertiary"
+                    icon
+                    ariaLabel={t('common.cancel')}
+                    tooltip={t('common.cancel')}
+                    onClick={cancelNewFolder}
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      width="14"
+                      height="14"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M4 4l8 8M12 4l-8 8"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.4"
+                        stroke-linecap="round"
+                      />
+                    </svg>
+                  </Button>
+                </div>
+                {#if createFailure}
+                  <p class="path-browser__error" role="alert">
+                    {createFailure}
+                  </p>
                 {/if}
               </div>
             {:else if emptyText}
@@ -694,10 +1032,36 @@
     gap: 6px;
   }
 
-  .path-browser__trail {
+  .path-browser__address {
+    display: flex;
     min-width: 0;
     flex: 1;
+    align-self: stretch;
+  }
+
+  .path-browser__trail {
+    min-width: 0;
+    flex: 0 1 auto;
     overflow-x: auto;
+  }
+
+  .path-browser__type-path {
+    min-width: 24px;
+    flex: 1;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    cursor: text;
+  }
+
+  .path-browser__type-path:hover {
+    background: var(--surface-2);
+  }
+
+  .path-browser__bar :global(.path-browser__path) {
+    min-width: 0;
+    flex: 1;
   }
 
   .path-browser__trail ol {
@@ -777,6 +1141,41 @@
   .path-browser__list {
     flex: 1 0 auto;
     outline: none;
+  }
+
+  /* A path or folder name that did not work, under its field. */
+  .path-browser__error {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 0;
+    color: var(--red);
+    font-size: var(--fs-body-sm);
+    line-height: 1.4;
+  }
+
+  .path-browser__error::before {
+    content: ' d7';
+    font-weight: 600;
+  }
+
+  .path-browser__new {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-2);
+  }
+
+  .path-browser__new-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .path-browser__new :global(.path-browser__new-name) {
+    min-width: 0;
+    flex: 1;
   }
 
   .path-browser__group {

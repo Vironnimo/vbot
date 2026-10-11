@@ -230,6 +230,15 @@ describe('RPC wrappers', () => {
       { path: 'docs', root: 'C:/repo', include_files: true, prefix: 'Re' },
     ],
     [
+      'filesystem.create_directory inside a root',
+      (o) =>
+        api.createServerDirectory(
+          { path: 'docs', name: 'New folder', root: 'C:/repo' },
+          o,
+        ),
+      { path: 'docs', name: 'New folder', root: 'C:/repo' },
+    ],
+    [
       'session.set_agent_overrides',
       (o) =>
         api.setSessionAgentOverrides(
@@ -780,6 +789,11 @@ describe('RPC wrappers', () => {
       'a directory listing with an empty root',
       () => api.listServerDirectory({ path: '', root: '' }),
       'filesystem.list',
+    ],
+    [
+      'a new folder without a name',
+      () => api.createServerDirectory({ path: 'C:/repo', name: '' }),
+      'filesystem.create_directory',
     ],
     [
       'a blank Agent id in an activity batch',
