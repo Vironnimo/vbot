@@ -512,12 +512,12 @@ export function toolResultCancelledByUser(result) {
   return normalizedResult?.error?.code === USER_CANCELLED_TOOL_RESULT_CODE;
 }
 
-// The shell Tool (registry name `bash` on every host) reports a command vBot
-// stopped before it ended - the user cancelled the call, the Run was
-// cancelled, its timeout or shutdown - as a successful envelope with
+// The shell Tool (registry name `bash` on every host) reports a command
+// stopped before its call returned - the user cancelled the call, the Run was
+// cancelled, Stop all or shutdown - as a successful envelope with
 // `data.status: "stopped"`, so the Agent still reads its output. The row reads
-// like a stopped handed-off command: cancelled. Other Tools that return the
-// shell result shape (a `terminal` kill or wait) did what they were asked.
+// like a stopped background command: cancelled. Other Tools that return the
+// shell result shape (a `background_tasks` stop) did what they were asked.
 function shellCommandStopped(toolName, result) {
   if (toolName !== 'bash') {
     return false;

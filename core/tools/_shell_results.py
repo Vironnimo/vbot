@@ -332,10 +332,10 @@ def _chars(lines: list[str]) -> int:
 def _holding_stage(command: str) -> str | None:
     """The last pipeline stage of *command* that holds its input until it ends.
 
-    Agents piped test runs into ``Select-Object -Last 25``: handed off after 90
-    seconds or stopped, the result showed no output, and they stopped commands
-    that worked. The last such stage, since commands run their long step last,
-    after quick preparations.
+    Agents piped test runs into ``Select-Object -Last 25``: running in the
+    background or stopped, the result showed no output, and they stopped
+    commands that worked. The last such stage, since commands run their long
+    step last, after quick preparations.
     """
     stages = [match["stage"] for match in _HOLDING_STAGE.finditer(command)]
     if not stages:

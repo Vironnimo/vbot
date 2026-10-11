@@ -30,8 +30,9 @@ Stops (``stop``) name a reason; the first reason wins:
 - ``run_cancelled``: the Run whose call waited for the command was cancelled
   (``cancel_run`` stops only foreground commands).
 - ``shutdown``: vBot stops (``shutdown``); a background result is delivered.
-- ``scope``: Stop all, ``subagent cancel``, removal of the Session, Agent or
-  Project, or the close of an Extension execution group; nothing is delivered.
+- ``scope``: Stop all, a ``background_tasks`` stop of a Sub-Agent, removal of
+  the Session, Agent or Project, or the close of an Extension execution group;
+  nothing is delivered.
 
 A stop of a command that already ended stops the processes it left running;
 its outcome stays as it ended. When something outside vBot kills the command,
@@ -433,11 +434,11 @@ class CommandManager:
     async def close_scope(self, owner: CommandOwner) -> int:
         """Stop the Session's commands without delivery (reason ``scope``).
 
-        For Stop all, ``subagent cancel`` and the Session's removal. A result
-        not yet delivered is withdrawn. Returns how many unfinished commands
-        were stopped. A kill the operating system does not confirm is logged,
-        not raised: the lifecycle step goes on, and the command stays live
-        and listed for a later stop.
+        For Stop all, a ``background_tasks`` stop of a Sub-Agent and the
+        Session's removal. A result not yet delivered is withdrawn. Returns how
+        many unfinished commands were stopped. A kill the operating system does
+        not confirm is logged, not raised: the lifecycle step goes on, and the
+        command stays live and listed for a later stop.
         """
         return await self._close_matching(lambda scope: scope == owner)
 

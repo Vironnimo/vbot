@@ -112,7 +112,7 @@
     // in arrival order, read from this Chat's own position, and the Runs
     // active now.
     runEvents = null,
-    // App's bounded live map of handed-off shell command statuses by terminal
+    // App's bounded live map of background shell command statuses by command
     // id (`command_status_changed`); the controller re-applies the whole map.
     commandStatuses = {},
     connectionSnapshot = null,
@@ -365,7 +365,7 @@
   let activeTimelineItems = $derived(
     visibleTimelineItemsForRender(target.activeSessionState),
   );
-  // Known work that outlives the Run: a running Sub-Agent or handed-off
+  // Known work that outlives the Run: a running Sub-Agent or background
   // command the loaded rows started. It keeps Stop all offered once the Run
   // ended.
   let backgroundWorkRunning = $derived(
