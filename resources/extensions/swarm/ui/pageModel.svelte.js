@@ -844,14 +844,19 @@ export function createSwarmPageModel(host) {
     return (rows[index + 1] ?? rows[index - 1])?.dataset[key] ?? null;
   }
 
-  // Focuses the pane row of `id`, or New Run when there is none.
+  // Focuses the pane row of `id`, or New Run when there is none; a narrow
+  // page hides the pane, and its picker takes the focus instead.
   async function focusPaneRow(kind, id) {
     await tick();
     if (disposed) return;
     const row = [...document.querySelectorAll(`[data-${kind}-id]`)].find(
       (item) => item.dataset[`${kind}Id`] === id,
     );
-    (row ?? document.querySelector('.swarm-new-run'))?.focus();
+    const target = row ?? document.querySelector('.swarm-new-run');
+    (target?.checkVisibility?.() === false
+      ? document.getElementById('swarm-picker')
+      : target
+    )?.focus();
   }
 
   async function deleteProfile() {

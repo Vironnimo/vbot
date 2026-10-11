@@ -31,6 +31,10 @@ export default Object.freeze({
   'swarm.sidebar.runDetail': '{state} · {time}',
   'swarm.sidebar.profileActions': 'Actions for {name}',
   'swarm.sidebar.startRun': 'Start a Run',
+  // The picker that replaces the pane on narrow pages; {current} is what
+  // the page shows.
+  'swarm.sidebar.picker': 'Swarms and Runs: {current}',
+  'swarm.sidebar.more': 'Load more Swarms and Runs',
   // The Run view's header, its actions and the Run details dialog.
   'swarm.run.summary': '{swarm} · started {time} · {participants}',
   'swarm.run.summaryUnstarted': '{swarm} · {participants}',

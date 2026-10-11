@@ -1,7 +1,8 @@
 /* The page's navigation pane (SwarmSidebar.svelte): New Run pinned below the
    header like the Agents pane's Shared defaults entry, then the Swarms and
    the Run groups. Rows follow the Agents and Scheduled Tasks panes: a name
-   line and a muted detail line, a Run's led by its state dot. */
+   line and a muted detail line, a Run's led by its state dot. At <=640px the
+   bar replaces the pane. */
 .swarm-page .swarm-pane__group + .swarm-pane__group {
   margin-top: 16px;
 }
@@ -75,50 +76,40 @@
 .swarm-page .swarm-row__dot--error {
   background: var(--red);
 }
+/* The narrow page's bar (below): one picker with the pane's entries, then
+   New Swarm. Its options read like the pane's rows, the name over the muted
+   detail line; the panel is portaled out of the page root. */
+.swarm-page > .swarm-bar {
+  display: none;
+}
+.swarm-bar__panel .searchable-dropdown__option {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.swarm-bar__panel .searchable-dropdown__option-meta {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 @media (max-width: 640px) {
-  /* A narrow page puts the pane above the work area as the Agents pane
-     does: the title, New Swarm and New Run share one row, and each list
-     becomes a shelf of cards that scrolls sideways. */
+  /* A narrow page trades the pane for the bar above the work area, as
+     Skills and Settings trade their sidebars for a picker. */
   .swarm-page > .swarm-pane {
-    display: grid;
-    width: 100%;
-    min-width: 0;
-    grid-template-columns: minmax(0, 1fr) auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    display: none;
   }
-  .swarm-page .swarm-pane__header {
-    min-width: 0;
-    min-height: 0;
-    padding: 8px 12px;
-  }
-  .swarm-page .swarm-pane__pinned {
-    grid-column: 2;
-    grid-row: 1;
-    padding: 8px 12px 8px 0;
-  }
-  .swarm-page .swarm-pane__pinned .secondary-pane__pinned-item {
-    width: auto;
-  }
-  .swarm-page .swarm-pane__scroll {
-    grid-column: 1 / -1;
-    max-height: min(40vh, 300px);
-    padding: 8px 12px 12px;
-  }
-  .swarm-page .swarm-pane__group + .swarm-pane__group {
-    margin-top: 8px;
-  }
-  .swarm-page .swarm-pane__group > .secondary-list__group {
-    margin: 0 2px 6px;
-  }
-  .swarm-page .swarm-pane__list {
-    flex-direction: row;
+  .swarm-page > .swarm-bar {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
     gap: 8px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
+    padding: 8px 12px 8px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--secondary-surface);
   }
-  .swarm-page .swarm-pane__list > .swarm-row {
-    width: 180px;
-    flex: 0 0 180px;
+  .swarm-page .swarm-bar__picker {
+    flex: 1;
+    min-width: 0;
   }
 }
