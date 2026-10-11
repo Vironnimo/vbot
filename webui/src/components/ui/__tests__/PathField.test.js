@@ -59,6 +59,7 @@ describe('PathField', () => {
     if (mounted) await unmount(mounted);
     mounted = null;
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     document.body.innerHTML = '';
   });
 
@@ -184,6 +185,17 @@ describe('PathField', () => {
   });
 
   it('shows the end of a long path while the field has no focus', async () => {
+    let reportResize;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback) {
+          reportResize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
     const input = render({ value: 'C:\\Users\\me' });
     let scrolled = 0;
     Object.defineProperty(input, 'scrollWidth', {
@@ -209,6 +221,11 @@ describe('PathField', () => {
     expect(scrolled).toBe(0);
     input.blur();
     await vi.advanceTimersByTimeAsync(0);
+    expect(scrolled).toBe(640);
+
+    // A field that changes width keeps showing the end.
+    scrolled = 0;
+    reportResize();
     expect(scrolled).toBe(640);
   });
 

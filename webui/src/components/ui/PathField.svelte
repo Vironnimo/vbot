@@ -417,6 +417,15 @@
     showPathEnd();
   });
 
+  // So does a field whose width changes with the window or its layout.
+  $effect(() => {
+    const input = inputElement();
+    if (!input || typeof ResizeObserver !== 'function') return undefined;
+    const observer = new ResizeObserver(showPathEnd);
+    observer.observe(input);
+    return () => observer.disconnect();
+  });
+
   $effect(() => {
     if (!panelOpen) return undefined;
     window.addEventListener('scroll', handleWindowScroll, true);
