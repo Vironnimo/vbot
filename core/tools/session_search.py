@@ -28,6 +28,7 @@ from core.recall.sqlite_fts import SqliteFtsRecallBackend
 from core.sessions import (
     ChatSessionManager,
 )
+from core.tools._argument_repair import load_json_value
 from core.tools._session_recall_results import (
     SESSION_SEARCH_DEFAULT_LIMIT as SESSION_SEARCH_DEFAULT_LIMIT,
 )
@@ -40,7 +41,6 @@ from core.tools._session_recall_results import (
     _serialized_result_bytes,
     _SessionSearchError,
 )
-from core.tools.contracts import _load_json_value
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -414,7 +414,7 @@ def _normalize_search_arguments(arguments: Any, zone: _Zone = _UTC_ZONE) -> Json
     """Recover clear search intent without dropping meaningful instructions."""
     if isinstance(arguments, str):
         try:
-            arguments = _load_json_value(arguments)
+            arguments = load_json_value(arguments)
         except ValueError as error:
             raise _SessionSearchError(
                 "invalid_arguments", "Provide search arguments as an object with query text."

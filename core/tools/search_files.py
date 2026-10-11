@@ -17,6 +17,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from core.tools._argument_repair import load_json_value
 from core.tools._path_suggestions import corrected_paths
 from core.tools._search_execution import (
     MAX_CHILD_MEMORY,
@@ -60,7 +61,7 @@ from core.tools.arguments import optional_int
 from core.tools.call_syntax import SpellingAliases as _SpellingAliases
 from core.tools.call_syntax import normalize_call_arguments
 from core.tools.call_syntax import spelling as _spelling
-from core.tools.contracts import ToolContractError, _load_json_value, compile_tool_contract
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.edit import offered_edit_tool
 from core.tools.file_state import os_error_reason
 from core.tools.search import SearchBudget, _expand_brace_alternations
@@ -97,7 +98,7 @@ def _repair_argument_array(value: Any) -> Any:
     if not isinstance(value, str) or not re.match(r'^\s*\[\s*"', value):
         return value
     try:
-        return _load_json_value(value)
+        return load_json_value(value)
     except ValueError:
         pass
 
@@ -119,7 +120,7 @@ def _repair_argument_array(value: Any) -> Any:
     repaired = re.sub(r"\\(.)", escape, value, flags=re.DOTALL)
     if not ambiguous:
         try:
-            return _load_json_value(repaired)
+            return load_json_value(repaired)
         except ValueError:
             pass
     raise ValueError(
@@ -133,7 +134,7 @@ def _repair_name_list(value: Any) -> Any:
     if not isinstance(value, str) or not re.match(r'^\s*\[\s*"', value):
         return value
     try:
-        decoded = _load_json_value(value)
+        decoded = load_json_value(value)
     except ValueError, ToolContractError:
         return value
     if isinstance(decoded, list) and decoded and all(isinstance(item, str) for item in decoded):
