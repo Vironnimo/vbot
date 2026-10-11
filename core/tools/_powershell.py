@@ -1,4 +1,4 @@
-"""PowerShell command text for ``pwsh -Command``: English messages and a faithful exit status.
+"""PowerShell command text for ``pwsh -Command``: English output and a faithful exit status.
 
 The shell Tool runs every Windows command as ``pwsh -NoProfile -Command <text>``
 in a ConPTY terminal; this module builds ``<text>`` around the Agent's command.
@@ -9,9 +9,11 @@ text, and PowerShell decodes the output it captures from native programs with
 the same page. Both pages are set to UTF-8 before the command runs; the terminal
 decodes UTF-8.
 
-English messages. PowerShell's own messages follow the Windows display language;
-the setup switches the UI culture to en-US, so Agents and the failure hints read
-one wording. Number and date formats keep the user's culture.
+English output. PowerShell's own messages follow the Windows display language,
+and the numbers and dates it formats follow the user's regional format; the setup
+switches both cultures to en-US, so Agents and the failure hints read one wording,
+and a decimal comma (``6,5``) is never read as a list or a thousands separator.
+Native programs keep the user's settings.
 
 Parsing after the setup. ``pwsh -Command`` parses its whole text before running
 any of it, so a syntax error in the Agent's command would be reported before the
@@ -78,10 +80,12 @@ import re
 UTF8_CONSOLE_STATEMENT = (
     "[Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)"
 )
-# New threads, such as ForEach-Object -Parallel runspaces, take the default.
-ENGLISH_MESSAGES_STATEMENT = (
-    "[cultureinfo]::CurrentUICulture = 'en-US'; "
-    "[cultureinfo]::DefaultThreadCurrentUICulture = 'en-US'"
+# Messages, numbers and dates; new threads, such as ForEach-Object -Parallel
+# runspaces, take the defaults.
+ENGLISH_CULTURE_STATEMENT = (
+    "[cultureinfo]::CurrentUICulture = [cultureinfo]::CurrentCulture = 'en-US'; "
+    "[cultureinfo]::DefaultThreadCurrentUICulture = "
+    "[cultureinfo]::DefaultThreadCurrentCulture = 'en-US'"
 )
 ERROR_RECORD_BASELINE_STATEMENT = "$__vbotInitialError = $Error | Select-Object -First 1"
 POWERSHELL_ERROR_NOTE = (
@@ -147,7 +151,7 @@ UNIX_LINE_FILTERS_STATEMENT = "".join(
 SETUP_STATEMENT = "; ".join(
     (
         UTF8_CONSOLE_STATEMENT,
-        ENGLISH_MESSAGES_STATEMENT,
+        ENGLISH_CULTURE_STATEMENT,
         UNIX_LINE_FILTERS_STATEMENT,
         ERROR_RECORD_BASELINE_STATEMENT,
     )
