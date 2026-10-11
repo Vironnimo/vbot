@@ -17,9 +17,11 @@ import pytest
 
 from core.utils import directory_listing
 from core.utils.directory_listing import (
+    DirectoryCreationError,
     DirectoryEntry,
     DirectoryListingError,
     ListingPathError,
+    create_directory,
     list_directory,
     list_directory_sync,
 )
@@ -242,3 +244,49 @@ async def test_a_directory_that_does_not_answer_does_not_hold_the_caller(
     leftover = asyncio.all_tasks() - before - {asyncio.current_task()}
     if leftover:
         await asyncio.wait(leftover)
+
+
+@pytest.mark.asyncio
+async def test_a_new_folder_is_created_once_inside_an_existing_directory(
+    tmp_path: Path, deny_access: Callable[[Path], None]
+) -> None:
+    root = tmp_path / "project"
+    (root / "src").mkdir(parents=True)
+    (tmp_path / "file.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "secret").mkdir()
+    link_directory(root / "escape", tmp_path / "secret")
+
+    absolute = await create_directory(tmp_path.as_posix(), "New folder")
+    relative = await create_directory("src", "lib", root=str(root))
+    at_root = await create_directory("", "docs", root=str(root))
+
+    assert absolute == (tmp_path / "New folder").as_posix()
+    assert (relative, at_root) == ("src/lib", "docs")
+    assert (root / "src" / "lib").is_dir() and (root / "docs").is_dir()
+    for outside in ("..", "escape", str(tmp_path)):
+        with pytest.raises(ListingPathError):
+            await create_directory(outside, "x", root=str(root))
+    assert not (tmp_path / "secret" / "x").exists()
+
+    (tmp_path / "denied").mkdir()
+    deny_access(tmp_path / "denied")
+    expected = {
+        (tmp_path.as_posix(), "New folder"): "exists",
+        (tmp_path.as_posix(), "file.txt"): "exists",
+        ((tmp_path / "missing").as_posix(), "x"): "not_found",
+        ((tmp_path / "file.txt").as_posix(), "x"): "not_a_directory",
+        (tmp_path.as_posix(), "a/b"): "invalid_name",
+        (tmp_path.as_posix(), ".."): "invalid_name",
+        (tmp_path.as_posix(), ""): "invalid_name",
+    }
+    if sys.platform == "win32":
+        expected[(tmp_path.as_posix(), "CON")] = "invalid_name"
+        expected[(tmp_path.as_posix(), "trailing.")] = "invalid_name"
+    reasons = {}
+    for path, name in expected:
+        with pytest.raises(DirectoryCreationError) as caught:
+            await create_directory(path, name)
+        reasons[(path, name)] = caught.value.reason
+    assert reasons == expected
+    # Parents are never created along the way.
+    assert not (tmp_path / "missing").exists()

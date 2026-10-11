@@ -45,7 +45,11 @@ from core.tools.terminal_manager import (
     TerminalProgramNotRunningError,
     TerminalStaleScreenError,
 )
-from core.utils.directory_listing import DirectoryListingError, ListingPathError
+from core.utils.directory_listing import (
+    DirectoryCreationError,
+    DirectoryListingError,
+    ListingPathError,
+)
 from core.utils.errors import ConfigError, VBotError
 from server.rpc.errors import (
     RPC_ERROR_ACTIVE_RUN,
@@ -201,7 +205,9 @@ def _map_expected_error(error: Exception) -> RpcError:
     # timeout) is what clients present; a path the request may not name is its fault.
     # Pickers list folders as the user types or browses, and a link inside a root can
     # lead outside it, so both are routine answers, not refusals worth a warning.
-    if isinstance(error, DirectoryListingError):
+    # A folder a picker creates fails the same way: the name exists or is not allowed,
+    # the folder may not be written. The user sees why and chooses again.
+    if isinstance(error, (DirectoryListingError, DirectoryCreationError)):
         return RpcError(RPC_ERROR_DOMAIN, str(error), data={"reason": error.reason}, routine=True)
     if isinstance(error, ListingPathError):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error), routine=True)
