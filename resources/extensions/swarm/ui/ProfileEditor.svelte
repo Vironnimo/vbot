@@ -30,6 +30,11 @@
   import ProfileAccess from './ProfileAccess.svelte';
   import ProfileInstructions from './ProfileInstructions.svelte';
   import ProfileParticipants from './ProfileParticipants.svelte';
+  import {
+    DELIVERY_LIMITS,
+    deliveryLimitError,
+    normalizeDelivery,
+  } from './runPresentation.js';
   import './profileEditor.css';
 
   let {
@@ -43,6 +48,10 @@
 
   // The `/swarm <shortcut>` names the backend accepts.
   const SHORTCUT_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+  // The delivery fields' id prefix; a batching limit's field is
+  // `${DELIVERY_ID}-${limit.id}` (DeliverySettings.svelte).
+  const DELIVERY_ID = 'swarm-delivery';
+  const deliveryFieldId = (limit) => `${DELIVERY_ID}-${limit.id}`;
   const defaults = {
     schema_version: 1,
     name: '',
@@ -96,6 +105,15 @@
   );
   // A save failed on the draft's own settings rather than on the server.
   const incomplete = $derived(Object.keys(fieldErrors).length > 0);
+  // The batching limits' field errors by limit field, as the delivery fields
+  // show them.
+  const deliveryErrors = $derived(
+    Object.fromEntries(
+      DELIVERY_LIMITS.filter(
+        (limit) => fieldErrors[deliveryFieldId(limit)],
+      ).map((limit) => [limit.field, fieldErrors[deliveryFieldId(limit)]]),
+    ),
+  );
   const describedBy = (id, help = '') =>
     [help, fieldErrors[id] ? `${id}-error` : ''].filter(Boolean).join(' ') ||
     undefined;
@@ -228,6 +246,11 @@
         id: 'swarm-directory',
         message: t('swarm.profile.directoryRequired'),
       });
+    for (const limit of normalizeDelivery(value.delivery).invalid)
+      issues.push({
+        id: deliveryFieldId(limit),
+        message: deliveryLimitError(limit),
+      });
     return issues;
   }
 
@@ -243,10 +266,7 @@
       ...row,
       count: Number(row.count),
     }));
-    for (const field of ['coalesce_ms', 'batch_messages', 'batch_chars']) {
-      const text = String(payload.delivery[field]).trim();
-      payload.delivery[field] = text === '' ? null : Number(text);
-    }
+    payload.delivery = normalizeDelivery(payload.delivery).value;
     if (!payload.slug?.trim()) delete payload.slug;
     if (payload.compaction_policy)
       payload.compaction_policy = buildCompactionPolicyPayload(
@@ -558,7 +578,8 @@
       <div class="s-section__body">
         <DeliverySettings
           value={draft.delivery}
-          idPrefix="swarm-delivery"
+          idPrefix={DELIVERY_ID}
+          errors={deliveryErrors}
           onChange={(next) => (draft.delivery = next)}
         />
       </div>

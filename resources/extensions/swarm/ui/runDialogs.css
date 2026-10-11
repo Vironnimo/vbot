@@ -33,27 +33,23 @@
   font-size: var(--fs-body-sm);
   line-height: 1.5;
 }
-/* Communication settings: the proposed changes under the fields. */
+/* Communication settings: the proposed changes under the fields. A field's
+   error shows under that field, styled like the editor's field errors
+   (profileEditor.css). */
 .swarm-communication__changes {
   display: grid;
   gap: 8px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
 }
-.swarm-communication__list,
-.swarm-communication__errors {
+.swarm-communication__list {
   display: grid;
   gap: 4px;
   margin: 0;
   padding-left: 18px;
+  color: var(--text-hi);
   font-size: var(--fs-body-sm);
   line-height: 1.5;
-}
-.swarm-communication__list {
-  color: var(--text-hi);
-}
-.swarm-communication__errors {
-  color: var(--red);
 }
 /* Run details: the Run's facts, its participants and the Swarm snapshot it
    started from. */

@@ -874,7 +874,7 @@ describe('Swarm Run controls', () => {
     );
   });
 
-  it('applies communication settings only on Apply, keeps a failure in the dialog and stops only on an explicit click', async () => {
+  it('applies communication settings only on Apply, shows an invalid limit under its field, keeps a failure in the dialog and stops only on an explicit click', async () => {
     const { bridge, operation } = createBridge();
     let conflict = true;
     overrideOperations(operation, {
@@ -894,14 +894,58 @@ describe('Swarm Run controls', () => {
     );
     expect(callsTo(operation, 'swarms.settings')).toHaveLength(0);
     // The change reads in the fields' words.
-    expect(dialog().textContent).toContain(
-      t('swarm.communication.routeChange', {
-        route: t('swarm.delivery.route.main'),
-        setting: t('swarm.delivery.receive'),
-        before: t('swarm.delivery.receive.all'),
-        after: t('swarm.delivery.receive.pull'),
+    const changes = () =>
+      dialog().querySelector('.swarm-communication__changes').textContent;
+    const routeChange = t('swarm.communication.routeChange', {
+      route: t('swarm.delivery.route.main'),
+      setting: t('swarm.delivery.receive'),
+      before: t('swarm.delivery.receive.all'),
+      after: t('swarm.delivery.receive.pull'),
+    });
+    expect(changes()).toContain(routeChange);
+
+    // An invalid limit shows its error under its own field only and keeps
+    // Apply off; its disclosure does not close over the error.
+    const disclosure = () =>
+      dialog().querySelector('[aria-controls="swarm-live-delivery-advanced"]');
+    const limitsShown = () =>
+      !document.getElementById('swarm-live-delivery-advanced').hidden;
+    const batchMessages = () =>
+      document.getElementById('swarm-live-delivery-batch-messages');
+    const batchError = () =>
+      document.getElementById('swarm-live-delivery-batch-messages-error');
+    const invalidMessage = t('swarm.communication.invalidNumber', {
+      field: t('swarm.delivery.batchMessages'),
+      min: '1',
+      max: '100',
+    });
+    disclosure().click();
+    await tick();
+    fill('swarm-live-delivery-batch-messages', '0');
+    await tick();
+    expect(batchError().textContent.trim()).toBe(invalidMessage);
+    expect(batchMessages().getAttribute('aria-invalid')).toBe('true');
+    expect(batchMessages().getAttribute('aria-describedby')).toBe(
+      'swarm-live-delivery-batch-messages-help swarm-live-delivery-batch-messages-error',
+    );
+    expect(changes()).toContain(routeChange);
+    expect(changes()).not.toContain(invalidMessage);
+    expect(button(t('swarm.apply')).disabled).toBe(true);
+    disclosure().click();
+    await tick();
+    expect(limitsShown()).toBe(true);
+    fill('swarm-live-delivery-batch-messages', '5');
+    await tick();
+    expect(batchError()).toBeNull();
+    expect(batchMessages().getAttribute('aria-invalid')).toBeNull();
+    expect(changes()).toContain(
+      t('swarm.communication.change', {
+        setting: t('swarm.delivery.batchMessages'),
+        before: '20',
+        after: '5',
       }),
     );
+    expect(button(t('swarm.apply')).disabled).toBe(false);
     button(t('swarm.apply')).click();
     await settle();
     // A failed apply stays in the dialog for another try.
@@ -918,6 +962,7 @@ describe('Swarm Run controls', () => {
         delivery: expect.objectContaining({
           main: expect.objectContaining({ mode: 'pull' }),
           coalesce_ms: 250,
+          batch_messages: 5,
         }),
       }),
     );
