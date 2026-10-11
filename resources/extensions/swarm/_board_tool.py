@@ -25,6 +25,7 @@ from ._board_view import (
     discussions_text,
     everyone_mentions,
     excerpt,
+    news_text,
     post_block,
     post_discussion_label,
     post_suggestion,
@@ -246,6 +247,14 @@ class BoardCall:
                 else text.BOARD_PAGE_EMPTY.format(discussion=label)
             )
         data: Json = {"page": summary}
+        news = news_text(
+            page.entries,
+            self.pid,
+            self.swarm["delivery"],
+            newest=not {"before", "cursor", "offset"} & query.keys(),
+        )
+        if news is not None:
+            data["new"] = news
         if discussion_id == self.main and not page.has_more:
             # Discussion pages omit the pinned request, which precedes the main discussion.
             data["user_request"] = self._user_request()

@@ -35,6 +35,8 @@ from ._store_values import (
     _post,
 )
 
+# Whether a post in the reader's audience (``r``) has not reached it yet; NULL outside it.
+_PENDING = "CASE WHEN r.post_id IS NULL THEN NULL ELSE r.delivered_at IS NULL END AS pending"
 # The number of the post a human-read post answers, for the Board page.
 _HUMAN_REPLY_SEQUENCE = (
     "(SELECT q.sequence FROM posts q WHERE q.id=posts.reply_to) AS reply_sequence"
@@ -142,8 +144,8 @@ def _read_posts(
         if message_id is not None:
             message_id = _post_id(connection, swarm_id, message_id)
             row = connection.execute(
-                f"SELECT {ALIASED_POST_COLUMNS},{POST_CONTEXT_COLUMNS},r.route_class FROM posts p "
-                "JOIN discussions d ON d.id=p.discussion_id "
+                f"SELECT {ALIASED_POST_COLUMNS},{POST_CONTEXT_COLUMNS},r.route_class,{_PENDING} "
+                "FROM posts p JOIN discussions d ON d.id=p.discussion_id "
                 "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "
                 "WHERE p.id=? AND p.swarm_id=?",
                 (participant_id, message_id, swarm_id),
@@ -338,7 +340,7 @@ def _post_page(
         ).fetchone()[0]
     )["batch_chars"]
     rows = connection.execute(
-        f"SELECT {ALIASED_POST_COLUMNS},{POST_CONTEXT_COLUMNS},r.route_class "
+        f"SELECT {ALIASED_POST_COLUMNS},{POST_CONTEXT_COLUMNS},r.route_class,{_PENDING} "
         "FROM posts p INDEXED BY posts_discussion_page "
         "JOIN discussions d ON d.id=p.discussion_id "
         "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "

@@ -361,6 +361,38 @@ def wake_text(routes: Sequence[str]) -> str:
     return template.format(routes=_routes(paced, capital=False), minutes=_QUIET_MINUTES)
 
 
+def news_text(
+    posts: Sequence[Json], self_id: str, settings: Mapping[str, Any], *, newest: bool
+) -> str | None:
+    """Say which shown posts had not reached the reader yet, or None when unknown.
+
+    A post is new while it is pending for the reader. The reader's own posts and
+    delivered ones are not; a post outside its audience (``pending`` absent) may be
+    either, so a page holding one makes no claim that nothing is new. When the
+    newest page holds nothing new, the reader is polling: ending the reply is how to
+    wait, when a post can start the next Run.
+    """
+
+    new = [post_ref(post["sequence"]) for post in posts if post.get("pending")]
+    if new:
+        if len(new) == len(posts) > 1:
+            return text.BOARD_NEW["all"].format(count=len(new))
+        return text.BOARD_NEW["one" if len(new) == 1 else "many"].format(posts=spoken_list(new))
+    known = all("pending" in post or post["author"]["id"] == self_id for post in posts)
+    if not (posts and newest and known):
+        return None
+    routes = [route for route in _ROUTES if settings[route]["wake_idle"]]
+    if not routes:
+        waiting = text.STATE_NO_WAKE
+    elif ADDRESSED_ROUTES & set(routes):
+        waiting = text.BOARD_WAIT["addressed"]
+    else:
+        waiting = text.BOARD_WAIT["paced"].format(
+            routes=_routes(routes, capital=False), minutes=_QUIET_MINUTES
+        )
+    return f"{text.BOARD_NOTHING_NEW} {waiting}"
+
+
 def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
     """Render participant status as readable fields and a roster listing.
 
@@ -499,6 +531,7 @@ __all__ = [
     "everyone_mentions",
     "excerpt",
     "messages_text",
+    "news_text",
     "post_block",
     "post_discussion_label",
     "post_suggestion",

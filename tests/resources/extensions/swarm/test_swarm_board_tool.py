@@ -6,7 +6,14 @@ from dataclasses import replace
 import pytest
 
 from core.chat import ChatMessage
-from resources.extensions.swarm.agent_text import BOARD_ADDRESSED_STOPPED, MENTION_EVERYONE
+from resources.extensions.swarm.agent_text import (
+    BOARD_ADDRESSED_STOPPED,
+    BOARD_NEW,
+    BOARD_NOTHING_NEW,
+    BOARD_PAGE_NEWEST,
+    BOARD_WAIT,
+    MENTION_EVERYONE,
+)
 from tests.resources.extensions.swarm.swarm_test_support import (
     _name,
     board_posts,
@@ -47,6 +54,7 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
         f"[{posted['data']['post_id']}] {author} (to you):\nfull text"
     )
     assert "(1 shown)" in read["data"]["page"]
+    assert read["data"]["new"] == BOARD_NEW["one"].format(posts=posted["data"]["post_id"])
     assert len(context._delivery_receipts) == 1
     receipt_id, content_hash, effect = context._delivery_receipts[0]
     assert not await board.store.reconcile_delivery(receipt_id)
@@ -65,6 +73,17 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
     )
     assert await board.store.reconcile_delivery(receipt_id)
     assert (await board.store.prepare_inbox_delivery(board.swarm["id"], peer))["entries"] == []
+    # Reading the newest posts again finds nothing new: ending the reply is how to wait.
+    again, _ = await call(board, {"action": "read"}, peer=1)
+    assert again["data"]["new"] == f"{BOARD_NOTHING_NEW} {BOARD_WAIT['addressed']}"
+    own, _ = await call(board, {"action": "read"})
+    assert own["data"]["new"] == again["data"]["new"]
+    # A post outside the reader's audience may be unknown to it, so no such claim is made.
+    created, _ = await call(board, {"action": "create", "title": "Side", "text": "aside"})
+    side, _ = await call(
+        board, {"action": "read", "discussion_id": created["data"]["discussion_id"]}, peer=1
+    )
+    assert side["data"]["content"].endswith(":\naside") and "new" not in side["data"]
     assert board.tools.get("swarm_board").catalog_visible is False
     assert board.tools.get("swarm_board").session_scoped
 
@@ -676,8 +695,9 @@ async def test_board_results_read_as_plain_text(board):
     )
     await dispatch(board, {"text": "second"}, peer=1)
     read, _ = await dispatch(board, {"action": "read", "limit": 1}, peer=2)
+    page = BOARD_PAGE_NEWEST.format(discussion="the main discussion (d1)", count=1)
     assert visible(read) == (
-        "page: Newest posts of the main discussion (d1), oldest first (1 shown).\n"
+        f"page: {page}\nnew: {BOARD_NEW['one'].format(posts='#2')}\n"
         "older: Older posts exist. Continue with "
         '{"action": "read", "discussion_id": "d1", "before": "#2", "limit": 1}\n\n'
         f"[#2] {_name(board, 1)}:\nsecond"

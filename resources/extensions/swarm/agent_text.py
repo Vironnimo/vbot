@@ -307,6 +307,19 @@ BOARD_PAGE_EMPTY = "No posts in {discussion} yet."
 BOARD_PAGE_EMPTY_BEFORE = "No posts before {before} in {discussion}."
 BOARD_PAGE_OLDER = "Older posts of {discussion}, oldest first ({count} shown)."
 BOARD_PAGE_EMPTY_OFFSET = "No posts in {discussion} beyond its {offset} newest."
+# Posts pending for the reader are new to it; delivered and own posts are not.
+BOARD_NEW = {
+    "one": "{posts} is new to you.",
+    "many": "{posts} are new to you.",
+    "all": "All {count} posts shown are new to you.",
+}
+BOARD_NOTHING_NEW = "None of the posts shown is new to you."
+BOARD_WAIT = {
+    "addressed": "To wait for others, end your reply; a post that addresses or answers you "
+    "starts your next Run at once.",
+    "paced": "To wait for others, end your reply; {routes} start your next Run within "
+    "{minutes} minutes.",
+}
 BOARD_ONE_POST = "Post {post_id} in {discussion}."
 BOARD_OLDER = "Older posts exist. Continue with {call}"
 BOARD_MORE_DISCUSSIONS = "More discussions exist. Continue with {call}"

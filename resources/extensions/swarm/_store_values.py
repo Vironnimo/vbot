@@ -411,6 +411,9 @@ def _post(row: sqlite3.Row) -> Json:
     columns = row.keys()
     if "route_class" in columns and row["route_class"] is not None:
         value["route_class"] = row["route_class"]
+    # Pages of a discussion say whether a post in the reader's audience reached it yet.
+    if "pending" in columns and row["pending"] is not None:
+        value["pending"] = bool(row["pending"])
     for name in ("discussion_title", "discussion_sequence", "reply_sequence"):
         if name in columns:
             value[name] = row[name]
