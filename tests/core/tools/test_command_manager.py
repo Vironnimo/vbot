@@ -364,9 +364,12 @@ async def test_an_unconfirmed_kill_keeps_the_command_and_a_later_stop_retries(
 
     assert failure.value.survivors == (RunningProcess(process.pid, "shell"),)
     assert harness.manager.report(command_id).status == "running"
+    # A lifecycle close goes on: the failure is logged and the command stays live.
+    assert await harness.manager.close_scope(OWNER) == 1
+    assert harness.manager.report(command_id).status == "running"
     process.tree.terminate_error = None
     report = await harness.manager.stop(command_id, "user")
-    assert (report.status, process.tree.terminations) == ("stopped", 2)
+    assert (report.status, process.tree.terminations) == ("stopped", 3)
 
 
 # --- Background and delivery -------------------------------------------------

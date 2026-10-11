@@ -693,6 +693,7 @@ def bootstrap(runtime: Runtime) -> None:
             reflection_service=runtime._reflection_service,
             storage=runtime._storage,
             terminal_manager=runtime._terminal_manager,
+            command_manager=runtime._command_manager,
             reasoning_render_describer=runtime.describe_agent_reasoning_render,
             wire_profile_describer=runtime.describe_agent_wire_profile,
             automation_references=runtime._automation_references,
@@ -874,6 +875,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
     runs = runtime._chat_run_manager
     automation = runtime._automation_references
     terminals = runtime._terminal_manager
+    commands = runtime._command_manager
     if (
         storage is None
         or sessions is None
@@ -883,6 +885,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         or runs is None
         or automation is None
         or terminals is None
+        or commands is None
     ):
         raise RuntimeError("Archive services are not available")
 
@@ -916,6 +919,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         runs=runs,
         automation=automation,
         terminals=terminals,
+        commands=commands,
         snapshot_barrier=runtime._snapshot_barrier,
         agent_references=runtime.agent_references,
         import_usage=import_usage,

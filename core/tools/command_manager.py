@@ -435,7 +435,9 @@ class CommandManager:
 
         For Stop all, ``subagent cancel`` and the Session's removal. A result
         not yet delivered is withdrawn. Returns how many unfinished commands
-        were stopped.
+        were stopped. A kill the operating system does not confirm is logged,
+        not raised: the lifecycle step goes on, and the command stays live
+        and listed for a later stop.
         """
         return await self._close_matching(lambda scope: scope == owner)
 
@@ -481,7 +483,7 @@ class CommandManager:
 
         Callers close a group only after every Run of the group settled. New
         launches for the group are refused until pending ones are drained and
-        its commands stopped.
+        its commands stopped. An unconfirmed kill is logged, as in ``close_scope``.
         """
         key = (extension, group_id, epoch)
         self._closed_execution_groups.add(key)
@@ -494,15 +496,14 @@ class CommandManager:
                     and _group_key(launch.execution_owner) == key
                 ]
             )
-            await self._stop_records(
+            await self._stop_scope(
                 [
                     record
                     for record in self._records.values()
                     if record.execution_owner is not None
                     and _group_key(record.execution_owner) == key
                     and not record.finished
-                ],
-                "scope",
+                ]
             )
         finally:
             # Each epoch key is used once and its launches are drained above.
@@ -602,8 +603,17 @@ class CommandManager:
         for record in matching:
             if record.finished:
                 record.withdraw_delivery()
-        await self._stop_records(running, "scope")
+        await self._stop_scope(running)
         return len(running)
+
+    async def _stop_scope(self, records: list[CommandRecord]) -> None:
+        """Stop records for a lifecycle close; an unconfirmed kill is logged, not raised."""
+        try:
+            await self._stop_records(records, "scope")
+        except CommandStopError as error:
+            _LOGGER.warning(
+                "A command survived the close of its scope (%s); it stays listed", error
+            )
 
     async def _stop_records(self, records: list[CommandRecord], reason: StopReason) -> None:
         """Stop every record; raise the first failure once all were stopped or tried."""

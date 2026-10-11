@@ -48,6 +48,7 @@ from core.runtime.runtime import Runtime
 from core.skills import SkillAuthoringService
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
+from core.tools.command_manager import CommandManager
 from core.utils.errors import ConfigError
 from core.utils.version import BuildIdentity
 from server.events import ServerEventBus
@@ -487,6 +488,7 @@ class StubRuntime:
         self.chat_runs: ChatRunManager | None = None
         self.extensions: Any = None
         self.terminal_manager = StubTerminalManager()
+        self.command_manager = CommandManager()
         self.cron_service: Any = StubJobService()
         self.bootstrap_service: Any = StubJobService()
         self.calendar_service: Any = StubCalendarService()
@@ -516,6 +518,7 @@ class StubRuntime:
             agents=cast(Any, self.agents),
             storage=cast(Any, self.storage),
             terminal_manager=cast(Any, self.terminal_manager),
+            command_manager=self.command_manager,
             automation_references=self.automation_references,
         )
 
@@ -541,6 +544,7 @@ class StubRuntime:
                 runs=self.chat_run_manager,
                 automation=self.automation_references,
                 terminals=cast(Any, self.terminal_manager),
+                commands=self.command_manager,
                 snapshot_barrier=self.snapshot_barrier,
                 agent_references=self.agent_references,
                 import_usage=lambda: None,
@@ -576,6 +580,7 @@ class StubRuntime:
             bootstrap=cast(Any, self.bootstrap_service),
             snapshot_barrier=self.snapshot_barrier,
             terminals=cast(Any, self.terminal_manager),
+            commands=self.command_manager,
         )
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:

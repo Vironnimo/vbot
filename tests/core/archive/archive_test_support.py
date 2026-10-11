@@ -1,7 +1,7 @@
 """An archive service over real Session, Agent and Project stores, for archive tests.
 
 Only the surroundings the archive composes but does not own are doubles: the
-Project Team resolution, Terminals, Recall and the usage import.
+Project Team resolution, Terminals, commands, Recall and the usage import.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from core.sessions import (
     ArchiveEntry,
     ArchiveTree,
     ChatSessionManager,
+    SessionAddress,
 )
 from core.utils.timestamps import utc_now_timestamp
 
@@ -60,6 +61,25 @@ class _Terminals:
         self.closed.append(project_id)
 
 
+class _Commands:
+    """The command manager's scope closes, recorded in ``closed``."""
+
+    def __init__(self) -> None:
+        self.closed: list[tuple[Any, ...]] = []
+
+    async def close_scope(self, owner: SessionAddress) -> int:
+        self.closed.append(("session", owner))
+        return 0
+
+    async def close_agent_scope(self, agent_id: str, project_id: str | None) -> int:
+        self.closed.append(("agent", agent_id, project_id))
+        return 0
+
+    async def close_project_scope(self, project_id: str) -> int:
+        self.closed.append(("project", project_id))
+        return 0
+
+
 @dataclass
 class ArchiveWorld:
     data_dir: Path
@@ -68,6 +88,7 @@ class ArchiveWorld:
     projects: ProjectStore
     runs: ChatRunManager
     team: _Team
+    commands: _Commands = field(default_factory=_Commands)
     usage_imports: list[None] = field(default_factory=list)
     recall_removals: list[tuple[str | None, str, str | None]] = field(default_factory=list)
     skill_invalidations: list[str] = field(default_factory=list)
@@ -174,6 +195,7 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         runs=world.runs,
         automation=AutomationReferences(bootstrap=cast(Any, nothing), cron=cast(Any, nothing)),
         terminals=cast(Any, _Terminals()),
+        commands=cast(Any, world.commands),
         snapshot_barrier=barrier,
         agent_references=no_references,
         import_usage=lambda: world.usage_imports.append(None),

@@ -75,6 +75,8 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
     assert [agent.id for agent in agents.list_with_order().agents] == ["manager", "beta"]
     assert world.recall_removals == [(None, "coder", None)]
     assert world.changes
+    # The commands of its Sessions were stopped without delivery first.
+    assert world.commands.closed == [("agent", "coder", None)]
 
     restored = await world.service.restore(archived.entry_id)
 
@@ -231,6 +233,7 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
     archived = await world.service.archive_project("vbot")
 
     assert archived.affected_agent_ids == ("coder",)
+    assert world.commands.closed == [("project", "vbot")]
     entry = world.entry(archived.entry_id)
     assert (entry.kind, entry.subject_id, entry.session_count) == ("project", "vbot", 1)
     assert not world.projects.exists("vbot")
@@ -302,6 +305,7 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     assert (archived.was_current, archived.next_session_id) == (True, "other")
     assert world.agents.get("coder").current_session_id == "other"
     assert not world.sessions.exists(session) and not world.sessions.exists(review)
+    assert world.commands.closed == [("session", session), ("session", review)]
     assert world.recall_removals == [(None, "coder", session.session_id)]
     assert (await world.service.show(archived.entry_id)).listing.accepts_target_id
     # Channel routing started a new Session at the archived address meanwhile.

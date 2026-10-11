@@ -23,6 +23,7 @@ from core.sessions import (
     FORK_SOURCE_META_KEY,
     ArchiveEntryRef,
 )
+from core.tools.command_manager import CommandManager
 from server.events import ServerEventBus
 from tests.server.rpc_test_support_runtime import StubJobService
 
@@ -282,6 +283,7 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
         bootstrap_service=StubJobService(),
         cron_service=StubJobService(),
         terminal_manager=FakeTerminalManager(),
+        command_manager=CommandManager(),
         agents=SimpleNamespace(
             update=lambda agent_id, **k: updates.append({agent_id: k}),
             reset_current_after_session_removed=_reset_current,
@@ -318,6 +320,7 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
             runs=chat_runs,
             automation=runtime.automation_references,
             terminals=cast(Any, runtime.terminal_manager),
+            commands=runtime.command_manager,
             snapshot_barrier=runtime.snapshot_barrier,
             agent_references=_no_agent_references,
             import_usage=lambda: None,

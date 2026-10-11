@@ -180,6 +180,7 @@ class _MoveHarness:
         self.resolver = _Resolver(resolver_error)
         self.trigger_calls: list[dict[str, Any]] = []
         self.terminal_transfers: list[tuple[TerminalOwner, TerminalOwner]] = []
+        self.command_transfers: list[tuple[SessionAddress, SessionAddress]] = []
         self.changes: list[CommandResourceChange] = []
 
     async def _trigger_run(self, agent_id: str, message: Any, **kwargs: Any) -> Any:
@@ -198,6 +199,14 @@ class _MoveHarness:
                 Any,
                 SimpleNamespace(
                     transfer_scope=lambda source, target: self.terminal_transfers.append(
+                        (source, target)
+                    )
+                ),
+            ),
+            command_manager=cast(
+                Any,
+                SimpleNamespace(
+                    transfer_scope=lambda source, target: self.command_transfers.append(
                         (source, target)
                     )
                 ),
@@ -278,6 +287,13 @@ async def test_move_directions_relocate_and_re_home_pointers(
         (
             TerminalOwner(source_project, "builder", "s1"),
             TerminalOwner(target_project, target_agent, "s1"),
+        )
+    ]
+    # Its commands follow it: their deliveries and cleanup go to the new address.
+    assert harness.command_transfers == [
+        (
+            SessionAddress(source_project, "builder", "s1"),
+            SessionAddress(target_project, target_agent, "s1"),
         )
     ]
 

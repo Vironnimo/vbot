@@ -306,8 +306,9 @@ class Runtime:
                 get_skills=lambda: self.skills,
                 skills_for=self.skills_for,
                 project_skill_names=self.project_skill_names,
-                resources=(self.terminal_manager, self.trigger_service),
+                resources=(self.terminal_manager, self.command_manager, self.trigger_service),
                 terminals=self.terminal_manager,
+                commands=self.command_manager,
                 get_change_publisher=lambda: self._extension_change_publisher,
                 get_title_service=lambda: self._session_title_service,
                 logger=self.logger,
@@ -945,6 +946,7 @@ class Runtime:
             bootstrap=bootstrap_jobs,
             snapshot_barrier=self._snapshot_barrier,
             terminals=self._terminal_manager,
+            commands=self._command_manager,
         )
 
     def reload_skills(self) -> None:

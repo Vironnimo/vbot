@@ -326,7 +326,8 @@ class ExecutionResources(Protocol):
     def has_execution_work(self, owner: RunExecutionOwner) -> bool: ...
 
 
-SessionTerminalCloser = Callable[[SessionAddress], Awaitable[None]]
+# Stops the terminals and commands of a Session that is about to be removed.
+SessionWorkCloser = Callable[[SessionAddress], Awaitable[None]]
 
 
 async def release_temporary_group(
@@ -336,13 +337,13 @@ async def release_temporary_group(
     group_id: str,
     *,
     delete: bool,
-    close_terminals: SessionTerminalCloser | None,
+    close_session_work: SessionWorkCloser | None,
     archive_reason: str = "extension",
 ) -> int:
     """Archive or delete one owner group's participant Sessions; return how many.
 
-    Like an ordinary Session removal, it first closes the Terminal Sessions of
-    each live participant, all under one no-Run boundary. Raises
+    Like an ordinary Session removal, it first closes the Terminal Sessions and
+    commands of each live participant, all under one no-Run boundary. Raises
     :class:`RunAdmissionBlockedError` while any of them has active, queued or
     guarded work; nothing changes then. Archiving makes them one archive entry
     that records ``archive_reason``: ``extension`` when the owner asked,
@@ -362,9 +363,9 @@ async def release_temporary_group(
     async with AsyncExitStack() as boundary:
         if addresses:
             await boundary.enter_async_context(run_manager.session_admission_guard(*addresses))
-        if close_terminals is not None:
+        if close_session_work is not None:
             for address in addresses:
-                await close_terminals(address)
+                await close_session_work(address)
         if delete:
             return await sessions.delete_temporary_group(owner_name=owner_name, group_id=group_id)
         if not addresses:
@@ -400,7 +401,7 @@ class TemporaryExecutionGroups:
         usage: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
         validate_binding: Callable[[TemporarySessionBinding], Awaitable[None]] | None = None,
         title: Callable[[str, str], Awaitable[str | None]] | None = None,
-        close_terminals: SessionTerminalCloser | None = None,
+        close_session_work: SessionWorkCloser | None = None,
     ) -> None:
         self._registry = registry
         self._chat = chat
@@ -412,7 +413,7 @@ class TemporaryExecutionGroups:
         self._usage = usage
         self._title = title
         self._validate_binding = validate_binding
-        self._close_terminals = close_terminals
+        self._close_session_work = close_session_work
         self._groups: dict[str, _Group] = {}
         self._lifecycle = asyncio.Lock()
         self._retiring = False
@@ -693,7 +694,7 @@ class TemporaryExecutionGroups:
                 self._identity.name,
                 group_id,
                 delete=True,
-                close_terminals=self._close_terminals,
+                close_session_work=self._close_session_work,
             )
             self._groups.pop(group_id, None)
             return count
@@ -717,7 +718,7 @@ class TemporaryExecutionGroups:
                 self._identity.name,
                 group_id,
                 delete=False,
-                close_terminals=self._close_terminals,
+                close_session_work=self._close_session_work,
             )
             self._groups.pop(group_id, None)
             return count
