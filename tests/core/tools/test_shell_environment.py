@@ -45,10 +45,13 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
 
     assert environment["HOME"] == "/home/user"
     assert environment["VBOT_DATA_DIR"] == "/data/dev"
-    assert environment["TERM"] == "xterm-256color"
+    # A command writes to a pipe: no terminal, no colors, Python output line by line.
+    assert environment["TERM"] == "dumb"
+    assert environment["NO_COLOR"] == "1"
+    assert environment["PYTHONUNBUFFERED"] == "1"
     # Unattended defaults replace the login's, and the Agent's variables replace those.
     assert environment["GIT_TERMINAL_PROMPT"] == "0"
-    assert environment["GIT_PAGER"] == "cat"
+    assert environment["GIT_PAGER"] == environment["GH_PAGER"] == "cat"
     assert environment["PYTHONIOENCODING"] == "utf-8"
     assert environment["PAGER"] == "more"
     assert (environment["MODE"], environment["API_TOKEN"]) == ("ci", "secret")
@@ -65,7 +68,7 @@ def test_terminal_environment_has_no_command_layers(login_base: dict[str, str]) 
     assert environment["PAGER"] == "less"
     assert environment["TERM"] == "xterm-256color"
     assert environment["EXTRA"] == "1"
-    assert "GIT_EDITOR" not in environment
+    assert not {"GIT_EDITOR", "NO_COLOR", "PYTHONUNBUFFERED"} & environment.keys()
 
 
 def test_server_environment_base_drops_what_vbot_added(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,7 +146,10 @@ def test_git_uses_prepared_messages_and_fails_with_the_fix_where_it_needs_text(
     # Without -m, the message is empty: git fails at once and the error names the fix.
     empty = git("commit", "--allow-empty")
     assert empty.returncode != 0
-    assert "pass the message as an argument, for example git commit -m" in empty.stderr
+    assert (
+        "No editor is available for this command: pass the message as an argument, "
+        'for example git commit -m "Fix the parser".'
+    ) in empty.stderr
 
     # A message git prepared is used as is: rebase --continue has no flag to skip it.
     git("checkout", "-q", "side")
@@ -157,5 +163,6 @@ def test_git_uses_prepared_messages_and_fails_with_the_fix_where_it_needs_text(
     # A rebase todo list needs a real edit; the error names the assignment that runs it as is.
     todo = git("rebase", "-i", "HEAD~1")
     assert todo.returncode != 0
+    assert "No editor is available for the git rebase -i todo list." in todo.stderr
     assert "GIT_SEQUENCE_EDITOR" in todo.stderr
     assert git("rebase", "-i", "HEAD~1", GIT_SEQUENCE_EDITOR=":").returncode == 0
