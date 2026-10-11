@@ -15,6 +15,7 @@ import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.providers.tool_schema import render_tool_definitions
+from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import terminal as terminal_module
 from core.tools import terminal_manager as manager_module
@@ -32,7 +33,7 @@ from core.tools.terminal_manager import TerminalManager, TerminalOwner, Terminal
 from core.tools.tools import JsonObject, ToolRegistry, tool_failure
 from core.utils.paths import model_path
 from core.utils.tokens import estimate_json_tokens
-from tests.core.tools.terminal_helpers import call, make_context
+from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
@@ -583,6 +584,54 @@ async def test_start_rejects_unresolvable_workdirs_before_spawn(
     )
     assert factory.calls == []
     assert terminal_manager.list_groups_for_operator() == groups_before
+
+
+class _SubAgents:
+    """The caller's Sub-Agent Sessions at every depth, as the coordinator reports them."""
+
+    def __init__(self, sessions: Mapping[SessionAddress, str]) -> None:
+        self.sessions = dict(sessions)
+        self.callers: list[SessionAddress] = []
+
+    async def descendant_sessions(self, caller: SessionAddress) -> Mapping[SessionAddress, str]:
+        self.callers.append(caller)
+        return self.sessions
+
+
+@pytest.mark.asyncio
+async def test_list_names_the_sub_agent_whose_session_holds_a_terminal(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A terminal attached to a Sub-Agent's Session (any depth) names that Sub-Agent;
+    one attached to any other Session stays ``other``."""
+    monkeypatch.setattr(manager_module, "default_terminal_argv", lambda env: ["host-shell"])
+    terminal_manager, _factory = manager
+    grandchild = TerminalOwner("project-a", "helper", "session-grandchild")
+    stranger = TerminalOwner("project-a", "agent-a", "session-b")
+    terminal_ids: list[str] = []
+    for holder in (grandchild, stranger, None):
+        started = await terminal_manager.spawn_for_operator(
+            command=None, arguments=[], cwd=tmp_path
+        )
+        if holder is not None:
+            terminal_manager.attach(started["terminal_id"], holder, origin_run_id="run-b")
+        terminal_ids.append(started["terminal_id"])
+    subagents = _SubAgents(
+        {SessionAddress("project-a", "helper", "session-grandchild"): "sub_grandchild"}
+    )
+    arguments: JsonObject = {"action": "list"}
+
+    listed = await call(terminal_manager, make_context(tmp_path), arguments, subagents=subagents)
+
+    rows = {row["terminal_id"]: row for row in cast(dict[str, Any], listed["data"])["terminals"]}
+    assert [(rows[id_]["attached"], rows[id_].get("subagent")) for id_ in terminal_ids] == [
+        ("subagent", "sub_grandchild"),
+        ("other", None),
+        ("no", None),
+    ]
+    assert subagents.callers == [SessionAddress("project-a", "agent-a", "session-a")]
+    shown = details(terminal_manager, tmp_path, arguments, listed)[-1]["items"]
+    assert shown[0]["meta"].endswith("attached to Sub-Agent sub_grandchild")
 
 
 @pytest.mark.asyncio

@@ -15,9 +15,10 @@ import shutil
 from collections.abc import Awaitable, Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from core.projects import ProjectStore
+from core.sessions import SessionAddress
 from core.tools._background_tasks_arguments import (
     BACKGROUND_TASKS_TOOL_NAME,
     COMMAND_ID_PREFIX,
@@ -273,11 +274,23 @@ def project_terminal_tool_definitions(definitions: list[JsonObject]) -> list[Jso
     return projected
 
 
-def make_terminal_handler(terminal_manager: TerminalManager, projects: ProjectStore):
+class SubAgentSessions(Protocol):
+    """The caller's Sub-Agents, whose Sessions ``list`` names as theirs."""
+
+    async def descendant_sessions(self, caller: SessionAddress) -> Mapping[SessionAddress, str]:
+        """The Sessions of *caller*'s Sub-Agents at every depth, each with its Sub-Agent id."""
+        ...
+
+
+def make_terminal_handler(
+    terminal_manager: TerminalManager,
+    projects: ProjectStore,
+    subagents: SubAgentSessions | None = None,
+):
     """Create a terminal Tool handler bound to one Terminal Manager."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await _handle_terminal(terminal_manager, projects, context, arguments)
+        return await _handle_terminal(terminal_manager, projects, subagents, context, arguments)
 
     return handler
 
@@ -285,6 +298,7 @@ def make_terminal_handler(terminal_manager: TerminalManager, projects: ProjectSt
 async def _handle_terminal(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
+    subagents: SubAgentSessions | None,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -309,7 +323,7 @@ async def _handle_terminal(
         if action == "start":
             return await _handle_start(terminal_manager, projects, context, arguments)
         if action == "list":
-            return _handle_list(terminal_manager, context)
+            return await _handle_list(terminal_manager, subagents, context)
         if action == "attach":
             return _handle_attach(terminal_manager, context, arguments)
         if action == "detach":
@@ -525,17 +539,33 @@ async def _handle_start(
     return tool_success(data)
 
 
-def _handle_list(terminal_manager: TerminalManager, context: ToolContext) -> JsonObject:
+async def _handle_list(
+    terminal_manager: TerminalManager,
+    subagents: SubAgentSessions | None,
+    context: ToolContext,
+) -> JsonObject:
     owner = _owner(context)
+    terminals = terminal_manager.list_terminals()
+    descendants: Mapping[SessionAddress, str] = {}
+    if subagents is not None and any(info.attachment not in (None, owner) for info in terminals):
+        descendants = await subagents.descendant_sessions(_address(owner))
     rows: list[JsonObject] = []
-    for info in terminal_manager.list_terminals():
+    for info in terminals:
+        attached = _attachment(info, owner)
+        # A terminal a Sub-Agent of this Session, at any depth, holds names that Sub-Agent.
+        subagent = (
+            descendants.get(_address(info.attachment))
+            if attached == "other" and info.attachment is not None
+            else None
+        )
         row: JsonObject = {
             "terminal_id": info.terminal_id,
             "program": _short_program(info.program),
             "name": info.name,
             "state": _agent_state(info),
             "exit_code": info.exit_code if info.finished else None,
-            "attached": _attachment(info, owner),
+            "attached": "subagent" if subagent is not None else attached,
+            "subagent": subagent,
         }
         rows.append({key: value for key, value in row.items() if value not in (None, "")})
     return tool_success({"terminals": rows})
@@ -1302,17 +1332,30 @@ def _owner(context: ToolContext) -> TerminalOwner:
     return TerminalOwner(context.project_id, context.agent_id, context.session_id)
 
 
+def _address(owner: TerminalOwner) -> SessionAddress:
+    return SessionAddress(
+        project_id=owner.project_id, agent_id=owner.agent_id, session_id=owner.session_id
+    )
+
+
 def register_terminal_tool(
     registry: ToolRegistry,
     terminal_manager: TerminalManager,
     projects: ProjectStore,
+    *,
+    subagents: SubAgentSessions | None = None,
 ) -> None:
-    """Register the Agent-facing terminal Tool."""
+    """Register the Agent-facing terminal Tool.
+
+    *subagents* tells which Sessions descend from the caller, so ``list`` names
+    the Sub-Agent that holds a terminal; without it such a terminal shows as
+    attached to another Session.
+    """
     registry.register(
         TERMINAL_TOOL_NAME,
         TERMINAL_TOOL_DESCRIPTION,
         TERMINAL_TOOL_PARAMETERS,
-        make_terminal_handler(terminal_manager, projects),
+        make_terminal_handler(terminal_manager, projects, subagents),
         summary="Drive interactive programs such as REPLs and coding-agent CLIs.",
         family="execution",
         open_input_schema=True,
@@ -1334,6 +1377,14 @@ _ATTACHMENT_TEXT = {
     "other": "attached to another conversation",
     "no": "not attached",
 }
+
+
+def _attachment_text(item: Mapping[str, Any]) -> str:
+    """Who holds a listed terminal, as the user reads it."""
+    subagent = item.get("subagent")
+    if item.get("attached") == "subagent" and isinstance(subagent, str) and subagent:
+        return f"attached to Sub-Agent {subagent}"
+    return _ATTACHMENT_TEXT.get(str(item.get("attached")), "")
 
 
 def _visible_input(data: str) -> str:
@@ -1394,12 +1445,7 @@ def _terminal_detail_blocks(arguments: JsonObject, result: JsonObject | None) ->
             {
                 "title": item.get("name") or item.get("program") or item.get("terminal_id"),
                 "meta": " · ".join(
-                    part
-                    for part in (
-                        _terminal_state_text(item),
-                        _ATTACHMENT_TEXT.get(str(item.get("attached")), ""),
-                    )
-                    if part
+                    part for part in (_terminal_state_text(item), _attachment_text(item)) if part
                 ),
             }
             for item in listed
@@ -1460,6 +1506,7 @@ __all__ = [
     "TERMINAL_UNADVERTISED_PARAMETERS",
     "TERMINAL_WAIT_DEFAULT_SECONDS",
     "TERMINAL_WAIT_MAX_SECONDS",
+    "SubAgentSessions",
     "make_terminal_handler",
     "project_terminal_tool_definitions",
     "register_terminal_tool",

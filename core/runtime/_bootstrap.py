@@ -651,7 +651,6 @@ def bootstrap(runtime: Runtime) -> None:
             process_observer=observe_process_tree,
         )
         runtime._start_terminal_manager()
-        register_terminal_tool(runtime._tools, runtime._terminal_manager, runtime._projects)
         runtime._command_manager = CommandManager(
             runtime._trigger_service, temporary_files=runtime._storage.temporary_files
         )
@@ -757,6 +756,12 @@ def bootstrap(runtime: Runtime) -> None:
         register_background_tasks_tool(
             runtime._tools,
             runtime._command_manager,
+            subagents=runtime._subagent_coordinator,
+        )
+        register_terminal_tool(
+            runtime._tools,
+            runtime._terminal_manager,
+            runtime._projects,
             subagents=runtime._subagent_coordinator,
         )
         register_status_tool(
