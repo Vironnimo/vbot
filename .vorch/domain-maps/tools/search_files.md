@@ -284,7 +284,11 @@ Documented deviations from plain `rg`, all deliberate:
 Diagnostics (`_judge`):
 
 - IO errors (`(os error N)`) become English warnings that name the path, with
-  the reason from `file_state.os_error_reason`.
+  the reason from `file_state.os_error_reason`. A not-found error for a path
+  that no longer exists is dropped: the file was deleted between ripgrep's walk
+  and its read, so nothing is missing from the result. Swarm Sessions (2026-10)
+  marked results incomplete for vanished `*.sqlite-journal` files
+  (`test_a_file_deleted_during_the_search_is_no_read_failure`).
 - Link loops become warnings ("Skipped a link loop").
 - Any other diagnostic that starts with an existing path becomes a warning, for
   example an invalid ignore file.

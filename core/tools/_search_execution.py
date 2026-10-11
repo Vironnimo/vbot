@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import errno
 import io
 import json
 import os
@@ -691,6 +692,8 @@ _IO_ERROR = re.compile(
     r" \(os error (?P<code>\d+)\)$"
 )
 _PATTERN_ERRORS = ("regex parse error", "PCRE2: error compiling pattern")
+# OS error codes for a missing file: Windows' file and path not found, POSIX ENOENT.
+_NOT_FOUND = frozenset({2, 3}) if os.name == "nt" else frozenset({errno.ENOENT})
 
 
 def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
@@ -714,6 +717,9 @@ def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
         match = _IO_ERROR.match(message)
         if match is not None:
             code = int(match["code"])
+            if code in _NOT_FOUND and not os.path.lexists(scope.cwd / match["path"]):
+                # Deleted after the walk listed it, such as a SQLite journal: nothing to read.
+                continue
             error = OSError(None, None, None, code) if os.name == "nt" else OSError(code, "")
             label = _label(match["path"], scope, cwd)
             result.warnings.append(f"Could not read {label}: {os_error_reason(error)}.")

@@ -620,6 +620,29 @@ def test_link_loops_become_warnings_and_the_rest_is_searched(tmp_path: Path) -> 
     assert data["summary"].endswith("The search is incomplete; see warnings.")
 
 
+def test_a_file_deleted_during_the_search_is_no_read_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ripgrep's walk listed a SQLite journal that was gone when it read it; any other
+    # read error, or a not-found error for a file that exists, still warns.
+    _write(tmp_path, {"a.txt": "needle\n", "locked.txt": "x\n"})
+    native_lines = execution.native_lines
+
+    def with_read_errors(*args: Any, outcome: Any = None, **kwargs: Any) -> Iterator[bytes]:
+        yield from native_lines(*args, outcome=outcome, **kwargs)
+        if outcome is not None:
+            outcome.diagnostics = "\n".join(
+                f"rg: {name}: IO error for operation on {name}: failed (os error {code})"
+                for name, code in (("gone.sqlite-journal", 2), ("locked.txt", 5), ("a.txt", 2))
+            )
+
+    monkeypatch.setattr(execution, "native_lines", with_read_errors)
+    data = search(tmp_path, pattern="needle")
+    assert data["content"] == "a.txt:1:needle"
+    warned = " ".join(data["warnings"])
+    assert "locked.txt" in warned and "a.txt" in warned and "gone" not in warned
+
+
 def test_junctions_are_followed_only_on_request_or_as_explicit_roots(tmp_path: Path) -> None:
     if sys.platform != "win32":
         pytest.skip("Windows directory junctions")
