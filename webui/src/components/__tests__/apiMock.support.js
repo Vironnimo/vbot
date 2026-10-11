@@ -133,6 +133,16 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       }),
     stopAll: (agentId, sessionId) =>
       call('chat.stop_all', { agent_id: agentId, session_id: sessionId }),
+    stopCommand: (sessionId, commandId) =>
+      call('chat.stop_command', {
+        session_id: sessionId,
+        command_id: commandId,
+      }),
+    loadCommandOutput: (sessionId, commandId) =>
+      call('chat.command_output', {
+        session_id: sessionId,
+        command_id: commandId,
+      }),
     listFiles: (
       agentId,
       { sessionId = '', workingProjectId, directory } = {},

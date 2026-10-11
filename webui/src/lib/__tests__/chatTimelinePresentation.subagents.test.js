@@ -264,7 +264,7 @@ describe('Sub-Agent rows', () => {
         },
       ],
       { 'run:run-reviewer': 'completed' },
-      { term_one: 'failed' },
+      { cmd_one: 'failed' },
     );
 
     expect(tasks.map((task) => [task.tool.id, task.dotStatus])).toEqual([
@@ -276,7 +276,7 @@ describe('Sub-Agent rows', () => {
       expect.objectContaining({
         kind: 'command',
         command: 'npm run dev',
-        terminalId: 'term_one',
+        commandId: 'cmd_one',
         target: null,
       }),
     );
@@ -609,7 +609,7 @@ describe('Sub-Agent timing and last Tool', () => {
         nowMs,
         [
           { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
-          { kind: 'command', id: 'term_1', label: 'npm run dev' },
+          { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
           { kind: 'terminal', id: 'term_2', label: '' },
         ],
       ),
@@ -643,7 +643,7 @@ describe('Sub-Agent timing and last Tool', () => {
           'runTool:run-child': 'bash',
         },
         nowMs,
-        [{ kind: 'command', id: 'term_1', label: 'npm run dev' }],
+        [{ kind: 'command', id: 'cmd_1', label: 'npm run dev' }],
       ),
     ).toEqual({
       title: t('chat.toolState.success'),

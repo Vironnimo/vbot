@@ -1186,7 +1186,8 @@
         onUndoReflection={(row) =>
           chatController.undoReflection(target.activeSessionState, row.runId)}
         onCancelSubAgent={actions.handleCancelSubAgent}
-        onCancelBackgroundCommand={actions.handleCancelBackgroundCommand}
+        onStopBackgroundCommand={actions.handleStopBackgroundCommand}
+        onLoadCommandOutput={actions.loadCommandOutput}
       />
     </div>
   {/if}

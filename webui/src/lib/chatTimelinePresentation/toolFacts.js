@@ -28,9 +28,10 @@ const EXECUTION_STATE_TITLES = {
   failed: () => t('chat.toolState.failed'),
   cancelled: () => t('chat.toolState.cancelled'),
   interrupted: () => t('chat.toolState.interrupted'),
+  ended: () => t('chat.toolState.ended'),
 };
 
-// The state of a Tool call, Sub-Agent Run or background process in words,
+// The state of a Tool call, Sub-Agent Run or background command in words,
 // for the tooltip behind its status dot.
 export const executionStateTitle = (status) =>
   (EXECUTION_STATE_TITLES[status] ?? EXECUTION_STATE_TITLES.running)();

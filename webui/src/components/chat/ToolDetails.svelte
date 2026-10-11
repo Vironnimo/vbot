@@ -6,9 +6,9 @@
   // (texts such as its command and output, the files it changed, what it
   // found, the Memory entries it changed, notices),
   // with the raw call and result behind a disclosure. The live Output (the
-  // command's current screen) takes the place of an Output block, or follows
-  // the blocks while the call runs. Any other Tool shows Args, live Output
-  // and its Result.
+  // command's newest output lines) takes the place of an Output block, or
+  // follows the blocks while the call runs. Any other Tool shows Args, live
+  // Output and its Result.
   import { toolDetailBlocks, toolDetailMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import ToolDetailSection from './ToolDetailSection.svelte';
@@ -24,7 +24,7 @@
     open = true,
     toolName = '',
     args,
-    // Live output while the call runs: the command's current screen.
+    // Live output while the call runs: the command's newest output lines.
     output = '',
     result,
     resultFailed = false,

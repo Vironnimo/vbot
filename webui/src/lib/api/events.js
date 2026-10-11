@@ -30,8 +30,8 @@ export const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
 
 export const RUN_EVENT_STREAM_ATTEMPT_RESTARTED = 'stream_attempt_restarted';
 
-// A command's current rendered terminal text (`screen`); each event replaces
-// the previous live output of its tool call.
+// A command's newest output lines as plain text (`output`); each event
+// replaces the previous live output of its tool call.
 export const RUN_EVENT_TOOL_CALL_OUTPUT = 'tool_call_output';
 
 export const RUN_EVENT_PROVIDER_HEARTBEAT = 'provider_heartbeat';

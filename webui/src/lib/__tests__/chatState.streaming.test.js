@@ -171,21 +171,21 @@ describe('streamed drafts', () => {
     ]);
   });
 
-  it('shows the latest output screen of each Tool row and retains only that event', () => {
+  it('shows the latest output of each Tool row and retains only that event', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
       'session-tool-output',
     );
-    const screen = (sequence, toolCallId, text) =>
+    const liveOutput = (sequence, toolCallId, text) =>
       appendRunEvent(sessionState, {
         type: 'tool_call_output',
         run_id: 'run-one',
         sequence,
         payload: {
           tool_call_id: toolCallId,
-          terminal_id: `term_${toolCallId}`,
-          screen: text,
+          command_id: `cmd_${toolCallId}`,
+          output: text,
         },
       });
     const tools = () => visibleTimelineItemsForRender(sessionState)[0].tools;
@@ -203,12 +203,12 @@ describe('streamed drafts', () => {
         },
       },
     });
-    screen(2, 'call-one', 'hel');
+    liveOutput(2, 'call-one', 'hel');
     const earlyKey = assistantRunChildProgressKey(tools()[0]);
-    screen(4, 'call-one', 'hello\nwarn');
-    screen(5, 'call-two', 'other');
-    // A replayed older screen does not replace a newer one.
-    screen(3, 'call-one', 'hell');
+    liveOutput(4, 'call-one', 'hello\nwarn');
+    liveOutput(5, 'call-two', 'other');
+    // A replayed older output does not replace a newer one.
+    liveOutput(3, 'call-one', 'hell');
 
     expect(tools()).toEqual([
       expect.objectContaining({
@@ -222,7 +222,7 @@ describe('streamed drafts', () => {
         (event) => event.type === 'tool_call_output',
       ),
     ).toHaveLength(2);
-    // A changed screen re-renders its row.
+    // A changed output re-renders its row.
     expect(assistantRunChildProgressKey(tools()[0])).not.toBe(earlyKey);
   });
 
@@ -255,8 +255,8 @@ describe('streamed drafts', () => {
       type: 'tool_call_output',
       payload: {
         tool_call_id: 'call-one',
-        terminal_id: 'term_one',
-        screen: 'hello',
+        command_id: 'cmd_one',
+        output: 'hello',
       },
       rendered: (run) => run.tools[0].output,
       expected: 'hello',
@@ -605,12 +605,16 @@ describe('replay cursor', () => {
         },
       ],
     });
-    const output = (sequence, toolCallId, screen) =>
+    const output = (sequence, toolCallId, text) =>
       appendRunEvent(sessionState, {
         type: 'tool_call_output',
         run_id: 'run-one',
         sequence,
-        payload: { tool_call_id: toolCallId, terminal_id: 'term_one', screen },
+        payload: {
+          tool_call_id: toolCallId,
+          command_id: 'cmd_one',
+          output: text,
+        },
       });
     output(2, 'call-one', 'a');
     output(3, 'call-two', 'b');

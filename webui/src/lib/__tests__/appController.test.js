@@ -158,26 +158,26 @@ describe('App controller', () => {
     expect(state.sessionDeletion).not.toBe(first);
   });
 
-  it('keeps the latest command status per terminal in a bounded map', async () => {
+  it('keeps the latest command status per command in a bounded map', async () => {
     const { controller, state } = setup();
-    const statusChanged = (terminalId, status) =>
+    const statusChanged = (commandId, status) =>
       controller.handleServerEvent({
         type: 'command_status_changed',
-        payload: { terminal_id: terminalId, status },
+        payload: { command_id: commandId, status },
       });
 
-    await statusChanged('term_first', 'running');
+    await statusChanged('cmd_first', 'running');
     for (let index = 0; index < 205; index += 1) {
-      await statusChanged(`term_${index}`, 'running');
+      await statusChanged(`cmd_${index}`, 'running');
     }
-    await statusChanged('term_204', 'stopped');
+    await statusChanged('cmd_204', 'stopped');
 
-    const terminalIds = Object.keys(state.commandStatuses);
-    expect(terminalIds).toHaveLength(200);
-    expect(state.commandStatuses.term_first).toBeUndefined();
-    expect(terminalIds[0]).toBe('term_5');
-    expect(terminalIds.at(-1)).toBe('term_204');
-    expect(state.commandStatuses.term_204).toBe('stopped');
+    const commandIds = Object.keys(state.commandStatuses);
+    expect(commandIds).toHaveLength(200);
+    expect(state.commandStatuses.cmd_first).toBeUndefined();
+    expect(commandIds[0]).toBe('cmd_5');
+    expect(commandIds.at(-1)).toBe('cmd_204');
+    expect(state.commandStatuses.cmd_204).toBe('stopped');
   });
 
   it('keeps the latest pushed Recall index status', async () => {

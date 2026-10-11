@@ -79,7 +79,7 @@ export function createChatState() {
     // Sub-Agents, background commands and terminals), by public Sub-Agent id,
     // as last inspected (bounded, newest last).
     subAgentWork: {},
-    // Live status of each handed-off shell command, by terminal id, from
+    // Live status of each background shell command, by command id, from
     // `command_status_changed` (bounded, newest last).
     commandStatuses: {},
   };
@@ -218,8 +218,9 @@ export function ensureSessionState(state, agentId, sessionId) {
       // The Session's effective Compaction Policy from `chat.history`; null
       // until History reports it.
       compactionPolicy: null,
-      // Durable status of each handed-off shell command, by terminal id, from
-      // `chat.history`'s `background_command_statuses`.
+      // Durable status of each background shell command, by command id, from
+      // `chat.history`'s `background_command_statuses`. A command the server
+      // no longer knows has no entry: it has ended.
       backgroundCommandStatuses: {},
       reflectionTasks: {},
       // Per review Run id: its loaded change list and undo state.

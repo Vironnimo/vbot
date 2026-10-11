@@ -157,8 +157,8 @@ describe('History reconciliation', () => {
       type: 'tool_call_output',
       payload: {
         tool_call_id: 'call-one',
-        terminal_id: 'term_one',
-        screen: 'Live output',
+        command_id: 'cmd_one',
+        output: 'Live output',
       },
     });
     appendRunEvent(session, {

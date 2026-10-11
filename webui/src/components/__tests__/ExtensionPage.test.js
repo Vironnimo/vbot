@@ -762,8 +762,8 @@ describe('ExtensionPage Run streams', () => {
         'tool_call_output',
         {
           tool_call_id: 'tool-a',
-          terminal_id: 'term_a',
-          screen: 'tool-output-sentinel',
+          command_id: 'cmd_a',
+          output: 'tool-output-sentinel',
         },
       ],
       [

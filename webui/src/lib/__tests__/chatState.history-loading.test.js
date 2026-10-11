@@ -25,7 +25,7 @@ describe('History reads', () => {
         session_usage: { input_tokens: 10 },
         context_usage: { used_tokens: 5 },
         compaction_policy: policy,
-        background_command_statuses: { term_one: 'running' },
+        background_command_statuses: { cmd_one: 'running' },
         reflection_runs: [],
       })
       .mockResolvedValueOnce({
@@ -65,7 +65,7 @@ describe('History reads', () => {
     expect(source.contextUsage).toEqual({ used_tokens: 5 });
     expect(source.compactionPolicy).toBe(policy);
     expect(source.backgroundCommandStatuses).toEqual({
-      term_one: 'running',
+      cmd_one: 'running',
     });
   });
 
@@ -79,8 +79,8 @@ describe('History reads', () => {
         incremental: false,
         context_usage: { used_tokens: 5 },
         background_command_statuses: {
-          term_one: 'running',
-          term_two: 'running',
+          cmd_one: 'running',
+          cmd_two: 'running',
         },
       })
       .mockResolvedValueOnce({
@@ -90,7 +90,7 @@ describe('History reads', () => {
         incremental: true,
         has_newer: true,
         context_usage: { used_tokens: 7 },
-        background_command_statuses: { term_one: 'completed' },
+        background_command_statuses: { cmd_one: 'completed' },
         runs: [{ run_id: 'run-one', status: 'completed' }],
       })
       .mockResolvedValueOnce({
@@ -99,7 +99,7 @@ describe('History reads', () => {
         next_after: 'cursor-3',
         incremental: true,
         context_usage: null,
-        background_command_statuses: { term_two: 'failed' },
+        background_command_statuses: { cmd_two: 'failed' },
         runs: [{ run_id: 'run-two', status: 'failed' }],
       });
     const { chatState, controller } = setupController({
@@ -112,8 +112,8 @@ describe('History reads', () => {
     expect(loadChatHistory).toHaveBeenCalledTimes(3);
     expect(source.historyAfter).toBe('cursor-3');
     expect(source.backgroundCommandStatuses).toEqual({
-      term_one: 'completed',
-      term_two: 'failed',
+      cmd_one: 'completed',
+      cmd_two: 'failed',
     });
     expect(Object.keys(source.historyRuns).sort()).toEqual([
       'run-one',
@@ -458,7 +458,7 @@ describe('older History pages', () => {
         older.resolve({
           messages: [message('oldest')],
           has_more: false,
-          background_command_statuses: { term_old: 'running' },
+          background_command_statuses: { cmd_old: 'running' },
         });
       }
 

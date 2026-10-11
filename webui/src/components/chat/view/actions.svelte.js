@@ -370,12 +370,19 @@ export function createChatViewActions(context) {
     });
   };
 
-  const handleCancelBackgroundCommand = async ({ terminalId } = {}) => {
-    await context.chatController.cancelCommand({
+  const handleStopBackgroundCommand = async ({ commandId } = {}) => {
+    await context.chatController.stopCommand({
       sessionState: context.target.activeSessionState,
-      terminalId,
+      commandId,
     });
   };
+
+  // The Activity panel's output view reads the displayed Session's command.
+  const loadCommandOutput = (commandId) =>
+    context.chatController.loadCommandOutput({
+      sessionState: context.target.activeSessionState,
+      commandId,
+    });
 
   const handleSteerQueuedMessage = async (queuedMessageId) => {
     const sessionState = context.target.activeSessionState;
@@ -525,8 +532,11 @@ export function createChatViewActions(context) {
     get handleSubAgentWorkWanted() {
       return handleSubAgentWorkWanted;
     },
-    get handleCancelBackgroundCommand() {
-      return handleCancelBackgroundCommand;
+    get handleStopBackgroundCommand() {
+      return handleStopBackgroundCommand;
+    },
+    get loadCommandOutput() {
+      return loadCommandOutput;
     },
     get handleSteerQueuedMessage() {
       return handleSteerQueuedMessage;

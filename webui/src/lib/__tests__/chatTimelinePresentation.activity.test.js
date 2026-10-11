@@ -600,8 +600,8 @@ describe('background command rows', () => {
     started_at: '2026-09-04T12:00:00Z',
     completed_at: '2026-09-04T12:00:01Z',
   };
-  const terminal = (value) => ({
-    label: t('chat.details.terminal'),
+  const commandIdRow = (value) => ({
+    label: t('chat.details.commandId'),
     value,
     mono: true,
   });
@@ -626,33 +626,35 @@ describe('background command rows', () => {
       backgroundCommandRowState(
         backgroundCommandTool(),
         {},
-        { term_one: status },
+        { cmd_one: status },
       ),
     ).toEqual({
-      terminalId: 'term_one',
+      commandId: 'cmd_one',
       command: 'npm run dev',
       fullCommand: 'npm run dev',
       dotStatus,
     });
   });
 
-  it('prefers the live status, falls back to the durable one and needs one', () => {
+  it('prefers the live status, falls back to the durable one, else has ended', () => {
     const tool = backgroundCommandTool();
 
     expect(
       backgroundCommandRowState(
         tool,
-        { term_one: 'running' },
-        { term_one: 'stopped' },
+        { cmd_one: 'running' },
+        { cmd_one: 'stopped' },
       ).dotStatus,
     ).toBe('cancelled');
     expect(
-      backgroundCommandRowState(tool, { term_one: 'failed' }, {}).dotStatus,
+      backgroundCommandRowState(tool, { cmd_one: 'failed' }, {}).dotStatus,
     ).toBe('failed');
-    // A command vBot no longer runs stays a plain Tool row.
-    expect(backgroundCommandRowState(tool, {}, {})).toBeNull();
+    // A command the server no longer reports has ended; how is unknown.
+    expect(backgroundCommandRowState(tool, {}, {}).dotStatus).toBe('ended');
+    // A view that follows no commands keeps a plain Tool row.
+    expect(backgroundCommandRowState(tool, null, null)).toBeNull();
     expect(
-      backgroundCommandRowState(foregroundBash(), {}, { term_one: 'running' }),
+      backgroundCommandRowState(foregroundBash(), {}, { cmd_one: 'running' }),
     ).toBeNull();
   });
 
@@ -670,7 +672,7 @@ describe('background command rows', () => {
     ['shows no time once the command ended', 'completed', () => ''],
   ])('%s', (_label, status, expected) => {
     const tool = backgroundCommandTool({ timing });
-    const rowState = backgroundCommandRowState(tool, {}, { term_one: status });
+    const rowState = backgroundCommandRowState(tool, {}, { cmd_one: status });
 
     expect(backgroundCommandToolStatusLabel(tool, rowState, nowMs)).toBe(
       expected(),
@@ -690,7 +692,7 @@ describe('background command rows', () => {
             value: moment(timing.started_at),
           },
           { label: t('chat.details.runningFor'), value: minutesSeconds(30, 0) },
-          terminal('term_one'),
+          commandIdRow('cmd_one'),
         ],
       }),
     ],
@@ -700,12 +702,25 @@ describe('background command rows', () => {
       () => ({
         title: t('chat.toolState.failed'),
         text: '',
-        rows: [terminal('term_one')],
+        rows: [commandIdRow('cmd_one')],
+      }),
+    ],
+    [
+      'a command the server no longer reports',
+      undefined,
+      () => ({
+        title: t('chat.toolState.ended'),
+        text: t('chat.toolState.endedHint'),
+        rows: [commandIdRow('cmd_one')],
       }),
     ],
   ])('details %s', (_label, status, expected) => {
     const tool = backgroundCommandTool({ timing });
-    const rowState = backgroundCommandRowState(tool, {}, { term_one: status });
+    const rowState = backgroundCommandRowState(
+      tool,
+      {},
+      status ? { cmd_one: status } : {},
+    );
     const moment = (value) => formatMoment(value, { nowMs, seconds: true });
 
     expect(backgroundCommandStatusDetails(tool, rowState, nowMs)).toEqual(
@@ -722,7 +737,7 @@ describe('background command rows', () => {
       },
     ];
 
-    expect(liveClockCadenceMs(items, {}, nowMs, { term_one: 'running' })).toBe(
+    expect(liveClockCadenceMs(items, {}, nowMs, { cmd_one: 'running' })).toBe(
       1000,
     );
     expect(
@@ -730,8 +745,8 @@ describe('background command rows', () => {
         items,
         {},
         nowMs,
-        { term_one: 'running' },
-        { term_one: 'completed' },
+        { cmd_one: 'running' },
+        { cmd_one: 'completed' },
       ),
     ).toBe(0);
   });
@@ -790,16 +805,16 @@ describe('background command rows', () => {
         },
       ],
       {},
-      { term_one: 'running' },
-      { term_one: 'stopped' },
+      { cmd_one: 'running' },
+      { cmd_one: 'stopped' },
       nowMs,
     );
 
     expect(tasks).toEqual([
       expect.objectContaining({
-        id: 'command:term_one',
+        id: 'command:cmd_one',
         kind: 'command',
-        terminalId: 'term_one',
+        commandId: 'cmd_one',
         dotStatus: 'cancelled',
         timeLabel: t('chat.toolCancelled'),
       }),
