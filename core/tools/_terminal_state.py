@@ -38,7 +38,15 @@ TERMINAL_DELIVERY_TAIL_LINES = 20
 TERMINAL_TEMPORARY_CATEGORY = "terminals"
 TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
+# Output paused this long after input or start ends the reply a Tool call shows,
+# and, with the evidence that the work ended, the cycle (``TerminalActivity``).
 TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
+# The fallback idle boundary: no output for this long, with a quiet process
+# tree, ends a cycle whose program neither declared its end nor showed it.
+# Working programs pause between progress updates for several seconds (up to
+# 6 s measured); waking at every 2 s pause woke Agents 17 times in 63 s while
+# their program kept working.
+TERMINAL_IDLE_SECONDS = 15.0
 # An Agent start returns once the start-up output is this quiet, its initial
 # text was sent, or the program ended; at the latest after this many seconds.
 TERMINAL_START_WAIT_SECONDS = 10.0
@@ -46,7 +54,6 @@ TERMINAL_START_WAIT_SECONDS = 10.0
 # its screen for the new size. Claude Code, Codex and OpenCode finish that
 # redraw within about 15-125 ms, in one burst.
 TERMINAL_REPAINT_WINDOW_SECONDS = 1.0
-TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
 TERMINAL_STREAM_BYTE_LIMIT = 4 * 1024 * 1024
 TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS = 512
@@ -90,11 +97,12 @@ TerminalState = Literal[
     "exited",
     "error",
 ]
-AttentionKind = Literal["output_settled", "exited", "error"]
+AttentionKind = Literal["idle", "exited", "error"]
 TerminalKind = Literal["terminal", "command"]
 # Why a wait for a program ended: it exited, printed output matching the
-# pattern, went quiet, or the wait's time ran out.
-WaitEnded = Literal["exited", "matched", "quiet", "timeout"]
+# pattern, went quiet after input, went idle showing a new screen, or the
+# wait's time ran out.
+WaitEnded = Literal["exited", "matched", "quiet", "idle", "timeout"]
 TerminalStreamEvent = dict[str, Any]
 TerminalChangedCallback = Callable[[str], None]
 

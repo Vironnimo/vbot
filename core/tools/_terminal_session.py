@@ -16,12 +16,18 @@ from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
 from core.tools import terminal_backend
 from core.tools.terminal_backend import TerminalAdapter
-from core.tools.terminal_emulator import EmulatorUpdate
+from core.tools.terminal_emulator import FOCUS_OUT_REPORT, EmulatorUpdate, ScreenObservation
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
-from ._terminal_activity import QuietRestart, TerminalActivity
+from ._terminal_activity import (
+    PROCESS_SAMPLE_SECONDS,
+    IdleReason,
+    ProcessSample,
+    QuietRestart,
+    TerminalActivity,
+)
 from ._terminal_command import (
     COMMAND_IDLE_CPU_SECONDS,
     COMMAND_IDLE_SECONDS,
@@ -34,13 +40,12 @@ from ._terminal_command import (
     StopReason,
 )
 from ._terminal_input import input_chunks
-from ._terminal_process_tree import ProcessTreeFacts
+from ._terminal_process_tree import ProcessTree, ProcessTreeFacts
 from ._terminal_render_host import TerminalScreen
 from ._terminal_state import (
     TERMINAL_DELIVERY_TAIL_LINES,
     TERMINAL_INITIAL_INPUT_QUIET_SECONDS,
     TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS,
-    TERMINAL_INPUT_KEY_DELAY_SECONDS,
     TERMINAL_NOTICE_MESSAGE_CAP_CHARS,
     TERMINAL_REPAINT_WINDOW_SECONDS,
     AttentionKind,
@@ -80,6 +85,12 @@ _COMMAND_QUIET_POLL_SECONDS = 0.5
 _COMMAND_MATCH_EXIT_SECONDS = 2.0
 # Labels in Agent notices are cut to this many characters.
 _NOTICE_LABEL_CHARS = 60
+# A key typed after text follows once the output paused for this share of the
+# activity quiet period (0.25 s), at the latest this share after the text (1 s).
+# Codex took an Enter 0.1 s after a 150-character text as part of a paste and
+# did not submit it; 0.3 s later it submitted (measured 2026-10-11).
+_ECHO_PAUSE_SHARE = 0.125
+_ECHO_LIMIT_SHARE = 0.5
 # Failures that persist across chunks or polls, keyed by (terminal id, kind):
 # logged when they start and when they end, not on every repetition.
 _CONDITIONS = LoggedConditions()
@@ -105,6 +116,7 @@ class TerminalSessionServices:
     trigger_service: Any | None
     reader_executor: ThreadPoolExecutor
     activity_quiet_seconds: float
+    idle_seconds: float
     monotonic: Callable[[], float]
     sleep: Callable[[float], Awaitable[None]]
     program_probe: Callable[[int, str], bool]
@@ -122,6 +134,8 @@ class TerminalObservation:
     resize_count: int
     columns: int
     rows: int
+    # Visible-cell signature: the Agent saw this screen, so its idle boundary wakes nobody.
+    signature: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +178,10 @@ class TerminalSession:
         cleanup: Callable[[], None] | None,
         services: TerminalSessionServices,
         command: CommandState | None = None,
+        observer: ProcessTree | None = None,
     ) -> None:
+        """*observer* watches an interactive program's process tree, whose CPU time
+        and new processes show work its output does not."""
         self.terminal_id = terminal_id
         self.owner = owner
         self.lifecycle_owner = owner
@@ -181,24 +198,29 @@ class TerminalSession:
         self._screen = screen
         self._services = services
         self._lock = asyncio.Lock()
+        # Serializes input, so nothing types between a text and the key after it.
+        self._input_lock = asyncio.Lock()
         self._command = command
+        self._observer = observer
         self._activity = TerminalActivity(
             awaiting_initial_input=awaiting_initial_input,
             startup_silence=owner is not None and not awaiting_initial_input,
             repaint_window=TERMINAL_REPAINT_WINDOW_SECONDS,
-            # A command's output is its result, not a reason to wake the Agent.
-            output_wakes=command is None,
+            quiet_seconds=services.activity_quiet_seconds,
+            idle_seconds=services.idle_seconds,
+            command=command is not None,
         )
         self._title = ""
         self._bracketed_paste = False
+        # The program asked for focus reports; it is told the focus is lost.
+        self._focus_reporting = False
         self._alternate_screen = False
         self._screen_revision = 0
         self._resize_count = 0
-        # Revision and signature of the screen at the last quiet boundary.
-        self._settled: tuple[int, str] | None = None
         self._observed: TerminalObservation | None = None
         self._output_count = 0
-        # Quiet boundaries so far: output paused for the quiet period after activity.
+        # Quiet boundaries so far: output paused for the quiet period after
+        # activity. Replies to input and start end at the next one.
         self._quiet_boundaries = 0
         # Quiet boundaries when start's text was typed; None until it is typed.
         self._initial_input_quiet: int | None = None
@@ -225,6 +247,7 @@ class TerminalSession:
         self._reader_task: asyncio.Task[None] | None = None
         self._initial_input_task: asyncio.Task[None] | None = None
         self._settle_task: asyncio.Task[None] | None = None
+        self._sample_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
         self._stream_sequence = 0
         self._stream = _new_terminal_stream()
@@ -351,6 +374,7 @@ class TerminalSession:
             self._suppress_exit_attention = True
             self._cancel_delivery()
         self._cancel_task(self._settle_task)
+        self._cancel_task(self._sample_task)
         if self._termination_pending or not self.finished:
             self._termination_pending = True
             try:
@@ -391,6 +415,7 @@ class TerminalSession:
             self._reader_task,
             self._initial_input_task,
             self._settle_task,
+            self._sample_task,
             self._timeout_task,
         ):
             self._cancel_task(task)
@@ -415,6 +440,7 @@ class TerminalSession:
                 self._reader_task,
                 self._initial_input_task,
                 self._settle_task,
+                self._sample_task,
                 self._delivery_task,
                 self._timeout_task,
             )
@@ -426,7 +452,7 @@ class TerminalSession:
         self._cancel_delivery()
         self._finish_files()
         self._screen.close()
-        for kind in ("render", "end_check"):
+        for kind in ("render", "end_check", "process_sample"):
             _CONDITIONS.ended((self.terminal_id, kind))
 
     # Commands
@@ -590,18 +616,17 @@ class TerminalSession:
         after_revision: int,
         on_match: Callable[[str], None] | None = None,
     ) -> WaitEnded:
-        """Wait until the program exits, its output matches *pattern*, its new output
-        settles, or *deadline* (a ``monotonic`` time) passes.
+        """Wait until the program exits, its output matches *pattern*, it goes idle
+        showing a new screen, or *deadline* (a ``monotonic`` time) passes.
 
         A command exits when it ends; its wait ends only then, at a match,
         or at the deadline. After a match, a command's wait lingers
         briefly and ends ``exited`` when the command ends within that time.
         Output printed before the call counts for
         *pattern*, except output before the Agent's last input and that
-        input's echo. An interactive program's new output settled when an
-        ``output_settled`` attention above *after_revision* exists; with
-        *pattern* that does not end the wait. *on_match* receives the line
-        where the match starts.
+        input's echo. An interactive program went idle when an ``idle``
+        attention above *after_revision* exists; with *pattern* that does
+        not end the wait. *on_match* receives the line where the match starts.
         """
         command = self._command
         services = self._services
@@ -623,10 +648,10 @@ class TerminalSession:
                 command is None
                 and pattern is None
                 and attention is not None
-                and attention.kind == "output_settled"
+                and attention.kind == "idle"
                 and attention.revision > after_revision
             ):
-                return "quiet"
+                return "idle"
             now = services.monotonic()
             if now >= deadline:
                 return "timeout"
@@ -651,10 +676,10 @@ class TerminalSession:
             await self._wait_or_sleep(change, until - now)
 
     async def wait_for_reply(self, *, deadline: float, after_quiet: int) -> WaitEnded:
-        """Wait until the output settles after input, the program exits, or *deadline* passes.
+        """Wait until the output pauses after input, the program exits, or *deadline* passes.
 
         *after_quiet* is the ``quiet_boundaries`` count the input reported:
-        the output settled once a quiet boundary follows it.
+        the output paused once a quiet boundary follows it.
         """
         command = self._command
         while True:
@@ -1020,53 +1045,104 @@ class TerminalSession:
         data: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
     ) -> dict[str, Any]:
-        """Write exact data or named terminal input from the attached Agent."""
+        """Write exact data or named terminal input from the attached Agent.
+
+        A key typed after text follows once the program took the text
+        (``_await_text_taken``); other input waits until both are written.
+        """
         write_error: BaseException | None = None
-        async with self._lock:
-            self._require_live()
-            self._check_revision(expected_screen_revision)
-            bracketed_paste = (
-                text is not None and ("\n" in text or "\r" in text) and self._bracketed_paste
-            )
-            chunks = input_chunks(data=data, text=text, key=key, bracketed_paste=bracketed_paste)
-            if not chunks:
-                # An empty write changes no activity, observation or queued input.
-                return self._input_result(0, key, bracketed_paste=False, superseded=None)
-            self._cancel_task(self._initial_input_task)
-            superseded = self._attention_revision if self._attention is not None else None
-            self._activity_origin_run_id = origin_run_id
-            self._activity_execution_owner = execution_owner
-            # Input invalidates an observation even when the program does
-            # not echo it (for example, a password prompt).
-            self._screen_revision += 1
-            # A wait's pattern matches what the program prints below this line.
-            await self._screen.mark_input()
-            self._note_activity()
-            # A command's result is delivered when it ends, not when its output settles.
-            restart, changed = self._activity.input(
-                notify=self._command is None, delivery_pending=self._delivery_pending()
-            )
-            for index, chunk in enumerate(chunks):
-                if index:
-                    await asyncio.sleep(TERMINAL_INPUT_KEY_DELAY_SECONDS)
-                try:
-                    await asyncio.to_thread(self._adapter.write, chunk)
-                except (EOFError, OSError) as error:
-                    write_error = error
-                    break
-            if write_error is None:
-                self._restart_quiet(restart)
-                self._output_event.set()
-                self._signal_change()
-                if changed:
-                    self._publish_state()
-                return self._input_result(
-                    sum(len(chunk) for chunk in chunks),
-                    key,
-                    bracketed_paste=bracketed_paste,
-                    superseded=superseded,
+        async with self._input_lock:
+            async with self._lock:
+                self._require_live()
+                self._check_revision(expected_screen_revision)
+                bracketed_paste = (
+                    text is not None and ("\n" in text or "\r" in text) and self._bracketed_paste
                 )
+                chunks = input_chunks(
+                    data=data, text=text, key=key, bracketed_paste=bracketed_paste
+                )
+                if not chunks:
+                    # An empty write changes no activity, observation or queued input.
+                    return self._input_result(0, key, bracketed_paste=False, superseded=None)
+                self._cancel_task(self._initial_input_task)
+                superseded = self._attention_revision if self._attention is not None else None
+                self._activity_origin_run_id = origin_run_id
+                self._activity_execution_owner = execution_owner
+                # Input invalidates an observation even when the program does
+                # not echo it (for example, a password prompt).
+                self._screen_revision += 1
+                # A wait's pattern matches what the program prints below this line.
+                await self._screen.mark_input()
+                running = await self._running_before_input()
+                *typed, last = chunks
+                typed_at = self._services.monotonic()
+                if typed:
+                    write_error = await self._write_input(typed[0], running)
+            if typed and write_error is None:
+                await self._await_text_taken(typed_at)
+            if write_error is None:
+                async with self._lock:
+                    self._require_live()
+                    write_error = await self._write_input(last, running)
+                    if write_error is None:
+                        if self._focus_reporting and last.endswith("\r"):
+                            # The program that works on the submitted input,
+                            # possibly one it starts, learns that its user is away.
+                            with contextlib.suppress(EOFError, OSError):
+                                await asyncio.to_thread(self._adapter.write, FOCUS_OUT_REPORT)
+                        return self._input_result(
+                            sum(len(chunk) for chunk in chunks),
+                            key,
+                            bracketed_paste=bracketed_paste,
+                            superseded=superseded,
+                        )
         raise await self._write_failure() from write_error
+
+    async def _write_input(
+        self, chunk: str, running: frozenset[int] | None
+    ) -> BaseException | None:
+        """Write one chunk of Agent input, which starts a cycle; the lock is held.
+
+        *running* are the processes that ran before the input. Returns the
+        error when the PTY refused the chunk.
+        """
+        self._note_activity()
+        # A command's result is delivered when it ends, not when it goes idle.
+        restart, changed = self._activity.input(
+            self._services.monotonic(),
+            notify=self._command is None,
+            delivery_pending=self._delivery_pending(),
+            running=running,
+        )
+        try:
+            await asyncio.to_thread(self._adapter.write, chunk)
+        except (EOFError, OSError) as error:
+            return error
+        self._restart_quiet(restart)
+        self._output_event.set()
+        self._signal_change()
+        if changed:
+            self._publish_state()
+        return None
+
+    async def _await_text_taken(self, typed_at: float) -> None:
+        """Wait until the program took the text typed at *typed_at*: until its
+        output paused for the echo pause, at most the echo limit after the text.
+
+        Programs that read fast input as a paste take a key that arrives
+        right after it as part of the paste (Codex inserts such an Enter
+        instead of submitting). The lock is not held, so the output renders.
+        """
+        services = self._services
+        pause = services.activity_quiet_seconds * _ECHO_PAUSE_SHARE
+        limit = typed_at + services.activity_quiet_seconds * _ECHO_LIMIT_SHARE
+        while not self.finished:
+            change = self._change
+            now = services.monotonic()
+            quiet_since = max(typed_at, self._last_output_at)
+            if now - quiet_since >= pause or now >= limit:
+                return
+            await self._wait_or_sleep(change, min(limit, quiet_since + pause) - now)
 
     async def send_operator_input(
         self,
@@ -1077,7 +1153,7 @@ class TerminalSession:
     ) -> None:
         """Write exact operator bytes; *expected_program* must run in the process tree."""
         write_error: BaseException | None = None
-        async with self._lock:
+        async with self._input_lock, self._lock:
             self._require_live()
             # Output waits for the lock, so the checks below see the screen
             # and process the input reaches.
@@ -1091,9 +1167,12 @@ class TerminalSession:
             self._cancel_task(self._initial_input_task)
             self._screen_revision += 1
             self._note_activity()
+            running = await self._running_before_input()
             restart, changed = self._activity.input(
+                self._services.monotonic(),
                 notify=self.attachment is not None and self._command is None,
                 delivery_pending=self._delivery_pending(),
+                running=running,
             )
             try:
                 await asyncio.to_thread(self._adapter.write, data)
@@ -1157,6 +1236,7 @@ class TerminalSession:
         async with self._lock:
             page = await self._screen.page(start_line=start_line, limit=lines)
             screen = await self._screen.screen_text()
+            signature = (await self._screen.observe(0)).signature
             info = self.info()
         data: dict[str, Any] = {
             "terminal_id": self.terminal_id,
@@ -1178,7 +1258,7 @@ class TerminalSession:
             "attention": _attention_data(info.attention),
             "log_file": model_path(info.log_path) if info.log_path is not None else None,
             "observation": TerminalObservation(
-                info.screen_revision, self._resize_count, info.columns, info.rows
+                info.screen_revision, self._resize_count, info.columns, info.rows, signature
             ),
         }
         observed = self._observed
@@ -1208,13 +1288,17 @@ class TerminalSession:
         return data
 
     def acknowledge_screen(self, observation: TerminalObservation) -> None:
-        """Remember a durably delivered screen without consuming a later resize."""
+        """Remember a durably delivered screen without consuming a later resize.
+
+        The Agent has seen it: an idle boundary showing the same screen wakes nobody.
+        """
         observed = self._observed
         if observed is None or (observation.resize_count, observation.screen_revision) >= (
             observed.resize_count,
             observed.screen_revision,
         ):
             self._observed = observation
+            self._activity.acknowledge(observation.signature)
 
     def acknowledge_attention(self, revision: int) -> None:
         """Cancel the equivalent automatic delivery after a manual result is durable."""
@@ -1222,13 +1306,6 @@ class TerminalSession:
         if attention is None or attention.revision != revision:
             return
         self._acknowledged_attention_revision = max(self._acknowledged_attention_revision, revision)
-        settled = self._settled
-        if (
-            attention.details.get("screen_revision") == self._screen_revision
-            and settled is not None
-            and settled[0] == self._screen_revision
-        ):
-            self._activity.acknowledge(settled[1])
         self._cancel_delivery()
 
     async def read_for_operator(self) -> dict[str, Any]:
@@ -1354,6 +1431,7 @@ class TerminalSession:
             self._services.monotonic(),
             attached=self.attachment is not None,
             delivery_pending=self._delivery_pending(),
+            signals=() if update is None else update.signals,
         )
         if effect.changes_screen:
             self._screen_revision += 1
@@ -1444,6 +1522,7 @@ class TerminalSession:
         )
         self._title = update.title
         self._bracketed_paste = update.bracketed_paste
+        self._focus_reporting = update.focus_reporting
         self._alternate_screen = update.alternate_screen
         if update.alternate_exited:
             try:
@@ -1470,49 +1549,159 @@ class TerminalSession:
         self._settle_task = self._background(
             self._settle_after_quiet(generation), f"settle:{generation}"
         )
+        sampler = self._sample_task
+        if (
+            self._observer is not None
+            and self._activity.cycle_open
+            and (sampler is None or sampler.done())
+        ):
+            self._sample_task = self._background(self._sample_cycle(), "sample")
 
     async def _settle_after_quiet(self, generation: int) -> None:
+        """Run the quiet boundary of one activity generation, then its idle boundary
+        when the program declared or showed the end of its work, or else at the
+        latest at the fallback (``TerminalActivity``)."""
+        services = self._services
         try:
-            await self._services.sleep(self._services.activity_quiet_seconds)
+            await services.sleep(services.activity_quiet_seconds)
             async with self._lock:
-                # A screen behind its output cannot show that the output settled.
-                if (
-                    generation != self._activity.generation
-                    or self.finished
-                    or self._render_failure is not None
-                ):
+                observation = await self._observe_unchanged(generation)
+                if observation is None:
                     return
-                if self._snapshot_on_settle:
-                    self._snapshot_on_settle = False
-                    await self._publish_snapshot()
-                try:
-                    observation = await self._screen.observe(TERMINAL_DELIVERY_TAIL_LINES)
-                except Exception as error:
-                    self._render_failed(error)
+                settled = self._activity.settle(generation, observation.signature)
+                if settled is None:
                     return
-                effect = self._activity.settle(
-                    generation, observation.signature, attached=self.attachment is not None
-                )
-                if effect is None:
-                    return
-                self._settled = (self._screen_revision, observation.signature)
-                if not effect.record:
-                    return
-                self._quiet_boundaries += 1
+                if settled == "activity":
+                    self._quiet_boundaries += 1
+                    self._signal_change()
                 if self._command is not None:
                     # A command's output is its result, delivered when it ends.
-                    self._signal_change()
+                    if settled == "activity":
+                        self._publish_state()
                     return
-                details = {"screen_revision": self._screen_revision}
-                self._set_attention(
-                    kind="output_settled",
-                    summary="Output settled after activity.",
-                    details=details,
-                    deliver=effect.deliver,
-                    screen_tail=observation.tail,
-                )
+                if settled == "repaint" or self._settle_idle(generation, observation):
+                    return
+            # Process samples can end the cycle earlier; without them, nothing
+            # but the fallback can.
+            fallback_at = self._activity.fallback_at(generation)
+            if fallback_at is None:
+                return
+            await services.sleep(max(0.0, fallback_at - services.monotonic()))
+            async with self._lock:
+                observation = await self._observe_unchanged(generation)
+                if observation is not None:
+                    self._settle_idle(generation, observation)
         except asyncio.CancelledError:
             return
+
+    async def _sample_cycle(self) -> None:
+        """Sample the program's processes while a cycle of work runs; once its output
+        is quiet, each sample can end the cycle."""
+        services = self._services
+        try:
+            while True:
+                await services.sleep(PROCESS_SAMPLE_SECONDS)
+                sample = await self._process_sample()
+                async with self._lock:
+                    activity = self._activity
+                    if self.finished or not activity.cycle_open:
+                        return
+                    now = services.monotonic()
+                    if sample is not None:
+                        activity.sample(now, sample)
+                    if not activity.quiet(now):
+                        continue
+                    generation = activity.generation
+                    observation = await self._observe_unchanged(generation)
+                    if observation is not None and self._settle_idle(generation, observation):
+                        return
+        except asyncio.CancelledError:
+            return
+
+    def _settle_idle(self, generation: int, observation: ScreenObservation) -> bool:
+        """End the cycle of *generation* if its program is idle; the lock is held.
+
+        Records and delivers the idle screen when the Agent has not seen it.
+        """
+        observed = self._observed
+        effect = self._activity.idle(
+            generation,
+            self._services.monotonic(),
+            observation.signature,
+            attached=self.attachment is not None,
+            seen=observed is not None and observed.screen_revision == self._screen_revision,
+        )
+        if effect is None:
+            return False
+        if effect.record:
+            self._set_attention(
+                kind="idle",
+                summary="The program is idle.",
+                details={"screen_revision": self._screen_revision, "reason": effect.reason},
+                deliver=effect.deliver,
+                screen_tail=observation.tail,
+            )
+        else:
+            self._publish_state()
+            self._signal_change()
+        return True
+
+    async def _process_sample(self) -> ProcessSample | None:
+        """The program's processes now; None without an observer or when it failed."""
+        observer = self._observer
+        if observer is None:
+            return None
+        key = (self.terminal_id, "process_sample")
+        try:
+            facts = await asyncio.to_thread(observer.facts)
+        except Exception:
+            if _CONDITIONS.started(key):
+                _LOGGER.warning(
+                    "Terminal process sampling failed; its activity relies on output and "
+                    "declared signals (terminal=%s)",
+                    self.terminal_id,
+                    exc_info=True,
+                )
+            return None
+        if _CONDITIONS.ended(key):
+            _LOGGER.info("Terminal process sampling recovered (terminal=%s)", self.terminal_id)
+        return ProcessSample(
+            frozenset(process.pid for process in facts.running),
+            facts.cpu_seconds,
+            facts.started,
+        )
+
+    async def _running_before_input(self) -> frozenset[int] | None:
+        """The processes that run before input starts a cycle: a process started
+        later is the cycle's work. The sample also starts the CPU measurement,
+        so CPU work shows from the cycle's first periodic sample on."""
+        if self._command is not None:
+            return None
+        sample = await self._process_sample()
+        if sample is None:
+            return None
+        self._activity.sample(self._services.monotonic(), sample)
+        return sample.running
+
+    async def _observe_unchanged(self, generation: int) -> ScreenObservation | None:
+        """The screen while *generation* is still the latest activity; the lock is held.
+
+        None once newer activity, the program's end or a rendering failure
+        (a screen behind its output cannot show that the output paused)
+        made the boundary moot.
+        """
+        if generation != self._activity.generation or self.finished:
+            return None
+        if self._render_failure is not None:
+            return None
+        if self._snapshot_on_settle:
+            self._snapshot_on_settle = False
+            await self._publish_snapshot()
+        try:
+            return await self._screen.observe(TERMINAL_DELIVERY_TAIL_LINES)
+        except Exception as error:
+            self._render_failed(error)
+            return None
 
     async def _send_initial_input(self, text: str, *, origin_run_id: str) -> None:
         """Wait until the program's start screen is quiet before sending its first task."""
@@ -1564,6 +1753,7 @@ class TerminalSession:
             return
         self._cancel_task(self._initial_input_task)
         self._cancel_task(self._settle_task)
+        self._cancel_task(self._sample_task)
         async with self._lock:
             if self.finished:
                 return
@@ -1650,7 +1840,11 @@ class TerminalSession:
             body
             if body is not None
             else _attention_body(
-                self.terminal_id, self._notice_label(), attention, screen_tail=screen_tail
+                self.terminal_id,
+                self._notice_label(),
+                attention,
+                screen_tail=screen_tail,
+                idle_seconds=self._services.idle_seconds,
             )
         )
         if kind in {"exited", "error"} and self._exit_acknowledged:
@@ -1701,6 +1895,10 @@ class TerminalSession:
                 attention.revision,
             )
             return
+        # The Agent received it: a wait ends only at a later attention.
+        self._acknowledged_attention_revision = max(
+            self._acknowledged_attention_revision, attention.revision
+        )
         if self._attention is attention:
             self._attention = replace(attention, delivered=True)
 
@@ -1709,11 +1907,11 @@ class TerminalSession:
         return task is not None and not task.done()
 
     def _delivery_pending(self) -> bool:
-        """An ``output_settled`` delivery is on its way and not yet received."""
+        """An ``idle`` delivery is on its way and not yet received."""
         attention = self._attention
         return (
             attention is not None
-            and attention.kind == "output_settled"
+            and attention.kind == "idle"
             and not attention.delivered
             and self._delivery_running()
         )
@@ -1795,6 +1993,10 @@ class TerminalSession:
     def _finish_files(self) -> None:
         if self._command is not None:
             self._command.close()
+        observer, self._observer = self._observer, None
+        if observer is not None:
+            with contextlib.suppress(Exception):
+                observer.close()
         if self._log_handle is not None:
             with contextlib.suppress(OSError):
                 self._log_handle.close()
@@ -1827,17 +2029,31 @@ class TerminalSession:
 
 
 def _attention_body(
-    terminal_id: str, label: str, attention: TerminalAttention, *, screen_tail: str
+    terminal_id: str,
+    label: str,
+    attention: TerminalAttention,
+    *,
+    screen_tail: str,
+    idle_seconds: float,
 ) -> str:
     """The message that tells the attached Agent its interactive program needs a look."""
-    if attention.kind == "output_settled":
+    if attention.kind == "idle":
+        reason: IdleReason | None = attention.details.get("reason")
+        if reason == "fallback":
+            headline = (
+                f"Terminal {terminal_id} ({label}) has printed nothing for {idle_seconds:g} "
+                "seconds; its program still runs and can still be working. Screen:"
+            )
+        else:
+            headline = (
+                f"Terminal {terminal_id} ({label}) went idle; its program still runs. Screen:"
+            )
         lines = [
-            f"The output of terminal {terminal_id} ({label}) settled after activity; "
-            "this does not mean the program finished. Screen:",
+            headline,
             _fenced(screen_tail),
             f'To type into it, call terminal with action "input", terminal_id "{terminal_id}", '
-            'your text as text and key "enter". When its output settles again, the new screen '
-            "arrives as another message.",
+            'your text as text and key "enter". When it shows something new and goes idle '
+            "again, that screen arrives as another message.",
         ]
     elif attention.kind == "exited":
         lines = [

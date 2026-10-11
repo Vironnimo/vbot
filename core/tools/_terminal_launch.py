@@ -1,20 +1,34 @@
-"""Start an operator-requested program inside the interactive shell.
+"""Start interactive shells with shell integration, optionally running a program first.
+
+Shell integration makes a shell mark its prompt (OSC 133 A) and, where the
+shell can, the start of each command line it runs (OSC 133 C), the standard
+marks terminals use to tell a working shell from one waiting for input. The
+Terminal Session reads them as declared signals (``terminal_emulator``).
 
 A manual Terminal with a launch command must behave like a normal terminal:
 the shell starts as usual (profile, rc files, PATH), runs the program, and
 stays open with its prompt after the program ends or is interrupted. Each
-shell gets the program through its own start options instead of typed input,
-so nothing depends on recognizing a prompt or on the timing of shell start:
+shell gets the integration and the program through its own start options
+instead of typed input, so nothing depends on recognizing a prompt or on the
+timing of shell start:
 
-- PowerShell: ``-NoExit -EncodedCommand`` (the profile loads first).
-- cmd: ``/d /s /k "<line>"`` as an exact Windows command line.
-- bash: ``--rcfile`` with a file that loads ``~/.bashrc`` first.
-- zsh: a ``ZDOTDIR`` whose ``.zshenv``/``.zshrc`` load the user's files first.
-- fish: ``-C`` (runs after ``config.fish``).
-- other shells: ``/bin/sh`` runs the program, then starts the shell.
+- PowerShell: ``-NoExit -EncodedCommand`` (the profile loads first); the
+  integration wraps ``prompt`` and PSReadLine's ``PSConsoleHostReadLine``.
+- cmd: ``/d /s /k "<line>"`` as an exact Windows command line; the
+  integration is the ``PROMPT`` variable (cmd marks no command start).
+- bash: ``--rcfile`` with a file that loads ``~/.bashrc`` first, then adds
+  ``PROMPT_COMMAND`` and ``PS0`` marks.
+- zsh: a ``ZDOTDIR`` whose ``.zshenv``/``.zshrc`` load the user's files first,
+  then add ``precmd``/``preexec`` hooks.
+- fish: ``-C`` (runs after ``config.fish``) with ``fish_prompt``/``fish_preexec``
+  handlers.
+- other shells: ``/bin/sh`` runs the program, then starts the shell, without
+  integration.
 
-The rc files live in a private temporary directory that the shell removes
-while loading them; the Session removes it too when it ends.
+bash, zsh and fish get the integration on POSIX only. A shell started with
+options other than plain interactive flags starts as given. The rc files
+live in a private temporary directory that the shell removes while loading
+them; the Session removes it too when it ends.
 """
 
 from __future__ import annotations
@@ -34,6 +48,74 @@ from core.tools.terminal_backend import windows_command_processor_line
 
 _POWERSHELL_SHELLS = frozenset({"pwsh", "powershell"})
 _POSIX_RC_SHELLS = frozenset({"bash", "zsh"})
+# Options that keep a shell interactive and change nothing the integration needs.
+_PLAIN_POWERSHELL_OPTIONS = frozenset(
+    {
+        "-nologo",
+        "-nol",
+        "-noprofile",
+        "-nop",
+        "-noexit",
+        "-noe",
+        "-interactive",
+        "-i",
+        "-login",
+        "-l",
+        "-mta",
+        "-sta",
+        "-noprofileloadtime",
+    }
+)
+_PLAIN_SHELL_OPTIONS = {
+    "pwsh": _PLAIN_POWERSHELL_OPTIONS,
+    "powershell": _PLAIN_POWERSHELL_OPTIONS,
+    "cmd": frozenset({"/d", "/q", "/a", "/u", "/e:on", "/e:off", "/v:on", "/v:off"}),
+    "bash": frozenset({"-i"}),
+    "zsh": frozenset({"-i"}),
+    "fish": frozenset({"-i", "-l", "--login", "--interactive"}),
+}
+
+# PowerShell: mark the prompt, and the command line PSReadLine read, keeping
+# the status ($?, $LASTEXITCODE) the user's prompt shows. PSReadLine may load
+# after this script, so its reader is wrapped at the first prompt.
+_POWERSHELL_INTEGRATION = """\
+$global:__vbot_prompt = $function:prompt
+function global:prompt {
+    $vbotFailed = -not $global:?
+    $vbotExitCode = $global:LASTEXITCODE
+    if (-not $global:__vbot_readline -and (Test-Path Function:\\PSConsoleHostReadLine)) {
+        $global:__vbot_readline = $function:PSConsoleHostReadLine
+        function global:PSConsoleHostReadLine {
+            $line = & $global:__vbot_readline
+            [Console]::Write([string][char]27 + ']133;C' + [char]7)
+            $line
+        }
+    }
+    $mark = [string][char]27 + ']133;A' + [char]7
+    if (-not $global:__vbot_prompt) { return $mark + 'PS ' + $PWD + '> ' }
+    $global:LASTEXITCODE = $vbotExitCode
+    if ($vbotFailed) { Write-Error 'failure' -ErrorAction Ignore }
+    $mark + ((& $global:__vbot_prompt) -join '')
+}
+"""
+# cmd's PROMPT codes: $e is the escape character.
+_CMD_PROMPT_MARK = "$e]133;A$e\\"
+_BASH_INTEGRATION = """\
+__vbot_prompt_mark() { local __vbot_status=$?; printf '\\033]133;A\\007'; return "$__vbot_status"; }
+PROMPT_COMMAND="__vbot_prompt_mark${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+PS0="${PS0}"$'\\033]133;C\\007'
+"""
+_ZSH_INTEGRATION = """\
+autoload -Uz add-zsh-hook
+__vbot_prompt_mark() { print -n -- $'\\e]133;A\\a' }
+__vbot_command_mark() { print -n -- $'\\e]133;C\\a' }
+add-zsh-hook precmd __vbot_prompt_mark
+add-zsh-hook preexec __vbot_command_mark
+"""
+_FISH_INTEGRATION = (
+    "function __vbot_prompt_mark --on-event fish_prompt; printf '\\e]133;A\\a'; end; "
+    "function __vbot_command_mark --on-event fish_preexec; printf '\\e]133;C\\a'; end"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +135,41 @@ class ShellLaunch:
             shutil.rmtree(self.scratch, ignore_errors=True)
 
 
+def interactive_shell(argv: Sequence[str], *, environment: Mapping[str, str]) -> ShellLaunch | None:
+    """Return the start of the interactive shell *argv* with shell integration.
+
+    None when *argv* starts another program, or a shell with options beyond
+    plain interactive flags: it then starts exactly as given. *environment*
+    is the environment the shell starts in.
+    """
+    if not argv:
+        return None
+    name = _shell_name(argv[0])
+    plain = _PLAIN_SHELL_OPTIONS.get(name)
+    if plain is None or any(option.lower() not in plain for option in argv[1:]):
+        return None
+    if name in _POWERSHELL_SHELLS:
+        options = [*argv[1:]]
+        if not any(option.lower() in {"-noexit", "-noe"} for option in options):
+            options.append("-NoExit")
+        script = _encoded(_POWERSHELL_INTEGRATION)
+        return ShellLaunch([argv[0], *options, "-EncodedCommand", script])
+    if name == "cmd":
+        return ShellLaunch(list(argv), environment={"PROMPT": _cmd_prompt(environment)})
+    if os.name == "nt":
+        return None
+    if name == "fish":
+        return ShellLaunch([*argv, "-C", _FISH_INTEGRATION])
+    scratch = Path(tempfile.mkdtemp(prefix="vbot-terminal-"))
+    try:
+        if name == "bash":
+            return _bash_launch(argv, None, scratch)
+        return _zsh_launch(argv, None, scratch, environment)
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+
+
 def shell_launch(
     shell_argv: Sequence[str],
     command: str,
@@ -60,7 +177,8 @@ def shell_launch(
     *,
     environment: Mapping[str, str],
 ) -> ShellLaunch:
-    """Return the start of *shell_argv* that runs ``[command, *arguments]`` first."""
+    """Return the start of *shell_argv* that runs ``[command, *arguments]`` first,
+    with shell integration where ``interactive_shell`` gives it."""
     if not command.strip() or any(not argument for argument in arguments):
         raise ValueError("A launch command and its arguments must not be empty")
     shell = shell_argv[0]
@@ -80,16 +198,20 @@ def shell_launch(
         # PSReadLine loads its history at the first prompt and drops what was
         # added before, so the line joins the history once the prompt idles.
         script = (
+            f"{_POWERSHELL_INTEGRATION}"
             "$null = Register-EngineEvent -SourceIdentifier PowerShell.OnIdle "
             "-MaxTriggerCount 1 -Action { try { "
             "[Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory("
             f"{_powershell_literal(line)}) }} catch {{ }} }}\n{run}"
         )
-        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-        return ShellLaunch([*shell_argv, "-NoExit", "-EncodedCommand", encoded])
+        return ShellLaunch([*shell_argv, "-NoExit", "-EncodedCommand", _encoded(script)])
     if name == "cmd":
         line = windows_command_processor_line(command, arguments)
-        return ShellLaunch(list(shell_argv), command_line=f'/d /s /k "{line}"')
+        return ShellLaunch(
+            list(shell_argv),
+            command_line=f'/d /s /k "{line}"',
+            environment={"PROMPT": _cmd_prompt(environment)},
+        )
     if os.name == "nt":
         comspec = environment.get("COMSPEC") or "cmd.exe"
         line = windows_command_processor_line(command, arguments)
@@ -97,7 +219,8 @@ def shell_launch(
         return ShellLaunch([comspec], command_line=f'/d /s /c "{line} & {shell_line}"')
     line = " ".join(shlex.quote(token) for token in (command, *arguments))
     if name == "fish":
-        return ShellLaunch([*shell_argv, "-C", " ".join(map(_fish_word, (command, *arguments)))])
+        program = " ".join(map(_fish_word, (command, *arguments)))
+        return ShellLaunch([*shell_argv, "-C", f"{_FISH_INTEGRATION}; {program}"])
     if name in _POSIX_RC_SHELLS:
         scratch = Path(tempfile.mkdtemp(prefix="vbot-terminal-"))
         try:
@@ -113,14 +236,14 @@ def shell_launch(
     return ShellLaunch(["/bin/sh", "-c", f"trap : INT; {line}; exec {shell_words}"])
 
 
-def _bash_launch(shell_argv: Sequence[str], line: str, scratch: Path) -> ShellLaunch:
+def _bash_launch(shell_argv: Sequence[str], line: str | None, scratch: Path) -> ShellLaunch:
     rcfile = scratch / "bashrc"
+    program = "" if line is None else f"history -s -- {shlex.quote(line)}\n{line}\n"
     # bash reads the whole rc file before running it, so it can remove it first.
     rcfile.write_text(
         f"command rm -rf -- {shlex.quote(str(scratch))}\n"
         'if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n'
-        f"history -s -- {shlex.quote(line)}\n"
-        f"{line}\n",
+        f"{_BASH_INTEGRATION}{program}",
         encoding="utf-8",
         newline="\n",
     )
@@ -131,8 +254,9 @@ def _bash_launch(shell_argv: Sequence[str], line: str, scratch: Path) -> ShellLa
 
 
 def _zsh_launch(
-    shell_argv: Sequence[str], line: str, scratch: Path, environment: Mapping[str, str]
+    shell_argv: Sequence[str], line: str | None, scratch: Path, environment: Mapping[str, str]
 ) -> ShellLaunch:
+    program = "" if line is None else f"print -s -r -- {shlex.quote(line)}\n{line}\n"
     user_dotdir = environment.get("ZDOTDIR")
     restore = f"ZDOTDIR={shlex.quote(user_dotdir)}" if user_dotdir else 'ZDOTDIR="$HOME"'
     (scratch / ".zshenv").write_text(
@@ -146,12 +270,21 @@ def _zsh_launch(
         'ZDOTDIR=$_vbot_user_dotdir\ncommand rm -rf -- "$_vbot_launch_dotdir"\n'
         "unset _vbot_launch_dotdir _vbot_user_dotdir\n"
         '[[ -f "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"\n'
-        f"print -s -r -- {shlex.quote(line)}\n"
-        f"{line}\n",
+        f"{_ZSH_INTEGRATION}{program}",
         encoding="utf-8",
         newline="\n",
     )
     return ShellLaunch(list(shell_argv), environment={"ZDOTDIR": str(scratch)}, scratch=scratch)
+
+
+def _encoded(script: str) -> str:
+    """A PowerShell script as ``-EncodedCommand`` takes it."""
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
+def _cmd_prompt(environment: Mapping[str, str]) -> str:
+    """The user's cmd prompt (``$P$G`` by default) after the prompt mark."""
+    return _CMD_PROMPT_MARK + (environment.get("PROMPT") or "$P$G")
 
 
 def _batch_program(command: str, environment: Mapping[str, str]) -> bool:

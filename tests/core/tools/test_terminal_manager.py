@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from core.tools.terminal_manager import (
     TerminalStaleScreenError,
 )
 from tests.core.tools.terminal_manager_helpers import (
+    TEST_ACTIVITY_QUIET_SECONDS,
     AdapterFactory,
     FakeClock,
     PendingTriggerService,
@@ -56,7 +58,7 @@ async def test_launch_runs_in_the_terminal_environment_and_keeps_explicit_env(
 async def test_start_input_waits_for_a_settled_screen_and_answers_terminal_queries_meanwhile(
     clocked_manager: Clocked, tmp_path: Path
 ) -> None:
-    manager, factory, _trigger, _clock = clocked_manager
+    manager, factory, _trigger, clock = clocked_manager
     started = await spawn(manager, tmp_path, initial_text="agent task")
     assert started.state == "starting"
 
@@ -64,8 +66,79 @@ async def test_start_input_waits_for_a_settled_screen_and_answers_terminal_queri
     factory.adapters[0].emit("\x1b[6n")
     await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R"])
     factory.adapters[0].emit("READY> ")
+    await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R", "agent task"])
+    # Enter follows once the program took the text: its output paused for an
+    # eighth of the quiet period.
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 8)
     await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R", "agent task", "\r"])
     assert terminal_info(manager, started.terminal_id).state == "working"
+
+
+@pytest.mark.asyncio
+async def test_a_key_after_text_follows_at_the_latest_half_the_quiet_period_later(
+    clocked_manager: Clocked, tmp_path: Path
+) -> None:
+    """A program that keeps printing (a spinner) never pauses for the echo:
+    the key still follows half the quiet period after the text."""
+    manager, factory, _trigger, clock = clocked_manager
+    started = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+
+    def revision() -> int:
+        return terminal_info(manager, started.terminal_id).screen_revision
+
+    sending = asyncio.ensure_future(
+        manager.send_input(
+            started.terminal_id,
+            owner(),
+            data=None,
+            text="fix the tests",
+            key="enter",
+            expected_screen_revision=None,
+            origin_run_id="run-a",
+        )
+    )
+    await eventually(lambda: adapter.writes == ["fix the tests"])
+    for index, frame in enumerate("|/-|/"):
+        if index:
+            await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 10)
+        shown = revision()
+        adapter.emit(f"\r{frame}")
+        await eventually(lambda shown=shown: revision() > shown)
+    assert adapter.writes == ["fix the tests"]
+
+    # The last frame came 0.4 quiet periods after the text: only the limit is due.
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS * 0.11)
+    await sending
+    assert adapter.writes == ["fix the tests", "\r"]
+
+
+@pytest.mark.asyncio
+async def test_a_program_asking_for_focus_reports_is_told_its_user_is_away(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    """Programs that report focus notify only a user who is away. The terminal
+    answers that it has no focus, and again after each submitted input."""
+    manager, factory = terminal_manager
+    started = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    adapter.emit("\x1b[?1004h")
+    await eventually(lambda: adapter.writes == ["\x1b[O"])
+
+    async def send(text: str, key: str | None = None) -> None:
+        await manager.send_input(
+            started.terminal_id,
+            owner(),
+            data=None,
+            text=text,
+            key=key,
+            expected_screen_revision=None,
+            origin_run_id="run-a",
+        )
+
+    await send("go", "enter")
+    await send("draft")
+    assert adapter.writes == ["\x1b[O", "go", "\r", "\x1b[O", "draft"]
 
 
 @pytest.mark.asyncio

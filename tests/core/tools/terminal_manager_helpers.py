@@ -29,6 +29,7 @@ from core.tools.terminal_manager import (
 )
 
 TEST_ACTIVITY_QUIET_SECONDS = 1.0
+TEST_IDLE_SECONDS = 5.0
 
 
 class FakeTerminalAdapter:
@@ -311,6 +312,7 @@ async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFact
         render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
+        idle_seconds=0.06,
     )
     manager.start()
     try:
@@ -323,7 +325,7 @@ async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFact
 async def delivering_manager() -> AsyncIterator[
     tuple[TerminalManager, AdapterFactory, PendingTriggerService]
 ]:
-    """A manager that delivers settled activity to a recording Trigger service."""
+    """A manager that delivers idle activity to a recording Trigger service."""
     trigger = PendingTriggerService()
     factory = AdapterFactory()
     manager = TerminalManager(
@@ -332,6 +334,7 @@ async def delivering_manager() -> AsyncIterator[
         render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
+        idle_seconds=0.06,
     )
     manager.start()
     try:
@@ -344,7 +347,7 @@ async def delivering_manager() -> AsyncIterator[
 async def clocked_manager() -> AsyncIterator[
     tuple[TerminalManager, AdapterFactory, PendingTriggerService, FakeClock]
 ]:
-    """A delivering manager whose quiet and resize-grace timers follow a fake clock."""
+    """A delivering manager whose quiet, idle and resize-grace timers follow a fake clock."""
     clock = FakeClock()
     trigger = PendingTriggerService()
     factory = AdapterFactory()
@@ -354,6 +357,7 @@ async def clocked_manager() -> AsyncIterator[
         render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        idle_seconds=TEST_IDLE_SECONDS,
         monotonic=clock.monotonic,
         sleep=clock.sleep,
     )
@@ -418,11 +422,22 @@ async def settle_next_activity(
     after_revision: int,
     quiet_seconds: float,
 ) -> None:
-    """Let output that advanced the screen past *after_revision* reach its quiet boundary."""
+    """Let output that advanced the screen past *after_revision* reach its idle boundary.
+
+    A cycle that input began ends at its quiet boundary; spontaneous output
+    without a declared end runs on to the fallback.
+    """
+
+    def state() -> str:
+        return terminal_info(manager, terminal_id).state
+
     await eventually(lambda: terminal_info(manager, terminal_id).screen_revision > after_revision)
     await eventually(lambda: clock.sleeping)
     await clock.advance(quiet_seconds)
-    await eventually(lambda: terminal_info(manager, terminal_id).state == "ready")
+    await eventually(lambda: state() == "ready" or clock.sleeping)
+    if state() != "ready":
+        await clock.advance(TEST_IDLE_SECONDS - quiet_seconds)
+        await eventually(lambda: state() == "ready")
 
 
 async def establish_delivered_baseline(
@@ -434,7 +449,7 @@ async def establish_delivered_baseline(
     *,
     quiet_seconds: float,
 ) -> TerminalInfo:
-    """Start an attached terminal whose first settled screen was delivered."""
+    """Start an attached terminal whose first idle screen was delivered."""
     started = await spawn(manager, tmp_path)
     terminal_id = started.terminal_id
     manager.attach(terminal_id, owner(), origin_run_id="attach-run")

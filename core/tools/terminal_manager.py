@@ -47,8 +47,13 @@ from ._terminal_command import (
     CommandState,
     StopReason,
 )
-from ._terminal_launch import shell_launch
-from ._terminal_process_tree import ProcessTreeTracker, track_process_tree
+from ._terminal_launch import ShellLaunch, interactive_shell, shell_launch
+from ._terminal_process_tree import (
+    ProcessTree,
+    ProcessTreeTracker,
+    observe_process_tree,
+    track_process_tree,
+)
 from ._terminal_render_host import TerminalRenderHost
 from ._terminal_session import (
     CommandWaitOutcome,
@@ -64,6 +69,7 @@ from ._terminal_state import (
     TERMINAL_DEFAULT_COLUMNS,
     TERMINAL_DEFAULT_ROWS,
     TERMINAL_FINISHED_TTL,
+    TERMINAL_IDLE_SECONDS,
     TERMINAL_INPUT_KEY_SEQUENCES,
     TERMINAL_INPUT_MAX_CHARS,
     TERMINAL_MAX_COLUMNS,
@@ -128,11 +134,16 @@ class TerminalManager:
         finished_session_ttl: timedelta = TERMINAL_FINISHED_TTL,
         sweep_interval_seconds: float = TERMINAL_SWEEP_INTERVAL_SECONDS,
         activity_quiet_seconds: float = TERMINAL_ACTIVITY_QUIET_SECONDS,
+        idle_seconds: float = TERMINAL_IDLE_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         program_probe: Callable[[int, str], bool] = process_tree_runs,
         process_tracker: ProcessTreeTracker = track_process_tree,
+        process_observer: ProcessTreeTracker | None = None,
     ) -> None:
+        """*process_tracker* captures a command's process tree. *process_observer*
+        watches an interactive program's tree for work its output does not show;
+        without it, only output and declared signals show work."""
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
         if finished_session_ttl <= timedelta(0):
@@ -141,6 +152,8 @@ class TerminalManager:
             raise ValueError("Terminal sweep interval must be positive")
         if activity_quiet_seconds <= 0:
             raise ValueError("Terminal activity quiet period must be positive")
+        if idle_seconds < activity_quiet_seconds:
+            raise ValueError("Terminal idle period must not be shorter than its quiet period")
         self._temporary_files = temporary_files
         self._operator_store = TerminalOperatorStore(
             launch_history_path=launch_history_path,
@@ -166,6 +179,7 @@ class TerminalManager:
         self._closed = False
         self._program_probe = program_probe
         self._process_tracker = process_tracker
+        self._process_observer = process_observer
         self._reader_executor = ThreadPoolExecutor(
             max_workers=TERMINAL_MAX_LIVE_GLOBAL + TERMINAL_MAX_LIVE_COMMANDS,
             thread_name_prefix="vbot-terminal-read",
@@ -179,6 +193,7 @@ class TerminalManager:
             trigger_service=trigger_service,
             reader_executor=self._reader_executor,
             activity_quiet_seconds=activity_quiet_seconds,
+            idle_seconds=idle_seconds,
             monotonic=monotonic,
             sleep=sleep,
             program_probe=program_probe,
@@ -314,7 +329,8 @@ class TerminalManager:
         group_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
     ) -> TerminalInfo:
-        """Start one Agent-owned program behind PTY/ConPTY with its exact argv."""
+        """Start one Agent-owned program behind PTY/ConPTY with its exact argv; an
+        interactive shell also gets shell integration (``_terminal_launch``)."""
         _validate_owner(owner)
         if not argv or not argv[0]:
             raise ValueError("Terminal command must not be empty")
@@ -332,6 +348,7 @@ class TerminalManager:
             name=name,
             group_id=group_id,
             execution_owner=execution_owner,
+            integrate_shell=True,
         )
         return session.info()
 
@@ -370,6 +387,7 @@ class TerminalManager:
                 origin_run_id=None,
                 name=name,
                 group_id=group_id,
+                integrate_shell=True,
             )
         else:
             start = shell_launch(shell_argv, command, arguments, environment=environment)
@@ -655,8 +673,12 @@ class TerminalManager:
         cleanup: Callable[[], None] | None = None,
         exact_env: bool = False,
         command_options: tuple[str, str | None, float | None, CommandReportFormatter] | None = None,
+        integrate_shell: bool = False,
     ) -> TerminalSession:
-        """Start one process behind PTY/ConPTY and its Terminal Session."""
+        """Start one process behind PTY/ConPTY and its Terminal Session.
+
+        With *integrate_shell*, an interactive shell starts with shell integration.
+        """
         _validate_dimensions(columns, rows)
         cwd = launch.cwd
         if not cwd.is_dir():
@@ -671,6 +693,8 @@ class TerminalManager:
         screen = None
         adapter: TerminalAdapter | None = None
         command: CommandState | None = None
+        observer: ProcessTree | None = None
+        integration: ShellLaunch | None = None
         try:
             await asyncio.to_thread(self._render_host.prepare)
             screen = self._render_host.open_screen(
@@ -685,9 +709,21 @@ class TerminalManager:
                 transcript_lease = await asyncio.to_thread(
                     self._temporary_files.create, COMMAND_TEMPORARY_CATEGORY, ".log"
                 )
-            adapter = await self._start_process(
-                argv, cwd, env, rows, columns, command_line, exact_env=exact_env
-            )
+            if exact_env and env is not None:
+                process_env = dict(env)
+            else:
+                process_env = await asyncio.to_thread(terminal_environment, env)
+            if integrate_shell:
+                integration = await asyncio.to_thread(
+                    interactive_shell, argv, environment=process_env
+                )
+                if integration is not None:
+                    argv = integration.argv
+                    command_line = integration.command_line
+                    process_env.update(integration.environment)
+                    if integration.scratch is not None:
+                        cleanup = integration.remove_scratch
+            adapter = await self._start_process(argv, cwd, process_env, rows, columns, command_line)
             if command_options is not None:
                 tree = await asyncio.to_thread(self._process_tracker, adapter.pid)
                 text, description, timeout_seconds, formatter = command_options
@@ -701,6 +737,8 @@ class TerminalManager:
                     formatter=formatter,
                     started_at=self._services.monotonic(),
                 )
+            else:
+                observer = await self._observe(adapter.pid)
             if self._closed:
                 raise TerminalClosedError("Terminal Session is no longer running")
         except Exception as error:
@@ -716,6 +754,11 @@ class TerminalManager:
                 command.close()
             elif transcript_lease is not None:
                 transcript_lease.finish()
+            if observer is not None:
+                with contextlib.suppress(Exception):
+                    observer.close()
+            if integration is not None:
+                integration.remove_scratch()
             if screen is not None:
                 screen.close()
             if log_handle is not None:
@@ -744,6 +787,7 @@ class TerminalManager:
             cleanup=cleanup,
             services=self._services,
             command=command,
+            observer=observer,
         )
         if group_id is not None:
             self._catalog.add_to_group(group_id, terminal_id)
@@ -751,22 +795,31 @@ class TerminalManager:
         session.start(initial_text=initial_text)
         return session
 
+    async def _observe(self, pid: int) -> ProcessTree | None:
+        """Observe an interactive program's process tree; None when that failed."""
+        if self._process_observer is None:
+            return None
+        try:
+            return await asyncio.to_thread(self._process_observer, pid)
+        except Exception:
+            _LOGGER.warning(
+                "Could not observe the processes of terminal program pid=%s; its activity "
+                "relies on output and declared signals",
+                pid,
+                exc_info=True,
+            )
+            return None
+
     async def _start_process(
         self,
         argv: Sequence[str],
         cwd: Path,
-        env: Mapping[str, str] | None,
+        process_env: Mapping[str, str],
         rows: int,
         columns: int,
         command_line: str | None,
-        *,
-        exact_env: bool = False,
     ) -> TerminalAdapter:
-        """Start the process in *env* when exact, else in a terminal environment plus *env*."""
-        if exact_env and env is not None:
-            process_env = dict(env)
-        else:
-            process_env = await asyncio.to_thread(terminal_environment, env)
+        """Start the process in exactly *process_env*."""
         return await asyncio.to_thread(
             self._adapter_factory,
             list(argv),
@@ -971,13 +1024,13 @@ class TerminalManager:
         after_revision: int | None = None,
         on_match: Callable[[str], None] | None = None,
     ) -> WaitEnded:
-        """Wait up to *seconds* until the program exits, prints a match, or its output settles.
+        """Wait up to *seconds* until the program exits, prints a match, or goes idle.
 
         A command's wait ends only when its shell exits, at a match, or after
-        *seconds*. An interactive program's wait also ends (``quiet``) once
-        its output settled after activity in an attention revision above
-        *after_revision* (default: the last one a durable result
-        acknowledged); with *pattern* that does not end its wait. Output
+        *seconds*. An interactive program's wait also ends (``idle``) once
+        it went idle showing a new screen in an attention revision above
+        *after_revision* (default: the last one a durable result showed or
+        a delivery brought); with *pattern* that does not end its wait. Output
         printed before the call counts for *pattern*, except output before the
         Agent's last input and that input's echo. *on_match* receives the
         line where a match starts.
@@ -995,7 +1048,7 @@ class TerminalManager:
     async def wait_for_reply(
         self, terminal_id: str, owner: TerminalOwner, *, seconds: float, after_quiet: int
     ) -> WaitEnded:
-        """Wait up to *seconds* until the output settles after input, or the program exits.
+        """Wait up to *seconds* until the output pauses after input, or the program exits.
 
         *after_quiet* is the ``quiet_boundaries`` count ``send_input`` returned.
         Ends ``quiet``, ``exited`` or ``timeout``.
@@ -1286,6 +1339,7 @@ __all__ = [
     "TERMINAL_FINISHED_GROUP_ID",
     "TERMINAL_FINISHED_TTL",
     "TERMINAL_GROUP_NAME_MAX_CHARS",
+    "TERMINAL_IDLE_SECONDS",
     "TERMINAL_INPUT_MAX_CHARS",
     "TERMINAL_INPUT_KEY_SEQUENCES",
     "TERMINAL_MANUAL_GROUP_ID",
@@ -1318,4 +1372,5 @@ __all__ = [
     "TerminalState",
     "WaitEnded",
     "agent_group_id",
+    "observe_process_tree",
 ]

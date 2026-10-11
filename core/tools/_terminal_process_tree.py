@@ -14,6 +14,9 @@ root starts:
 - POSIX: the root is a session leader; the tree is every process of its
   session. A process that starts its own session (``setsid``, daemons) leaves.
 
+``observe_process_tree`` captures an interactive program's tree the same way,
+for its liveness and CPU time only: closing it kills nothing.
+
 Facts are best effort where the platform is: Windows does not guarantee job
 notifications, and a child is opened only once the notification of its start
 is handled, so a child that has ended and been released by its parent by then
@@ -87,7 +90,7 @@ class ProcessTree(Protocol):
     def close(self) -> None:
         """Release tracking resources once the tree has ended or was terminated.
 
-        On Windows a process still in the tree is killed (kill-on-close job).
+        On Windows a process still in a command's tree is killed (kill-on-close job).
         """
 
 
@@ -97,7 +100,18 @@ ProcessTreeTracker = Callable[[int], ProcessTree]
 def track_process_tree(root_pid: int) -> ProcessTree:
     """Start tracking the tree of the just-started *root_pid*."""
     if sys.platform == "win32":
-        return _WindowsJobTree(root_pid)
+        return _WindowsJobTree(root_pid, kill_on_close=True)
+    return _PosixSessionTree(root_pid)
+
+
+def observe_process_tree(root_pid: int) -> ProcessTree:
+    """Observe the tree of the just-started interactive *root_pid*.
+
+    Unlike ``track_process_tree``, closing the observer leaves every process
+    running: an interactive program's lifetime stays with its terminal.
+    """
+    if sys.platform == "win32":
+        return _WindowsJobTree(root_pid, kill_on_close=False)
     return _PosixSessionTree(root_pid)
 
 
@@ -387,7 +401,7 @@ class _JobNotifications:
 
 
 class _WindowsJobTree:
-    def __init__(self, root_pid: int) -> None:
+    def __init__(self, root_pid: int, *, kill_on_close: bool) -> None:
         self._kernel = kernel = _Kernel.get()
         self._k = k = kernel.kernel32
         self._root_pid = root_pid
@@ -404,8 +418,8 @@ class _WindowsJobTree:
         self._key = self._notifications.register(self)
         try:
             limits = _ExtendedLimits()
-            limits.BasicLimitInformation.LimitFlags = (
-                _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | _JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_BREAKAWAY_OK | (
+                _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE if kill_on_close else 0
             )
             self._set(_JOB_EXTENDED_LIMITS, limits)
             association = _AssociateCompletionPort(self._key, self._notifications.port)
@@ -585,5 +599,6 @@ __all__ = [
     "ProcessTreeTracker",
     "ProgramExit",
     "RunningProcess",
+    "observe_process_tree",
     "track_process_tree",
 ]

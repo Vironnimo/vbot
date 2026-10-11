@@ -1,38 +1,81 @@
-"""When Terminal I/O counts as work, and when its quiet boundary wakes the Agent.
+"""When a program in a Terminal works, and when its work is done.
 
 ``TerminalActivity`` is the pure state machine behind a Terminal Session's
-``state`` and its ``output_settled`` attention. It owns no tasks and no
-clock: the Session feeds it events with the current monotonic time and
-carries out what it answers (restart the quiet timer, cancel a pending
+``state`` and its ``idle`` attention. It owns no tasks and no clock: the
+Session feeds it events with the current monotonic time and carries out what
+it answers (restart the quiet timer, sample processes, cancel a pending
 delivery, record or deliver attention).
+
+Work comes in cycles. Input from the Agent or the operator starts one, the
+program's start-up starts the first, and output after the program went idle
+starts a spontaneous one. A cycle ends at its idle boundary, which the
+evidence decides, by the first reason that holds:
+
+- ``declared``: the program declared the end of its work (a bell or
+  notification, a cleared progress indicator, a shell prompt) and then
+  printed nothing for the quiet period;
+- ``quiet``: in a cycle input or start-up began, the program showed work
+  without a pause (output, CPU time, a process the cycle started), then
+  printed nothing for the quiet period, and now runs no process the cycle
+  started, uses no CPU and shows no progress;
+- ``fallback``: the program printed nothing for the idle period, with neither
+  CPU time nor a new process in it.
+
+A spontaneous cycle ends only as declared or by the fallback: a program that
+resumed on its own can pause again without being done. Only an idle
+boundary wakes the attached Agent, and only with a screen the Agent has not
+seen. Every output or input also starts a new generation of the quiet timer,
+whose quiet boundary ends the reply to input or start.
 
 Phases (``state`` shows ``repainting`` as ``ready``)::
 
-    starting --input--> working --quiet--> ready --output/input--> working
-                                             |
-                                          resize, then output inside the
-                                          repaint window
-                                             v
-                                         repainting --quiet--> ready (baseline)
+    starting --input--> working --idle--> ready --output/input--> working
+                                            |
+                                         resize, then output inside the
+                                         repaint window
+                                            v
+                                        repainting --quiet--> ready
 
+A command has no idle boundary: its quiet boundary makes it ``ready``, and
+its output wakes nobody (its result is delivered when it ends).
 ``exited`` and ``error`` are final.
 """
 
 from __future__ import annotations
 
+from collections import deque
+from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
+from ._terminal_command import COMMAND_IDLE_CPU_SECONDS
 from ._terminal_state import TerminalState
 
 _Phase = Literal["starting", "ready", "repainting", "working", "exited", "error"]
+_Origin = Literal["start", "input", "output"]
+# What ended at a quiet boundary: activity, or only a redraw for a new size.
+SettleKind = Literal["activity", "repaint"]
+IdleReason = Literal["declared", "quiet", "fallback"]
+
+# A running cycle's processes are sampled this often.
+PROCESS_SAMPLE_SECONDS = 0.5
+# A pause in the evidence of work longer than this share of the quiet period
+# shows that the program can pause while it works.
+_CONTINUITY_SHARE = 0.75
+# The tree works while it uses at least this share of one core, measured
+# over the samples of the last second.
+_BUSY_CPU_SHARE = 0.2
+_BUSY_WINDOW_SECONDS = 1.0
+# Clock readings that differ by less than this are the same moment.
+_EPSILON = 1e-6
 
 
 class QuietRestart(NamedTuple):
-    """The quiet timer must restart for ``generation``."""
+    """The activity timer must restart for ``generation``."""
 
     generation: int
-    # A pending ``output_settled`` delivery describes a screen that is
-    # changing again: cancel it; the next quiet boundary delivers instead.
+    # A pending ``idle`` delivery describes a screen that is changing again:
+    # cancel it; the next idle boundary delivers instead.
     supersede_delivery: bool
 
 
@@ -43,16 +86,46 @@ class OutputEffect(NamedTuple):
     state_changed: bool
 
 
-class SettleEffect(NamedTuple):
-    # Record a new ``output_settled`` attention revision.
+class IdleEffect(NamedTuple):
+    # Record a new ``idle`` attention revision: the screen is new to the Agent.
     record: bool
     # Deliver it to the attached Agent.
     deliver: bool
-    state_changed: bool
+    reason: IdleReason
+
+
+class ProcessSample(NamedTuple):
+    """The program's process tree at one moment."""
+
+    running: frozenset[int]
+    cpu_seconds: float
+    # Processes ever started in the tree.
+    started: int
+
+
+@dataclass(slots=True)
+class _Cycle:
+    origin: _Origin
+    last_output_at: float
+    last_evidence_at: float
+    # No pause in the evidence of work longer than the continuity gap so far.
+    continuous: bool = True
+    declared_end: bool = False
+    # A shell runs a command line this cycle started.
+    command_running: bool = False
+    # Processes running when the cycle started; None until sampled.
+    baseline: frozenset[int] | None = None
+    child_running: bool = False
+
+
+class _Sample(NamedTuple):
+    at: float
+    cpu_seconds: float
+    started: int
 
 
 class TerminalActivity:
-    """Activity phase, quiet-boundary wakeups and the delivered-screen baseline."""
+    """Activity phase, work cycles, idle boundaries and the delivered-screen baseline."""
 
     def __init__(
         self,
@@ -60,20 +133,29 @@ class TerminalActivity:
         awaiting_initial_input: bool,
         startup_silence: bool,
         repaint_window: float,
-        output_wakes: bool = True,
+        quiet_seconds: float,
+        idle_seconds: float,
+        command: bool = False,
     ) -> None:
         self._phase: _Phase = "starting" if awaiting_initial_input else "ready"
-        # False: only input wakes the attached Agent, never spontaneous output
-        # (a command's output is its result, delivered when it ends).
-        self._spontaneous_wakes = output_wakes
+        self._command = command
         self._repaint_window = repaint_window
+        self._quiet_seconds = quiet_seconds
+        self._idle_seconds = idle_seconds
+        self._continuity_gap = quiet_seconds * _CONTINUITY_SHARE
         # Set when a quiet terminal is resized: output before this monotonic
         # time redraws known content for the new size and is not activity.
         self._repaint_deadline: float | None = None
-        # The current cycle wakes the attached Agent at its quiet boundary.
-        self._wake_at_quiet = False
+        self._cycle: _Cycle | None = None
+        # Origin of the next cycle that output opens: the program's start-up first.
+        self._next_origin: _Origin = "start"
+        # A progress indicator (OSC 9;4) shows work; it outlives cycles.
+        self._progress = False
+        self._samples: deque[_Sample] = deque()
+        # The current activity wakes the attached Agent at its idle boundary.
+        self._wake_at_idle = False
         # Spontaneous output (not caused by input) wakes the attached Agent.
-        # Armed by attach and by the first quiet boundary while attached, so
+        # Armed by attach and by the first idle boundary while attached, so
         # the start-up output of an Agent-started terminal wakes nobody.
         self._output_wakes = False
         # An Agent start without initial text wakes nobody until the first
@@ -81,8 +163,8 @@ class TerminalActivity:
         # start result and the operator sees it live.
         self._startup_silence = startup_silence
         # Visible-cell signature of the screen the attached Agent last
-        # received or acknowledged. A quiet boundary showing the same screen
-        # (status refreshes, cursor frames, repaint echoes) wakes nobody.
+        # received or saw in a result. An idle boundary showing the same
+        # screen (status refreshes, cursor frames, repaint echoes) wakes nobody.
         self._baseline: str | None = None
         self.generation = 0
 
@@ -94,31 +176,61 @@ class TerminalActivity:
     def finished(self) -> bool:
         return self._phase in {"exited", "error"}
 
-    def output(self, now: float, *, attached: bool, delivery_pending: bool) -> OutputEffect:
-        """Program output arrived."""
+    @property
+    def cycle_open(self) -> bool:
+        """A cycle of work runs: its processes are worth sampling."""
+        return self._cycle is not None and not self.finished
+
+    def output(
+        self,
+        now: float,
+        *,
+        attached: bool,
+        delivery_pending: bool,
+        signals: Iterable[str] = (),
+    ) -> OutputEffect:
+        """Program output arrived, with the *signals* it declared."""
+        signals = tuple(signals)
         if self.finished:
             return OutputEffect(False, None, False)
         if self._phase == "starting":
             # The initial input is still waiting for a stable screen.
+            self._apply_signals(None, signals)
             return OutputEffect(True, None, False)
-        if self._repaint_deadline is not None and now < self._repaint_deadline:
+        if not signals and self._repaint_deadline is not None and now < self._repaint_deadline:
             self._phase = "repainting"
             return OutputEffect(False, self._restart(notify=False, supersede=False), False)
         self._repaint_deadline = None
         changed = self._phase != "working"
         self._phase = "working"
-        restart = self._restart(
-            notify=attached and self._output_wakes and self._spontaneous_wakes,
-            supersede=delivery_pending,
-        )
+        if self._command:
+            return OutputEffect(True, self._restart(notify=False, supersede=False), changed)
+        cycle = self._cycle
+        if cycle is None:
+            cycle = self._open(self._next_origin, now)
+        else:
+            self._evidence(cycle, now)
+        cycle.last_output_at = now
+        self._apply_signals(cycle, signals)
+        restart = self._restart(notify=attached and self._output_wakes, supersede=delivery_pending)
         return OutputEffect(True, restart, changed)
 
-    def input(self, *, notify: bool, delivery_pending: bool) -> tuple[QuietRestart, bool]:
-        """Agent or operator input was written; returns the restart and a state change."""
+    def input(
+        self,
+        now: float,
+        *,
+        notify: bool,
+        delivery_pending: bool,
+        running: frozenset[int] | None = None,
+    ) -> tuple[QuietRestart, bool]:
+        """Agent or operator input was written, which starts a cycle; *running* are
+        the processes that ran before it. Returns the restart and a state change."""
         self._repaint_deadline = None
         self._startup_silence = False
         changed = self._phase != "working"
         self._phase = "working"
+        if not self._command:
+            self._open("input", now).baseline = running
         return self._restart(notify=notify, supersede=delivery_pending), changed
 
     def resize(self, now: float) -> None:
@@ -127,7 +239,7 @@ class TerminalActivity:
             self._repaint_deadline = now + self._repaint_window
 
     def attach(self, *, delivery_pending: bool) -> QuietRestart | None:
-        """An Agent attached: its activity, including a cycle in progress, wakes it."""
+        """An Agent attached: its activity, including activity in progress, wakes it."""
         self._output_wakes = True
         self._startup_silence = False
         if self._phase != "working":
@@ -135,38 +247,97 @@ class TerminalActivity:
         return self._restart(notify=True, supersede=delivery_pending)
 
     def detach(self) -> None:
-        self._wake_at_quiet = False
+        self._wake_at_idle = False
         self._output_wakes = False
 
-    def settle(self, generation: int, signature: str, *, attached: bool) -> SettleEffect | None:
-        """The quiet timer of ``generation`` expired showing ``signature``.
+    def sample(self, now: float, sample: ProcessSample) -> None:
+        """The program's processes at *now*, sampled while a cycle runs."""
+        samples = self._samples
+        samples.append(_Sample(now, sample.cpu_seconds, sample.started))
+        horizon = now - self._idle_seconds - _BUSY_WINDOW_SECONDS
+        while samples and samples[0].at < horizon:
+            samples.popleft()
+        cycle = self._cycle
+        if cycle is None or self.finished:
+            return
+        if cycle.baseline is None:
+            cycle.baseline = sample.running
+        cycle.child_running = bool(sample.running - cycle.baseline)
+        if cycle.child_running or self._progress or self._cpu_busy():
+            self._evidence(cycle, now)
+
+    def settle(self, generation: int, signature: str) -> SettleKind | None:
+        """The quiet period of ``generation`` passed showing ``signature``.
 
         Returns None for a stale timer or a phase without a quiet boundary.
+        An interactive program stays ``working`` until its idle boundary.
         """
         if generation != self.generation or self._phase not in {"working", "repainting"}:
             return None
         if self._phase == "repainting":
-            # Only a redraw for a new size happened. Its screen shows the
-            # known content and becomes the baseline without waking anyone or
-            # recording attention.
             self._phase = "ready"
             self._repaint_deadline = None
-            self._baseline = signature
-            return SettleEffect(False, False, False)
-        deliver = self._wake_at_quiet
-        self._wake_at_quiet = False
-        self._output_wakes = attached
+            if not self._wake_at_idle:
+                # Only a redraw for a new size happened: its screen shows the
+                # known content.
+                self._baseline = signature
+            return "repaint"
+        if self._command:
+            self._phase = "ready"
+        return "activity"
+
+    def quiet(self, now: float) -> bool:
+        """A cycle runs and its program printed nothing for the quiet period."""
+        cycle = self._cycle
+        return (
+            cycle is not None
+            and not self.finished
+            and now - cycle.last_output_at >= self._quiet_seconds - _EPSILON
+        )
+
+    def idle(
+        self, generation: int, now: float, signature: str, *, attached: bool, seen: bool
+    ) -> IdleEffect | None:
+        """Whether the cycle of ``generation`` reached its idle boundary at *now*.
+
+        *seen* tells that the attached Agent's last result showed this screen
+        revision. Returns None for a stale timer and while the program works.
+        """
+        if (
+            generation != self.generation
+            or self._phase != "working"
+            or self._cycle is None
+            or self._command
+        ):
+            return None
+        reason = self._idle_reason(self._cycle, now)
+        if reason is None:
+            return None
         self._phase = "ready"
-        if deliver and self._startup_silence:
+        self._cycle = None
+        self._next_origin = "output"
+        deliver = self._wake_at_idle
+        self._wake_at_idle = False
+        self._output_wakes = attached
+        if seen or signature == self._baseline:
+            self._baseline = signature
+            return IdleEffect(False, False, reason)
+        if self._startup_silence:
             # Remember the start-up screen as seen, so an identical later
             # refresh stays silent too.
             self._baseline = signature
-            deliver = False
-        if deliver and signature == self._baseline:
-            deliver = False
+            return IdleEffect(True, False, reason)
         if deliver:
             self._baseline = signature
-        return SettleEffect(True, deliver, True)
+        return IdleEffect(True, deliver, reason)
+
+    def fallback_at(self, generation: int) -> float | None:
+        """When the cycle of ``generation`` can reach its fallback idle boundary,
+        or None when that time has passed or no cycle runs."""
+        cycle = self._cycle
+        if generation != self.generation or cycle is None or self._phase != "working":
+            return None
+        return cycle.last_output_at + self._idle_seconds
 
     def acknowledge(self, signature: str) -> None:
         """The attached Agent durably received this screen."""
@@ -174,8 +345,92 @@ class TerminalActivity:
 
     def finish(self, *, error: bool) -> None:
         self._phase = "error" if error else "exited"
-        self._wake_at_quiet = False
+        self._cycle = None
+        self._wake_at_idle = False
         self._repaint_deadline = None
+
+    def _open(self, origin: _Origin, now: float) -> _Cycle:
+        self._cycle = _Cycle(origin, last_output_at=now, last_evidence_at=now)
+        self._next_origin = "output"
+        return self._cycle
+
+    def _evidence(self, cycle: _Cycle, now: float) -> None:
+        """The program showed work at *now*."""
+        if now - cycle.last_evidence_at > self._continuity_gap + _EPSILON:
+            cycle.continuous = False
+        cycle.last_evidence_at = max(cycle.last_evidence_at, now)
+
+    def _apply_signals(self, cycle: _Cycle | None, signals: tuple[str, ...]) -> None:
+        for signal in signals:
+            if signal == "progress":
+                self._progress = True
+            elif signal == "progress_end":
+                if self._progress and cycle is not None:
+                    cycle.declared_end = True
+                self._progress = False
+            elif cycle is None:
+                continue
+            elif signal == "attention":
+                cycle.declared_end = True
+            elif signal == "prompt":
+                cycle.declared_end = True
+                cycle.command_running = False
+            elif signal == "command":
+                # A shell runs the next command line: an earlier prompt is stale.
+                cycle.declared_end = False
+                cycle.command_running = True
+
+    def _idle_reason(self, cycle: _Cycle, now: float) -> IdleReason | None:
+        quiet_for = now - cycle.last_output_at
+        if quiet_for < self._quiet_seconds - _EPSILON:
+            return None
+        if cycle.declared_end and not self._progress:
+            return "declared"
+        if (
+            cycle.origin != "output"
+            and cycle.continuous
+            and not cycle.child_running
+            and not cycle.command_running
+            and not self._progress
+            and not self._cpu_busy()
+        ):
+            return "quiet"
+        if quiet_for >= self._idle_seconds - _EPSILON and self._tree_quiet(cycle, now):
+            return "fallback"
+        return None
+
+    def _cpu_busy(self) -> bool:
+        """The tree used at least the busy share of a core over the last second."""
+        samples = self._samples
+        if len(samples) < 2:
+            return False
+        latest = samples[-1]
+        earliest = next(
+            sample for sample in samples if sample.at >= latest.at - _BUSY_WINDOW_SECONDS - _EPSILON
+        )
+        span = latest.at - earliest.at
+        if span <= _EPSILON:
+            return False
+        return (latest.cpu_seconds - earliest.cpu_seconds) / span >= _BUSY_CPU_SHARE
+
+    def _tree_quiet(self, cycle: _Cycle, now: float) -> bool:
+        """Neither CPU time nor a new process in the processes since the output paused.
+
+        A change in the CPU sum either way is work: POSIX sums running
+        processes only, so an exit takes CPU time out of it.
+        """
+        window = [
+            sample
+            for sample in self._samples
+            if sample.at >= max(cycle.last_output_at, now - self._idle_seconds) - _EPSILON
+        ]
+        if len(window) < 2:
+            return True
+        first, last = window[0], window[-1]
+        return (
+            abs(last.cpu_seconds - first.cpu_seconds) <= COMMAND_IDLE_CPU_SECONDS
+            and last.started == first.started
+        )
 
     def _restart(self, *, notify: bool, supersede: bool) -> QuietRestart:
         if supersede:
@@ -183,6 +438,6 @@ class TerminalActivity:
             # an identical screen must still carry the outstanding update.
             self._baseline = None
             notify = True
-        self._wake_at_quiet = self._wake_at_quiet or notify
+        self._wake_at_idle = self._wake_at_idle or notify
         self.generation += 1
         return QuietRestart(self.generation, supersede)
