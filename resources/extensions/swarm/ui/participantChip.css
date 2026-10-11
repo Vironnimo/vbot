@@ -2,13 +2,7 @@
    (ParticipantChip.svelte, ParticipantAvatar.svelte). An avatar is an
    unframed tile: a participant's initials in its identity colour on a soft
    tint of it, or a person for the user. */
-:where(
-    .swarm-page,
-    .swarm-page-modal-copy,
-    .swarm-page-communication,
-    .board-composer
-  )
-  .participant-avatar {
+:where(.swarm-page, .board-composer) .participant-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -23,19 +17,11 @@
   font: 600 var(--fs-label-sm) / 1 var(--font-ui);
   white-space: nowrap;
 }
-:where(
-    .swarm-page,
-    .swarm-page-modal-copy,
-    .swarm-page-communication,
-    .board-composer
-  )
-  .participant-avatar
-  svg {
+:where(.swarm-page, .board-composer) .participant-avatar svg {
   width: 16px;
   height: 16px;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participant-row {
+:where(.swarm-page) .participant-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;

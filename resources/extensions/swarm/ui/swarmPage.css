@@ -61,25 +61,18 @@ body {
   margin: 4px 0;
   overflow-wrap: anywhere;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .panel {
+:where(.swarm-page) .panel {
   display: grid;
   gap: 16px;
   padding-block: 20px;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .panel
-  h3 {
+:where(.swarm-page) .panel h3 {
   margin: 0;
   font-size: var(--fs-heading-sm);
   font-weight: 600;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .history
-  pre:where(:not(.msg-markdown *)),
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .panel
-  pre:where(:not(.msg-markdown *)),
-.swarm-page-modal-copy > pre {
+:where(.swarm-page) .history pre:where(:not(.msg-markdown *)),
+:where(.swarm-page) .panel pre:where(:not(.msg-markdown *)) {
   overflow: auto;
   max-height: 420px;
   white-space: pre-wrap;
