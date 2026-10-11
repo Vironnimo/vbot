@@ -794,8 +794,15 @@ describe('Swarm Board posts', () => {
     await settle();
     expect(reads()).toHaveLength(shown);
 
+    // A failed page shows as the page error until the next try.
+    operation.mockRejectedValueOnce(new Error('invalid_cursor'));
+    button(t('swarm.board.newer')).click();
+    await vi.waitFor(() =>
+      expect(notice('alert')).toContain(t('swarm.error.unexpected')),
+    );
     button(t('swarm.board.newer')).click();
     await vi.waitFor(() => expect(numbers()[0]).toBe(160));
+    expect(notice('alert')).toBe('');
     expect(reads().at(-1)).toEqual(read({ after: 110 }));
     button(t('swarm.board.newest')).click();
     await vi.waitFor(() =>

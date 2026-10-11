@@ -305,12 +305,13 @@ export function createSwarmPageBoard(host) {
     }
   }
 
-  // Puts the next page of newer posts on top of a Board that does not show
-  // the discussion's newest posts.
+  // "Load newer messages", a user step: puts the next page of newer posts on
+  // top of a Board that does not show the discussion's newest posts.
   async function loadNewerPosts() {
     const swarm = host.selectedSwarm;
     const discussionId = selectedDiscussion;
     if (!swarm || boardAtNewest || !shows(swarm, discussionId)) return;
+    host.error = '';
     const version = boardVersion;
     const load = readPosts(swarm, discussionId, {
       after: posts[0]?.sequence ?? 0,
@@ -331,11 +332,12 @@ export function createSwarmPageBoard(host) {
     boardAtNewest = !result.has_more;
   }
 
-  // Replaces the shown posts with the discussion's newest page and shows its
-  // newest post.
+  // "Jump to newest", a user step: replaces the shown posts with the
+  // discussion's newest page and shows its newest post.
   async function jumpToNewest() {
     const swarm = host.selectedSwarm;
     if (!swarm) return;
+    host.error = '';
     const version = boardVersion + 1;
     try {
       await loadBoard(swarm, selectedDiscussion);

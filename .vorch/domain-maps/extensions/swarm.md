@@ -856,8 +856,9 @@ Page errors (`pageModel.svelte.js`): a failed user action shows in the page's
 error banner until the next user action starts; refreshes never clear it, so a
 background refresh cannot hide it unseen. Reads the user starts are user
 actions: choosing a participant or the start form's Swarm, opening the Board or
-Usage tab, choosing a discussion, loading more discussions or earlier posts,
-loading earlier Activity, revealing a post, cancelling a Tool Call.
+Usage tab, choosing a discussion, loading more discussions, earlier or newer
+posts, jumping to the newest post, loading earlier Activity, revealing a post,
+cancelling a Tool Call.
 A failed refresh shows its own banner with Retry, and so does a failed read the
 page starts on its own (`refreshFailed`), which never touches the error banner:
 Activity's reads for a refresh, for a Run that ended on its own and for its tab
