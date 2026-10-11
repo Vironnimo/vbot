@@ -1,4 +1,5 @@
-"""Manual launch commands start inside the interactive shell through its own start options."""
+"""Interactive shells start with shell integration; manual launch commands run inside
+them through each shell's own start options."""
 
 from __future__ import annotations
 
@@ -9,14 +10,20 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import core.tools._terminal_launch as terminal_launch
-from core.tools._terminal_launch import ShellLaunch, shell_launch
-from core.tools.terminal_backend import windows_command_processor_line
+from core.tools._terminal_launch import ShellLaunch, interactive_shell, shell_launch
+from core.tools.terminal_backend import (
+    TerminalAdapter,
+    spawn_terminal_adapter,
+    windows_command_processor_line,
+)
+from core.tools.terminal_emulator import TerminalEmulator
 
 # Values each shell's own syntax would otherwise interpret.
 _SPECIAL = ['a "b" c', "100%", "x&y|z", "it's"]
@@ -56,7 +63,7 @@ def test_powershell_runs_the_command_last_in_an_encoded_script(
     script = _powershell_script(launch)
     assert script[-1] == line
     # The command also lands in the shell's history, so Up repeats it.
-    assert _history_entry(line) in script[0]
+    assert _history_entry(line) in script[-2]
     assert (launch.command_line, launch.environment, launch.scratch) == (None, {}, None)
 
 
@@ -78,7 +85,7 @@ def test_powershell_runs_a_batch_program_through_cmd_when_an_argument_needs_prot
     exact = windows_command_processor_line("codex", _SPECIAL)
     assert script[-1] == f"& 'C:\\Windows\\system32\\cmd.exe' --% /d /s /c \"{exact}\""
     # The history keeps the line as the operator would type it in PowerShell.
-    assert _history_entry(r"""codex 'a "b" c' '100%' 'x&y|z' 'it''s'""") in script[0]
+    assert _history_entry(r"""codex 'a "b" c' '100%' 'x&y|z' 'it''s'""") in script[-2]
     assert _powershell_script(plain)[-1] == "codex --profile 'work space'"
 
 
@@ -97,7 +104,8 @@ def test_cmd_runs_an_exact_command_line_with_escaped_metacharacters() -> None:
     # An argument cmd could act on is quoted even without whitespace, since a
     # batch program hands it to cmd once more.
     assert launch.command_line == r'''/d /s /k "codex ^"a \^"b\^" c^" 100^% ^"x^&y^|z^" it's"'''
-    assert (launch.environment, launch.scratch) == ({}, None)
+    # The shell integration is the prompt: its mark, then the default prompt.
+    assert (launch.environment, launch.scratch) == ({"PROMPT": r"$e]133;A$e\$P$G"}, None)
 
 
 @pytest.mark.usefixtures("posix_host")
@@ -109,10 +117,14 @@ def test_bash_rcfile_loads_the_users_bashrc_then_runs_the_command() -> None:
         rcfile = scratch / "bashrc"
         assert launch.argv == ["/bin/bash", "--rcfile", str(rcfile), "-i"]
         assert (launch.command_line, launch.environment) == (None, {})
-        removal, user_rc, history, run = rcfile.read_text(encoding="utf-8").splitlines()
-        # The shell removes its private files first, then starts like any interactive bash.
+        removal, user_rc, *integration, history, run = rcfile.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        # The shell removes its private files first, then starts like any interactive
+        # bash and adds its marks to the user's prompt.
         assert shlex.split(removal) == ["command", "rm", "-rf", "--", str(scratch)]
         assert user_rc == 'if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi'
+        assert any(row.startswith("PROMPT_COMMAND=") for row in integration)
         line = "codex --profile 'work space'"
         assert shlex.split(history) == ["history", "-s", "--", line]
         assert run == line
@@ -144,7 +156,9 @@ def test_zsh_dotdir_loads_the_users_files_then_runs_the_command(
         assert '[[ -f "$ZDOTDIR/.zshenv" ]] && source "$ZDOTDIR/.zshenv"' in zshenv
         *setup, history, run = (scratch / ".zshrc").read_text(encoding="utf-8").splitlines()
         assert 'command rm -rf -- "$_vbot_launch_dotdir"' in setup
-        assert setup[-1] == '[[ -f "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"'
+        # The prompt marks are hooked in after the user's files.
+        user_rc = setup.index('[[ -f "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"')
+        assert setup.index("add-zsh-hook precmd __vbot_prompt_mark") > user_rc
         line = "codex --profile 'work space'"
         assert shlex.split(history) == ["print", "-s", "-r", "--", line]
         assert run == line
@@ -158,7 +172,11 @@ def test_zsh_dotdir_loads_the_users_files_then_runs_the_command(
         (
             "posix",
             ["/usr/bin/fish"],
-            ["/usr/bin/fish", "-C", r"""codex --profile 'work space' 'it\'s'"""],
+            [
+                "/usr/bin/fish",
+                "-C",
+                terminal_launch._FISH_INTEGRATION + r"""; codex --profile 'work space' 'it\'s'""",
+            ],
             None,
         ),
         (
@@ -206,6 +224,97 @@ def test_other_shells_run_the_command_before_the_interactive_shell(
 def test_an_empty_command_or_argument_is_rejected(command: str, arguments: list[str]) -> None:
     with pytest.raises(ValueError):
         shell_launch(["pwsh.exe"], command, arguments, environment={})
+
+
+@pytest.mark.parametrize(
+    ("os_name", "argv", "integrated"),
+    [
+        ("nt", ["pwsh.exe", "-NoLogo"], ["pwsh.exe", "-NoLogo", "-NoExit", "-EncodedCommand"]),
+        ("nt", ["pwsh.exe", "-NoExit"], ["pwsh.exe", "-NoExit", "-EncodedCommand"]),
+        ("nt", ["cmd.exe", "/d"], ["cmd.exe", "/d"]),
+        ("posix", ["/usr/bin/fish", "-l"], ["/usr/bin/fish", "-l", "-C"]),
+        ("posix", ["/bin/bash"], ["/bin/bash", "--rcfile"]),
+        ("posix", ["/bin/zsh", "-i"], ["/bin/zsh", "-i"]),
+        # Options beyond plain interactive flags: the shell starts as given.
+        ("nt", ["pwsh.exe", "-Command", "Get-Date"], None),
+        ("nt", ["cmd.exe", "/c", "dir"], None),
+        ("posix", ["/bin/bash", "--norc"], None),
+        # bash on Windows (Git Bash, MSYS) and programs other than shells.
+        ("nt", ["C:\\Program Files\\Git\\bin\\bash.exe"], None),
+        ("posix", ["python3"], None),
+    ],
+)
+def test_only_a_plain_interactive_shell_starts_with_shell_integration(
+    monkeypatch: pytest.MonkeyPatch, os_name: str, argv: list[str], integrated: list[str] | None
+) -> None:
+    monkeypatch.setattr(terminal_launch, "os", SimpleNamespace(name=os_name))
+
+    launch = interactive_shell(argv, environment={"PROMPT": "$N$G"})
+
+    if integrated is None:
+        assert launch is None
+        return
+    assert launch is not None
+    try:
+        assert launch.argv[: len(integrated)] == integrated
+        if Path(argv[0]).name == "cmd.exe":
+            # cmd keeps the user's own prompt after the mark.
+            assert launch.environment == {"PROMPT": r"$e]133;A$e\$N$G"}
+    finally:
+        launch.remove_scratch()
+
+
+# Real shell startup can exceed 10 seconds on shared Windows CI runners.
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("shell", ["powershell.exe", "pwsh.exe", "cmd.exe", "bash", "zsh", "fish"])
+def test_real_integrated_shell_declares_its_prompt_and_command_start(
+    shell: str, tmp_path: Path
+) -> None:
+    """In a terminal, an integrated shell marks every prompt and, except cmd, the
+    start of every command line it runs; the emulator reads them as signals."""
+    executable = _shell_available(shell)
+    environment = {key: value for key, value in os.environ.items() if key != "ZDOTDIR"}
+    launch = interactive_shell([executable], environment=environment)
+    assert launch is not None
+    adapter = spawn_terminal_adapter(
+        launch.argv,
+        tmp_path,
+        {**environment, **launch.environment},
+        24,
+        80,
+        command_line=launch.command_line,
+    )
+    emulator = TerminalEmulator(80, 24, scrollback_lines=100)
+    try:
+        _read_signals_until_prompt(adapter, emulator)
+        adapter.write("echo vbot\r")
+        signals = _read_signals_until_prompt(adapter, emulator)
+    finally:
+        adapter.terminate()
+        adapter.close()
+        launch.remove_scratch()
+
+    assert signals[-1] == "prompt"
+    if shell != "cmd.exe":
+        assert "command" in signals
+
+
+def _read_signals_until_prompt(adapter: TerminalAdapter, emulator: TerminalEmulator) -> list[str]:
+    """The shell's signals up to and including the next prompt."""
+    signals: list[str] = []
+    deadline = time.monotonic() + 60
+    while "prompt" not in signals:
+        assert time.monotonic() < deadline, f"no prompt mark; signals {signals}"
+        try:
+            chunk = adapter.read(4096)
+        except TimeoutError:
+            continue
+        update = emulator.feed(chunk)
+        if update.responses:
+            # ConPTY holds output until its device query is answered.
+            adapter.write(update.responses)
+        signals.extend(signal for signal in update.signals if signal in {"command", "prompt"})
+    return signals
 
 
 def _run(

@@ -128,7 +128,7 @@ from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
-from core.tools.terminal_manager import TerminalManager
+from core.tools.terminal_manager import TerminalManager, observe_process_tree
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
 from core.utils.tls import prewarm_outbound_http
@@ -646,6 +646,7 @@ def bootstrap(runtime: Runtime) -> None:
             launch_history_path=runtime._storage.layout.terminals / "launch-history.json",
             groups_path=runtime._storage.layout.terminals / "groups.json",
             data_dir=runtime._storage.data_dir,
+            process_observer=observe_process_tree,
         )
         runtime._start_terminal_manager()
         register_terminal_tool(runtime._tools, runtime._terminal_manager, runtime._projects)

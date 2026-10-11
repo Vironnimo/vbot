@@ -20,6 +20,9 @@ from pyte import graphics
 
 _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
 _BRACKETED_PASTE_MODE = 2004
+_FOCUS_REPORTING_MODE = 1004
+# The report that the terminal lost the focus: vBot's terminals never have it.
+FOCUS_OUT_REPORT = "\x1b[O"
 _APPLICATION_CURSOR_MODE = 1
 TERMINAL_TITLE_MAX_CHARS = 160
 # A repeat request (REP) draws at most one screen of characters.
@@ -42,6 +45,21 @@ _COLON_SEQUENCE = re.compile(r"\x1b\[([0-9;]*:[0-9;:]*)([ -/]*)([@-~])")
 # next chunk completes it.
 _INCOMPLETE_SEQUENCE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*)?$")
 _TERMINAL_QUERY = re.compile(r"\x1b\[([?>]?)([0-9;]*)(\$?)([cntp])")
+# What the signal scanner looks for between control strings: a whole CSI
+# (read in one step), a bell, or the start of another escape sequence.
+_SCAN_GROUND = re.compile(r"\x1b\[([0-?]*)[ -/]*([@-~])|\x07|\x1b")
+_SCAN_CSI_END = re.compile(r"[@-~\x1b\x18\x1a]")
+_SCAN_CSI_PARAMETERS = re.compile(r"[0-?]*")
+# A CSI split across chunks is kept up to this many characters; longer ones
+# set no mode the scanner reads.
+_CSI_PREFIX_CHARS = 32
+_SCAN_OSC_END = re.compile(r"[\x07\x1b\x18\x1a]")
+_SCAN_STRING_END = re.compile(r"[\x1b\x18\x1a]")
+# ConEmu's numbered OSC 9 commands; any other OSC 9 text is a notification.
+_OSC9_COMMAND = re.compile(r"\d+(?:;|$)")
+# An OSC payload is classified by its start; longer payloads (images,
+# clipboard data) are not kept.
+_OSC_PREFIX_CHARS = 64
 _SCREEN_STATE_FIELDS = (
     "savepoints",
     "columns",
@@ -109,6 +127,11 @@ class EmulatorUpdate(NamedTuple):
     alternate_exited: bool
     # Transcript lines that became final in this chunk (transcript screens only).
     transcript: tuple[str, ...] = ()
+    # What the program declared about its work in this chunk, in order (see
+    # ``SignalScanner``).
+    signals: tuple[str, ...] = ()
+    # The program asked for focus reports (CSI ? 1004 h) and still wants them.
+    focus_reporting: bool = False
 
 
 class ScreenObservation(NamedTuple):
@@ -116,6 +139,181 @@ class ScreenObservation(NamedTuple):
 
     signature: str
     tail: str
+
+
+class SignalScanner:
+    """Find what a program declares about its work in its output, across chunks.
+
+    Signals, by the standard terminal sequences that carry them:
+
+    - ``attention``: the program asks for the user: a bell outside control
+      strings, or a desktop notification (OSC 9 with text, OSC 777;notify,
+      OSC 99).
+    - ``progress`` / ``progress_end``: a progress indicator (OSC 9;4) shows
+      work (state 1 or 3), or is cleared, failed or paused (state 0, 2 or 4).
+    - ``prompt``: a shell shows its prompt or ended a command (OSC 133/633 A
+      or D, OSC 9;12), or a line editor starts reading input (it turns
+      bracketed paste on, CSI ? 2004 h).
+    - ``command``: a shell starts running a command line (OSC 133/633 C), or
+      a line editor stops reading input (it turns bracketed paste off).
+
+    Line editors (readline, zle, fish, prompt_toolkit, Python's REPL) turn
+    bracketed paste on while they read a line and off while it runs; only a
+    change of the mode is a signal, as full-screen programs set it once.
+    A sequence split across chunks is recognized once it completes.
+    """
+
+    def __init__(self) -> None:
+        self._state = "ground"
+        self._payload: list[str] = []
+        self._payload_chars = 0
+        self._csi: list[str] = []
+        self._csi_chars = 0
+        self._bracketed_paste = False
+
+    def scan(self, text: str) -> list[str]:
+        signals: list[str] = []
+        index = 0
+        length = len(text)
+        while index < length:
+            state = self._state
+            if state == "ground":
+                match = _SCAN_GROUND.search(text, index)
+                if match is None:
+                    break
+                index = match.end()
+                token = match.group()
+                if token == "\x07":
+                    signals.append("attention")
+                elif token == "\x1b":
+                    self._state = "escape"
+                else:
+                    self._dispatch_csi(match.group(1), match.group(2), signals)
+            elif state == "escape":
+                character = text[index]
+                index += 1
+                if character == "]":
+                    self._state = "osc"
+                    self._payload = []
+                    self._payload_chars = 0
+                elif character == "[":
+                    self._state = "csi"
+                    self._csi = []
+                    self._csi_chars = 0
+                elif character in "P^_X":
+                    self._state = "string"
+                elif " " <= character <= "/":
+                    self._state = "escape_intermediate"
+                elif character != "\x1b":
+                    self._state = "ground"
+            elif state == "escape_intermediate":
+                character = text[index]
+                index += 1
+                if character == "\x1b":
+                    self._state = "escape"
+                elif not " " <= character <= "/":
+                    self._state = "ground"
+            elif state == "csi":
+                match = _SCAN_CSI_END.search(text, index)
+                end = length if match is None else match.start()
+                if self._csi_chars < _CSI_PREFIX_CHARS:
+                    part = text[index : min(end, index + _CSI_PREFIX_CHARS - self._csi_chars)]
+                    self._csi.append(part)
+                    self._csi_chars += len(part)
+                if match is None:
+                    break
+                index = match.end()
+                final = match.group()
+                if final == "\x1b":
+                    self._state = "escape"
+                    continue
+                self._state = "ground"
+                if final not in "\x18\x1a" and self._csi_chars < _CSI_PREFIX_CHARS:
+                    parameters = _SCAN_CSI_PARAMETERS.match("".join(self._csi))
+                    self._dispatch_csi(parameters.group() if parameters else "", final, signals)
+            elif state == "osc":
+                match = _SCAN_OSC_END.search(text, index)
+                end = length if match is None else match.start()
+                if self._payload_chars < _OSC_PREFIX_CHARS:
+                    part = text[index : min(end, index + _OSC_PREFIX_CHARS - self._payload_chars)]
+                    self._payload.append(part)
+                    self._payload_chars += len(part)
+                if match is None:
+                    break
+                index = match.end()
+                terminator = match.group()
+                if terminator == "\x07":
+                    self._dispatch(signals)
+                    self._state = "ground"
+                elif terminator == "\x1b":
+                    self._state = "osc_escape"
+                else:
+                    self._state = "ground"
+            elif state == "osc_escape":
+                if text[index] == "\\":
+                    index += 1
+                    self._dispatch(signals)
+                    self._state = "ground"
+                else:
+                    # The escape starts another sequence and cancels the OSC.
+                    self._state = "escape"
+            elif state == "string":
+                match = _SCAN_STRING_END.search(text, index)
+                if match is None:
+                    break
+                index = match.end()
+                self._state = "string_escape" if match.group() == "\x1b" else "ground"
+            else:  # string_escape
+                if text[index] == "\\":
+                    index += 1
+                    self._state = "ground"
+                else:
+                    # Another escape sequence inside the string (tmux passthrough
+                    # doubles them) is read as one.
+                    self._state = "escape"
+        return signals
+
+    def _dispatch(self, signals: list[str]) -> None:
+        signal = _osc_signal("".join(self._payload))
+        if signal is not None:
+            signals.append(signal)
+
+    def _dispatch_csi(self, parameters: str, final: str, signals: list[str]) -> None:
+        if final not in "hl" or not parameters.startswith("?"):
+            return
+        if str(_BRACKETED_PASTE_MODE) not in parameters[1:].split(";"):
+            return
+        enabled = final == "h"
+        if enabled != self._bracketed_paste:
+            self._bracketed_paste = enabled
+            signals.append("prompt" if enabled else "command")
+
+
+def _osc_signal(payload: str) -> str | None:
+    """The signal an OSC payload carries, if any."""
+    head, _, rest = payload.partition(";")
+    if head == "9":
+        if rest.startswith("4;"):
+            state = rest[2:].partition(";")[0]
+            if state in {"1", "3"}:
+                return "progress"
+            return "progress_end" if state in {"0", "2", "4"} else None
+        if rest == "12" or rest.startswith("12;"):
+            return "prompt"
+        if _OSC9_COMMAND.match(rest) or not rest.strip():
+            return None
+        return "attention"
+    if head == "777":
+        return "attention" if rest == "notify" or rest.startswith("notify;") else None
+    if head == "99":
+        return "attention"
+    if head in {"133", "633"}:
+        mark = rest[:1]
+        if mark in {"A", "D"}:
+            return "prompt"
+        if mark == "C":
+            return "command"
+    return None
 
 
 class _EmulatorStream(pyte.Stream):
@@ -152,6 +350,8 @@ class _EmulatorScreen(pyte.Screen):
         self._drawing = False
         self.alternate_exit_revision = 0
         self.bracketed_paste_enabled = False
+        # Times a program enabled focus reporting.
+        self.focus_requests = 0
         # Top rows of the primary screen already emitted to the transcript.
         self.committed_rows = 0
         super().__init__(columns, lines)
@@ -318,6 +518,8 @@ class _EmulatorScreen(pyte.Screen):
             self._private_modes.update(modes)
             if _BRACKETED_PASTE_MODE in modes:
                 self.bracketed_paste_enabled = True
+            if _FOCUS_REPORTING_MODE in modes:
+                self.focus_requests += 1
         self._alternate_modes.update(alternate)
         super().set_mode(*modes, **kwargs)
 
@@ -428,13 +630,20 @@ class TerminalEmulator:
         self._stream = _EmulatorStream(self._screen)
         self._held = ""
         self._responses: list[str] = []
+        self._signals = SignalScanner()
         self._transcript = transcript
         self._transcript_lines: list[str] = []
         # Row texts of a logical line whose last row has not become final yet.
         self._transcript_partial: list[str] = []
 
     def feed(self, text: str) -> EmulatorUpdate:
-        """Render program output and report what it changed."""
+        """Render program output and report what it changed.
+
+        A program that enables focus reporting is answered that the terminal
+        does not have the focus, so it treats its user as away.
+        """
+        signals = tuple(self._signals.scan(text))
+        focus_requests = self._screen.focus_requests
         text = self._held + text
         self._held = ""
         incomplete = _INCOMPLETE_SEQUENCE.search(text)
@@ -450,6 +659,8 @@ class TerminalEmulator:
                 self._respond_to_query(*match.groups())
                 offset = match.end()
             self._stream.feed(text[offset:])
+        if self._screen.focus_requests != focus_requests:
+            self._responses.append(FOCUS_OUT_REPORT)
         responses = "".join(self._responses)
         self._responses.clear()
         transcript = tuple(self._transcript_lines)
@@ -461,6 +672,8 @@ class TerminalEmulator:
             alternate_screen=self._screen.alternate_active,
             alternate_exited=self._screen.alternate_exit_revision != alternate_exits,
             transcript=transcript,
+            signals=signals,
+            focus_reporting=_FOCUS_REPORTING_MODE in self._screen.private_modes,
         )
 
     def commit_transcript(self) -> tuple[str, ...]:

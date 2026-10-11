@@ -505,8 +505,8 @@ describe('TerminalsView rendering and input', () => {
           title: 'Auth refactor · Codex',
           attention: {
             revision: 1,
-            kind: 'output_settled',
-            summary: 'Quiet is not a semantic prompt.',
+            kind: 'idle',
+            summary: 'The program is idle.',
           },
         }),
         shell,

@@ -49,18 +49,53 @@ def test_terminal_queries_are_answered_in_the_update(chunk_size: int) -> None:
         "\x1b[4;9HReady\x1b[?2004h"
         "\x1b[6n\x1b[?6n\x1b[5n\x1b[c\x1b[>c\x1b[18t"
         "\x1b[?2004$p\x1b[?2026$p\x1b[?7$p"
+        # A program that asks for focus reports learns that the terminal has no focus.
+        "\x1b[?1004h"
     )
-    responses = "".join(
-        emulator.feed(output[index : index + chunk_size]).responses
+    updates = [
+        emulator.feed(output[index : index + chunk_size])
         for index in range(0, len(output), chunk_size)
-    )
-    assert responses == (
+    ]
+    assert "".join(update.responses for update in updates) == (
         "\x1b[4;14R\x1b[?4;14R\x1b[0n\x1b[?6c\x1b[>0;0;0c\x1b[8;24;80t"
-        "\x1b[?2004;1$y\x1b[?2026;0$y\x1b[?7;1$y"
+        "\x1b[?2004;1$y\x1b[?2026;0$y\x1b[?7;1$y\x1b[O"
     )
+    assert updates[-1].focus_reporting is True
     assert emulator.screen_text() == "\n\n\n        Ready"
     emulator.resize(100, 30)
     assert emulator.feed("\x1b[18t").responses == "\x1b[8;30;100t"
+    assert emulator.feed("\x1b[?1004l").focus_reporting is False
+
+
+@pytest.mark.parametrize("chunk_size", [1, 5, 1000])
+def test_update_reports_what_the_program_declares_about_its_work(chunk_size: int) -> None:
+    """Bells, notifications, progress, shell marks and a line editor's
+    bracketed-paste changes are signals, also when split across chunks."""
+    output = [
+        ("\x07", ["attention"]),
+        ("\x1b]9;Build finished\x07", ["attention"]),
+        ("\x1b]777;notify;Codex;done\x1b\\", ["attention"]),
+        ("\x1b]99;i=1;Task done\x1b\\", ["attention"]),
+        ("\x1b]9;4;1;40\x07\x1b]9;4;0;0\x07", ["progress", "progress_end"]),
+        ("\x1b]133;A\x07$ make\x1b]133;C\x07", ["prompt", "command"]),
+        ("\x1b]633;D;0\x07\x1b]9;12\x07", ["prompt", "prompt"]),
+        # A line editor reads a line, reads the next one, and runs it.
+        ("\x1b[?2004h>>> \x1b[?2004h", ["prompt"]),
+        ("\x1b[?1;2004l", ["command"]),
+        # A bell that ends a title or sits in a control string declares nothing,
+        # and neither do ConEmu's numbered OSC 9 commands.
+        ("\x1b]0;title\x07\x1bP+q\x07\x1b\\\x1b]9;9;C:\\work\x07", []),
+    ]
+    emulator = TerminalEmulator(80, 24, scrollback_lines=100)
+    text = "".join(part for part, _signals in output)
+
+    signals = [
+        signal
+        for index in range(0, len(text), chunk_size)
+        for signal in emulator.feed(text[index : index + chunk_size]).signals
+    ]
+
+    assert signals == [signal for _part, expected in output for signal in expected]
 
 
 def test_terminal_title_uses_vt_metadata_and_is_safe_for_single_line_ui() -> None:

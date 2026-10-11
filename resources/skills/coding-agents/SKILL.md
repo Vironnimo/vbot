@@ -21,7 +21,7 @@ Before you start or resume one of these CLIs, read its reference for launch opti
 
 ## Follow the task
 
-When the CLI's output settles, read the screen it shows: the CLI can be asking a question, waiting for an approval, or showing its final summary. Judge whether the coding task succeeded by the CLI's output and the task's results, such as changed files or test output, not by the output going quiet.
+When the CLI goes idle, read the screen it shows: the CLI can be asking a question, waiting for an approval, or showing its final summary. Judge whether the coding task succeeded by the CLI's output and the task's results, such as changed files or test output, not by the output going quiet.
 
 The `log_file` of a `status` result contains raw terminal output with control sequences and redraws.
 

@@ -12,6 +12,8 @@ import pytest
 import core.tools._terminal_session as terminal_session
 import core.tools._terminal_state as terminal_state
 from core.runs import RunAdmissionBlockedError
+from core.tools._terminal_activity import PROCESS_SAMPLE_SECONDS
+from core.tools._terminal_process_tree import RunningProcess
 from core.tools._terminal_render_host import TerminalScreen
 from core.tools.terminal_manager import (
     TerminalClosedError,
@@ -20,17 +22,22 @@ from core.tools.terminal_manager import (
     TerminalManagerError,
     TerminalNotOwnedError,
     TerminalOwner,
+    TerminalRenderHost,
     TerminalStaleScreenError,
 )
 from tests.core.tools.terminal_helpers import call, make_context
 from tests.core.tools.terminal_manager_helpers import (
     TEST_ACTIVITY_QUIET_SECONDS,
+    TEST_IDLE_SECONDS,
     AdapterFactory,
     FakeClock,
+    FakeTree,
     PendingTriggerService,
+    TrackedExecutor,
     establish_delivered_baseline,
     eventually,
     owner,
+    settle,
     settle_next_activity,
     spawn,
     terminal_info,
@@ -63,8 +70,8 @@ async def test_operator_activity_wakes_the_attached_agent_session(
 ) -> None:
     manager, factory, trigger = delivering_manager
     started = await spawn(manager, tmp_path)
-    # A text-less Agent start suppresses the first settle (the startup screen
-    # is not work); operator input re-arms delivery.
+    # A text-less Agent start wakes nobody (the startup screen is not work);
+    # operator input arms delivery.
     await manager.send_operator_input(started.terminal_id, "look\r")
     factory.adapters[0].emit("screen changed")
     await eventually(lambda: terminal_info(manager, started.terminal_id).attention_revision == 1)
@@ -72,7 +79,7 @@ async def test_operator_activity_wakes_the_attached_agent_session(
     settled = terminal_info(manager, started.terminal_id)
     assert settled.state == "ready"
     assert settled.attention is not None
-    assert settled.attention.kind == "output_settled"
+    assert settled.attention.kind == "idle"
     await eventually(lambda: len(trigger.submissions) == 1)
     assert trigger.submissions[0][0] == ("agent-a", "session-a")
 
@@ -111,16 +118,13 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
     assert kwargs["origin_run_id"] == "run-b"
     assert kwargs["project_id"] == "project-a"
     terminal_id = started.terminal_id
-    assert kwargs["body"] == (
-        f"The output of terminal {terminal_id} (fake-tui) settled after activity; this does not "
-        "mean the program finished. Screen:\n```text\nworking...\nREADY>\n```\nTo type into "
-        f'it, call terminal with action "input", terminal_id "{terminal_id}", your text as text '
-        'and key "enter". When its output settles again, the new screen arrives as another '
-        "message."
-    )
+    body = kwargs["body"]
+    assert body.startswith(f"Terminal {terminal_id} (fake-tui) went idle")
+    assert "\n```text\nworking...\nREADY>\n```\n" in body
+    assert f'terminal_id "{terminal_id}"' in body
     attention = terminal_info(manager, started.terminal_id).attention
     assert attention is not None
-    assert attention.kind == "output_settled"
+    assert (attention.kind, attention.details["reason"]) == ("idle", "quiet")
 
     manager.acknowledge_attention(started.terminal_id, owner(), 1)
     assert len(trigger.cancellations) == 1
@@ -170,7 +174,7 @@ async def test_failed_attention_delivery_stays_undelivered_and_logs_only_faults(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output", ["late output", "\x1b[1;1H"])
-async def test_new_output_postpones_a_pending_agent_wakeup_to_the_next_quiet_boundary(
+async def test_new_output_postpones_a_pending_agent_wakeup_to_the_next_idle_boundary(
     delivering_manager: Delivering, tmp_path: Path, output: str
 ) -> None:
     manager, factory, trigger = delivering_manager
@@ -185,7 +189,7 @@ async def test_new_output_postpones_a_pending_agent_wakeup_to_the_next_quiet_bou
     postponed = terminal_info(manager, started.terminal_id)
     assert postponed.attention_revision == 2
     assert postponed.attention is not None
-    assert postponed.attention.kind == "output_settled"
+    assert postponed.attention.kind == "idle"
     assert trigger.submissions[0][1]["notice_id"] != trigger.submissions[1][1]["notice_id"]
     assert trigger.submissions[1][1]["origin_run_id"] == "run-b"
 
@@ -232,9 +236,13 @@ async def test_notification_revision_authorizes_only_the_delivered_screen(
     await eventually(lambda: clock.sleeping)
     assert terminal_info(manager, terminal_id).screen_revision == revision
 
-    sent = await _agent_input(
-        manager, delivered, text="y", key="enter", expected_screen_revision=revision
+    answer = asyncio.ensure_future(
+        _agent_input(manager, delivered, text="y", key="enter", expected_screen_revision=revision)
     )
+    # Enter follows once the program took the text.
+    await eventually(lambda: adapter.writes[-1:] == ["y"])
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 8)
+    sent = await answer
     assert sent["characters_sent"] == 2
     assert adapter.writes[-2:] == ["y", "\r"]
     writes = list(adapter.writes)
@@ -356,7 +364,7 @@ async def test_operator_terminal_attach_delivers_activity_and_detach_preserves_l
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("default_shell")
-async def test_attach_arms_an_already_working_terminal_for_its_next_quiet_boundary(
+async def test_attach_arms_an_already_working_terminal_for_its_next_idle_boundary(
     delivering_manager: Delivering, tmp_path: Path
 ) -> None:
     manager, _factory, trigger = delivering_manager
@@ -371,7 +379,7 @@ async def test_attach_arms_an_already_working_terminal_for_its_next_quiet_bounda
     await eventually(lambda: len(trigger.submissions) == 1)
     attention = terminal_info(manager, terminal_id).attention
     assert attention is not None
-    assert attention.kind == "output_settled"
+    assert attention.kind == "idle"
     assert trigger.submissions[0][1]["origin_run_id"] == "attach-run"
 
 
@@ -392,8 +400,8 @@ async def test_resize_to_current_dimensions_is_a_no_op(
     assert unchanged.state != "working"
 
 
-async def _settle(clocked: Clocked, terminal_id: str, output: str) -> None:
-    """Emit output that changes the screen and let it reach its quiet boundary."""
+async def _idle(clocked: Clocked, terminal_id: str, output: str) -> None:
+    """Emit output that changes the screen and let it reach its idle boundary."""
     manager, factory, _trigger, clock = clocked
     revision = terminal_info(manager, terminal_id).screen_revision
     factory.adapters[0].emit(output)
@@ -406,14 +414,21 @@ async def _settle(clocked: Clocked, terminal_id: str, output: str) -> None:
     )
 
 
+async def _turns() -> None:
+    """Let a boundary that is due run; the in-process screen needs no thread."""
+    for _turn in range(10):
+        await asyncio.sleep(0)
+
+
 async def _repaint(clocked: Clocked, terminal_id: str, columns: int, rows: int) -> None:
     """Resize a quiet terminal and let the program's redraw reach its quiet boundary."""
     manager, factory, _trigger, clock = clocked
     await manager.resize_for_operator(terminal_id, columns=columns, rows=rows)
     factory.adapters[0].emit("\x1b[2J\x1b[HMENU> ")
-    # A redraw keeps the screen revision; it only restarts the quiet timer.
+    # A redraw keeps the screen revision; it only restarts the activity timer.
     await eventually(lambda: clock.sleeping)
     await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+    await _turns()
 
 
 async def _baseline(clocked: Clocked, tmp_path: Path) -> TerminalInfo:
@@ -440,11 +455,109 @@ async def test_repaint_after_resizing_a_quiet_terminal_does_not_wake_agent(
     assert repainted.screen_revision == delivered.screen_revision
     assert repainted.state == "ready"
     # The same screen again, long after the resize, is still known content.
-    await _settle(clocked_manager, terminal_id, "\x1b[2J\x1b[HMENU> ")
+    await _idle(clocked_manager, terminal_id, "\x1b[2J\x1b[HMENU> ")
     assert len(trigger.submissions) == 1
 
-    await _settle(clocked_manager, terminal_id, "\r\nTask completed.")
+    await _idle(clocked_manager, terminal_id, "\r\nTask completed.")
     await eventually(lambda: len(trigger.submissions) == 2)
+    assert "Task completed." in trigger.submissions[1][1]["body"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("end", ["declared", "fallback"])
+async def test_work_the_program_resumed_on_its_own_wakes_at_a_declared_end_or_the_fallback(
+    clocked_manager: Clocked, tmp_path: Path, end: str
+) -> None:
+    """A program that resumed work on its own pauses between its updates
+    without being done: its pauses wake nobody. A declared end (here a bell)
+    wakes the Agent at the next quiet boundary; without one, the fallback
+    wakes it once the program printed nothing for the idle period."""
+    manager, factory, trigger, clock = clocked_manager
+    delivered = await _baseline(clocked_manager, tmp_path)
+    terminal_id = delivered.terminal_id
+
+    async def emit(output: str) -> None:
+        revision = terminal_info(manager, terminal_id).screen_revision
+        factory.adapters[0].emit(output)
+        await eventually(lambda: terminal_info(manager, terminal_id).screen_revision > revision)
+        await eventually(lambda: clock.sleeping)
+
+    for step in range(3):
+        await emit(f"\r\nstep {step}")
+        await clock.advance(TEST_IDLE_SECONDS - 0.5)
+        await _turns()
+        assert len(trigger.submissions) == 1
+        assert terminal_info(manager, terminal_id).state == "working"
+
+    await emit("\r\ndone\x07" if end == "declared" else "\r\ndone")
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+    await _turns()
+    if end == "fallback":
+        assert len(trigger.submissions) == 1
+        await clock.advance(TEST_IDLE_SECONDS - TEST_ACTIVITY_QUIET_SECONDS)
+    await eventually(lambda: len(trigger.submissions) == 2)
+    attention = terminal_info(manager, terminal_id).attention
+    assert attention is not None
+    assert attention.details["reason"] == end
+    body = trigger.submissions[1][1]["body"]
+    assert "step 2\ndone" in body
+    assert (f"printed nothing for {TEST_IDLE_SECONDS:g} seconds" in body) == (end == "fallback")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("work", ["child", "cpu"])
+async def test_work_the_processes_show_keeps_a_quiet_program_working(
+    tmp_path: Path, work: str
+) -> None:
+    """A program can work without printing: in a process its input started, or
+    on the CPU. Its quiet output wakes nobody while that work runs; the first
+    process sample after the work ended goes idle, long before the fallback."""
+    clock = FakeClock()
+    executor = TrackedExecutor()
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    tree = FakeTree()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        idle_seconds=TEST_IDLE_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        process_observer=lambda _pid: tree,
+    )
+    asyncio.get_running_loop().set_default_executor(executor)
+    manager.start()
+    try:
+        started = await spawn(manager, tmp_path)
+        await _agent_input(manager, started, data="make\r")
+        factory.adapters[0].emit("compiling...")
+        if work == "child":
+            tree.running = (*tree.running, RunningProcess(2, "make.exe"))
+            tree.started += 1
+
+        async def run_until(seconds: float) -> None:
+            while clock.now < seconds and not trigger.submissions:
+                await settle(clock, executor)
+                if work == "cpu" and clock.now < 3:
+                    tree.cpu_seconds += PROCESS_SAMPLE_SECONDS
+                await clock.advance(PROCESS_SAMPLE_SECONDS)
+            await settle(clock, executor)
+
+        await run_until(3)
+        assert trigger.submissions == []
+        assert terminal_info(manager, started.terminal_id).state == "working"
+
+        tree.running = tree.running[:1]
+        await run_until(TEST_IDLE_SECONDS - 0.5)
+        assert len(trigger.submissions) == 1
+        attention = terminal_info(manager, started.terminal_id).attention
+        assert attention is not None
+        assert attention.details["reason"] == "quiet"
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
@@ -470,12 +583,12 @@ async def test_activity_around_a_resize_wakes_agent(
         await manager.resize_for_operator(terminal_id, columns=100, rows=24)
         await _agent_input(manager, delivered, data="answer\r", origin_run_id="run-c")
 
-    await _settle(clocked_manager, terminal_id, "\r\nTask completed.")
+    await _idle(clocked_manager, terminal_id, "\r\nTask completed.")
 
     await eventually(lambda: len(trigger.submissions) == 2)
     attention = terminal_info(manager, terminal_id).attention
     assert attention is not None
-    assert attention.kind == "output_settled"
+    assert attention.kind == "idle"
     assert factory.adapters[0].resizes == [(24, 100)]
 
 
@@ -484,22 +597,23 @@ async def test_unchanged_screen_stays_silent_until_content_changes(
     clocked_manager: Clocked, tmp_path: Path
 ) -> None:
     """Suppression only covers an unchanged screen: once the screen actually
-    changes, the next quiet boundary wakes the agent again."""
+    changes, the next idle boundary wakes the agent again."""
     manager, _factory, trigger, _clock = clocked_manager
     delivered = await _baseline(clocked_manager, tmp_path)
 
-    await _settle(clocked_manager, delivered.terminal_id, "\rMENU> ")
+    await _idle(clocked_manager, delivered.terminal_id, "\rMENU> ")
     assert len(trigger.submissions) == 1
 
-    await _settle(clocked_manager, delivered.terminal_id, "\rMENU> \nsecond option")
+    await _idle(clocked_manager, delivered.terminal_id, "\rMENU> \nsecond option")
     await eventually(lambda: len(trigger.submissions) == 2)
+    assert "second option" in trigger.submissions[1][1]["body"]
     attention = terminal_info(manager, delivered.terminal_id).attention
     assert attention is not None
-    assert attention.kind == "output_settled"
+    assert attention.kind == "idle"
 
 
 @pytest.mark.asyncio
-async def test_textless_agent_start_suppresses_the_startup_settle(
+async def test_textless_agent_start_suppresses_the_startup_screen(
     clocked_manager: Clocked, tmp_path: Path
 ) -> None:
     """A text-less Agent start stays silent until the first explicit input:
@@ -509,19 +623,20 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
     started = await spawn(manager, tmp_path)
     terminal_id = started.terminal_id
 
-    await _settle(clocked_manager, terminal_id, "TUI banner")
+    await _idle(clocked_manager, terminal_id, "TUI banner")
     assert trigger.submissions == []
     startup = terminal_info(manager, terminal_id).attention
     assert startup is None or not startup.delivered
-    await _settle(clocked_manager, terminal_id, "\rTUI banner")
+    await _idle(clocked_manager, terminal_id, "\rTUI banner")
     assert trigger.submissions == []
 
     await _agent_input(manager, started, data="go\r", origin_run_id="run-0")
-    await _settle(clocked_manager, terminal_id, "output after input")
+    await _idle(clocked_manager, terminal_id, "output after input")
     await eventually(lambda: len(trigger.submissions) == 1)
+    assert "output after input" in trigger.submissions[0][1]["body"]
     attention = terminal_info(manager, terminal_id).attention
     assert attention is not None
-    assert attention.kind == "output_settled"
+    assert attention.kind == "idle"
 
 
 @pytest.mark.parametrize("failing", ["read", "render"])

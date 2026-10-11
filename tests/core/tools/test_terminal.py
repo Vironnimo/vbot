@@ -128,8 +128,8 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
 
 
 _DELIVERIES = (
-    "While it runs, its screen arrives as a new message each time its output settles after "
-    "activity, and so does its exit. Continue with your next step instead of polling with status."
+    "While it runs, its screen arrives as a new message each time it goes idle showing something "
+    "new, and so does its exit. Continue with your next step instead of polling with status."
 )
 
 
@@ -299,6 +299,9 @@ async def test_start_with_text_returns_once_its_output_settles_or_after_ten_seco
         assert not starting.done()
         await clock.advance(0.1)
     else:
+        await eventually(lambda: factory.adapters[0].writes == ["fix the tests"])
+        # Enter follows once the program took the text: its output paused for 0.25 s.
+        await clock.advance(0.25)
         await eventually(lambda: factory.adapters[0].writes == ["fix the tests", "\r"])
         if program == "answers":
             await emit("fix the tests\r\nDone.\r\nReady> ")
@@ -669,8 +672,9 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     assert "attached" not in status["data"]
     assert (await run({"action": "input", "text": "hello"}))["ok"] is True
     assert factory.adapters[0].writes == ["hello"]
-    # The input's result showed the settled reply but was not kept, so a wait returns it.
-    assert (await run({"action": "wait", "timeout": 0.01}))["data"]["wait_ended"] == "quiet"
+    # The input's result showed the reply but was not kept, so its screen is still unseen:
+    # a wait returns it once the program is idle.
+    assert (await run({"action": "wait", "timeout": 5}))["data"]["wait_ended"] == "idle"
 
     wrong_detach = await run({"action": "detach"}, other_context)
     assert wrong_detach["error"] == {

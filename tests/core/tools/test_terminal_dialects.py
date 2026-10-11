@@ -251,14 +251,11 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
         [{"type": "text", "label": "input", "text": "\\x1b[200~more\\r\n\\x1b[201~"}, screen],
     ]
     assert adapter.writes == ["answer", "submit", "\r", "\x1b[24~", raw]
-    # When the reply wait ends before the output settles, next says how the reply arrives.
+    # When the reply wait ends while the program still works, next says how the
+    # reply arrives and how to wait for it now.
     unsettled = await send(key="enter", timeout=0.01)
-    assert unsettled["data"]["next"] == (
-        "Its screen arrives as a new message when its output settles; continue other work or "
-        "end your turn. To wait for it now instead, call terminal "
-        + json.dumps({"action": "wait", "terminal_id": terminal_id})
-        + "."
-    )
+    assert "arrives as a new message" in unsettled["data"]["next"]
+    assert json.dumps({"action": "wait", "terminal_id": terminal_id}) in unsettled["data"]["next"]
 
     multiline = "first\n  second"
     await render("\x1b[?2004h")
@@ -569,9 +566,9 @@ async def test_wait_reads_seconds_and_refuses_disagreeing_timeouts(terminal: Ter
     )
 
 
-@pytest.mark.parametrize("ending", ["matched", "quiet", "exited", "stopped"])
+@pytest.mark.parametrize("ending", ["matched", "idle", "exited", "stopped"])
 @pytest.mark.asyncio
-async def test_wait_ends_at_the_exit_a_matching_line_or_quiet_output(
+async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], ending: str
 ) -> None:
     terminal_id = await terminal.start()
@@ -582,7 +579,7 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_quiet_output(
         adapter.emit("booting\r\nServer LISTENING on :8080\r\n")
         await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
         arguments["pattern"] = r"^server listening on :\d+$"
-    elif ending == "quiet":
+    elif ending == "idle":
         await terminal(
             {"action": "input", "terminal_id": terminal_id, "text": "go", "key": "enter"}
         )
@@ -621,8 +618,8 @@ async def test_pattern_waits_through_quiet_output_and_reads_invalid_syntax_as_te
     # The program echoes the input line, then prints.
     adapter.emit("make\r\n[error] disk full\r\n")
 
-    # The output settles during the wait, which waits on for its pattern; the echo of the
-    # input does not match it.
+    # The program goes idle during the wait, which waits on for its pattern; the echo of
+    # the input does not match it.
     arguments: JsonObject = {
         "action": "wait",
         "terminal_id": terminal_id,
@@ -645,7 +642,7 @@ async def test_pattern_waits_through_quiet_output_and_reads_invalid_syntax_as_te
 
 
 @pytest.mark.asyncio
-async def test_input_returns_the_reply_once_its_output_settles(
+async def test_input_returns_the_reply_once_its_output_pauses(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
 ) -> None:
     terminal_id = await terminal.start()

@@ -138,9 +138,9 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "screen; list shows terminals; status shows a terminal's screen, or a "
                 "command's output; wait waits until the program exits, prints output "
                 "matching pattern, or the timeout passes; without pattern, it also ends when "
-                "an interactive program's new output settles; input types text and keys; kill "
-                "stops the program and everything it started; attach takes over an unattached "
-                "terminal; detach releases it for another Session."
+                "an interactive program goes idle showing something new; input types text and "
+                "keys; kill stops the program and everything it started; attach takes over an "
+                "unattached terminal; detach releases it for another Session."
             ),
         },
         "terminal_id": {
@@ -219,7 +219,7 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "by line; the wait ends when the output matches it, such as a server's ready "
                 "line. Output printed before the call counts, except output before your last "
                 "input and the echo of that input. Omit to wait for the exit, or for an "
-                "interactive program's new output to settle."
+                "interactive program to go idle."
             ),
         },
         "timeout": {
@@ -820,7 +820,7 @@ async def _handle_input(
             on_match=matched.append,
         )
     else:
-        # The reply: the output settles after the input, as start's first screen does.
+        # The reply: the output pauses after the input, as start's first screen does.
         ended = await terminal_manager.wait_for_reply(
             terminal_id, owner, seconds=seconds, after_quiet=int(sent["quiet_boundaries"])
         )
@@ -839,7 +839,8 @@ async def _handle_input(
         data = _screen_result(snapshot, view="input")
         if pattern is not None:
             data["wait_ended"] = _wait_end(ended, data)
-        elif ended == "timeout":
+        elif snapshot.get("state") == "working":
+            # The reply paused or ran out of time while the program still works.
             data["next"] = _reply_pending_text(terminal_id)
     if matched:
         data["matched"] = _matched_line(matched[0])
@@ -911,16 +912,17 @@ async def _command_result(
 
 # What an attached interactive program sends on its own; Agents polled for it.
 _DELIVERIES_TEXT = (
-    "While it runs, its screen arrives as a new message each time its output settles after "
-    "activity, and so does its exit. Continue with your next step instead of polling with status."
+    "While it runs, its screen arrives as a new message each time it goes idle showing something "
+    "new, and so does its exit. Continue with your next step instead of polling with status."
 )
 
 
 def _reply_pending_text(terminal_id: str) -> str:
-    """What to do when an interactive program still printed output as input's wait ended."""
+    """What to do when an interactive program still works as input's wait ended."""
     return (
-        "Its screen arrives as a new message when its output settles; continue other work or "
-        f"end your turn. To wait for it now instead, call terminal {_call('wait', terminal_id)}."
+        "It is still working: its screen arrives as a new message once it goes idle; continue "
+        f"other work or end your turn. To wait for it now instead, call terminal "
+        f"{_call('wait', terminal_id)}."
     )
 
 

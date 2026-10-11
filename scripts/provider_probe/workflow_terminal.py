@@ -149,6 +149,7 @@ async def _probe_terminal_case(
             adapter_factory=factory,
             render_host=TerminalRenderHost.in_process(),
             activity_quiet_seconds=0.03,
+            idle_seconds=0.06,
         )
         manager.start()
         projects = ProjectStore(root / "data")
@@ -345,7 +346,7 @@ async def _probe_terminal_case(
                 elif actual["action"] == "wait":
                     ended = {"wait_timeout": "timeout", "wait_pattern": "matched"}
                     effect_ok = (
-                        data["wait_ended"] == ended.get(case["id"], "quiet")
+                        data["wait_ended"] == ended.get(case["id"], "idle")
                         and factory.adapters[0].alive
                     )
                 elif actual["action"] == "attach":

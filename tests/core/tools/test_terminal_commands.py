@@ -479,7 +479,7 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
     typing = asyncio.ensure_future(
         tools.terminal({"action": "input", "terminal_id": terminal_id, "text": "y\n"})
     )
-    await eventually(lambda: adapter.writes[-2:] == ["y", "\r"])
+    await tools.run_clock(lambda: adapter.writes[-2:] == ["y", "\r"], until=tools.clock.now + 5)
     adapter.emit("y\r\nSaved.\r\n")
     await eventually(lambda: shows(tools, terminal_id, "Saved."))
     await tools.run_clock(typing, until=tools.clock.now + 5)

@@ -27,6 +27,7 @@ async def manager(tmp_path: Path) -> AsyncIterator[tuple[TerminalManager, Adapte
         ),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
+        idle_seconds=0.06,
     )
     manager.start()
     try:

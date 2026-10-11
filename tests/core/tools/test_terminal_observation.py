@@ -376,16 +376,16 @@ async def test_only_a_persisted_current_screen_acknowledges_resize_and_attention
     assert info().acknowledged_attention_revision == info().attention_revision
     assert "size_change" not in await terminal_manager.snapshot(terminal_id, OWNER)
 
-    # input shows the screen its output settled on, so that settle is not delivered again.
-    settled = info().attention_revision
+    # input shows the screen its output paused on. That screen was seen, so the idle
+    # boundary after the input records nothing, and a wait ends only at its timeout.
+    shown = info().attention_revision
     replied = await call(
         terminal_manager,
         context,
         {"action": "input", "terminal_id": terminal_id, "text": "go", "key": "enter"},
     )
     assert replied["data"]["screen"] == "new prompt"
-    assert info().attention_revision > settled
-    assert info().acknowledged_attention_revision == settled
     while callbacks:
         callbacks.pop()()
-    assert info().acknowledged_attention_revision == info().attention_revision
+    assert await terminal_manager.wait(terminal_id, OWNER, seconds=0.2) == "timeout"
+    assert info().attention_revision == shown
