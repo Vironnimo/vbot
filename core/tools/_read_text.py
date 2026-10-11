@@ -7,9 +7,10 @@ through a channel has exactly the same limits and continuation hints.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -649,10 +650,17 @@ def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: st
     return output
 
 
-def render_directory_listing(names: list[str], arguments: JsonObject, label: str) -> str:
-    """List directory entries one per line, paged like the lines of a file."""
+def render_directory_listing(
+    entries: Sequence[os.DirEntry[str]], arguments: JsonObject, label: str
+) -> str:
+    """List directory entries one per line, paged like the lines of a file.
+
+    Entries are sorted by name in any letter case, directories end with ``/``, and
+    each shown file carries its size, so choosing what to read needs no shell listing.
+    """
     directory = label if label.endswith("/") else f"{label}/"
-    total = len(names)
+    listed = sorted(((_entry_name(entry), entry) for entry in entries), key=_listing_order)
+    total = len(listed)
     if not total:
         return f"{directory} is an empty directory."
     position = read_position(arguments)
@@ -669,11 +677,12 @@ def render_directory_listing(names: list[str], arguments: JsonObject, label: str
     )
     shown: list[str] = []
     used = 0
-    for name in names[start - 1 : start - 1 + max_entries]:
-        size = len(name.encode("utf-8")) + 1
+    for name, entry in listed[start - 1 : start - 1 + max_entries]:
+        line = name if name.endswith("/") else _with_size(name, entry)
+        size = len(line.encode("utf-8")) + 1
         if shown and used + size > MAX_FILE_BYTES:
             break
-        shown.append(name)
+        shown.append(line)
         used += size
     end = start + len(shown) - 1
     noun = "entry" if total == 1 else "entries"
@@ -681,3 +690,36 @@ def render_directory_listing(names: list[str], arguments: JsonObject, label: str
     if end < total:
         output += f"\n[Showing entries {start}-{end} of {total}. Use offset={end + 1} to continue.]"
     return output
+
+
+def _entry_name(entry: os.DirEntry[str]) -> str:
+    try:
+        is_directory = entry.is_dir()
+    except OSError:
+        is_directory = False
+    return entry.name + ("/" if is_directory else "")
+
+
+def _listing_order(item: tuple[str, os.DirEntry[str]]) -> tuple[str, str]:
+    return item[0].casefold(), item[0]
+
+
+def _with_size(name: str, entry: os.DirEntry[str]) -> str:
+    """Return ``name`` with the entry's size, or alone when it cannot be read."""
+    try:
+        size = entry.stat().st_size
+    except OSError:
+        return name
+    return f"{name}  {_size_text(size)}"
+
+
+def _size_text(size: int) -> str:
+    """Render a byte count: one decimal below 10 units, whole units from 10 up."""
+    if size < 1024:
+        return f"{size} B"
+    value = float(size)
+    for unit in ("KB", "MB", "GB", "TB"):
+        value /= 1024
+        if round(value) < 1024 or unit == "TB":
+            break
+    return f"{value:.1f} {unit}" if round(value, 1) < 10 else f"{round(value)} {unit}"
