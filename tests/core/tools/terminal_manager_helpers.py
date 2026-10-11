@@ -16,11 +16,7 @@ import pytest_asyncio
 
 import core.tools._terminal_session as terminal_session
 import core.tools.terminal_manager as terminal_manager_module
-from core.tools.process_tree import (
-    ProcessTreeFacts,
-    ProgramExit,
-    RunningProcess,
-)
+from core.tools.process_tree import ProcessTreeFacts, RunningProcess
 from core.tools.terminal_manager import (
     TerminalInfo,
     TerminalManager,
@@ -43,25 +39,14 @@ class FakeTerminalAdapter:
         self.code: int | None = None
         self.write_error: BaseException | None = None
         self.closed = False
-        # Reads time out instead of blocking, as a real terminal's reads do.
-        self._read_timeouts = False
-        # A read reported the end of output: the reader moved on to polling.
-        self.output_ended = False
 
     @property
     def pid(self) -> int:
         return 987_654
 
     def read(self, _size: int) -> str:
-        if self._read_timeouts:
-            try:
-                value = self._output.get(timeout=0.01)
-            except queue.Empty:
-                raise TimeoutError from None
-        else:
-            value = self._output.get()
+        value = self._output.get()
         if value is None:
-            self.output_ended = True
             raise EOFError
         return value
 
@@ -99,55 +84,27 @@ class FakeTerminalAdapter:
         self.alive = False
         self._output.put(None)
 
-    def exit_keeping_output(self, code: int) -> None:
-        """The program exits, but processes it started still hold its terminal and
-        can print to it."""
-        self.code = code
-        self.alive = False
-        self._read_timeouts = True
-
 
 class FakeTree:
-    """A command's process tree: what runs, CPU used, failed children, and the kill."""
+    """An observed program's process tree: what runs and the CPU it used."""
 
     def __init__(self) -> None:
-        self.adapter: FakeTerminalAdapter | None = None
         self.running: tuple[RunningProcess, ...] = (RunningProcess(1, "pwsh.exe"),)
         self.cpu_seconds = 0.0
         self.started = 1
-        self.exits: tuple[ProgramExit, ...] = ()
-        self.terminated = 0
         self.closed = False
 
     def facts(self) -> ProcessTreeFacts:
-        return ProcessTreeFacts(self.running, self.cpu_seconds, self.started, self.exits)
+        return ProcessTreeFacts(self.running, self.cpu_seconds, self.started, ())
 
     def exit_count(self) -> int:
-        return len(self.exits)
+        return 0
 
     def terminate(self) -> None:
-        self.terminated += 1
         self.running = ()
-        if self.adapter is not None:
-            self.adapter.finish(1)
 
     def close(self) -> None:
         self.closed = True
-
-    def shell_exits(
-        self,
-        code: int,
-        *,
-        survivors: tuple[RunningProcess, ...] = (),
-        survivors_print: bool = False,
-    ) -> None:
-        """The shell exits; *survivors_print*: the survivors still hold its terminal."""
-        self.running = survivors
-        assert self.adapter is not None
-        if survivors_print:
-            self.adapter.exit_keeping_output(code)
-        else:
-            self.adapter.finish(code)
 
 
 class AdapterFactory:

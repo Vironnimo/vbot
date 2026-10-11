@@ -349,15 +349,6 @@ class StubTerminalManager:
     def add_changed_callback(self, _callback: Callable[[str], None]) -> Callable[[], None]:
         return _unsubscribe
 
-    def command_status(self, _terminal_id: str) -> str | None:
-        return None
-
-    async def cancel_run(self, _run_id: str) -> None:
-        return None
-
-    def release_run(self, _run_id: str) -> None:
-        return None
-
 
 class StubJobService:
     """Cron or Bootstrap service double listing ``jobs``."""

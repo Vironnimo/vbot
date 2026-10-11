@@ -81,14 +81,6 @@ class TerminalScreen:
         ansi: str = await self._backend.call("ansi_snapshot", ())
         return ansi
 
-    async def commit_transcript(self) -> tuple[str, ...]:
-        lines: tuple[str, ...] = await self._backend.call("commit_transcript", ())
-        return lines
-
-    async def pending_transcript(self) -> tuple[str, ...]:
-        lines: tuple[str, ...] = await self._backend.call("pending_transcript", ())
-        return lines
-
     def close(self) -> None:
         """Release the screen; later calls fail."""
         self._backend.close()
@@ -113,22 +105,16 @@ class TerminalRenderHost:
         """A host that renders in the calling thread."""
         return cls(workers=1, inline=True)
 
-    def open_screen(
-        self, columns: int, rows: int, *, scrollback_lines: int, transcript: bool = False
-    ) -> TerminalScreen:
-        """Open a screen; with *transcript* its feeds also yield final output lines."""
+    def open_screen(self, columns: int, rows: int, *, scrollback_lines: int) -> TerminalScreen:
+        """Open a screen."""
         if self._closed:
             raise RuntimeError("Terminal render host is closed")
         worker = None if self._inline else self._worker()
         if worker is None:
-            emulator = TerminalEmulator(
-                columns, rows, scrollback_lines=scrollback_lines, transcript=transcript
-            )
+            emulator = TerminalEmulator(columns, rows, scrollback_lines=scrollback_lines)
             return TerminalScreen(_InlineBackend(emulator), columns, rows)
         key = next(self._keys)
-        worker.submit_nowait(
-            terminal_emulator.hosted_create, key, columns, rows, scrollback_lines, transcript
-        )
+        worker.submit_nowait(terminal_emulator.hosted_create, key, columns, rows, scrollback_lines)
         return TerminalScreen(_WorkerBackend(worker, key), columns, rows)
 
     def close(self) -> None:

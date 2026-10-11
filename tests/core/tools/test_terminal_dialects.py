@@ -427,7 +427,6 @@ async def test_codex_and_hermes_input_shapes_type_into_the_terminal(
         ("await", "wait"),
         ("launch", "start"),
         ("disconnect", "detach"),
-        ("KillShell", "kill"),
         ("cancel", "kill"),
         ("join", "wait"),
     ],
@@ -435,12 +434,6 @@ async def test_codex_and_hermes_input_shapes_type_into_the_terminal(
 def test_action_spellings_name_the_action(action: str, canonical: str) -> None:
     normalized = normalize_terminal_arguments({"action": action, "terminal_id": "term_a"})
     assert normalized["action"] == canonical
-
-
-@pytest.mark.parametrize("field", ["process_id", "bash_id", "shell_id", "task_id"])
-def test_background_command_id_spellings_name_the_terminal(field: str) -> None:
-    normalized = normalize_terminal_arguments({"action": "status", field: "term_a"})
-    assert normalized == {"action": "status", "terminal_id": "term_a"}
 
 
 @pytest.mark.asyncio
@@ -666,9 +659,8 @@ async def test_unknown_terminal_id_lists_attached_terminals(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     removed = (
-        "No terminal with the id term_missing is open for this Session: the id is wrong or "
-        "belongs to another Session, or its program ended more than 30 minutes ago and the "
-        "terminal was removed, with its output."
+        "No terminal with the id term_missing is open: the id is wrong, or its program ended "
+        "more than 30 minutes ago and the terminal was removed, with its output."
     )
     listing = 'To see all terminals, call terminal {"action": "list"}.'
     missing = await terminal({"action": "status", "terminal_id": "term_missing"})

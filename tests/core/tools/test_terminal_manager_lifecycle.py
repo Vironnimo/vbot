@@ -33,7 +33,6 @@ from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
     FakeClock,
     FakeTerminalAdapter,
-    FakeTree,
     PendingTriggerService,
     establish_delivered_baseline,
     eventually,
@@ -262,18 +261,15 @@ async def test_waiting_reader_does_not_block_input_resize_or_stop(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("terminate_directly")
-@pytest.mark.parametrize("kind", ["terminal", "command"])
 @pytest.mark.parametrize("paused_at", ["process", "log"])
 async def test_cancelled_start_waits_for_child_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, paused_at: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, paused_at: str
 ) -> None:
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
     entered = asyncio.Event()
     release = threading.Event()
     adapter = FakeTerminalAdapter()
-    tree = FakeTree()
-    tree.adapter = adapter
     log_paths: list[Path] = []
 
     def pause() -> None:
@@ -301,26 +297,12 @@ async def test_cancelled_start_waits_for_child_cleanup(
         adapter_factory=factory,
         render_host=TerminalRenderHost.in_process(),
         temporary_files=temporary_files,
-        process_tracker=lambda _pid: tree,
         sweep_interval_seconds=3600,
     )
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 1)
-    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_COMMANDS", 1)
 
     async def start() -> Any:
-        if kind == "terminal":
-            return await spawn(manager, tmp_path)
-        return await manager.spawn_command(
-            owner(),
-            ["fixture-shell"],
-            command="build",
-            description=None,
-            cwd=tmp_path,
-            env={},
-            timeout_seconds=None,
-            formatter=lambda _report: "finished",
-            origin_run_id="run-a",
-        )
+        return await spawn(manager, tmp_path)
 
     task = asyncio.create_task(start())
     waiting = asyncio.create_task(entered.wait())
