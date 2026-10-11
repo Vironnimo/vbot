@@ -20,6 +20,11 @@ if TYPE_CHECKING:
         RouteFacts,
     )
     from core.channels.channels import ChannelService
+    from core.channels.checklist import (
+        CHECKLIST_ITEM_ID_MAX_BYTES,
+        ChecklistItem,
+        checklist_keyboard,
+    )
     from core.channels.config import (
         ALLOWED_CHANNEL_DM_SCOPES,
         ALLOWED_CHANNEL_PLATFORMS,
@@ -42,6 +47,7 @@ _EXPORT_MODULES = {
     "ALLOWED_CHANNEL_DM_SCOPES": "core.channels.config",
     "ALLOWED_CHANNEL_PLATFORMS": "core.channels.config",
     "ALLOWED_CHANNEL_RESPONSE_MODES": "core.channels.config",
+    "CHECKLIST_ITEM_ID_MAX_BYTES": "core.channels.checklist",
     "MANAGED_CHANNEL_TOKEN_ENV_PREFIX": "core.channels.config",
     "ChannelAdapter": "core.channels.adapter",
     "ChannelConfig": "core.channels.config",
@@ -50,6 +56,7 @@ _EXPORT_MODULES = {
     "ChannelNotFoundError": "core.channels.config",
     "ChannelService": "core.channels.channels",
     "ChannelStorage": "core.channels.storage",
+    "ChecklistItem": "core.channels.checklist",
     "ConversationFacts": "core.channels.adapter",
     "DeniedChatFacts": "core.channels.adapter",
     "DeniedChatLog": "core.channels.adapter",
@@ -58,6 +65,7 @@ _EXPORT_MODULES = {
     "ReplyPlanFacts": "core.channels.adapter",
     "RouteFacts": "core.channels.adapter",
     "channel_database_spec": "core.channels._state_schema",
+    "checklist_keyboard": "core.channels.checklist",
     "load_validated_channel_json": "core.channels.config",
     "managed_channel_token_env_var": "core.channels.config",
     "validate_channel_data": "core.channels.config",
@@ -80,6 +88,7 @@ __all__ = [
     "ALLOWED_CHANNEL_DM_SCOPES",
     "ALLOWED_CHANNEL_PLATFORMS",
     "ALLOWED_CHANNEL_RESPONSE_MODES",
+    "CHECKLIST_ITEM_ID_MAX_BYTES",
     "MANAGED_CHANNEL_TOKEN_ENV_PREFIX",
     "ChannelAdapter",
     "ChannelConfig",
@@ -88,6 +97,7 @@ __all__ = [
     "ChannelNotFoundError",
     "ChannelService",
     "ChannelStorage",
+    "ChecklistItem",
     "ConversationFacts",
     "DeniedChatFacts",
     "DeniedChatLog",
@@ -96,6 +106,7 @@ __all__ = [
     "ReplyPlanFacts",
     "RouteFacts",
     "channel_database_spec",
+    "checklist_keyboard",
     "load_validated_channel_json",
     "managed_channel_token_env_var",
     "validate_channel_data",

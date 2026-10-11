@@ -21,9 +21,11 @@ from core.channels.adapter import (
     RouteFacts,
     UpdateOffsetStore,
 )
+from core.channels.checklist import toggled_checklist_buttons
 from core.channels.config import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
 from core.extensions import (
+    CHECKLIST_PREFIX,
     RUN_TRIGGER_PREFIX,
     InteractionButton,
     InteractionEvent,
@@ -670,12 +672,13 @@ class TelegramChannelAdapter(ChannelAdapter):
     async def _handle_callback_query(self, update: Any, _context: Any) -> None:
         """Turn a Telegram button tap (callback_query) into a dispatched interaction.
 
-        Extension-owned taps stay deterministic and in-process. The reserved
+        Checklist item taps (reserved ``chk:``) flip their glyph in place and
+        extension-owned taps stay deterministic and in-process. The reserved
         ``run:`` prefix instead enters the conversation engine and its per-chat FIFO
         because it deliberately wakes the agent. Identity and the allowlist gate
         reuse the same inbound plumbing as messages. Every tap is acknowledged
-        exactly once — by the Run path, extension handler, or fallback here — so the
-        tapper's spinner always stops.
+        exactly once — by the Run path, the checklist toggle, an extension handler,
+        or the fallback here — so the tapper's spinner always stops.
         """
         if not self._claim_update(update):
             # A redelivered tap was answered before the restart; answering again
@@ -759,6 +762,15 @@ class TelegramChannelAdapter(ChannelAdapter):
             if close_keyboard:
                 with contextlib.suppress(ChannelError):
                     await responder.edit(buttons=[])
+            return
+
+        if data.split(":", 1)[0] == CHECKLIST_PREFIX:
+            # The checklist's state lives in the message: flip the tapped item there.
+            # Its done button is a reserved Run button and was handled above.
+            with contextlib.suppress(ChannelError):
+                await responder.edit(buttons=toggled_checklist_buttons(event.buttons, data))
+            with contextlib.suppress(ChannelError):
+                await responder.answer()
             return
 
         if self._interaction_dispatcher is not None:

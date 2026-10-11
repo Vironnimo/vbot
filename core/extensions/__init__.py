@@ -24,6 +24,7 @@ from core.extensions.extensions import (
     purge_extension_modules,
 )
 from core.extensions.interactions import (
+    CHECKLIST_PREFIX,
     RESERVED_INTERACTION_PREFIXES,
     RUN_TRIGGER_PREFIX,
     InteractionButton,
@@ -39,6 +40,7 @@ from core.extensions.settings_schema import (
 
 __all__ = [
     "API_VERSION",
+    "CHECKLIST_PREFIX",
     "CommandDeclaration",
     "Deny",
     "ExtensionAPI",

@@ -16,10 +16,11 @@ handles the tap deterministically in-process (no LLM run) via an
 :class:`InteractionResponder`: it acknowledges the tap and optionally edits the
 message's text or keyboard.
 
-One prefix, ``run`` (:data:`RUN_TRIGGER_PREFIX`), is reserved by the runtime: a
-channel adapter routes such a tap to the conversation engine to *wake the agent*
-with the tap context instead of to an extension, so the registry refuses to let
-an extension claim it.
+Two prefixes are reserved by the runtime, so the registry refuses to let an
+extension claim them: ``run`` (:data:`RUN_TRIGGER_PREFIX`), whose tap a channel
+adapter routes to the conversation engine to *wake the agent* with the tap
+context, and ``chk`` (:data:`CHECKLIST_PREFIX`), the item buttons of a Channel
+checklist message, which the adapter toggles itself.
 
 Imports nothing from ``core/channels`` or ``core/tools``: the dependency runs
 channels → extensions (channels imports these types), never the reverse.
@@ -37,7 +38,10 @@ from typing import Any, Protocol
 # extension. The registry skips any extension declaration for a reserved prefix
 # (see ``ExtensionRegistry._apply_one_interaction_handler``).
 RUN_TRIGGER_PREFIX = "run"
-RESERVED_INTERACTION_PREFIXES = frozenset({RUN_TRIGGER_PREFIX})
+# Callback-data prefix of a Channel checklist's item buttons (``core.channels.checklist``):
+# the channel adapter toggles such a tap in the message itself.
+CHECKLIST_PREFIX = "chk"
+RESERVED_INTERACTION_PREFIXES = frozenset({RUN_TRIGGER_PREFIX, CHECKLIST_PREFIX})
 
 
 @dataclass(frozen=True)

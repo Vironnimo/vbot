@@ -10,17 +10,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.channels import ChannelConfigError
+from core.channels import ChannelConfigError, ChecklistItem, checklist_keyboard
 from core.channels.adapter import FileData, RunButtonBinding, bound_run_callback_data
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT
 from core.extensions import (
     InteractionButton,
     InteractionEvent,
     InteractionResponder,
-    purge_extension_modules,
 )
 from core.utils.timestamps import utc_now_timestamp
-from tests.resources.extensions.bundled_test_support import load_bundled
 
 from .engine_test_support import MemoryChannelAccessRegistry, channel_state, make_completed_run
 from .telegram_test_support import (
@@ -112,83 +110,59 @@ async def test_buttons_cannot_be_combined_with_files(
     await adapter.stop()
 
 
-# --- Extension taps -------------------------------------------------------------------
+# --- Checklist and extension taps -----------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_a_tap_reaches_the_bundled_checklist_extension_which_flips_the_item(
+async def test_a_checklist_tap_flips_only_that_item_without_a_run_or_extension(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    registry = load_bundled("checklist")
-    events: list[InteractionEvent] = []
-
-    async def dispatch(event: InteractionEvent, responder: InteractionResponder) -> bool:
-        events.append(event)
-        return await registry.dispatch_channel_interaction(event, responder)
-
+    dispatcher = _RecordingDispatcher()
     trigger = AsyncMock()
-    try:
-        adapter, _sessions, _trigger, bot = make_adapter(
-            tmp_path,
-            monkeypatch,
-            allowed_chat_ids=[12345],
-            trigger_run=trigger,
-            interaction_dispatcher=dispatch,
-        )
-        update = make_callback_update(
-            data="chk:milk",
-            inline_keyboard=[
-                [
-                    SimpleNamespace(text="⬜ Milk", callback_data="chk:milk"),
-                    SimpleNamespace(text="⬜ Eggs", callback_data="chk:eggs"),
-                ]
-            ],
-        )
+    adapter, _sessions, _trigger, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger,
+        interaction_dispatcher=dispatcher,
+    )
+    keyboard = checklist_keyboard(
+        [
+            ChecklistItem(id="milk", label="Milk", checked=False),
+            ChecklistItem(id="eggs", label="Eggs", checked=True),
+        ],
+        done_label="Fertig",
+    )
+    milk = keyboard[0][0].data
+    update = make_callback_update(
+        data=milk,
+        inline_keyboard=[
+            [SimpleNamespace(text=button.label, callback_data=button.data) for button in row]
+            for row in keyboard
+        ],
+    )
 
-        await adapter._handle_callback_query(update, None)
+    await adapter._handle_callback_query(update, None)
 
-        [event] = events
-        assert (
-            event.platform,
-            event.channel_id,
-            event.chat_id,
-            event.user_id,
-            event.message_id,
-            event.data,
-            event.text,
-            event.user_display_name,
-        ) == (
-            "telegram",
-            "tg-assistant",
-            "12345",
-            "50",
-            "777",
-            "chk:milk",
-            "Shopping list",
-            "Tapper",
-        )
-        assert event.buttons == (
-            (
-                InteractionButton(label="⬜ Milk", data="chk:milk"),
-                InteractionButton(label="⬜ Eggs", data="chk:eggs"),
-            ),
-        )
-        # Only the tapped item flipped; every callback value survives the edit.
-        bot.edit_message_reply_markup.assert_awaited_once()
-        edit = bot.edit_message_reply_markup.await_args.kwargs
-        assert (edit["chat_id"], edit["message_id"]) == (12345, 777)
-        [row] = edit["reply_markup"].inline_keyboard
-        assert [(button.text, button.callback_data) for button in row] == [
-            ("✅ Milk", "chk:milk"),
-            ("⬜ Eggs", "chk:eggs"),
-        ]
-        # The extension answered the tap, so no second acknowledgement follows,
-        # and an extension tap never wakes the agent.
-        bot.answer_callback_query.assert_awaited_once()
-        trigger.assert_not_awaited()
-        await adapter.stop()
-    finally:
-        purge_extension_modules()
+    # Only the tapped item flipped; every callback value survives the edit.
+    bot.edit_message_reply_markup.assert_awaited_once()
+    edit = bot.edit_message_reply_markup.await_args.kwargs
+    assert (edit["chat_id"], edit["message_id"]) == (12345, 777)
+    assert [
+        [(button.text, button.callback_data) for button in row]
+        for row in edit["reply_markup"].inline_keyboard
+    ] == [
+        [("✅ Milk", milk)],
+        [(keyboard[1][0].label, keyboard[1][0].data)],
+        [("Fertig", keyboard[2][0].data)],
+    ]
+    # One silent acknowledgement; the tap neither reaches an extension nor wakes the agent.
+    bot.answer_callback_query.assert_awaited_once_with(
+        callback_query_id="cb1", text=None, show_alert=False
+    )
+    assert dispatcher.events == []
+    trigger.assert_not_awaited()
+    await adapter.stop()
 
 
 @pytest.mark.asyncio
@@ -204,7 +178,7 @@ async def test_a_dispatcher_answer_and_edit_reach_the_tapped_message(
         tmp_path, monkeypatch, allowed_chat_ids=[12345], interaction_dispatcher=dispatch
     )
 
-    await adapter._handle_callback_query(make_callback_update(data="chk:milk"), None)
+    await adapter._handle_callback_query(make_callback_update(data="poll:yes"), None)
 
     bot.answer_callback_query.assert_awaited_once_with(
         callback_query_id="cb1", text="Saved", show_alert=True
@@ -218,7 +192,7 @@ async def test_a_dispatcher_answer_and_edit_reach_the_tapped_message(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("chat_id", "data"),
-    [(99999, "chk:milk"), (12345, "")],
+    [(99999, "poll:yes"), (12345, "")],
     ids=["chat-outside-allowlist", "no-callback-data"],
 )
 async def test_an_undeliverable_tap_is_acknowledged_silently(
@@ -255,7 +229,7 @@ async def test_an_unanswered_tap_still_gets_one_acknowledgement(
         tmp_path, monkeypatch, allowed_chat_ids=[12345], interaction_dispatcher=dispatcher
     )
 
-    await adapter._handle_callback_query(make_callback_update(data="chk:milk"), None)
+    await adapter._handle_callback_query(make_callback_update(data="poll:yes"), None)
 
     bot.answer_callback_query.assert_awaited_once_with(
         callback_query_id="cb1", text=None, show_alert=False

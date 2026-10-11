@@ -12,6 +12,7 @@ from core.channels.adapter import (
     RunButtonBinding,
     parse_bound_run_callback_data,
 )
+from core.channels.checklist import CHECKLIST_DONE_DATA, checklist_changes, is_checklist_button
 from core.chat.messages import MessageSender
 from core.extensions import InteractionButton
 from core.sessions import CHANNEL_MESSAGE_NOTE_PREFIX
@@ -53,16 +54,20 @@ def _format_observed_message(conversation: ConversationFacts, text: str) -> str:
 def _format_interaction_note(conversation: ConversationFacts, event: InteractionEvent) -> str:
     """Render the neutral kernel note for a run-triggering button tap.
 
-    Content-agnostic: it calls out the tapped button and then lists every current
-    button's label and callback data verbatim in row order, so the agent can read
-    the whole keyboard state — e.g. which items a skill marked ✅ — from the note
-    alone, with no server-side store. Any glyph or id convention inside the labels
-    or data is the skill's interpretation, never the engine's.
+    Without a checklist it calls out the tapped button and lists every current
+    button's label and callback data verbatim in row order, so the agent reads the
+    whole keyboard state from the note alone. A checklist keyboard
+    (``core.channels.checklist``) is reported as the items whose state changed
+    since sending, by their ids, so the agent applies only what the user changed.
     """
-    lines = [
-        "A channel button was tapped and is asking you to act on it.",
-        f'Tapped button: "{_tapped_button_label(event)}" ({event.data})',
-    ]
+    changes = checklist_changes(event.buttons)
+    if changes is not None and event.data == CHECKLIST_DONE_DATA:
+        lines = ["The checklist you sent to this chat was submitted."]
+    else:
+        lines = [
+            "A channel button was tapped and is asking you to act on it.",
+            f'Tapped button: "{_tapped_button_label(event)}" ({event.data})',
+        ]
     if conversation.kind == "group":
         lines.append(
             "Tapped by: "
@@ -70,9 +75,29 @@ def _format_interaction_note(conversation: ConversationFacts, event: Interaction
             f"|{_sanitize_sender_tag_part(conversation.user_id)}"
             f"|{conversation.sender_role or 'member'}]"
         )
-    lines.append("Current buttons on the message (top to bottom, left to right):")
-    lines.extend(f'- "{button.label}" ({button.data})' for row in event.buttons for button in row)
-    lines.append("Act on the current button state, then confirm in this chat.")
+    if changes is None:
+        lines.append("Current buttons on the message (top to bottom, left to right):")
+        lines.extend(
+            f'- "{button.label}" ({button.data})' for row in event.buttons for button in row
+        )
+        lines.append("Act on the current button state, then confirm in this chat.")
+        return "\n".join(lines)
+
+    changed = len(changes.checked) + len(changes.unchecked)
+    if changed:
+        lines.append("Checklist items changed since you sent it:")
+        lines.extend(f'- checked: "{item.label}" (id {item.id})' for item in changes.checked)
+        lines.extend(f'- unchecked: "{item.label}" (id {item.id})' for item in changes.unchecked)
+        lines.append(f"Unchanged items: {changes.unchanged}.")
+    else:
+        lines.append(f"No checklist item changed since you sent it ({changes.unchanged} items).")
+    others = [button for row in event.buttons for button in row if not is_checklist_button(button)]
+    if others:
+        lines.append("Other buttons on the message:")
+        lines.extend(f'- "{button.label}" ({button.data})' for button in others)
+    lines.append(
+        "Act on these changes, then confirm in this chat." if changed else "Confirm in this chat."
+    )
     return "\n".join(lines)
 
 

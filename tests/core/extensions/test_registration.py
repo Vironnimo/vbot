@@ -273,7 +273,7 @@ def test_declarations_land_on_the_loaded_record(tmp_path: Path) -> None:
         "        {'key': 'url', 'type': 'text', 'label': 'URL'},\n"
         "        {'key': 'token', 'type': 'secret', 'label': 'Token', 'env_key': 'HASS_TOKEN'},\n"
         "    ])\n"
-        "    api.register_interaction_handler('chk', _tap)\n"
+        "    api.register_interaction_handler('poll', _tap)\n"
         "    api.register_command(\n"
         "        'workflow', 'Start the workflow.', _workflow, argument='required',\n"
         "        catalog_result='state_change', execution_mode='serialized',\n"
@@ -295,7 +295,7 @@ def test_declarations_land_on_the_loaded_record(tmp_path: Path) -> None:
     assert [
         (declaration.prefix, declaration.handler)
         for declaration in declared.declarations.interaction_handlers
-    ] == [("chk", module._tap)]
+    ] == [("poll", module._tap)]
     assert [
         (
             command.name,

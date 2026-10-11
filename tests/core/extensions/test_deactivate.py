@@ -80,7 +80,7 @@ def _live_extension_source(marker: Path) -> str:
         "    api.register_tool('read', 'shadow', {'type': 'object'}, _tool)\n"
         "    api.register_command('workflow', 'desc', lambda context, argument: "
         "CommandOutcome(command='workflow'))\n"
-        "    api.register_interaction_handler('chk', _tap)\n"
+        "    api.register_interaction_handler('poll', _tap)\n"
         "    api.on_shutdown(lambda: _write('shutdown'))\n"
     )
 
@@ -102,7 +102,7 @@ def test_deactivate_stops_every_live_effect_exactly_once(tmp_path: Path) -> None
     registry.apply_commands(dispatcher)
     before = RecordingResponder()
     fire_run_start(registry)
-    assert asyncio.run(registry.dispatch_channel_interaction(tap("chk:milk"), before)) is True
+    assert asyncio.run(registry.dispatch_channel_interaction(tap("poll:yes"), before)) is True
     assert before.answers == ["live"]
     assert tools.provider_definitions(["ext_echo"]) != []
     assert dispatcher.prepare("/workflow") is not None
@@ -111,7 +111,7 @@ def test_deactivate_stops_every_live_effect_exactly_once(tmp_path: Path) -> None
 
     fire_run_start(registry)
     after = RecordingResponder()
-    assert asyncio.run(registry.dispatch_channel_interaction(tap("chk:milk"), after)) is False
+    assert asyncio.run(registry.dispatch_channel_interaction(tap("poll:yes"), after)) is False
     assert after.answers == []
     assert [tool.name for tool in tools.list_tools()] == ["read"]
     assert tools.get("read").handler is builtin_read

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.channels.engine as engine_module
+from core.channels import ChecklistItem, checklist_keyboard
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
 from core.channels.state import ChannelStateStore
 from core.database import DatabaseUnavailableError
@@ -139,6 +140,49 @@ async def test_a_tap_enqueues_an_internal_run_describing_the_keyboard(
         assert "Tapped by:" not in note
     else:
         assert tapper in note
+
+
+@pytest.mark.asyncio
+async def test_a_submitted_checklist_reports_only_the_items_changed_since_sending(
+    tmp_path: Path,
+) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="saved"))
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+    sent = checklist_keyboard(
+        [
+            ChecklistItem(id="milk", label="Milk", checked=False),
+            ChecklistItem(id="bread", label="Bread", checked=True),
+            ChecklistItem(id="eggs", label="Eggs", checked=False),
+        ],
+        done_label="Fertig",
+        extra_rows=[[InteractionButton(label="Clear all", data="run:clear")]],
+    )
+    # The user ticked Milk and unticked Bread; Eggs stayed as sent.
+    tapped = [
+        [InteractionButton(label=f"✅{button.label[1:]}", data=button.data) for button in sent[0]],
+        [InteractionButton(label=f"⬜{button.label[1:]}", data=button.data) for button in sent[1]],
+        *sent[2:],
+    ]
+    done = sent[-1][0].data
+
+    result = await engine.trigger_interaction_reply(
+        make_conversation(kind="direct", user_id=50, message_id="777"),
+        _tap_event(done, *(tuple(row) for row in tapped)),
+    )
+    await drain(engine, 12345)
+    await engine.stop()
+
+    assert result == "enqueued"
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    note_lines = await_args.args[1].splitlines()
+    assert [line for line in note_lines if "(id " in line] == [
+        '- checked: "Milk" (id milk)',
+        '- unchecked: "Bread" (id bread)',
+    ]
+    # Buttons the checklist did not build stay visible with their data.
+    assert '- "Clear all" (run:clear)' in note_lines
+    assert not any("chk:" in line or done in line for line in note_lines)
 
 
 @pytest.mark.asyncio

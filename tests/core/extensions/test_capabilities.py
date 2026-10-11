@@ -358,24 +358,27 @@ def test_interaction_prefixes_route_to_the_first_declarer_and_never_claim_reserv
 ) -> None:
     root = tmp_path / "extensions"
     # Load order is sorted by name: alpha applies before zeta.
-    write_extension(root, "alpha", interaction_source("chk", "alpha"))
+    write_extension(root, "alpha", interaction_source("poll", "alpha"))
+    write_extension(root, "checker", interaction_source("chk", "checker"))
     write_extension(root, "hijacker", interaction_source("run", "hijacker"))
-    write_extension(root, "zeta", interaction_source("chk", "zeta"))
+    write_extension(root, "zeta", interaction_source("poll", "zeta"))
     registry = ExtensionRegistry.load(root)
 
-    chk, run = RecordingResponder(), RecordingResponder()
-    assert asyncio.run(registry.dispatch_channel_interaction(tap("chk:milk"), chk)) is True
+    poll, run, chk = RecordingResponder(), RecordingResponder(), RecordingResponder()
+    assert asyncio.run(registry.dispatch_channel_interaction(tap("poll:yes"), poll)) is True
     # The runtime routes reserved prefixes itself; no Extension handler is wired.
     assert asyncio.run(registry.dispatch_channel_interaction(tap("run:go"), run)) is False
+    assert asyncio.run(registry.dispatch_channel_interaction(tap("chk:0:milk"), chk)) is False
 
-    assert (chk.answers, run.answers) == (["alpha"], [])
+    assert (poll.answers, run.answers, chk.answers) == (["alpha"], [], [])
     alpha, zeta = record(registry, "alpha"), record(registry, "zeta")
     assert any("zeta" in message for message in alpha.capability_errors)
     assert any("alpha" in message and "skipped" in message for message in zeta.capability_errors)
-    hijacker = record(registry, "hijacker")
-    # Registration stays permissive: the declaration lands but is never applied.
-    assert [item.prefix for item in hijacker.declarations.interaction_handlers] == ["run"]
-    assert any("reserved" in message for message in hijacker.capability_errors)
+    for name, prefix in (("hijacker", "run"), ("checker", "chk")):
+        reserved = record(registry, name)
+        # Registration stays permissive: the declaration lands but is never applied.
+        assert [item.prefix for item in reserved.declarations.interaction_handlers] == [prefix]
+        assert any("reserved" in message for message in reserved.capability_errors)
     assert registry.diagnostics() == []
 
 

@@ -45,11 +45,14 @@ _CALL_ORDER = (
     "message",
     "file_paths",
     "buttons",
+    "checklist",
+    "done_label",
 )
 _LONG_TEXT = 120
 _STAND_INS = {
     "message": "<the message from this call>",
     "buttons": "<the buttons from this call>",
+    "checklist": "<the checklist from this call>",
 }
 _TEMPLATE = re.compile(r"^\s*<[^<>]+>\s*$")
 _MEDIA_TOKEN = re.compile(r'MEDIA:(?:"([^"]+)"|(\S+))')
@@ -114,6 +117,7 @@ def normalize_channel_send_arguments(contract: ToolContract, arguments: Any) -> 
             "message",
             "platform_target",
             "thread_id",
+            "done_label",
             CHANNEL_FIELD,
             TARGET_FIELD,
         ),
@@ -124,7 +128,7 @@ def normalize_channel_send_arguments(contract: ToolContract, arguments: Any) -> 
         item = normalized.get(name)
         if isinstance(item, str) and (is_placeholder(item) or _TEMPLATE.match(item)):
             del normalized[name]
-    for name in ("file_paths", "buttons"):
+    for name in ("file_paths", "buttons", "checklist"):
         if normalized.get(name) == []:
             del normalized[name]  # An empty list asks for nothing.
     channel_id = normalized.get("channel_id")
@@ -158,8 +162,9 @@ def render_call(arguments: Mapping[str, Any], **overrides: Any) -> str:
     message = ordered.get("message")
     if isinstance(message, str) and len(message) > _LONG_TEXT:
         ordered["message"] = _STAND_INS["message"]
-    if "buttons" in ordered and not isinstance(ordered["buttons"], str):
-        ordered["buttons"] = _STAND_INS["buttons"]
+    for name in ("buttons", "checklist"):
+        if name in ordered and not isinstance(ordered[name], str):
+            ordered[name] = _STAND_INS[name]
     return json.dumps(ordered, ensure_ascii=False, separators=(",", ":"))
 
 
