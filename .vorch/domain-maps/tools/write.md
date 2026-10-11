@@ -32,7 +32,9 @@ Tool shares only its name.
   gutter loses the gutters with a note, as in Add File; NUL text fails `binary_file`. Results:
   `Created X (N lines).`,
   `Replaced the content of X (N lines).`, `X already has this content. No file was
-  changed.` A file changed on disk while the call ran fails `file_changed`:
+  changed.` Content that leaves a Python, JSON, YAML or TOML file unparsable adds
+  the syntax warning shared with `edit` and `apply_patch`, with the lines around
+  the error (`apply_patch.md` -> Agent-facing text). A file changed on disk while the call ran fails `file_changed`:
   `X changed on disk while this write ran. Read it before writing it again.`
 - Coverage: `tests/core/tools/test_edit_tools.py`
   (`test_write_creates_replaces_after_a_read_and_keeps_identical_content`, the
