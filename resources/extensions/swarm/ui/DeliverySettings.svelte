@@ -153,7 +153,8 @@
       hidden={!advancedOpen}
     >
       {#each limits as limit (limit.field)}
-        <div class="s-row">
+        <!-- A number field keeps to its width, so the text takes the rest. -->
+        <div class="s-row s-row--compact">
           <div class="s-row-info">
             <label class="s-row-label" for={limit.id}>{limit.label}</label>
             <div class="s-row-desc" id={`${limit.id}-help`}>
