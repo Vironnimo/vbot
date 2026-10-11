@@ -186,7 +186,10 @@ the call's own page reference. Store-assigned numbers were chosen over page name
 that Agents pick: 3 of 11 pages were renamed in one Run, so a descriptive ID would
 go stale or break links in immutable posts, and the title already carries the
 meaning (Sessions, 2026-09). Agents choose how to organize them. List/search returns
-recent changes and excerpts; content and history reads are bounded. List/history
+recent changes and excerpts; content and history reads are bounded. A content read
+without `limit` shows up to 20000 characters, the most one read can: at a default
+of 12000, 5 of 53 Wiki reads in one Run showed only part of a page shorter than
+20000 characters (Sessions, 2026-10). List/history
 continuations bind their query and revision watermark; content continuations pin
 the requested revision. Search matches Unicode-casefolded titles and content; the
 folding runs in Python over the latest revisions because kernel read connections
@@ -1062,6 +1065,7 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. `or answers` was dropped with the advertised `reply_to`. |
 | `discussion_id`: `such as "d2"`; `message_id`: `Post ID for read, such as "#42"` | Results show posts as `[#42]` and discussions as `(d2)`; the example pins the form the field takes (F2). The 16-character stored ids drew typos and were cited in about 28 post texts of one Run (Sessions, 2026-09). |
 | `swarm_wiki` `page_id`: `Page ID, such as "w3".` | Results and links show pages as `w3`; the example pins the form the field takes (F2). Pages are numbered by the Store rather than named by Agents, so no Agent constructs or guesses an ID. |
+| `swarm_wiki` `limit`: `With read: characters to show (default and maximum 20000).` | Says that an omitted limit already reads as much as possible, so Agents do not raise it (F6). The default was 12000: 5 of 53 reads in one Run cut a page shorter than 20000 characters and cost a continuation (Sessions, 2026-10). |
 | Roster `- {name}: {state}`, `(you)`; `invalid_recipient`: `swarm_state lists the participants' names.` | Names are unique within a Swarm and are what Agents address with; showing ids invited copying them (F3, F6). |
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |
 | `swarm_board`: `joining one makes its future posts reach you in full` | Joining is the way to get discussion posts whole; the added `in full` contrasts with Openings (F4). |

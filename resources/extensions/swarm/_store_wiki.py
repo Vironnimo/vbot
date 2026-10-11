@@ -179,7 +179,7 @@ def _metadata(row: sqlite3.Row, numbers: dict[str, int]) -> Json:
 def _read(
     row: sqlite3.Row, arguments: Json, current_revision: int, numbers: dict[str, int]
 ) -> Json:
-    offset, limit = arguments.get("offset", 0), arguments.get("limit", 12000)
+    offset, limit = arguments.get("offset", 0), arguments.get("limit", 20000)
     content = row["content"]
     if offset > len(content):
         raise SwarmStoreError("invalid_arguments", field="offset")

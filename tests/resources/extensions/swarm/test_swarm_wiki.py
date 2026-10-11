@@ -339,11 +339,12 @@ async def test_wiki_collaboration_conflicts_history_delete_restore(board):
 
 @pytest.mark.asyncio
 async def test_wiki_bounded_reads_search_and_frozen_pagination(board):
-    content = "a" * 12500 + "\nÜberraschung"
+    content = "a" * 20500 + "\nÜberraschung"
     page_ids = [await create(board, content, f"Page {index}") for index in range(3)]
+    # A read without limit shows as much as one read can.
     result = (await invoke(board, {"action": "read", "page_id": page_ids[0]}))["data"]
-    assert len(result["content"]) == 12000
-    assert result["shown"] == "Characters 0 to 12000 of 12513."
+    assert len(result["content"]) == 20000
+    assert result["shown"] == "Characters 0 to 20000 of 20513."
     await invoke(
         board,
         {"action": "update", "page_id": page_ids[0], "expected_revision": 1, "content": "changed"},

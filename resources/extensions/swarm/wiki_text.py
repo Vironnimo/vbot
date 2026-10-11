@@ -72,7 +72,7 @@ WIKI_PARAMETERS: dict[str, Any] = {
         "limit": {
             "type": "integer",
             "description": (
-                "With read: characters to show (default 12000, at most 20000). With list or "
+                "With read: characters to show (default and maximum 20000). With list or "
                 "history: entries (default 20, at most 100)."
             ),
         },
