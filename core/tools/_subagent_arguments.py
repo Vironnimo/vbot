@@ -17,6 +17,7 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
+from core.tools._background_tasks_arguments import is_wait_action, wait_refusal
 from core.tools.call_syntax import (
     PLACEHOLDER_WORDS,
     SpellingAliases,
@@ -28,12 +29,16 @@ from core.tools.contracts import ToolContract, ToolContractError
 from core.tools.tools import JsonObject
 
 BACKGROUND_FIELD = "background"
+# Set by the normalizer only: the action a call sent to list, check or stop
+# Sub-Agents, which ``background_tasks`` does; the handler runs that call.
+BACKGROUND_TASKS_ACTION = "background_tasks_action"
 # Accepted, never advertised: a requested delivery mode reaches the handler, which
 # states in the result when vBot's fixed mode differs, and a ``session_id`` from a
 # result names the Sub-Agent of that Session.
 UNADVERTISED_PARAMETERS: JsonObject = {
     BACKGROUND_FIELD: {"type": "boolean"},
     "session_id": {"type": "string"},
+    BACKGROUND_TASKS_ACTION: {"type": "string"},
 }
 
 _FIELD_ALIASES = SpellingAliases(
@@ -80,7 +85,14 @@ _ACTION_SYNONYMS = SpellingAliases(
             "answer",
             "instruct",
         ),
+    }
+)
+# Actions ``subagent`` had before ``background_tasks`` took them over, and their
+# synonyms, by the ``background_tasks`` action they run.
+_BACKGROUND_TASKS_ACTIONS = SpellingAliases(
+    {
         "list": (
+            "list",
             "status",
             "ls",
             "check",
@@ -94,11 +106,11 @@ _ACTION_SYNONYMS = SpellingAliases(
             "result",
             "results",
             "fetch",
-            "wait",
         ),
-        "cancel": ("stop", "kill", "abort", "terminate", "halt", "interrupt"),
+        "stop": ("cancel", "stop", "kill", "abort", "terminate", "halt", "interrupt"),
     }
 )
+_ACTION_KEYS = frozenset({"action", "operation"})
 # Placeholder vocabulary per optional field. ``"none"`` is a real thinking effort.
 _PLACEHOLDERS: dict[str, frozenset[str]] = {
     "id": PLACEHOLDER_WORDS,
@@ -130,7 +142,7 @@ def normalize_subagent_arguments(
 ) -> Any:
     """Return the canonical ``subagent`` arguments for one Model call."""
     if isinstance(arguments, dict):
-        arguments = _task_text_request(arguments)
+        arguments = _read_background_tasks_action(_task_text_request(arguments))
     normalized = normalize_call_arguments(
         contract,
         arguments,
@@ -162,6 +174,30 @@ def _task_text_request(arguments: dict[str, Any]) -> dict[str, Any]:
             key = next((name for name in _TASK_TEXT_KEYS if name not in arguments), key)
         result[key] = item
     return result
+
+
+def _read_background_tasks_action(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Move an action that lists, checks or stops Sub-Agents out of ``action``.
+
+    The handler runs it as ``background_tasks``; waiting is refused the way that
+    Tool refuses it.
+    """
+    keys = [key for key in arguments if spelling(key) in _ACTION_KEYS]
+    if len(keys) != 1 or not isinstance(arguments[keys[0]], str):
+        return arguments
+    action = arguments[keys[0]]
+    if is_wait_action(action):
+        raise ToolContractError(wait_refusal(action))
+    if spelling(action) not in _BACKGROUND_TASKS_ACTIONS:
+        return arguments
+    result = {key: value for key, value in arguments.items() if key != keys[0]}
+    result[BACKGROUND_TASKS_ACTION] = action
+    return result
+
+
+def background_tasks_action(action: str) -> str:
+    """The ``background_tasks`` action a moved ``subagent`` action runs: list or stop."""
+    return _BACKGROUND_TASKS_ACTIONS[action]
 
 
 def _is_json_object(text: str) -> bool:
@@ -226,4 +262,10 @@ def _distinct(values: Iterable[Any]) -> list[Any]:
     return distinct
 
 
-__all__ = ["BACKGROUND_FIELD", "UNADVERTISED_PARAMETERS", "normalize_subagent_arguments"]
+__all__ = [
+    "BACKGROUND_FIELD",
+    "BACKGROUND_TASKS_ACTION",
+    "UNADVERTISED_PARAMETERS",
+    "background_tasks_action",
+    "normalize_subagent_arguments",
+]

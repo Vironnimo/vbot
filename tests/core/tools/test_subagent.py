@@ -1,9 +1,10 @@
 """The ``subagent`` Tool: its definition, the call shapes it accepts, and its display.
 
 Other harness dialects, action synonyms, placeholder fields and copied result
-fields reach exactly the Agent and task the call meant. Calls whose meaning is
-unclear, or that ask for something vBot cannot do, are refused before any work
-starts, with the corrected call.
+fields reach exactly the Agent and task the call meant. Calls that list, check
+or stop Sub-Agents run as ``background_tasks``, which does that now. Calls whose
+meaning is unclear, or that ask for something vBot cannot do, are refused
+before any work starts, with the corrected call.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ async def test_tool_definitions_are_flat_open_contracts(harness: SubAgentHarness
         "thinking_effort",
     ]
     assert all(schema.get("description") for schema in properties.values())
-    assert properties["action"]["enum"] == ["run", "send", "list", "cancel"]
+    assert properties["action"]["enum"] == ["run", "send"]
 
     message_parent = harness.registry.get(MESSAGE_PARENT_TOOL_NAME)
     assert message_parent.description == MESSAGE_PARENT_TOOL_DESCRIPTION
@@ -215,7 +216,8 @@ def _id_without_action(subagent_id: str) -> str:
     return (
         f"subagent was not run: it received Sub-Agent id {subagent_id} but no action. To "
         f'message that Sub-Agent, call {{"action": "send", "id": "{subagent_id}", "content": '
-        f'"<message>"}}; to stop it, call {{"action": "cancel", "id": "{subagent_id}"}}.'
+        f'"<message>"}}; to stop it, call background_tasks {{"action": "stop", "id": '
+        f'"{subagent_id}"}}.'
     )
 
 
@@ -236,8 +238,18 @@ def _id_without_action(subagent_id: str) -> str:
         # An explicit invalid choice never counts as omission.
         (
             {"content": BRIEF, "action": "rn"},
-            'subagent was not run: "action" must be one of "run", "send", "list", "cancel"; '
-            'received "rn".',
+            'subagent was not run: "action" must be one of "run", "send"; received "rn".',
+        ),
+        # Nothing waits for a Sub-Agent, and stopping one needs its id.
+        (
+            {"action": "wait", "id": "sub_abcdefghijkl"},
+            'Unknown action "wait". Use one of: list, status, stop. Command results and '
+            "Sub-Agent answers arrive as new messages, so there is nothing to wait for.",
+        ),
+        (
+            {"action": "cancel", "content": "stop it"},
+            "stop needs id, the background command or Sub-Agent to stop; nothing was stopped. "
+            "Nothing of yours is running now.",
         ),
         (
             {"content": BRIEF, "description": "Audit", "thinking_effort": "extreme"},
@@ -288,41 +300,83 @@ async def test_unclear_or_unsupported_calls_are_refused_before_any_work(
     assert harness.sessions.list("worker") == []
 
 
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"action": "list"},
-        {"action": "status", "content": "spawn"},
-        {"action": "check", "id": ""},
-    ],
+_RAN_AS_LIST = (
+    "This call ran as background_tasks {call}, which lists, checks and stops Sub-Agents and "
+    "background commands."
 )
-async def test_list_without_subagents_is_an_empty_listing(
-    harness: SubAgentHarness, arguments: JsonObject
-) -> None:
-    result = await harness.call(arguments)
-
-    assert result == {"ok": True, "error": None, "data": {"subagents": []}, "artifacts": []}
+_RAN_AS_STOP = "This call ran as background_tasks {call}."
 
 
-@pytest.mark.parametrize("action", ["cancel", "stop", "Kill"])
-async def test_cancel_words_ignore_echoed_fields_and_stop_the_exact_subagent(
-    harness: SubAgentHarness, action: str
+@pytest.mark.parametrize(
+    ("arguments", "ran", "status"),
+    [
+        ({"action": "list"}, _RAN_AS_LIST.format(call='{"action": "list"}'), None),
+        (
+            {"action": "status", "content": "spawn", "id": ""},
+            _RAN_AS_LIST.format(call='{"action": "list"}'),
+            None,
+        ),
+        (
+            {"action": "check", "id": "{id}"},
+            _RAN_AS_LIST.format(call='{"action": "status", "id": "{id}"}'),
+            "working",
+        ),
+        # Fields echoed from a result are ignored; the id names the Sub-Agent.
+        (
+            {
+                "action": "Kill",
+                "id": "{id}",
+                "agent_id": "worker",
+                "content": "stop the audit",
+                "session_id": "{session_id}",
+            },
+            _RAN_AS_STOP.format(call='{"action": "stop", "id": "{id}"}'),
+            "stopped",
+        ),
+        (
+            {"operation": "cancel", "session_id": "{session_id}"},
+            _RAN_AS_STOP.format(call='{"action": "stop", "id": "{session_id}"}'),
+            "stopped",
+        ),
+    ],
+    ids=["list", "list-word", "check", "kill", "cancel-session"],
+)
+async def test_calls_that_list_check_or_stop_run_as_background_tasks(
+    harness: SubAgentHarness, arguments: JsonObject, ran: str, status: str | None
 ) -> None:
     harness.loop.hold(BRIEF)
     child = await harness.spawn(BRIEF, agent_id="worker")
 
+    def filled(text: str) -> str:
+        return text.replace("{id}", child["id"]).replace("{session_id}", child["session_id"])
+
     result = await harness.call(
         {
-            "action": action,
-            "id": child["id"],
-            "agent_id": "worker",
-            "content": "stop the audit",
-            "session_id": child["session_id"],
+            key: filled(value) if isinstance(value, str) else value
+            for key, value in arguments.items()
         }
     )
 
     assert result["ok"], result
-    assert result["data"]["status"] == "cancelled"
+    assert result["data"]["notes"][0] == filled(ran)
+    if status is None:
+        assert [row["id"] for row in result["data"]["tasks"]] == [child["id"]]
+    else:
+        assert (result["data"]["id"], result["data"]["status"]) == (child["id"], status)
+    await harness.settle()
+
+
+async def test_list_and_stop_words_are_refused_when_background_tasks_is_not_callable(
+    harness: SubAgentHarness,
+) -> None:
+    result = await harness.registry.dispatch(
+        harness.context(), {"action": "list"}, [SUBAGENT_TOOL_NAME]
+    )
+
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": 'subagent was not run: "action" must be one of "run", "send"; received "list".',
+    }
 
 
 @pytest.mark.parametrize(
@@ -341,8 +395,12 @@ async def test_cancel_words_ignore_echoed_fields_and_stop_the_exact_subagent(
             [("text", "send"), ("identifier", "sub_abcdefghijkl")],
         ),
         (
-            {"action": "stop", "work_id": "sub_abcdefghijkl"},
-            [("text", "cancel"), ("identifier", "sub_abcdefghijkl")],
+            {"action": "cancel", "work_id": "sub_abcdefghijkl"},
+            [("text", "stop"), ("identifier", "sub_abcdefghijkl")],
+        ),
+        (
+            {"action": "check", "id": "sub_abcdefghijkl"},
+            [("text", "status"), ("identifier", "sub_abcdefghijkl")],
         ),
         ({"action": "status"}, [("text", "list")]),
     ],
@@ -355,7 +413,7 @@ async def test_display_labels_what_the_call_meant(
     assert [(part.get("kind", "text"), part["value"]) for part in display["primary"]] == expected
 
 
-async def test_details_show_the_task_the_message_and_the_listed_subagents(
+async def test_details_show_the_task_the_message_and_what_background_tasks_did(
     harness: SubAgentHarness,
 ) -> None:
     display = harness.registry.get(SUBAGENT_TOOL_NAME).display
@@ -382,16 +440,29 @@ async def test_details_show_the_task_the_message_and_the_listed_subagents(
     assert details(
         {"action": "list"},
         {
-            "subagents": [
+            "tasks": [
                 {
                     "id": "sub_a",
+                    "type": "subagent",
                     "title": "Check links",
                     "agent_id": "worker",
-                    "state": "working",
+                    "status": "working",
                     "last_tool": "bash",
                 }
             ]
         },
     ) == [
-        {"type": "results", "items": [{"title": "Check links", "meta": "worker · working · bash"}]}
+        {"type": "results", "items": [{"title": "Check links", "meta": "sub_a · working · bash"}]}
+    ]
+    assert details(
+        {"action": "cancel", "id": "sub_a"},
+        {"id": "sub_a", "type": "subagent", "agent_id": "worker", "status": "stopped"},
+    ) == [{"type": "notice", "level": "info", "text": "The Sub-Agent was stopped."}]
+    # Persisted rows from before background_tasks keep the subagent result they got.
+    former_list = {"subagents": [{"id": "sub_a", "title": "Check links", "state": "idle"}]}
+    assert details({"action": "list"}, former_list) == [
+        {"type": "results", "items": [{"title": "Check links", "meta": "idle"}]}
+    ]
+    assert details({"action": "cancel", "id": "sub_a"}, {"id": "sub_a", "status": "cancelled"}) == [
+        {"type": "notice", "level": "info", "text": "The sub-agent was stopped."}
     ]

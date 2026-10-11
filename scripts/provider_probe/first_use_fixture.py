@@ -19,6 +19,7 @@ from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
 from core.tools._shell_arguments import normalize_shell_arguments
 from core.tools.apply_patch import patch_targets, register_apply_patch_tool
+from core.tools.background_tasks import register_background_tasks_tool
 from core.tools.command_manager import CommandManager
 from core.tools.edit import (
     EditDialect,
@@ -85,6 +86,7 @@ class FirstUseFixture:
             chat_sessions=self.sessions,
             chat_run_manager=self.runs,
             terminal_manager=self.terminals,
+            command_manager=self.commands,
             storage=SimpleNamespace(
                 temporary_files=self.temporary, load_subagent_settings=lambda: {}
             ),
@@ -96,6 +98,7 @@ class FirstUseFixture:
         register_search_files_tool(self.registry)
         register_subagent_tools(self.registry, self.coordinator)
         register_shell_tool(self.registry, self.commands)
+        register_background_tasks_tool(self.registry, self.commands, subagents=self.coordinator)
         file_state = FileReadState()
         register_apply_patch_tool(self.registry, file_state=file_state)
         register_edit_tools(self.registry, file_state=file_state)

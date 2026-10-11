@@ -1,10 +1,11 @@
 """A dispatch harness for the Sub-Agent Tools over real Sessions and a real Run manager.
 
-Every call goes through the registered Tool the way the Tool executor runs an
-Agent's call: argument normalization, contract validation, then the
-coordinator. Sessions, the Run manager, the Sub-Agent links and forwarding are
-real; the Agent resolver, the completion coordinator and the Chat loop that
-executes a Sub-Agent's turn are doubles.
+The Sub-Agent Tools are ``subagent``, ``message_parent`` and ``background_tasks``,
+which lists, checks and stops Sub-Agents. Every call goes through the registered
+Tool the way the Tool executor runs an Agent's call: argument normalization,
+contract validation, then the coordinator. Sessions, the Run manager, the
+Sub-Agent links and forwarding are real; the Agent resolver, the completion
+coordinator and the Chat loop that executes a Sub-Agent's turn are doubles.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
 from core.subagents.links import find_link
 from core.tools.availability import MESSAGE_PARENT_TOOL_NAME
+from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME, register_background_tasks_tool
+from core.tools.command_manager import CommandManager
 from core.tools.subagent import SUBAGENT_TOOL_NAME, register_subagent_tools
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure_for_exception
 
@@ -254,16 +257,26 @@ class SubAgentHarness:
             storage=self.storage,
             chat_loop=self.loop,
             terminal_manager=None,
-            # Tests that need background commands set a CommandManager here.
+            # Tests that need background commands set one with ``use_commands``.
             command_manager=None,
         )
         self.triggers = RecordingTriggerService()
         self.coordinator = SubAgentCoordinator(cast(Any, self.runtime), self.triggers)
         self.coordinator.install(self.manager)
-        self.registry = ToolRegistry()
-        register_subagent_tools(self.registry, self.coordinator)
+        self.registry = self._registry(CommandManager())
         self.parent = self.sessions.create("parent").address
         self.events: list[tuple[str, JsonObject]] = []
+
+    def _registry(self, commands: CommandManager) -> ToolRegistry:
+        registry = ToolRegistry()
+        register_subagent_tools(registry, self.coordinator)
+        register_background_tasks_tool(registry, commands, subagents=self.coordinator)
+        return registry
+
+    def use_commands(self, commands: CommandManager) -> None:
+        """Run background commands on *commands*, the runtime's and ``background_tasks``'s."""
+        self.runtime.command_manager = commands
+        self.registry = self._registry(commands)
 
     def context(
         self,
@@ -317,6 +330,11 @@ class SubAgentHarness:
 
     async def message_parent(self, content: str, session: SessionAddress) -> JsonObject:
         return await self.call({"content": content}, session, tool_name=MESSAGE_PARENT_TOOL_NAME)
+
+    async def background_tasks(
+        self, arguments: JsonObject, session: SessionAddress | None = None
+    ) -> JsonObject:
+        return await self.call(arguments, session, tool_name=BACKGROUND_TASKS_TOOL_NAME)
 
     async def spawn(
         self, task: str = "review", session: SessionAddress | None = None, **arguments: Any

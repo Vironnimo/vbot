@@ -7,6 +7,11 @@ from typing import Any
 
 from core.channels import ChannelConfig
 from core.tools import model_tool_name
+from core.tools.background_tasks import (
+    BACKGROUND_TASKS_TOOL_DESCRIPTION,
+    BACKGROUND_TASKS_TOOL_NAME,
+    BACKGROUND_TASKS_TOOL_PARAMETERS,
+)
 from core.tools.channel import CHANNEL_SEND_TOOL_NAME, _channel_send_definition_profile
 from core.tools.project import PROJECT_TOOL_DESCRIPTION, PROJECT_TOOL_NAME, PROJECT_TOOL_PARAMETERS
 from core.tools.shell import SHELL_TOOL_DESCRIPTION, SHELL_TOOL_NAME, SHELL_TOOL_PARAMETERS
@@ -315,9 +320,6 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
             "content": "Inspect the Tool contract and report concise findings.",
             "thinking_effort": "none",
         },
-        "list_all": {"action": "list"},
-        "list": {"action": "list", "id": "sub_123"},
-        "cancel": {"action": "cancel", "id": "sub_123"},
     }
     expected_arguments = subagent_arguments[case_name]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
@@ -336,6 +338,34 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         SUBAGENT_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _background_tasks_scenario(case_name: str) -> ProbeScenario:
+    background_tasks_arguments: dict[str, dict[str, Any]] = {
+        "list": {"action": "list"},
+        "status": {"action": "status", "id": "sub_123"},
+        "stop": {"action": "stop", "id": "sub_123"},
+    }
+    expected_arguments = background_tasks_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {BACKGROUND_TASKS_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and do not add any field."
+    )
+    return ProbeScenario(
+        "background_tasks",
+        [
+            {
+                "name": BACKGROUND_TASKS_TOOL_NAME,
+                "description": BACKGROUND_TASKS_TOOL_DESCRIPTION,
+                "parameters": BACKGROUND_TASKS_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        BACKGROUND_TASKS_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )

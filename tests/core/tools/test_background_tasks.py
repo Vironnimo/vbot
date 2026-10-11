@@ -1,8 +1,10 @@
-"""background_tasks: list, check and stop background commands; never input, never a wait.
+"""background_tasks: list, check and stop background commands and Sub-Agents.
 
-Commands run on fake processes through a real ``CommandManager`` on a fake clock
-(``command_manager_helpers``); a fake Sub-Agent tree says which Sessions descend
-from the caller. Calls go through the registry as the executor sends them.
+It never gives input and never waits. Commands run on fake processes through a
+real ``CommandManager`` on a fake clock (``command_manager_helpers``); a fake
+Sub-Agent tree says which Sub-Agents work below the caller and in which
+Sessions. Calls go through the registry as the executor sends them. The
+Sub-Agent tree itself is tested over real Sessions in ``tests/core/subagents``.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ import asyncio
 import dataclasses
 import json
 import re
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ import pytest
 import pytest_asyncio
 
 from core.sessions import SessionAddress
+from core.subagents import SubAgentState
 from core.tools.availability import ToolAccess, resolve_tool_access
 from core.tools.background_tasks import (
     BACKGROUND_TASKS_TOOL_NAME,
@@ -43,17 +46,46 @@ from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import AdapterFactory
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
-# The caller's Sub-Agent, and a Session outside the caller's tree.
-CHILD = SessionAddress("project-a", "sub-agent", "session-child")
-SIBLING = SessionAddress("project-a", "sub-agent-2", "session-sibling")
+# The caller's Sub-Agent, its own Sub-Agent, and a Session outside the caller's tree.
+CHILD = SessionAddress("project-a", "sub-agent", "ses_child")
+GRANDCHILD = SessionAddress("project-a", "sub-agent", "ses_grandchild")
+SIBLING = SessionAddress("project-a", "sub-agent-2", "ses_sibling")
 SERVER = RunningProcess(5001, "server.exe")
+SUBAGENT = "subagent"
 
 
 class FakeSubAgents:
-    """The Sub-Agent tree: the caller's Sub-Agent ``sub_child`` runs in ``CHILD``."""
+    """The caller's Sub-Agent ``sub_child`` works in ``CHILD``, and nothing runs below it.
 
-    async def descendant_sessions(self, caller: SessionAddress) -> Mapping[SessionAddress, str]:
-        return {CHILD: "sub_child"} if caller == OWNER else {}
+    Tests change its state, give it a Sub-Agent of its own, or name what it runs.
+    """
+
+    def __init__(self) -> None:
+        self.child = SubAgentState(
+            id="sub_child",
+            title="Review docs",
+            agent_id="sub-agent",
+            session=CHILD,
+            parent_id=None,
+            status="working",
+            last_tool="bash",
+            activity_file="/tmp/sub_child.md",
+        )
+        self.grandchild: SubAgentState | None = None
+        self.running: list[str] = []
+        self.stopped: list[str] = []
+
+    async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
+        if caller != OWNER:
+            return ()
+        return [self.child] if self.grandchild is None else [self.child, self.grandchild]
+
+    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
+        return self.running if subagent.id == self.child.id else ()
+
+    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+        self.stopped.append(subagent.id)
+        return subagent.status in {"working", "queued"} or bool(self.running)
 
 
 class Tasks:
@@ -61,9 +93,10 @@ class Tasks:
 
     def __init__(self, commands: Harness) -> None:
         self.commands = commands
+        self.subagents = FakeSubAgents()
         self.registry = ToolRegistry()
         register_shell_tool(self.registry, commands.manager)
-        register_background_tasks_tool(self.registry, commands.manager, subagents=FakeSubAgents())
+        register_background_tasks_tool(self.registry, commands.manager, subagents=self.subagents)
         # Callbacks the calls registered to run once their Tool Results are persisted.
         self.persisted: list[Callable[[], None]] = []
 
@@ -156,7 +189,7 @@ def output_file(text: str) -> Path:
 
 
 @pytest.mark.asyncio
-async def test_list_shows_the_background_commands_of_this_session_and_its_subagents(
+async def test_list_shows_the_subagents_then_the_commands_of_this_session_and_its_subagents(
     tasks: Tasks,
 ) -> None:
     running, _ = await tasks.background(command="serve")
@@ -169,9 +202,42 @@ async def test_list_shows_the_background_commands_of_this_session_and_its_subage
     await tasks.commands.launch(command="foreground")
     await tasks.commands.advance(60, step=5)
 
+    tasks.subagents.grandchild = dataclasses.replace(
+        tasks.subagents.child,
+        id="sub_grandchild",
+        title="Check links",
+        session=GRANDCHILD,
+        parent_id="sub_child",
+        status="idle",
+        last_tool=None,
+    )
+
     listed = data(await tasks.call({"action": "list"}))
 
-    rows = listed["tasks"]
+    subagents, rows = listed["tasks"][:2], listed["tasks"][2:]
+    # Sub-Agents come first, in tree order.
+    assert subagents == [
+        {
+            "id": "sub_child",
+            "type": "subagent",
+            "title": "Review docs",
+            "agent_id": "sub-agent",
+            "session_id": CHILD.session_id,
+            "status": "working",
+            "last_tool": "bash",
+            "activity_file": "/tmp/sub_child.md",
+        },
+        {
+            "id": "sub_grandchild",
+            "type": "subagent",
+            "title": "Check links",
+            "agent_id": "sub-agent",
+            "session_id": GRANDCHILD.session_id,
+            "parent_id": "sub_child",
+            "status": "idle",
+            "activity_file": "/tmp/sub_child.md",
+        },
+    ]
     assert [row["id"] for row in rows] == [child, ended, running]
     for row in rows:
         assert row["type"] == "command"
@@ -183,13 +249,19 @@ async def test_list_shows_the_background_commands_of_this_session_and_its_subage
     ]
     assert rows[1]["exit_code"] == 1
     assert rows[2]["runtime"].startswith("1 minute ")
-    # The caller's own command runs: the note says its result arrives by itself.
+    # Answers and results arrive by themselves: listing again is no way to wait.
     assert len(listed["notes"]) == 1
-    # The user sees each listed command.
+    # The user sees each listed task.
     shown = tasks.registry.display_for_call(
         BACKGROUND_TASKS_TOOL_NAME, {"action": "list"}, result={"ok": True, "data": listed}
     )["details"]
-    assert [item["title"] for item in shown[0]["items"]] == ["watch", "build", "serve"]
+    assert [item["title"] for item in shown[0]["items"]] == [
+        "Review docs",
+        "Check links",
+        "watch",
+        "build",
+        "serve",
+    ]
 
     # A Sub-Agent sees its own commands, never its parent's or a sibling's.
     own = data(await tasks.call({"action": "list"}, owner=CHILD))["tasks"]
@@ -250,6 +322,114 @@ async def test_status_of_an_ended_command_acknowledges_only_this_sessions_delive
     # The result showed the end to the Agent that waits for it; a Sub-Agent's stays.
     own = owner == OWNER
     assert tasks.commands.sink.cancellations == ([f"command:{command_id}"] if own else [])
+
+
+def _stop_text(subagent_id: str) -> str:
+    return f'To stop it, call background_tasks {{"action": "stop", "id": "{subagent_id}"}}.'
+
+
+@pytest.mark.parametrize(
+    ("status", "deeper", "next_text"),
+    [
+        (
+            "working",
+            False,
+            "The Sub-Agent is working; its answer arrives as a new message when its turn ends, "
+            "so do not poll for it. " + _stop_text("sub_child"),
+        ),
+        (
+            "queued",
+            True,
+            "The Sub-Agent is working for your Sub-Agent sub_child, which receives its answer. "
+            + _stop_text("sub_grandchild"),
+        ),
+        (
+            "idle",
+            False,
+            "The Sub-Agent is idle. To give it more work, send it a message with subagent "
+            "action send.",
+        ),
+        (
+            "idle",
+            True,
+            "The Sub-Agent is idle; only your Sub-Agent sub_child can send it messages.",
+        ),
+        (
+            "taken over by the user",
+            False,
+            "The user took over this Sub-Agent by writing in its Session; it works for the "
+            "user, and vBot no longer sends you its answers.",
+        ),
+    ],
+    ids=["working", "queued-deeper", "idle", "idle-deeper", "taken-over"],
+)
+@pytest.mark.asyncio
+async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
+    tasks: Tasks, status: Any, deeper: bool, next_text: str
+) -> None:
+    subagent = dataclasses.replace(tasks.subagents.child, status=status)
+    if deeper:
+        subagent = dataclasses.replace(
+            subagent, id="sub_grandchild", session=GRANDCHILD, parent_id="sub_child"
+        )
+        tasks.subagents.grandchild = subagent
+    else:
+        tasks.subagents.child = subagent
+        tasks.subagents.running = ["background command cmd_a (serve)"]
+
+    shown = data(await tasks.call({"action": "status", "id": subagent.id}))
+
+    assert shown["next"] == next_text
+    assert (shown["id"], shown["type"], shown["status"]) == (subagent.id, "subagent", status)
+    assert shown["project_id"] == "project-a"
+    # Only a working turn has a last Tool; only work it still runs is named.
+    assert ("last_tool" in shown) is (status == "working")
+    assert shown.get("running") == (None if deeper else ["background command cmd_a (serve)"])
+    assert tasks.subagents.stopped == []
+
+
+@pytest.mark.parametrize("working", [True, False], ids=["working", "idle"])
+@pytest.mark.asyncio
+async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
+    tasks: Tasks, working: bool
+) -> None:
+    if not working:
+        tasks.subagents.child = dataclasses.replace(
+            tasks.subagents.child, status="idle", last_tool=None
+        )
+
+    result = await tasks.call({"action": "stop", "id": "sub_child"})
+    stopped = data(result)
+
+    assert tasks.subagents.stopped == ["sub_child"]
+    assert stopped == {
+        "id": "sub_child",
+        "type": "subagent",
+        "agent_id": "sub-agent",
+        "session_id": CHILD.session_id,
+        "project_id": "project-a",
+        "status": "stopped" if working else "idle",
+        "notes": [
+            "Stopped: its current turn, its queued messages, its background commands and "
+            "terminals, and its own Sub-Agents. Its Session keeps the history; send it a "
+            "message to continue."
+            if working
+            else "Sub-Agent sub_child and its own Sub-Agents were idle and ran no background "
+            "commands or terminals, so nothing needed stopping."
+        ],
+    }
+    shown = tasks.registry.display_for_call(
+        BACKGROUND_TASKS_TOOL_NAME, {"action": "stop", "id": "sub_child"}, result=result
+    )["details"]
+    assert shown == [
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "The Sub-Agent was stopped."
+            if working
+            else "The Sub-Agent was idle; nothing needed stopping.",
+        }
+    ]
 
 
 # --- stop --------------------------------------------------------------------
@@ -354,7 +534,7 @@ async def test_other_harnesses_shapes_reach_the_intended_action(
     result = data(await tasks.call(sent))
 
     if outcome == "listed":
-        assert [row["id"] for row in result["tasks"]] == [command_id]
+        assert [row["id"] for row in result["tasks"]] == ["sub_child", command_id]
         return
     assert result["status"] == ("stopped" if outcome == "stopped" else "running")
     assert process.tree.terminations == (1 if outcome == "stopped" else 0)
@@ -363,6 +543,17 @@ async def test_other_harnesses_shapes_reach_the_intended_action(
         assert calls(result["notes"][0]) == [{"action": "stop", "id": command_id}]
     else:
         assert "notes" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_subagents_session_id_names_that_subagent(tasks: Tasks) -> None:
+    shown = data(await tasks.call({"action": "status", "session_id": CHILD.session_id}))
+    unknown = error(await tasks.call({"action": "stop", "id": SIBLING.session_id}))
+
+    assert shown["id"] == "sub_child"
+    assert shown["notes"] == [f"session_id {CHILD.session_id} was read as Sub-Agent sub_child."]
+    assert unknown["code"] == "task_not_found"
+    assert tasks.subagents.stopped == []
 
 
 @pytest.mark.asyncio
@@ -385,8 +576,8 @@ async def test_ids_outside_this_session_and_its_subagents_are_refused(tasks: Tas
     for refusal in refusals[:3]:
         failure = error(refusal)
         assert failure["code"] == "task_not_found"
-        # The refusal names what of the caller's runs now.
-        assert f"{own} (serve)" in failure["message"]
+        # The refusal names what of the caller's runs now, working Sub-Agents first.
+        assert f"Running now: sub_child (Review docs), {own} (serve)." in failure["message"]
     assert error(refusals[3])["code"] == "task_not_found"
     assert missing["code"] == "invalid_arguments" and f"{own} (serve)" in missing["message"]
     assert several["code"] == "invalid_arguments"
@@ -397,24 +588,32 @@ async def test_ids_outside_this_session_and_its_subagents_are_refused(tasks: Tas
 # --- Availability ----------------------------------------------------------------
 
 
-def test_background_tasks_is_available_exactly_when_the_shell_is() -> None:
+def test_background_tasks_is_available_exactly_when_the_shell_or_subagent_is() -> None:
     commands = CommandManager()
     tools = ToolRegistry()
     register_shell_tool(tools, commands)
+    schema = {"type": "object", "properties": {}, "additionalProperties": False}
+    tools.register(SUBAGENT, "Delegate tasks.", schema, lambda _context, _arguments: {})
     register_background_tasks_tool(tools, commands)
     catalog = tools.list_tools()
 
     def allowed(policy: ToolAccess) -> set[str]:
         return set(resolve_tool_access(policy, catalog, "off").allowed_tools)
 
-    both = {SHELL_TOOL_NAME, BACKGROUND_TASKS_TOOL_NAME}
-    assert allowed(ToolAccess(mode="all")) == both
-    assert allowed(ToolAccess(mode="selected", allowed=(SHELL_TOOL_NAME,))) == both
-    assert allowed(ToolAccess(mode="all", denied=(SHELL_TOOL_NAME,))) == set()
-    assert allowed(ToolAccess(mode="selected", allowed=(BACKGROUND_TASKS_TOOL_NAME,))) == set()
-    # The user configures the shell; its companion is no switch of its own.
+    tasks = BACKGROUND_TASKS_TOOL_NAME
+    assert allowed(ToolAccess(mode="all")) == {SHELL_TOOL_NAME, SUBAGENT, tasks}
+    assert allowed(ToolAccess(mode="selected", allowed=(SHELL_TOOL_NAME,))) == {
+        SHELL_TOOL_NAME,
+        tasks,
+    }
+    assert allowed(ToolAccess(mode="selected", allowed=(SUBAGENT,))) == {SUBAGENT, tasks}
+    assert allowed(ToolAccess(mode="all", denied=(SHELL_TOOL_NAME,))) == {SUBAGENT, tasks}
+    assert allowed(ToolAccess(mode="all", denied=(SHELL_TOOL_NAME, SUBAGENT))) == set()
+    assert allowed(ToolAccess(mode="selected", allowed=(tasks,))) == set()
+    # The user configures the shell and subagent; their companion is no switch of its own.
     assert [tool.name for tool in tools.list_tools(include_catalog_hidden=False)] == [
-        SHELL_TOOL_NAME
+        SHELL_TOOL_NAME,
+        SUBAGENT,
     ]
 
 

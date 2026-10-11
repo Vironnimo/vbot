@@ -162,15 +162,25 @@ def _read_ids_by_value(arguments: dict[str, Any]) -> None:
         arguments["id"] = value
 
 
+def is_wait_action(action: str) -> bool:
+    """Whether *action* asks to wait for a task, which nothing in vBot does."""
+    return spelling(action) in _WAIT_ACTIONS
+
+
+def wait_refusal(action: str) -> str:
+    """The refusal of an action that waits for a task; ``subagent`` refuses it the same way."""
+    return (
+        f'Unknown action "{action}". Use one of: {_CHOICES}. Command results and Sub-Agent '
+        "answers arrive as new messages, so there is nothing to wait for."
+    )
+
+
 def _unknown_action(arguments: dict[str, Any], action: str) -> JsonObject:
     """Refuse an action the Tool does not have; an input request goes to the handler."""
     word = spelling(action)
     unknown = f'Unknown action "{action}". Use one of: {_CHOICES}.'
-    if word in _WAIT_ACTIONS:
-        raise ToolContractError(
-            f"{unknown} Command results and Sub-Agent answers arrive as new messages, so there "
-            "is nothing to wait for."
-        )
+    if is_wait_action(action):
+        raise ToolContractError(wait_refusal(action))
     task_id = arguments.get("id")
     if (
         word in _MESSAGE_ACTIONS
@@ -229,5 +239,7 @@ __all__ = [
     "SESSION_ID_PREFIX",
     "SUBAGENT_ID_PREFIX",
     "TERMINAL_ID_PREFIX",
+    "is_wait_action",
     "normalize_background_tasks_arguments",
+    "wait_refusal",
 ]

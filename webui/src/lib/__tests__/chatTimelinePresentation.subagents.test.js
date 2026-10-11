@@ -152,6 +152,36 @@ describe('Sub-Agent actions', () => {
       'cancel',
     ],
     [
+      'a check that ran as background_tasks, by its queued Sub-Agent',
+      () => ({
+        name: 'subagent',
+        status: 'success',
+        arguments: { action: 'check', id: 'sub_child' },
+        result: {
+          ok: true,
+          error: null,
+          data: { id: 'sub_child', type: 'subagent', status: 'queued' },
+          artifacts: [],
+        },
+      }),
+      '',
+    ],
+    [
+      'a check that ran as background_tasks, by its running command',
+      () => ({
+        name: 'subagent',
+        status: 'success',
+        arguments: { action: 'poll', id: 'cmd_a' },
+        result: {
+          ok: true,
+          error: null,
+          data: { status: 'running', command_id: 'cmd_a' },
+          artifacts: [],
+        },
+      }),
+      '',
+    ],
+    [
       'another Tool',
       () => ({ name: 'bash', arguments: { command: 'ls' } }),
       '',

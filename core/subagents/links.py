@@ -60,10 +60,8 @@ def children(sessions: ChatSessionManager, parent: SessionAddress) -> list[SubAg
     return [link for link in links if link is not None and link.parent == parent]
 
 
-def descendants(
-    sessions: ChatSessionManager, root: SessionAddress, *, limit: int | None = None
-) -> list[SubAgentLink]:
-    """Walk the complete subtree breadth first, optionally limiting a display projection.
+def descendants(sessions: ChatSessionManager, root: SessionAddress) -> list[SubAgentLink]:
+    """Walk the complete subtree breadth first.
 
     Control operations need every descendant regardless of historical tree size.
     A visited set prevents corrupt cycles and duplicate links from repeating work.
@@ -71,14 +69,12 @@ def descendants(
     found: list[SubAgentLink] = []
     seen = {root}
     pending = deque([root])
-    while pending and (limit is None or len(found) < limit):
+    while pending:
         for link in children(sessions, pending.popleft()):
             if link.session in seen:
                 continue
             seen.add(link.session)
             found.append(link)
-            if limit is not None and len(found) >= limit:
-                return found
             pending.append(link.session)
     return found
 

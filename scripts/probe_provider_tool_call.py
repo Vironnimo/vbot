@@ -48,6 +48,7 @@ from core.tools.edit import edit_dialect  # noqa: E402
 from core.utils.config import Config  # noqa: E402
 from scripts.provider_probe.choices import (  # noqa: E402
     ANALYZE_IMAGE_CASES,
+    BACKGROUND_TASKS_CASES,
     BASH_CASES,
     CALENDAR_CASES,
     CHANNEL_SEND_CASES,
@@ -299,6 +300,12 @@ def _parser() -> argparse.ArgumentParser:
         help="Exact subagent action and argument shape requested by the scenario.",
     )
     parser.add_argument(
+        "--background-tasks-case",
+        choices=BACKGROUND_TASKS_CASES,
+        default="list",
+        help="Exact background_tasks action and argument shape requested by the scenario.",
+    )
+    parser.add_argument(
         "--speech-case",
         choices=TEXT_TO_SPEECH_CASES,
         default="plain",
@@ -548,6 +555,9 @@ async def _run(args: argparse.Namespace) -> int:
             ),
             "status_case": args.status_case if scenario.name == "status" else None,
             "subagent_case": args.subagent_case if scenario.name == "subagent" else None,
+            "background_tasks_case": (
+                args.background_tasks_case if scenario.name == "background_tasks" else None
+            ),
             "speech_case": args.speech_case if scenario.name == "generate_speech" else None,
             "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
             "web_search_case": (args.web_search_case if scenario.name == "web_search" else None),

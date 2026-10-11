@@ -1,17 +1,20 @@
 """The ``subagent`` and ``message_parent`` Tools over the durable Sub-Agent tree.
 
 A Sub-Agent is a Session linked to the Parent Session that started it, with one
-public id for its whole life. ``run`` starts a new Sub-Agent in the background,
-``send`` gives one of the caller's Sub-Agents another message, ``list`` shows
-the caller's whole tree, and ``cancel`` stops any Sub-Agent below the caller.
-Answers reach the Parent through :mod:`core.subagents.forwarding`.
+public id for its whole life. ``run`` starts a new Sub-Agent in the background
+and ``send`` gives one of the caller's Sub-Agents another message. The
+``background_tasks`` Tool lists, checks and stops the caller's whole tree
+through :meth:`SubAgentCoordinator.subagents`, ``running_work`` and
+``stop_subagent``. Answers reach the Parent through
+:mod:`core.subagents.forwarding`.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.agents import is_builtin_agent
 from core.projects import (
@@ -48,18 +51,14 @@ from core.subagents._constants import (
     SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
     SUBAGENT_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_BACKGROUND_IGNORED_NOTE,
-    SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE,
-    SUBAGENT_CANCELLED_NOTE,
     SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE,
     SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE,
     SUBAGENT_IGNORED_LABEL_NOTE_TEMPLATE,
-    SUBAGENT_LIST_NOTE,
     SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE,
     SUBAGENT_MISSING_TASK_MESSAGE,
     SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE,
     SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE,
-    SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_QUEUED_NOTE,
@@ -128,7 +127,6 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("subagents")
 _FOLLOW_UP_PLACEHOLDER = "<message>"
-_TREE_DISPLAY_LIMIT = 1_000
 
 
 def _subagent_count(count: int) -> str:
@@ -141,6 +139,30 @@ _INSPECTED_WORK_KINDS = {
     "background command": "command",
     "terminal": "terminal",
 }
+
+# ``working``: its turn runs; ``queued``: a message waits to start its next turn;
+# ``taken over by the user``: the user wrote in its Session, so it works for the
+# user whatever it does.
+SubAgentStatus = Literal["working", "queued", "idle", "taken over by the user"]
+
+
+@dataclass(frozen=True)
+class SubAgentState:
+    """One Sub-Agent below a caller, as it is now.
+
+    ``agent_id`` is the address ``subagent`` accepts for its Agent. ``parent_id``
+    names the caller's Sub-Agent it works for, ``None`` for a direct Sub-Agent of
+    the caller. ``last_tool`` is the Tool its working turn called last.
+    """
+
+    id: str
+    title: str
+    agent_id: str
+    session: SessionAddress
+    parent_id: str | None
+    status: SubAgentStatus
+    last_tool: str | None
+    activity_file: str | None
 
 
 class SubAgentCoordinator:
@@ -222,19 +244,13 @@ class SubAgentCoordinator:
                 if not isinstance(implied, str):
                     return implied
                 action = implied
-            if action == "status":
-                action = "list"
             if action == "run":
                 return await self._run(context, arguments)
             if action == "send":
                 return await self._send_call(context, arguments)
-            if action == "list":
-                return await self._list(context, arguments)
-            if action == "cancel":
-                return await self._cancel(context, arguments)
         except (ToolContractError, InvalidAgentAddressError, SettingsValidationError) as error:
             return tool_failure("invalid_arguments", str(error))
-        return tool_failure("invalid_arguments", "action must be one of: run, send, list, cancel")
+        return tool_failure("invalid_arguments", "action must be one of: run, send")
 
     async def message_parent(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         """Handle one ``message_parent`` call from a Sub-Agent."""
@@ -339,14 +355,78 @@ class SubAgentCoordinator:
             clear_root_queue=False,
         )
 
-    async def descendant_sessions(self, caller: SessionAddress) -> dict[SessionAddress, str]:
-        """The Sessions of *caller*'s Sub-Agents at every depth, each with its Sub-Agent id.
+    async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
+        """Return *caller*'s Sub-Agents at every depth, breadth first, as they are now.
 
-        ``background_tasks`` shows the caller the background work of these Sessions.
+        ``background_tasks`` lists, checks and stops them, and shows the caller
+        the background commands of their Sessions.
         """
-        sessions = self._runtime.chat_sessions
-        links = await sessions.run_async(descendants, sessions, caller)
-        return {link.session: link.id for link in links}
+        runtime = self._runtime
+        sessions = runtime.chat_sessions
+        tree = await sessions.run_async(descendants, sessions, caller)
+        ids = {link.session: link.id for link in tree}
+        states: list[SubAgentState] = []
+        for link in tree:
+            address = link.session
+            run = runtime.chat_run_manager.active_run(
+                agent_id=address.agent_id,
+                session_id=address.session_id,
+                project_id=address.project_id,
+            )
+            last_tool: str | None = None
+            if link.taken_over_at is not None:
+                status: SubAgentStatus = "taken over by the user"
+            elif run is not None:
+                status, last_tool = "working", _latest_tool_name(run)
+            elif is_working(runtime, address):
+                status = "queued"
+            else:
+                status = "idle"
+            states.append(
+                SubAgentState(
+                    id=link.id,
+                    title=link.title,
+                    agent_id=subagent_address(link),
+                    session=address,
+                    parent_id=ids.get(link.parent) if link.parent != caller else None,
+                    status=status,
+                    last_tool=last_tool,
+                    activity_file=self._activities.path(address),
+                )
+            )
+        return states
+
+    async def running_work(self, subagent: SubAgentState) -> list[str]:
+        """Name what *subagent* still runs besides its own turn, as ``kind id (label)``.
+
+        Its background commands, its terminals and its own working Sub-Agents.
+        """
+        return [
+            entry.describe() for entry in await running_entries(self._runtime, subagent.session)
+        ]
+
+    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+        """Stop *subagent*: its turn, its queue, its background work and its own Sub-Agents.
+
+        Returns whether anything ran. The caller learns the outcome from its
+        Tool result, so a direct Sub-Agent's stopped turn is not forwarded to
+        it; a deeper one's is forwarded to its own Parent, which did not stop it.
+        """
+        stopped = await self._stop_subtree(
+            subagent.session,
+            reason=PARENT_AGENT_CANCEL_REASON,
+            initiator=f"parent_run:{context.run_id}",
+            silence_root=subagent.parent_id is None,
+            clear_root_queue=True,
+        )
+        if not stopped:
+            return False
+        await _emit(
+            context,
+            SUBAGENT_STATUS_CHANGED_EVENT,
+            _event_data(subagent.id, subagent.session, status="cancelled"),
+        )
+        return True
 
     async def drain_activity(self) -> None:
         """Wait until the activity files' text so far is on disk."""
@@ -717,114 +797,6 @@ class SubAgentCoordinator:
         result["note"] = note
         return tool_success(result)
 
-    # list
-
-    async def _list(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        runtime, caller = self._runtime, _caller(context)
-        sessions = runtime.chat_sessions
-        tree = await sessions.run_async(descendants, sessions, caller, limit=_TREE_DISPLAY_LIMIT)
-        subagent_id = optional_text(arguments, "id")
-        if subagent_id is not None:
-            selected = [link for link in tree if link.id == subagent_id]
-            if not selected:
-                own = [link for link in tree if link.parent == caller]
-                return _not_found(subagent_id, own)
-            tree = selected
-        ids = {link.session: link.id for link in tree}
-        entries: list[JsonObject] = []
-        working = False
-        for link in tree:
-            entry: JsonObject = {
-                "id": link.id,
-                "title": link.title,
-                "agent_id": subagent_address(link),
-                "session_id": link.session.session_id,
-            }
-            if link.parent != caller and link.parent in ids:
-                entry["parent_id"] = ids[link.parent]
-            address = link.session
-            run = runtime.chat_run_manager.active_run(
-                agent_id=address.agent_id,
-                session_id=address.session_id,
-                project_id=address.project_id,
-            )
-            if link.taken_over_at is not None:
-                entry["state"] = "taken over by the user"
-            elif run is not None:
-                entry["state"] = "working"
-                working = True
-                tool_name = _latest_tool_name(run)
-                if tool_name is not None:
-                    entry["last_tool"] = tool_name
-            elif is_working(runtime, address):
-                entry["state"] = "queued"
-                working = True
-            else:
-                entry["state"] = "idle"
-            running = [
-                item.describe()
-                for item in await running_entries(runtime, address)
-                if item.kind != "Sub-Agent"
-            ]
-            if running:
-                entry["running"] = running
-            activity_file = self._activities.path(address)
-            if activity_file is not None:
-                entry["activity_file"] = activity_file
-            entries.append(entry)
-        listing: JsonObject = {"subagents": entries}
-        if working:
-            listing["note"] = SUBAGENT_LIST_NOTE
-        return tool_success(listing)
-
-    # cancel
-
-    async def _cancel(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        runtime, caller = self._runtime, _caller(context)
-        sessions = runtime.chat_sessions
-        subagent_id = optional_text(arguments, "id")
-        if subagent_id is None:
-            tree = await sessions.run_async(
-                descendants, sessions, caller, limit=_TREE_DISPLAY_LIMIT
-            )
-            working = [link for link in tree if is_working(runtime, link.session)]
-            example = working[0].id if working else tree[0].id if tree else "<id>"
-            return tool_failure(
-                "invalid_arguments",
-                SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE.format(
-                    yours=yours_text(working or tree),
-                    call=call_text({"action": "cancel", "id": example}),
-                ),
-            )
-        link = await sessions.run_async(find_link, sessions, subagent_id)
-        if link is None or caller not in await sessions.run_async(
-            ancestors, sessions, link.session
-        ):
-            own = await sessions.run_async(children, sessions, caller)
-            return _not_found(subagent_id, own)
-        initiator = f"parent_run:{context.run_id}"
-        stopped = await self._stop_subtree(
-            link.session,
-            reason=PARENT_AGENT_CANCEL_REASON,
-            initiator=initiator,
-            silence_root=link.parent == caller,
-            clear_root_queue=True,
-        )
-        if not stopped:
-            return tool_failure(
-                "subagent_not_running",
-                SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE.format(id=link.id),
-            )
-        await _emit(
-            context,
-            SUBAGENT_STATUS_CHANGED_EVENT,
-            _event_data(link.id, link.session, status="cancelled"),
-        )
-        result = _public_identity(link.id, link.session)
-        result["status"] = "cancelled"
-        result["note"] = SUBAGENT_CANCELLED_NOTE
-        return tool_success(result)
-
     async def _stop_subtree(
         self,
         root: SessionAddress,
@@ -927,7 +899,7 @@ def _implied_action(arguments: JsonObject) -> str | JsonObject:
                 send_call=call_text(
                     {"action": "send", "id": subagent_id, "content": _FOLLOW_UP_PLACEHOLDER}
                 ),
-                cancel_call=call_text({"action": "cancel", "id": subagent_id}),
+                stop_call=call_text({"action": "stop", "id": subagent_id}),
             ),
         )
     return "run"
@@ -1282,4 +1254,4 @@ def _target_is_allowed(
     return address in allowed
 
 
-__all__ = ["SubAgentCoordinator"]
+__all__ = ["SubAgentCoordinator", "SubAgentState", "SubAgentStatus"]

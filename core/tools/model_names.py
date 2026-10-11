@@ -20,6 +20,7 @@ import re
 from collections.abc import Collection, Container
 
 BASH_TOOL_NAME = "bash"
+SUBAGENT_TOOL_NAME = "subagent"
 SHELL_MODEL_NAME = "powershell" if os.name == "nt" else BASH_TOOL_NAME
 
 _MODEL_NAMES = {BASH_TOOL_NAME: SHELL_MODEL_NAME} if SHELL_MODEL_NAME != BASH_TOOL_NAME else {}

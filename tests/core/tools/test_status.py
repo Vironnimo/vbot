@@ -202,9 +202,10 @@ def _dispatch(
     arguments: dict[str, object] | None = None,
     *,
     project_id: str | None = None,
+    allowed_tools: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     context = _context(tmp_path, project_id=project_id)
-    return asyncio.run(dispatch_as_executor(registry, context, arguments or {}))
+    return asyncio.run(dispatch_as_executor(registry, context, arguments or {}, allowed_tools))
 
 
 def test_schema_offers_only_the_optional_target() -> None:
@@ -486,14 +487,16 @@ def test_status_tool_reads_clear_targets_written_other_ways(
         (
             {"id": "sub_abcdefghijkl"},
             "status was not run: sub_abcdefghijkl is a Sub-Agent id. To see that Sub-Agent, "
-            'call subagent with {"action": "list", "id": "sub_abcdefghijkl"}. status reports '
-            "a chat Session and takes session_id, with agent_id for another Agent's Session.",
+            'call background_tasks {"action": "status", "id": "sub_abcdefghijkl"}. status '
+            "reports a chat Session and takes session_id, with agent_id for another Agent's "
+            "Session.",
         ),
         (
-            {"work_id": "sub_abcdefghijkl", "agent_id": "worker"},
+            {"work_id": "sub_abcdefghijkl", "agent_id": "worker", "id": "ses_abcdefghijkl"},
             "status was not run: sub_abcdefghijkl is a Sub-Agent id. To see that Sub-Agent, "
-            'call subagent with {"action": "list", "id": "sub_abcdefghijkl"}. status reports '
-            "a chat Session and takes session_id, with agent_id for another Agent's Session.",
+            'call background_tasks {"action": "status", "id": "sub_abcdefghijkl"}. status '
+            "reports a chat Session and takes session_id, with agent_id for another Agent's "
+            "Session.",
         ),
         (
             {"id": "worker"},
@@ -518,12 +521,25 @@ def test_status_tool_refuses_unclear_ids_before_lookup(
     sessions = _StubSessions([])
     registry = _registry(sessions=sessions)
 
-    result = _dispatch(registry, tmp_path, arguments)
+    result = _dispatch(
+        registry, tmp_path, arguments, allowed_tools=(STATUS_TOOL_NAME, "background_tasks")
+    )
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
     assert message in result["error"]["message"]
     assert sessions.calls == []
+
+
+def test_status_tool_names_background_tasks_for_a_subagent_id_only_when_callable(
+    tmp_path: Path,
+) -> None:
+    result = _dispatch(_registry(), tmp_path, {"id": "sub_abcdefghijkl"})
+
+    assert result["error"]["message"] == (
+        "status was not run: sub_abcdefghijkl is a Sub-Agent id. status reports a chat Session "
+        "and takes session_id, with agent_id for another Agent's Session."
+    )
 
 
 def test_status_tool_rejects_unknown_arguments(tmp_path: Path) -> None:

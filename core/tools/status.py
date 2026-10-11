@@ -31,6 +31,7 @@ from core.projects import (
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import SESSION_WORKING_PROJECT_META_KEY, ChatSessionManager, SessionAddress
+from core.tools._background_tasks_arguments import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.arguments import optional_string
 from core.tools.call_syntax import (
     PLACEHOLDER_WORDS,
@@ -102,11 +103,14 @@ _SESSION_OWNER_HINT = (
     " If that Session belongs to another Agent, such as a Sub-Agent, also pass that "
     "Agent's agent_id."
 )
-# Sub-Agent ids come from ``subagent`` results; this Tool reports Sessions.
+# Sub-Agent ids come from ``subagent`` results; this Tool reports Sessions. The
+# sentence naming ``background_tasks`` is left out when the Agent cannot call it.
 _WORK_ID_MESSAGE_TEMPLATE = (
-    "status was not run: {work_id} is a Sub-Agent id. To see that Sub-Agent, call subagent "
-    'with {{"action": "list", "id": "{work_id}"}}. status reports a chat Session and takes '
-    "session_id, with agent_id for another Agent's Session."
+    "status was not run: {work_id} is a Sub-Agent id.{see_subagent} status reports a chat "
+    "Session and takes session_id, with agent_id for another Agent's Session."
+)
+_SEE_SUBAGENT_TEMPLATE = (
+    ' To see that Sub-Agent, call background_tasks {{"action": "status", "id": "{work_id}"}}.'
 )
 _ID_MESSAGE_TEMPLATE = (
     'status was not run: it has no "id" parameter, so {value} is ambiguous. Pass a Session '
@@ -123,6 +127,9 @@ _CURRENT_SESSION_WORDS = PLACEHOLDER_WORDS | {"current", "this", "active", "mine
 _ID_KEYS = frozenset({"id", "workid", "subagentid"})
 _WORK_ID_PREFIX = "sub_"
 _SESSION_ID_PREFIX = "ses_"
+# Set by the normalizer only: a Sub-Agent id the call sent, which the handler
+# refuses, naming ``background_tasks`` only when the Agent can call it.
+_SUBAGENT_ID_SENT = "subagent_id_sent"
 
 
 _STATUS_RUNTIME_CONTRACT = compile_tool_contract(
@@ -153,13 +160,14 @@ def _normalize_status_arguments(arguments: Any) -> Any:
 
 def _read_id_field(arguments: dict[str, Any]) -> None:
     """Read an ``id`` field by what its value is: a Session, Sub-Agent work, or unknown."""
-    for key in [key for key in arguments if spelling(key) in _ID_KEYS]:
-        value = arguments.pop(key)
+    given = {key: arguments.pop(key) for key in list(arguments) if spelling(key) in _ID_KEYS}
+    for key, value in given.items():
         if is_placeholder(value):
             continue
         text = value.strip() if isinstance(value, str) else value
         if isinstance(text, str) and text.startswith(_WORK_ID_PREFIX):
-            raise ToolContractError(_WORK_ID_MESSAGE_TEMPLATE.format(work_id=text))
+            arguments[_SUBAGENT_ID_SENT] = text
+            return
         if spelling(key) == "id" and isinstance(text, str) and text.startswith(_SESSION_ID_PREFIX):
             session_id = arguments.get("session_id")
             if not is_placeholder(session_id, _CURRENT_SESSION_WORDS) and session_id != text:
@@ -167,6 +175,15 @@ def _read_id_field(arguments: dict[str, Any]) -> None:
             arguments["session_id"] = text
             continue
         raise ToolContractError(_ID_MESSAGE_TEMPLATE.format(value=json.dumps(value)))
+
+
+def _subagent_id_message(context: ToolContext, subagent_id: str) -> str:
+    see_subagent = (
+        _SEE_SUBAGENT_TEMPLATE.format(work_id=subagent_id)
+        if context.can_call(BACKGROUND_TASKS_TOOL_NAME)
+        else ""
+    )
+    return _WORK_ID_MESSAGE_TEMPLATE.format(work_id=subagent_id, see_subagent=see_subagent)
 
 
 def _configured_zone(timezone_name_loader: Callable[[], str] | None) -> tzinfo | None:
@@ -207,7 +224,9 @@ def make_status_handler(
             return {}
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-
+        subagent_id = arguments.get(_SUBAGENT_ID_SENT)
+        if isinstance(subagent_id, str):
+            return tool_failure("invalid_arguments", _subagent_id_message(context, subagent_id))
         try:
             requested_agent_id = optional_string(arguments.get("agent_id"), field_name="agent_id")
             requested_session_id = optional_string(
@@ -346,6 +365,7 @@ def register_status_tool(
         summary="Check a Session's model, context and usage.",
         open_input_schema=True,
         argument_normalizer=_normalize_status_arguments,
+        unadvertised_parameters={_SUBAGENT_ID_SENT: {"type": "string"}},
         result_schema={"type": "object", "required": ["text", "agent_id", "session_id"]},
         display=ToolDisplay(),
         parallel_safe=True,

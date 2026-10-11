@@ -3,8 +3,8 @@
 A Sub-Agent is a Session linked to its Parent Session. ``run`` starts one in the
 background; vBot forwards the final answer of every turn the Parent or a
 delivery started there; ``send`` reaches it at its next step or starts a turn;
-``list`` and ``cancel`` cover the caller's whole tree; the user's first message
-in the Session ends forwarding.
+``background_tasks`` lists, checks and stops the caller's whole tree; the user's
+first message in the Session ends forwarding.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ pytestmark = pytest.mark.asyncio
 async def commands(harness: SubAgentHarness, tmp_path: Path) -> AsyncIterator[CommandHarness]:
     """Background commands of the harness's Sessions, on fake processes."""
     async with command_harness(tmp_path) as subject:
-        harness.runtime.command_manager = subject.manager
+        harness.use_commands(subject.manager)
         yield subject
 
 
@@ -493,23 +493,38 @@ async def test_send_reaches_only_direct_subagents(harness: SubAgentHarness) -> N
     assert foreign["error"]["message"].count(stranger["id"]) == 1
 
 
-async def test_list_shows_the_whole_tree(harness: SubAgentHarness) -> None:
+async def test_background_tasks_lists_and_checks_the_whole_tree(
+    harness: SubAgentHarness, commands: CommandHarness
+) -> None:
     outer = await harness.spawn("outer")
     await harness.settle()
+    outer_session = harness.subagent_session(outer["id"])
     harness.loop.hold("inner")
-    inner = await harness.spawn("inner", session=harness.subagent_session(outer["id"]))
+    inner = await harness.spawn("inner", session=outer_session)
+    tests = await _background_command(commands, outer_session, "Run the tests")
 
-    result = await harness.call({"action": "status"})
+    listed = await harness.background_tasks({"action": "list"})
+    checked = await harness.background_tasks({"action": "status", "id": outer["id"]})
+    deeper = await harness.background_tasks({"action": "status", "id": inner["id"]})
 
-    entries = {entry["id"]: entry for entry in result["data"]["subagents"]}
-    assert entries.keys() == {outer["id"], inner["id"]}
-    assert entries[outer["id"]]["state"] == "idle"
-    assert "parent_id" not in entries[outer["id"]]
-    assert entries[inner["id"]]["state"] == "working"
-    assert entries[inner["id"]]["parent_id"] == outer["id"]
-    assert entries[inner["id"]]["title"] == "Do inner"
-    assert "answer" not in entries[outer["id"]]
-    assert "note" in result["data"]
+    rows = listed["data"]["tasks"]
+    assert [(row["id"], row["type"], row["status"]) for row in rows] == [
+        (outer["id"], "subagent", "idle"),
+        (inner["id"], "subagent", "working"),
+        (tests, "command", "running"),
+    ]
+    assert "parent_id" not in rows[0]
+    assert (rows[1]["parent_id"], rows[1]["title"]) == (outer["id"], "Do inner")
+    assert rows[2]["subagent"] == outer["id"]
+    assert "calling list again does not make them finish faster" in listed["data"]["notes"][0]
+    assert checked["data"]["running"] == [
+        f"background command {tests} (Run the tests)",
+        f"Sub-Agent {inner['id']} (Do inner)",
+    ]
+    assert checked["data"]["next"].startswith("The Sub-Agent is idle. To give it more work")
+    assert deeper["data"]["next"].startswith(
+        f"The Sub-Agent is working for your Sub-Agent {outer['id']}"
+    )
 
 
 async def test_inspect_reports_the_work_a_subagent_still_runs(
@@ -587,7 +602,7 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
     stopping = asyncio.create_task(
         harness.coordinator.stop_tree(outer_session)
         if user_stop
-        else harness.call({"action": "cancel", "id": outer["id"]})
+        else harness.background_tasks({"action": "stop", "id": outer["id"]})
     )
     try:
         await cleanup_entered.wait()
@@ -625,12 +640,12 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
         assert "Its turn was cancelled by the user." in notice.body
     else:
         assert isinstance(result, dict)
-        assert result["data"]["status"] == "cancelled"
+        assert result["data"]["status"] == "stopped"
         # The Parent learned the outcome from its own Tool result.
         assert harness.triggers.to(harness.parent) == []
 
-    again = await harness.call({"action": "cancel", "id": inner["id"]})
-    assert again["error"]["code"] == "subagent_not_running"
+    again = await harness.background_tasks({"action": "stop", "id": inner["id"]})
+    assert again["data"]["status"] == "idle"
 
 
 @pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
@@ -651,8 +666,8 @@ async def test_a_tree_stop_stops_its_background_commands_without_delivery(
         assert await harness.coordinator.stop_tree(harness.parent) == 2
         stopped = [own, childs]
     else:
-        result = await harness.call({"action": "cancel", "id": child["id"]})
-        assert result["data"]["status"] == "cancelled"
+        result = await harness.background_tasks({"action": "stop", "id": child["id"]})
+        assert result["data"]["status"] == "stopped"
         stopped = [childs]
 
     for command_id in stopped:
@@ -874,8 +889,8 @@ async def test_takeover_ends_forwarding_and_parent_messages(harness: SubAgentHar
     assert "The user took over this Sub-Agent" in notice.body
     refused = await harness.call({"action": "send", "id": data["id"], "content": "more"})
     assert refused["error"]["code"] == "subagent_taken_over"
-    listed = await harness.call({"action": "list"})
-    assert listed["data"]["subagents"][0]["state"] == "taken over by the user"
+    listed = await harness.background_tasks({"action": "list"})
+    assert listed["data"]["tasks"][0]["status"] == "taken over by the user"
     gone = await harness.message_parent("question", child)
     assert gone["error"]["code"] == "subagent_taken_over"
 
@@ -907,8 +922,8 @@ async def test_activity_file_follows_every_turn_of_a_subagent(
     await harness.call({"action": "send", "id": data["id"], "content": "again"})
     await harness.settle()
 
-    listed = await harness.call({"action": "list"})
-    path = listed["data"]["subagents"][0]["activity_file"]
+    listed = await harness.background_tasks({"action": "list"})
+    path = listed["data"]["tasks"][0]["activity_file"]
     assert path in data["activity_note"]
     files = [file for file in harness.storage.temporary_files.root.rglob("*") if file.is_file()]
     assert len(files) == 1
