@@ -9,6 +9,7 @@ and the "all" recipient exist only at this Tool boundary.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from difflib import get_close_matches
@@ -391,8 +392,18 @@ def discussions_text(entries: Iterable[Json], main_id: str) -> str:
     return "\n".join(lines)
 
 
-def queued_text(routes: Mapping[str, int], addressed: Sequence[str], *, opening: int) -> str:
-    """Say who receives a new post, who receives it in full, and who only its opening."""
+def queued_text(
+    routes: Mapping[str, int],
+    addressed: Sequence[str],
+    *,
+    opening: int,
+    stopped: Sequence[str] = (),
+) -> str:
+    """Say who receives a new post, who receives it in full, and who only its opening.
+
+    ``stopped`` names addressed participants whose work ended, who see the post
+    only once the user resumes them.
+    """
 
     count = sum(routes.values())
     if not count:
@@ -401,9 +412,30 @@ def queued_text(routes: Mapping[str, int], addressed: Sequence[str], *, opening:
     parts = [text.BOARD_QUEUED.format(participants=participants)]
     if addressed:
         parts.append(text.BOARD_ADDRESSED.format(names=spoken_list(addressed)))
+    if stopped:
+        parts.append(
+            text.BOARD_ADDRESSED_STOPPED["one" if len(stopped) == 1 else "many"].format(
+                names=spoken_list(stopped)
+            )
+        )
     if opening:
         parts.append(text.BOARD_OPENING["one" if opening == 1 else "many"].format(count=opening))
     return " ".join(parts)
+
+
+# "@all" and its synonyms address no one; only "@" before a participant's name does.
+_EVERYONE_MENTION = re.compile(rf"(?<!\w)@({'|'.join(sorted(_EVERYONE))})(?!\w)", re.IGNORECASE)
+
+
+def everyone_mentions(value: str, roster: Roster) -> list[str]:
+    """Return the "@all"-style words in a post's text that name no participant, as written."""
+
+    names = {spelling(name) for name in roster.names.values()}
+    found: dict[str, str] = {}
+    for match in _EVERYONE_MENTION.finditer(value):
+        if spelling(match.group(1)) not in names:
+            found.setdefault(match.group(0).casefold(), match.group(0))
+    return list(found.values())
 
 
 def with_notes(data: Json, notes: Sequence[str]) -> Json:
@@ -422,6 +454,7 @@ __all__ = [
     "delivered_chars",
     "delivery_text",
     "discussions_text",
+    "everyone_mentions",
     "excerpt",
     "messages_text",
     "post_block",

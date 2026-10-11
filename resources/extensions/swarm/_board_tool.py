@@ -23,12 +23,14 @@ from ._board_view import (
     discussion_choices,
     discussion_label,
     discussions_text,
+    everyone_mentions,
     excerpt,
     post_block,
     post_discussion_label,
     post_suggestion,
     posts_text,
     queued_text,
+    spoken_list,
 )
 from ._extension_values import AgentCallError, Json, _call_request_id
 from ._store_values import discussion_number, discussion_ref, post_number, post_ref
@@ -55,6 +57,8 @@ _REQUIRED = {
 # Paging fields request nothing an action without pages could do.
 _PAGING = frozenset({"cursor", "limit", "before", "offset"})
 _REFERENCES = ("discussion_id", "message_id", "reply_to", "before")
+# Participants whose work ended; they read new posts only once the user resumes them.
+_STOPPED = frozenset({"failed", "cancelled", "interrupted"})
 _MAX_LIMIT = 100
 _MAX_TEXT = {"text": 16000, "title": 120}
 
@@ -283,15 +287,21 @@ class BoardCall:
         long_main = (
             data["discussion_id"] == self.main and len(values["text"]) > text.FULL_POST_CHARS
         )
+        addressed = data.get("addressed", [])
+        states = {
+            participant["id"]: participant["state"] for participant in self.swarm["participants"]
+        }
         result: Json = {
             "post_id": post_ref(data["sequence"]),
             "discussion": await self._label(data["discussion_id"]),
             "delivery": queued_text(
                 data["routes"],
-                [self.roster.name(pid) for pid in data.get("addressed", [])],
+                [self.roster.name(pid) for pid in addressed],
                 opening=data["routes"].get("main", 0) if long_main else 0,
+                stopped=[self.roster.name(pid) for pid in addressed if states.get(pid) in _STOPPED],
             ),
         }
+        self._note_everyone(values["text"])
         if data.get("replayed"):
             result["replayed"] = text.REPLAYED
         return result
@@ -325,6 +335,7 @@ class BoardCall:
             "opening_post_id": post_ref(opening["sequence"]),
             "status": text.BOARD_CREATED,
         }
+        self._note_everyone(values["text"])
         if data.get("replayed"):
             result["replayed"] = text.REPLAYED
         return result
@@ -497,6 +508,11 @@ class BoardCall:
                 ),
             )
         return error
+
+    def _note_everyone(self, value: str) -> None:
+        mentions = everyone_mentions(value, self.roster)
+        if mentions:
+            self.notes.append(text.MENTION_EVERYONE.format(mentions=spoken_list(mentions)))
 
     def _user_request(self) -> str:
         goal = post_ref(self.swarm["goal_post_sequence"])

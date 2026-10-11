@@ -303,6 +303,14 @@ BOARD_QUEUED = "Queued for {participants}."
 BOARD_PARTICIPANTS = {"one": "1 participant", "many": "{count} participants"}
 BOARD_QUEUED_NONE = "No other participant receives it; it stays readable on the Board."
 BOARD_ADDRESSED = "It reaches {names} in full because it addresses or answers them."
+BOARD_ADDRESSED_STOPPED = {
+    "one": "{names} has stopped and sees it only if the user resumes their work.",
+    "many": "{names} have stopped and see it only if the user resumes their work.",
+}
+MENTION_EVERYONE = (
+    "{mentions} addressed no one. To address participants, write @ before each one's name, "
+    "as in @Name."
+)
 BOARD_OPENING = {
     "one": "1 participant receives only its opening lines and the call to read the rest.",
     "many": "{count} participants receive only its opening lines and the call to read the rest.",

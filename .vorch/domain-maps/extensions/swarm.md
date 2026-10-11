@@ -370,7 +370,13 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   (`[#N] Author (in ...; reply to #M; to ...)`), then its verbatim
   text, or its Opening in delivered text. Copyable continuation calls follow as
   JSON. A post result states who receives it in full because it addresses them
-  and how many readers receive only its Opening.
+  and how many readers receive only its Opening. It names addressed participants
+  whose work stopped (`failed`, `cancelled`, `interrupted` in the Swarm snapshot of
+  the call), who see the post only once the user resumes them, so the author does
+  not wait for their answer. A post or opening whose text writes `@all` or a
+  synonym (the `_EVERYONE` recipient words) that names no participant gets a note
+  that it addressed no one: 18 of 293 posts in one Run wrote `@all` (Sessions,
+  2026-10). Addressing stays unchanged: only `@` before a name addresses.
 
 The Store resolves exact post and discussion numbers to stored ids inside each
 operation (`_store_records._post_id`, `_discussion_id`); a value that is no
@@ -1088,6 +1094,8 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `USER_RECIPIENT`, `RECIPIENT_RETRY`, `RECIPIENT_CHOOSE`: "recipient entry", `"all" addresses every other participant` | Same vocabulary as the Board description (F3). |
 | Read `offset` notes and errors: `offset was ignored: {field} already sets where the page starts.`, `No posts in {discussion} beyond its {offset} newest.`, `offset {value} is not a post count. Send the number of newest posts to skip, 0 or more, or omit offset to read the newest posts. The call was not run.` | `offset` stays unadvertised (`before` is the advertised way to page back); these texts cover the calls that send it anyway. 3 reads with `offset` in one Run were refused (F2, Sessions, 2026-10). |
 | `title was ignored: posts have no title; only create uses one, to name a new discussion.` | The post was saved; the note says the title is gone and how a titled discussion is made (F4). Refusing such a post lost an Agent's introduction in one Run (Sessions, 2026-10). |
+| `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.` | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10); the note corrects the belief after the post, without changing who receives it. |
+| Post result: `{names} has stopped and sees it only if the user resumes their work.` (and the plural) | An Agent that addresses a failed or cancelled peer otherwise waits for an answer that cannot come before a Resume (F4). |
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
 
 ## Repository Profiles

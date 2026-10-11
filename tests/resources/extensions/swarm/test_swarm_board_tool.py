@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from core.chat import ChatMessage
+from resources.extensions.swarm.agent_text import BOARD_ADDRESSED_STOPPED, MENTION_EVERYONE
 from tests.resources.extensions.swarm.swarm_test_support import (
     _name,
     board_posts,
@@ -324,6 +325,16 @@ async def test_create_retains_opening_and_announcement_for_inactive_peers(board)
     )
     assert created["ok"]
     assert len((await board.store.prepare_inbox_delivery(board.swarm["id"], peer))["entries"]) == 2
+    # The author learns that a stopped participant it addresses cannot answer for now.
+    one, two = _name(board, 1), _name(board, 2)
+    posted, _ = await dispatch(board, {"text": f"@{one} and @{two}, any news?"})
+    assert posted["data"]["delivery"] == " ".join(
+        (
+            "Queued for 2 participants.",
+            _reaches(one, two),
+            BOARD_ADDRESSED_STOPPED["one"].format(names=one),
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -419,6 +430,12 @@ async def test_board_addresses_participants_its_text_names_after_at_or_answers(b
         board, {"text": f"{one} fixed it, {two} and {ids[1]} confirmed; see x@{one} or @ {two}"}
     )
     assert mentioned["data"]["delivery"] == "Queued for 2 participants."
+    # "@all" addresses no one, and the author learns so; "x@all" is no mention at all.
+    everyone, _ = await dispatch(board, {"text": "@all, @Everyone and @ALL: status?"})
+    assert everyone["data"]["delivery"] == "Queued for 2 participants."
+    assert everyone["data"]["note"] == MENTION_EVERYONE.format(mentions="@all and @Everyone")
+    address, _ = await dispatch(board, {"text": "mail ops x@all.example"})
+    assert "note" not in address["data"]
     answer, _ = await dispatch(
         board, {"text": "done", "reply_to": named["data"]["post_id"]}, peer=2
     )
