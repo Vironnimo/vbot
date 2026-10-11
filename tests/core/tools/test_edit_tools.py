@@ -333,6 +333,65 @@ NUL = (
         pytest.param(
             "edit",
             {
+                "path": "app.py",
+                "edits": [
+                    {
+                        "old_string": "    print(total)\n    return total\n"
+                        "def main():\n    total = compute(1, 2)",
+                        "new_string": "def main():\n    return compute(1, 2)",
+                    }
+                ],
+            },
+            "text_not_found",
+            # Whole lines from separate places are named as such.
+            "app.py: old_string was not found.\n"
+            "old_string joins lines from different places in the file: its lines 1-2 are "
+            "lines 3-4 and its lines 3-4 are lines 1-2. Give each place its own edit.\n"
+            "1| def main():\n2|     total = compute(1, 2)\n3|     print(total)\n"
+            "4|     return total\nNo file was changed.",
+            id="lines-from-different-places",
+        ),
+        pytest.param(
+            "edit",
+            {
+                "path": "app.py",
+                "edits": [
+                    {
+                        "old_string": "    print(total)\n    total = compute(1, 2)",
+                        "new_string": "    total = compute(1, 2)",
+                    }
+                ],
+            },
+            "text_not_found",
+            # Single lines occur elsewhere by chance: they name no separate place.
+            "app.py: old_string was not found.\nThe closest texts in the file:\n"
+            "1| def main():\n2|     total = compute(1, 2)\n3|     print(total)\n"
+            "4|     return total\nFirst difference, line 4: the file has '    return total' "
+            "where old_string has '    total = compute(1, 2)'.\nNo file was changed.",
+            id="single-lines-from-different-places",
+        ),
+        pytest.param(
+            "edit",
+            {
+                "path": "app.py",
+                "edits": [
+                    {
+                        "old_string": "    total = compute(1, 2)\n    return total",
+                        "new_string": "    return compute(1, 2)",
+                    }
+                ],
+            },
+            "text_not_found",
+            # A passage that left out a line is one place: its first difference names it.
+            "app.py: old_string was not found.\nThe closest texts in the file:\n"
+            "1| def main():\n2|     total = compute(1, 2)\n3|     print(total)\n"
+            "4|     return total\nFirst difference, line 3: the file has '    print(total)' "
+            "where old_string has '    return total'.\nNo file was changed.",
+            id="passage-that-left-out-a-line",
+        ),
+        pytest.param(
+            "edit",
+            {
                 "path": "a.txt",
                 "edits": [
                     {"old_string": "two", "new_string": "one"},

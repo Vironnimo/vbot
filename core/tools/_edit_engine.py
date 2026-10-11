@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from itertools import pairwise
 from os.path import commonprefix
 from typing import Literal
 
@@ -862,6 +863,9 @@ def _not_found(
     # than the closest text; inside many lines, the closest text is more useful.
     if part is not None and part["count"] <= 3:
         return {"candidates": [], "part_of": part}
+    split = _split_copy(content, old) if source == "old_string" else None
+    if split is not None:
+        return split
     details = _candidates(content, old)
     if part is not None and not details["candidates"]:
         details["part_of"] = part
@@ -870,6 +874,80 @@ def _not_found(
         if difference is not None:
             details["difference"] = {**difference, "source": source}
     return details
+
+
+_SPLIT_MAX_LINES = 200
+# Parts in order with at most this many non-blank lines between them are one passage.
+_SPLIT_MAX_LEFT_OUT = 3
+
+
+def _split_copy(content: str, old: str) -> JsonObject | None:
+    """Name the separate places whose whole lines ``old`` joins, each found once.
+
+    Lines compare with runs of whitespace collapsed; blank lines only separate
+    parts. Each part is the longest run of copied lines the file holds together,
+    and needs 2 lines with a word of 3 or more characters. ``None`` when a copied line is
+    missing, a part occurs more than once, or the parts are one passage that left
+    out a few lines.
+    """
+    wanted = [_loose(line) for line in split_text_lines(old)]
+    if len(wanted) > _SPLIT_MAX_LINES:
+        return None
+    held = [_loose(line) for line in split_text_lines(content)]
+    places: dict[str, list[int]] = {}
+    for number, line in enumerate(held):
+        places.setdefault(line, []).append(number)
+    parts: list[JsonObject] = []
+    index = 0
+    while index < len(wanted):
+        if not wanted[index]:
+            index += 1
+            continue
+        runs: dict[int, int] = {}
+        for start in places.get(wanted[index], []):
+            length = 0
+            while (
+                index + length < len(wanted)
+                and start + length < len(held)
+                and wanted[index + length] == held[start + length]
+            ):
+                length += 1
+            # Blank lines at the end of a run belong to no part.
+            while not wanted[index + length - 1]:
+                length -= 1
+            runs[start] = length
+        longest = max(runs.values(), default=0)
+        starts = [start for start, length in runs.items() if length == longest]
+        if len(starts) != 1:
+            return None
+        # A single line, like a closing line or a common call, occurs by chance.
+        if sum(bool(re.search(r"\w{3}", line)) for line in wanted[index : index + longest]) < 2:
+            return None
+        parts.append(
+            {"copy_first": index + 1, "copy_last": index + longest, "first": starts[0] + 1}
+        )
+        index += longest
+    if len(parts) < 2:
+        return None
+    for part in parts:
+        part["last"] = int(part["first"]) + int(part["copy_last"]) - int(part["copy_first"])
+    # Parts in order with a few lines between them are one passage that left out
+    # lines; the first difference names the first of them.
+    if all(
+        int(later["first"]) > int(earlier["last"])
+        and sum(map(bool, held[int(earlier["last"]) : int(later["first"]) - 1]))
+        <= _SPLIT_MAX_LEFT_OUT
+        for earlier, later in pairwise(parts)
+    ):
+        return None
+    file_lines = split_text_lines(content)
+    candidates = []
+    for part in parts:
+        first, last = int(part["first"]), int(part["last"])
+        candidates.append(
+            {"line": first, "text": "\n".join(file_lines[first - 1 : last]), "truncated": False}
+        )
+    return {"candidates": candidates, "split": parts}
 
 
 def _part_of_lines(content: str, old: str) -> JsonObject | None:

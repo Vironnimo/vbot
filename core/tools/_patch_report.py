@@ -340,6 +340,25 @@ def _written_text(error: JsonObject, shown: set[int]) -> list[str]:
     return [sentence + "".join(f"; {other} wrote {more}" for other, more in rest) + "."]
 
 
+def _span(first: int, last: int) -> str:
+    return f"line {first}" if first == last else f"lines {first}-{last}"
+
+
+def _split_text(parts: list[JsonObject], held: str) -> str:
+    """Say which lines of old_string are which separate lines of the file."""
+    places = [
+        f"its {_span(int(part['copy_first']), int(part['copy_last']))} "
+        f"{'is' if part['copy_first'] == part['copy_last'] else 'are'} "
+        f"{_span(int(part['first']), int(part['last']))}"
+        for part in parts
+    ]
+    joined = ", ".join(places[:-1]) + f" and {places[-1]}"
+    return (
+        f"old_string joins lines from different places {held}: {joined}. "
+        "Give each place its own edit."
+    )
+
+
 def failure_text(error: JsonObject) -> str:
     """Render one failed change with the current text the next call needs.
 
@@ -356,7 +375,10 @@ def failure_text(error: JsonObject) -> str:
         first = int(candidate["line"])
         shown.update(range(first, first + candidate["text"].count("\n") + 1))
     if code in _NOT_FOUND_CODES or code == "eof_not_found":
-        if candidates:
+        if error.get("split"):
+            lines.append(_split_text(error["split"], held))
+            lines.extend(_excerpts(candidates, error.get("path_label")))
+        elif candidates:
             if len(candidates) == 1:
                 first = int(candidates[0]["line"])
                 last = first + candidates[0]["text"].count("\n")

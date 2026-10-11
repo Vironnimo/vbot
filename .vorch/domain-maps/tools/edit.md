@@ -90,7 +90,17 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   reads ...`, `Where it occurs after edit 1:`); when shown lines are ones an
   earlier edit of the call wrote, it names that edit (`Edit 2 of this call wrote
   line N.`; `apply_hunks` tracks each edit's written lines through the later
-  ones). Coverage:
+  ones). An `old_string` whose lines the file holds whole, each part at exactly
+  one place, but at places apart (not in order with at most 3 non-blank lines
+  left out between them) names the places instead of a closest text: `old_string
+  joins lines from different places in the file: its lines 1-3 are lines 60-62
+  and its lines 5-6 are lines 41-42. Give each place its own edit.` plus those
+  lines (`_edit_engine._split_copy`; lines compare with whitespace collapsed).
+  Each part needs 2 lines with a word of 3 or more characters: in a replay of
+  582 failed calls (2026-10), 4 of 8 such reports rested on single lines, one of
+  them `return tool_success(result)` of another function; the first difference
+  served those copies better. The other 4 each joined two functions or blocks the
+  Agent took for neighbors. Coverage:
   `test_failed_changes_change_nothing_and_say_what_to_send`,
   `test_a_file_changed_during_the_call_is_not_overwritten`.
 
@@ -116,6 +126,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | Match report for edit K > 1: `The closest text in the file after edits 1-4, line 287:`, `First difference: after edits 1-4, line 287 reads '...' where old_string has '...'.`, `Edit 2 of this call wrote line 287.` | Replaces `the file has` plus a trailing `Line numbers count the text as edits 1-4 left it.`: the report said the file had `Param(1)` at line 287, which edit 2 of the same call had written; the file held `Param(0)` (Swarm Run 2026-10). The trailing sentence came after the text it qualified, and naming the edit shows that the failed edit's place overlaps a change the call already makes. |
+| Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 
 ## Verification
