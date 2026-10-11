@@ -33,6 +33,10 @@ from ._terminal_process_tree import ProcessTree, ProcessTreeFacts, ProgramExit, 
 COMMAND_TEMPORARY_CATEGORY = "commands"
 COMMAND_HEAD_LINES = 40
 COMMAND_TAIL_LINES = 80
+# The tail holds this many lines more, so the transcript never leaves out fewer
+# than this many lines: a marker for a few lines saves less than the read of the
+# log file it invites.
+COMMAND_TAIL_SPARE_LINES = 20
 # A transcript line kept in memory for the result; the file has every line whole.
 COMMAND_MEMORY_LINE_MAX_CHARS = 65_536
 # A running command's log file shows its output at most this long after it was printed.
@@ -132,7 +136,7 @@ class CommandState:
         self._facts: ProcessTreeFacts | None = None
         self._ended_at: float | None = None
         self._head: list[str] = []
-        self._tail: deque[str] = deque(maxlen=COMMAND_TAIL_LINES)
+        self._tail: deque[str] = deque(maxlen=COMMAND_TAIL_LINES + COMMAND_TAIL_SPARE_LINES)
         self._total_lines = 0
         self._lease = transcript_lease
         # Kept after the lease ends: the file stays until its retention expires.
@@ -223,11 +227,15 @@ class CommandState:
                 self._exits_before_stop = self.tree.exit_count()
 
     def transcript(self) -> CommandTranscript:
-        # The tail holds only lines after the head, so nothing appears twice.
+        # The tail holds only lines after the head, so nothing appears twice. It
+        # keeps its spare lines only while no line is left out.
+        tail = tuple(self._tail)
+        if self._total_lines > len(self._head) + len(tail):
+            tail = tail[-COMMAND_TAIL_LINES:]
         return CommandTranscript(
             head=tuple(self._head),
-            tail=tuple(self._tail),
-            omitted_lines=self._total_lines - len(self._head) - len(self._tail),
+            tail=tail,
+            omitted_lines=self._total_lines - len(self._head) - len(tail),
             total_lines=self._total_lines,
             log_path=self.log_path,
         )

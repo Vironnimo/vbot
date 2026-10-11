@@ -186,8 +186,14 @@ _PRINTED_ERROR_TEXT = "; ".join(
         ),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, False, ("requires-sentinel",)),
-        # PowerShell's messages are English whatever the display language.
-        ("Get-Item does-not-exist", 1, False, ("Cannot find path", "does-not-exist")),
+        # PowerShell's messages, numbers and dates are English whatever the display
+        # language and regional format.
+        (
+            "'{0:N1} {1:d}' -f 6.5, [datetime]'2026-01-02'\nGet-Item does-not-exist",
+            1,
+            False,
+            ("6.5 1/2/2026", "Cannot find path", "does-not-exist"),
+        ),
         # A syntax error names the command's own line, in UTF-8, and runs nothing.
         (
             "'not-run'\nWrite-Output ('ä' + )",

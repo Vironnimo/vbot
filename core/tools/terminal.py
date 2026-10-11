@@ -674,10 +674,19 @@ async def _handle_wait(
         snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
         data = _screen_result(snapshot, view="wait")
-        data["wait_ended"] = ended
+        data["wait_ended"] = _wait_end(ended, data)
     if matched:
         data["matched"] = _matched_line(matched[0])
     return tool_success(_with_notes(data, notes))
+
+
+def _wait_end(ended: str, data: JsonObject) -> str:
+    """How a wait on an interactive program ended, as its result's state tells it.
+
+    A program that was stopped did not exit on its own: ``exited`` beside the
+    state ``stopped`` contradicted it.
+    """
+    return "stopped" if ended == "exited" and data.get("state") == "stopped" else ended
 
 
 async def _wait_unless_released(context: ToolContext, waiting: Awaitable[str]) -> str:
@@ -829,7 +838,7 @@ async def _handle_input(
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
         data = _screen_result(snapshot, view="input")
         if pattern is not None:
-            data["wait_ended"] = ended
+            data["wait_ended"] = _wait_end(ended, data)
         elif ended == "timeout":
             data["next"] = _reply_pending_text(terminal_id)
     if matched:

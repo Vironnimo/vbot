@@ -340,6 +340,33 @@ async def test_long_output_keeps_head_and_tail_and_points_to_the_log_file(shell:
     assert len(log) == 500
 
 
+@pytest.mark.parametrize(
+    ("total", "omitted"),
+    # 500-character lines: 24 are a little over the 12,000-character budget and stay
+    # whole; of 30, the first 7 and the last 16 fill the budget.
+    [(24, 0), (30, 7)],
+)
+@pytest.mark.asyncio
+async def test_long_lines_keep_both_ends_of_the_output_within_its_budget(
+    shell: Shell, total: int, omitted: int
+) -> None:
+    lines = [f"{number:03d} " + "x" * 496 for number in range(total)]
+    call = shell.call({"command": "test"})
+    adapter, tree = await shell.started()
+    adapter.emit("".join(f"{line}\r\n" for line in lines))
+    await asyncio.sleep(0.05)
+    tree.shell_exits(0)
+
+    output = data(await call)["output"].splitlines()
+    if not omitted:
+        assert output == lines
+        return
+    # The output's end, where errors and summaries are, stays in view.
+    marker = output[7]
+    assert re.fullmatch(rf"\[\.\.\. {omitted} lines omitted; .*\]", marker), marker
+    assert output[:7] + output[8:] == lines[:7] + lines[-16:]
+
+
 @pytest.mark.asyncio
 async def test_running_output_is_the_newest_rows_and_its_log_file_has_every_row(
     shell: Shell,
@@ -395,6 +422,32 @@ async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
     # The finishing session starts the delivery before it reports the end.
     await shell.manager.wait_finished(terminal_id)
     assert len(shell.bodies()) == 1
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "while (-not (Test-Path done.txt)) { Start-Sleep -Seconds 10 }",
+        "python -c 'import time; time.sleep(40)'",
+        "timeout /t 40 /nobreak",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_command_that_sleeps_is_never_idle(shell: Shell, command: str) -> None:
+    # Silent and without CPU use while it sleeps on purpose, as a poll loop is.
+    call = shell.call({"command": command})
+    adapter, tree = await shell.started()
+    adapter.emit("polling\r\n")
+    await shell.shows("polling")
+    terminal_id = shell.live_output[0]["terminal_id"]
+    await shell.run_clock(call, until=40)
+    assert not call.done()
+    # A terminal call on it follows it up instead of asking whether it waits for input.
+    status = await command_terminal_result(shell.manager, shell.context(), terminal_id)
+    assert status["next"].startswith("The command has run for 40 seconds and keeps running;")
+
+    tree.shell_exits(0)
+    assert data(await call)["status"] == "exited"
 
 
 @pytest.mark.parametrize(
@@ -455,6 +508,40 @@ async def test_timeout_stops_the_command_and_says_how_to_let_it_finish(shell: Sh
         "or 0 for no limit; run servers and watchers with mode background."
     )
     assert result["exit_code"] == 1
+
+
+@pytest.mark.parametrize(
+    ("command", "stage"),
+    [
+        ("python -m unittest 2>&1 | Select-Object -Last 25", "Select-Object -Last 25"),
+        # Select-Object -First passes each line on as it arrives.
+        ("python -m unittest 2>&1 | Select-Object -First 25", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_output_a_pipe_stage_holds_back_is_explained_while_running_and_after_a_stop(
+    shell: Shell, command: str, stage: str | None
+) -> None:
+    # The command prints nothing before its pipe stage passes its output on.
+    running_call = shell.call({"command": command}, terminal=False)
+    await shell.started()
+    await shell.run_clock(running_call, until=SHELL_HANDOFF_SECONDS)
+    running = data(await running_call)
+
+    stopped_call = shell.call({"command": command, "timeout": 5})
+    await eventually(lambda: len(shell.trees) == 2)
+    adapter, tree = shell.factory.adapters[-1], shell.trees[-1]
+    await shell.run_clock(stopped_call, until=shell.clock.now + 5)
+    await eventually(lambda: "\x03" in adapter.writes)
+    tree.shell_exits(1)
+    stopped = data(await stopped_call)
+
+    assert (running["status"], stopped["status"]) == ("running", "stopped")
+    for result in (running, stopped):
+        # Only a stage that holds output back is named, after the output.
+        assert (result["output"] != "") is (stage is not None)
+        if stage is not None:
+            assert stage in result["output"].splitlines()[-1]
 
 
 @pytest.mark.parametrize("request_kind", ["cancel", "background"])

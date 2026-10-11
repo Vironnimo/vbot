@@ -84,6 +84,9 @@ SHELL_DEFAULT_TIMEOUT_SECONDS = 600.0
 SHELL_OUTPUT_HEAD_CHARS = 4_000
 SHELL_OUTPUT_TAIL_CHARS = 8_000
 SHELL_OUTPUT_LINE_CHARS = 2_000
+# Output over the budget by at most this much is shown whole: a marker for a few
+# lines saves less than the read of the log file it invites.
+SHELL_OUTPUT_OMIT_MIN_CHARS = 1_000
 # A running command's result shows only its newest output; its log file has all of it.
 SHELL_RUNNING_OUTPUT_LINES = 20
 SHELL_RUNNING_OUTPUT_CHARS = 4_000
@@ -93,6 +96,24 @@ _SCREEN_ROWS = TERMINAL_MAX_ROWS
 # Windows rejects longer command lines.
 _WINDOWS_COMMAND_LINE_MAX_CHARS = 32_000
 _TERMINAL_TOOL = "terminal"
+# A command that sleeps prints nothing and uses no CPU while it waits on purpose,
+# as a command waiting for an answer does: Start-Sleep or its alias sleep, bash's
+# sleep, Python's time.sleep, cmd's timeout /t. Such a command is never idle.
+_SLEEP = re.compile(
+    r"(?<![\w-])(?:Start-Sleep|sleep)(?![\w-])|(?<![\w-])timeout(?:\.exe)?[ \t]+[/-]t\b",
+    re.IGNORECASE,
+)
+# A pipeline stage that passes nothing on before its input ends: the last lines,
+# a sort, a count or a group, or one string of everything. Output piped into it
+# reaches the terminal only once the command before the pipe has finished.
+_HOLDING_STAGE = re.compile(
+    r"(?<!\|)\|(?!\|)[ \t]*(?P<stage>"
+    r"(?:Select-Object|select)(?=[ \t])[^|;\n]*?[ \t]-l(?:a(?:st?)?)?(?=[ \t]|$)[^|;\n]*"
+    r"|(?:tail|sort|tac|wc|Sort-Object|Group-Object|group|Measure-Object|measure)"
+    r"(?=[ \t);}]|$)[^|;\n]*"
+    r"|Out-String(?=[ \t);}]|$)(?![^|;\n]*-Stream)[^|;\n]*)",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 # Definition
@@ -107,16 +128,21 @@ if sys.platform == "win32":
     )
     # How Agents start a program in the background without the Tool.
     _DETACHED_START = "Start-Process or a trailing &"
+    # How Agents cut a command's output themselves.
+    _TRIMMING = "Select-Object -First or -Last"
 else:
     _OPENING = (
         "Run a bash command in a new terminal and return its output and exit code. Use bash syntax."
     )
     _DETACHED_START = "nohup or a trailing &"
+    _TRIMMING = "head or tail"
 
 # The same for every Tool set: what happens to a long or waiting command, and how
 # to answer a prompt, the results say when it happens.
 SHELL_TOOL_DESCRIPTION = (
-    f"{_OPENING} When another tool covers the task, use it instead of a shell command."
+    f"{_OPENING} Long output keeps its first and last lines, and the result names a file "
+    f"with all of it, so there is no need to trim it with {_TRIMMING}. When another tool "
+    "covers the task, use it instead of a shell command."
 )
 
 _COMMAND_PARAMETER: JsonObject = {
@@ -534,12 +560,14 @@ class ShellTool:
                 },
             )
 
+        # Idleness hands a command off only to an Agent that can answer it, and
+        # never a command that sleeps on purpose.
+        idle = context.offers(_TERMINAL_TOOL) and not _sleeps(call.command)
         waiting = asyncio.ensure_future(
             self._terminals.wait_command(
                 terminal_id,
                 seconds=SHELL_HANDOFF_SECONDS,
-                # Idleness hands a command off only to an Agent that can answer it.
-                idle_seconds=COMMAND_IDLE_SECONDS if context.offers(_TERMINAL_TOOL) else None,
+                idle_seconds=COMMAND_IDLE_SECONDS if idle else None,
                 progress=progress,
             )
         )
@@ -622,17 +650,19 @@ async def command_terminal_result(
     ``status`` (``running``, ``exited`` or ``stopped``) and, as they apply,
     ``terminal_id``, ``exit_code``, ``stopped_because``, ``output``,
     ``failed_programs``, ``still_running``, ``hint`` and ``next``, plus
-    ``wait_ended`` when given.
+    ``wait_ended`` when given (``stopped`` for an ``exited`` wait on a
+    command that was stopped).
     A running command's ``next`` follows from how the wait ended
     (``matched``, ``timeout``, or no wait), unless the command is idle: then
-    it is the idle text with the seconds it has been idle.
+    it is the idle text with the seconds it has been idle. A command that
+    sleeps on purpose is never idle.
     Raises ``TerminalManagerError`` for an unknown terminal or one that runs no
     command.
     """
     report, screen = await _report_with_screen(terminals, terminal_id)
     reason = {"matched": "matched", "timeout": "waited"}.get(wait_ended or "", "following")
     idle_seconds = None
-    if not report.exited and reason != "matched":
+    if not report.exited and reason != "matched" and not _sleeps(report.command):
         idle_seconds = await terminals.command_idle_seconds(terminal_id)
     data = _result_data(
         context,
@@ -642,8 +672,19 @@ async def command_terminal_result(
         idle_seconds=idle_seconds,
     )
     if wait_ended is not None:
-        data["wait_ended"] = wait_ended
+        # A command that was stopped did not exit on its own; the end says so as the status does.
+        stopped = wait_ended == "exited" and data["status"] == "stopped"
+        data["wait_ended"] = "stopped" if stopped else wait_ended
     return data
+
+
+def _sleeps(command: str) -> bool:
+    """Whether *command* sleeps, so its silence is no sign that it waits for an answer.
+
+    Poll loops with Start-Sleep were handed off as idle after 16 seconds with a
+    text that suggested a hang or a prompt; Agents killed them or polled them.
+    """
+    return _SLEEP.search(command) is not None
 
 
 async def _report_with_screen(
@@ -849,12 +890,16 @@ def _running_text(
     follow_up = context.offers(_TERMINAL_TOOL)
     if reason == "idle" and follow_up:
         silent = COMMAND_IDLE_SECONDS if idle_seconds is None else idle_seconds
+        # Silence is also a sleep or a poll loop the command runs on purpose; "If it
+        # hangs" made Agents kill healthy ones.
         return (
             f"The command in terminal {terminal_id} has printed nothing for "
             f"{_duration(silent)} and uses no CPU; {limit}.{log} If its output ends in "
             f'a question or prompt, answer it with terminal action "input", terminal_id '
-            f'"{terminal_id}", your answer as text, and key "enter". Otherwise it waits for '
-            f"something else, such as the network. {_RESULT_ARRIVES} If it hangs, stop it with "
+            f'"{terminal_id}", your answer as text, and key "enter". Otherwise it is waiting, '
+            f"such as in a sleep, a polling loop or on the network. {_RESULT_ARRIVES} "
+            f"Continue other work, or end your turn if your next step needs the result; "
+            f"{_NO_REPEAT} If what it waits for will not happen, stop it with "
             f"{_terminal_call('kill', terminal_id)}."
         )
     if reason in {"matched", "waited", "following"} and follow_up:
@@ -921,18 +966,52 @@ def command_output_text(report: CommandReport, *, screen: str = "") -> str:
     where = _full_output(report)
     head = [_shortened(line, where) for line in transcript.head]
     tail = [_shortened(line, where) for line in transcript.tail]
-    screen_lines = screen.splitlines()
-    tail.extend(_shortened(line, where) for line in screen_lines)
+    tail.extend(_shortened(line, where) for line in screen.splitlines())
     omitted = transcript.omitted_lines
-    head, dropped_head = _within(head, SHELL_OUTPUT_HEAD_CHARS, keep="start")
-    tail, dropped_tail = _within(tail, SHELL_OUTPUT_TAIL_CHARS, keep="end")
-    omitted += dropped_head + dropped_tail
+    if not omitted:
+        # One run of lines: where the transcript's head ends means nothing here.
+        head, tail = [], head + tail
+    head, tail, dropped = _head_and_tail(head, tail)
+    omitted += dropped
     lines = list(head)
     if omitted:
         noun = "line" if omitted == 1 else "lines"
         lines.append(f"[... {omitted:,} {noun} omitted{where} ...]")
     lines.extend(tail)
+    stage = _holding_stage(report.command) if report.stop_reason is not None else None
+    if stage is not None:
+        lines.append(
+            f"[Output piped into {stage} appears only once the command before the pipe has "
+            "finished; to see output as it arrives, run the command without that pipe.]"
+        )
     return "\n".join(lines)
+
+
+def _head_and_tail(head: list[str], tail: list[str]) -> tuple[list[str], list[str], int]:
+    """*head* and *tail* within the output budget, and the number of lines left out.
+
+    *head* lines are kept from the start, *tail* lines from the end; with an
+    empty *head*, both ends of *tail* are kept. Each end gets at least its own
+    budget and the room the other end does not need. Output is left out only
+    where that saves more than ``SHELL_OUTPUT_OMIT_MIN_CHARS``.
+    """
+    budget = SHELL_OUTPUT_HEAD_CHARS + SHELL_OUTPUT_TAIL_CHARS
+    if _chars(head) + _chars(tail) <= budget + SHELL_OUTPUT_OMIT_MIN_CHARS:
+        return head, tail, 0
+    if not head:
+        kept_head, _ = _within(tail, SHELL_OUTPUT_HEAD_CHARS, keep="start")
+        rest = tail[len(kept_head) :]
+        kept_tail, _ = _within(rest, budget - _chars(kept_head), keep="end")
+        return kept_head, kept_tail, len(rest) - len(kept_tail)
+    head_budget = max(SHELL_OUTPUT_HEAD_CHARS, budget - _chars(tail))
+    kept_head, dropped_head = _within(head, head_budget, keep="start")
+    kept_tail, dropped_tail = _within(tail, budget - _chars(kept_head), keep="end")
+    return kept_head, kept_tail, dropped_head + dropped_tail
+
+
+def _chars(lines: list[str]) -> int:
+    """The characters *lines* take in the output, line breaks included."""
+    return sum(len(line) + 1 for line in lines)
 
 
 def _running_output_text(report: CommandReport, screen: str) -> str:
@@ -944,11 +1023,32 @@ def _running_output_text(report: CommandReport, screen: str) -> str:
     newest = [_shortened(line, where) for line in lines[-SHELL_RUNNING_OUTPUT_LINES:]]
     kept, _ = _within(newest, SHELL_RUNNING_OUTPUT_CHARS, keep="end")
     omitted = transcript.total_lines + len(screen_lines) - len(kept)
-    if not omitted:
-        return "\n".join(kept)
-    noun = "line" if omitted == 1 else "lines"
-    marker = f"[... {omitted:,} earlier {noun} omitted{where} ...]"
-    return "\n".join([marker, *kept])
+    if omitted:
+        noun = "line" if omitted == 1 else "lines"
+        kept.insert(0, f"[... {omitted:,} earlier {noun} omitted{where} ...]")
+    stage = _holding_stage(report.command)
+    if stage is not None:
+        log = " and in the log file" if report.transcript.log_path is not None else ""
+        kept.append(
+            f"[Output piped into {stage} appears here{log} only once the command before the "
+            "pipe has finished.]"
+        )
+    return "\n".join(kept)
+
+
+def _holding_stage(command: str) -> str | None:
+    """The last pipeline stage of *command* that holds its input until it ends.
+
+    Agents piped test runs into ``Select-Object -Last 25``: handed off after 90
+    seconds or stopped by the timeout, the result showed no output, and they
+    stopped commands that worked. The last such stage, since commands run their
+    long step last, after quick preparations.
+    """
+    stages = [match["stage"] for match in _HOLDING_STAGE.finditer(command)]
+    if not stages:
+        return None
+    stage = stages[-1].split(")", 1)[0].split("}", 1)[0].strip()
+    return stage if len(stage) <= 60 else f"{stage[:57]}..."
 
 
 def _full_output(report: CommandReport) -> str:
