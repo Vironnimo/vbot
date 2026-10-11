@@ -299,7 +299,7 @@ async def test_channel_interactions_route_by_prefix_and_isolate_raising_handlers
         "async def _boom(event, responder):\n"
         "    raise RuntimeError('boom')\n"
         "def register(api):\n"
-        "    api.register_interaction_handler('chk', _check)\n"
+        "    api.register_interaction_handler('poll', _check)\n"
         "    api.register_interaction_handler('ping', _ping)\n"
         "    api.register_interaction_handler('boom', _boom)\n",
     )
@@ -308,12 +308,12 @@ async def test_channel_interactions_route_by_prefix_and_isolate_raising_handlers
     responder = RecordingResponder()
     caplog.set_level(logging.WARNING, logger="vbot.extensions")
 
-    assert await registry.dispatch_channel_interaction(tap("chk:milk"), responder) is True
+    assert await registry.dispatch_channel_interaction(tap("poll:yes"), responder) is True
     assert await registry.dispatch_channel_interaction(tap("other:x"), responder) is False
     # Data without a colon is its own prefix; sync handlers are supported.
     assert await registry.dispatch_channel_interaction(tap("ping"), responder) is True
     # A matched handler that raises still counts as handled; the error is only logged.
     assert await registry.dispatch_channel_interaction(tap("boom:a"), responder) is True
 
-    assert seen == [("chk:milk", responder), ("ping", responder)]
+    assert seen == [("poll:yes", responder), ("ping", responder)]
     assert any("interaction handler" in entry.getMessage() for entry in caplog.records)

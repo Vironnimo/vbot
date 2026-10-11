@@ -18,7 +18,16 @@ from tests.core.tools.channel_send_test_support import (
     refused,
 )
 
-ALL_FIELDS = {"channel_id", "message", "platform_target", "thread_id", "file_paths", "buttons"}
+ALL_FIELDS = {
+    "channel_id",
+    "message",
+    "platform_target",
+    "thread_id",
+    "file_paths",
+    "buttons",
+    "checklist",
+    "done_label",
+}
 
 
 def test_profile_offers_the_agents_enabled_channels(tmp_path: Path) -> None:

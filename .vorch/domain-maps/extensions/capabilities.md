@@ -60,11 +60,9 @@ Only loaded owners contribute. Slug/id collisions are first-wins and diagnosed; 
 - `InteractionEvent` carries platform/channel/chat/user/message identity, callback `data`, the current keyboard snapshot, and optional message/user/thread data.
 - `InteractionResponder.answer()` acknowledges the tap; `edit()` changes the tapped message text and/or keyboard.
 
-`dispatch_channel_interaction(event, responder)` routes by the prefix before the first colon. A matched handler returns handled even if it raises; dispatch logs and swallows the failure. Prefix collisions are first-wins and diagnosed. The runtime-reserved `run` prefix is rejected before collision handling because Channels routes it to an Agent Run instead.
+`dispatch_channel_interaction(event, responder)` routes by the prefix before the first colon. A matched handler returns handled even if it raises; dispatch logs and swallows the failure. Prefix collisions are first-wins and diagnosed. The runtime-reserved prefixes (`RESERVED_INTERACTION_PREFIXES`) are rejected before collision handling: Channels routes `run` to an Agent Run and toggles `chk` checklist items itself (`channels.md` -> Interactive messages).
 
 Every tap must be acknowledged exactly once from the user's perspective. The channel adapter guarantees a fallback acknowledgement if an Extension handler does not answer.
-
-The bundled Checklist Extension is the small reference implementation: it owns prefix `chk`, toggles the tapped button's leading ⬜/✅ label, edits the whole keyboard from the event snapshot, and silently acknowledges. It persists no state; concurrent taps can temporarily overwrite from stale platform snapshots and self-heal on a later tap.
 
 ## Capability teardown
 

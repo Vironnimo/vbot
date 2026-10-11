@@ -309,6 +309,7 @@ def test_a_call_without_one_clear_chat_is_refused(
         json.dumps({"send": {"message": "Hi"}}),
         {"message": "Hi", "file_paths": []},
         {"message": "Hi", "buttons": []},
+        {"message": "Hi", "checklist": [], "done_label": ""},
     ],
     ids=[
         "request-wrapper",
@@ -316,6 +317,7 @@ def test_a_call_without_one_clear_chat_is_refused(
         "json-text",
         "no-files",
         "no-buttons",
+        "no-checklist",
     ],
 )
 def test_other_call_shapes_still_send(tmp_path: Path, arguments: Any) -> None:
@@ -350,7 +352,7 @@ def test_other_call_shapes_still_send(tmp_path: Path, arguments: Any) -> None:
             "- \"buttons[0][0].data\" is required: Callback payload as '<prefix>:<payload>'; "
             "max 64 UTF-8 bytes.\n"
             "channel_send parameters: channel_id, message, platform_target, thread_id, "
-            "file_paths, buttons.",
+            "file_paths, buttons, checklist, done_label.",
             id="button-without-data",
         ),
         pytest.param(
@@ -358,6 +360,24 @@ def test_other_call_shapes_still_send(tmp_path: Path, arguments: Any) -> None:
             {"message": "Hi", "buttons": [[{"label": "Milk", "data": "chk:milk", "x": True}]]},
             "buttons[0][0] has unknown field(s): x",
             id="unknown-button-field",
+        ),
+        pytest.param(
+            "one",
+            {
+                "message": "Shopping list",
+                "checklist": [{"id": "a1", "label": "Milk"}, {"id": "a1", "label": "Eggs"}],
+            },
+            'channel_send was not run: the id "a1" appears on more than one checklist item. '
+            "Give each item its own id.",
+            id="repeated-checklist-id",
+        ),
+        pytest.param(
+            "one",
+            {"message": "Shopping list", "checklist": [{"id": "x" * 59, "label": "Milk"}]},
+            f'channel_send was not run: checklist item 1 has the id "{"x" * 59}" of 59 bytes; '
+            "an id can have at most 58. Use shorter ids, such as item numbers you map back to "
+            "the items.",
+            id="checklist-id-too-long",
         ),
         pytest.param(
             "discord",

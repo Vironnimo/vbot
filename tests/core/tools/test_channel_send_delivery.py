@@ -14,7 +14,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.tools.channel as channel_tool_module
-from core.channels import ChannelError, ChannelNotFoundError
+from core.channels import (
+    ChannelError,
+    ChannelNotFoundError,
+    ChecklistItem,
+    checklist_keyboard,
+)
 from core.channels.adapter import ConversationFacts, RouteFacts
 from core.channels.telegram import TelegramChannelAdapter
 from core.extensions import InteractionButton
@@ -76,6 +81,54 @@ def test_buttons_reach_the_channel(
     if run_origin is not None:
         expected["run_origin"] = run_origin
     assert tool.sent() == [("tg-main", "Shopping list", "111", expected)]
+
+
+@pytest.mark.parametrize(
+    ("project_id", "run_origin"),
+    [
+        (None, RouteFacts(agent_id="agent-1", session_id="session-1")),
+        ("project-1", None),
+    ],
+    ids=["identity-session", "project-session"],
+)
+def test_a_checklist_reaches_the_channel_as_its_keyboard(
+    tmp_path: Path, project_id: str | None, run_origin: RouteFacts | None
+) -> None:
+    tool = channel_send(tmp_path)
+
+    envelope = tool.call(
+        {
+            "message": "Shopping list",
+            "platform_target": "111",
+            "checklist": [
+                {"id": "a1", "label": "200 g Spaghetti"},
+                {"id": "b2-c3", "label": "Eggs", "checked": "true"},
+            ],
+            "buttons": [[{"label": "Clear", "data": "run:clear"}]],
+            "done_label": "Fertig",
+        },
+        project_id=project_id,
+    )
+
+    delivered(envelope)
+    items = [
+        ChecklistItem(id="a1", label="200 g Spaghetti", checked=False),
+        ChecklistItem(id="b2-c3", label="Eggs", checked=True),
+    ]
+    keyboard = checklist_keyboard(
+        items,
+        done_label="Fertig",
+        extra_rows=[[InteractionButton(label="Clear", data="run:clear")]],
+    )
+    expected = options(buttons=keyboard)
+    if run_origin is not None:
+        # The done button wakes the Session that sent the checklist.
+        expected["run_origin"] = run_origin
+    assert tool.sent() == [("tg-main", "Shopping list", "111", expected)]
+    # The chat's Session keeps the items, so later messages there have them as context.
+    note = tool.sessions.get_or_create.return_value.add_note.call_args.args[0]
+    assert "200 g Spaghetti (id a1)" in note
+    assert "Eggs (id b2-c3)" in note
 
 
 @pytest.mark.parametrize(

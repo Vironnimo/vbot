@@ -16,10 +16,13 @@ from typing import TYPE_CHECKING, Any
 from core.attachments.attachments import _sniff_mime
 from core.channels import (
     ALLOWED_CHANNEL_PLATFORMS,
+    CHECKLIST_ITEM_ID_MAX_BYTES,
     ChannelConfig,
     ChannelConfigError,
     ChannelError,
     ChannelNotFoundError,
+    ChecklistItem,
+    checklist_keyboard,
 )
 from core.channels.adapter import FileData, RouteFacts
 from core.extensions import InteractionButton
@@ -37,7 +40,7 @@ from core.tools._channel_send_arguments import (
     stand_in_message_refusal,
 )
 from core.tools._path_suggestions import similar_entries
-from core.tools.arguments import optional_string, required_string
+from core.tools.arguments import optional_bool, optional_string, required_string
 from core.tools.call_syntax import spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.tools import (
@@ -72,7 +75,10 @@ CHANNEL_SEND_TOOL_DESCRIPTION = (
     "reply, and to write to a chat on your own."
 )
 _INTERACTION_BUTTON_ARGUMENTS = frozenset(("label", "data"))
+_CHECKLIST_ITEM_ARGUMENTS = frozenset(("id", "label", "checked"))
+_DEFAULT_DONE_LABEL = "Done"
 _LISTED_CHATS = 10
+_SEND_FIELDS = ("message", "file_paths", "buttons", "checklist", "done_label")
 _WEB_ADDRESS = re.compile(r"^(?:[a-z][a-z0-9+.-]*://|data:|/api/)", re.IGNORECASE)
 
 
@@ -87,6 +93,7 @@ class _PreparedChannelSend:
     message: str | None
     files: list[FileData]
     buttons: list[list[InteractionButton]] | None
+    checklist: list[ChecklistItem] | None
     requested_platform_target: str | None
     requested_thread_id: str | None
     call: JsonObject
@@ -163,6 +170,38 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
                 "file_paths."
             ),
         },
+        "checklist": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": (
+                            "Id the submission reports for this item, such as its id in the "
+                            "app that keeps the list."
+                        ),
+                    },
+                    "label": {"type": "string", "minLength": 1},
+                    "checked": {"type": "boolean", "description": "Omit for an open item."},
+                },
+                "required": ["id", "label"],
+            },
+            "description": (
+                "Items the user can tick in this message. A tap only toggles the item in the "
+                "message; a done button is added below, and tapping it wakes you with the items "
+                "whose state changed since sending, by id."
+            ),
+        },
+        "done_label": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Text of the checklist's done button, in the user's language. Omit for \"Done\"."
+            ),
+        },
     },
 }
 
@@ -175,6 +214,8 @@ _CHANNEL_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
         "thread_id",
         "file_paths",
         "buttons",
+        "checklist",
+        "done_label",
     ),
     "discord": ("channel_id", "message", "platform_target", "file_paths"),
     "slack": ("channel_id", "message", "platform_target", "thread_id", "file_paths"),
@@ -393,6 +434,7 @@ async def _handle_channel_send_tool(
             sender_agent_id=context.agent_id,
             message=prepared.message,
             files=prepared.files,
+            checklist=prepared.checklist,
         ),
     )
     result: JsonObject = {
@@ -460,9 +502,7 @@ def _prepare_channel_send(
         arguments, "platform_target", target_chat, channel_config
     )
     requested_thread_id = _one_value(arguments, "thread_id", target_thread, channel_config)
-    call: JsonObject = {
-        name: arguments[name] for name in ("message", "file_paths", "buttons") if name in arguments
-    }
+    call: JsonObject = {name: arguments[name] for name in _SEND_FIELDS if name in arguments}
     call["channel_id"] = channel_config.id
     if requested_platform_target is not None:
         call["platform_target"] = requested_platform_target
@@ -480,6 +520,7 @@ def _prepare_channel_send(
         max_size_bytes=max_size_bytes,
     )
     buttons = _build_buttons(arguments.get("buttons"))
+    checklist = _build_checklist(arguments.get("checklist"))
     if message is None and not files:
         raise ChannelSendRefusedError(
             refusal(
@@ -488,12 +529,21 @@ def _prepare_channel_send(
                 message="<text to send>",
             )
         )
-    if buttons is not None and files:
-        without_buttons = render_call(call, buttons=None)
-        buttons_only = render_call(call, file_paths=None, message=call.get("message", "<text>"))
+    keyboard_fields = [name for name in ("buttons", "checklist") if name in call]
+    if keyboard_fields and files:
+        names = " and ".join(keyboard_fields)
+        without_keyboard = render_call(call, **dict.fromkeys([*keyboard_fields, "done_label"]))
+        keyboard_only = render_call(call, file_paths=None, message=call.get("message", "<text>"))
         raise ChannelSendRefusedError(
-            f"{REFUSAL_PREFIX}buttons cannot go with files in one message. Send the files "
-            f"first, then the buttons, in two calls: {without_buttons} then {buttons_only}"
+            f"{REFUSAL_PREFIX}{names} cannot go with files in one message. Send the files "
+            f"first, then the {names}, in two calls: {without_keyboard} then {keyboard_only}"
+        )
+    if checklist is not None:
+        done_label = optional_string(arguments.get("done_label"), field_name="done_label")
+        buttons = checklist_keyboard(
+            checklist,
+            done_label=done_label or _DEFAULT_DONE_LABEL,
+            extra_rows=buttons or (),
         )
     return _PreparedChannelSend(
         channel_id=channel_config.id,
@@ -501,6 +551,7 @@ def _prepare_channel_send(
         message=message,
         files=files,
         buttons=buttons,
+        checklist=checklist,
         requested_platform_target=requested_platform_target,
         requested_thread_id=requested_thread_id,
         call=call,
@@ -679,7 +730,7 @@ async def _list_targets(
     arguments: JsonObject,
 ) -> JsonObject:
     """Show the Agent's Channels, this conversation's chat and the allowed chats."""
-    sends = sorted(name for name in ("message", "file_paths", "buttons") if name in arguments)
+    sends = sorted(name for name in _SEND_FIELDS if name in arguments)
     if sends:
         raise ChannelSendRefusedError(
             f"{REFUSAL_PREFIX}action list only shows where messages can go, but the call also "
@@ -730,6 +781,7 @@ async def _record_outbound_message_note(
     sender_agent_id: str,
     message: str | None,
     files: list[FileData],
+    checklist: list[ChecklistItem] | None = None,
 ) -> None:
     try:
         route = await channel_service.ensure_outbound_session(
@@ -741,7 +793,7 @@ async def _record_outbound_message_note(
         target = SessionAddress(
             project_id=None, agent_id=route.agent_id, session_id=route.session_id
         )
-        note = _outbound_message_note(sender_agent_id, message, files)
+        note = _outbound_message_note(sender_agent_id, message, files, checklist)
         async with chat_sessions.write_lock(target):
             await chat_sessions.run_async(_append_session_note, chat_sessions, target, note)
     except Exception as error:
@@ -766,6 +818,7 @@ def _outbound_message_note(
     sender_agent_id: str,
     message: str | None,
     files: list[FileData],
+    checklist: list[ChecklistItem] | None = None,
 ) -> str:
     parts = [
         f'A message was sent to this chat via the channel_send tool by agent "{sender_agent_id}".'
@@ -775,6 +828,11 @@ def _outbound_message_note(
     if files:
         names = ", ".join(file_data.filename for file_data in files)
         parts.append(f"Attached file(s): {names}")
+    if checklist:
+        items = (
+            f"- [{'x' if item.checked else ' '}] {item.label} (id {item.id})" for item in checklist
+        )
+        parts.append("Checklist:\n" + "\n".join(items))
     return "\n\n".join(parts)
 
 
@@ -981,3 +1039,40 @@ def _build_buttons(
             buttons.append(InteractionButton(label=button["label"], data=button["data"]))
         rows.append(buttons)
     return rows
+
+
+def _build_checklist(value: Any) -> list[ChecklistItem] | None:
+    """Parse the tool's ``checklist`` items; None when omitted.
+
+    The input schema guarantees objects with non-empty ``id`` and ``label``; the
+    checks here cover what it cannot say: other fields, repeated ids, and ids too
+    long for the platform's callback data.
+    """
+    if value is None:
+        return None
+    items: list[ChecklistItem] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(value, start=1):
+        unknown_fields = sorted(set(raw) - _CHECKLIST_ITEM_ARGUMENTS)
+        if unknown_fields:
+            raise ChannelSendRefusedError(
+                f"{REFUSAL_PREFIX}checklist item {index} has unknown field(s): "
+                f"{', '.join(unknown_fields)}. An item takes id, label and checked."
+            )
+        item_id = raw["id"]
+        size = len(item_id.encode("utf-8"))
+        if size > CHECKLIST_ITEM_ID_MAX_BYTES:
+            raise ChannelSendRefusedError(
+                f'{REFUSAL_PREFIX}checklist item {index} has the id "{item_id}" of {size} bytes; '
+                f"an id can have at most {CHECKLIST_ITEM_ID_MAX_BYTES}. Use shorter ids, such as "
+                "item numbers you map back to the items."
+            )
+        if item_id in seen:
+            raise ChannelSendRefusedError(
+                f'{REFUSAL_PREFIX}the id "{item_id}" appears on more than one checklist item. '
+                "Give each item its own id."
+            )
+        seen.add(item_id)
+        checked = optional_bool(raw.get("checked"), field_name="checked", default=False)
+        items.append(ChecklistItem(id=item_id, label=raw["label"], checked=checked))
+    return items
