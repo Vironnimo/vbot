@@ -412,7 +412,8 @@ def _tool_response(tool: Any) -> JsonObject:
         "family": getattr(tool, "family", None),
         "family_label": getattr(tool, "family_label", None),
         "activation": getattr(tool, "activation", "configurable"),
-        "activation_source": getattr(tool, "activation_source", None),
+        # One source as its name, several as a list.
+        "activation_source": _activation_source(tool),
         "requires_opt_in": bool(getattr(tool, "requires_opt_in", False)),
         "constraints": list(getattr(tool, "constraints", ())),
         "session_scoped": bool(getattr(tool, "session_scoped", False)),
@@ -423,6 +424,11 @@ def _tool_response(tool: Any) -> JsonObject:
         "schema_fingerprint": tool.contract.schema_fingerprint,
         "parallel_safe": tool.parallel_safe,
     }
+
+
+def _activation_source(tool: Any) -> str | list[str] | None:
+    source = getattr(tool, "activation_source", None)
+    return list(source) if isinstance(source, tuple) else source
 
 
 def _skill_response(skill_registry: Any, skill: Any) -> JsonObject:

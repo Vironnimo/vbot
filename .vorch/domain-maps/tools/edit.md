@@ -20,8 +20,8 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   `follows` -> `apply_patch` and `catalog_visible=False`: they are active exactly
   when `apply_patch` is, a denial of `apply_patch` removes them, and neither
   appears in `tool.list`, so the Tool picker and the Project Tool Whitelist show
-  only `apply_patch` (one user-visible switch). `ToolAccess.fixed` adds no
-  followers. A persisted `denied: ["edit"]` still vetoes `edit`; the route then
+  only `apply_patch` (one user-visible switch). A fixed Tool set
+  (`ToolAccess.fixed`) with `apply_patch` gets them as well. A persisted `denied: ["edit"]` still vetoes `edit`; the route then
   keeps `apply_patch` (`offer_edit_dialect`). Coverage:
   `test_edit_tools.py::test_edit_and_write_are_available_exactly_when_apply_patch_is`,
   `test_projects.py` (not in `PROJECT_DEFAULT_ALLOWED_TOOLS`).

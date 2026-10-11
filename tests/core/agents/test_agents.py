@@ -329,14 +329,13 @@ def test_the_librarian_keeps_its_id_and_existence_and_changes_only_model_setting
     assert store.restore_target_problem("librarian") == "agent_id_taken"
     assert store.get(LIBRARIAN_AGENT_ID).name == "Librarian"
     assert not (store.data_dir / "payload").exists()
-    # The Agents of a Live call also take their Tools from the user; their fixed
-    # set lists background_tasks beside bash.
+    # The Agents of a Live call also take their Tools from the user.
     backend = store.update(
-        LIVE_BACKEND_AGENT_ID, tool_access={"mode": "selected", "allowed": ["bash", "overview"]}
+        LIVE_BACKEND_AGENT_ID, tool_access={"mode": "selected", "allowed": ["overview"]}
     )
     assert backend.tool_access == ToolAccess(
         mode="selected",
-        allowed=("bash", "background_tasks", "overview"),
+        allowed=("overview",),
         granted=LIVE_TOOL_NAMES,
         fixed=True,
         live_call=True,

@@ -500,17 +500,30 @@ function automaticToolIsActive(
     return true;
   }
 
-  const sourceName = tool.activation_source;
-  if (!sourceName) {
-    return false;
-  }
-  const source = toolByName(catalog, sourceName);
   const nextSeen = new Set(seen);
   nextSeen.add(tool.name);
-  if (toolIsConfigurable(source)) {
-    return toolAccessPreferenceEnabled(policy, source);
+  // A followed Tool is active while any of its sources is.
+  return activationSources(tool).some((sourceName) => {
+    const source = toolByName(catalog, sourceName);
+    if (toolIsConfigurable(source)) {
+      return toolAccessPreferenceEnabled(policy, source);
+    }
+    return automaticToolIsActive(policy, source, catalog, context, nextSeen);
+  });
+}
+
+/**
+ * The Tools a followed Tool follows: the catalog names one source as a string
+ * and several as a list.
+ */
+export function activationSources(tool) {
+  const source = tool?.activation_source;
+  if (typeof source === 'string') {
+    return source ? [source] : [];
   }
-  return automaticToolIsActive(policy, source, catalog, context, nextSeen);
+  return Array.isArray(source)
+    ? source.filter((name) => typeof name === 'string' && name)
+    : [];
 }
 
 function ceilingNames(ceiling) {

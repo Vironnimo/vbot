@@ -86,6 +86,10 @@ def _file_tools() -> ToolRegistry:
         ({"summary": "x" * 201}, "Tool summary must be at most 200 characters"),
         ({"activation": "mystery"}, "Unsupported Tool activation: mystery"),
         ({"activation": "follows"}, "A followed Tool requires activation_source"),
+        (
+            {"activation": "follows", "activation_source": ("read", "read")},
+            "activation_source must name distinct Tools",
+        ),
         ({"activation_source": "read"}, "activation_source is only valid for a followed Tool"),
         ({"requires_opt_in": "true"}, "requires_opt_in must be a boolean"),
         (

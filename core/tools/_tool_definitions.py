@@ -139,9 +139,10 @@ class Tool:
     # surfaces render Extension families without understanding their ids.
     family_label: str | None = None
     # How policy activates this Tool. Configurable Tools are selected directly;
-    # followed, memory-mode, and Session-grant Tools are automatic.
+    # followed, memory-mode, and Session-grant Tools are automatic. A followed
+    # Tool names its source, or a tuple of sources it follows while any is active.
     activation: str = TOOL_ACTIVATION_CONFIGURABLE
-    activation_source: str | None = None
+    activation_source: str | tuple[str, ...] | None = None
     requires_opt_in: bool = False
     # Stable machine-readable preconditions. Runtime readiness and Chat route
     # availability remain separate live projections.
@@ -226,6 +227,13 @@ class Tool:
         if self.activation == TOOL_ACTIVATION_FOLLOWS:
             if not self.activation_source:
                 raise ValueError("A followed Tool requires activation_source")
+            if not isinstance(self.activation_source, str):
+                sources = tuple(self.activation_source)
+                if any(not isinstance(name, str) or not name for name in sources) or len(
+                    set(sources)
+                ) != len(sources):
+                    raise ValueError("activation_source must name distinct Tools")
+                object.__setattr__(self, "activation_source", sources)
         elif self.activation_source is not None:
             raise ValueError("activation_source is only valid for a followed Tool")
         if self.family is not None and not self.family.strip():

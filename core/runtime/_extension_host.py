@@ -552,7 +552,11 @@ class ExtensionHostFactory:
                     "family": tool.family,
                     "family_label": tool.family_label,
                     "activation": tool.activation,
-                    "activation_source": tool.activation_source,
+                    "activation_source": (
+                        list(tool.activation_source)
+                        if isinstance(tool.activation_source, tuple)
+                        else tool.activation_source
+                    ),
                 }
                 for tool in self.tools.list_tools()
                 if tool.catalog_visible and not tool.session_scoped

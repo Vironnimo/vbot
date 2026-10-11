@@ -33,7 +33,7 @@ from core.sessions import (
     TemporarySessionBinding,
 )
 from core.settings.normalizers import normalize_compaction_policy
-from core.tools.availability import ToolAccess, list_companion_tools, normalize_tool_access
+from core.tools.availability import ToolAccess, normalize_tool_access
 from core.utils.errors import StorageError
 from core.utils.ids import new_id
 
@@ -148,11 +148,6 @@ class TemporaryAgent:
     compaction_policy: dict[str, Any] | None = None
     # A temporary Agent has no On-demand Tools.
     tool_loading: dict[str, Any] | None = None
-
-    def __post_init__(self) -> None:
-        # Resolved per Run rather than stored, so existing bindings gain the
-        # companions of their fixed Tool set without changing.
-        object.__setattr__(self, "tool_access", list_companion_tools(self.tool_access))
 
 
 class TemporaryAgentRegistry:
