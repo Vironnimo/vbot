@@ -16,6 +16,7 @@ from typing import Any
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.tools._interpreter_host import InterpreterHost
 from core.tools.command_manager import CommandManager, CommandReport, CommandReportFormatter
 from core.tools.process_tree import (
     ProcessTreeFacts,
@@ -48,11 +49,15 @@ class FakeTree:
         self.cpu_seconds = 0.0
         self.started = 1
         self.exits: list[ProgramExit] = []
+        # Raised by the process queries instead of answering.
+        self.facts_error: OSError | None = None
         self.terminate_error: OSError | None = None
         self.terminations = 0
         self.closed = False
 
     def facts(self) -> ProcessTreeFacts:
+        if self.facts_error is not None:
+            raise self.facts_error
         return ProcessTreeFacts(
             tuple(self.running), self.cpu_seconds, self.started, tuple(self.exits)
         )
@@ -168,6 +173,8 @@ class FakeSink:
         self.submissions: list[dict[str, Any]] = []
         self.cancellations: list[str] = []
         self.futures: list[asyncio.Future[None]] = []
+        # Notice ids a delivery claimed: they can no longer be withdrawn.
+        self.claimed: set[str] = set()
 
     def submit_completion(self, agent_id: str, session_id: str, **kwargs: Any) -> Awaitable[None]:
         self.submissions.append({"agent_id": agent_id, "session_id": session_id, **kwargs})
@@ -175,9 +182,26 @@ class FakeSink:
         self.futures.append(future)
         return future
 
-    def cancel_completion(self, agent_id: str, session_id: str, **kwargs: Any) -> bool:
-        self.cancellations.append(kwargs["notice_id"])
-        return True
+    def cancel_completion(
+        self, agent_id: str, session_id: str, *, notice_id: str, project_id: str | None = None
+    ) -> bool:
+        """Withdraw the pending submission of *notice_id* to this address."""
+        self.cancellations.append(notice_id)
+        if notice_id in self.claimed:
+            return False
+        address = (agent_id, session_id, project_id)
+        for submission, future in zip(self.submissions, self.futures, strict=True):
+            submitted_to = (
+                submission["agent_id"],
+                submission["session_id"],
+                submission.get("project_id"),
+            )
+            if submission["notice_id"] == notice_id and submitted_to == address:
+                if future.done():
+                    return False
+                future.cancel()
+                return True
+        return False
 
     @property
     def bodies(self) -> list[str]:
@@ -244,9 +268,17 @@ class Harness:
 
 @asynccontextmanager
 async def command_harness(
-    tmp_path: Path, *, max_live: int = 3, sink: FakeSink | None = None
+    tmp_path: Path,
+    *,
+    max_live: int = 3,
+    sink: FakeSink | None = None,
+    run_blocking: Callable[..., Awaitable[Any]] = run_inline,
 ) -> AsyncIterator[Harness]:
-    """A started manager over fakes, with its log files under *tmp_path*; closed after."""
+    """A started manager over fakes, with its log files under *tmp_path*; closed after.
+
+    Process queries and kills run inline unless *run_blocking* says otherwise;
+    output is cleaned inline.
+    """
     clock = FakeClock()
     launcher = FakeLauncher()
     sink = sink if sink is not None else FakeSink()
@@ -256,8 +288,9 @@ async def command_harness(
         launcher=launcher,
         monotonic=clock.monotonic,
         sleep=clock.sleep,
-        run_blocking=run_inline,
+        run_blocking=run_blocking,
         max_live=max_live,
+        output_host=InterpreterHost.in_process(),
     )
     harness = Harness(manager, launcher, clock, sink, tmp_path)
     manager.add_changed_callback(harness.changes.append)

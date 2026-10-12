@@ -5,7 +5,7 @@ reader feeds the output pipe into ``CommandOutput``; the supervisor waits for
 the shell's exit and then for the processes it left running. A command has no
 time limit of its own: it runs until it ends or something stops it. Every
 decision runs on the Event Loop; process queries and kills run through the
-blocking runner.
+blocking runner, and output cleaning on the output host's worker.
 
 End of a command: the shell exited, output after the exit was read for at most
 ``COMMAND_DRAIN_SECONDS``, and either no process of the command runs, or the
@@ -131,6 +131,7 @@ class CommandRecord:
         self._facts: ProcessTreeFacts | None = None
         self._facts_failing = False
         self._ended_at: float | None = None
+        self._finished_at: float | None = None
         self._activity = 0
         self._eof = asyncio.Event()
         self._ended = asyncio.Event()
@@ -145,8 +146,10 @@ class CommandRecord:
         self._progress_task: asyncio.Task[None] | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
-        # The Session the result was submitted to; a later transfer moves no submission.
+        # The Session the result was submitted to, and its body: a transfer
+        # submits a result not yet delivered again, to the new Session.
         self._delivered_to = owner
+        self._delivered_body: str | None = None
 
     # Facts
 
@@ -159,8 +162,9 @@ class CommandRecord:
         return self._finished.is_set()
 
     @property
-    def ended_at(self) -> float | None:
-        return self._ended_at
+    def finished_at(self) -> float | None:
+        """When the last process of the command ended; None while one runs."""
+        return self._finished_at
 
     @property
     def background(self) -> bool:
@@ -242,6 +246,15 @@ class CommandRecord:
         if self.owner != source:
             return False
         self.owner = target
+        sink = self._services.trigger_service
+        body = self._delivered_body
+        if (
+            sink is not None
+            and body is not None
+            and self._delivered_to != target
+            and self._withdraw_submitted()
+        ):
+            self._submit(sink, body)
         return True
 
     async def stop(self, reason: StopReason) -> None:
@@ -276,31 +289,34 @@ class CommandRecord:
             self.withdraw_delivery()
 
     def withdraw_delivery(self) -> None:
-        """Deliver no result: disarm it, and withdraw one already submitted."""
-        self._deliver = False
-        task = self._delivery_task
-        sink = self._services.trigger_service
-        if task is None or task.done():
-            return
-        if sink is not None:
-            target = self._delivered_to
-            with contextlib.suppress(Exception):
-                sink.cancel_completion(
-                    target.agent_id,
-                    target.session_id,
-                    notice_id=self.notice_id,
-                    project_id=target.project_id,
-                )
-        # Without a running Event Loop (Runtime stop), nothing is left to cancel.
-        with contextlib.suppress(RuntimeError):
-            task.cancel()
+        """Deliver no result: disarm it, and withdraw one already submitted.
 
-    def kill_now(self) -> bool:
-        """Kill every process synchronously, withdraw the delivery and release the
-        record (Runtime stop).
+        A submitted result whose delivery already claimed it stays: it is
+        delivered once, as submitted.
+        """
+        self._deliver = False
+        self._withdraw_submitted()
+
+    async def kill_and_release(self) -> bool:
+        """Kill every process off the Event Loop, withdraw the delivery and release
+        the record (Runtime stop).
 
         Returns False when the kill was not confirmed; the record stays then.
         """
+        self._request_stop("shutdown")
+        self.withdraw_delivery()
+        if not self.finished:
+            try:
+                await self._services.run_blocking(self._tree.terminate)
+            except OSError:
+                return False
+            self._killed.set()
+        self._abandon()
+        return True
+
+    def kill_now(self) -> bool:
+        """``kill_and_release`` with the kill on the calling thread, also without an
+        Event Loop."""
         self._request_stop("shutdown")
         self.withdraw_delivery()
         if not self.finished:
@@ -309,6 +325,11 @@ class CommandRecord:
             except OSError:
                 return False
             self._killed.set()
+        self._abandon()
+        return True
+
+    def _abandon(self) -> None:
+        """No process runs any longer: stop following the command and release it."""
         for task in (
             self._reader_task,
             self._supervisor_task,
@@ -325,11 +346,12 @@ class CommandRecord:
         # waiting for the finish, returns.
         if self._ended_at is None:
             self._ended_at = self._services.monotonic()
+        if self._finished_at is None:
+            self._finished_at = self._services.monotonic()
         for event in (self._ended, self._finished):
             # The flag is set first; waking a waiter fails only on a closed Event Loop.
             with contextlib.suppress(RuntimeError):
                 event.set()
-        return True
 
     def pending_tasks(self) -> list[asyncio.Task[Any]]:
         return [
@@ -348,19 +370,26 @@ class CommandRecord:
 
     async def _read(self) -> None:
         try:
-            while data := await self._process.read():
-                self._output.feed(data)
-                self._activity += 1
-                self._output_changed()
+            try:
+                # The next chunk is read once the previous one is cleaned: a
+                # command that prints faster waits for its pipe.
+                while data := await self._process.read():
+                    await self._output.feed(data)
+                    self._activity += 1
+                    self._output_changed()
+            except Exception:
+                _LOGGER.error(
+                    "Reading the output of command %s failed; it keeps running until it "
+                    "ends or is stopped",
+                    self.command_id,
+                    exc_info=True,
+                )
+            await self._output.end()
         except Exception:
             _LOGGER.error(
-                "Reading the output of command %s failed; it keeps running until it "
-                "ends or is stopped",
-                self.command_id,
-                exc_info=True,
+                "Completing the output of command %s failed", self.command_id, exc_info=True
             )
         finally:
-            self._output.end()
             self._eof.set()
             self._output_changed()
 
@@ -372,7 +401,7 @@ class CommandRecord:
 
     async def _flush_later(self) -> None:
         await self._services.sleep(COMMAND_LOG_REFRESH_SECONDS)
-        self._output.flush_log()
+        await self._output.flush_log()
 
     async def _publish_progress(self) -> None:
         callback = self._on_output
@@ -406,7 +435,9 @@ class CommandRecord:
                 if facts is not None:
                     if not facts.running:
                         break
-                    if not self.ended and self._leftovers_quiet(quiet, facts):
+                    if self.ended:
+                        self._follow_leftovers(facts)
+                    elif self._leftovers_quiet(quiet, facts):
                         self._record_end(facts)
                 await self._wait_or_sleep(self._killed, TREE_POLL_SECONDS)
                 if self._killed.is_set():
@@ -431,11 +462,18 @@ class CommandRecord:
             self._finish(None)
 
     def _record_exit(self, exit_code: int, facts: ProcessTreeFacts | None) -> None:
-        """The shell exited: fix its exit code; the command ends unless processes run."""
+        """The shell exited: fix its exit code; the command ends unless processes run.
+
+        Processes that cannot be inspected (*facts* None) may still run: the
+        command keeps running, so its call moves it to the background as any
+        running command and it stays listed and stoppable, until a later poll
+        shows what runs.
+        """
         self._exit_code = exit_code
-        if facts is not None:
-            self._facts = facts
-        if facts is None or not facts.running:
+        if facts is None:
+            return
+        self._facts = facts
+        if not facts.running:
             self._record_end(facts)
 
     def _leftovers_quiet(self, quiet: _QuietWatch, facts: ProcessTreeFacts) -> bool:
@@ -458,6 +496,17 @@ class CommandRecord:
             return False
         return now - quiet.since >= COMMAND_LEFTOVER_QUIET_SECONDS
 
+    def _follow_leftovers(self, facts: ProcessTreeFacts) -> None:
+        """After the end: keep the processes still running current.
+
+        Listeners hear when one of them ended, so a view of what still runs
+        follows; the command's status stays as it ended.
+        """
+        before = {process.pid for process in self._facts.running} if self._facts else set()
+        self._facts = facts
+        if before - {process.pid for process in facts.running}:
+            self._changed()
+
     def _record_end(self, facts: ProcessTreeFacts | None) -> None:
         if self.ended:
             return
@@ -479,11 +528,12 @@ class CommandRecord:
             self._facts = replace(self._facts, running=())
         self._cancel(self._flush_task)
         self._release()
+        self._finished_at = self._services.monotonic()
         self._finished.set()
         self._changed()
 
     def _release(self) -> None:
-        self._output.close_log()
+        self._output.close()
         if self._log_lease is not None:
             self._log_lease.finish()
             self._log_lease = None
@@ -541,9 +591,20 @@ class CommandRecord:
     # Delivery
 
     def _submit_result(self, sink: CompletionSink) -> None:
-        self._delivered_to = self.owner
         try:
             body = self._formatter(self.report())
+        except Exception:
+            _LOGGER.error(
+                "Could not deliver the result of command %s", self.command_id, exc_info=True
+            )
+            return
+        self._submit(sink, body)
+
+    def _submit(self, sink: CompletionSink, body: str) -> None:
+        """Submit the result *body* to the command's Session."""
+        self._delivered_to = self.owner
+        self._delivered_body = body
+        try:
             delivery = asyncio.ensure_future(
                 sink.submit_completion(
                     self.owner.agent_id,
@@ -563,9 +624,44 @@ class CommandRecord:
             return
         self._delivery_task = self._task(self._await_delivery(delivery), "delivery")
 
+    def _withdraw_submitted(self) -> bool:
+        """Withdraw a submitted result not yet delivered; whether one was withdrawn.
+
+        A result whose delivery the sink already claimed stays: it is delivered
+        once, as submitted.
+        """
+        task = self._delivery_task
+        if task is None or task.done() or not self._withdraw_submission():
+            return False
+        # Without a running Event Loop (Runtime stop), nothing is left to cancel.
+        with contextlib.suppress(RuntimeError):
+            task.cancel()
+        return True
+
+    def _withdraw_submission(self) -> bool:
+        """Withdraw the submitted result from the sink; whether it was withdrawn."""
+        sink = self._services.trigger_service
+        if sink is None:
+            return True
+        target = self._delivered_to
+        try:
+            return sink.cancel_completion(
+                target.agent_id,
+                target.session_id,
+                notice_id=self.notice_id,
+                project_id=target.project_id,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Could not withdraw the result of command %s", self.command_id, exc_info=True
+            )
+            return False
+
     async def _await_delivery(self, delivery: Awaitable[None]) -> None:
         try:
-            await delivery
+            # Only the sink withdraws a submitted result; stopping to follow
+            # the delivery leaves it alone.
+            await asyncio.shield(delivery)
         except RunAdmissionBlockedError:
             # The command's execution owner closed (for example its temporary
             # group): an expected end of its lifecycle, not a delivery fault.

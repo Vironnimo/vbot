@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -57,6 +58,7 @@ OTHER = SessionAddress("project-a", "agent-b", "session-b")
 GROUP = RunExecutionOwner("ext", "group-1", "participant", "generation", "epoch-1")
 SERVER = RunningProcess(5001, "server.exe")
 CONSOLE_HOST = RunningProcess(5002, "conhost.exe")
+WORKER = RunningProcess(5003, "worker.exe")
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Objects")
 
@@ -82,13 +84,23 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
             [b"progress 10%\rprogress 50%\r", b"progress 100%\n", b"done\r\n"],
             ["progress 100%", "done"],
         ),
+        # A CRLF split between reads ends the line like one.
+        ([b"kept\r", b"\nnext\r\n"], ["kept", "next"]),
         ([b"abd\x08c\n"], ["abc"]),
         (["ä".encode()[:1], "ä".encode()[1:] + b" \xff ok\n"], ["ä � ok"]),
         # PowerShell writes a bare ESC for `e in a double-quoted string.
         ([b"literal \x1bexpected\n"], ["literal \\x1bexpected"]),
         ([b"no line break"], ["no line break"]),
     ],
-    ids=["escapes", "redrawn-line", "backspace", "utf-8", "data-escape", "last-line"],
+    ids=[
+        "escapes",
+        "redrawn-line",
+        "split-line-break",
+        "backspace",
+        "utf-8",
+        "data-escape",
+        "last-line",
+    ],
 )
 async def test_output_is_clean_text(
     harness: Harness, chunks: list[bytes], lines: list[str]
@@ -187,7 +199,7 @@ async def test_foreground_output_is_published_until_the_command_moves_to_the_bac
 async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harness) -> None:
     command_id, process = await harness.launch()
     process.write("server started\n")
-    process.exit(0, leftovers=[SERVER, CONSOLE_HOST])
+    process.exit(0, leftovers=[SERVER, WORKER, CONSOLE_HOST])
 
     # The output is drained for a second, then the leftovers must stay quiet for two.
     await harness.advance(2.5)
@@ -197,7 +209,15 @@ async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harn
 
     assert (report.ended, report.finished, report.status) == (True, False, "completed")
     # The console host of a windowless console is no work of the command.
-    assert report.still_running == (SERVER,)
+    assert report.still_running == (SERVER, WORKER)
+    # Listed as the shell lists a command that ended with processes still running.
+    harness.manager.to_background(command_id, deliver=False)
+    harness.changes.clear()
+    # What still runs stays current, and listeners hear when a process ended.
+    process.tree.running.remove(WORKER)
+    await harness.advance(1.0)
+    assert harness.manager.report(command_id).still_running == (SERVER,)
+    assert harness.changes == [command_id]
     process.end_leftovers()
     await harness.advance(1.0)
     report = harness.manager.report(command_id)
@@ -224,6 +244,23 @@ async def test_working_leftovers_hold_the_end(harness: Harness, activity: str) -
     assert harness.manager.report(command_id).ended
 
 
+@pytest.mark.asyncio
+async def test_processes_that_cannot_be_inspected_at_the_exit_keep_the_command_running(
+    harness: Harness,
+) -> None:
+    command_id, process = await harness.launch()
+    process.tree.facts_error = OSError("access denied")
+    process.exit(0, leftovers=[SERVER])
+
+    # They may still run: the command neither ends nor drops them.
+    await harness.advance(5.0)
+    assert harness.manager.report(command_id).status == "running"
+    process.tree.facts_error = None
+    await harness.advance(3.25)
+    report = harness.manager.report(command_id)
+    assert (report.ended, report.still_running) == (True, (SERVER,))
+
+
 # --- Stops -------------------------------------------------------------------
 
 
@@ -241,21 +278,35 @@ async def _close_project(manager: CommandManager) -> object:
 
 async def _close_group(manager: CommandManager) -> object:
     await manager.close_execution_group("ext", "group-1", "epoch-1")
-    return 1
+    return None
+
+
+# Commands a scope close must leave running: (Session, execution owner).
+_SESSION_BYSTANDERS = [(SessionAddress("project-a", "agent-a", "session-c"), None)]
+_PROJECT_BYSTANDERS = [
+    (SessionAddress("project-b", "agent-a", "session-a"), None),
+    (SessionAddress(None, "agent-a", "session-a"), None),
+]
+_AGENT_BYSTANDERS = [*_PROJECT_BYSTANDERS, (OTHER, None)]
+_GROUP_BYSTANDERS = [
+    (OWNER, RunExecutionOwner("ext", "group-2", "participant", "generation", "epoch-1")),
+    (OWNER, RunExecutionOwner("ext", "group-1", "participant", "generation", "epoch-2")),
+    (OWNER, None),
+]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stop", "reason", "background", "delivered"),
+    ("stop", "reason", "background", "delivered", "bystanders"),
     [
-        (lambda m, c: m.stop(c, "agent"), "agent", True, False),
-        (lambda m, c: m.stop(c, "parent"), "parent", True, True),
-        (lambda m, c: m.stop(c, "user"), "user", True, True),
-        (lambda m, c: m.cancel_run("run-a"), "run_cancelled", False, False),
-        (lambda m, c: _close_session(m), "scope", True, False),
-        (lambda m, c: _close_agent(m), "scope", True, False),
-        (lambda m, c: _close_project(m), "scope", True, False),
-        (lambda m, c: _close_group(m), "scope", True, False),
+        (lambda m, c: m.stop(c, "agent"), "agent", True, False, []),
+        (lambda m, c: m.stop(c, "parent"), "parent", True, True, []),
+        (lambda m, c: m.stop(c, "user"), "user", True, True, []),
+        (lambda m, c: m.cancel_run("run-a"), "run_cancelled", False, False, []),
+        (lambda m, c: _close_session(m), "scope", True, False, _SESSION_BYSTANDERS),
+        (lambda m, c: _close_agent(m), "scope", True, False, _AGENT_BYSTANDERS),
+        (lambda m, c: _close_project(m), "scope", True, False, _PROJECT_BYSTANDERS),
+        (lambda m, c: _close_group(m), "scope", True, False, _GROUP_BYSTANDERS),
     ],
     ids=[
         "agent",
@@ -269,24 +320,38 @@ async def _close_group(manager: CommandManager) -> object:
     ],
 )
 async def test_each_stop_kills_the_whole_tree_and_records_its_reason(
-    harness: Harness,
+    tmp_path: Path,
     stop: Callable[[CommandManager, str], Awaitable[object]],
     reason: str,
     background: bool,
     delivered: bool,
+    bystanders: list[tuple[SessionAddress, RunExecutionOwner | None]],
 ) -> None:
-    command_id, process = await harness.launch(execution_owner=GROUP)
-    if background:
-        harness.manager.to_background(command_id, deliver=True)
-    assert harness.manager.has_execution_work(GROUP)
+    async with command_harness(tmp_path, max_live=8) as harness:
+        command_id, process = await harness.launch(execution_owner=GROUP)
+        if background:
+            harness.manager.to_background(command_id, deliver=True)
+        others = [
+            await harness.launch(owner=owner, execution_owner=execution_owner)
+            for owner, execution_owner in bystanders
+        ]
+        for other_id, _other in others:
+            harness.manager.to_background(other_id, deliver=True)
+        assert harness.manager.has_execution_work(GROUP)
 
-    await stop(harness.manager, command_id)
-    report = await harness.finish(command_id)
+        stopped = await stop(harness.manager, command_id)
+        report = await harness.finish(command_id)
 
-    assert (report.status, report.stop_reason) == ("stopped", reason)
-    assert process.tree.terminations == 1 and process.tree.closed
-    assert not harness.manager.has_execution_work(GROUP)
-    assert harness.sink.bodies == ([format_report(report)] if delivered else [])
+        assert (report.status, report.stop_reason) == ("stopped", reason)
+        assert process.tree.terminations == 1 and process.tree.closed
+        assert not harness.manager.has_execution_work(GROUP)
+        assert harness.sink.bodies == ([format_report(report)] if delivered else [])
+        # A scope close stops only its own commands, and counts only them.
+        if reason == "scope" and stopped is not None:
+            assert stopped == 1
+        for other_id, other in others:
+            assert harness.manager.report(other_id).status == "running"
+            assert other.tree.terminations == 0
 
 
 @pytest.mark.asyncio
@@ -455,37 +520,46 @@ async def test_acknowledging_a_shown_end_withdraws_a_result_not_yet_handed_over(
 ) -> None:
     pending_id, pending = await harness.launch()
     handed_id, handed = await harness.launch()
-    for command_id in (pending_id, handed_id):
+    claimed_id, claimed = await harness.launch()
+    for command_id in (pending_id, handed_id, claimed_id):
         harness.manager.to_background(command_id, deliver=True)
     # Before the end there is nothing to acknowledge.
     harness.manager.acknowledge(pending_id)
-    pending.exit(0)
-    handed.exit(0)
-    await harness.finish(pending_id)
-    await harness.finish(handed_id)
+    for process in (pending, handed, claimed):
+        process.exit(0)
+    for command_id in (pending_id, handed_id, claimed_id):
+        await harness.finish(command_id)
     deliveries = {
         submission["notice_id"]: future
         for submission, future in zip(harness.sink.submissions, harness.sink.futures, strict=True)
     }
     deliveries[f"command:{handed_id}"].set_result(None)
+    # A delivery is building the message that carries this result.
+    harness.sink.claimed.add(f"command:{claimed_id}")
     await turns()
 
-    harness.manager.acknowledge(pending_id)
-    harness.manager.acknowledge(handed_id)
-    harness.manager.acknowledge("cmd_unknown")
+    for command_id in (pending_id, handed_id, claimed_id, "cmd_unknown"):
+        harness.manager.acknowledge(command_id)
 
-    assert len(harness.sink.submissions) == 2
-    assert harness.sink.cancellations == [f"command:{pending_id}"]
+    assert len(harness.sink.submissions) == 3
+    assert harness.sink.cancellations == [f"command:{pending_id}", f"command:{claimed_id}"]
     await turns()
     assert deliveries[f"command:{pending_id}"].cancelled()
+    # The claimed result is delivered once, as submitted.
+    assert not deliveries[f"command:{claimed_id}"].done()
 
 
 @pytest.mark.asyncio
 async def test_transferred_commands_deliver_to_their_new_session(harness: Harness) -> None:
     command_id, process = await harness.launch()
-    harness.manager.to_background(command_id, deliver=True)
+    submitted_id, submitted = await harness.launch()
+    for background_id in (command_id, submitted_id):
+        harness.manager.to_background(background_id, deliver=True)
+    # Its result went to the old Session and is not delivered yet.
+    submitted.exit(0)
+    await harness.finish(submitted_id)
 
-    assert harness.manager.transfer_scope(OWNER, OTHER) == 1
+    assert harness.manager.transfer_scope(OWNER, OTHER) == 2
     identity = SessionAddress(None, "agent-old", "session-i")
     identity_id, identity_process = await harness.launch(owner=identity)
     assert harness.manager.transfer_agent_scope("agent-old", "agent-new") == 1
@@ -494,9 +568,13 @@ async def test_transferred_commands_deliver_to_their_new_session(harness: Harnes
     await harness.finish(command_id)
     await harness.finish(identity_id)
 
-    assert [(s["agent_id"], s["session_id"]) for s in harness.sink.submissions] == [
-        ("agent-b", "session-b")
+    assert [(s["notice_id"], s["agent_id"], s["session_id"]) for s in harness.sink.submissions] == [
+        (f"command:{submitted_id}", "agent-a", "session-a"),
+        (f"command:{submitted_id}", "agent-b", "session-b"),
+        (f"command:{command_id}", "agent-b", "session-b"),
     ]
+    assert harness.sink.futures[0].cancelled()
+    assert harness.sink.submissions[0]["body"] == harness.sink.submissions[1]["body"]
     assert harness.manager.report(identity_id).owner == SessionAddress(
         None, "agent-new", "session-i"
     )
@@ -596,6 +674,29 @@ async def test_closing_the_manager_kills_every_command_and_ends_the_waits_for_it
 
 
 @pytest.mark.asyncio
+async def test_aclose_kills_the_remaining_commands_off_the_event_loop_together(
+    tmp_path: Path,
+) -> None:
+    async with command_harness(tmp_path, run_blocking=asyncio.to_thread) as harness:
+        processes = [(await harness.launch())[1] for _ in range(2)]
+        # Each kill waits until the other one runs: one at a time, or on the
+        # Event Loop, they would wait for each other until the barrier breaks.
+        both = threading.Barrier(2, timeout=5)
+        for process in processes:
+
+            def kill_together(tree: FakeTree = process.tree) -> None:
+                both.wait()
+                FakeTree.terminate(tree)
+
+            process.tree.terminate = kill_together  # type: ignore[method-assign]
+
+        await harness.manager.aclose()
+
+        assert [process.tree.terminations for process in processes] == [1, 1]
+        assert all(process.released for process in processes)
+
+
+@pytest.mark.asyncio
 async def test_commands_are_forgotten_after_their_retention(harness: Harness) -> None:
     command_id, process = await harness.launch()
     harness.manager.to_background(command_id, deliver=False)
@@ -616,6 +717,13 @@ async def test_commands_are_forgotten_after_their_retention(harness: Harness) ->
         harness.manager.report(command_id)
     # A command whose leftovers still run stays.
     assert [row.command_id for row in harness.manager.commands([OWNER])] == [held_id]
+    # Its retention counts from when its last process ended, not from its end.
+    held.end_leftovers()
+    await harness.finish(held_id)
+    await harness.advance(COMMAND_RETENTION_SECONDS - 60, step=30)
+    assert harness.manager.status(held_id) == "completed"
+    await harness.advance(90, step=30)
+    assert harness.manager.status(held_id) is None
 
 
 # --- Real processes ----------------------------------------------------------

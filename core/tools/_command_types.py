@@ -18,8 +18,8 @@ from .process_tree import ProcessTree, ProcessTreeTracker, RunningProcess
 
 # At most this many commands run at once, server-wide; launches in progress count.
 COMMAND_MAX_LIVE = 64
-# A command stays queryable this long after it ended, and as long as a process
-# it left running still runs.
+# A command stays queryable as long as a process of it runs, and this long after
+# its last process ended.
 COMMAND_RETENTION_SECONDS = 30 * 60.0
 # How often commands past their retention are forgotten.
 COMMAND_SWEEP_INTERVAL_SECONDS = 60.0

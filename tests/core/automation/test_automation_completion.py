@@ -789,6 +789,50 @@ async def test_cancelled_pending_notice_does_not_start_empty_follow_up(
     assert loop.messages == []
 
 
+@pytest.mark.parametrize("delivery", ["follow_up_run", "reminder"])
+async def test_a_result_its_delivery_claimed_cannot_be_withdrawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delivery: str
+) -> None:
+    # Once a delivery builds the message carrying a result, a withdrawal could
+    # no longer keep it from the Agent: it is refused, and the result arrives once.
+    manager = ChatRunManager()
+    service, loop, session = _completion_service(tmp_path, manager)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    if delivery == "follow_up_run":
+        origin_id = "origin"
+        start_run = loop.start_run
+
+        async def held_start(*args: Any, **kwargs: Any) -> Run:
+            entered.set()
+            await release.wait()
+            return await start_run(*args, **kwargs)
+
+        monkeypatch.setattr(loop, "start_run", held_start)
+    else:
+        origin_id = (await _user_cancelled_origin(manager)).id
+        add_note_async = ChatSession.add_note_async
+
+        async def held_add_note(chat_session: ChatSession, content: str, **options: Any) -> None:
+            entered.set()
+            await release.wait()
+            await add_note_async(chat_session, content, **options)
+
+        monkeypatch.setattr(ChatSession, "add_note_async", held_add_note)
+
+    result = _submit(service, "bash:claimed", "claimed result", origin_id)
+    await asyncio.wait_for(entered.wait(), timeout=1)
+
+    assert not service.cancel_completion("coder", "session-one", notice_id="bash:claimed")
+    release.set()
+    await asyncio.wait_for(result, timeout=1)
+    delivered = loop.messages if delivery == "follow_up_run" else _notes(session)
+    assert len(delivered) == 1
+    assert "claimed result" in delivered[0]
+    await service.aclose()
+    await manager.aclose()
+
+
 async def test_user_cancelled_origin_gets_its_completions_as_notes_without_a_run(
     tmp_path: Path,
 ) -> None:
