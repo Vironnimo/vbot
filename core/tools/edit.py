@@ -590,15 +590,17 @@ def _edit_numbers(numbers: Sequence[int]) -> str:
 
 
 def _failed_edit(
-    error: JsonObject, failed: Collection[int], total: int, *, written: bool
+    error: JsonObject, idle: Collection[int], total: int, *, written: bool
 ) -> JsonObject:
     """Prepare a failed edit's report: it saw the text the earlier applied edits left.
 
-    ``written`` says the call's other edits were written, so an earlier edit
-    that replaced this one's old text stays applied.
+    ``idle`` holds the edits that left the text as it was: the failed ones and
+    those whose new text equals the text they matched. ``written`` says the
+    call's other edits were written, so an earlier edit that replaced this
+    one's old text stays applied.
     """
     number = _edit_number(error, total)
-    earlier = [n for n in range(1, number or 1) if n not in failed]
+    earlier = [n for n in range(1, number or 1) if n not in idle]
     if not earlier:
         return error
 
@@ -644,9 +646,12 @@ def _edit_failure(context: ToolContext, errors: Sequence[JsonObject], total: int
     )
 
 
-def _partial_lead(failed: Sequence[int], total: int) -> str:
-    """Name the applied edits and the failed ones, which alone need another call."""
-    applied = [n for n in range(1, total + 1) if n not in failed]
+def _partial_lead(failed: Sequence[int], total: int, unchanged: Collection[int] = ()) -> str:
+    """Name the applied edits and the failed ones, which alone need another call.
+
+    Edits in ``unchanged`` matched but changed nothing; their own notes say so.
+    """
+    applied = [n for n in range(1, total + 1) if n not in failed and n not in unchanged]
     done, missed = _edit_numbers(applied), _edit_numbers(failed)
     return (
         f"{done[:1].upper()}{done[1:]} {'was' if len(applied) == 1 else 'were'} applied; "
@@ -676,24 +681,43 @@ def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadSt
         # A problem of the whole call, such as a missing file.
         return _edit_failure(context, [outcome["error"], *refused], total)
     errors = sorted([*refused, *skipped], key=lambda error: _edit_number(error, total) or 0)
+    # Edits that matched and changed nothing, in a call that changed the file.
+    unchanged = [
+        n
+        for n in (_edit_number({"label": label}, total) for label in outcome.get("unchanged") or [])
+        if n is not None
+    ]
+    no_ops: list[JsonObject] = [
+        {
+            "status": "unchanged",
+            "action": "update",
+            "path": outcome["path"],
+            "where": f"{outcome['where']}, edit {n} of {total}",
+        }
+        for n in unchanged
+    ]
     for error in errors[1:]:
         # Matched precisely only, so that no other text stands in for a failed edit's.
         if error["code"] == "text_not_found":
             error["message"] = f"{error['message']} {_PRECISE_AFTER_FAILURE}"
     if not errors:
-        return patch_result(context, files, batch.results, cancelled_paths(batch))
+        return patch_result(context, files, [*batch.results, *no_ops], cancelled_paths(batch))
     if outcome["status"] != "applied":
         # The edits that did not fail left the file as it was.
         return _edit_failure(context, errors, total)
     failed = [n for n in (_edit_number(error, total) for error in errors) if n is not None]
     entries = [
         outcome,
+        *no_ops,
         *(
-            {"status": "failed", "error": _failed_edit(error, failed, total, written=True)}
+            {
+                "status": "failed",
+                "error": _failed_edit(error, {*failed, *unchanged}, total, written=True),
+            }
             for error in errors
         ),
     ]
-    lead = _partial_lead(failed, total)
+    lead = _partial_lead(failed, total, unchanged)
     return patch_result(context, files, entries, cancelled_paths(batch), lead=lead)
 
 

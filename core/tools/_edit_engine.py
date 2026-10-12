@@ -116,6 +116,7 @@ def apply_hunks(
     previous: int | None = None,
     *,
     failures: list[_PatchError] | None = None,
+    unchanged: list[str] | None = None,
 ) -> tuple[str, list[str], int | None]:
     """Apply one file's hunks in order and return the text, the notes and the change end.
 
@@ -130,7 +131,8 @@ def apply_hunks(
     A hunk that fails after others applied carries ``written`` in its error
     details: the lines of the text it saw that each earlier hunk wrote, as
     ``{label, first, last}``, and ``replaced_by``, the label of the earlier hunk
-    that replaced its old text.
+    that replaced its old text. With ``unchanged``, the labels of text
+    replacements whose new text equals the text they matched go there.
     """
     notes: list[str] = []
     written: list[tuple[str, int, int]] = []
@@ -159,6 +161,8 @@ def apply_hunks(
                 raise
             failures.append(error)
             continue
+        if edited == content and unchanged is not None and hunk.replacement is not None:
+            unchanged.append(hunk.label)
         if edited != content:
             seen.append((hunk.label, content))
             previous = _change_end_line(content, edited)

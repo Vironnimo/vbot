@@ -544,6 +544,34 @@ async def test_edits_that_leave_the_file_as_it_is_say_so(tmp_path, edits, messag
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True], ids=["all-matched", "one-failed"])
+async def test_an_edit_that_changes_nothing_is_named_apart_from_the_applied_ones(
+    tmp_path, fails
+) -> None:
+    # Swarm runs 2026-10-11/12: 12 written calls held an edit whose new_string was its
+    # old_string; the results counted it as applied and never named it.
+    (tmp_path / "a.py").write_bytes(b"x = 1\ny = 2\nz = 3\n")
+    edits = [
+        {"old_string": "x = 1", "new_string": "x = 9"},
+        {"old_string": "y = 2", "new_string": "y = 2"},
+        {"old_string": "zzz" if fails else "z = 3", "new_string": "z = 9"},
+    ]
+
+    result = await call(tmp_path, {"path": "a.py", "edits": edits}, name="edit")
+
+    message = text(result)
+    after = b"x = 9\ny = 2\nz = 3\n" if fails else b"x = 9\ny = 2\nz = 9\n"
+    assert (tmp_path / "a.py").read_bytes() == after
+    assert edit_outcome(message) == ("partial" if fails else "applied")
+    # Edit 2 is named once, in its own sentence: not as applied, not as failed.
+    lines = [line for line in message.split("\n") if "edit 2" in line.lower()]
+    assert len(lines) == 1 and not lines[0].startswith("Failed:")
+    if fails:
+        applied = re.match(r"Edits? ([\d, and-]+?) (?:was|were) applied", message)
+        assert applied and applied[1] == "1"
+
+
+@pytest.mark.asyncio
 async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(tmp_path) -> None:
     state = FileReadState()
     tools = registry(state)
