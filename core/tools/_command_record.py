@@ -297,12 +297,26 @@ class CommandRecord:
         with contextlib.suppress(RuntimeError):
             task.cancel()
 
-    def kill_now(self) -> bool:
-        """Kill every process synchronously, withdraw the delivery and release the
-        record (Runtime stop).
+    async def kill_and_release(self) -> bool:
+        """Kill every process off the Event Loop, withdraw the delivery and release
+        the record (Runtime stop).
 
         Returns False when the kill was not confirmed; the record stays then.
         """
+        self._request_stop("shutdown")
+        self.withdraw_delivery()
+        if not self.finished:
+            try:
+                await self._services.run_blocking(self._tree.terminate)
+            except OSError:
+                return False
+            self._killed.set()
+        self._abandon()
+        return True
+
+    def kill_now(self) -> bool:
+        """``kill_and_release`` with the kill on the calling thread, also without an
+        Event Loop."""
         self._request_stop("shutdown")
         self.withdraw_delivery()
         if not self.finished:
@@ -311,6 +325,11 @@ class CommandRecord:
             except OSError:
                 return False
             self._killed.set()
+        self._abandon()
+        return True
+
+    def _abandon(self) -> None:
+        """No process runs any longer: stop following the command and release it."""
         for task in (
             self._reader_task,
             self._supervisor_task,
@@ -333,7 +352,6 @@ class CommandRecord:
             # The flag is set first; waking a waiter fails only on a closed Event Loop.
             with contextlib.suppress(RuntimeError):
                 event.set()
-        return True
 
     def pending_tasks(self) -> list[asyncio.Task[Any]]:
         return [

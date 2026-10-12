@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -619,6 +620,29 @@ async def test_closing_the_manager_kills_every_command_and_ends_the_waits_for_it
     assert await asyncio.wait_for(waiting, 1) == "ended"
     await asyncio.wait_for(finishing, 1)
     assert process.tree.terminations == 1
+
+
+@pytest.mark.asyncio
+async def test_aclose_kills_the_remaining_commands_off_the_event_loop_together(
+    tmp_path: Path,
+) -> None:
+    async with command_harness(tmp_path, run_blocking=asyncio.to_thread) as harness:
+        processes = [(await harness.launch())[1] for _ in range(2)]
+        # Each kill waits until the other one runs: one at a time, or on the
+        # Event Loop, they would wait for each other until the barrier breaks.
+        both = threading.Barrier(2, timeout=5)
+        for process in processes:
+
+            def kill_together(tree: FakeTree = process.tree) -> None:
+                both.wait()
+                FakeTree.terminate(tree)
+
+            process.tree.terminate = kill_together  # type: ignore[method-assign]
+
+        await harness.manager.aclose()
+
+        assert [process.tree.terminations for process in processes] == [1, 1]
+        assert all(process.released for process in processes)
 
 
 @pytest.mark.asyncio

@@ -248,9 +248,16 @@ class Harness:
 
 @asynccontextmanager
 async def command_harness(
-    tmp_path: Path, *, max_live: int = 3, sink: FakeSink | None = None
+    tmp_path: Path,
+    *,
+    max_live: int = 3,
+    sink: FakeSink | None = None,
+    run_blocking: Callable[..., Awaitable[Any]] = run_inline,
 ) -> AsyncIterator[Harness]:
-    """A started manager over fakes, with its log files under *tmp_path*; closed after."""
+    """A started manager over fakes, with its log files under *tmp_path*; closed after.
+
+    Process queries and kills run inline unless *run_blocking* says otherwise.
+    """
     clock = FakeClock()
     launcher = FakeLauncher()
     sink = sink if sink is not None else FakeSink()
@@ -260,7 +267,7 @@ async def command_harness(
         launcher=launcher,
         monotonic=clock.monotonic,
         sleep=clock.sleep,
-        run_blocking=run_inline,
+        run_blocking=run_blocking,
         max_live=max_live,
     )
     harness = Harness(manager, launcher, clock, sink, tmp_path)

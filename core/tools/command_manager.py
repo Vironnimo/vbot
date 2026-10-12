@@ -216,31 +216,35 @@ class CommandManager:
         await asyncio.sleep(0)
 
     def close(self) -> None:
-        """Kill every command's processes synchronously and release them (Runtime stop).
+        """``aclose`` without an Event Loop: each kill blocks the calling thread.
 
-        Nothing is delivered any more: a result not yet handed over is withdrawn.
         Raises ``CommandManagerError`` naming the commands whose kill was not
         confirmed.
         """
         self._closed = True
-        if self._sweeper is not None:
-            with contextlib.suppress(RuntimeError):
-                self._sweeper.cancel()
-        failures = [
-            record.command_id for record in list(self._records.values()) if not record.kill_now()
-        ]
-        if failures:
-            raise CommandManagerError(
-                "Could not stop the processes of commands: " + ", ".join(failures)
-            )
+        self._stop_sweeper()
+        records = list(self._records.values())
+        _raise_unconfirmed([record for record in records if not record.kill_now()])
 
     async def aclose(self) -> None:
-        """``close``, then await every task of the manager and its commands."""
-        failure: CommandManagerError | None = None
-        try:
-            self.close()
-        except CommandManagerError as error:
-            failure = error
+        """Kill every command's processes, release them and await every task (Runtime stop).
+
+        The kills run off the Event Loop and in parallel; each may wait for
+        the operating system to confirm it. Nothing is delivered any more: a
+        result not yet handed over is withdrawn. Raises ``CommandManagerError``
+        naming the commands whose kill was not confirmed.
+        """
+        self._closed = True
+        self._stop_sweeper()
+        # Launches in progress start their commands first, so their kill is not missed.
+        await _settle(list(self._pending))
+        records = list(self._records.values())
+        killed = await asyncio.gather(
+            *(record.kill_and_release() for record in records), return_exceptions=True
+        )
+        for result in killed:
+            if isinstance(result, BaseException):
+                _LOGGER.error("Killing a command at shutdown failed", exc_info=result)
         tasks: list[asyncio.Task[object]] = [*self._pending]
         if self._sweeper is not None:
             tasks.append(self._sweeper)
@@ -248,8 +252,15 @@ class CommandManager:
             tasks.extend(record.pending_tasks())
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        if failure is not None:
-            raise failure
+        _raise_unconfirmed(
+            [record for record, result in zip(records, killed, strict=True) if result is not True]
+        )
+
+    def _stop_sweeper(self) -> None:
+        if self._sweeper is not None:
+            # Without a running Event Loop, nothing is left to cancel.
+            with contextlib.suppress(RuntimeError):
+                self._sweeper.cancel()
 
     # Commands
 
@@ -679,6 +690,14 @@ def _open_log(temporary_files: TemporaryFileManager) -> tuple[TemporaryFileLease
     except BaseException:
         lease.finish()
         raise
+
+
+def _raise_unconfirmed(records: list[CommandRecord]) -> None:
+    if records:
+        raise CommandManagerError(
+            "Could not stop the processes of commands: "
+            + ", ".join(record.command_id for record in records)
+        )
 
 
 async def _settle(launches: list[asyncio.Task[CommandRecord]]) -> None:
