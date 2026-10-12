@@ -605,6 +605,7 @@ describe('background command rows', () => {
     value,
     mono: true,
   });
+  const state = (status, stillRunning = false) => ({ status, stillRunning });
   const foregroundBash = () =>
     backgroundCommandTool({
       id: 'bash-foreground',
@@ -615,64 +616,135 @@ describe('background command rows', () => {
         artifacts: [],
       },
     });
+  // A call whose shell exited while a process it started still ran.
+  const lingeringBash = (fields = {}) =>
+    backgroundCommandTool({
+      id: 'bash-lingering',
+      timing,
+      result: {
+        ok: true,
+        data: {
+          status: 'exited',
+          exit_code: 0,
+          command_id: 'cmd_one',
+          still_running: ['node (PID 4242)'],
+          output: 'serving',
+        },
+        artifacts: [],
+      },
+      ...fields,
+    });
 
   it.each([
-    ['running', 'running'],
-    ['completed', 'success'],
-    ['failed', 'failed'],
-    ['stopped', 'cancelled'],
-  ])('shows a %s command with the %s dot', (status, dotStatus) => {
-    expect(
-      backgroundCommandRowState(
-        backgroundCommandTool(),
-        {},
-        { cmd_one: status },
-      ),
-    ).toEqual({
-      commandId: 'cmd_one',
-      command: 'npm run dev',
-      fullCommand: 'npm run dev',
-      dotStatus,
-    });
-  });
+    ['running', false, 'running'],
+    ['completed', false, 'success'],
+    ['failed', false, 'failed'],
+    ['stopped', false, 'cancelled'],
+    ['completed', true, 'running'],
+  ])(
+    'shows a %s command (processes still running: %s) with the %s dot',
+    (status, stillRunning, dotStatus) => {
+      expect(
+        backgroundCommandRowState(
+          backgroundCommandTool(),
+          {},
+          { cmd_one: state(status, stillRunning) },
+        ),
+      ).toEqual({
+        commandId: 'cmd_one',
+        command: 'npm run dev',
+        fullCommand: 'npm run dev',
+        dotStatus,
+        stillRunning,
+        callEnded: false,
+      });
+    },
+  );
 
-  it('prefers the live status, falls back to the durable one, else has ended', () => {
+  it('resolves the further of the live and durable states, else has ended', () => {
     const tool = backgroundCommandTool();
+    const dot = (durable, live) =>
+      backgroundCommandRowState(tool, durable, live).dotStatus;
 
     expect(
-      backgroundCommandRowState(
-        tool,
-        { cmd_one: 'running' },
-        { cmd_one: 'stopped' },
-      ).dotStatus,
+      dot({ cmd_one: state('running') }, { cmd_one: state('stopped') }),
     ).toBe('cancelled');
+    // A live `running` that missed the end never undoes it.
     expect(
-      backgroundCommandRowState(tool, { cmd_one: 'failed' }, {}).dotStatus,
-    ).toBe('failed');
+      dot({ cmd_one: state('completed') }, { cmd_one: state('running') }),
+    ).toBe('success');
+    expect(dot({ cmd_one: state('failed') }, {})).toBe('failed');
+    // Processes left running never start again.
+    expect(
+      dot(
+        { cmd_one: state('completed', true) },
+        { cmd_one: state('completed') },
+      ),
+    ).toBe('success');
     // A command the server no longer reports has ended; how is unknown.
-    expect(backgroundCommandRowState(tool, {}, {}).dotStatus).toBe('ended');
+    expect(dot({}, {})).toBe('ended');
+    expect(dot({}, { cmd_one: state('ended') })).toBe('ended');
     // A view that follows no commands keeps a plain Tool row.
     expect(backgroundCommandRowState(tool, null, null)).toBeNull();
     expect(
-      backgroundCommandRowState(foregroundBash(), {}, { cmd_one: 'running' }),
+      backgroundCommandRowState(
+        foregroundBash(),
+        {},
+        { cmd_one: state('running') },
+      ),
     ).toBeNull();
   });
 
   it.each([
+    ['its processes run', { cmd_one: state('completed', true) }, 'running'],
+    ['its processes ended', { cmd_one: state('completed') }, 'success'],
+    ['nothing reports it, by its own exit', {}, 'success'],
+  ])(
+    'follows a call whose shell exited while a process ran once %s',
+    (_label, live, dotStatus) => {
+      expect(backgroundCommandRowState(lingeringBash(), {}, live)).toEqual(
+        expect.objectContaining({
+          commandId: 'cmd_one',
+          dotStatus,
+          callEnded: true,
+        }),
+      );
+    },
+  );
+
+  it.each([
     [
       'ticks from the Tool call start while the command runs',
-      'running',
+      backgroundCommandTool({ timing }),
+      state('running'),
       () => minutesSeconds(30, 0),
     ],
     [
       'marks a stopped command as cancelled',
-      'stopped',
+      backgroundCommandTool({ timing }),
+      state('stopped'),
       () => t('chat.toolCancelled'),
     ],
-    ['shows no time once the command ended', 'completed', () => ''],
-  ])('%s', (_label, status, expected) => {
-    const tool = backgroundCommandTool({ timing });
-    const rowState = backgroundCommandRowState(tool, {}, { cmd_one: status });
+    [
+      'shows no time once the command ended',
+      backgroundCommandTool({ timing }),
+      state('completed'),
+      () => '',
+    ],
+    [
+      'says so while processes it started still run',
+      lingeringBash(),
+      state('completed', true),
+      () => t('chat.toolStillRunning'),
+    ],
+    [
+      "shows a call's own duration once its processes ended",
+      lingeringBash(),
+      state('completed'),
+      () => '1.0s',
+    ],
+  ])('%s', (_label, tool, live, expected) => {
+    const rowState = backgroundCommandRowState(tool, {}, { cmd_one: live });
 
     expect(backgroundCommandToolStatusLabel(tool, rowState, nowMs)).toBe(
       expected(),
@@ -682,7 +754,8 @@ describe('background command rows', () => {
   it.each([
     [
       'a running command with its hand-off meaning',
-      'running',
+      backgroundCommandTool({ timing }),
+      state('running'),
       (moment) => ({
         title: t('chat.toolState.background'),
         text: t('chat.toolState.backgroundHint'),
@@ -697,8 +770,26 @@ describe('background command rows', () => {
       }),
     ],
     [
+      'processes a command left running',
+      lingeringBash(),
+      state('completed', true),
+      (moment) => ({
+        title: t('chat.toolState.stillRunning'),
+        text: t('chat.toolState.stillRunningHint'),
+        rows: [
+          {
+            label: t('chat.details.started'),
+            value: moment(timing.started_at),
+          },
+          { label: t('chat.details.runningFor'), value: minutesSeconds(30, 0) },
+          commandIdRow('cmd_one'),
+        ],
+      }),
+    ],
+    [
       'a failed command',
-      'failed',
+      backgroundCommandTool({ timing }),
+      state('failed'),
       () => ({
         title: t('chat.toolState.failed'),
         text: '',
@@ -707,6 +798,7 @@ describe('background command rows', () => {
     ],
     [
       'a command the server no longer reports',
+      backgroundCommandTool({ timing }),
       undefined,
       () => ({
         title: t('chat.toolState.ended'),
@@ -714,12 +806,11 @@ describe('background command rows', () => {
         rows: [commandIdRow('cmd_one')],
       }),
     ],
-  ])('details %s', (_label, status, expected) => {
-    const tool = backgroundCommandTool({ timing });
+  ])('details %s', (_label, tool, live, expected) => {
     const rowState = backgroundCommandRowState(
       tool,
       {},
-      status ? { cmd_one: status } : {},
+      live ? { cmd_one: live } : {},
     );
     const moment = (value) => formatMoment(value, { nowMs, seconds: true });
 
@@ -729,25 +820,28 @@ describe('background command rows', () => {
   });
 
   it('keeps the live clock running until the handed-off command ends', () => {
-    const items = [
-      {
-        id: 'run-1',
-        type: 'assistant_run',
-        items: [backgroundCommandTool({ timing })],
-      },
+    const items = (tool) => [
+      { id: 'run-1', type: 'assistant_run', items: [tool] },
     ];
+    const handedOff = items(backgroundCommandTool({ timing }));
 
-    expect(liveClockCadenceMs(items, {}, nowMs, { cmd_one: 'running' })).toBe(
-      1000,
-    );
+    expect(
+      liveClockCadenceMs(handedOff, {}, nowMs, { cmd_one: state('running') }),
+    ).toBe(1000);
     expect(
       liveClockCadenceMs(
-        items,
+        handedOff,
         {},
         nowMs,
-        { cmd_one: 'running' },
-        { cmd_one: 'completed' },
+        { cmd_one: state('running') },
+        { cmd_one: state('completed') },
       ),
+    ).toBe(0);
+    // Processes left running show no ticking time.
+    expect(
+      liveClockCadenceMs(items(lingeringBash()), {}, nowMs, {
+        cmd_one: state('completed', true),
+      }),
     ).toBe(0);
   });
 
@@ -805,8 +899,8 @@ describe('background command rows', () => {
         },
       ],
       {},
-      { cmd_one: 'running' },
-      { cmd_one: 'stopped' },
+      { cmd_one: state('running') },
+      { cmd_one: state('stopped') },
       nowMs,
     );
 

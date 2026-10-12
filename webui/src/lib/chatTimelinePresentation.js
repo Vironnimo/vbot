@@ -39,6 +39,7 @@ export {
   backgroundCommandRowState,
   backgroundCommandToolStatusLabel,
   backgroundCommandStatusDetails,
+  laterCommandState,
 } from './chatTimelinePresentation/activity.js';
 export {
   isReflectionRunKind,

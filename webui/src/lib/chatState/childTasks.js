@@ -7,6 +7,7 @@ import {
 } from '../clientCaches.js';
 import {
   isSubAgentSpawnTool,
+  laterCommandState,
   resolveSubAgentCancelPlan,
   subAgentDotStatus,
   subAgentEffectiveRunId,
@@ -22,8 +23,9 @@ const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
 const COMMAND_STATUS_CACHE_LIMIT = 200;
 const SUBAGENT_WORK_CACHE_LIMIT = 200;
 const SUBAGENT_WORK_KINDS = new Set(['subagent', 'command', 'terminal']);
-const COMMAND_STATUS_RUNNING = 'running';
-const COMMAND_STATUS_STOPPED = 'stopped';
+// The WebUI's own state of a command the server no longer knows: it ended,
+// but how is unknown.
+const COMMAND_STATUS_ENDED = 'ended';
 const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
 const RPC_ERROR_COMMAND_NOT_FOUND = 'command_not_found';
 
@@ -307,39 +309,78 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
-  function setCommandStatuses(updates) {
-    chatState.commandStatuses = mergeBoundedEntries(
-      chatState.commandStatuses,
-      updates,
-      COMMAND_STATUS_CACHE_LIMIT,
-    ).entries;
+  // The live state of background commands comes from two sources: App's
+  // bounded map of `command_status_changed` (`{ status, stillRunning,
+  // sessionId }` by command id), forwarded whole on every change, and what
+  // this Chat's own stop and output reads learned (bounded). Both join into
+  // `chatState.commandStatuses` by Session, the state that got further
+  // winning, so a stop shown at once is not undone by a `running` the
+  // forwarded map still holds. A reconnect that may have missed an end
+  // forgets both: App starts its map over, and so does this Chat.
+  let forwardedCommandStatuses = {};
+  let learnedCommandStatuses = {};
+
+  function publishCommandStatuses() {
+    const bySession = {};
+    for (const source of [forwardedCommandStatuses, learnedCommandStatuses]) {
+      for (const [commandId, entry] of Object.entries(source)) {
+        const sessionId = trimmedString(entry?.sessionId);
+        const state = laterCommandState(
+          bySession[sessionId]?.[commandId],
+          entry,
+        );
+        if (sessionId && state) {
+          bySession[sessionId] ??= {};
+          bySession[sessionId][commandId] = state;
+        }
+      }
+    }
+    chatState.commandStatuses = bySession;
   }
 
-  // Stops a background command of the Session for the user; its Agent then
-  // receives the stopped result. The server reports `stopped` itself; showing
-  // it at once only anticipates that, and never replaces an end the command
-  // already reached. A command that had already ended keeps its own end.
+  function learnCommandStatus(sessionId, commandId, report) {
+    const state = laterCommandState(learnedCommandStatuses[commandId], report);
+    if (!state) {
+      return;
+    }
+    learnedCommandStatuses = mergeBoundedEntries(
+      learnedCommandStatuses,
+      { [commandId]: { ...state, sessionId } },
+      COMMAND_STATUS_CACHE_LIMIT,
+    ).entries;
+    publishCommandStatuses();
+  }
+
+  // Stops a background command of the Session for the user, or the processes
+  // it left running after its shell exited; a stopped command's Agent then
+  // receives the stopped result. The reply's status shows at once, before
+  // its event arrives. A command the server no longer knows has ended: it
+  // shows as such, and there is nothing left to stop.
   async function stopCommand({ sessionState, commandId = '' } = {}) {
     const normalizedCommandId = trimmedString(commandId);
-    if (!sessionState?.sessionId || !normalizedCommandId) {
+    const sessionId = sessionState?.sessionId;
+    if (!sessionId || !normalizedCommandId) {
       return false;
     }
 
     sessionState.actionError = '';
     try {
       const result = await operations.stopCommand(
-        sessionState.sessionId,
+        sessionId,
         normalizedCommandId,
       );
-      const known = chatState.commandStatuses[normalizedCommandId];
-      if (
-        result?.stopped === true &&
-        (!known || known === COMMAND_STATUS_RUNNING)
-      ) {
-        setCommandStatuses({ [normalizedCommandId]: COMMAND_STATUS_STOPPED });
-      }
+      learnCommandStatus(sessionId, normalizedCommandId, {
+        status: trimmedString(result?.status),
+        stillRunning: false,
+      });
       return true;
     } catch (error) {
+      if (error?.code === RPC_ERROR_COMMAND_NOT_FOUND) {
+        learnCommandStatus(sessionId, normalizedCommandId, {
+          status: COMMAND_STATUS_ENDED,
+        });
+        return true;
+      }
       sessionState.actionError = `${t(
         'chat.cancelBackgroundTaskError',
       )} ${errorMessage(error)}`;
@@ -347,34 +388,43 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
-  // Reads a background command's status and newest output for the Activity
-  // panel's output view. The status the read reports joins the live statuses
-  // under their rule (a known end is never undone). Resolves to
-  // `{ ok: true, status, output }`, or `{ ok: false, error, gone }` when the
-  // read failed; `gone` means the server no longer knows the command.
+  // Reads a background command's state and newest output for the Activity
+  // panel's output view. The state the read reports joins the live states
+  // (a further state is never undone). Resolves to
+  // `{ ok: true, status, stillRunning, output }`, or
+  // `{ ok: false, error, gone }` when the read failed; `gone` means the
+  // server no longer knows the command, which then shows as ended.
   async function loadCommandOutput({ sessionState, commandId = '' } = {}) {
     const normalizedCommandId = trimmedString(commandId);
-    if (!sessionState?.sessionId || !normalizedCommandId) {
+    const sessionId = sessionState?.sessionId;
+    if (!sessionId || !normalizedCommandId) {
       return { ok: false, error: '', gone: true };
     }
     try {
       const result = await operations.loadCommandOutput(
-        sessionState.sessionId,
+        sessionId,
         normalizedCommandId,
       );
       const status = trimmedString(result?.status);
-      applyCommandStatuses({ [normalizedCommandId]: status });
+      const stillRunning = result?.still_running === true;
+      learnCommandStatus(sessionId, normalizedCommandId, {
+        status,
+        stillRunning,
+      });
       return {
         ok: true,
         status,
+        stillRunning,
         output: typeof result?.output === 'string' ? result.output : '',
       };
     } catch (error) {
-      return {
-        ok: false,
-        error: errorMessage(error),
-        gone: error?.code === RPC_ERROR_COMMAND_NOT_FOUND,
-      };
+      const gone = error?.code === RPC_ERROR_COMMAND_NOT_FOUND;
+      if (gone) {
+        learnCommandStatus(sessionId, normalizedCommandId, {
+          status: COMMAND_STATUS_ENDED,
+        });
+      }
+      return { ok: false, error: errorMessage(error), gone };
     }
   }
 
@@ -407,37 +457,25 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
-  // The View forwards App's bounded live map of `command_status_changed`
-  // statuses (command id -> status) on every change; applying it again is
-  // idempotent. A command never runs again once it ended, so a `running` the
-  // map still holds cannot undo a known end, such as a stop shown right after
-  // a successful stop request.
+  // The View forwards App's live map of `command_status_changed` on every
+  // change; applying it again is idempotent.
   function applyCommandStatuses(statuses) {
-    if (!isRecord(statuses)) {
-      return;
-    }
-    const updates = {};
-    for (const [commandId, value] of Object.entries(statuses)) {
-      const status = trimmedString(value);
-      const known = chatState.commandStatuses[commandId];
-      if (
-        !status ||
-        status === known ||
-        (status === COMMAND_STATUS_RUNNING && known)
-      ) {
-        continue;
-      }
-      updates[commandId] = status;
-    }
-    if (Object.keys(updates).length > 0) {
-      setCommandStatuses(updates);
-    }
+    forwardedCommandStatuses = isRecord(statuses) ? statuses : {};
+    publishCommandStatuses();
+  }
+
+  // After a replay gap or a server restart, what this Chat learned may be
+  // stale; App's map starts over at the same time.
+  function forgetLearnedCommandStatuses() {
+    learnedCommandStatuses = {};
+    publishCommandStatuses();
   }
 
   return {
     applyCommandStatuses,
     applySubAgentStatusUpdates,
     cancelSubAgent,
+    forgetLearnedCommandStatuses,
     loadCommandOutput,
     loadSubAgentWork,
     reconcileSubAgentRows,

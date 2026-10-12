@@ -274,7 +274,9 @@
     if (task.kind === 'command') {
       return t('chat.activity.commandTaskAria', {
         command: task.command,
-        status: statusLabel(task.dotStatus),
+        status: task.rowState?.stillRunning
+          ? t('chat.activity.status.stillRunning')
+          : statusLabel(task.dotStatus),
       });
     }
     return t('chat.activity.taskAria', {

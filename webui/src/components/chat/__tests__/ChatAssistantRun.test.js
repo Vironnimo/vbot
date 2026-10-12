@@ -616,8 +616,10 @@ describe('ChatAssistantRun', () => {
     });
   });
 
-  describe('handed-off background commands', () => {
-    const handedOffBash = () =>
+  describe('background commands', () => {
+    // A call that handed its command off (`running`), or one whose shell
+    // exited while a process it started still ran (`exited`).
+    const commandBash = (data) =>
       toolChild(
         'bash',
         { command: 'npm run dev' },
@@ -633,53 +635,94 @@ describe('ChatAssistantRun', () => {
             ok: true,
             error: null,
             data: {
-              status: 'running',
               command_id: 'cmd_one',
               output: 'VITE ready in 830ms',
-              next: 'The result arrives as a new message.',
+              ...data,
             },
             artifacts: [],
           },
         },
       );
+    const handedOff = {
+      status: 'running',
+      next: 'The result arrives as a new message.',
+    };
+    const lingering = {
+      status: 'exited',
+      exit_code: 0,
+      still_running: ['node (PID 4242)'],
+    };
+    const state = (status, stillRunning = false) => ({ status, stillRunning });
 
     it.each([
       [
         'keeps the row running and ticking while the command runs',
-        { backgroundCommandStatuses: { cmd_one: 'running' } },
+        handedOff,
+        { backgroundCommandStatuses: { cmd_one: state('running') } },
         ['running', 'done'],
         () => '30m 0s',
       ],
       [
-        'follows the live status before the durable one',
+        'follows a live end before a durable running',
+        handedOff,
         {
-          backgroundCommandStatuses: { cmd_one: 'running' },
-          commandStatuses: { cmd_one: 'stopped' },
+          backgroundCommandStatuses: { cmd_one: state('running') },
+          commandStatuses: { cmd_one: state('stopped') },
         },
         ['cancelled', 'running'],
         () => t('chat.toolCancelled'),
       ],
       [
-        'settles the dot from durable History without inventing a runtime',
-        { backgroundCommandStatuses: { cmd_one: 'completed' } },
+        'follows a durable end before a stale live running',
+        handedOff,
+        {
+          backgroundCommandStatuses: { cmd_one: state('completed') },
+          commandStatuses: { cmd_one: state('running') },
+        },
         ['done', 'running'],
         () => '',
       ],
       [
         'shows a command the server no longer reports as ended',
+        handedOff,
         { backgroundCommandStatuses: {}, commandStatuses: {} },
         ['ended', 'running'],
         () => '',
       ],
       [
         'keeps a plain Tool row in a view that follows no commands',
+        handedOff,
         {},
         ['done', 'running'],
         () => '1.0s',
       ],
-    ])('%s', (_case, props, [dot, otherDot], time) => {
+      [
+        'keeps a call whose processes still run running, saying so',
+        lingering,
+        { commandStatuses: { cmd_one: state('completed', true) } },
+        ['running', 'done'],
+        () => t('chat.toolStillRunning'),
+      ],
+      [
+        'settles a call once its processes ended, with its own duration',
+        lingering,
+        {
+          backgroundCommandStatuses: { cmd_one: state('completed', true) },
+          commandStatuses: { cmd_one: state('completed') },
+        },
+        ['done', 'running'],
+        () => '1.0s',
+      ],
+      [
+        'settles a call by its own exit when nothing reports its command',
+        { ...lingering, exit_code: 1 },
+        { backgroundCommandStatuses: {}, commandStatuses: {} },
+        ['error', 'running'],
+        () => '1.0s',
+      ],
+    ])('%s', (_case, data, props, [dot, otherDot], time) => {
       run.mount({
-        item: assistantRun({ items: [handedOffBash()] }),
+        item: assistantRun({ items: [commandBash(data)] }),
         nowMs: Date.parse('2026-09-04T12:30:00Z'),
         ...props,
       });
@@ -689,8 +732,8 @@ describe('ChatAssistantRun', () => {
       expect(
         document.querySelector('.tool-event-line .te-time')?.textContent ?? '',
       ).toBe(time());
-      // The row keeps showing its own result; the final one reaches the
-      // Agent as a new message.
+      // The row keeps showing its own result; a handed-off command's final
+      // one reaches the Agent as a new message.
       setDisclosureOpen('.tool-event');
       expect(detailRow('chat.toolResultLabel').textContent).toContain(
         'VITE ready in 830ms',

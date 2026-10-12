@@ -1,11 +1,11 @@
 <script>
   // The newest output of one background command, shown in the Activity panel
   // while its output view is open. It reads the output when it mounts and
-  // again every 2 seconds while the command runs. Reading stops when the view
-  // closes or unmounts, and after the first read that finds the command
-  // ended, which shows its final output. A failed read shows in place; while
-  // the command still runs, the next read tries again, unless the server no
-  // longer knows the command.
+  // again every 2 seconds while the command or processes it started run.
+  // Reading stops when the view closes or unmounts, and after the first read
+  // that finds nothing of the command running, which shows its final output.
+  // A failed read shows in place; while the command still runs, the next read
+  // tries again, unless the server no longer knows the command.
   import { untrack } from 'svelte';
 
   import { boundedScroll } from '$lib/boundedScroll.js';
@@ -20,8 +20,8 @@
     // Whether the panel shows the command as running; a failed read is tried
     // again only then.
     running = false,
-    // (commandId) => Promise of `{ ok: true, status, output }` or
-    // `{ ok: false, error, gone }`.
+    // (commandId) => Promise of `{ ok: true, status, stillRunning, output }`
+    // or `{ ok: false, error, gone }`.
     load,
     // The output box's accessible name.
     label = '',
@@ -62,7 +62,7 @@
         output = typeof result.output === 'string' ? result.output : '';
         error = '';
         gone = false;
-        if (result.status === STATUS_RUNNING) {
+        if (result.status === STATUS_RUNNING || result.stillRunning === true) {
           schedule();
         }
         return;

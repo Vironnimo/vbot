@@ -70,6 +70,12 @@ function backgroundCommandTask({ id, command, ...fields }) {
   };
 }
 
+// The state of a background command as the Chat holds it.
+const commandState = (status, stillRunning = false) => ({
+  status,
+  stillRunning,
+});
+
 function runItem(items, id = 'assistant-run') {
   return { id, type: 'assistant_run', items };
 }
@@ -248,8 +254,8 @@ describe('ChatActivityPanel', () => {
       props: {
         timelineItems: [runItem(Object.values(tasks))],
         backgroundCommandStatuses: {
-          'cmd_bash-failed': 'failed',
-          'cmd_bash-running': 'running',
+          'cmd_bash-failed': commandState('failed'),
+          'cmd_bash-running': commandState('running'),
         },
       },
     };
@@ -474,7 +480,9 @@ describe('ChatActivityPanel', () => {
           runItem([bash], 'history-run'),
           runItem([{ ...bash, id: 'live-tool' }], 'live-run'),
         ],
-        backgroundCommandStatuses: { cmd_overlap: commandStatus },
+        backgroundCommandStatuses: {
+          cmd_overlap: commandState(commandStatus),
+        },
       });
 
       expect(taskRows()).toHaveLength(1);
@@ -793,12 +801,13 @@ describe('ChatActivityPanel', () => {
     });
   });
 
-  it('shows live command statuses and times on panel rows', () => {
+  it('shows the further of the live and durable command states, times and stop controls on panel rows', () => {
     const timing = {
       started_at: '2026-09-04T12:00:00+00:00',
       completed_at: '2026-09-04T12:00:01+00:00',
       duration_ms: 1000,
     };
+    const onStopBackgroundCommand = vi.fn();
     openPanel({
       timelineItems: [
         runItem([
@@ -812,15 +821,44 @@ describe('ChatActivityPanel', () => {
             command: 'npm run dev',
             timing,
           }),
+          backgroundCommandTask({
+            id: 'settled',
+            command: 'npm run lint',
+            timing,
+          }),
+          // The shell exited while a process it started still runs.
+          backgroundCommandTask({
+            id: 'lingering',
+            command: 'npm run serve &',
+            timing,
+            result: {
+              ok: true,
+              error: null,
+              data: {
+                status: 'exited',
+                exit_code: 0,
+                command_id: 'cmd_lingering',
+                still_running: ['node (PID 4242)'],
+                output: '',
+              },
+              artifacts: [],
+            },
+          }),
         ]),
       ],
-      // The live status wins over the durable one recorded in History.
       backgroundCommandStatuses: {
-        cmd_stopped: 'running',
-        cmd_ticking: 'running',
+        cmd_stopped: commandState('running'),
+        cmd_ticking: commandState('running'),
+        cmd_settled: commandState('completed'),
+        cmd_lingering: commandState('completed', true),
       },
-      commandStatuses: { cmd_stopped: 'stopped' },
+      // An end beats a running, whichever of the two reports it.
+      commandStatuses: {
+        cmd_stopped: commandState('stopped'),
+        cmd_settled: commandState('running'),
+      },
       reflectionTasks: [],
+      onStopBackgroundCommand,
     });
 
     const stoppedRow = rowContaining('npm run build');
@@ -830,6 +868,9 @@ describe('ChatActivityPanel', () => {
     expect(
       stoppedRow.querySelector('.chat-activity__task-time').textContent,
     ).toContain(t('chat.toolCancelled'));
+    expect(
+      rowContaining('npm run lint').querySelector('[data-status="success"]'),
+    ).not.toBeNull();
     // The running row ticks from the panel's own clock, so only its presence
     // is asserted.
     const runningRow = rowContaining('npm run dev');
@@ -837,6 +878,32 @@ describe('ChatActivityPanel', () => {
     expect(
       runningRow.querySelector('.chat-activity__task-time'),
     ).not.toBeNull();
+    // Processes left running count as running work and can be stopped.
+    const lingeringRow = rowContaining('npm run serve &');
+    expect(
+      lingeringRow.closest('.chat-activity__group--running'),
+    ).not.toBeNull();
+    expect(lingeringRow.getAttribute('aria-label')).toBe(
+      t('chat.activity.commandTaskAria', {
+        command: 'npm run serve &',
+        status: status('stillRunning'),
+      }),
+    );
+    expect(
+      lingeringRow.querySelector('.chat-activity__task-time').textContent,
+    ).toBe(`· ${t('chat.toolStillRunning')}`);
+    expect(
+      [...document.querySelectorAll('[data-cancel-kind="command"]')].map(
+        (button) => button.closest('.chat-activity__task-row'),
+      ),
+    ).toEqual(expect.arrayContaining([runningRow, lingeringRow]));
+    expect(
+      document.querySelectorAll('[data-cancel-kind="command"]'),
+    ).toHaveLength(2);
+    lingeringRow.querySelector('[data-cancel-kind="command"]').click();
+    expect(onStopBackgroundCommand).toHaveBeenCalledWith({
+      commandId: 'cmd_lingering',
+    });
   });
 
   describe('command output', () => {
@@ -845,7 +912,7 @@ describe('ChatActivityPanel', () => {
       timelineItems: [
         runItem([backgroundCommandTask({ id: 'dev', command: 'npm run dev' })]),
       ],
-      backgroundCommandStatuses: { cmd_dev: 'running' },
+      backgroundCommandStatuses: { cmd_dev: commandState('running') },
       ...props,
     });
     const outputToggle = () =>
@@ -903,10 +970,16 @@ describe('ChatActivityPanel', () => {
       expect(load).toHaveBeenCalledTimes(3);
     });
 
-    it('stops reading once the command ended and keeps its final output', async () => {
+    it('stops reading once nothing of the command runs and keeps its final output', async () => {
       const load = vi
         .fn()
         .mockResolvedValueOnce({ ok: true, status: 'running', output: '' })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 'completed',
+          stillRunning: true,
+          output: 'serving',
+        })
         .mockResolvedValue({ ok: true, status: 'completed', output: 'done' });
       openPanel(runningCommand({ onLoadCommandOutput: load }));
 
@@ -916,9 +989,11 @@ describe('ChatActivityPanel', () => {
         t('chat.activity.commandOutput.empty'),
       );
       await settle(REFRESH_MS);
+      expect(shownOutput()).toBe('serving');
+      await settle(REFRESH_MS);
       await settle(REFRESH_MS * 3);
 
-      expect(load).toHaveBeenCalledTimes(2);
+      expect(load).toHaveBeenCalledTimes(3);
       expect(shownOutput()).toBe('done');
     });
 

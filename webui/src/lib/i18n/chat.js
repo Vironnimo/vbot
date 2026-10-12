@@ -198,6 +198,7 @@ export default Object.freeze({
   'chat.toolArgs': 'Args',
   'chat.toolPendingName': 'tool',
   'chat.toolCancelled': 'cancelled',
+  'chat.toolStillRunning': 'processes still running',
   'chat.toolPartial': 'partial',
   'chat.toolInterrupted': 'interrupted',
   'chat.toolState.preparing': 'Preparing',
@@ -215,6 +216,9 @@ export default Object.freeze({
   'chat.toolState.background': 'Running in the background',
   'chat.toolState.backgroundHint':
     'vBot watches the command. Its result reaches the Agent as a new message when it ends.',
+  'chat.toolState.stillRunning': 'Processes still running',
+  'chat.toolState.stillRunningHint':
+    'The command ended, but processes it started still run until they exit or are stopped.',
   'chat.toolState.ended': 'Ended',
   'chat.toolState.endedHint':
     'The command no longer runs; how it ended is not known.',
@@ -317,6 +321,7 @@ export default Object.freeze({
   'chat.activity.status.cancelled': 'Cancelled',
   'chat.activity.status.interrupted': 'Interrupted',
   'chat.activity.status.ended': 'Ended',
+  'chat.activity.status.stillRunning': 'Processes still running',
   'chat.activity.status.unknown': 'Unknown',
   'chat.activity.commandOutput.title': 'Output',
   'chat.activity.commandOutput.aria': 'Output of {command}',
