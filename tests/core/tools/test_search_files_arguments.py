@@ -505,6 +505,18 @@ async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
         assert "warnings" not in corrected["data"]
     literal = await dispatch(tmp_path, {"args": ["-F", "call(", "src"]})
     assert literal["data"]["content"] == "src/code\n3:call("
+    # With pattern set, every args item without a leading - is a path: the error
+    # names the -e form, which runs as suggested and keeps the other items.
+    words = await dispatch(tmp_path, {"pattern": "Alpha", "args": ["beta", "-i"]})
+    message = words["error"]["message"]
+    assert words["error"]["code"] == "path_not_found"
+    assert "Correct path, or omit it" not in message
+    suggested = json.loads(message.split("args ")[-1].split("]")[0] + "]")
+    corrected = await dispatch(tmp_path, {"pattern": "Alpha", "args": suggested})
+    assert corrected["data"]["content"] == "src/code\n1:Alpha\n2:Beta"
+    # A path with a similar existing one was most likely mistyped.
+    mistyped = await dispatch(tmp_path, {"pattern": "Alpha", "args": ["scr"]})
+    assert '"-e"' not in mistyped["error"]["message"]
 
 
 @pytest.mark.asyncio

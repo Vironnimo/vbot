@@ -500,10 +500,20 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
 
 
 def _missing_warnings(
-    query: SearchQuery, roots: _Roots, cwd: Path, offers: Callable[[str], bool]
+    query: SearchQuery,
+    roots: _Roots,
+    cwd: Path,
+    offers: Callable[[str], bool],
+    args: object = None,
 ) -> list[str]:
+    """Name each missing root, and how args operands that were meant otherwise work.
+
+    *args* is the call's args as sent, for a suggestion that keeps its other items.
+    """
     warnings = [_missing_root_message(raw, path, cwd, query, offers) for raw, path in roots.missing]
     missing_operands = [raw for raw, _ in roots.missing if raw in query.operand_roots]
+    if missing_operands and query.searches_contents and not query.pattern_operand:
+        warnings.extend(_operand_pattern_warning(roots, query, cwd, args))
     if missing_operands and query.mode == "list_files":
         warnings.append(
             "--files lists files by name, so every args operand is a path. To list the files "
@@ -526,6 +536,57 @@ def _missing_warnings(
             f"{combined}."
         )
     return warnings
+
+
+def _operand_pattern_warning(
+    roots: _Roots, query: SearchQuery, cwd: Path, args: object
+) -> list[str]:
+    """Say how to search args items that were read as paths as further patterns.
+
+    With pattern set, an args item without a leading - is a path: pattern "class "
+    with args ["def ", "return Result"] reported both items as missing paths.
+    They stay paths, since a missing path can also be mistyped; only items
+    without a path separator and without a similar path count as text.
+    """
+    words = [
+        raw
+        for raw, path in roots.missing
+        if raw in query.operand_roots
+        and "/" not in raw
+        and "\\" not in raw
+        and not corrected_paths(path, cwd)
+    ]
+    if not words:
+        return []
+    if isinstance(args, list) and all(isinstance(item, str) for item in args):
+        suggested: list[str] = []
+        for item in args:
+            suggested += ["-e", item] if item in words else [item]
+    else:
+        suggested = [part for word in words for part in ("-e", word)]
+    listed = " and ".join(f'"{word}"' for word in dict.fromkeys(words))
+    read, search = (
+        ("were read as paths", "them as further patterns, put -e before each")
+        if len(words) > 1
+        else ("was read as a path", "it as another pattern, put -e before it")
+    )
+    return [
+        f"args takes ripgrep options, and an item without a leading - is a path, so {listed} "
+        f"{read}. To search {search}: args {json.dumps(suggested, ensure_ascii=False)}."
+    ]
+
+
+def _nothing_searched(warnings: list[str], roots: _Roots, query: SearchQuery) -> str:
+    """The error when every root is missing, naming the field the missing roots came from."""
+    if all(raw in query.operand_roots for raw, _ in roots.missing):
+        several = len(roots.missing) > 1
+        fix = (
+            f"Correct the path{'s' if several else ''} in args, or remove "
+            f"{'them' if several else 'it'} to search the working directory."
+        )
+    else:
+        fix = "Correct path, or omit it to search the working directory."
+    return f"{' '.join(warnings)} Nothing was searched. {fix}"
 
 
 def _absolute(text: str, cwd: Path) -> Path:
@@ -1158,14 +1219,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             text = reference_text(binary, query.reference_args, context, budget)
             return tool_success({"content": text})
         roots = _resolve_roots(query, cwd)
-        missing = _missing_warnings(query, roots, cwd, context.offers)
+        missing = _missing_warnings(query, roots, cwd, context.offers, arguments.get("args"))
         if not roots.paths:
-            return tool_failure(
-                "path_not_found",
-                " ".join(missing)
-                + " Nothing was searched. Correct path, or omit it to search the working "
-                "directory.",
-            )
+            return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
         _directory_globs(query, roots.paths, cwd)
         outcome = _search(context, query, roots.paths, cwd, binary, budget)
     except (SearchArgumentError, ToolContractError, ValueError) as error:
