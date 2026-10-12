@@ -58,7 +58,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   otherwise. A replacement whose `new_string` is its `old_string` without the
   final line break is refused where the file continues after the match
   (`line_join`), and one that also changes text keeps the file's line break
-  where its last line and the next would join two lines of text (`edit.md` ->
+  where the file continues after it and its last line holds text (`edit.md` ->
   Results). `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
 - The definition is minimal (user decision 2026-10-04): the description names
