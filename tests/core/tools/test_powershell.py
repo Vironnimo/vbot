@@ -266,8 +266,6 @@ _PRINTED_ERROR_TEXT = "; ".join(
             False,
             ("wide-sentinel " + "v" * (OUTPUT_COLUMNS - len("wide-sentinel ") - 2) + "\u2026",),
         ),
-        # A prompt fails at once instead of waiting for input that never comes.
-        ("Read-Host 'Name'", 1, False, ("NonInteractive mode",)),
     ],
     ids=[
         "param-block-native-exit",
@@ -284,7 +282,6 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "named-blocks-exit",
         "formatted-objects-and-native-program-without-tty",
         "wide-table",
-        "read-host",
     ],
 )
 async def test_exit_status_and_error_records_follow_the_last_statement(

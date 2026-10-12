@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import errno
 import json
 import re
 import shutil
@@ -39,6 +40,7 @@ from core.tools.shell import (
     SHELL_TOOL_NAME,
     SHELL_TOOL_PARAMETERS,
     background_command_statuses,
+    format_command_delivery,
     register_shell_tool,
     shell_detail_blocks,
 )
@@ -410,26 +412,53 @@ async def test_a_command_still_running_when_the_wait_passes_continues_and_delive
     assert background_command_statuses([note(submission["body"])]) == {command_id: "completed"}
 
 
+@pytest.mark.parametrize(
+    ("tools", "lines"),
+    [(COMPANIONS, 3), (("terminal",), 500)],
+    ids=["background_tasks-short-output", "without-background_tasks-long-output"],
+)
 @pytest.mark.asyncio
-async def test_run_in_background_returns_at_once_and_delivers(shell: Shell) -> None:
+async def test_run_in_background_returns_at_once_and_delivers(
+    shell: Shell, tools: tuple[str, ...], lines: int
+) -> None:
     # A call in the background does not wait, also with a timeout.
-    running = data(await shell.call({"command": "serve", "run_in_background": True, "timeout": 5}))
+    running = data(
+        await shell.call({"command": "serve", "run_in_background": True, "timeout": 5}, tools=tools)
+    )
     command_id = running["command_id"]
     assert (running["status"], shell.clock.now) == ("running", 0)
     assert "notes" not in running
-    assert stop_calls(running["next"]) == [{"action": "stop", "id": command_id}]
-    log_file(running["next"])
+    if tools == COMPANIONS:
+        assert stop_calls(running["next"]) == [{"action": "stop", "id": command_id}]
+    else:
+        # Without background_tasks, the host shell stops it by its root process.
+        pid = shell.manager.report(command_id).pid
+        stop = f"taskkill /PID {pid} /T /F" if sys.platform == "win32" else f"kill -- -{pid}"
+        assert f"stop it with the shell command {stop} once" in running["next"]
+        assert BACKGROUND_TASKS_TOOL_NAME not in running["next"]
+    path = log_file(running["next"])
     assert [row.command_id for row in shell.manager.commands([OWNER])] == [command_id]
     # The user sees that it continues.
     details = shell_detail_blocks({"command": "serve"}, tool_success(running))
     assert [block["level"] for block in details if block["type"] == "notice"] == ["info"]
 
     process = await shell.started()
+    process.write("".join(f"line {number}\n" for number in range(lines)))
     await shell.commands.advance(30, step=5)
     assert not shell.manager.report(command_id).ended
     process.exit(0)
     await shell.commands.finish(command_id)
-    assert shell.sink.bodies[0].startswith(f"The background command {command_id} (serve) exited")
+    body = shell.sink.bodies[0].splitlines()
+    assert body[0].startswith(f"The background command {command_id} (serve) exited")
+    # The delivery names the file with the complete output once: in its last line,
+    # or in the marker where it leaves output out.
+    assert sum(path in line for line in body) == 1
+    if lines > 100:
+        assert body[-1] == f"line {lines - 1}"
+        assert any(line.startswith("[... ") and path in line for line in body)
+    else:
+        assert body[-1] == f"The complete output is in {path}."
+    assert Path(path).read_text(encoding="utf-8").splitlines()[-1] == f"line {lines - 1}"
 
 
 @pytest.mark.asyncio
@@ -501,17 +530,27 @@ async def test_the_user_stops_the_command_or_moves_it_to_the_background(
         stopping = shell.cancel_callbacks[0]()
         result = data(await shell.returned(call, step=0.25))
         await stopping
-        assert (result["status"], result["stopped_because"]) == (
-            "stopped",
-            "the user stopped it after 12 seconds.",
-        )
+        # The exit code of the kill is vBot's, not the command's: neither shows it.
+        assert result == {
+            "status": "stopped",
+            "stopped_because": "the user stopped it after 12 seconds.",
+            "output": "compiling",
+        }
+        notices = [
+            block["text"]
+            for block in shell_detail_blocks({"command": "build"}, tool_success(result))
+            if block["type"] == "notice"
+        ]
+        assert notices == ["Stopped: the user stopped it after 12 seconds."]
     elif request_kind == "background":
         assert shell.background_callbacks[0]() is True
         result = data(await shell.returned(call))
         assert (result["status"], result["command_id"]) == ("running", command_id)
         assert stop_calls(result["next"]) == [{"action": "stop", "id": command_id}]
-        # A second request finds it moved already.
+        # A second request finds it moved already, and a stop of the call no longer
+        # reaches the command it handed to the background.
         assert shell.background_callbacks[0]() is False
+        assert shell.cancel_callbacks[0]() is None
         process.exit(0)
     else:
         # The turn was cancelled with its call: the command is stopped with it.
@@ -640,6 +679,49 @@ async def test_missing_workdir_and_ungranted_credentials_run_nothing(shell: Shel
     assert shell.launcher.argv == []
 
 
+@pytest.mark.parametrize(
+    ("error", "retryable", "fragment"),
+    [
+        (
+            PermissionError(errno.EACCES, "Zugriff verweigert"),
+            False,
+            "pass that directory as workdir",
+        ),
+        (OSError(errno.ENOMEM, "Nicht genug Speicher"), True, "out of memory or process resources"),
+        (OSError(errno.ENOSPC, "Datenträger voll"), False, "Tell the user that the disk is full."),
+        (OSError(errno.EIO, "E/A-Fehler"), True, f"(operating system error {errno.EIO})"),
+        # The directory was removed after the call was checked.
+        (FileNotFoundError(errno.ENOENT, "Pfad nicht gefunden"), False, "is not an existing"),
+    ],
+    ids=["access-denied", "out-of-resources", "disk-full", "other", "workdir-removed"],
+)
+@pytest.mark.asyncio
+async def test_a_shell_that_cannot_start_names_the_state_instead_of_the_raw_error(
+    shell: Shell, error: OSError, retryable: bool, fragment: str
+) -> None:
+    workdir = shell.commands.cwd / "build"
+    workdir.mkdir()
+    shell.launcher.gate = asyncio.Event()
+    call = shell.call({"command": "make", "workdir": "build"})
+    await eventually(lambda: bool(shell.launcher.argv), attempts=2000)
+    if isinstance(error, FileNotFoundError):
+        workdir.rmdir()
+    shell.launcher.error = error
+    shell.launcher.gate.set()
+
+    failure = (await call)["error"]
+    message = failure["message"]
+    assert (failure["code"], failure["retryable"]) == ("command_not_started", retryable)
+    assert message.startswith(f"{SHELL_MODEL_NAME} was not run: ")
+    assert fragment in message
+    # The host's own message names neither the state nor the next step.
+    assert str(error.strerror) not in message
+    if isinstance(error, PermissionError):
+        assert model_path(workdir) in message
+    # Out of resources, the Agent can free some by stopping its background commands.
+    assert stop_calls(message) == ([{"action": "list"}] if error.errno == errno.ENOMEM else [])
+
+
 @pytest.mark.parametrize("companion", [True, False])
 @pytest.mark.asyncio
 async def test_command_over_the_running_command_limit_says_how_to_make_room(
@@ -737,12 +819,6 @@ async def test_update_handoff_token_is_claimable_exactly_while_the_command_runs(
         failed = await shell.call({"command": "vbot update"})
         assert failed["error"]["code"] == "command_not_started"
         assert failed["error"]["retryable"] is True
-        assert failed["error"]["message"].startswith(
-            f"{SHELL_MODEL_NAME} was not run: the shell could not be started ("
-        )
-        assert failed["error"]["message"].endswith(
-            "Run the command again; if it fails the same way, tell the user."
-        )
         assert released(shell.launcher.envs[-1]["VBOT_UPDATE_HANDOFF"])
 
 
@@ -758,20 +834,28 @@ async def test_statuses_of_background_commands_fold_from_results_and_deliveries(
     await shell.commands.finish(command_id)
     # A delivery named by its description shows the command as well.
     assert shell.sink.bodies[0].splitlines()[1] == "Command: serve"
+    # The user stops a background command whose label has parentheses after a minute.
+    stopped_id = data(
+        await shell.call(
+            {"command": "watch", "description": "Watch (a) b", "run_in_background": True}
+        )
+    )["command_id"]
+    await shell.started(2)
+    await shell.commands.advance(65, step=5)
+    await shell.manager.stop(stopped_id, "user")
+    await shell.commands.finish(stopped_id)
+    # The shell's exit code can be unknown.
+    unknown_end = dataclasses.replace(
+        shell.manager.report(command_id), command_id="cmd_y", exit_code=None
+    )
 
     def record(role: str, content: str, name: str | None = None) -> Any:
         return SimpleNamespace(role=role, content=content, name=name)
 
     result = record("tool", json.dumps(running), SHELL_TOOL_NAME)
     delivery = record("note", "Background results:\n" + shell.sink.bodies[0])
-    stopped = record(
-        "note",
-        "The background command cmd_x (a (b) c) was stopped after 1 minute 5 seconds: vBot "
-        "shut down.",
-    )
-    unknown = record(
-        "note", "The background command cmd_y (y) exited after 3 seconds; its exit code is unknown."
-    )
+    stopped = record("note", "Background results:\n" + shell.sink.bodies[1])
+    unknown = record("note", format_command_delivery(unknown_end))
     stopped_by_agent = record(
         "tool",
         json.dumps(tool_success({"status": "stopped", "command_id": "cmd_z"})),
@@ -781,7 +865,7 @@ async def test_statuses_of_background_commands_fold_from_results_and_deliveries(
     assert background_command_statuses([result]) == {command_id: "running"}
     assert background_command_statuses([result, delivery, stopped, unknown, stopped_by_agent]) == {
         command_id: "failed",
-        "cmd_x": "stopped",
+        stopped_id: "stopped",
         "cmd_y": "failed",
         "cmd_z": "stopped",
     }
@@ -835,8 +919,9 @@ async def run_real(tmp_path: Path, command: str, *, tools: tuple[str, ...] = ())
     )
     async with real_shell(tmp_path) as registry:
         result = await asyncio.wait_for(
+            # A program that waited for input would still run when the call returns.
             dispatch_as_executor(
-                registry, context, {"command": command}, [SHELL_TOOL_NAME, *tools]
+                registry, context, {"command": command, "timeout": 10}, [SHELL_TOOL_NAME, *tools]
             ),
             timeout=60,
         )

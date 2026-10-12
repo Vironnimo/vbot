@@ -179,7 +179,8 @@ _STOP_TEXTS: dict[StopReason, str] = {
     "user": "the user stopped it.",
     "run_cancelled": "the turn that started it was cancelled.",
     "shutdown": "vBot shut down.",
-    "scope": "it was stopped together with all other work of this Session.",
+    # Read by the Session that ran it and by Agents above it.
+    "scope": "it was stopped together with all other work of the Session that ran it.",
 }
 
 
@@ -197,15 +198,18 @@ def stopped_because(report: CommandReport, *, delivery: bool = False) -> str:
 def ended_result(report: CommandReport, names: ToolNames) -> JsonObject:
     """The result data of an ended command, fields in order and omitted when empty.
 
-    ``status`` (``exited`` or ``stopped``), ``exit_code``, ``stopped_because``,
-    ``output``, ``failed_programs``, ``hint``, and for processes it left running
-    ``command_id``, ``still_running`` and ``next``.
+    ``status`` (``exited`` or ``stopped``), ``exit_code`` (of a command that
+    exited by itself), ``stopped_because``, ``output``, ``failed_programs``,
+    ``hint``, and for processes it left running ``command_id``,
+    ``still_running`` and ``next``.
     """
-    data: JsonObject = {"status": "stopped" if report.stop_reason is not None else "exited"}
-    if report.exit_code is not None:
-        data["exit_code"] = report.exit_code
     if report.stop_reason is not None:
-        data["stopped_because"] = stopped_because(report)
+        # The exit code of a stopped command is vBot's kill, not the program's.
+        data: JsonObject = {"status": "stopped", "stopped_because": stopped_because(report)}
+    else:
+        data = {"status": "exited"}
+        if report.exit_code is not None:
+            data["exit_code"] = report.exit_code
     output = command_output_text(report)
     if output:
         data["output"] = output
@@ -228,12 +232,13 @@ def ended_result(report: CommandReport, names: ToolNames) -> JsonObject:
 def failed_programs(report: CommandReport) -> tuple[str, ...]:
     """The failed programs that tell more than the exit code.
 
-    A single failed program whose code is the command's exit code repeats it.
-    Each entry reads ``<name> exited with code <code>``, with the hex form after
+    A single failed program whose code is the exit code of a command that
+    exited by itself repeats it; a stopped command shows no exit code. Each
+    entry reads ``<name> exited with code <code>``, with the hex form after
     large codes.
     """
     exits = report.failed_programs
-    if len(exits) == 1:
+    if len(exits) == 1 and report.stop_reason is None:
         code = exits[0].rpartition(" exited with code ")[2].split(" ", 1)[0]
         if code == str(report.exit_code):
             return ()
@@ -395,8 +400,7 @@ def format_command_delivery(report: CommandReport, *, names: ToolNames = _names_
     hint = failure_hint(report, output, names)
     if hint is not None:
         lines.append(f"Hint: {hint}")
-    # The status line of a stopped command names no exit code to repeat.
-    failed = report.failed_programs if report.stop_reason is not None else failed_programs(report)
+    failed = failed_programs(report)
     if failed:
         lines.append(f"Failed programs: {'; '.join(failed)}.")
     if report.still_running:

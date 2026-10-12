@@ -7,10 +7,12 @@ every id spelling onto ``id`` and action synonyms onto ``list``, ``status`` and
 ``stop``. A call without an action but with an id shows that task's status
 (``ACTION_MISSING``): reading is safe, a stop is never guessed.
 
-What the Tool never does fails before anything runs: waiting for a task, and
-sending one a message, each with the call that does it instead. A request for
-input is refused by the handler (``INPUT_ACTION``), because its refusal names
-``terminal`` only when the Agent can call it.
+Asking to wait for a task fails before anything runs, with the reason. A request
+for input or a message is refused by the handler (``INPUT_ACTION``), because its
+refusal names ``terminal`` or ``subagent`` only when the Agent can call it.
+Fields of other harnesses' output Tools that ask to wait for a task or to filter
+its output (``block``, ``timeout``, ``filter``) have no effect; the call runs
+and the handler says so (``NO_EFFECT_FIELDS``).
 """
 
 from __future__ import annotations
@@ -32,12 +34,24 @@ BACKGROUND_TASKS_TOOL_NAME = "background_tasks"
 BACKGROUND_TASK_ACTIONS = ("list", "status", "stop")
 # Set by the normalizer only. ``ACTION_MISSING``: the call named an id but no
 # action, so it runs as status with a note. ``INPUT_ACTION``: the action the call
-# sent to give a task input, which the handler refuses.
+# sent to give a task input or a message, which the handler refuses;
+# ``MESSAGE_CONTENT``: the text of a message for a Sub-Agent, for the refusal's
+# corrected call. ``NO_EFFECT_FIELDS``: each field that cannot have an effect, by
+# the key the call sent, with its kind: ``wait`` or ``filter``.
 ACTION_MISSING = "action_missing"
 INPUT_ACTION = "input_action"
+MESSAGE_CONTENT = "message_content"
+NO_EFFECT_FIELDS = "no_effect_fields"
+NO_EFFECT_WAIT = "wait"
+NO_EFFECT_FILTER = "filter"
 BACKGROUND_TASKS_UNADVERTISED_PARAMETERS: JsonObject = {
     ACTION_MISSING: {"type": "boolean"},
     INPUT_ACTION: {"type": "string"},
+    MESSAGE_CONTENT: {"type": "string"},
+    NO_EFFECT_FIELDS: {
+        "type": "object",
+        "additionalProperties": {"type": "string", "enum": [NO_EFFECT_WAIT, NO_EFFECT_FILTER]},
+    },
 }
 
 # Ids of background commands, Sub-Agents and terminals by their prefix.
@@ -88,6 +102,12 @@ _ACTION_SYNONYMS = SpellingAliases(
     }
 )
 _WAIT_ACTIONS = frozenset({"wait", "await", "polluntil"})
+# Claude Code's TaskOutput waits with block and timeout; BashOutput keeps only
+# the output lines that match filter.
+_WAIT_FIELDS = frozenset({"block", "wait", "timeout", "timeoutms", "timeoutseconds"})
+_FILTER_FIELDS = frozenset({"filter", "grep"})
+# Values that ask for nothing, such as block "false": no wait is what happens.
+_NO_REQUEST = frozenset({"false", "no", "0", "none", "null"})
 _MESSAGE_ACTIONS = frozenset({"send", "message", "tell", "steer"})
 _INPUT_ACTIONS = frozenset({"input", "write", "submit", "sendkeys", "paste", "stdin"})
 _CONTENT_FIELDS = ("content", "message", "text", "prompt")
@@ -123,6 +143,7 @@ def normalize_background_tasks_arguments(arguments: Any) -> Any:
     )
     if not isinstance(normalized, dict):
         return normalized
+    _set_aside_no_effect_fields(normalized)
     _read_ids_by_value(normalized)
     for name in ("action", "id"):
         if name in normalized and is_placeholder(normalized[name]):
@@ -143,6 +164,42 @@ def normalize_background_tasks_arguments(arguments: Any) -> Any:
 
 def _action_word(value: Any) -> Any:
     return _ACTION_SYNONYMS.get(value, value) if isinstance(value, str) else value
+
+
+def _set_aside_no_effect_fields(arguments: dict[str, Any]) -> None:
+    """Move fields that ask to wait or to filter output under ``NO_EFFECT_FIELDS``.
+
+    A field that asks for nothing, such as ``block: false``, is dropped silently;
+    so is a ``timeout`` that comes with ``block: false``.
+    """
+    fields = {
+        key: arguments.pop(key)
+        for key in list(arguments)
+        if spelling(key) in _WAIT_FIELDS or spelling(key) in _FILTER_FIELDS
+    }
+    earlier = arguments.pop(NO_EFFECT_FIELDS, None)
+    no_effect: dict[str, str] = dict(earlier) if isinstance(earlier, dict) else {}
+    waits = not any(spelling(key) == "block" and not _asks(value) for key, value in fields.items())
+    for key, value in fields.items():
+        if not _asks(value):
+            continue
+        if spelling(key) in _FILTER_FIELDS:
+            no_effect[key] = NO_EFFECT_FILTER
+        elif waits:
+            no_effect[key] = NO_EFFECT_WAIT
+    if no_effect:
+        arguments[NO_EFFECT_FIELDS] = no_effect
+
+
+def _asks(value: Any) -> bool:
+    """Whether a field's *value* asks for something rather than for nothing."""
+    if value is None or value is False or is_placeholder(value):
+        return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value != 0
+    if isinstance(value, str):
+        return bool(value.strip()) and value.strip().casefold() not in _NO_REQUEST
+    return value not in ([], {})
 
 
 def _read_ids_by_value(arguments: dict[str, Any]) -> None:
@@ -167,6 +224,11 @@ def is_wait_action(action: str) -> bool:
     return spelling(action) in _WAIT_ACTIONS
 
 
+def is_message_action(action: str) -> bool:
+    """Whether *action* asks to send a task a message."""
+    return spelling(action) in _MESSAGE_ACTIONS
+
+
 def _wait_refusal(action: str) -> str:
     """The refusal of an action that waits for a task."""
     return (
@@ -176,41 +238,33 @@ def _wait_refusal(action: str) -> str:
 
 
 def _unknown_action(arguments: dict[str, Any], action: str) -> JsonObject:
-    """Refuse an action the Tool does not have; an input request goes to the handler."""
+    """Refuse an action the Tool does not have; input and messages go to the handler."""
     word = spelling(action)
-    unknown = f'Unknown action "{action}". Use one of: {_CHOICES}.'
     if is_wait_action(action):
         raise ToolContractError(_wait_refusal(action))
+    if word not in _MESSAGE_ACTIONS and word not in _INPUT_ACTIONS:
+        raise ToolContractError(f'Unknown action "{action}". Use one of: {_CHOICES}.')
+    # Only the refusal runs: the call's keys are dropped unread, except a message
+    # for a Sub-Agent, which the refusal's corrected call carries.
+    refused: JsonObject = {"action": "list", INPUT_ACTION: action}
     task_id = arguments.get("id")
     if (
         word in _MESSAGE_ACTIONS
         and isinstance(task_id, str)
         and task_id.startswith(SUBAGENT_ID_PREFIX)
     ):
-        raise ToolContractError(_message_refusal(arguments, task_id))
-    if word in _MESSAGE_ACTIONS or word in _INPUT_ACTIONS:
-        # Only the refusal runs: the call's text and keys are dropped unread.
-        return {"action": "list", INPUT_ACTION: action}
-    raise ToolContractError(unknown)
-
-
-def _message_refusal(arguments: dict[str, Any], subagent_id: str) -> str:
-    refusal = (
-        f"{BACKGROUND_TASKS_TOOL_NAME} sends no messages; nothing was sent. To message "
-        f"Sub-Agent {subagent_id}, call subagent"
-    )
-    content = next(
-        (
-            value
-            for key, value in arguments.items()
-            if spelling(key) in _CONTENT_FIELDS and isinstance(value, str) and value.strip()
-        ),
-        None,
-    )
-    if content is None:
-        return f"{refusal} with action send, this id and your message as content."
-    call = {"action": "send", "id": subagent_id, "content": content}
-    return f"{refusal} {json.dumps(call, ensure_ascii=False)}."
+        refused["id"] = task_id
+        content = next(
+            (
+                value
+                for key, value in arguments.items()
+                if spelling(key) in _CONTENT_FIELDS and isinstance(value, str) and value.strip()
+            ),
+            None,
+        )
+        if content is not None:
+            refused[MESSAGE_CONTENT] = content
+    return refused
 
 
 def _read_one_id(arguments: dict[str, Any], action: str) -> None:
@@ -236,9 +290,14 @@ __all__ = [
     "BACKGROUND_TASK_ACTIONS",
     "COMMAND_ID_PREFIX",
     "INPUT_ACTION",
+    "MESSAGE_CONTENT",
+    "NO_EFFECT_FIELDS",
+    "NO_EFFECT_FILTER",
+    "NO_EFFECT_WAIT",
     "SESSION_ID_PREFIX",
     "SUBAGENT_ID_PREFIX",
     "TERMINAL_ID_PREFIX",
+    "is_message_action",
     "is_wait_action",
     "normalize_background_tasks_arguments",
 ]

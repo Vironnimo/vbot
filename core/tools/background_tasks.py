@@ -17,9 +17,10 @@ fields (``_shell_results``).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from core.sessions import SessionAddress
 from core.tools._background_tasks_arguments import (
@@ -29,9 +30,13 @@ from core.tools._background_tasks_arguments import (
     BACKGROUND_TASKS_UNADVERTISED_PARAMETERS,
     COMMAND_ID_PREFIX,
     INPUT_ACTION,
+    MESSAGE_CONTENT,
+    NO_EFFECT_FIELDS,
+    NO_EFFECT_WAIT,
     SESSION_ID_PREFIX,
     SUBAGENT_ID_PREFIX,
     TERMINAL_ID_PREFIX,
+    is_message_action,
     normalize_background_tasks_arguments,
 )
 from core.tools._shell_results import (
@@ -42,6 +47,7 @@ from core.tools._shell_results import (
     log_sentence,
     named_tools,
     output_location,
+    process_text,
     processes_text,
     running_output_text,
     stop_call,
@@ -135,7 +141,19 @@ class BackgroundTasksTool:
 
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         names = named_tools(context)
-        if isinstance(arguments.get(INPUT_ACTION), str):
+        input_action = arguments.get(INPUT_ACTION)
+        if isinstance(input_action, str):
+            target = arguments.get("id")
+            if is_message_action(input_action) and isinstance(target, str):
+                content = arguments.get(MESSAGE_CONTENT)
+                return tool_failure(
+                    "invalid_arguments",
+                    _message_refusal(
+                        target,
+                        content if isinstance(content, str) else None,
+                        can_send=context.can_call(SUBAGENT_TOOL_NAME),
+                    ),
+                )
             return tool_failure("invalid_arguments", _no_input(names))
         caller = SessionAddress(
             project_id=context.project_id,
@@ -144,8 +162,13 @@ class BackgroundTasksTool:
         )
         tree = await self._tree(caller)
         action = arguments["action"]
+        no_effect = arguments.get(NO_EFFECT_FIELDS) or {}
         if action == "list":
-            return tool_success(self._list(caller, tree))
+            data = self._list(caller, tree)
+            ignored = _no_effect_notes(no_effect, shown="list")
+            if ignored:
+                data["notes"] = [*ignored, *data.get("notes", [])]
+            return tool_success(data)
         task_id = arguments.get("id")
         if not isinstance(task_id, str) or not task_id:
             return tool_failure("invalid_arguments", self._missing_id(action, tree))
@@ -171,6 +194,12 @@ class BackgroundTasksTool:
             notes.append(
                 f"action is missing, so the status is shown. To stop it, call {stop_call(task_id)}."
             )
+        if no_effect:
+            if task_id.startswith(SUBAGENT_ID_PREFIX):
+                notes.extend(_no_effect_notes(no_effect, shown="subagent"))
+            else:
+                log = self._log_file(task_id)
+                notes.extend(_no_effect_notes(no_effect, shown="output", log=log))
         if notes:
             data["notes"] = [*notes, *data.get("notes", [])]
         return tool_success(data)
@@ -209,17 +238,21 @@ class BackgroundTasksTool:
         data = _subagent_identity(subagent)
         if stopped:
             data["status"] = "stopped"
-            # Only the Sub-Agent's own Parent can message it.
-            sender = (
-                "send it a message"
-                if subagent.parent_id is None
-                else f"your Sub-Agent {subagent.parent_id} can send it a message"
-            )
             note = (
                 "Stopped: its current turn, its queued messages, its background commands and "
-                f"terminals, and its own Sub-Agents. Its Session keeps the history; {sender} to "
-                "continue."
+                "terminals, and its own Sub-Agents. Its Session keeps the history"
             )
+            if subagent.status == _TAKEN_OVER:
+                # It works for the user, and subagent send refuses it.
+                note += "."
+            else:
+                # Only the Sub-Agent's own Parent can message it.
+                sender = (
+                    "send it a message"
+                    if subagent.parent_id is None
+                    else f"your Sub-Agent {subagent.parent_id} can send it a message"
+                )
+                note += f"; {sender} to continue."
         else:
             data["status"] = "idle"
             note = (
@@ -257,9 +290,9 @@ class BackgroundTasksTool:
                 "You have no Sub-Agents, and no background commands ran in this Session or its "
                 "Sub-Agents in the last 30 minutes."
             ]
-        elif any(item.status in _WORKING for item in tree.subagents) or any(
-            report.owner == caller and not report.ended for report in reports
-        ):
+        elif any(
+            item.parent_id is None and item.status in _WORKING for item in tree.subagents
+        ) or any(report.owner == caller and not report.ended for report in reports):
             data["notes"] = [
                 "vBot sends you each answer of a working Sub-Agent and the result of each of "
                 "your running commands as a new message; calling list again does not make them "
@@ -276,6 +309,8 @@ class BackgroundTasksTool:
         subagent: str | None,
         names: ToolNames,
     ) -> JsonObject:
+        # The call names only the id: the user sees which command it is.
+        context.add_display_results([_shown_task(_command_row(report, subagent))])
         if report.ended:
             if subagent is None:
                 self._acknowledge_when_persisted(context, report.command_id)
@@ -322,9 +357,9 @@ class BackgroundTasksTool:
         except CommandStopError as error:
             survivors = processes_text(error.survivors)
             still = (
-                f" Its processes may still run: {survivors}."
+                f" These processes still ran when vBot stopped waiting: {survivors}."
                 if survivors
-                else (" Its processes may still run.")
+                else " Whether its processes ended is unknown."
             )
             return tool_failure(
                 "stop_failed",
@@ -425,13 +460,21 @@ class BackgroundTasksTool:
         running.extend(
             f"{report.command_id} ({report.label})"
             for report in self._commands.commands(tree.sessions)
-            if not report.ended
+            if not report.ended or report.still_running
         )
         if not running:
             return "Nothing of yours is running now."
         entries = ", ".join(running[:_YOURS_SHOWN])
         more = len(running) - _YOURS_SHOWN
         return f"Running now: {entries}{f' and {more} more' if more > 0 else ''}."
+
+    def _log_file(self, command_id: str) -> str | None:
+        """The file with the complete output of *command_id*, as the Agent reads paths."""
+        try:
+            report = self._commands.report(command_id)
+        except CommandNotFoundError:
+            return None
+        return model_path(report.log_path) if report.log_path is not None else None
 
     def _missing_id(self, action: str, tree: _Tree) -> str:
         if action == "stop":
@@ -527,10 +570,16 @@ def _command_row(report: CommandReport, subagent: str | None) -> JsonObject:
         row["subagent"] = subagent
     if not report.ended:
         row["status"] = "running"
+    elif report.stop_reason is not None:
+        # Its exit code is vBot's kill, not the command's.
+        row["status"] = "stopped"
     else:
-        row["status"] = "stopped" if report.stop_reason is not None else "exited"
+        row["status"] = "exited"
         if report.exit_code is not None:
             row["exit_code"] = report.exit_code
+    if report.still_running:
+        # The shell exited, but processes it started run on until stopped.
+        row["still_running"] = [process_text(process) for process in report.still_running]
     row["runtime"] = duration(report.elapsed_seconds)
     if report.log_path is not None:
         row["log"] = model_path(report.log_path)
@@ -561,6 +610,51 @@ def _no_input(names: ToolNames) -> str:
         "Nothing was sent: background commands get no input. Give the command its input "
         "through a file or a pipeline instead."
     )
+
+
+def _message_refusal(subagent_id: str, content: str | None, *, can_send: bool) -> str:
+    refusal = f"{BACKGROUND_TASKS_TOOL_NAME} sends no messages; nothing was sent."
+    if not can_send:
+        return f"{refusal} Its actions are list, status and stop."
+    refusal = f"{refusal} To message Sub-Agent {subagent_id}, call {SUBAGENT_TOOL_NAME}"
+    if content is None:
+        return f"{refusal} with action send, this id and your message as content."
+    call = {"action": "send", "id": subagent_id, "content": content}
+    return f"{refusal} {json.dumps(call, ensure_ascii=False)}."
+
+
+def _no_effect_notes(
+    fields: Mapping[str, str],
+    *,
+    shown: Literal["list", "output", "subagent"],
+    log: str | None = None,
+) -> list[str]:
+    """Notes for fields that asked to wait for a task or to filter its output.
+
+    *fields* maps each key as the call sent it to its kind (``NO_EFFECT_FIELDS``);
+    *shown* is what the result shows, *log* the file with a command's complete output.
+    """
+    notes: list[str] = []
+    waits = [key for key, kind in fields.items() if kind == NO_EFFECT_WAIT]
+    if waits:
+        named = " and ".join([", ".join(waits[:-1]), waits[-1]] if len(waits) > 1 else waits)
+        verb = "has" if len(waits) == 1 else "have"
+        notes.append(f"{named} {verb} no effect: {BACKGROUND_TASKS_TOOL_NAME} never waits.")
+    for key, kind in fields.items():
+        if kind == NO_EFFECT_WAIT:
+            continue
+        if shown == "list":
+            notes.append(f"{key} has no effect: list shows every task.")
+        elif shown == "subagent":
+            notes.append(f"{key} has no effect.")
+        elif log is not None:
+            notes.append(
+                f"{key} has no effect: the output is shown unfiltered. The complete output is "
+                f"in {log}."
+            )
+        else:
+            notes.append(f"{key} has no effect: the output is shown unfiltered.")
+    return notes
 
 
 def _terminal_refusal(terminal_id: str, names: ToolNames) -> str:
