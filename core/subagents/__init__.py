@@ -6,6 +6,7 @@ from core.subagents.subagents import (
     SubAgentCoordinator,
     SubAgentState,
     SubAgentStatus,
+    SubAgentStopOutcome,
     SubAgentTree,
 )
 
@@ -16,6 +17,7 @@ __all__ = [
     "SubAgentPromptTarget",
     "SubAgentState",
     "SubAgentStatus",
+    "SubAgentStopOutcome",
     "SubAgentTree",
     "build_subagent_prompt_targets",
 ]

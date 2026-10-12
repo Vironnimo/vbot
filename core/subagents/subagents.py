@@ -111,6 +111,7 @@ from core.subagents.links import (
     find_link,
     link_session,
     read_link,
+    taken_over_below,
 )
 from core.tools.availability import subagent_allowed_agents
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
@@ -150,6 +151,11 @@ _INSPECTED_WORK_KINDS = {
 # user whatever it does.
 SubAgentStatus = Literal["working", "queued", "idle", "taken over by the user"]
 
+# What a stop of a Sub-Agent did. ``stopped``: something ran and was stopped;
+# ``idle``: nothing ran; ``taken over by the user``: the user took it over, or a
+# Sub-Agent above it, so nothing was stopped.
+SubAgentStopOutcome = Literal["stopped", "idle", "taken over by the user"]
+
 
 @dataclass(frozen=True)
 class SubAgentState:
@@ -180,9 +186,10 @@ class SubAgentTree(Protocol):
     ``background_tasks`` lists, checks and stops them and the background commands
     of their Sessions; ``terminal`` names the Sub-Agent whose Session holds a
     terminal. Both stop at a takeover: what runs within one
-    (``SubAgentState.within_takeover``) works for the user. :class:`SubAgentCoordinator`
-    implements it. The Tools import it for annotations only, because this package
-    imports the Tool package.
+    (``SubAgentState.within_takeover``) works for the user, and no stop of an
+    Agent above it reaches it. :class:`SubAgentCoordinator` implements it. The
+    Tools import it for annotations only, because this package imports the Tool
+    package.
     """
 
     async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
@@ -193,10 +200,14 @@ class SubAgentTree(Protocol):
         """What *subagent* still runs besides its own turn, each as ``kind id (label)``."""
         ...
 
-    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+    async def stop_subagent(
+        self, context: ToolContext, subagent: SubAgentState
+    ) -> SubAgentStopOutcome:
         """Stop *subagent* with its queue, background work and own Sub-Agents.
 
-        Returns whether anything ran.
+        The stop ends at every Sub-Agent below it the user took over, which keeps
+        running with everything below it. When the user took over *subagent*, or
+        a Sub-Agent between the caller and it, nothing is stopped.
         """
         ...
 
@@ -395,15 +406,19 @@ class SubAgentCoordinator:
         The user's "Stop all"; returns how many Runs, queued messages, commands and
         terminals were stopped. The Session keeps its own queued messages. Answers of
         the stopped Sub-Agents are not forwarded, so they do not wake the Sessions
-        above them that are stopped too.
+        above them that are stopped too. A Sub-Agent below the Session that the user
+        took over keeps running with everything below it: it belongs to the user,
+        whose Stop all in its own Session stops it.
         """
-        return await self._stop_subtree(
+        stopped = await self._stop_subtree(
             address,
             reason=USER_CANCEL_REASON,
             initiator="user_stop_all",
             silence_root=False,
             clear_root_queue=False,
         )
+        # Without stopped_by the Session the user works in is always stopped.
+        return stopped or 0
 
     async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
         """Return *caller*'s Sub-Agents at every depth, breadth first, as they are now.
@@ -463,12 +478,18 @@ class SubAgentCoordinator:
             entry.describe() for entry in await running_entries(self._runtime, subagent.session)
         ]
 
-    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+    async def stop_subagent(
+        self, context: ToolContext, subagent: SubAgentState
+    ) -> SubAgentStopOutcome:
         """Stop *subagent*: its turn, its queue, its background work and its own Sub-Agents.
 
-        Returns whether anything ran. The caller learns the outcome from its
-        Tool result, so a direct Sub-Agent's stopped turn is not forwarded to
-        it; a deeper one's is forwarded to its own Parent, which did not stop it.
+        The caller learns the outcome from its Tool result, so a direct
+        Sub-Agent's stopped turn is not forwarded to it; a deeper one's is
+        forwarded to its own Parent, which did not stop it. The stop ends at every
+        takeover below *subagent*. The takeover is read again under the admission
+        lock, since *subagent* is the state the caller read before: when the user
+        took over *subagent* or a Sub-Agent between the caller and it, nothing is
+        stopped.
         """
         stopped = await self._stop_subtree(
             subagent.session,
@@ -476,15 +497,18 @@ class SubAgentCoordinator:
             initiator=f"parent_run:{context.run_id}",
             silence_root=subagent.parent_id is None,
             clear_root_queue=True,
+            stopped_by=_caller(context),
         )
+        if stopped is None:
+            return "taken over by the user"
         if not stopped:
-            return False
+            return "idle"
         await _emit(
             context,
             SUBAGENT_STATUS_CHANGED_EVENT,
             _event_data(subagent.id, subagent.session, status="cancelled"),
         )
-        return True
+        return "stopped"
 
     async def drain_activity(self) -> None:
         """Wait until the activity files' text so far is on disk."""
@@ -878,8 +902,16 @@ class SubAgentCoordinator:
         initiator: str,
         silence_root: bool,
         clear_root_queue: bool,
-    ) -> int:
-        """Cancel a complete admitted tree before awaiting any of its cleanup."""
+        stopped_by: SessionAddress | None = None,
+    ) -> int | None:
+        """Cancel a complete admitted tree before awaiting any of its cleanup.
+
+        The tree ends at every Sub-Agent below *root* the user took over: that one
+        and everything below it keep running for the user. *stopped_by* is the
+        Session of an Agent above *root* that stops it; when the user took over
+        *root* or a Sub-Agent between *stopped_by* and it, nothing is stopped and
+        the result is None. Otherwise it counts what was stopped.
+        """
         sessions = self._runtime.chat_sessions
         manager = self._runtime.chat_run_manager
         terminals = self._runtime.terminal_manager
@@ -890,7 +922,11 @@ class SubAgentCoordinator:
         # Cancel every captured Run while admissions are still excluded, so a
         # descendant cannot create or resume work during another Run's cleanup.
         async with self._admission_lock:
-            below = await sessions.run_async(descendants, sessions, root)
+            if stopped_by is not None and await sessions.run_async(
+                taken_over_below, sessions, stopped_by, root
+            ):
+                return None
+            below = await sessions.run_async(descendants, sessions, root, stop_at_takeover=True)
             addresses = [root, *(link.session for link in below)]
             for address in addresses:
                 if address != root or clear_root_queue:
@@ -1337,4 +1373,4 @@ def _target_is_allowed(
     return address in allowed
 
 
-__all__ = ["SubAgentCoordinator", "SubAgentState", "SubAgentStatus"]
+__all__ = ["SubAgentCoordinator", "SubAgentState", "SubAgentStatus", "SubAgentStopOutcome"]

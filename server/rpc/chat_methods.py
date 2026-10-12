@@ -185,7 +185,8 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     caller's values stay current; its background fields report the live
     commands only. Every read but a ``before`` one lists in
     ``subagent_background_commands`` the background commands the Session's
-    Sub-Agents still run, at every depth (complete each time). A ``before``
+    Sub-Agents still run, at every depth down to a Sub-Agent the user took over,
+    which with everything below it is left out (complete each time). A ``before``
     page carries neither a background field nor the Compaction Policy.
     """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
@@ -353,10 +354,14 @@ def _read_chat_history(
 
 def _subagent_sessions(state: Any, address: SessionAddress) -> dict[SessionAddress, str]:
     """The Sessions of *address*'s Sub-Agents at every depth, each with the id of
-    *address*'s own Sub-Agent above it. Blocking: reads the Sub-Agent links."""
+    *address*'s own Sub-Agent above it. Blocking: reads the Sub-Agent links.
+
+    The walk ends at every Sub-Agent the user took over: that Session and those
+    below it belong to the user, and the Session's Stop all leaves them running.
+    """
     above: dict[SessionAddress, str] = {}
     # Breadth first: a Parent's Session is known before its children's.
-    for link in descendants(state.runtime.chat_sessions, address):
+    for link in descendants(state.runtime.chat_sessions, address, stop_at_takeover=True):
         direct = link.id if link.parent == address else above.get(link.parent)
         if direct is not None:
             above[link.session] = direct

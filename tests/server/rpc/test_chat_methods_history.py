@@ -20,7 +20,7 @@ from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
 from core.runs import ChatRunManager, RunAdmission, RunKind
-from core.sessions import ChatSession, SessionAddress
+from core.sessions import SUBAGENT_TAKEN_OVER_AT_META_KEY, ChatSession, SessionAddress
 from core.settings.normalizers import normalize_compaction_settings
 from core.skills import SkillAuthoringService
 from core.subagents.links import link_session
@@ -431,10 +431,13 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     commands.add("cmd_one", "completed", "node (pid 7)")
     commands.add("cmd_new", "running")
     commands.add("cmd_source", "running", session_id="session-source")
-    # Its Sub-Agent and that one's own Sub-Agent run commands too.
+    # Its Sub-Agent and that one's own Sub-Agents run commands too; the user took
+    # over one of them, which with its own Sub-Agent now works for the user.
     for subagent_id, child, parent in (
         ("sub_child", "session-child", "session-one"),
         ("sub_grandchild", "session-grandchild", "session-child"),
+        ("sub_taken", "session-taken", "session-child"),
+        ("sub_below_taken", "session-below-taken", "session-taken"),
     ):
         history.session(child)
         link_session(
@@ -446,9 +449,17 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
             tool_call_id=None,
             tool_call_index=None,
         )
+    history.sessions.mutate_metadata(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-taken"),
+        lambda metadata: metadata.__setitem__(
+            SUBAGENT_TAKEN_OVER_AT_META_KEY, "2026-10-12T09:00:00+00:00"
+        ),
+    )
     commands.add("cmd_child", "running", session_id="session-child")
     commands.add("cmd_grandchild", "failed", "vite (pid 9)", session_id="session-grandchild")
     commands.add("cmd_grandchild_done", "completed", session_id="session-grandchild")
+    commands.add("cmd_taken", "running", session_id="session-taken")
+    commands.add("cmd_below_taken", "running", session_id="session-below-taken")
 
     # A replacement read carries the complete map: deliveries applied, the
     # Session's own background commands at their current status, and none for
@@ -462,7 +473,8 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     assert first["background_commands_still_running"] == ["cmd_one"]
     assert all(message["role"] != "note" for message in first["messages"])
     # The commands its Sub-Agents still run, at every depth, each under the
-    # Session's own Sub-Agent above it.
+    # Session's own Sub-Agent above it; none of the user's, which the
+    # Session's Stop all leaves running.
     assert sorted(first["subagent_background_commands"], key=lambda entry: entry["command_id"]) == [
         {
             "subagent_id": "sub_child",
