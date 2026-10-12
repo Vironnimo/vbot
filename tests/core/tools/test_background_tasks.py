@@ -726,9 +726,9 @@ async def test_background_tasks_are_never_terminals(
 
     assert command_id not in json.dumps(data(listed))
     assert terminals.list_terminals() == [] and factory.adapters == []
-    for refusal in (error(status), error(kill)):
+    for refusal, action in ((error(status), "status"), (error(kill), "stop")):
         assert refusal["code"] == "not_a_terminal"
-        assert calls(refusal["message"]) == [{"action": "status", "id": command_id}]
+        assert calls(refusal["message"]) == [{"action": action, "id": command_id}]
     assert not tasks.commands.manager.report(command_id).ended
     assert refused["code"] == "not_a_background_task"
     assert 'terminal {"action": "status", "terminal_id": "term_abc123"}' in refused["message"]

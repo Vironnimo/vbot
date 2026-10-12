@@ -10,7 +10,8 @@ import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.storage.temp_files import TemporaryFileManager
-from core.tools.terminal import TERMINAL_TOOL_NAME, SubAgentSessions, register_terminal_tool
+from core.subagents import SubAgentTree
+from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure_for_exception
 from tests.core.tools.terminal_manager_helpers import AdapterFactory
@@ -67,7 +68,7 @@ async def call(
     arguments: JsonObject,
     projects: ProjectStore | None = None,
     *,
-    subagents: SubAgentSessions | None = None,
+    subagents: SubAgentTree | None = None,
 ) -> JsonObject:
     """Run one Agent call the way the Tool executor does.
 

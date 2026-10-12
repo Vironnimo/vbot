@@ -883,10 +883,15 @@ async def test_parallel_starts_respect_the_active_limit_with_a_stale_count(
     assert len(harness.loop.turns) == 1
 
 
-async def test_takeover_ends_forwarding_and_parent_messages(harness: SubAgentHarness) -> None:
+async def test_takeover_hands_the_subagent_and_its_work_to_the_user(
+    harness: SubAgentHarness, commands: CommandHarness
+) -> None:
     harness.loop.hold("review")
     data = await harness.spawn("review")
     child = harness.subagent_session(data["id"])
+    deep = await harness.spawn("deep", child)
+    serve = await _background_command(commands, child, "Serve")
+    tests = await _background_command(commands, harness.subagent_session(deep["id"]), "Test")
 
     harness.sessions.mutate_metadata(
         child,
@@ -904,10 +909,48 @@ async def test_takeover_ends_forwarding_and_parent_messages(harness: SubAgentHar
     assert "The user took over this Sub-Agent" in notice.body
     refused = await harness.call({"action": "send", "id": data["id"], "content": "more"})
     assert refused["error"]["code"] == "subagent_taken_over"
-    listed = await harness.background_tasks({"action": "list"})
-    assert listed["data"]["tasks"][0]["status"] == "taken over by the user"
     gone = await harness.message_parent("question", child)
     assert gone["error"]["code"] == "subagent_taken_over"
+
+    # The Parent keeps the taken-over Sub-Agent's row; what its Session runs, and the
+    # Sub-Agents below it, work for the user.
+    listed = await harness.background_tasks({"action": "list"})
+    assert [(row["id"], row["status"]) for row in listed["data"]["tasks"]] == [
+        (data["id"], "taken over by the user")
+    ]
+    shown = await harness.background_tasks({"action": "status", "id": data["id"]})
+    assert "running" not in shown["data"]
+    for task_id, action, message in [
+        (
+            serve,
+            "stop",
+            f"{serve} belongs to the Session of Sub-Agent {data['id']}, which the user took "
+            "over; it works for the user now and is no longer yours to stop. Nothing was "
+            "stopped.",
+        ),
+        (
+            tests,
+            "status",
+            f"{tests} belongs to Sub-Agent {deep['id']} below {data['id']}, whose Session the "
+            "user took over; it works for the user now and is no longer yours to check.",
+        ),
+        (
+            deep["session_id"],
+            "stop",
+            f"{deep['id']} works below Sub-Agent {data['id']}, whose Session the user took "
+            "over; it works for the user now and is no longer yours to stop. Nothing was "
+            "stopped.",
+        ),
+    ]:
+        refusal = await harness.background_tasks({"action": action, "id": task_id})
+        assert refusal["error"] == {"code": "subagent_taken_over", "message": message}
+    assert [commands.manager.status(serve), commands.manager.status(tests)] == ["running"] * 2
+
+    # Stopping the taken-over Sub-Agent as a whole still stops everything below it.
+    stopped = await harness.background_tasks({"action": "stop", "id": data["id"]})
+    assert stopped["data"]["status"] == "stopped"
+    for command_id in (serve, tests):
+        assert (await commands.finish(command_id)).stop_reason == "scope"
 
 
 async def test_message_parent_reaches_the_parent_while_the_subagent_works(

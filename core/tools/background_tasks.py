@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 from core.sessions import SessionAddress
 from core.tools._background_tasks_arguments import (
@@ -69,7 +69,7 @@ from core.utils.paths import model_path
 
 if TYPE_CHECKING:
     # Imported for annotations only: ``core.subagents`` imports the Tool package.
-    from core.subagents import SubAgentState
+    from core.subagents import SubAgentState, SubAgentTree
 
 BACKGROUND_TASKS_TOOL_DESCRIPTION = "List, check or stop your background commands and Sub-Agents."
 BACKGROUND_TASKS_TOOL_PARAMETERS: JsonObject = {
@@ -104,32 +104,20 @@ _WORKING = frozenset({"working", "queued"})
 _TAKEN_OVER = "taken over by the user"
 
 
-class SubAgentTree(Protocol):
-    """The caller's Sub-Agents at every depth, and what they run."""
-
-    async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
-        """*caller*'s Sub-Agents at every depth, breadth first, as they are now."""
-        ...
-
-    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
-        """What *subagent* still runs besides its own turn, each as ``kind id (label)``."""
-        ...
-
-    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
-        """Stop *subagent* with its queue, background work and own Sub-Agents.
-
-        Returns whether anything ran.
-        """
-        ...
-
-
 @dataclass(frozen=True)
 class _Tree:
-    """What one call sees: the caller's Sub-Agents and the Sessions whose commands it sees."""
+    """What one call sees: the caller's Sub-Agents and the Sessions whose commands it sees.
+
+    A takeover is a boundary: the caller keeps the row of a Sub-Agent the user took
+    over and can stop it as a whole, but what its Session runs and the Sub-Agents
+    below it work for the user (``SubAgentState.within_takeover``).
+    """
 
     subagents: Sequence[SubAgentState]
     # Each Session with the id of the Sub-Agent working in it; the caller's own is None.
     sessions: Mapping[SessionAddress, str | None]
+    # Every Sub-Agent below the caller, those within a takeover included.
+    everyone: Sequence[SubAgentState]
 
     def subagent(self, subagent_id: str) -> SubAgentState | None:
         return next((item for item in self.subagents if item.id == subagent_id), None)
@@ -166,10 +154,13 @@ class BackgroundTasksTool:
         notes: list[str] = []
         if task_id.startswith(SESSION_ID_PREFIX):
             # A Session id from a result names the Sub-Agent working in it.
-            matches = [item for item in tree.subagents if item.session.session_id == task_id]
+            matches = [item for item in tree.everyone if item.session.session_id == task_id]
             if len(matches) == 1:
                 notes.append(f"session_id {task_id} was read as Sub-Agent {matches[0].id}.")
                 task_id = matches[0].id
+        taken_over = self._taken_over(task_id, action, tree)
+        if taken_over is not None:
+            return tool_failure("subagent_taken_over", taken_over)
         if task_id.startswith(SUBAGENT_ID_PREFIX):
             data = await self._subagent_task(context, task_id, action, tree)
         else:
@@ -185,10 +176,16 @@ class BackgroundTasksTool:
         return tool_success(data)
 
     async def _tree(self, caller: SessionAddress) -> _Tree:
-        subagents = await self._subagents.subagents(caller) if self._subagents is not None else ()
+        everyone = await self._subagents.subagents(caller) if self._subagents is not None else ()
         sessions: dict[SessionAddress, str | None] = {caller: None}
-        sessions.update((item.session, item.id) for item in subagents)
-        return _Tree(subagents=subagents, sessions=sessions)
+        sessions.update(
+            (item.session, item.id) for item in everyone if item.within_takeover is None
+        )
+        return _Tree(
+            subagents=[item for item in everyone if item.within_takeover in (None, item.id)],
+            sessions=sessions,
+            everyone=everyone,
+        )
 
     async def _subagent_task(
         self, context: ToolContext, subagent_id: str, action: str, tree: _Tree
@@ -198,7 +195,12 @@ class BackgroundTasksTool:
             return tool_failure("task_not_found", self._not_found(subagent_id, action, tree))
         if action == "status":
             data = _subagent_fields(subagent, with_project=True)
-            running = await self._subagents.running_work(subagent)
+            # What a taken-over Session runs works for the user; its ids would be refused.
+            running = (
+                await self._subagents.running_work(subagent)
+                if subagent.within_takeover is None
+                else ()
+            )
             if running:
                 data["running"] = list(running)
             data["next"] = _subagent_next(subagent, can_send=context.can_call(SUBAGENT_TOOL_NAME))
@@ -375,6 +377,43 @@ class BackgroundTasksTool:
         if not report.background or report.owner not in tree.sessions:
             return None
         return report
+
+    def _taken_over(self, task_id: str, action: str, tree: _Tree) -> str | None:
+        """Why *task_id* is no longer the caller's, when it works within a takeover.
+
+        The taken-over Sub-Agent itself stays the caller's to check and stop.
+        """
+        if task_id.startswith(SUBAGENT_ID_PREFIX):
+            subagent = next((item for item in tree.everyone if item.id == task_id), None)
+            if subagent is None or subagent.within_takeover in (None, task_id):
+                return None
+            problem = (
+                f"{task_id} works below Sub-Agent {subagent.within_takeover}, whose Session the "
+                "user took over"
+            )
+        elif task_id.startswith(COMMAND_ID_PREFIX):
+            try:
+                report = self._commands.report(task_id)
+            except CommandNotFoundError:
+                return None
+            subagent = next((item for item in tree.everyone if item.session == report.owner), None)
+            if not report.background or subagent is None or subagent.within_takeover is None:
+                return None
+            if subagent.within_takeover == subagent.id:
+                problem = (
+                    f"{task_id} belongs to the Session of Sub-Agent {subagent.id}, which the user "
+                    "took over"
+                )
+            else:
+                problem = (
+                    f"{task_id} belongs to Sub-Agent {subagent.id} below "
+                    f"{subagent.within_takeover}, whose Session the user took over"
+                )
+        else:
+            return None
+        verb = "stop" if action == "stop" else "check"
+        message = f"{problem}; it works for the user now and is no longer yours to {verb}."
+        return f"{message} Nothing was stopped." if action == "stop" else message
 
     def _yours(self, tree: _Tree) -> str:
         """Name the caller's working Sub-Agents and running commands, for an error."""
@@ -644,7 +683,6 @@ __all__ = [
     "BACKGROUND_TASKS_TOOL_NAME",
     "BACKGROUND_TASKS_TOOL_PARAMETERS",
     "BackgroundTasksTool",
-    "SubAgentTree",
     "background_tasks_detail_blocks",
     "register_background_tasks_tool",
 ]

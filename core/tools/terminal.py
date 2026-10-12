@@ -15,7 +15,7 @@ import shutil
 from collections.abc import Awaitable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from core.projects import ProjectStore
 from core.sessions import SessionAddress
@@ -84,7 +84,7 @@ from core.tools.tools import (
 from core.utils.paths import model_path
 
 if TYPE_CHECKING:
-    from core.subagents import SubAgentState
+    from core.subagents import SubAgentTree
 
 TERMINAL_TOOL_NAME = "terminal"
 TERMINAL_ACTIONS = (
@@ -220,10 +220,9 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "For wait: a case-insensitive regular expression (Python syntax), matched line "
-                "by line; the wait ends when the output matches it, such as a server's ready "
-                "line. Output printed before the call counts, except output before your last "
-                "input and the echo of that input. Omit to wait for the exit, or for the "
-                "program to go idle."
+                "by line; the wait ends when the output matches it, such as a prompt. Output "
+                "printed before the call counts, except output before your last input and the "
+                "echo of that input. Omit to wait for the exit, or for the program to go idle."
             ),
         },
         "timeout": {
@@ -277,18 +276,10 @@ def project_terminal_tool_definitions(definitions: list[JsonObject]) -> list[Jso
     return projected
 
 
-class SubAgentSessions(Protocol):
-    """The caller's Sub-Agents, whose Sessions ``list`` and ``status`` name as theirs."""
-
-    async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
-        """*caller*'s Sub-Agents at every depth, each with its Session and id."""
-        ...
-
-
 def make_terminal_handler(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
-    subagents: SubAgentSessions | None = None,
+    subagents: SubAgentTree | None = None,
 ):
     """Create a terminal Tool handler bound to one Terminal Manager."""
 
@@ -301,7 +292,7 @@ def make_terminal_handler(
 async def _handle_terminal(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
-    subagents: SubAgentSessions | None,
+    subagents: SubAgentTree | None,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -318,7 +309,7 @@ async def _handle_terminal(
             retryable=False,
         )
     if isinstance(terminal_id, str):
-        refusal = _background_task_refusal(context, terminal_id.strip())
+        refusal = _background_task_refusal(context, terminal_id.strip(), action)
         if refusal is not None:
             return tool_failure("not_a_terminal", refusal, retryable=False)
 
@@ -544,7 +535,7 @@ async def _handle_start(
 
 async def _handle_list(
     terminal_manager: TerminalManager,
-    subagents: SubAgentSessions | None,
+    subagents: SubAgentTree | None,
     context: ToolContext,
 ) -> JsonObject:
     owner = _owner(context)
@@ -565,14 +556,20 @@ async def _handle_list(
 
 
 async def _subagent_holders(
-    subagents: SubAgentSessions | None, owner: TerminalOwner, terminals: Sequence[TerminalInfo]
+    subagents: SubAgentTree | None, owner: TerminalOwner, terminals: Sequence[TerminalInfo]
 ) -> Mapping[SessionAddress, str]:
     """The Sessions of this Session's Sub-Agents (any depth) by Sub-Agent id, when one of
-    *terminals* is attached to another Session."""
+    *terminals* is attached to another Session.
+
+    A Session the user took over, and every Session below it, works for the user, so
+    its terminals count as another Session's.
+    """
     if subagents is None or all(info.attachment in (None, owner) for info in terminals):
         return {}
     return {
-        subagent.session: subagent.id for subagent in await subagents.subagents(_address(owner))
+        subagent.session: subagent.id
+        for subagent in await subagents.subagents(_address(owner))
+        if subagent.within_takeover is None
     }
 
 
@@ -625,7 +622,7 @@ def _handle_detach(
 
 async def _handle_status(
     terminal_manager: TerminalManager,
-    subagents: SubAgentSessions | None,
+    subagents: SubAgentTree | None,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -1235,8 +1232,11 @@ def _closed_message(terminal_manager: TerminalManager, terminal_id: str, action:
     return message
 
 
-def _background_task_refusal(context: ToolContext, task_id: str) -> str | None:
-    """Refuse the id of a background command or Sub-Agent, which ``background_tasks`` serves."""
+def _background_task_refusal(context: ToolContext, task_id: str, action: str) -> str | None:
+    """Refuse the id of a background command or Sub-Agent, which ``background_tasks`` serves.
+
+    A ``kill`` gets the call that stops the task; every other action the one that shows it.
+    """
     if task_id.startswith(COMMAND_ID_PREFIX):
         task = "a background command"
     elif task_id.startswith(SUBAGENT_ID_PREFIX):
@@ -1248,7 +1248,7 @@ def _background_task_refusal(context: ToolContext, task_id: str) -> str | None:
     # Agent can call it, as the shell results name it (``named_tools``).
     if not context.can_call(BACKGROUND_TASKS_TOOL_NAME):
         return refusal
-    call = json.dumps({"action": "status", "id": task_id})
+    call = json.dumps({"action": "stop" if action == "kill" else "status", "id": task_id})
     return (
         f"{refusal} Use {BACKGROUND_TASKS_TOOL_NAME} for it, such as "
         f"{BACKGROUND_TASKS_TOOL_NAME} {call}."
@@ -1365,7 +1365,7 @@ def register_terminal_tool(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
     *,
-    subagents: SubAgentSessions | None = None,
+    subagents: SubAgentTree | None = None,
 ) -> None:
     """Register the Agent-facing terminal Tool.
 
@@ -1526,7 +1526,6 @@ __all__ = [
     "TERMINAL_UNADVERTISED_PARAMETERS",
     "TERMINAL_WAIT_DEFAULT_SECONDS",
     "TERMINAL_WAIT_MAX_SECONDS",
-    "SubAgentSessions",
     "make_terminal_handler",
     "project_terminal_tool_definitions",
     "register_terminal_tool",

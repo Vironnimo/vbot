@@ -9,6 +9,7 @@ from typing import Any
 
 from core.settings import ALLOWED_THINKING_EFFORTS
 from core.subagents import SubAgentCoordinator, SubAgentPromptTarget
+from core.tools._background_tasks_arguments import COMMAND_ID_PREFIX
 from core.tools._subagent_arguments import (
     BACKGROUND_TASKS_ACTION,
     UNADVERTISED_PARAMETERS,
@@ -241,7 +242,12 @@ def _background_tasks_call(arguments: JsonObject) -> JsonObject | None:
 async def _run_as_background_tasks(
     registry: ToolRegistry, context: ToolContext, arguments: JsonObject, call: JsonObject
 ) -> JsonObject:
-    """Run *call* as ``background_tasks`` and say so; refuse the action without that Tool."""
+    """Run *call* as ``background_tasks`` and say so; refuse the action without that Tool.
+
+    The handler runs inside this ``subagent`` call, so the dispatcher's Extension
+    hooks see only ``subagent``. A background command concerns no Sub-Agent and
+    takes its own ``background_tasks`` call, which those hooks see.
+    """
     word = arguments[BACKGROUND_TASKS_ACTION]
     try:
         handler = registry.get(BACKGROUND_TASKS_TOOL_NAME).handler
@@ -252,6 +258,14 @@ async def _run_as_background_tasks(
             "invalid_arguments",
             f'{SUBAGENT_TOOL_NAME} was not run: "action" must be one of "run", "send"; '
             f"received {json.dumps(word, ensure_ascii=False)}.",
+        )
+    task_id = call.get("id")
+    if isinstance(task_id, str) and task_id.startswith(COMMAND_ID_PREFIX):
+        return tool_failure(
+            "not_a_subagent",
+            f"{SUBAGENT_TOOL_NAME} was not run: {task_id} is a background command, not a "
+            f"Sub-Agent. Call {BACKGROUND_TASKS_TOOL_NAME} "
+            f"{json.dumps(call, ensure_ascii=False)} instead.",
         )
     result = handler(context, call)
     if inspect.isawaitable(result):

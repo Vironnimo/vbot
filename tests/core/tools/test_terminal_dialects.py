@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -559,14 +561,17 @@ async def test_wait_reads_seconds_and_refuses_disagreeing_timeouts(terminal: Ter
     )
 
 
-@pytest.mark.parametrize("ending", ["matched", "idle", "exited", "stopped"])
+@pytest.mark.parametrize("ending", ["matched", "idle", "exited", "stopped", "user"])
 @pytest.mark.asyncio
 async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], ending: str
 ) -> None:
+    """A wait also ends when the user ends it, long before its timeout."""
     terminal_id = await terminal.start()
     adapter = manager[1].adapters[0]
     arguments: JsonObject = {"action": "wait", "terminal_id": terminal_id}
+    context = terminal.context
+    releases: list[Callable[[], bool]] = []
     if ending == "matched":
         # Output printed before the call counts, matched case-insensitively and line by line.
         adapter.emit("booting\r\nServer LISTENING on :8080\r\n")
@@ -580,11 +585,18 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
     elif ending == "exited":
         adapter.emit("bye\r\n")
         adapter.finish(4)
-    else:
+    elif ending == "stopped":
         # A program that was stopped did not exit on its own.
         await terminal({"action": "kill", "terminal_id": terminal_id})
+    else:
+        arguments["timeout"] = 300
+        context = dataclasses.replace(context, background_registration_hook=releases.append)
 
-    result = await terminal(arguments)
+    waiting = asyncio.ensure_future(terminal(arguments, context))
+    if ending == "user":
+        await eventually(lambda: bool(releases))
+        assert releases[-1]() is True
+    result = await asyncio.wait_for(waiting, 5)
 
     data = result["data"]
     assert data["wait_ended"] == ending
@@ -597,6 +609,11 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
         }
     elif ending == "stopped":
         assert data["state"] == "stopped"
+    elif ending == "user":
+        assert (data["state"], data["note"]) == (
+            "running",
+            "The user ended this wait; the program keeps running.",
+        )
     else:
         assert data["state"] == "running"
 

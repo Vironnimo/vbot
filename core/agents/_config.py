@@ -743,8 +743,9 @@ def _with_builtin_capabilities(agent: Agent) -> Agent:
 def live_agent_tool_access(tool_access: ToolAccess) -> ToolAccess:
     """Return a Live Agent's Tool policy: the user's choice, with the Live Tools usable.
 
-    The Live Tools need an opt-in on every Agent, which a Live Agent always has;
-    nothing activates beside the Tools the policy names.
+    The Live Tools need an opt-in on every Agent, which a Live Agent always has.
+    The policy is fixed: only the Tools it names activate, together with their
+    followers (such as ``background_tasks`` beside the shell Tool).
     """
     granted = tuple(dict.fromkeys((*tool_access.granted, *LIVE_TOOL_NAMES)))
     return replace(tool_access, granted=granted, fixed=True, live_call=True)

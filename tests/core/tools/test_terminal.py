@@ -31,7 +31,7 @@ from core.tools.terminal import (
     register_terminal_tool,
 )
 from core.tools.terminal_manager import TerminalManager, TerminalOwner, TerminalRenderHost
-from core.tools.tools import JsonObject, ToolRegistry, tool_failure
+from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
 from core.utils.paths import model_path
 from core.utils.tokens import estimate_json_tokens
 from tests.core.tools.terminal_helpers import call, details, make_context
@@ -588,10 +588,16 @@ async def test_start_rejects_unresolvable_workdirs_before_spawn(
 
 
 class _SubAgents:
-    """The caller's Sub-Agent Sessions at every depth, as the coordinator reports them."""
+    """The caller's Sub-Agent Sessions at every depth, as the coordinator reports them.
 
-    def __init__(self, sessions: Mapping[SessionAddress, str]) -> None:
+    The Sub-Agents in *taken_over* are ones whose Session the user took over.
+    """
+
+    def __init__(
+        self, sessions: Mapping[SessionAddress, str], taken_over: Sequence[str] = ()
+    ) -> None:
         self.sessions = dict(sessions)
+        self.taken_over = set(taken_over)
         self.callers: list[SessionAddress] = []
 
     async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
@@ -603,12 +609,19 @@ class _SubAgents:
                 agent_id=session.agent_id,
                 session=session,
                 parent_id=None,
-                status="working",
+                status="taken over by the user" if subagent_id in self.taken_over else "working",
                 last_tool=None,
                 activity_file=None,
+                within_takeover=subagent_id if subagent_id in self.taken_over else None,
             )
             for session, subagent_id in self.sessions.items()
         ]
+
+    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
+        raise AssertionError("terminal asks only which Sessions are Sub-Agents'")
+
+    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+        raise AssertionError("terminal never stops a Sub-Agent")
 
 
 @pytest.mark.asyncio
@@ -616,13 +629,15 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A terminal attached to a Sub-Agent's Session (any depth) names that Sub-Agent in
-    list and status; one attached to any other Session stays ``other``."""
+    list and status; one attached to any other Session, or to a Session the user took
+    over, stays ``other``."""
     monkeypatch.setattr(manager_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, _factory = manager
     grandchild = TerminalOwner("project-a", "helper", "session-grandchild")
     stranger = TerminalOwner("project-a", "agent-a", "session-b")
+    taken = TerminalOwner("project-a", "helper", "session-taken")
     terminal_ids: list[str] = []
-    for holder in (grandchild, stranger, None):
+    for holder in (grandchild, stranger, taken, None):
         started = await terminal_manager.spawn_for_operator(
             command=None, arguments=[], cwd=tmp_path
         )
@@ -630,7 +645,11 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
             terminal_manager.attach(started["terminal_id"], holder, origin_run_id="run-b")
         terminal_ids.append(started["terminal_id"])
     subagents = _SubAgents(
-        {SessionAddress("project-a", "helper", "session-grandchild"): "sub_grandchild"}
+        {
+            SessionAddress("project-a", "helper", "session-grandchild"): "sub_grandchild",
+            SessionAddress("project-a", "helper", "session-taken"): "sub_taken",
+        },
+        taken_over=["sub_taken"],
     )
     arguments: JsonObject = {"action": "list"}
 
@@ -639,6 +658,7 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
     rows = {row["terminal_id"]: row for row in cast(dict[str, Any], listed["data"])["terminals"]}
     assert [(rows[id_]["attached"], rows[id_].get("subagent")) for id_ in terminal_ids] == [
         ("subagent", "sub_grandchild"),
+        ("other", None),
         ("other", None),
         ("no", None),
     ]
@@ -662,45 +682,56 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
     assert [(item["attached"], item.get("subagent")) for item in statuses] == [
         ("subagent", "sub_grandchild"),
         ("other", None),
+        ("other", None),
         ("no", None),
     ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("task_id", "offered", "named_call"),
-    [
-        ("sub_child", ("background_tasks",), {"action": "status", "id": "sub_child"}),
-        ("cmd_build", (), None),
-    ],
+    ("task_id", "offered"),
+    [("cmd_build", ("background_tasks",)), ("sub_child", ())],
 )
 async def test_ids_of_background_tasks_are_refused_before_anything_runs(
     manager: tuple[TerminalManager, AdapterFactory],
     tmp_path: Path,
     task_id: str,
     offered: tuple[str, ...],
-    named_call: JsonObject | None,
 ) -> None:
     """A background command or Sub-Agent is never a terminal: every action refuses its id,
-    and names the background_tasks call only when the Agent can make it."""
+    and names the background_tasks call (stop for kill) only when the Agent can make it."""
     terminal_manager, factory = manager
     context = make_context(tmp_path, offered_tools=offered)
-
-    for action in ("start", "status", "wait", "input", "kill", "attach", "detach"):
-        result = await call(
-            terminal_manager,
-            context,
+    calls: list[tuple[JsonObject, str]] = [
+        (
             {"action": action, "terminal_id": task_id, "text": "y"}
             if action in {"start", "input"}
             else {"action": action, "terminal_id": task_id},
+            "stop" if action == "kill" else "status",
         )
+        for action in ("start", "status", "wait", "input", "kill", "attach", "detach")
+    ]
+    # Other harnesses' fields and stop action for a background shell reach the same refusal.
+    calls += [
+        ({"action": "kill", "process_id": task_id}, "stop"),
+        ({"action": "KillShell", "shell_id": task_id}, "stop"),
+        ({"action": "status", "bash_id": task_id}, "status"),
+    ]
+
+    for arguments, verb in calls:
+        result = await call(terminal_manager, context, arguments)
         assert result["ok"] is False
-        assert result["error"]["code"] == "not_a_terminal"
+        assert result["error"]["code"] == "not_a_terminal", arguments
         message = str(result["error"]["message"])
         assert task_id in message
-        mentioned = re.findall(r"background_tasks (\{.*?\})", message)
-        assert [json.loads(found) for found in mentioned] == ([named_call] if named_call else [])
-        assert ("background_tasks" in message) is (named_call is not None)
+        mentioned = [
+            json.loads(found) for found in re.findall(r"background_tasks (\{.*?\})", message)
+        ]
+        assert mentioned == ([{"action": verb, "id": task_id}] if offered else [])
+        assert ("background_tasks" in message) is bool(offered)
+    # A terminal's own id under such a field names no terminal.
+    other = await call(terminal_manager, context, {"action": "kill", "process_id": "term_x"})
+    assert other["error"]["code"] == "invalid_arguments"
     assert terminal_manager.list_terminals() == [] and factory.calls == []
 
 
