@@ -371,9 +371,12 @@ class CommandManager:
         the processes it left running; a finished command is returned
         unchanged. Raises ``CommandStopError`` (naming the survivors) when the
         kill is not confirmed; the command then stays live and a later stop
-        retries. Unless it ended meanwhile, it runs on as if not stopped: an
-        end it reaches by itself reports its exit code, and a background
-        result is delivered unless a ``scope`` stop withdrew it.
+        retries. When the kill was sent (``kill_sent``), the stop keeps its
+        reason and the end the kill causes reads ``stopped``. A stop that sent
+        no kill - refused, or cancelled before its kill began - gives its
+        reason back: unless the command ended meanwhile, it runs on as if not
+        stopped, an end it reaches by itself reports its exit code, and a
+        background result is delivered unless a ``scope`` stop withdrew it.
         """
         record = self._get(command_id)
         await record.stop(reason)

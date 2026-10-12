@@ -40,6 +40,7 @@ from core.tools.command_manager import (
     CommandStopError,
 )
 from core.tools.process_tree import (
+    KillNotConfirmedError,
     ProcessTree,
     ProgramExit,
     RunningProcess,
@@ -465,41 +466,91 @@ async def test_posix_stop_interrupts_first_and_kills_after_the_grace(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("then", ["stop-again", "end-by-itself"])
-async def test_an_unconfirmed_kill_leaves_the_command_running_as_before(
-    harness: Harness, then: str
+@pytest.mark.parametrize(
+    ("failure", "then"),
+    [
+        ("refused", "stop-again"),
+        ("refused", "end"),
+        ("cancelled-before-kill", "end"),
+        ("not-confirmed", "end"),
+        ("cancelled-during-kill", "end"),
+    ],
+)
+async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
+    tmp_path: Path, failure: str, then: str
 ) -> None:
-    command_id, process = await harness.launch()
-    harness.manager.to_background(command_id, deliver=True)
-    process.tree.terminate_error = OSError("access denied")
+    kill_gate = asyncio.Event()
+    kill_gate.set()
 
-    with pytest.raises(CommandStopError) as failure:
-        await harness.manager.stop(command_id, "agent")
+    async def run_blocking(function: Callable[..., object], /, *args: object) -> object:
+        if getattr(function, "__func__", None) is FakeTree.terminate:
+            await kill_gate.wait()
+        return function(*args)
 
-    assert failure.value.survivors == (RunningProcess(process.pid, "shell"),)
-    running = harness.manager.report(command_id)
-    assert (running.status, running.stop_reason, running.delivers_result) == (
-        "running",
-        None,
-        True,
-    )
-    if then == "stop-again":
-        # A lifecycle close goes on: the failure is logged and the command stays live.
-        assert await harness.manager.close_scope(OWNER) == 1
-        assert harness.manager.report(command_id).status == "running"
-        process.tree.terminate_error = None
-        report = await harness.manager.stop(command_id, "user")
-        assert (report.status, report.stop_reason) == ("stopped", "user")
-        assert process.tree.terminations == 3
-        # The scope close withdrew the delivery for good.
+    kill_sent = failure in ("not-confirmed", "cancelled-during-kill")
+    async with command_harness(tmp_path, run_blocking=run_blocking) as harness:
+        command_id, process = await harness.launch()
+        harness.manager.to_background(command_id, deliver=True)
+        if failure == "refused":
+            process.tree.terminate_error = OSError("access denied")
+        elif failure == "not-confirmed":
+            process.tree.terminate_error = KillNotConfirmedError("the processes survived")
+        elif failure == "cancelled-before-kill":
+            # POSIX: the program ignores the interrupt, the stop waits its grace.
+            process.interruptible = True
+        else:
+            kill_gate.clear()
+        stopping = asyncio.ensure_future(harness.manager.stop(command_id, "agent"))
+
+        if failure.startswith("cancelled"):
+            # The Run is cancelled while its stop call waits.
+            await turns()
+            stopping.cancel()
+            await asyncio.gather(stopping, return_exceptions=True)
+            assert stopping.cancelled() and process.tree.terminations == 0
+        else:
+            with pytest.raises(CommandStopError) as stop_failure:
+                await stopping
+            assert stop_failure.value.survivors == (RunningProcess(process.pid, "shell"),)
+            assert stop_failure.value.kill_sent == kill_sent
+
+        # Without a kill, the command runs on as if not stopped; with one, the
+        # stop's reason stays for the end the kill causes.
+        running = harness.manager.report(command_id)
+        assert (running.status, running.stop_reason, running.delivers_result) == (
+            "running",
+            "agent" if kill_sent else None,
+            not kill_sent,
+        )
+        if then == "stop-again":
+            # A lifecycle close goes on: the failure is logged and the command stays live.
+            assert await harness.manager.close_scope(OWNER) == 1
+            assert harness.manager.report(command_id).status == "running"
+            process.tree.terminate_error = None
+            report = await harness.manager.stop(command_id, "user")
+            assert (report.status, report.stop_reason) == ("stopped", "user")
+            assert process.tree.terminations == 3
+            # The scope close withdrew the delivery for good.
+            assert harness.sink.submissions == []
+            return
+        process.tree.exits.append(ProgramExit("node.exe", 1))
+        process.write("FAILED: 3 tests\n")
+        if failure == "cancelled-during-kill":
+            # The kill began before the cancel and goes on.
+            kill_gate.set()
+        else:
+            # The command ends: by itself, or of the kill sent before.
+            process.exit(1)
+        report = await harness.finish(command_id)
+
+    if kill_sent:
+        assert (report.status, report.stop_reason) == ("stopped", "agent")
+        # The kill ended the child; the Agent's stop result was the outcome.
+        assert report.failed_programs == ()
         assert harness.sink.submissions == []
     else:
-        process.tree.exits.append(ProgramExit("pytest.exe", 1))
-        process.write("FAILED: 3 tests\n")
-        process.exit(1)
-        report = await harness.finish(command_id)
         assert (report.status, report.exit_code, report.stop_reason) == ("failed", 1, None)
-        assert report.failed_programs == ("pytest.exe exited with code 1",)
+        assert report.failed_programs == ("node.exe exited with code 1",)
         assert harness.sink.bodies == [format_report(report)]
 
 

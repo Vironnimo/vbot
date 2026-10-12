@@ -9,9 +9,16 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 
-from core.tools.process_tree import ProcessTree, ProcessTreeFacts, track_process_tree
+from core.tools import process_tree
+from core.tools.process_tree import (
+    KillNotConfirmedError,
+    ProcessTree,
+    ProcessTreeFacts,
+    track_process_tree,
+)
 
 # Real processes: the contract is the operating system's. Each root waits for a
 # line before it starts children, so the tracker is in place first.
@@ -100,6 +107,40 @@ def test_tree_lists_the_processes_the_root_left_running_until_terminate_kills_th
 
         tree.terminate()
         assert tree.facts().running == ()
+
+
+class _Member:
+    """A session member that ignores the kill or that vBot may not signal."""
+
+    def __init__(self, *, may_signal: bool) -> None:
+        self.may_signal = may_signal
+
+    def kill(self) -> None:
+        if not self.may_signal:
+            raise psutil.AccessDenied(4242)
+
+
+@pytest.mark.parametrize("sent", [False, True], ids=["refused", "not-confirmed"])
+def test_posix_terminate_tells_a_refused_kill_from_one_not_confirmed(
+    monkeypatch: pytest.MonkeyPatch, sent: bool
+) -> None:
+    # Survivors that a real kill leaves are rare (a process stuck in the
+    # kernel, or one of another user), so the operating system's answers are faked.
+    def killpg(sid: int, signal_number: int) -> None:
+        if not sent:
+            raise PermissionError("not permitted")
+
+    monkeypatch.setattr(os, "killpg", killpg, raising=False)
+    monkeypatch.setattr(process_tree, "_TERMINATE_CONFIRM_SECONDS", 0.0)
+    tree = process_tree._PosixSessionTree(4242)
+    member = _Member(may_signal=sent)
+    monkeypatch.setattr(tree, "_live_members", lambda: [member])
+
+    with pytest.raises(OSError) as failure:
+        tree.terminate()
+
+    # Only a kill that reached the tree leaves processes that end of it later.
+    assert isinstance(failure.value, KillNotConfirmedError) == sent
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="only Windows reports child exit codes")

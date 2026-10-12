@@ -50,7 +50,13 @@ from ._command_types import (
     StopReason,
     command_status,
 )
-from .process_tree import IDLE_CPU_SECONDS, TREE_POLL_SECONDS, ProcessTreeFacts, RunningProcess
+from .process_tree import (
+    IDLE_CPU_SECONDS,
+    TREE_POLL_SECONDS,
+    KillNotConfirmedError,
+    ProcessTreeFacts,
+    RunningProcess,
+)
 
 _LOGGER = get_logger("tools.command_manager")
 # The console host of a windowless console is a member of the command's Job; it
@@ -268,19 +274,27 @@ class CommandRecord:
 
         The first reason wins. ``scope`` withdraws the result delivery; ``agent``
         delivers nothing more, since the kill's own result shows the outcome.
-        Raises ``CommandStopError`` when the kill is not confirmed. Unless the
-        command ended meanwhile (an interrupt sent before the kill can end
-        it), it then runs on as if this stop had not happened: an end it
-        reaches by itself reports its exit code, and its result is delivered
-        unless a ``scope`` stop withdrew the delivery.
+        Raises ``CommandStopError`` when the kill is not confirmed.
+
+        A stop that sent no kill - the operating system refused it, or the
+        stop was cancelled or failed before its kill began - gives its reason
+        back. Unless the command ended meanwhile (an interrupt sent before the
+        kill can end it), it runs on as if this stop had not happened: an end
+        it reaches by itself reports its exit code, and its result is
+        delivered unless a ``scope`` stop withdrew the delivery. A stop whose
+        kill was sent keeps its reason, also when the kill is not confirmed or
+        the stop is cancelled once its kill began (the kill goes on): the end
+        the kill causes reads ``stopped``.
         """
         claimed = self._request_stop(reason)
         if reason == "scope":
             self.withdraw_delivery()
         froze = False
+        # Once the kill began it counts as sent, until it turns out refused.
+        kill_sent = False
         try:
             async with self._stop_lock:
-                # A stop before this one whose kill failed gave its reason back.
+                # A stop before this one that sent no kill gave its reason back.
                 claimed = self._request_stop(reason) or claimed
                 if not self.finished and not self._killed.is_set():
                     froze = self._freeze_exits()
@@ -289,9 +303,16 @@ class CommandRecord:
                         if self._process.interrupt():
                             await self._wait_or_sleep(self._finished, COMMAND_STOP_GRACE_SECONDS)
                     if not self.finished:
-                        await self._kill()
-        except CommandStopError:
-            if not self.ended:
+                        kill_sent = True
+                        failure = await self._kill()
+                        if failure is not None:
+                            kill_sent = isinstance(failure, KillNotConfirmedError)
+                            raise await self._stop_error(failure) from failure
+                        # This kill ended the command: when every stop before
+                        # it gave its reason back, the reason is this one's.
+                        self._request_stop(reason)
+        except BaseException:
+            if not kill_sent and not self.ended:
                 # The command runs on; what it does from now on is its own.
                 if claimed:
                     self._stop_reason = None
@@ -656,18 +677,46 @@ class CommandRecord:
             return None
         return tuple(process for process in running if process.name.lower() != _CONSOLE_HOST)
 
-    async def _kill(self) -> None:
+    async def _kill(self) -> OSError | None:
+        """Kill every process of the command; the error when that is not confirmed.
+
+        Once begun, the kill runs to its end even when the caller is cancelled.
+        """
+        kill = asyncio.ensure_future(self._services.run_blocking(self._tree.terminate))
         try:
-            await self._services.run_blocking(self._tree.terminate)
+            await asyncio.shield(kill)
+        except asyncio.CancelledError:
+            kill.add_done_callback(self._cancelled_kill_ended)
+            raise
         except OSError as error:
-            facts = await self._tree_facts()
-            survivors = facts.running if facts is not None else ()
-            raise CommandStopError(
-                f"Could not stop command {self.command_id}: the operating system did not "
-                "confirm that its processes ended",
-                survivors=survivors,
-            ) from error
+            return error
         self._killed.set()
+        return None
+
+    async def _stop_error(self, failure: OSError) -> CommandStopError:
+        """The error of a kill that was not confirmed, naming the processes still running."""
+        facts = await self._tree_facts()
+        return CommandStopError(
+            f"Could not stop command {self.command_id}: the operating system did not "
+            "confirm that its processes ended",
+            survivors=facts.running if facts is not None else (),
+            kill_sent=isinstance(failure, KillNotConfirmedError),
+        )
+
+    def _cancelled_kill_ended(self, kill: asyncio.Future[Any]) -> None:
+        """The kill of a stop that was cancelled meanwhile ended."""
+        if kill.cancelled():
+            return
+        error = kill.exception()
+        if error is None:
+            self._killed.set()
+        else:
+            _LOGGER.warning(
+                "The kill of command %s, whose stop was cancelled, was not confirmed; "
+                "it stays listed",
+                self.command_id,
+                exc_info=error,
+            )
 
     # Delivery
 
