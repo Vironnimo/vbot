@@ -29,6 +29,7 @@ from core.settings import (
 )
 from core.settings.normalizers import normalize_model_task_settings
 from core.settings.settings import available_timezone_names, effective_timezone_name
+from core.tools.web_fetch import find_local_browser
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
@@ -672,6 +673,8 @@ async def _settings_response(state: Any) -> JsonObject:
         "web_fetch": {
             **runtime.storage.load_web_fetch_settings(),
             "available_providers": list(WEB_FETCH_PROVIDERS),
+            # The installed browser the fallback would use, or None.
+            "local_browser": (browser.name if (browser := find_local_browser()) else None),
             "services": [
                 {**item, "pricing_url": WEB_FETCH_PRICING[item["id"]]}
                 for item in _service_key_items(runtime, WEB_FETCH_CREDENTIALS)

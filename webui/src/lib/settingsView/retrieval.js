@@ -77,6 +77,7 @@ export function getWebFetchSettings(settings) {
   return {
     provider: typeof value.provider === 'string' ? value.provider : 'direct',
     mode: value.mode === 'prefer' ? 'prefer' : 'fallback',
+    browser: value.browser !== false,
   };
 }
 

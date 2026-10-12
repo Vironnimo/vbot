@@ -127,6 +127,7 @@ from core.tools.command_manager import CommandManager
 from core.tools.live import LiveToolHosts
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
+from core.tools.web_fetch import PageBrowser
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
@@ -212,6 +213,7 @@ class Runtime:
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
         self._keep_awake: KeepAwakeController | None = None
+        self._page_browser: PageBrowser | None = None
         self._agents: AgentStore | None = None
         self._tools: ToolRegistry | None = None
         self._memory_service: MemoryService | None = None

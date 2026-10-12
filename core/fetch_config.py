@@ -5,8 +5,13 @@ from typing import Any
 
 WEB_FETCH_PROVIDERS = ("direct", "firecrawl", "tavily", "exa", "parallel")
 WEB_FETCH_MODES = ("fallback", "prefer")
-DEFAULT_WEB_FETCH_SETTINGS = {"provider": "direct", "mode": "fallback"}
-WEB_FETCH_FIELDS = frozenset({"provider", "mode"})
+# The local browser costs nothing but time, so it is on unless the user turns it off.
+DEFAULT_WEB_FETCH_SETTINGS: dict[str, Any] = {
+    "provider": "direct",
+    "mode": "fallback",
+    "browser": True,
+}
+WEB_FETCH_FIELDS = frozenset({"provider", "mode", "browser"})
 WEB_FETCH_CREDENTIALS = {
     "firecrawl": "FIRECRAWL_API_KEY",
     "tavily": "TAVILY_API_KEY",
@@ -33,4 +38,8 @@ def parse_web_fetch_settings(value: Any, *, partial: bool = False) -> dict[str, 
             if not isinstance(value[key], str) or value[key] not in allowed:
                 raise ValueError(f"web_fetch.{key} must be one of: {', '.join(allowed)}")
             result[key] = value[key]
+    if "browser" in value:
+        if not isinstance(value["browser"], bool):
+            raise ValueError("web_fetch.browser must be true or false")
+        result["browser"] = value["browser"]
     return result

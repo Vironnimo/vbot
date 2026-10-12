@@ -120,8 +120,10 @@ describe('Web Fetch settings', () => {
     await choose('settings-web-fetch-provider', TAVILY());
     await vi.advanceTimersByTimeAsync(850);
     expect(rpcMock).toHaveBeenCalledWith('settings.update', {
-      web_fetch: { provider: 'tavily', mode: 'fallback' },
-      base: { web_fetch: { provider: 'direct', mode: 'fallback' } },
+      web_fetch: { provider: 'tavily', mode: 'fallback', browser: true },
+      base: {
+        web_fetch: { provider: 'direct', mode: 'fallback', browser: true },
+      },
     });
     await choose('settings-web-fetch-provider', PARALLEL());
     resolveSave({
@@ -134,6 +136,42 @@ describe('Web Fetch settings', () => {
     expect(
       document.getElementById('settings-web-fetch-provider').textContent,
     ).toContain(PARALLEL());
+  });
+
+  it('names the server browser and saves turning the browser fallback off', async () => {
+    rpcMock.mockResolvedValue(settings);
+    component = mount(Panel, {
+      target: document.body,
+      props: {
+        settings: {
+          ...settings,
+          web_fetch: { ...settings.web_fetch, local_browser: 'Microsoft Edge' },
+        },
+      },
+    });
+    flushSync();
+    expect(document.body.textContent).toContain(
+      t('settings.webFetch.browserFound', { browser: 'Microsoft Edge' }),
+    );
+    const toggle = document.getElementById('settings-web-fetch-browser');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    toggle.click();
+    flushSync();
+    await vi.advanceTimersByTimeAsync(850);
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
+      web_fetch: { provider: 'direct', mode: 'fallback', browser: false },
+      base: {
+        web_fetch: { provider: 'direct', mode: 'fallback', browser: true },
+      },
+    });
+  });
+
+  it('says when the server has no browser for the fallback', () => {
+    component = mount(Panel, { target: document.body, props: { settings } });
+    flushSync();
+    expect(document.body.textContent).toContain(
+      t('settings.webFetch.browserMissing'),
+    );
   });
 
   it('retains the selection and exposes save failure for retry', async () => {

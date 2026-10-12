@@ -171,6 +171,8 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("command_processes", commands.close, commands.aclose)
     if (terminals := runtime._terminal_manager) is not None:
         yield _Step("terminals", terminals.stop, terminals.aclose)
+    if (page_browser := runtime._page_browser) is not None:
+        yield _Step("page_browser", page_browser.close, page_browser.aclose)
     if (keep_awake := runtime._keep_awake) is not None:
         yield _Step("keep_awake", keep_awake.close, keep_awake.close)
     if (storage := runtime._storage) is not None:

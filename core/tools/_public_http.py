@@ -636,6 +636,19 @@ async def check_public_url(url: str) -> None:
         raise _url_error(error) from error
 
 
+async def resolve_public_address(host: str, port: int) -> str:
+    """Return the public IP a connection to ``host:port`` must use.
+
+    Raises ``PublicFetchError`` when the host is private, local or unresolvable.
+    Callers connect to exactly the returned address, so a later DNS answer
+    cannot swap in a private one.
+    """
+    try:
+        return (await _validate_public_target("https", host, port))[1]
+    except ValueError as error:
+        raise _url_error(error) from error
+
+
 async def fetch_public(
     url: str,
     *,
@@ -681,4 +694,5 @@ __all__ = [
     "PublicResponse",
     "check_public_url",
     "fetch_public",
+    "resolve_public_address",
 ]

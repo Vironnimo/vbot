@@ -14,7 +14,11 @@ from core.storage.storage import StorageManager
 
 def test_defaults_never_enable_paid_extraction(tmp_path):
     storage = StorageManager(tmp_path)
-    assert storage.load_web_fetch_settings() == {"provider": "direct", "mode": "fallback"}
+    assert storage.load_web_fetch_settings() == {
+        "provider": "direct",
+        "mode": "fallback",
+        "browser": True,
+    }
     assert build_effective_settings({})["web_fetch"] == storage.load_web_fetch_settings()
 
 
@@ -25,12 +29,14 @@ def test_path_settings_support_selection_and_reset():
             [
                 {"op": "set", "path": "web_fetch.provider", "value": "parallel"},
                 {"op": "set", "path": "web_fetch.mode", "value": "prefer"},
+                {"op": "set", "path": "web_fetch.browser", "value": False},
             ]
         ),
     )
     assert build_effective_settings(candidate)["web_fetch"] == {
         "provider": "parallel",
         "mode": "prefer",
+        "browser": False,
     }
 
 
@@ -38,14 +44,29 @@ def test_selection_roundtrips_and_sparse_update_preserves_mode(tmp_path):
     storage = StorageManager(tmp_path)
     parsed = parse_settings_update({"web_fetch": {"provider": "parallel", "mode": "prefer"}})
     storage.update_settings_sections(parsed)
-    assert storage.load_web_fetch_settings() == {"provider": "parallel", "mode": "prefer"}
-    storage.update_settings_sections(parse_settings_update({"web_fetch": {"provider": "direct"}}))
-    assert storage.load_web_fetch_settings() == {"provider": "direct", "mode": "prefer"}
+    assert storage.load_web_fetch_settings() == {
+        "provider": "parallel",
+        "mode": "prefer",
+        "browser": True,
+    }
+    storage.update_settings_sections(parse_settings_update({"web_fetch": {"browser": False}}))
+    assert storage.load_web_fetch_settings() == {
+        "provider": "parallel",
+        "mode": "prefer",
+        "browser": False,
+    }
 
 
 @pytest.mark.parametrize(
     "value",
-    [[], {"provider": "auto"}, {"mode": "always"}, {"api_key": "secret"}, {"provider": True}],
+    [
+        [],
+        {"provider": "auto"},
+        {"mode": "always"},
+        {"api_key": "secret"},
+        {"provider": True},
+        {"browser": "yes"},
+    ],
 )
 def test_invalid_or_secret_fields_cannot_enter_settings(value):
     with pytest.raises(SettingsValidationError):

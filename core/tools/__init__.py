@@ -178,6 +178,7 @@ from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
     WEB_FETCH_TOOL_PARAMETERS,
+    PageBrowser,
     register_web_fetch_tool,
 )
 from core.tools.web_search import (
@@ -333,6 +334,7 @@ __all__ = [
     "register_terminal_tool",
     "register_generate_image_tool",
     "register_web_fetch_tool",
+    "PageBrowser",
     "register_web_search_tool",
     "tool_failure",
     "tool_failure_for_exception",
