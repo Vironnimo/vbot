@@ -535,27 +535,55 @@ describe('Review changes', () => {
 });
 
 describe('handed-off command statuses', () => {
-  it('applies live command statuses without letting a stale running undo an end', () => {
-    const { chatState, controller } = setupController();
+  const live = (status, { sessionId = 'session-one', stillRunning } = {}) => ({
+    status,
+    stillRunning: stillRunning === true,
+    sessionId,
+  });
+  const state = (status, stillRunning = false) => ({ status, stillRunning });
 
-    controller.applyCommandStatuses({ cmd_one: 'running' });
-    controller.applyCommandStatuses({
-      cmd_one: 'running',
-      cmd_two: 'running',
+  it('joins live command states by Session, the further state winning, until a reconnect may have missed an end', async () => {
+    const stopCommand = vi
+      .fn()
+      .mockResolvedValue({ stopped: true, status: 'stopped' });
+    const { chatState, controller } = setupController({
+      operationOverrides: { stopCommand },
     });
-    controller.applyCommandStatuses({
-      cmd_one: 'completed',
-      cmd_two: 'running',
-    });
-    // A map that still holds an older `running` changes nothing known to end.
-    controller.applyCommandStatuses({
-      cmd_one: 'running',
-      cmd_two: 'failed',
-    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    const forwarded = {
+      cmd_one: live('running'),
+      cmd_two: live('completed', { stillRunning: true }),
+      cmd_source: live('running', { sessionId: 'session-source' }),
+    };
 
+    controller.applyCommandStatuses(forwarded);
+    await controller.stopCommand({ sessionState, commandId: 'cmd_one' });
+    // App's map still holds the `running` from before the stop's own event.
+    controller.applyCommandStatuses({ ...forwarded });
     expect(chatState.commandStatuses).toEqual({
-      cmd_one: 'completed',
-      cmd_two: 'failed',
+      'session-one': {
+        cmd_one: state('stopped'),
+        cmd_two: state('completed', true),
+      },
+      'session-source': { cmd_source: state('running') },
     });
+
+    // Processes left running never start again.
+    controller.applyCommandStatuses({
+      ...forwarded,
+      cmd_two: live('completed'),
+    });
+    expect(chatState.commandStatuses['session-one'].cmd_two).toEqual(
+      state('completed'),
+    );
+
+    // App starts its map over after a replay gap; what the stop learned
+    // goes too.
+    controller.applyConnectionSnapshot({
+      replay_status: 'gap',
+      active_runs: [],
+    });
+    controller.applyCommandStatuses({});
+    expect(chatState.commandStatuses).toEqual({});
   });
 });

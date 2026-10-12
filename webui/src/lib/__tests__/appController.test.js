@@ -158,26 +158,52 @@ describe('App controller', () => {
     expect(state.sessionDeletion).not.toBe(first);
   });
 
-  it('keeps the latest command status per command in a bounded map', async () => {
+  it('keeps the latest state per command in a bounded map until a reconnect may have missed an end', async () => {
     const { controller, state } = setup();
-    const statusChanged = (commandId, status) =>
+    const statusChanged = (commandId, status, extra = {}) =>
       controller.handleServerEvent({
         type: 'command_status_changed',
-        payload: { command_id: commandId, status },
+        payload: {
+          command_id: commandId,
+          session_id: 'session-one',
+          status,
+          still_running: false,
+          ...extra,
+        },
+      });
+    const connectionReady = (replayStatus) =>
+      controller.handleServerEvent({
+        type: 'connection_ready',
+        replay_status: replayStatus,
+        active_runs: [],
       });
 
     await statusChanged('cmd_first', 'running');
     for (let index = 0; index < 205; index += 1) {
       await statusChanged(`cmd_${index}`, 'running');
     }
-    await statusChanged('cmd_204', 'stopped');
+    await statusChanged('cmd_204', 'completed', { still_running: true });
+    // A status without its Session cannot be shown in the right one.
+    await statusChanged('cmd_unowned', 'running', { session_id: undefined });
 
     const commandIds = Object.keys(state.commandStatuses);
     expect(commandIds).toHaveLength(200);
     expect(state.commandStatuses.cmd_first).toBeUndefined();
     expect(commandIds[0]).toBe('cmd_5');
     expect(commandIds.at(-1)).toBe('cmd_204');
-    expect(state.commandStatuses.cmd_204).toBe('stopped');
+    expect(state.commandStatuses.cmd_204).toEqual({
+      status: 'completed',
+      stillRunning: true,
+      sessionId: 'session-one',
+    });
+
+    await connectionReady('resumed');
+    expect(Object.keys(state.commandStatuses)).toHaveLength(200);
+    for (const replayStatus of ['gap', 'epoch_changed']) {
+      await statusChanged('cmd_204', 'running');
+      await connectionReady(replayStatus);
+      expect(state.commandStatuses).toEqual({});
+    }
   });
 
   it('keeps the latest pushed Recall index status', async () => {

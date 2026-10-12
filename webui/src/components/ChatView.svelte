@@ -112,8 +112,9 @@
     // in arrival order, read from this Chat's own position, and the Runs
     // active now.
     runEvents = null,
-    // App's bounded live map of background shell command statuses by command
-    // id (`command_status_changed`); the controller re-applies the whole map.
+    // App's bounded live map of background shell commands by command id
+    // (`command_status_changed`: `{ status, stillRunning, sessionId }`); the
+    // controller re-applies the whole map.
     commandStatuses = {},
     connectionSnapshot = null,
     // Bumped by App when Session-list continuity is uncertain (replay gap or
@@ -365,15 +366,20 @@
   let activeTimelineItems = $derived(
     visibleTimelineItemsForRender(target.activeSessionState),
   );
+  // The live state of the displayed Session's own background commands; a
+  // fork's History names its source's commands, which never run for it.
+  let displayedCommandStatuses = $derived(
+    chatState.commandStatuses[target.activeSessionState?.sessionId] ?? {},
+  );
   // Known work that outlives the Run: a running Sub-Agent or background
-  // command the loaded rows started. It keeps Stop all offered once the Run
-  // ended.
+  // command the loaded rows started, or processes such a command left
+  // running. It keeps Stop all offered once the Run ended.
   let backgroundWorkRunning = $derived(
     backgroundTasks(
       activeTimelineItems,
       chatState.subAgentStatuses,
       target.activeSessionState?.backgroundCommandStatuses,
-      chatState.commandStatuses,
+      displayedCommandStatuses,
     ).some((task) => task.dotStatus === 'running'),
   );
   // Every Agent the picker offers: Identity Agents, then each Project Team.
@@ -960,7 +966,7 @@
             subAgentStatuses={chatState.subAgentStatuses}
             backgroundCommandStatuses={target.activeSessionState
               ?.backgroundCommandStatuses}
-            commandStatuses={chatState.commandStatuses}
+            commandStatuses={displayedCommandStatuses}
             onLoadOlder={actions.loadOlderHistory}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             otherArea={subAgentOtherArea}
@@ -1169,7 +1175,7 @@
         onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
         backgroundCommandStatuses={target.activeSessionState
           ?.backgroundCommandStatuses}
-        commandStatuses={chatState.commandStatuses}
+        commandStatuses={displayedCommandStatuses}
         reflectionTasks={reflectionTaskRows(target.activeSessionState)}
         sessionStats={sessionChanges.stats}
         onSessionStatsWanted={sessionChanges.setWanted}

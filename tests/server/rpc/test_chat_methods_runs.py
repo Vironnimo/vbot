@@ -14,6 +14,7 @@ from core.database import write_bootstrap_marker
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import ToolContext, tool_success
+from core.tools.process_tree import RunningProcess
 from server.file_delivery import FileDelivery
 from server.rpc.errors import (
     RPC_ERROR_COMMAND_NOT_FOUND,
@@ -211,20 +212,35 @@ async def test_stop_command_stops_a_background_command_for_the_user(tmp_path: Pa
         ended, process = await _background_command(commands)
         process.exit(0)
         await commands.finish(ended)
+        # Its shell exited while a server it started still runs; its result
+        # was delivered then.
+        lingering, shell = await _background_command(commands)
+        shell.exit(0, leftovers=[RunningProcess(20_001, "node")])
+        await commands.advance(3.25)
+        delivered = list(commands.sink.bodies)
 
-        stopped = await call(
-            state, "chat.stop_command", session_id=OWNER.session_id, command_id=running
-        )
+        async def stop(command_id: str) -> JsonObject:
+            return await call(
+                state, "chat.stop_command", session_id=OWNER.session_id, command_id=command_id
+            )
+
+        stopped = await stop(running)
         report = await commands.finish(running)
-        late = await call(state, "chat.stop_command", session_id=OWNER.session_id, command_id=ended)
+        late = await stop(ended)
+        server_stopped = await stop(lingering)
+        lingering_report = commands.manager.report(lingering)
 
-    assert stopped == {"ok": True, "result": {"stopped": True}}
+    assert stopped == {"ok": True, "result": {"stopped": True, "status": "stopped"}}
     assert (report.status, report.stop_reason) == ("stopped", "user")
     # The Agent learns that the user stopped it.
-    assert commands.sink.bodies[-1] == format_report(report)
+    assert commands.sink.bodies == [*delivered, format_report(report)]
     # A command that had ended keeps its own end.
-    assert late == {"ok": True, "result": {"stopped": False}}
+    assert late == {"ok": True, "result": {"stopped": False, "status": "completed"}}
     assert commands.manager.report(ended).status == "completed"
+    # The processes it left running are stopped; it keeps its end, and nothing
+    # more is delivered.
+    assert server_stopped == {"ok": True, "result": {"stopped": True, "status": "completed"}}
+    assert (lingering_report.finished, lingering_report.still_running) == (True, ())
 
 
 @pytest.mark.asyncio
@@ -240,7 +256,10 @@ async def test_command_output_reads_the_status_and_the_newest_200_lines(tmp_path
         )
 
     assert response["ok"] is True, response
-    assert response["result"]["status"] == "running"
+    assert (response["result"]["status"], response["result"]["still_running"]) == (
+        "running",
+        False,
+    )
     lines = response["result"]["output"].splitlines()
     assert (len(lines), lines[0], lines[-1]) == (200, "line 6", "line 205")
 

@@ -294,7 +294,7 @@ describe('Sub-Agent rows', () => {
         },
       ],
       { 'run:run-reviewer': 'completed' },
-      { cmd_one: 'failed' },
+      { cmd_one: { status: 'failed', stillRunning: false } },
     );
 
     expect(tasks.map((task) => [task.tool.id, task.dotStatus])).toEqual([

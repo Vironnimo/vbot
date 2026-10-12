@@ -90,8 +90,11 @@ export function createAppControllerState() {
     // The server's background activity list: loaded on every connection,
     // then replaced by each `activity_status` push.
     backgroundActivity: [],
-    // Background shell command status by command id, from
-    // `command_status_changed` (bounded, newest last).
+    // Background shell commands by command id, from `command_status_changed`
+    // (bounded, newest last): `{ status, stillRunning, sessionId }`, where
+    // `stillRunning` marks processes the command started that still run after
+    // its shell exited. A replay gap or a server restart may have lost an
+    // end, so the map starts over then.
     commandStatuses: {},
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
@@ -211,6 +214,7 @@ export function createAppController({
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
         event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
       ) {
+        state.commandStatuses = {};
         state.modelsRefreshToken += 1;
         state.memoriesRefreshToken += 1;
         state.projectsRefreshToken += 1;
@@ -240,15 +244,24 @@ export function createAppController({
     if (event.type === 'command_status_changed') {
       const commandId = event.payload?.command_id;
       const status = event.payload?.status;
+      const sessionId = event.payload?.session_id;
       if (
         typeof commandId === 'string' &&
         commandId &&
         typeof status === 'string' &&
-        status
+        status &&
+        typeof sessionId === 'string' &&
+        sessionId
       ) {
         state.commandStatuses = mergeBoundedEntries(
           state.commandStatuses,
-          { [commandId]: status },
+          {
+            [commandId]: {
+              status,
+              stillRunning: event.payload.still_running === true,
+              sessionId,
+            },
+          },
           MAX_COMMAND_STATUSES,
         ).entries;
       }

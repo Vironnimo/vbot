@@ -160,7 +160,15 @@ describe('ChatView Runs', () => {
   describe('run stream', () => {
     it('applies a live command status without a reactive update loop', async () => {
       rpcMock.mockImplementation(createChatRpcMock());
-      await chat.mountChat({ commandStatuses: { cmd_test: 'completed' } });
+      await chat.mountChat({
+        commandStatuses: {
+          cmd_test: {
+            status: 'completed',
+            stillRunning: false,
+            sessionId: 'session-one',
+          },
+        },
+      });
 
       const input = document.querySelector('textarea');
       setInputValue(input, 'Continue after completion');

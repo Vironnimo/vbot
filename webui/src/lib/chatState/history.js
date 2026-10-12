@@ -116,18 +116,35 @@ export function loadHistory(sessionState, messages, options = {}) {
   if (isRecord(options.compactionPolicy)) {
     sessionState.compactionPolicy = options.compactionPolicy;
   }
-  // An incremental response reports the statuses its appended records
-  // changed (none when absent); any other response reports them all.
-  const backgroundCommandStatuses = isRecord(options.backgroundCommandStatuses)
+  sessionState.backgroundCommandStatuses = nextBackgroundCommandStatuses(
+    incremental ? sessionState.backgroundCommandStatuses : {},
+    options,
+  );
+  return sessionState;
+}
+
+// An incremental response reports the statuses its appended records and the
+// Session's live commands changed (none when absent); any other response
+// reports them all. The commands whose processes still run after their shell
+// exited are listed in full whenever the response reports statuses.
+function nextBackgroundCommandStatuses(known, options) {
+  const entries = { ...known };
+  const statuses = isRecord(options.backgroundCommandStatuses)
     ? options.backgroundCommandStatuses
     : {};
-  sessionState.backgroundCommandStatuses = incremental
-    ? {
-        ...sessionState.backgroundCommandStatuses,
-        ...backgroundCommandStatuses,
-      }
-    : { ...backgroundCommandStatuses };
-  return sessionState;
+  for (const [commandId, status] of Object.entries(statuses)) {
+    entries[commandId] = { status, stillRunning: false };
+  }
+  if (Array.isArray(options.backgroundCommandsStillRunning)) {
+    const stillRunning = new Set(options.backgroundCommandsStillRunning);
+    for (const [commandId, entry] of Object.entries(entries)) {
+      entries[commandId] = {
+        ...entry,
+        stillRunning: stillRunning.has(commandId),
+      };
+    }
+  }
+  return entries;
 }
 
 function mergeHistoryRecords(existing, incoming) {
@@ -186,11 +203,6 @@ export function prependHistory(sessionState, messages, options = {}) {
     options.hasMore === true && typeof options.nextBefore === 'string'
       ? options.nextBefore
       : '';
-  if (isRecord(options.backgroundCommandStatuses)) {
-    sessionState.backgroundCommandStatuses = {
-      ...options.backgroundCommandStatuses,
-    };
-  }
   return sessionState;
 }
 
@@ -201,6 +213,14 @@ function findLastUsage(messages) {
     }
   }
   return null;
+}
+
+// The Session's next History read reads it in full and replaces what the
+// Session holds; a read already under way no longer applies.
+export function invalidateLoadedHistory(sessionState) {
+  sessionState.historyAfter = '';
+  sessionState.historySnapshotVersion =
+    (sessionState.historySnapshotVersion ?? 0) + 1;
 }
 
 export function truncateSessionForEdit(sessionState, messageId, acceptedRunId) {
