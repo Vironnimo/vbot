@@ -9,7 +9,9 @@ names the next action.
 
 Design rules (keep them when adding a pattern):
 
-* Only non-zero exit codes get a hint; success is never annotated.
+* Only non-zero exit codes get a hint, except for a command that did not run as
+  written, which the command text shows: a typographic quote that ended a
+  PowerShell string.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
@@ -487,6 +489,135 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
 
 def _has_bash_quote_idiom(text: str) -> bool:
     return any(idiom in text for idiom in _BASH_QUOTE_IDIOMS)
+
+
+# PowerShell takes the typographic quotes for quotes of their kind, as it does ' and ".
+_SINGLE_QUOTES = "'‘’‚‛"
+_DOUBLE_QUOTES = '"“”„'
+# Where something in PowerShell code can start a string, a comment or an escape.
+_CODE_MARK = re.compile(rf"[#<@`{_SINGLE_QUOTES}{_DOUBLE_QUOTES}]")
+_SINGLE_MARK = re.compile(rf"[{_SINGLE_QUOTES}]")
+_DOUBLE_MARK = re.compile(rf"[`{_DOUBLE_QUOTES}]")
+_HERE_STRING_START = re.compile(rf"@([{_SINGLE_QUOTES}{_DOUBLE_QUOTES}])[ \t]*\r?\n")
+# A comment's # starts a token: after a blank, a separator or a bracket.
+_TOKEN_BOUNDARY = frozenset(" \t\r\n;|&(){},")
+
+
+@dataclass(frozen=True)
+class _PowerShellCode:
+    """A PowerShell command with the contents of its strings and comments blanked.
+
+    Offsets are the command's own. ``early_end`` is the first string opened with
+    ' or " that a typographic quote of the same kind ended: (opening offset,
+    closing offset).
+    """
+
+    text: str
+    early_end: tuple[int, int] | None
+
+
+def _powershell_code(command: str) -> _PowerShellCode:
+    """Blank strings, here-strings and comments of *command*, in one linear pass.
+
+    Inside single quotes, two quotes of that kind in a row are one literal
+    quote; inside double quotes, so are two double quotes or a backtick and the
+    character after it. PowerShell counts every typographic quote of a kind as
+    a quote of that kind (``it’s`` ends ``'it’s'`` early).
+    """
+    code = list(command)
+    early_end: tuple[int, int] | None = None
+    end = len(command)
+
+    def blank(start: int, stop: int) -> None:
+        for index in range(start, min(stop, end)):
+            if code[index] not in "\r\n":
+                code[index] = " "
+
+    position = 0
+    while mark := _CODE_MARK.search(command, position):
+        start = mark.start()
+        char = command[start]
+        if char == "`":
+            position = start + 2
+        elif char == "#":
+            if start and command[start - 1] not in _TOKEN_BOUNDARY:
+                position = start + 1
+                continue
+            stop = command.find("\n", start)
+            stop = end if stop < 0 else stop
+            blank(start, stop)
+            position = stop
+        elif char == "<":
+            if not command.startswith("<#", start):
+                position = start + 1
+                continue
+            stop = command.find("#>", start + 2)
+            stop = end if stop < 0 else stop + 2
+            blank(start, stop)
+            position = stop
+        elif char == "@":
+            opener = _HERE_STRING_START.match(command, start)
+            if opener is None:
+                position = start + 1
+                continue
+            kind = _SINGLE_QUOTES if opener[1] in _SINGLE_QUOTES else _DOUBLE_QUOTES
+            close = re.compile(rf"\n[{kind}]@").search(command, opener.end())
+            stop = end if close is None else close.start()
+            blank(opener.end(), stop)
+            position = end if close is None else close.end()
+        else:
+            single = char in _SINGLE_QUOTES
+            inner = _SINGLE_MARK if single else _DOUBLE_MARK
+            kind = _SINGLE_QUOTES if single else _DOUBLE_QUOTES
+            index = start + 1
+            stop = end
+            while found := inner.search(command, index):
+                at = found.start()
+                if command[at] == "`" or at + 1 < end and command[at + 1] in kind:
+                    index = at + 2
+                else:
+                    stop = at
+                    break
+            blank(start + 1, stop)
+            if early_end is None and stop < end and char in "'\"" and command[stop] != char:
+                early_end = (start, stop)
+            position = stop + 1
+    return _PowerShellCode("".join(code), early_end)
+
+
+_STRING_SHOWN_CHARS = 40
+
+
+def _hint_typographic_quote(command: str) -> str | None:
+    """Name a typographic quote that ended a string early.
+
+    Agents quote text copied from web pages: ``--quote 'Köln (lateinisch ‚Colonia‘) ...'``
+    was cut at ‚, so the program got two arguments, or PowerShell reported a
+    ParserError, and nothing said why. Read from the command alone, whatever the
+    exit code: the command did not run as written either way.
+    """
+    if not _POWERSHELL:
+        return None
+    early_end = _powershell_code(command).early_end
+    if early_end is None:
+        return None
+    start, stop = early_end
+    single = command[start] == "'"
+    kind, name = (_SINGLE_QUOTES, "single") if single else (_DOUBLE_QUOTES, "double")
+    typographic = "".join(dict.fromkeys(char for char in command if char in kind[1:]))
+    listed = " and ".join(typographic) if len(typographic) <= 2 else ", ".join(typographic)
+    plural = len(typographic) > 1
+    text = command[start + 1 : stop]
+    if len(text) > _STRING_SHOWN_CHARS:
+        text = text[: _STRING_SHOWN_CHARS - 3] + "..."
+    doubled = " and ".join(char * 2 for char in typographic)
+    return (
+        f"PowerShell reads {listed} as {name} quote{'s' if plural else ''}, so {command[stop]} "
+        f"ended the string {command[start]}{text}{command[stop]} early and the command did not "
+        f"run as written. Inside {name} quotes, write {'each of them' if plural else 'it'} "
+        f"twice ({doubled}), or pass the text in a here-string: @' on its own line, the text, "
+        "then '@ at the start of a line."
+    )
 
 
 # A word of the command, between blanks, quotes, parentheses and separators.
@@ -973,17 +1104,35 @@ def annotate_failure(
     *output* is the command's output as the Agent reads it; only its first and
     last ``_SCAN_CHARS`` characters are examined. *workdir* is the directory the
     command started in, when known. *offers* tells whether the Agent is offered
-    the Tool of a registry name; a hint names only offered Tools. Returns None
-    for exit code 0 or None, so successful and undetermined runs stay unannotated.
+    the Tool of a registry name; a hint names only offered Tools.
+
+    A command that did not run as written gets a hint whatever its exit code: a
+    typographic quote ended a string early (first, since every error follows
+    from it). Otherwise exit code 0 or None stays unannotated.
     """
-    if not exit_code:
-        return None
+    command = command or ""
     output = output or ""
+    try:
+        quote = _hint_typographic_quote(command)
+    except Exception:
+        quote = None
+    if quote:
+        return quote
+    return _failure_hint(command, exit_code, output, workdir, offers) if exit_code else None
+
+
+def _failure_hint(
+    command: str,
+    exit_code: int,
+    output: str,
+    workdir: Path | None,
+    offers: Callable[[str], bool],
+) -> str | None:
     window = output
     if len(output) > 2 * _SCAN_CHARS:
         window = f"{output[:_SCAN_CHARS]}\n{output[-_SCAN_CHARS:]}"
     if window:
-        failure = _Failure(command or "", window, workdir, offers, _error_start(window))
+        failure = _Failure(command, window, workdir, offers, _error_start(window))
         for hint_for in _OUTPUT_HINTS:
             try:
                 hint = hint_for(failure)
@@ -991,7 +1140,7 @@ def annotate_failure(
                 continue
             if hint:
                 return hint
-    if exit_code == 124 and _TIMEOUT_PROGRAM.search(command or ""):
+    if exit_code == 124 and _TIMEOUT_PROGRAM.search(command):
         return _TIMEOUT_PROGRAM_HINT
     return _EXIT_CODE_HINTS.get(exit_code)
 

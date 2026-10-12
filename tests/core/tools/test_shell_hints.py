@@ -633,6 +633,44 @@ def test_bash_syntax_and_quoting_that_break_powershell_are_named(
         assert annotate_failure(command, 1, output) is None
 
 
+@pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize(
+    ("command", "doubled"),
+    [
+        # Text copied from a web page: PowerShell ends the string at \u201a, so the
+        # program gets two arguments, or the rest is a ParserError.
+        (
+            "python cite.py --quote 'K\u00f6ln (lateinisch \u201aColonia\u2018) liegt am Rhein'",
+            "\u201a\u201a",
+        ),
+        ("$q = 'it\u2019s'; python cite.py --quote $q", "\u2019\u2019"),
+        ('python cite.py --quote "er sagte \u201eja\u201c"', "\u201e\u201e"),
+        # Doubled, of the other kind, in a here-string or in a comment: literal text.
+        ("python cite.py --quote 'lateinisch \u201a\u201aColonia\u2018\u2018'", None),
+        ('python cite.py --quote "it\u2019s \u201aja\u2018"', None),
+        ("python cite.py --quote '\u201eja\u201c'", None),
+        ("python cite.py --quote @'\nit\u2019s \u201aColonia\u2018\n'@", None),
+        ("python cite.py  # it\u2019s", None),
+    ],
+)
+def test_typographic_quotes_that_end_a_powershell_string_are_named(
+    monkeypatch: pytest.MonkeyPatch, command: str, doubled: str | None, exit_code: int
+) -> None:
+    output = "ParserError: Unexpected token in expression or statement." if exit_code else ""
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, exit_code, output)
+
+    if doubled is None:
+        assert hint is None
+    else:
+        # The hint names the fix: the quote written twice.
+        assert hint is not None and doubled in hint
+    # Bash takes typographic quotes as text.
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, 0, output) is None
+
+
 def _project(tmp_path: Path) -> Path:
     """A working directory holding the package `shop` and a `tests` folder."""
     (tmp_path / "shop").mkdir()
