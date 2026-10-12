@@ -743,8 +743,13 @@ async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(boar
     skipped, _ = await dispatch(board, {"action": "read", "limit": 1, "offset": "1"}, peer=1)
     assert skipped["data"]["content"].endswith(":\npost 1")
     assert continuation(skipped["data"]["older"])["before"] == "#2"
+    # The page names what offset skipped and the call for the newest posts it left out.
+    assert "#2" in skipped["data"]["page"]
+    newest, _ = await dispatch(board, continuation(skipped["data"]["page"]), peer=1)
+    assert newest["data"]["content"].endswith(":\npost 2")
     beyond, _ = await dispatch(board, {"action": "read", "offset": 3})
     assert beyond["ok"] and "content" not in beyond["data"]
+    assert continuation(beyond["data"]["page"]) == {"action": "read"}
     # Beside a post or a page start, offset positions nothing.
     one, _ = await dispatch(board, {"action": "read", "message_id": "#1", "offset": 2})
     assert one["data"]["content"].endswith(":\npost 0") and "note" not in one["data"]

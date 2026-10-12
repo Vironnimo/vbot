@@ -270,10 +270,29 @@ class BoardCall:
                 if count
                 else text.BOARD_PAGE_EMPTY_BEFORE.format(before=query["before"], discussion=label)
             )
-        elif "cursor" in query or (count and "offset" in query):
-            summary = text.BOARD_PAGE_OLDER.format(count=count, discussion=label)
         elif "offset" in query:
-            summary = text.BOARD_PAGE_EMPTY_OFFSET.format(offset=query["offset"], discussion=label)
+            # Callers send offset to page as elsewhere; say what it skipped and how to
+            # read the newest posts, which it left out.
+            newest: Json = {"action": "read"}
+            if discussion_id != self.main:
+                newest["discussion_id"] = discussion_ref(number)
+            if "limit" in query:
+                newest["limit"] = query["limit"]
+            summary = (
+                text.BOARD_PAGE_OFFSET.format(
+                    count=count,
+                    discussion=label,
+                    offset=query["offset"],
+                    post_id=post_ref(page.entries[-1]["sequence"]),
+                    call=call_text(newest),
+                )
+                if count
+                else text.BOARD_PAGE_EMPTY_OFFSET.format(
+                    offset=query["offset"], discussion=label, call=call_text(newest)
+                )
+            )
+        elif "cursor" in query:
+            summary = text.BOARD_PAGE_OLDER.format(count=count, discussion=label)
         else:
             summary = (
                 text.BOARD_PAGE_NEWEST.format(count=count, discussion=label)

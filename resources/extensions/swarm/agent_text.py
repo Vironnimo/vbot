@@ -340,7 +340,15 @@ BOARD_PAGE_BEFORE = "Posts before {before} in {discussion}, oldest first ({count
 BOARD_PAGE_EMPTY = "No posts in {discussion} yet."
 BOARD_PAGE_EMPTY_BEFORE = "No posts before {before} in {discussion}."
 BOARD_PAGE_OLDER = "Older posts of {discussion}, oldest first ({count} shown)."
-BOARD_PAGE_EMPTY_OFFSET = "No posts in {discussion} beyond its {offset} newest."
+# offset (unadvertised) skips the newest posts; callers often send it hoping for them.
+BOARD_PAGE_OFFSET = (
+    "Older posts of {discussion}, oldest first ({count} shown). offset {offset} skipped the "
+    "newest posts, those after {post_id}. Read the newest posts with {call}"
+)
+BOARD_PAGE_EMPTY_OFFSET = (
+    "No posts shown: offset {offset} skips that many of the newest posts, and {discussion} has "
+    "no older ones. Read the newest posts with {call}"
+)
 # Posts pending for the reader are new to it; delivered and own posts are not.
 BOARD_NEW = {
     "one": "{posts} is new to you.",
