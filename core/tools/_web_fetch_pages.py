@@ -18,13 +18,21 @@ MAX_CONTENT_TOKENS = 4_000
 MAX_SAVED_CHARS = 2_000_000
 _REF_BODY = r"tmp_[0-9a-hjkmnp-tv-z]{12}"
 _REF = re.compile(rf"({_REF_BODY})(?:\.([mp])\.([0-9]{{1,7}}))?")
-# A ref inside copied text, such as a find passage's "[ref ...]" prefix.
+# A ref inside copied text, such as a find passage's read-on call.
 REF_IN_TEXT = re.compile(rf"{_REF_BODY}(?:\.[mp]\.[0-9]{{1,7}})?")
 _CATEGORY = "web_fetch"
 _RETENTION_HOURS = int(TEMPORARY_FILE_RETENTION[_CATEGORY].total_seconds() // 3600)
 _PARTIAL_WARNING = "Saved content is partial (2,000,000-character limit per view)."
 # Snapshot limitations worth repeating when a later part is read.
 _LASTING_WARNINGS = ("partial", "Service unavailable")
+# Characters a find passage shows before and after its match: a paragraph of
+# prose, or about eight lines before and twenty-five after in plain text and code,
+# where a match is mostly a name whose definition follows.
+_PROSE_PASSAGE = (180, 350)
+_CODE_PASSAGE = (300, 900)
+# Passages this close together are shown as one, so no text appears twice.
+_ADJACENT_CHARS = 120
+_MAX_PASSAGES = 12
 
 
 class SavedPageError(ValueError):
@@ -171,47 +179,81 @@ def _read_text(
     return data
 
 
+def _passage_window(
+    text: str, offset: int, start: int, end: int, size: tuple[int, int]
+) -> tuple[int, int]:
+    """Return the passage around text[start:end], cut at line ends where lines are short."""
+    first = max(offset, start - size[0])
+    last = min(len(text), end + size[1])
+    if first > offset and text[first - 1] != "\n":
+        line_start = text.find("\n", first, start)
+        if line_start != -1:
+            first = line_start + 1
+    if last < len(text) and text[last - 1] != "\n":
+        line_end = text.rfind("\n", end, last)
+        if line_end != -1:
+            last = line_end + 1
+    return first, last
+
+
 def _find_text(
     snapshot: dict[str, Any], text: str, scope: str, offset: int, find: str, max_chars: int
 ) -> dict[str, Any]:
     ref = snapshot["ref"]
-    snippets: list[str] = []
+    before, after = _CODE_PASSAGE if snapshot.get("source") == "direct" else _PROSE_PASSAGE
+    # A small max_chars from older history still shows the match and its read-on call.
+    size = (min(before, max_chars // 5), min(after, max_chars // 2))
+    spans: list[list[int]] = []
     next_offset = None
-    last_end = -1
+
+    def render(passages: list[list[int]]) -> str:
+        parts = []
+        for first, last in passages:
+            passage = text[first:last].rstrip("\n")
+            if last < len(text):
+                passage += f"\nRead on with {_call({'ref': _continuation(ref, scope, last)})}"
+            parts.append(passage)
+        return "\n\n".join(parts)
+
     for match in re.finditer(re.escape(find), text[offset:], re.IGNORECASE):
         position = offset + match.start()
-        if position < last_end:
-            continue
-        start = max(offset, position - 180)
-        end = min(len(text), position + len(find) + 350)
-        snippet = f"[ref {_continuation(ref, scope, start)}]\n{text[start:end]}"
-        trial = "\n\n".join([*snippets, snippet])
-        if len(snippets) >= 12 or (snippets and _bounded(trial, max_chars) != trial):
+        first, last = _passage_window(text, offset, position, offset + match.end(), size)
+        if spans and first <= spans[-1][1] + _ADJACENT_CHARS:
+            if last <= spans[-1][1]:
+                continue
+            trial = [*spans[:-1], [spans[-1][0], last]]
+        elif len(spans) >= _MAX_PASSAGES:
             next_offset = position
             break
-        snippets.append(snippet)
-        last_end = end
+        else:
+            trial = [*spans, [first, last]]
+        rendered = render(trial)
+        if spans and _bounded(rendered, max_chars) != rendered:
+            # A match next to the last passage continues the search where it ends.
+            next_offset = spans[-1][1] if len(trial) == len(spans) else position
+            break
+        spans = trial
     searched = f"after character {offset}" if offset else "in the whole page"
-    if not snippets:
+    if not spans:
+        sections = (
+            ", including navigation and footers"
+            if scope == "page" and snapshot["page"] != snapshot["content"]
+            else ""
+        )
         return {
             "content": (
-                f"No matches for {_call(find)} {searched} ({len(text)} characters, "
-                "including navigation and footers). Try a shorter or different phrase."
+                f"No matches for {_call(find)} {searched} ({len(text)} characters{sections}). "
+                "Try a shorter or different phrase."
             )
         }
-    count = f"{len(snippets)} passage{'s' if len(snippets) != 1 else ''}"
-    data: dict[str, Any] = {
-        "shown": (
-            f"{count} matching {_call(find)} {searched}; each starts with a ref that "
-            "reads on from that point"
-        )
-    }
+    count = f"{len(spans)} passage{'s' if len(spans) != 1 else ''}"
+    data: dict[str, Any] = {"shown": f"{count} matching {_call(find)} {searched}"}
     if next_offset is not None:
         data["more"] = (
             "More matches. Continue with "
             f"{_call({'ref': _continuation(ref, scope, next_offset), 'find': find})}."
         )
-    data["content"] = _bounded("\n\n".join(snippets), max_chars)
+    data["content"] = _bounded(render(spans), max_chars)
     return data
 
 
