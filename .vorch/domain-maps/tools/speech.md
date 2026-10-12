@@ -6,7 +6,7 @@ Built-in `generate_speech` Tool for creating speech artifacts through the centra
 
 - Tool name: `generate_speech`
 - Registration: `register_generate_speech_tool(registry, speech_service)`
-- Model-facing schema: required `text` (string, `minLength: 1`) with no `additionalProperties` keyword; dispatch rejects unknown or malformed arguments. The Tool intentionally exposes only `text` - model, provider, voice, format, speed, and instructions come from Settings `model_tasks.text_to_speech`.
+- Model-facing schema: required `text` (string, `minLength: 1`) with no `additionalProperties` keyword; dispatch rejects malformed arguments and handles unknown ones by the shared rule (`tools.md` -> Unknown fields). The Tool intentionally exposes only `text` - model, provider, voice, format, speed, and instructions come from Settings `model_tasks.text_to_speech`.
 - Dialects (owner argument normalizer, spelling-insensitive): `input` (the OpenAI speech API name), `content`, and `transcript` -> `text`; two different texts fail with the central conflict error.
 - Display: summary field `text`.
 - Success data: `{ artifact }`; the artifact dict is also returned in the top-level `artifacts` list.

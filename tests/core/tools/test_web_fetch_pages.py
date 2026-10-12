@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from core.tools import _web_fetch_pages as pages
-from core.tools.contracts import ToolContractError
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
 from tests.core.tools.web_fetch_test_support import (
     fetch,
@@ -137,8 +136,9 @@ async def test_redundant_url_must_name_the_saved_page(tmp_path, monkeypatch):
         f"ref {ref} is the saved page of {final_url}, not https://example.com/other. Pass "
         "only ref to read the saved page, or only url to fetch the other address."
     )
-    with pytest.raises(ToolContractError, match='"fresh" is not a parameter'):
-        await tool.dispatch(context, {"url": final_url, "ref": ref, "fresh": True})
+    # An unknown field fetches nothing again; the result says it had no effect.
+    stale = await tool.dispatch(context, {"url": final_url, "ref": ref, "fresh": True})
+    assert stale["data"]["note"].startswith('"fresh" had no effect')
     network.assert_awaited_once()
 
 

@@ -158,8 +158,8 @@ Other rules:
 
 - Single-letter keys keep ripgrep's case: `-c` counts, `-C` is context.
 - A `pattern` list becomes repeated `-e`.
-- Unclear values, conflicting aliases and unknown fields are rejected.
-- The old `action` and `kind` fields are unknown fields.
+- Unclear values (`ignore_case: "maybe"`, a flag field without a usable value) and conflicting aliases are refused.
+- Unknown fields follow the shared rule (`tools.md` -> Unknown fields): the old `action` field refuses the call, the old `kind` runs without effect and says so.
 - A double-quoted encoded list in `args` keeps regex backslashes that are missing
   from its JSON escaping.
 - A scalar `args` string that starts with an option and contains no backslash
@@ -526,6 +526,7 @@ blank placeholders, so no sentence has to warn about them.
 | offset: `Pass next_offset to continue.` | Continuation uses the returned value, never a computed one (F4); Agents sent `offset: 0` in 213 of 217 calls that set it (Sessions, 2026-09). |
 | Help: `Output: content names each file on its own line, followed by line:text for its matching lines and line-text for context lines.` | States the heading layout (Results and Paging -> Content lines) for an Agent that asks how to read results (F4); it replaced `content shows path:line:text for matching lines and path-line-text for context lines` with the layout change (2026-10-12). |
 | `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
+| Unclear flag value: `search_files was not run: "ignore_case" must be true or false; received "maybe".` (lists: `must be a value or a list of values`) | A flag field the call cannot read used to stay an unknown field; unknown fields can now run without effect (`tools.md` -> Unknown fields), which would search without the flag the Agent asked for (F3). |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
 covered by `test_search_files_arguments.py` (the help examples run against a

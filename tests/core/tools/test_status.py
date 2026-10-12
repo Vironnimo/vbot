@@ -580,14 +580,6 @@ def test_status_tool_refuses_unclear_ids_before_lookup(
     assert sessions.calls == []
 
 
-def test_status_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
-    result = _dispatch(_registry(), tmp_path, {"unexpected": True})
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert "unexpected" in result["error"]["message"]
-
-
 @pytest.mark.parametrize(
     "arguments",
     (

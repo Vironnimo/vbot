@@ -30,7 +30,7 @@ from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.recall.recall import RecallBackendContext, RecallBackendRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
-from core.tools import ToolContractError, ToolRegistry
+from core.tools import ToolRegistry
 from tests.core.extensions.extension_test_support import (
     RecordingResponder,
     command_source,
@@ -156,9 +156,12 @@ def test_extension_tool_schemas_can_be_open_or_accept_unknown_arguments(tmp_path
     assert dispatch("ext_open", {"value": "declared"})["data"] == {
         "arguments": {"value": "declared"}
     }
-    # The declared properties are the complete parameter list...
-    with pytest.raises(ToolContractError, match='"unknown" is not a parameter'):
-        dispatch("ext_open", {"unknown": "rejected"})
+    # The declared properties are the complete parameter list: an unknown field
+    # does not reach the handler, and the result says it had no effect...
+    assert dispatch("ext_open", {"value": "declared", "unknown": "ignored"})["data"] == {
+        "arguments": {"value": "declared"},
+        "note": '"unknown" had no effect: ext_open has no such parameter.',
+    }
     # ...unless the schema explicitly admits additional properties.
     assert dispatch("ext_any", {"unknown": "preserved"})["data"] == {
         "arguments": {"unknown": "preserved"}

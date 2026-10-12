@@ -118,9 +118,9 @@ async def test_paths_resolve_from_the_working_directory_or_are_absolute(
     ("arguments", "refusal"),
     [
         pytest.param(
-            {"path": "notes.txt", "encoding": "latin-1"},
-            '"encoding" is not a parameter',
-            id="unknown-argument",
+            {"path": "notes.txt", "mode": "bytes"},
+            '"mode" is not a parameter',
+            id="unknown-mode",
         ),
         # A NUL makes no path on any platform; the refusal must not depend on
         # whether this host's filesystem layer raises for it or ignores it.

@@ -87,7 +87,7 @@ Every message names the next call or tells the Agent what to tell the user (toke
 ## Constraints & Gotchas
 
 - `entity_id`, `domain`, and `service` are grammar-checked after spelling repair and before URL construction - prevents path traversal; the `ha_call_service` domain blocklist stops code-execution / SSRF domains.
-- Dispatch contract validation rejects unknown keys and wrong types before the handler; the handlers do not re-check unknown fields. The runtime does not assume the Provider enforced JSON Schema.
+- Dispatch contract validation rejects wrong types before the handler and handles unknown keys by the shared rule (`tools.md` -> Unknown fields): a switch such as `force` refuses the call, an inert label runs with a note. The handlers do not re-check unknown fields. The runtime does not assume the Provider enforced JSON Schema.
 - Never pick an entity: name-like or missing references fail with candidates; one candidate is offered as a corrected call, not executed. Several candidates are listed for the Agent to choose.
 - The token is **never logged** (`_ha_request` logs status/detail, never the bearer value).
 - The handler guard (empty token -> `home_assistant_error`) is defense in depth behind the dispatch-time readiness check; it fires without attempting any request.

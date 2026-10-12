@@ -43,11 +43,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   patch, because shared contract normalization drops empty unadvertised root
   values (`_carry_empty_text`). Remark fields (`explanation`, `instructions`,
   `description`; any spelling) are dropped, and so is `dryRun` while `false`.
-  Every other field is an unknown parameter that fails at dispatch validation,
-  including other harnesses' commands and switches (text-editor `command`, Hermes
-  `mode`, `insert_line`, `expected_replacements`, Cursor `code_edit`, Windsurf
-  chunks); the edit engine rebuild (2026-10) dropped them, and they return only
-  with replay evidence. Two kinds of change in one call (also an `old_string`
+  Other harnesses' commands and switches fail at dispatch validation as unknown
+  fields that change the call (`tools.md` -> Unknown fields; text-editor `command`,
+  Hermes `mode`, `insert_line`, `expected_replacements`, Cursor `code_edit`,
+  Windsurf chunks); the edit engine rebuild (2026-10) dropped them, and they return
+  only with replay evidence. Other unknown fields run without effect, with a note. Two kinds of change in one call (also an `old_string`
   beside a nonempty patch), a `path` that contradicts the patch's file,
   incomplete old/new pairs and `replace_all` without `old_string` fail before any
   effect. `old_string` replacements match as substrings, precisely, else as a copy

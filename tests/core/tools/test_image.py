@@ -213,14 +213,14 @@ async def test_the_call_reaches_the_image_model(
             id="blank-prompt",
         ),
         pytest.param(
-            {"prompt": "a", "unexpected": True},
+            {"prompt": "a", "overwrite": True},
             contract_refusal(
                 "generate_image was not run:\n"
-                '- "unexpected" is not a parameter.\n'
+                '- "overwrite" is not a parameter.\n'
                 "generate_image parameters: prompt (required), source_images, aspect_ratio, "
                 "resolution, background, output_dir."
             ),
-            id="unknown-argument",
+            id="unknown-switch",
         ),
         pytest.param(
             {"prompt": "a", "aspect_ratio": "  ", "resolution": ""},

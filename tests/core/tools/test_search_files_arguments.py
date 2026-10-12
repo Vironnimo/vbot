@@ -847,7 +847,6 @@ _PATHS = "path must name a file or directory"
             "invalid_arguments",
             "offset must be between 0 and 1000000; received -1",
         ),
-        ({"args": ["needle"], "fuzzy": True}, None, '"fuzzy" is not a parameter'),
         ({"args": ["needle"], "argv": ["other"]}, None, "Conflicting values for args"),
         ({"args": r'["-e", "\bcall\("]'}, None, _LIST),
         ({"args": '["needle",]'}, None, _LIST),

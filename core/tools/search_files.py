@@ -299,8 +299,9 @@ def _values(value: Any) -> list[str] | None:
 def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
     """Turn flag-shaped fields from other search interfaces into args.
 
-    A field is translated only when its meaning is exact; anything else stays
-    for validation to report.
+    A field is translated only when its meaning is exact. A flag field whose
+    value is unclear (``ignore_case: "maybe"``) refuses the call; any other
+    field stays for validation.
     """
     result = dict(arguments)
     tokens: list[str] = []
@@ -309,6 +310,13 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
         if field in result and result[field] != value:
             raise ToolContractError(f"Conflicting values for {field}; provide one intended value.")
         result[field] = value
+
+    def unclear(key: str, value: Any, expected: str) -> ToolContractError:
+        received = json.dumps(value, ensure_ascii=False)
+        return ToolContractError(
+            f'{SEARCH_FILES_TOOL_NAME} was not run: "{key}" must be {expected}; '
+            f"received {received}."
+        )
 
     for key, value in arguments.items():
         if key in SEARCH_FILES_TOOL_PARAMETERS["properties"]:
@@ -320,28 +328,28 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
             set_field("pattern", value)
         elif letter in _SWITCH_LETTERS:
             if switch is None:
-                continue
+                raise unclear(key, value, "true or false")
             if switch:
                 tokens.extend(_SWITCH_LETTERS[letter])
         elif word in _SWITCH_WORDS:
             if switch is None:
-                continue
+                raise unclear(key, value, "true or false")
             tokens.extend(_SWITCH_WORDS[word][0 if switch else 1])
         elif letter in {"l", "c"} or word in {"count", "fileswithmatches", "filesonly"}:
             if switch is None:
-                continue
+                raise unclear(key, value, "true or false")
             if switch:
                 set_field("output", "count" if letter == "c" or word == "count" else "files")
         elif letter in _VALUED_LETTERS or word in _VALUED_WORDS:
             values = _values(value)
             if values is None:
-                continue
+                raise unclear(key, value, "a value or a list of values")
             flag = _VALUED_LETTERS.get(letter) or _VALUED_WORDS[word]
             tokens.extend(token for item in values for token in (flag, item))
         elif word in _EXCLUDE_WORDS:
             values = _values(value)
             if values is None:
-                continue
+                raise unclear(key, value, "a value or a list of values")
             tokens.extend(token for item in values for token in ("-g", "!" + item.lstrip("!")))
         elif letter in _FIELD_LETTERS:
             set_field(_FIELD_LETTERS[letter], value)
