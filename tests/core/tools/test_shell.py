@@ -29,6 +29,7 @@ import pytest_asyncio
 from core.projects import ProjectNotFoundError
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import shell as shell_module
+from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import CommandManager
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -338,6 +339,34 @@ async def test_long_output_keeps_head_and_tail_and_points_to_the_log_file(shell:
     assert marker is not None, omitted
     log = Path(marker[1]).read_text(encoding="utf-8").splitlines()
     assert len(log) == 500
+
+
+@pytest.mark.asyncio
+async def test_output_vbot_could_not_process_is_marked_as_missing(
+    shell: Shell, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    call = shell.call({"command": "test"})
+    process = await shell.started()
+    process.write("".join(f"line {number}\n" for number in range(200)))
+    await turns()
+
+    def broken(cleaner: OutputCleaner, data: bytes) -> OutputUpdate:
+        raise ValueError("cleaner bug")
+
+    monkeypatch.setattr(OutputCleaner, "feed", broken)
+    process.write("lost line\n")
+    await turns()
+    process.exit(0)
+
+    output = data(await shell.returned(call))["output"]
+    lines = output.splitlines()
+    # A marker follows the last processed line, and nothing calls the log complete.
+    assert lines[-2] == "line 199" and lines[-1].startswith("[") and "lost line" not in output
+    assert "complete output" not in output
+    omitted = next(line for line in lines if line.startswith("[... "))
+    log = re.search(r" is in (\S+) \.\.\.\]$", omitted)
+    assert log is not None, omitted
+    assert Path(log[1]).read_text(encoding="utf-8").splitlines()[-1] == "line 199"
 
 
 @pytest.mark.parametrize(

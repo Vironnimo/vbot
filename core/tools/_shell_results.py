@@ -115,6 +115,8 @@ def log_sentence(report: CommandReport) -> str:
         return ""
     # A running result shows only the newest output; Agents did not know what a
     # bare log_file field held.
+    if report.transcript.processing_failed:
+        return f" The output vBot processed is in {model_path(report.log_path)}."
     return f" The command's complete output is written live to {model_path(report.log_path)}."
 
 
@@ -124,9 +126,10 @@ def output_location(report: CommandReport, output: str) -> str | None:
     if report.log_path is None:
         return None
     path = model_path(report.log_path)
-    if f"the complete output is in {path}" in output:
+    noun = _log_content(report)
+    if f"the {noun} is in {path}" in output:
         return None
-    return f"The complete output is in {path}."
+    return f"The {noun} is in {path}."
 
 
 def stop_call(command_id: str) -> str:
@@ -387,7 +390,14 @@ def _holding_stage(command: str) -> str | None:
 def _full_output(report: CommandReport) -> str:
     """Where the omitted output is, as a clause of a marker."""
     path = report.log_path
-    return f"; the complete output is in {model_path(path)}" if path is not None else ""
+    if path is None:
+        return ""
+    return f"; the {_log_content(report)} is in {model_path(path)}"
+
+
+def _log_content(report: CommandReport) -> str:
+    """What the log file holds: everything, or only what came before a cleaning failure."""
+    return "output vBot processed" if report.transcript.processing_failed else "complete output"
 
 
 def _shortened(line: str, where: str) -> str:
