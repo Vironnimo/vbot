@@ -314,16 +314,40 @@ def test_a_kept_line_is_never_placed_on_another_line() -> None:
     assert match_copied_edit(content, lines) is None
 
 
-def test_a_copy_joined_across_a_line_break_is_refused() -> None:
-    # Placed on the continuation line, the added item would take its indentation.
-    content = (
-        "- The first item explains the setup and then wraps onto\n"
-        "  a second line of text that ends here.\n"
-        "- Second item.\n"
-    )
-    old = "wraps onto a second line of text that ends here."
+@pytest.mark.parametrize(
+    ("content", "old", "new", "expected"),
+    [
+        # Joined across a line break and placed on the continuation line, the added
+        # item would take its indentation.
+        (
+            "- The first item explains the setup and then wraps onto\n"
+            "  a second line of text that ends here.\n"
+            "- Second item.\n",
+            "wraps onto a second line of text that ends here.",
+            "wraps onto a second line of text that ends here.\n- Inserted item.",
+            None,
+        ),
+        # Broken into two lines, the copy would take the blank line below its line too
+        # and remove it.
+        ("def g():\n    return 1\n\n\ndef f():\n", "return\n1", "return 2", None),
+        # A copy that holds the blank line may remove it.
+        (
+            "def g():\n    value = 1\n\n    return value\n",
+            "value = 1\n\nreturn valeu",
+            "value = 2\nreturn value + 1",
+            "def g():\n    value = 2\n    return value + 1\n",
+        ),
+    ],
+)
+def test_a_copy_takes_only_the_lines_it_holds(
+    content: str, old: str, new: str, expected: str | None
+) -> None:
+    found = replace_copied(content, old, new)
 
-    assert replace_copied(content, old, old + "\n- Inserted item.") is None
+    if expected is None:
+        assert found is None
+        return
+    assert _applied(found).new_content == expected
 
 
 def test_a_kept_line_that_holds_its_file_line_may_add_a_note() -> None:
