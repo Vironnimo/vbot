@@ -98,6 +98,8 @@ def apply_hunks(
     """
     notes: list[str] = []
     written: list[tuple[str, int, int]] = []
+    # Edits that would only join lines are refused together: the first carries the others.
+    joins: list[_PatchError] = []
     for hunk in hunks:
         try:
             if hunk.replacement is not None:
@@ -105,6 +107,12 @@ def apply_hunks(
             else:
                 edited, placed = _apply_line_hunk(content, hunk, path, previous)
         except _PatchError as error:
+            if error.code == "line_join":
+                joins.append(error)
+                continue
+            if joins:
+                # A later failure can follow from the refused edits; they come first.
+                break
             if written:
                 error.details["written"] = [
                     {"label": label, "first": first, "last": last} for label, first, last in written
@@ -115,6 +123,13 @@ def apply_hunks(
             written = _track_written(written, content, edited, hunk.label)
         content = edited
         notes.extend(placed)
+    if joins:
+        first, *others = joins
+        if others:
+            first.details["also"] = [
+                {"label": other.values.get("label", ""), **other.details} for other in others
+            ]
+        raise first
     return content, notes, previous
 
 
@@ -244,6 +259,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             **values,
         )
     if found is not None:
+        _refuse_join(content, found, hunk, path)
         edited, placed = _keep_decorated(content, found, path)
         return edited, notes + _joined_lines(content, found) + placed
     details = _not_found(content, old, source="old_string")
@@ -266,6 +282,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
                 **values,
             )
         if copied is not None:
+            _refuse_join(content, copied, hunk, path)
             edited, placed = _keep_decorated(content, copied, path)
             return edited, [
                 *_deviations(copy_warnings(copied)),
@@ -286,6 +303,51 @@ def _keep_decorated(content: str, found: FuzzyReplacement, path: object) -> tupl
     spans = list(zip(found.before_spans, found.after_spans, strict=True))
     edited, notes = place_before_decorators(content, found.new_content, spans, path)
     return edited, _deviations(notes)
+
+
+def _refuse_join(content: str, found: FuzzyReplacement, hunk: _Hunk, path: object) -> None:
+    """Refuse a replacement whose only change drops the line break ending its old text.
+
+    Its next line would continue the matched text's last line, or a blank line
+    after it would go. In the recorded Sessions (2026-10), 9 such edits in 7
+    calls joined code lines or deleted blank lines, none on purpose. At the end
+    of the file it only removes the final line break, which can be meant.
+    """
+    replacement = hunk.replacement
+    assert replacement is not None
+    old, new = replacement.old, replacement.new
+    ending = next((e for e in ("\r\n", "\n", "\r") if old.endswith(e)), None)
+    if ending is None or not new or new != old[: -len(ending)]:
+        return
+    end = next(
+        (
+            end
+            for _, end in found.before_spans
+            if content[end - 1 : end] in ("\n", "\r") and end < len(content)
+        ),
+        None,
+    )
+    if end is None:
+        return
+    stop = end - 2 if content[end - 2 : end] == "\r\n" else end - 1
+    start = max(content.rfind("\n", 0, stop), content.rfind("\r", 0, stop)) + 1
+    after = _BREAK.search(content, end)
+    line = content[start:stop].strip()
+    following = content[end : after.start() if after else len(content)].strip()
+    if len(line) > _JOINED_SIDE_CHARACTERS:
+        line = "..." + line[-_JOINED_SIDE_CHARACTERS:]
+    if len(following) > _JOINED_SIDE_CHARACTERS:
+        following = following[:_JOINED_SIDE_CHARACTERS] + "..."
+    details: JsonObject = {"line": line, "next": following}
+    raise _PatchError(
+        "line_join",
+        template="line_join" if following else "blank_line_join",
+        path=path,
+        label=hunk.label,
+        details=details,
+        line=repr(line),
+        next=repr(following),
+    )
 
 
 def _joined_lines(content: str, found: FuzzyReplacement) -> list[str]:

@@ -340,6 +340,18 @@ def _written_text(error: JsonObject, shown: set[int]) -> list[str]:
     return [sentence + "".join(f"; {other} wrote {more}" for other, more in rest) + "."]
 
 
+def _join_text(join: JsonObject) -> str:
+    """Name one more edit of the call that would only join two lines."""
+    label = str(join["label"])
+    lead = (
+        f"{label[:1].upper()}{label[1:]}: new_string is likewise old_string without its "
+        "final line break; it would only"
+    )
+    if join["next"]:
+        return f"{lead} join the line {join['line']!r} with the next line, {join['next']!r}."
+    return f"{lead} delete the blank line after the line {join['line']!r}."
+
+
 def _span(first: int, last: int) -> str:
     return f"line {first}" if first == last else f"lines {first}-{last}"
 
@@ -429,6 +441,8 @@ def failure_text(error: JsonObject) -> str:
         lines.append(f"Where it occurs after {after}:" if after else "Where it occurs:")
         lines.extend(_excerpts(candidates, error.get("path_label")))
         lines.extend(_written_text(error, shown))
+    elif code == "line_join":
+        lines.extend(_join_text(join) for join in error.get("also") or ())
     if error.get("content"):
         lines.append(str(error["content"]))
     if error.get("completed_paths"):

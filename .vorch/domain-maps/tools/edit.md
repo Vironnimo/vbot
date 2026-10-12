@@ -85,11 +85,24 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   `X already reads as this edit would leave it.` (`these edits`) when the edits
   leave the file as it was, such as a change and its reversal (the
   `already_applied` template).
-  An edit whose `old_string` ends with a line break and whose non-empty
-  `new_string` does not joins the next line to its last line; when that line is
-  not blank and not the end of the file, a note quotes the joined line, at most
-  100 characters on each side of the join (`_joined_lines`). The edit applies as
-  sent: some joins are meant.
+  An edit whose non-empty `new_string` is its `old_string` without the final
+  line break changes nothing else; when the file continues after the match, the
+  call is refused before any effect (`line_join`, `_edit_engine._refuse_join`,
+  also for `apply_patch`'s `old_string` shapes): the edit would only join the
+  next line to the matched text's last line, or delete the blank line after it.
+  The refusal quotes both lines, at most 100 characters each, and says to leave
+  the edit out or, to join the lines, to include the next line in `old_string`
+  and `new_string`. Every such edit of the call is named in the one refusal
+  (`also` details, `Edit K: new_string is likewise ...`), and the closing names
+  them all (`with edits 2 and 3 corrected or left out`). At the end of the file
+  the edit applies: it only drops the final line break. Evidence: in the
+  recorded Sessions (2026-10), 9 such items in 7 successful calls, mostly from
+  one Model, joined code lines (twice breaking Python syntax) or deleted blank
+  lines, none on purpose; the Agents spent calls on reading and repairing them.
+  An edit that also changes text and drops the final line break joins the next
+  line to its last line; when that line is not blank and not the end of the
+  file, a note quotes the joined line, at most 100 characters on each side of
+  the join (`_joined_lines`). That edit applies as sent: some joins are meant.
   Coverage: `test_edits_that_leave_the_file_as_it_is_say_so`,
   `test_an_edit_that_drops_a_final_line_break_names_the_joined_line`. The
   display shows the path and the shared `file_changes` diff and notices.
@@ -142,6 +155,9 @@ where every form a Model sends is accepted (relative and absolute paths).
 | Match report for edit K > 1: `The closest text in the file after edits 1-4, line 287:`, `First difference: after edits 1-4, line 287 reads '...' where old_string has '...'.`, `Edit 2 of this call wrote line 287.` | Replaces `the file has` plus a trailing `Line numbers count the text as edits 1-4 left it.`: the report said the file had `Param(1)` at line 287, which edit 2 of the same call had written; the file held `Param(0)` (Swarm Run 2026-10). The trailing sentence came after the text it qualified, and naming the edit shows that the failed edit's place overlaps a change the call already makes. |
 | Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |
 | Joined-line note: `new_string does not end with a line break as old_string does, so the next line now continues its last line: import a2 from 'a';import b from 'b';` | In the recorded Sessions (2026-10), 4 of 2751 edit items joined two non-empty lines this way, none on purpose; the result said only `Updated X (line N).`, since the written text was what the call sent. Three cost 2 to 3 more calls each to find and undo the join (reads, a failed edit, the fix); the fourth, a joined TypeScript import, stayed in the file. The quoted line is a ready `old_string` for the fix; no line number, because a later edit of the same call can move it. |
+| `line_join`: `X, edit K of N: new_string is old_string without its final line break, so this edit would only join the line '...' with the next line, '...'. Leave this edit out; to join the two lines, include the next line in old_string and new_string.` | 9 items in 7 calls dropped only the final line break (Sessions, 2026-10); each joined code lines or deleted a blank line, none on purpose, and the result said only `Updated X (line N).`. The edit changes nothing else, so leaving it out is the usual fix; the second clause keeps an intended join possible without guessing. Quoting the lines instead of numbering them stays right when earlier edits of the call moved lines. |
+| `blank_line_join`: `... so this edit would only delete the blank line after the line '...'. Leave this edit out; to delete that blank line, end old_string with two line breaks and new_string with one.` | The same shape before a blank line deletes it. "Include the next line" would invite `old_string` `X\n\n` with `new_string` `X`, which joins the line after the blank one; the counted line breaks name the edit that deletes only the blank line. |
+| `Edit K: new_string is likewise old_string without its final line break; it would only join ...` plus the closing `Send all N edits again with edits J and K corrected or left out.` | One of the 7 calls had two such items; naming only the first would cost a second refused call. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 | Broken `edits` JSON text: `edits is not valid JSON. At character N, <what breaks in which field>:` + the text around it + how to write it | The former `edits arrived as text, not as an array.` named no break, so the Model could not tell what to fix; 12 `edits` texts in the live Sessions failed this way, 7 of them still after the quote repair (tool review 2026-10-11). |
 | `If this text fails again, send one edit per call, or call write with the whole file.` | Only for a break inside a text (a quote, an escape, a line break): long code with quotes is what Models fail to escape; a smaller call or `write` avoids the nested JSON. Dispatch does not know whether the call repeats, so the sentence is conditional. |

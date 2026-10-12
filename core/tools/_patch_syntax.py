@@ -118,6 +118,16 @@ _MESSAGES = {
     "text_not_found": "{where}: the lines to replace were not found.",
     "context_lines_not_found": "{where}: the context lines around the + lines were not found.",
     "old_text_not_found": "{where}: old_string was not found.",
+    "line_join": (
+        "{where}: new_string is old_string without its final line break, so this edit would "
+        "only join the line {line} with the next line, {next}. Leave this edit out; to join "
+        "the two lines, include the next line in old_string and new_string."
+    ),
+    "blank_line_join": (
+        "{where}: new_string is old_string without its final line break, so this edit would "
+        "only delete the blank line after the line {line}. Leave this edit out; to delete "
+        "that blank line, end old_string with two line breaks and new_string with one."
+    ),
     "eof_not_found": "{where}: the file does not end with the lines before *** End of File.",
     "not_after_hint": (
         '{where}: the lines to replace are not after the @@ line "{hint}"; they are at '

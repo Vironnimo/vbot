@@ -488,8 +488,11 @@ def _edit_failure(
     """Say that no edit was applied, why, and which edit to correct."""
     context.add_display_notice("error", str(error["message"]))
     total = len(edits)
-    label = str(error.get("label", ""))
-    number = next((n for n in range(1, total + 1) if label == f"edit {n} of {total}"), None)
+
+    def number_of(label: object) -> int | None:
+        return next((n for n in range(1, total + 1) if label == f"edit {n} of {total}"), None)
+
+    number = number_of(error.get("label", ""))
     if number is not None and number > 1:
         # The failed edit saw the text the earlier edits left, not the file.
         written = [
@@ -498,6 +501,12 @@ def _edit_failure(
         ]
         after = "edit 1" if number == 2 else f"edits 1-{number - 1}"
         error = {**error, "after": after, "written": written}
+    # Further edits refused with the first, such as other edits that only join lines.
+    also = error.get("also") or []
+    numbers = [n for n in [number, *(number_of(item["label"]) for item in also)] if n is not None]
+    if also:
+        also = [{**item, "label": str(item["label"]).split(" of ")[0]} for item in also]
+        error = {**error, "also": also}
     lines = [failure_text(error)]
     if total == 1:
         lines.append("No file was changed.")
@@ -508,8 +517,13 @@ def _edit_failure(
             else (f"None of the {total} edits were", f"all {total} edits")
         )
         closing = f"{none} applied, so no file was changed."
-        if number is not None:
-            closing += f" Send {every} again with edit {number} corrected or left out."
+        if numbers:
+            named = (
+                f"edit {numbers[0]}"
+                if len(numbers) == 1
+                else "edits " + ", ".join(map(str, numbers[:-1])) + f" and {numbers[-1]}"
+            )
+            closing += f" Send {every} again with {named} corrected or left out."
         lines.append(closing)
     return tool_failure(
         str(error["code"]),

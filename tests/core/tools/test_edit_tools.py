@@ -125,23 +125,49 @@ async def test_edits_apply_in_order_as_one_change(tmp_path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("old", "new", "joined"),
+    ("edits", "joined"),
     [
-        ("import a from 'a';\n", "import a2 from 'a';", "import a2 from 'a';import b from 'b';"),
+        (
+            [("import a from 'a';\n", "import a2 from 'a';")],
+            "import a2 from 'a';import b from 'b';",
+        ),
         # Only a blank line or the end of the file follows: no line joins.
-        ("import b from 'b';\n", "import b2 from 'b';", None),
-        ("end\n", "fin", None),
+        ([("import b from 'b';\n", "import b2 from 'b';")], None),
+        ([("end\n", "fin")], None),
+        ([("end\n", "end")], None),
+        # An edit that changes nothing but drops the line break is refused, all
+        # such edits of the call together (here 2), also one that only deletes a
+        # blank line.
+        ([("import a from 'a';\n", "import a from 'a';")], 1),
+        (
+            [
+                ("import a from 'a';\n", "import a from 'a';"),
+                ("end", "fin"),
+                ("import b from 'b';\n", "import b from 'b';"),
+            ],
+            2,
+        ),
     ],
 )
 async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
-    tmp_path, old, new, joined
+    tmp_path, edits, joined
 ) -> None:
-    (tmp_path / "a.ts").write_bytes(b"import a from 'a';\nimport b from 'b';\n\nend\n")
+    original = b"import a from 'a';\nimport b from 'b';\n\nend\n"
+    (tmp_path / "a.ts").write_bytes(original)
 
     result = await call(
-        tmp_path, {"path": "a.ts", "edits": [{"old_string": old, "new_string": new}]}, name="edit"
+        tmp_path,
+        {"path": "a.ts", "edits": [{"old_string": old, "new_string": new} for old, new in edits]},
+        name="edit",
     )
 
+    if isinstance(joined, int):
+        assert result["error"]["code"] == "line_join"
+        # One line per refused edit, naming the lines, then the closing.
+        assert len(text(result).split("\n")) == joined + 1
+        assert "import b from 'b';" in text(result).split("\n")[0]
+        assert (tmp_path / "a.ts").read_bytes() == original
+        return
     lines = text(result).split("\n")
     assert len(lines) == (1 if joined is None else 2)
     assert joined is None or joined in lines[1]

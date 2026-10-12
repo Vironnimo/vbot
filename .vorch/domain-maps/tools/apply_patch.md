@@ -53,7 +53,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   effect. `old_string` replacements match as substrings, precisely, else as a copy
   with errors (`copy_match`, below; never with `replace_all`); an empty
   `old_string` creates a file or fills an empty one and fails with `file_exists`
-  otherwise. `patch_targets(arguments)` lists every named path for callers that
+  otherwise. A replacement whose `new_string` is its `old_string` without the
+  final line break is refused where the file continues after the match
+  (`line_join`; `edit.md` -> Results). `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
 - The definition is minimal (user decision 2026-10-04): the description names
   its effects, and `patch` names its frame and that Add File replaces an existing file. The patch route is offered only to
