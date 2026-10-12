@@ -26,7 +26,9 @@ Design rules (keep them when adding a pattern):
   can stall the Event Loop.
 * A hint states the next action in one or two sentences. It names another Tool
   only when the Agent is offered that Tool.
-* No I/O beyond existence checks in the command's working directory.
+* No I/O beyond existence checks in the command's working directory and its
+  direct subdirectories, and bounded listings of the directories they need
+  (hints are built on the Event Loop).
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ import re
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 
 # The shell Tool runs commands in PowerShell on Windows and in bash elsewhere.
@@ -982,6 +985,28 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
         return _missing_submodule(name, failure.workdir)
     workdir = failure.workdir
     if workdir is None or not _in_workdir(name, workdir):
+        below = [] if workdir is None else _in_subdirectories(name, workdir)
+        if below:
+            directory = below[0][1]
+            setting = (
+                f"$env:PYTHONPATH = (Resolve-Path {directory}).Path;"
+                if _POWERSHELL
+                else f"PYTHONPATH={directory}"
+            )
+            shown = " and ".join(path for path, _ in below)
+            fix = (
+                f"Put `{setting}` before the python call to import it from {directory}/."
+                if len(below) == 1
+                else "Put the directory of the one you mean on PYTHONPATH before the python "
+                f"call, such as `{setting}`."
+            )
+            where = "a subdirectory" if len(below) == 1 else "subdirectories"
+            return (
+                f"Python cannot import '{name}': the working directory has it only in {where}, "
+                f"as {shown}, and Python does not search subdirectories; it "
+                "imports from the directory of the script it runs (the working directory for "
+                f"-c, - and -m) and from PYTHONPATH. {fix}"
+            )
         return (
             f"Python cannot import '{name}': this interpreter finds no package or module "
             "of that name. Check the spelling; if the project has a virtual environment, "
@@ -1085,6 +1110,45 @@ def _imported_elsewhere(failure: _Failure, error_at: int) -> bool:
 
 def _in_workdir(module: str, workdir: Path) -> bool:
     return (workdir / module).is_dir() or (workdir / f"{module}.py").is_file()
+
+
+# Directory entries of the working directory looked at for a module or script below it.
+_LISTED_ENTRIES = 200
+_SHOWN_PATHS = 3
+
+
+def _subdirectories(workdir: Path) -> list[Path]:
+    """The working directory's subdirectories, sorted, from a bounded listing."""
+    try:
+        entries = sorted(islice(workdir.iterdir(), _LISTED_ENTRIES))
+    except OSError:
+        return []
+    found: list[Path] = []
+    for entry in entries:
+        try:
+            if entry.is_dir() and entry.name != "__pycache__":
+                found.append(entry)
+        except OSError:
+            continue
+    return found
+
+
+def _in_subdirectories(module: str, workdir: Path) -> list[tuple[str, str]]:
+    """A module's file or package directly in subdirectories of *workdir*.
+
+    Each as (path shown, its subdirectory), relative to *workdir*. A script piped
+    into Python imported a module that lives in tools/; the hint sent the Agent
+    to install a package of that name.
+    """
+    found: list[tuple[str, str]] = []
+    for directory in _subdirectories(workdir):
+        if (directory / f"{module}.py").is_file():
+            found.append((f"{directory.name}/{module}.py", directory.name))
+        elif (directory / module / "__init__.py").is_file():
+            found.append((f"{directory.name}/{module}/", directory.name))
+        if len(found) == _SHOWN_PATHS:
+            break
+    return found
 
 
 def _script_in_subdirectory(

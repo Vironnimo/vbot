@@ -873,9 +873,11 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
 
 
 def _project(tmp_path: Path) -> Path:
-    """A working directory holding the package `shop` and a `tests` folder."""
+    """A working directory holding the package `shop`, a `tests` folder and tools/source_id.py."""
     (tmp_path / "shop").mkdir()
     (tmp_path / "tests").mkdir()
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "source_id.py").touch()
     return tmp_path
 
 
@@ -1045,6 +1047,15 @@ def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -
             "ModuleNotFoundError: No module named 'shop'\n",
             True,
             "runs with another working directory or import path",
+        ),
+        # Only a subdirectory has the module; Python does not search there.
+        (
+            "@'\nfrom source_id import source_id\n'@ | python -",
+            "Traceback (most recent call last):\n"
+            '  File "<stdin>", line 1, in <module>\n'
+            "ModuleNotFoundError: No module named 'source_id'\n",
+            True,
+            "tools/source_id.py",
         ),
     ],
 )
