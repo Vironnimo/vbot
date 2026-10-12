@@ -57,6 +57,15 @@ Rules for `args`:
   option parsing.
 - Short clusters split. A valued short flag accepts `-m5`, `-m 5` and `-m=5`.
   A value attached to a valueless flag (`-F=true`) is rejected with a correction.
+- A valued flag that ends `args` without its value (`--glob`, `-g`, `--iglob`,
+  `--include`, `-e`/`--regexp`, `-C`/`--context`, `--limit`, `--offset`) is
+  left out with a `note` when the named field that gives such a value is set
+  (`glob`, `pattern`, `context`, `limit`, `offset`): `--glob in args had no
+  value and was ignored; glob gives "tools/*.py".` Without that field it is
+  still rejected (`--glob in args needs a value as the next item, ...`), since
+  the value is unknown. A Swarm Agent sent `args: ["--glob"]` beside
+  `glob: "tools/*.py"` (Swarm run 2026-10-12, one call). Coverage:
+  `test_a_flag_without_its_value_beside_the_field_that_gives_it_is_ignored`.
 - Most flags pass through to ripgrep unchanged, so ripgrep's own semantics and
   later-flag-wins precedence hold.
 - `_search_query.py` owns these flags:
@@ -526,6 +535,7 @@ blank placeholders, so no sentence has to warn about them.
 | offset: `Pass next_offset to continue.` | Continuation uses the returned value, never a computed one (F4); Agents sent `offset: 0` in 213 of 217 calls that set it (Sessions, 2026-09). |
 | Help: `Output: content names each file on its own line, followed by line:text for its matching lines and line-text for context lines.` | States the heading layout (Results and Paging -> Content lines) for an Agent that asks how to read results (F4); it replaced `content shows path:line:text for matching lines and path-line-text for context lines` with the layout change (2026-10-12). |
 | `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
+| Bare flag beside its field: `--glob in args had no value and was ignored; glob gives "tools/*.py".` | The call runs as the named field says; the note tells the Agent the flag had no effect, so it does not repeat it (Swarm run 2026-10-12: one call failed with `needs a value as the next item` although `glob` gave the value). |
 | Unclear flag value: `search_files was not run: "ignore_case" must be true or false; received "maybe".` (lists: `must be a value or a list of values`) | A flag field the call cannot read used to stay an unknown field; unknown fields can now run without effect (`tools.md` -> Unknown fields), which would search without the flag the Agent asked for (F3). |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are

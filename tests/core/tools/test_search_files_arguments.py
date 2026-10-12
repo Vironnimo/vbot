@@ -873,6 +873,33 @@ async def test_ambiguous_or_unsupported_requests_reject_without_substitution(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("arguments", "field", "content"),
+    [
+        # Swarm run 2026-10-12: a bare --glob beside the glob that gives its value.
+        ({"args": ["--glob"], "glob": "*.py", "output": "files"}, "glob", "src/app.py"),
+        (
+            {"args": ["-i", "-e"], "pattern": "LOAD", "glob": "*.ts"},
+            "pattern",
+            "src/view.ts\n1:export const load = 1;",
+        ),
+    ],
+)
+async def test_a_flag_without_its_value_beside_the_field_that_gives_it_is_ignored(
+    project: Path, arguments: dict, field: str, content: str
+):
+    result = await dispatch(project, arguments)
+
+    assert result["data"]["content"] == content
+    assert result["data"]["note"]
+    # Without that field the flag still needs its value.
+    alone = await dispatch(
+        project, {key: value for key, value in arguments.items() if key != field}
+    )
+    assert alone["error"]["code"] == "invalid_arguments"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("args", "note"),
     [
         (["--files", "-c"], "-c was ignored because --files lists files"),
