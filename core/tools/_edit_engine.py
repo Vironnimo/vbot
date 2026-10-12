@@ -29,6 +29,7 @@ changed lines take the file's line endings, indentation and typography.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from itertools import pairwise
@@ -47,7 +48,9 @@ from core.tools.copy_match import copy_warnings, match_copied_edit, replace_copi
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
+    dominant_line_ending,
     find_closest_candidates,
+    find_closest_passages,
     first_difference,
     preserve_typography,
     replace_fuzzy,
@@ -115,6 +118,7 @@ def apply_hunks(
     previous: int | None = None,
     *,
     failures: list[_PatchError] | None = None,
+    unchanged: list[str] | None = None,
 ) -> tuple[str, list[str], int | None]:
     """Apply one file's hunks in order and return the text, the notes and the change end.
 
@@ -129,7 +133,8 @@ def apply_hunks(
     A hunk that fails after others applied carries ``written`` in its error
     details: the lines of the text it saw that each earlier hunk wrote, as
     ``{label, first, last}``, and ``replaced_by``, the label of the earlier hunk
-    that replaced its old text.
+    that replaced its old text. With ``unchanged``, the labels of text
+    replacements whose new text equals the text they matched go there.
     """
     notes: list[str] = []
     written: list[tuple[str, int, int]] = []
@@ -158,6 +163,8 @@ def apply_hunks(
                 raise
             failures.append(error)
             continue
+        if edited == content and unchanged is not None and hunk.replacement is not None:
+            unchanged.append(hunk.label)
         if edited != content:
             seen.append((hunk.label, content))
             previous = _change_end_line(content, edited)
@@ -215,11 +222,8 @@ def _track_written(
 
 
 def line_ending(content: str) -> str:
-    """Return the first line ending ``content`` uses, else LF."""
-    for ending in ("\r\n", "\n", "\r"):
-        if ending in content:
-            return ending
-    return "\n"
+    """Return the line ending most lines of ``content`` use, else LF."""
+    return dominant_line_ending(content) or "\n"
 
 
 def file_excerpt(lines: list[str], first: int, last: int) -> JsonObject:
@@ -1062,7 +1066,11 @@ def _match(
         if not positions:
             return None
         if len(positions) > 1 and not first:
-            return AmbiguousFuzzyMatch(len(positions), [line for _, line in positions])
+            return AmbiguousFuzzyMatch(
+                len(positions),
+                [line for _, line in positions],
+                tuple((start, start) for start, _ in positions),
+            )
         start, line = positions[0]
         return FuzzyReplacement(
             content[:start] + new + content[start:],
@@ -1233,38 +1241,90 @@ def _not_found(
     if split is not None:
         return split
     place = rewrapped_place(content, old) if source == "old_string" else None
+    # Every word of old_string is there, in order: only whitespace differs.
+    places = [place] if place is not None else []
     details: JsonObject = (
-        # Every word of old_string is there, in order: only whitespace differs.
-        {"candidates": [_place_excerpt(content, *place)]}
-        if place is not None
-        else _candidates(content, old)
+        {"candidates": _place_excerpts(content, places)} if places else _candidates(content, old)
     )
+    if source == "old_string" and not details["candidates"]:
+        # No whole lines are alike: the closest text can be part of a line, or
+        # lines that old_string breaks in other places.
+        places = find_closest_passages(content, old)
+        details["candidates"] = _place_excerpts(content, places)
     if part is not None and not details["candidates"]:
         details["part_of"] = part
     if details["candidates"]:
+        if places:
+            line, character = _place_start(content, places[0][0])
+        else:
+            line, character = int(details["candidates"][0]["line"]), 1
         difference = first_difference(
             content,
             old,
-            details["candidates"][0]["line"],
-            placed=place is not None,
+            line,
+            placed=bool(places),
             whole_lines=source == "patch",
+            character=character,
         )
         if difference is not None:
             details["difference"] = {**difference, "source": source}
     return details
 
 
-def _place_excerpt(content: str, first: int, last: int) -> JsonObject:
-    """Show lines ``first``-``last``, at most as many as a closest-text candidate."""
+def _place_start(content: str, start: int) -> tuple[int, int]:
+    """Return the line and character at offset ``start``; character 1 after indentation."""
+    starts = [0, *(found.end() for found in _BREAK.finditer(content))]
+    number = bisect_right(starts, start)
+    line_start = starts[number - 1]
+    if not content[line_start:start].strip():
+        return number, 1
+    return number, start - line_start + 1
+
+
+def _place_excerpts(content: str, places: list[tuple[int, int]]) -> list[JsonObject]:
+    """Show the lines of each (start, end) place, at most as many as a closest-text candidate.
+
+    A place on a line longer than 240 characters shows the 240-character part
+    of that line around it, numbered ``line:character``; a place within a part
+    shown already is not shown again.
+    """
     lines = split_text_lines(content)
-    shown = min(last, first + _PLACE_MAX_LINES - 1)
-    excerpt = file_excerpt(lines, first, shown)
-    if shown < last:
-        excerpt["truncated"] = True
-        excerpt["continuations"].append(
-            {"offset": f"{shown + 1}:1", "limit": min(_PLACE_MAX_LINES, last - shown)}
-        )
-    return excerpt
+    starts = [0, *(found.end() for found in _BREAK.finditer(content))]
+    excerpts: list[JsonObject] = []
+    # The parts of each line an excerpt shows, as [start, end) character offsets.
+    shown: dict[int, list[tuple[int, int]]] = {}
+    for start, end in places:
+        first = bisect_right(starts, start)
+        last = bisect_right(starts, max(start, end - 1))
+        index = start - starts[first - 1]
+        if any(left <= index < right for left, right in shown.get(first, [])):
+            continue
+        visible = min(last, first + _PLACE_MAX_LINES - 1)
+        excerpt = file_excerpt(lines, first, visible)
+        line = lines[first - 1]
+        if len(line) > 240:
+            left, right = _window(line, index, 0)
+            rest = excerpt["text"].split("\n")[1:]
+            excerpt["text"] = "\n".join([line[left:right], *rest])
+            if left:
+                excerpt["character"] = left + 1
+            excerpt["truncated"] = right < len(line) or any(
+                len(other) > 240 for other in lines[first:visible]
+            )
+            excerpt["continuations"] = [
+                *([{"offset": f"{first}:{right + 1}", "limit": 1}] if right < len(line) else []),
+                *excerpt["continuations"][1:],
+            ]
+            shown.setdefault(first, []).append((left, right))
+        else:
+            shown[first] = [(0, len(line))]
+        if visible < last:
+            excerpt["truncated"] = True
+            excerpt["continuations"].append(
+                {"offset": f"{visible + 1}:1", "limit": min(_PLACE_MAX_LINES, last - visible)}
+            )
+        excerpts.append(excerpt)
+    return excerpts
 
 
 _PLACE_MAX_LINES = 8
@@ -1414,13 +1474,96 @@ def _line_list(numbers: list[int]) -> str:
 def _ambiguity(
     content: str, match: AmbiguousFuzzyMatch, offset: int = 0
 ) -> tuple[JsonObject, JsonObject]:
-    """Return excerpts around each occurrence, and the values an error message names."""
-    shift = len(_BREAK.findall(content[:offset]))
-    numbers = [number + shift for number in dict.fromkeys(match.line_numbers)]
+    """Return excerpts around each occurrence, and the values an error message names.
+
+    ``match`` was found in ``content[offset:]``. An occurrence on a line of at
+    most 240 characters shows that line and its neighbors; one on a longer line
+    shows a window of that line around it, numbered ``line:character``, so
+    occurrences far apart on one line each show their own text.
+    """
     lines = split_text_lines(content)
-    candidates = [
-        file_excerpt(lines, max(1, number - 1), min(len(lines), number + 1))
-        for number in numbers[:3]
-    ]
+    if match.spans:
+        starts = [0, *(found.end() for found in _BREAK.finditer(content))]
+        places = []
+        for start, _ in match.spans:
+            number = bisect_right(starts, offset + start)
+            places.append((number, offset + start - starts[number - 1] + 1))
+    else:
+        shift = len(_BREAK.findall(content[:offset]))
+        places = [(number + shift, 0) for number in match.line_numbers]
+    candidates: list[JsonObject] = []
+    # The parts of each line an excerpt shows, as [start, end) character offsets.
+    shown: dict[int, list[tuple[int, int]]] = {}
+    for number, character in places:
+        if len(candidates) == 3:
+            break
+        line = lines[number - 1] if number <= len(lines) else ""
+        whole = len(line) <= 240 or not character
+        covered = shown.get(number, [])
+        if (covered and whole) or any(start < character <= end for start, end in covered):
+            continue
+        if whole:
+            shown[number] = [(0, len(line))]
+            candidates.append(file_excerpt(lines, max(1, number - 1), min(len(lines), number + 1)))
+            continue
+        start, end = _window(line, character - 1, max((end for _, end in covered), default=0))
+        shown.setdefault(number, []).append((start, end))
+        candidates.append(
+            {
+                "line": number,
+                "character": start + 1,
+                "text": line[start:end],
+                "truncated": end < len(line),
+                "continuations": (
+                    [{"offset": f"{number}:{end + 1}", "limit": 1}] if end < len(line) else []
+                ),
+            }
+        )
+    long = {number for number, _ in places if number <= len(lines) and len(lines[number - 1]) > 240}
     details: JsonObject = {"occurrences": match.occurrences, "candidates": candidates}
-    return details, {"occurrences": match.occurrences, "lines": _line_list(numbers)}
+    return details, {"occurrences": match.occurrences, "lines": _place_list(places, long)}
+
+
+def _window(line: str, index: int, previous: int) -> tuple[int, int]:
+    """Return the 240-character part of ``line`` that shows the text at ``index``.
+
+    It starts 80 characters before ``index``, or at the line's start for an
+    index in its first 160 characters, but not before ``previous``, the end of
+    a part of this line shown already.
+    """
+    start = 0 if index < 160 else index - 80
+    start = max(start, previous)
+    end = min(len(line), start + 240)
+    return max(previous, end - 240), end
+
+
+def _place_list(places: list[tuple[int, int]], long: set[int]) -> str:
+    """Name the lines of ``places``, as (line, character) pairs, in a message.
+
+    A line holding several places, or longer than an excerpt shows, also names
+    the characters where they start, such as ``line 1, characters 57 and 3021``.
+    """
+    by_line: dict[int, list[int]] = {}
+    for number, character in places:
+        by_line.setdefault(number, []).append(character)
+    named = {
+        number
+        for number, characters in by_line.items()
+        if all(characters) and (len(characters) > 1 or number in long)
+    }
+    if not named:
+        return _line_list(list(by_line))
+    parts = []
+    for number, characters in list(by_line.items())[:6]:
+        if number not in named:
+            parts.append(f"line {number}")
+            continue
+        listed = [str(character) for character in characters[:6]]
+        if len(characters) > len(listed):
+            text = ", ".join(listed) + ", ..."
+        else:
+            text = " and ".join([", ".join(listed[:-1]), listed[-1]] if len(listed) > 1 else listed)
+        parts.append(f"line {number}, character{'s' if len(characters) > 1 else ''} {text}")
+    if len(by_line) > len(parts):
+        parts.append("...")
+    return "; ".join(parts)

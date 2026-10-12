@@ -678,21 +678,45 @@ def test_part_of_a_line_is_matched_as_a_fragment() -> None:
     assert found.new_content == "    result = compute_total(alpha, beta) + offset_value  # keep\n"
 
 
-def test_line_endings_and_indentation_follow_the_file() -> None:
-    content = "class Account:\r\n    def run(self):\r\n        return reciept_total\r\n"
+JSON_ITEM = (
+    '    "evidence": [\n      {\n        "quote": "density 0.89",\n        "source": "a"\n      }\n'
+)
 
-    found = _applied(
-        replace_copied(
-            content,
+
+@pytest.mark.parametrize(
+    ("content", "old", "new", "expected"),
+    [
+        pytest.param(
+            "class Account:\r\n    def run(self):\r\n        return reciept_total\r\n",
             "def run(self):\n    return receipt_total",
             "def run(self):\n    return receipt_total + tax\n    # done",
-        )
-    )
+            "class Account:\r\n    def run(self):\r\n        return reciept_total + tax\r\n"
+            "        # done\r\n",
+            id="crlf-and-dropped-level",
+        ),
+        # Swarm run 2026-10-12: a copy that joined a "{" line to the next one paired its
+        # indent with that next line's; the closing "}" and the lines added after it were
+        # written at the inner level. The "}" that reads alike decides its indent.
+        pytest.param(
+            JSON_ITEM,
+            '    {"quote": "density 0.89",\n     "source": "a"\n    }',
+            '    {"quote": "density 0.89",\n     "source": "a"\n    },\n    {\n'
+            '     "quote": "density at 20 C",\n     "source": "a"\n    }',
+            JSON_ITEM.replace(
+                "      }\n",
+                '      },\n      {\n        "quote": "density at 20 C",\n        "source": "a"\n'
+                "      }\n",
+            ),
+            id="joined-line-copy",
+        ),
+    ],
+)
+def test_line_endings_and_indentation_follow_the_file(
+    content: str, old: str, new: str, expected: str
+) -> None:
+    found = _applied(replace_copied(content, old, new))
 
-    assert found.new_content == (
-        "class Account:\r\n    def run(self):\r\n        return reciept_total + tax\r\n"
-        "        # done\r\n"
-    )
+    assert found.new_content == expected
 
 
 @pytest.mark.parametrize(

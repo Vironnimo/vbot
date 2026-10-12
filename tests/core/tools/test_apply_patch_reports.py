@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 
 import pytest
@@ -749,3 +750,90 @@ async def test_ambiguous_long_lines_preserve_each_read_continuation(tmp_path):
         assert continued["data"]["content"].split("\n")[0] == (
             f"{read_call['offset']}| {line[240:]}"
         )
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_places_far_apart_in_one_long_line_each_show_their_text(tmp_path):
+    # Swarm run 2026-10-12: old_string occurred several times in a one-line JSON file,
+    # and the report showed only the line's first 240 characters, none of the places.
+    item = '{"id": "t%d", "notes": "%s", "done": false}'
+    line = "[" + ", ".join(item % (n, "word " * (60 + n)) for n in range(4)) + "]"
+    (tmp_path / "tasks.json").write_bytes(f"{line}\n".encode())
+    old = '"done": false'
+    places = [match.start() + 1 for match in re.finditer(re.escape(old), line)]
+
+    result = await call(
+        tmp_path,
+        {"path": "tasks.json", "old_string": old, "new_string": '"done": true'},
+        name="edit",
+    )
+
+    assert result["error"]["code"] == "ambiguous_match"
+    assert (tmp_path / "tasks.json").read_bytes() == f"{line}\n".encode()
+    message = text(result)
+    head = message.split("\n")[1]
+    assert all(str(place) in head for place in places[:3])
+    # Each place shows in an excerpt numbered line:character, as read continues a line.
+    excerpts = [
+        (int(found["character"] or 1), found["text"])
+        for found in re.finditer(r"^1(?::(?P<character>\d+))?\| (?P<text>.*)$", message, re.M)
+    ]
+    for start, shown in excerpts:
+        assert line[start - 1 : start - 1 + len(shown)] == shown
+    for place in places[:3]:
+        assert any(
+            start <= place and place + len(old) <= start + len(shown) for start, shown in excerpts
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("old", "start", "differs"),
+    [
+        # Part of the line, with the end of its object misremembered.
+        pytest.param(
+            '{"quote": "boiling point 90.188 k"}',
+            '{"quote": "boiling point 90.188 k"',
+            ', "source": "s17"}',
+            id="part-of-a-line",
+        ),
+        # The line's text with line breaks, as pretty-printed JSON has them.
+        pytest.param(
+            '    "status": "not_applicable"\n  },\n  "melting": {',
+            '"status": "not_applicable"',
+            '}, "melting"',
+            id="other-line-breaks",
+        ),
+    ],
+)
+async def test_closest_text_inside_a_long_line_shows_its_place_and_first_difference(
+    tmp_path, old, start, differs
+):
+    # Swarm run 2026-10-12: old_string was part of a one-line JSON file or that line
+    # pretty-printed, and the report said that no similar text was in the file.
+    items = [{"quote": f"reading {n} at room temperature", "source": f"s{n}"} for n in range(30)]
+    items[17] = {"quote": "boiling point 90.188 k", "source": "s17"}
+    line = json.dumps(
+        {"evidence": items, "boiling": {"status": "not_applicable"}, "melting": {"value": 1}}
+    )
+    (tmp_path / "data.json").write_bytes(f"{line}\n".encode())
+
+    result = await call(
+        tmp_path, {"path": "data.json", "old_string": old, "new_string": "x"}, name="edit"
+    )
+
+    assert result["error"]["code"] == "text_not_found"
+    assert (tmp_path / "data.json").read_bytes() == f"{line}\n".encode()
+    message = text(result)
+    excerpts = [
+        (int(found["character"] or 1), found["text"])
+        for found in re.finditer(r"^1(?::(?P<character>\d+))?\| (?P<text>.*)$", message, re.M)
+    ]
+    for begin, shown in excerpts:
+        assert line[begin - 1 : begin - 1 + len(shown)] == shown
+    place = line.index(start) + 1
+    assert any(
+        begin <= place and place + len(start) <= begin + len(shown) for begin, shown in excerpts
+    )
+    # The first difference names the character where the file goes on otherwise.
+    assert re.search(rf"\b{line.index(differs) + 1}\b", message)

@@ -79,6 +79,7 @@ from core.tools.fuzzy_match import (
     _normalize_with_spans,
     _reindent_replacement,
     _split_lines_preserving_endings,
+    dominant_line_ending,
 )
 
 # Where: below this many correct words a copy must be exact up to spacing.
@@ -745,7 +746,7 @@ class _File:
             for word in dict.fromkeys(self.line_words[-1]):
                 self.postings.setdefault(word, []).append(number)
         self.words = frozenset(self.postings)
-        self.ending = next((ending for ending in self.endings if ending), "\n")
+        self.ending = dominant_line_ending(content) or "\n"
         self._lines: dict[int, _Text] = {}
         self._groups: dict[tuple[int, int], _Text] = {}
         self._by_key: dict[str, list[int]] | None = None
@@ -1240,7 +1241,9 @@ def _result(
     if len(unique) > 1:
         unique.sort(key=lambda item: item.start)
         return AmbiguousFuzzyMatch(
-            len(unique), [bisect_right(file.starts, item.start) for item in unique]
+            len(unique),
+            [bisect_right(file.starts, item.start) for item in unique],
+            tuple((item.start, item.end) for item in unique),
         )
     item = unique[0]
     if item.text is None:

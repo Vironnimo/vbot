@@ -135,7 +135,15 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   text); a note for identical old/new text, and
   `X already reads as this edit would leave it.` (`these edits`) when the edits
   leave the file as it was, such as a change and its reversal (the
-  `already_applied` template).
+  `already_applied` template). In a call that writes the file, an edit whose
+  new text equals the text it matched is named on a line of its own after the
+  file report, `X, edit K of N: the new text equals the current text; nothing
+  to change.`, and neither the partial lead, a later failed edit's `after
+  edits ...` nor the display's edit count counts it as applied
+  (`apply_hunks(unchanged=...)` collects the
+  labels, `_run_step` puts them in `outcome["unchanged"]`). Evidence: 12
+  written calls held an item whose `new_string` was its `old_string`; the
+  results counted it as applied and never named it (Swarm runs 2026-10-11/12).
   A call with failed and applied edits is a success led by the edit numbers in
   place of `apply_patch`'s change counts (`patch_result(..., lead=...)`,
   `_partial_lead`): `Edits 1, 2 and 4 were applied; edit 3 was not. Send only
@@ -197,9 +205,10 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   Coverage: `test_edits_that_fail_are_skipped_and_the_others_written_once`
   (partial results, the single write, the display notices and edit count),
   `test_edits_that_leave_the_file_as_it_is_say_so`,
+  `test_an_edit_that_changes_nothing_is_named_apart_from_the_applied_ones`,
   `test_an_edit_that_drops_a_final_line_break_keeps_the_next_line`,
   `test_old_string_with_line_breaks_in_other_places_than_the_file`. The
-  display shows the path, the count of applied edits (no file count: one file) and
+  display shows the path, the count of edits that changed the file (no file count: one file) and
   the shared `file_changes` diff and notices.
 - **Failures** use the engine's messages with `edit` wording where they name the
   Tool (`_EDIT_TEMPLATES`); every error first says what was applied, as the
@@ -238,7 +247,11 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   breaks shows that place, and a first difference that is a line break says
   where the file and `old_string` break the line (`First difference, line N:
   the file breaks this line after '...'; old_string continues it with '...'.`,
-  `apply_patch.md` -> Matching and recovery).
+  `apply_patch.md` -> Matching and recovery). When no whole lines resemble
+  `old_string`, the closest passages anywhere in the text show instead: part of
+  a long line in a `line:character|` window, and the first difference from that
+  place on (`find_closest_passages`; coverage:
+  `test_closest_text_inside_a_long_line_shows_its_place_and_first_difference`).
   Each part needs 2 lines with a word of 3 or more characters: in a replay of
   582 failed calls (2026-10), 4 of 8 such reports rested on single lines, one of
   them `return tool_success(result)` of another function; the first difference
@@ -275,11 +288,14 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `edits[].replace_all`: `Replace every occurrence. Omit to replace one.` | Weak Models fill every field; a filled `replace_all: true` changes text the Agent did not mean (F3). |
 | `path`, `edits[].new_string`: no text | The names say the role, both path forms are accepted, and `""` deleting is trained behavior (review 2026-10-10). |
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
+| Closest text inside a long line: `The closest text in the file, line 1:`, `1:9809| <240 characters around it>`, `First difference, file line 1, character 9915; copied line 1, character 31 (excerpts truncated):` with both windows | Replaces `No similar text is in the file; read(path=...) shows its current content.`, which 17 of 38 `old_string` failures in 637 replayable calls got; 5 of them had the text in the file as part of a long JSON or prose line, as one-line JSON copied pretty-printed, or rewritten since (Sessions 2026-10-07 to 2026-10-12). The report has the shape of the whole-line one, so the Agent reads it the same way. |
+| Places on one line or a long line: `(line 1, characters 82 and 3021; line 4)`, each shown as `1:3001| <240 characters around it>` under `Where it occurs:` | 4 ambiguity reports in 3 calls named 2 places as `(line 1)` of a one-line JSON file and showed only its first 240 characters, neither place (Swarm run 2026-10-12); the Agent could not see which text tells them apart. The `line:character` gutter is `read`'s for a continued line. |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | Match report for edit K > 1: `The closest text in the file after edits 1-4, line 287:`, `First difference: after edits 1-4, line 287 reads '...' where old_string has '...'.`, `Edit 2 of this call wrote line 287.` | Replaces `the file has` plus a trailing `Line numbers count the text as edits 1-4 left it.`: the report said the file had `Param(1)` at line 287, which edit 2 of the same call had written; the file held `Param(0)` (Swarm Run 2026-10). The trailing sentence came after the text it qualified, and naming the edit shows that the failed edit's place overlaps a change the call already makes. |
 | `Edit J of this call already replaced this old_string; merge the two edits into one.` | An item that reused the `old_string` of the item before it, which that item had replaced, got only `No similar text is in the file after edit 1` (Swarm, 2026-10-12), which does not say that the text was there before the call. Merging is the fix for both readings: the second change builds on the first, or the first was a draft of it. Now only when nothing was written. |
 | `Edit J of this call already replaced this old_string; to change that text again, use what edit J wrote as old_string.` | In a partial result edit J stays written, so merging would resend an edit whose `old_string` is gone; the next call can only build on what edit J wrote. |
 | Partial lead: `Edits 1, 2 and 4 were applied; edit 3 was not. Send only edit 3 again, corrected or left out.` (`edits 2 and 3 were not. Send only edits 2 and 3 again, each corrected or left out.`) | User decision 2026-10-12: a call applies every edit it can; results name the items by their numbers in input order (`vbot-agent-tools` -> Results). `Send only` keeps the Agent from resending the applied edits, whose `old_string` is gone or whose insertion would repeat; `left out` covers a failed edit whose change is already in the file. Replay 2026-10-12: 14 live calls refused as a whole apply in part this way. |
+| No-op item in a written call: `X, edit K of N: the new text equals the current text; nothing to change.`; the lead names only the edits that changed text (`Edit 1 was applied; edit 3 was not. ...`) | The `vbot-agent-tools` Skill requires every item without effect to be named. The sentence is the one a call of only such edits already gets, with the item's label. Before, 12 written calls counted such an item as applied (Swarm runs 2026-10-11/12). |
 | `After an earlier edit of this call failed, old_string must match the file exactly (up to whitespace).` | After a failed edit the later ones match without copy tolerance, so a copy that applies in a call of its own fails here; without the sentence the not-found report reads as if the text were missing, and the Agent cannot tell why the same copy matched before. |
 | `Neither edit was applied; no file was changed.` first, then the reports, then `Send both edits again, each corrected or left out.` (`None of the N edits were applied; ...`, `all N edits`) | When every edit failed, each has its report above; naming them all again in the closing adds nothing. |
 | Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |

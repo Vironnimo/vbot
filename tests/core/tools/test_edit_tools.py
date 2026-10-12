@@ -628,6 +628,41 @@ async def test_edits_that_leave_the_file_as_it_is_say_so(tmp_path, edits, messag
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True], ids=["all-matched", "one-failed"])
+async def test_an_edit_that_changes_nothing_is_named_apart_from_the_applied_ones(
+    tmp_path, fails
+) -> None:
+    # Swarm runs 2026-10-11/12: 12 written calls held an edit whose new_string was its
+    # old_string; the results counted it as applied and never named it.
+    (tmp_path / "a.py").write_bytes(b"x = 1\ny = 2\nz = 3\n")
+    edits = [
+        {"old_string": "x = 1", "new_string": "x = 9"},
+        {"old_string": "y = 2", "new_string": "y = 2"},
+        {"old_string": "zzz" if fails else "z = 3", "new_string": "z = 9"},
+    ]
+    tools = registry()
+    ctx = replace(context(tmp_path), tool_name="edit")
+    arguments = {"path": "a.py", "edits": edits}
+
+    result = await tools.dispatch(ctx, arguments)
+
+    message = text(result)
+    # The row counts only the edits that changed the file.
+    display = tools.display_for_call("edit", arguments, context=ctx, result=result)
+    counts = {f["unit"]: f["value"] for f in display["facts"] if f["kind"] == "count"}
+    assert counts == {"edits": 1 if fails else 2}
+    after = b"x = 9\ny = 2\nz = 3\n" if fails else b"x = 9\ny = 2\nz = 9\n"
+    assert (tmp_path / "a.py").read_bytes() == after
+    assert edit_outcome(message) == ("partial" if fails else "applied")
+    # Edit 2 is named once, in its own sentence: not as applied, not as failed.
+    lines = [line for line in message.split("\n") if "edit 2" in line.lower()]
+    assert len(lines) == 1 and not lines[0].startswith("Failed:")
+    if fails:
+        applied = re.match(r"Edits? ([\d, and-]+?) (?:was|were) applied", message)
+        assert applied and applied[1] == "1"
+
+
+@pytest.mark.asyncio
 async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(tmp_path) -> None:
     state = FileReadState()
     tools = registry(state)
@@ -654,6 +689,56 @@ async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(t
     assert text(replaced) == "Replaced the content of a.txt (1 line)."
     assert path.read_bytes() == b"new\n"
     assert bare.read_bytes() == b"new"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("before", "tool", "arguments", "after"),
+    [
+        # A stray CRLF or lone CR does not set the ending of every written line.
+        pytest.param(
+            None,
+            "write",
+            {"path": "a.txt", "content": "one\ntwo\r\nthree\n"},
+            b"one\ntwo\nthree\n",
+            id="new-file",
+        ),
+        pytest.param(
+            None,
+            "write",
+            {"path": "a.txt", "content": "one\r\ntwo\rthree\r\n"},
+            b"one\r\ntwo\r\nthree\r\n",
+            id="new-file-crlf",
+        ),
+        pytest.param(
+            b"one\ntwo\r\nthree\n",
+            "write",
+            {"path": "a.txt", "content": "1\r\n2\r\n"},
+            b"1\n2\n",
+            id="replaced-file",
+        ),
+        pytest.param(
+            b"one\r\ntwo\nthree\n",
+            "edit",
+            {"path": "a.txt", "old_string": "three", "new_string": "three\nfour"},
+            b"one\r\ntwo\nthree\nfour\n",
+            id="added-lines",
+        ),
+    ],
+)
+async def test_written_lines_end_as_most_lines_of_the_file_or_content(
+    tmp_path, before, tool, arguments, after
+) -> None:
+    state = FileReadState()
+    path = tmp_path / "a.txt"
+    if before is not None:
+        path.write_bytes(before)
+        state.record_read("session-test", path)
+
+    result = await call(tmp_path, arguments, tools=registry(state), name=tool)
+
+    assert result["ok"], result
+    assert path.read_bytes() == after
 
 
 FILES = {

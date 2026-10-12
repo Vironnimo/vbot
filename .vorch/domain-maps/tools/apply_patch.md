@@ -358,7 +358,27 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   candidate's line; longer copies are aligned by the lines the file holds.
   An `old_string` whose words are all at exactly one place of the file, with
   other whitespace between them (`rewrapped_place`), shows that place (at most 8
-  lines) as its candidate, and its first difference starts there. A first
+  lines) as its candidate, and its first difference starts there. When no
+  whole-line window resembles an `old_string`, the closest passages anywhere in
+  the text show instead (`find_closest_passages`): both sides compare with each
+  whitespace run as one space, so part of a long line and a line broken in other
+  places are found. The copy's rarest words place them; at most 40 places are
+  compared with its first 400 characters, and at most 3 passages show, each with
+  >= 0.60 similarity and within 0.1 of the closest. Diagnostic only, like the
+  whole-line candidates. A place on a line longer than 240 characters shows the
+  240-character window around it, numbered `line:character|` like an ambiguity
+  window (`_place_excerpts`), and the first difference compares the copy's
+  first line from the place on (`first_difference(character=...)`), unless the
+  copy starts with a line break; it is compared like a mid-line first line
+  above (the rest of the file line must end with it), so a placed copy and a
+  whole-line candidate name the same kind of difference. Evidence: 17 of 38 `old_string` failures in
+  637 replayable `edit` calls said `No similar text`; 5 now show the place
+  (part of a long JSON or prose line, a one-line JSON file copied
+  pretty-printed, a line rewritten since), the other 12 held text the file
+  lacks (Sessions 2026-10-07 to 2026-10-12). Whitespace between JSON tokens
+  stays a difference for matching: 1 of the 637 calls differed only there, and
+  its new text, written as sent, would have put pretty-printed lines into a
+  one-line file; the report now names the place and the differing `}`. A first
   difference that is a line break in another place carries `break` (`file`,
   `copy`, or `start` for a copied line that starts a line the file continues)
   with the text on both sides, and the report says so (`the file breaks this
@@ -366,6 +386,17 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   whole line. Only a copy that starts with a line break, or a patch line,
   claims to start a line; an `old_string`'s first line can start inside one. Ambiguity reports the winning match's actual locations
   (including section offsets) under `Where it occurs:`, not guessed alternatives.
+  `AmbiguousFuzzyMatch.spans` carries each match's offsets. An occurrence on a
+  line of at most 240 characters shows that line and its neighbors; one on a
+  longer line shows a 240-character window of that line starting 80 characters
+  before it (at the line start within its first 160), numbered
+  `line:character|` as `read` continues a line, as its own excerpt; windows on
+  one line never overlap, and a continuation starts after the text they show
+  without a gap. A line holding several occurrences, or a long line, also names
+  their characters in the message (`line 1, characters 82 and 3021; line 4`,
+  `_place_list`). Evidence: 4 ambiguity reports in 3 `edit` calls named 2
+  places as `(line 1)` of a one-line JSON file and showed only its first 240
+  characters, neither place (Swarm run 2026-10-12). At most three excerpts show.
   These excerpts never authorize a write.
 - A patch line that occurs only inside longer file lines (a fragment copied as a
   line) is named before similarity candidates when it sits in at most 3 lines:
@@ -555,7 +586,13 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   lines are typos, and mapping them re-indented new lines wrongly (Session: a
   `-` line one level too deep put the new block one level too shallow). One
   space is never a level unit; when no wider unit explains the indents, new
-  lines keep their offset instead of every space becoming a file level.
+  lines keep their offset instead of every space becoming a file level. Lines
+  that read alike decide an indent's mapping before lines that differ, and a
+  pair the decided mappings contradict is left out: a copy that joins a line to
+  the next one (`{"quote": ...` for `{` and `"quote": ...`) carries the indent
+  of other text (Swarm run 2026-10-12: such a copy wrote the closing brace and
+  the added lines one level too deep). Test:
+  `test_copy_match.py::test_line_endings_and_indentation_follow_the_file`.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.
@@ -632,8 +669,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   File for a file an Add was creating (Sessions, 2026-09). BOM, surviving context bytes,
   existing EOF newline state, and file permissions are preserved. Lines are
   delimited like `read` (LF, CRLF, lone CR only; U+2028 and similar separators
-  are line content). New lines adopt the detected CRLF/LF/CR style, else LF;
-  explicit no-newline markers apply only at EOF.
+  are line content). New lines adopt the style most of the file's lines end
+  with (`fuzzy_match.dominant_line_ending`; a tie goes to CRLF, then LF), else
+  LF; a stray CRLF or lone CR in an LF file no longer sets the ending of every
+  added or replacing line. An Add of a new file ends all its lines as most lines
+  of its text do. Explicit no-newline markers apply only at EOF.
   Binary files may be moved or deleted without text decoding.
 - Writes reuse `atomic_write_bytes`; its optional `mode` carries source
   permissions to a move destination. Its `before_replace` callback rechecks all

@@ -20,6 +20,7 @@ from typing import Any
 from core.tools._patch_syntax import _Hunk, _Operation, _parse, _PatchError, _Replacement
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, compile_tool_contract
+from core.tools.fuzzy_match import dominant_line_ending
 from core.tools.tools import JsonObject
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
@@ -248,9 +249,12 @@ def patch_operations(arguments: JsonObject) -> list[_Operation]:
 def content_operation(
     path: str, content: str, *, only_if_empty: bool = False, label: str = ""
 ) -> _Operation:
-    """Create or replace a file with ``content``; its final line break follows the file."""
+    """Create or replace a file with ``content``; its final line break follows the file.
+
+    A new file's lines all end as most lines of ``content`` do.
+    """
     text = content.replace("\r\n", "\n").replace("\r", "\n")
-    newline = "\r\n" if "\r\n" in content else "\r" if "\r" in content else "\n"
+    newline = dominant_line_ending(content) or "\n"
     hunks = []
     if text:
         lines = text.split("\n")
