@@ -195,11 +195,12 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   the note; the joining call itself was not replayable (its file state was
   unknown).
   Coverage: `test_edits_that_fail_are_skipped_and_the_others_written_once`
-  (partial results, the single write, the display notices),
+  (partial results, the single write, the display notices and edit count),
   `test_edits_that_leave_the_file_as_it_is_say_so`,
   `test_an_edit_that_drops_a_final_line_break_keeps_the_next_line`,
   `test_old_string_with_line_breaks_in_other_places_than_the_file`. The
-  display shows the path and the shared `file_changes` diff and notices.
+  display shows the path, the count of applied edits (no file count: one file) and
+  the shared `file_changes` diff and notices.
 - **Failures** use the engine's messages with `edit` wording where they name the
   Tool (`_EDIT_TEMPLATES`); every error first says what was applied, as the
   `vbot-agent-tools` Skill's Errors section requires (user decision 2026-10-12)

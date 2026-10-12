@@ -141,8 +141,10 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
         return _request_failure(context, batch, error)
     _label_hunks(operations)
     run_operations(context, state, batch, operations)
+    # Each hunk, Add, Delete and Move that took effect is one edit.
+    edits = sum(outcome["status"] == "applied" for outcome in batch.results)
     return patch_result(
-        context, file_reports(context, batch), batch.results, cancelled_paths(batch)
+        context, file_reports(context, batch, edits=edits), batch.results, cancelled_paths(batch)
     )
 
 

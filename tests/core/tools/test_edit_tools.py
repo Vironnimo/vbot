@@ -242,6 +242,9 @@ async def test_edits_that_fail_are_skipped_and_the_others_written_once(
     display = tools.display_for_call("edit", arguments, context=ctx, result=result)
     notices = [block for block in display["details"] if block.get("level") == "error"]
     assert len(notices) == len(failed)
+    # The row counts the applied edits; one file goes without a file count.
+    counts = {f["unit"]: f["value"] for f in display["facts"] if f["kind"] == "count"}
+    assert counts == {"edits": len(edits) - len(failed)}
 
 
 @pytest.mark.asyncio

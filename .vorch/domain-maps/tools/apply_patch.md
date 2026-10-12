@@ -657,7 +657,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - Successful surviving files, including verified no-ops, receive Session read
   stamps. Metadata drift can produce a post-success warning. Text mutations
   feed the existing ChangeTracker with actual before/after contents and publish
-  presentation-only line/file counts. Each reported file also records its diff
+  presentation-only counts: added and removed lines, the applied edits (each
+  hunk, Add, Delete and Move; for `edit`, each edit that was not skipped; `write`
+  counts none) and, only when several files changed, the files, a move counting as
+  one. Each reported file also records its diff
   of actual before/after text (`ToolContext.add_display_file_change`, display
   `file_changes` block); the line counts are that diff's, so a replaced file counts
   its changed lines, not its whole content. A call that changed no file records no
