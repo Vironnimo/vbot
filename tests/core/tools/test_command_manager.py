@@ -513,6 +513,7 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
     command_id, process = await harness.launch(owner=CHILD)
     assert harness.manager.status(command_id) is None
     assert harness.manager.commands([OWNER, CHILD]) == []
+    assert not harness.manager.has_unfinished_background()
 
     moved = harness.manager.to_background(command_id, deliver=True)
 
@@ -523,10 +524,15 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
     assert harness.manager.status(command_id) == "running"
     assert [row.owner for row in harness.manager.commands([OWNER, CHILD])] == [CHILD]
     assert harness.manager.commands([OWNER]) == []
+    assert harness.manager.has_unfinished_background(besides=OWNER)
+    assert not harness.manager.has_unfinished_background(besides=CHILD)
     process.exit(0, leftovers=[SERVER])
     await harness.advance(3.25)
+    # Ended, but a process it started still runs.
+    assert harness.manager.has_unfinished_background()
     process.end_leftovers()
     report = await harness.finish(command_id)
+    assert not harness.manager.has_unfinished_background()
 
     assert harness.sink.submissions == [
         {

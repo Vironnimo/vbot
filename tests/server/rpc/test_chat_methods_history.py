@@ -76,6 +76,11 @@ class _Commands:
     def commands(self, owners: Collection[SessionAddress]) -> list[SimpleNamespace]:
         return [report for report in self.reports.values() if report.owner in owners]
 
+    def has_unfinished_background(self, *, besides: SessionAddress | None = None) -> bool:
+        return any(
+            not report.finished and report.owner != besides for report in self.reports.values()
+        )
+
 
 @dataclass
 class _History:
@@ -414,8 +419,16 @@ async def test_history_projects_the_active_edit_lineage_but_keeps_raw_usage(
 
 @pytest.mark.asyncio
 async def test_history_reports_the_current_statuses_of_the_sessions_background_commands(
-    history: _History,
+    history: _History, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    walks: list[SessionAddress] = []
+    walk = chat_methods.descendants
+
+    def recorded_walk(sessions: ChatSessionManager, root: SessionAddress, **kwargs: Any) -> Any:
+        walks.append(root)
+        return walk(sessions, root, **kwargs)
+
+    monkeypatch.setattr(chat_methods, "descendants", recorded_walk)
     session = history.session()
     _handed_off_command(session, "bash-one", "cmd_one")
     _handed_off_command(session, "bash-two", "cmd_two")
@@ -472,6 +485,7 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     }
     assert first["background_commands_still_running"] == ["cmd_one"]
     assert all(message["role"] != "note" for message in first["messages"])
+    assert walks
     # The commands its Sub-Agents still run, at every depth, each under the
     # Session's own Sub-Agent above it; none of the user's, which the
     # Session's Stop all leaves running.
@@ -502,13 +516,17 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
 
     # A read that finds nothing appended still reports the live commands, so
     # the caller learns that a command it holds as running ended in a restart.
+    # With no background command running outside the Session, it skips the
+    # Sub-Agent tree walk.
     commands.reports.clear()
     commands.add("cmd_next", "running")
+    walks.clear()
     unchanged = await history.read(after=delta["next_after"])
     assert unchanged["messages"] == []
     assert unchanged["background_command_statuses"] == {"cmd_next": "running"}
     assert unchanged["background_commands_still_running"] == []
     assert unchanged["subagent_background_commands"] == []
+    assert walks == []
 
     # An older page carries neither.
     older = await history.read(before=first["next_before"])

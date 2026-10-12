@@ -224,6 +224,12 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 if before is None and after is None
                 else None
             )
+            # The Sub-Agent tree walk costs milliseconds for a large tree; skip it
+            # when no other Session has a background command it could find.
+            subagent_walk = (
+                before is None
+                and state.runtime.command_manager.has_unfinished_background(besides=address)
+            )
             read = await state.runtime.chat_sessions.run_async(
                 _read_chat_history,
                 state,
@@ -232,6 +238,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 before=before,
                 after=after,
                 active_reviews=active_reviews,
+                subagent_walk=subagent_walk,
             )
             latest_run = chat_runs.active_run(
                 agent_id=agent_id, session_id=session_id, project_id=project_id
@@ -324,8 +331,12 @@ def _read_chat_history(
     before: str | None,
     after: str | None,
     active_reviews: list[Run] | None,
+    subagent_walk: bool,
 ) -> _ChatHistoryRead:
-    """Read one History page and the Session facts it carries in one Session-pool hop."""
+    """Read one History page and the Session facts it carries in one Session-pool hop.
+
+    *subagent_walk* reads the Sessions of the Session's Sub-Agents too.
+    """
     session = state.runtime.chat_sessions.get(address)
     history = session.read_chat_history_snapshot(
         limit=limit,
@@ -337,7 +348,7 @@ def _read_chat_history(
         background_note_marker=COMMAND_STATUS_NOTE_MARKER if before is None else None,
         skip_unchanged=True,
     )
-    subagent_sessions = _subagent_sessions(state, address) if before is None else None
+    subagent_sessions = _subagent_sessions(state, address) if subagent_walk else None
     if history.unchanged:
         return _ChatHistoryRead(history, None, None, subagent_sessions=subagent_sessions)
     agent = _session_agent(state, address) if before is None else None
