@@ -414,7 +414,12 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   neighbor outside the passage counts: words moved across a break inside the
   passage (a rewrapped comment) leave the kept line as the file has it; a
   written line still counts neighbors inside, since its new text could drop or
-  repeat the moved words. A misspelling is a word of
+  repeat the moved words. Lines the edit replaces may hold no more blank lines
+  than their copy: a blank line holds nothing a copy could miss, so a copy that
+  breaks a line in two (`return` and `1` for `    return 1`) would otherwise take
+  the blank line below as its second line and remove it (found 2026-10-12; the
+  passage does not qualify, and the `old_string` report shows the line-break
+  first difference). A misspelling is a word of
   4+ characters within one edit (two from 8 characters, case-insensitive,
   adjacent swaps count once) of the file's word, with the same digits, that
   occurs nowhere in the file. Some differences never matter: a hyphen (or two)

@@ -20,7 +20,9 @@ line's words, and of its words and signs together (a blank file line holds none)
 and a copy whose extra words continue the line above or below joined lines across a
 line break (the copy left out or added a line), so the passage does not take the
 edit. Words moved across a line break between a kept line and another line of the
-passage are the exception, since the kept line stays as the file has it.
+passage are the exception, since the kept line stays as the file has it. Lines the
+edit replaces hold no more blank lines than their copy: a copy that breaks a line
+in two must not take the blank line after it as its second line.
 Passages copied up to misspellings and kept-line gaps are preferred, like the
 precise strategies before them; candidates that overlap are one passage, placed by
 the fewest differences; exactly one passage may qualify at the first level that has
@@ -1043,6 +1045,8 @@ def _place_lines(
     hunk that leaves no line covers that ending too, so the lines go entirely.
     """
     old = hunk.old
+    if any(_takes_blank_line(file, old, segment, start) for segment in hunk.segments):
+        return None
     anchored = best != 0 and _anchored(file, old, start)
     speller = _Speller(file.words)
     aligned = []
@@ -1132,6 +1136,22 @@ def _place_lines(
         total.misspelled + total.other + total.alike,
         tuple(kept_differed),
     )
+
+
+def _takes_blank_line(file: _File, old: Sequence[str], segment: _Segment, start: int) -> bool:
+    """Whether the lines a segment replaces hold more blank lines than its copy.
+
+    A blank line holds no words or signs the copy could miss, so only the count
+    shows that the copy, its line breaks moved, leaves one out ("return" and "1"
+    copying a line "return 1", then the blank line after it). Replacing it would
+    remove a line the copy does not hold. A kept line stays as the file has it.
+    """
+    if segment.kept:
+        return False
+    first = start + segment.old
+    held = sum(not key for key in file.keys[first : first + segment.removed])
+    copied = sum(not _line_key(line) for line in old[segment.old : segment.old + segment.removed])
+    return held > copied
 
 
 def _respelled(speller: _Speller, new: str) -> tuple[tuple[str, str], ...]:
