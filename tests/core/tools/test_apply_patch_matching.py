@@ -51,6 +51,16 @@ GUTTER_NOTE = "Note: Removed read-output line-number prefixes"
         ("last\r\n", "@@\n last\n \n+added\n+more", "last\r\n\r\nadded\r\nmore\r\n"),
         ("alpha\n\nomega\n", "@@\n alpha\n \n+middle\n omega", "alpha\n\nmiddle\nomega\n"),
         ("alpha\nold\nomega\n", "@@\n \n alpha\n-old\n+new\n omega\n ", "alpha\nnew\nomega\n"),
+        # Empty lines between + lines past the unchanged lines belong to the added
+        # block; the file's blank lines after those unchanged lines stay in place.
+        (
+            "def a():\n    return 1\n\n\ndef c():\n    pass\n",
+            '@@\n     return 1\n+\n+\n+def b():\n+    """Doc.\n\n+    More."""\n\n+    pass',
+            'def a():\n    return 1\n\n\ndef b():\n    """Doc.\n\n    More."""\n\n    pass'
+            "\n\n\ndef c():\n    pass\n",
+        ),
+        # Between unchanged lines, an empty line is the file's blank line.
+        ("alpha\n\nomega\n", "@@\n alpha\n+one\n\n+two\n omega", "alpha\none\n\ntwo\nomega\n"),
         ("alpha\r\nold\nomega\r", "@@\n alpha\n-old\n+new\n omega", "alpha\r\nnew\r\nomega\r"),
         # Gutter-shaped file content matches literally; indented gutters keep indentation.
         (

@@ -523,6 +523,17 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   Blank lines explicitly marked for deletion remain meaningful operations.
   A blank last context line matches the empty line past the file's final line
   break; `+` lines after it end with that line break, so the file keeps it.
+- Empty lines written without a prefix between `+` lines, outside a hunk's
+  nonblank unchanged and removed lines, are added lines
+  (`_patch_syntax._read_added_blank_lines`). Read as unchanged, they matched the
+  file's blank lines beside those lines and moved them into the added block, so
+  the code after the block lost its blank-line separation. Evidence (replay of
+  7881 calls, 2026-10): 45 such lines in 35 calls, none meant as unchanged; 27
+  applied calls had lost one or two blank lines this way, and 5 refused calls
+  now apply. Between unchanged lines, such an empty line stays unchanged and
+  step 8 adds it only when that reading misses; an empty line written with its
+  space prefix always stays unchanged (all 8 between `+` lines were the file's
+  blank line).
 - Context-only blocks before another `@@` become ordered precise locator hints
   for that next hunk, including multiline context. A missing anchor fails like a
   missing hint, and repeated anchors follow the hint rule above (step 2). A multiline block that is not found fails `context_not_found`
@@ -644,8 +655,8 @@ replacements still went through Delete File plus Add File (agent-eval
 - `test_apply_patch_matching.py` covers the engine's steps: gutters, copied text
   with misspellings, code targets, typography, context hints and anchors that
   do not place a hunk, EOF markers (also one that only closes the patch),
-  whole-line matching, ordering of repeated lines and changes already
-  in the file.
+  whole-line matching, empty lines of an added block, ordering of repeated
+  lines and changes already in the file.
 - `test_apply_patch_reports.py` covers previews, `no_changes`, long mismatch
   evidence and failure -> displayed read continuation -> successful correction,
   including Unicode and LF/CRLF/CR, plus `part_of` diagnostics.
