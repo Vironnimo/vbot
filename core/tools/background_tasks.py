@@ -742,8 +742,8 @@ def _no_effect_notes(
             notes.append(f"{key} has no effect.{where}")
         elif log is not None:
             notes.append(
-                f"{key} has no effect: the output is shown unfiltered. The complete output is "
-                f"in {log}."
+                f"{key} has no effect: the output is shown unfiltered. vBot kept this "
+                f"command's complete output in {log} for you to read."
             )
         else:
             notes.append(f"{key} has no effect: the output is shown unfiltered.")

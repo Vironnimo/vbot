@@ -123,13 +123,10 @@ def log_sentence(report: CommandReport) -> str:
 def output_location(report: CommandReport, output: str) -> str | None:
     """The sentence naming the file with the complete output, unless *output*'s
     markers name it already; None without a log file."""
-    if report.log_path is None:
+    kept = _kept_output(report)
+    if kept is None or kept in output:
         return None
-    path = model_path(report.log_path)
-    noun = _log_content(report)
-    if f"the {noun} is in {path}" in output:
-        return None
-    return f"The {noun} is in {path}."
+    return f"{kept}."
 
 
 def stop_call(command_id: str) -> str:
@@ -392,15 +389,26 @@ def _holding_stage(command: str) -> str | None:
 
 def _full_output(report: CommandReport) -> str:
     """Where the omitted output is, as a clause of a marker."""
+    kept = _kept_output(report)
+    return f"; {kept}" if kept is not None else ""
+
+
+def _kept_output(report: CommandReport) -> str | None:
+    """The clause naming the log file as vBot's copy for the Agent; None without one.
+
+    Agents whose task forbade reading outside their working directory took the
+    file for someone else's and ran the whole command again instead of reading
+    it. The file holds everything, or what came before a cleaning failure.
+    """
     path = report.log_path
     if path is None:
-        return ""
-    return f"; the {_log_content(report)} is in {model_path(path)}"
-
-
-def _log_content(report: CommandReport) -> str:
-    """What the log file holds: everything, or only what came before a cleaning failure."""
-    return "output vBot processed" if report.transcript.processing_failed else "complete output"
+        return None
+    content = (
+        "the output it processed"
+        if report.transcript.processing_failed
+        else "this command's complete output"
+    )
+    return f"vBot kept {content} in {model_path(path)} for you to read"
 
 
 def _shortened(line: str, where: str) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -174,6 +175,44 @@ _BASH_SYNTAX = (
             ["such as -y or --yes, or pipe it into the program within the command."],
             id="prompt_library_closed",
         ),
+        # A Python failure is its last traceback's exception, not data printed before it.
+        pytest.param(
+            "python probe.py",
+            1,
+            "dir path -> [Errno 13] Permission denied: 'C:\\w\\d'\n"
+            "Traceback (most recent call last):\n"
+            '  File "probe.py", line 34, in <module>\n'
+            "    print('Permission denied')\n"
+            "TypeError: expected str, bytes or os.PathLike object, not State",
+            None,
+            id="data_before_the_traceback_is_not_the_failure",
+        ),
+        pytest.param(
+            "python write.py",
+            1,
+            "Traceback (most recent call last):\n"
+            '  File "write.py", line 3, in <module>\n'
+            "PermissionError: [Errno 13] Permission denied: 'out.db'",
+            ["Permission denied:"],
+            id="python_failure_is_its_exception",
+        ),
+        pytest.param(
+            "python prepare.py; git branch feature",
+            1,
+            "Traceback (most recent call last):\n"
+            '  File "prepare.py", line 1, in <module>\n'
+            "ValueError: no input\n"
+            "fatal: a branch named 'feature' already exists",
+            ["'feature' already exists"],
+            id="output_after_the_traceback_counts",
+        ),
+        pytest.param(
+            "Run the unit tests",
+            127,
+            "bash: line 1: Run: command not found",
+            ["command holds a description"],
+            id="description_sent_as_command",
+        ),
     ],
 )
 def test_failure_output_gets_the_matching_hint(
@@ -307,6 +346,42 @@ def test_platform_specific_hints_follow_the_host_shell(
         ),
         ("git add src/*.py", "fatal: pathspec 'src/*.py' did not match any files", None),
         ("rg -g '*.py' todo", "rg: *.py: No such file or directory (os error 2)", None),
+        # \" ended the string early and a { } block of the code became an argument.
+        (
+            'python -c "\nfor (sql,) in cases:\n    print(f\'{run(f\\"SELECT {sql}\\")}\')\n"',
+            "python.exe: ScriptBlock should only be specified as a value of the Command parameter.",
+            'In PowerShell, \\" does not escape a quote.',
+        ),
+        (
+            "node -e { console.log(1) }",
+            "node.exe: ScriptBlock should only be specified as a value of the Command parameter.",
+            None,
+        ),
+        # Python code sent as the command, whatever PowerShell reports about it.
+        (
+            "import sqlite3\ncon = sqlite3.connect(':memory:')\nprint([(1, 'x')])",
+            "ParserError:\nLine |\n   3 |  print([(1, 'x')])\n     |         ~\n"
+            "     | Missing type name after '['.",
+            "The command is Python code, which PowerShell cannot run.",
+        ),
+        (
+            "# probe\n\nfrom pathlib import Path\nprint(Path.cwd())",
+            "ParserError:\nLine |\n   3 |  from pathlib import Path\n     |  ~~~~\n"
+            "     | The 'from' keyword is not supported in this version of the language.",
+            "The command is Python code, which PowerShell cannot run.",
+        ),
+        (
+            "def f(x):\n    return x\nprint(f(1))",
+            _NOT_RECOGNIZED.format(name="x"),
+            "The command is Python code, which PowerShell cannot run.",
+        ),
+        # PowerShell's own class, also with a base class, and Import-Module.
+        ("class Child : Base {\n}", "ParserError: Unable to find type [Base].", None),
+        (
+            "Import-Module Pester",
+            "Import-Module: The specified module 'Pester' was not loaded.",
+            None,
+        ),
     ],
 )
 def test_bash_habits_in_powershell_name_the_powershell_form(
@@ -358,6 +433,15 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
             _NOT_RECOGNIZED,
         ),
         ("cargo build", "cargo", "Check with `Get-Command cargo`", _NOT_RECOGNIZED_DE),
+        # A description sent as the command; a missing program keeps its own hint.
+        (
+            "Check shell files compile and behave",
+            "Check",
+            "command holds a description, not a command",
+            _NOT_RECOGNIZED,
+        ),
+        ("Cargo build --release", "Cargo", "Check with `Get-Command Cargo`", _NOT_RECOGNIZED),
+        ("check shell files compile", "check", "Check with `Get-Command check`", _NOT_RECOGNIZED),
     ],
 )
 def test_missing_powershell_command_names_the_equivalent(
@@ -468,6 +552,11 @@ def test_hints_name_only_the_tools_the_agent_is_offered(
             'In PowerShell, \\" does not escape a quote.',
         ),
         ("Write-Output (", "Missing file specification after redirection operator.", None),
+        (
+            'python -m minidb "$work\\data.db" < "$work\\s1.sql"',
+            "The '<' operator is reserved for future use.",
+            "PowerShell has no < input redirection.",
+        ),
         # Bash control flow and tests, wherever a statement starts.
         (
             "for f in *.md; do echo $f; done",
@@ -568,17 +657,38 @@ _RUN_AS_MODULE = (
 )
 
 
+def _suggested_call(hint: str | None) -> str:
+    """The call a hint suggests: its last code span."""
+    assert hint is not None
+    spans: list[str] = re.findall(r"`([^`]+)`", hint)
+    return spans[-1]
+
+
 @pytest.mark.parametrize(
-    ("command", "module"),
+    ("command", "module", "call"),
     [
-        ("python tests/test_cart.py", "shop"),
-        ("python tests\\test_cart.py 2>&1 | Select-Object -Last 5", "tests"),
-        ('& "C:/venv/Scripts/python.exe" -u tests/test_cart.py', "shop"),
-        ("python {script}", "shop"),
+        ("python tests/test_cart.py", "shop", "python -m tests.test_cart"),
+        (
+            "python tests\\test_cart.py 2>&1 | Select-Object -Last 5",
+            "tests",
+            "python -m tests.test_cart",
+        ),
+        (
+            '& "C:/venv/Scripts/python.exe" -u tests/test_cart.py',
+            "shop",
+            '& "C:/venv/Scripts/python.exe" -u -m tests.test_cart',
+        ),
+        ("python {script}", "shop", "python -m tests.test_cart"),
+        # Every argument after the script stays, up to a redirection or the statement's end.
+        (
+            "python tests/test_cart.py --impl shop.fast.total 20000 'two words' > out.txt; echo",
+            "shop",
+            "python -m tests.test_cart --impl shop.fast.total 20000 'two words'",
+        ),
     ],
 )
 def test_module_not_found_from_script_run_by_path_names_module_run(
-    tmp_path: Path, command: str, module: str
+    tmp_path: Path, command: str, module: str, call: str
 ) -> None:
     workdir = _project(tmp_path)
     script = workdir / "tests" / "test_cart.py"
@@ -587,7 +697,9 @@ def test_module_not_found_from_script_run_by_path_names_module_run(
         command.format(script=f'"{script}"'), 1, _import_traceback(script, module), workdir=workdir
     )
 
-    assert hint == _RUN_AS_MODULE.format(module=module)
+    assert hint is not None
+    assert hint.startswith(_RUN_AS_MODULE.format(module=module).split(" Run it as")[0])
+    assert _suggested_call(hint) == call
 
 
 def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -> None:
@@ -637,8 +749,8 @@ def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -
                 'python -c "import shop.api"',
                 output,
                 True,
-                "Python imported the package 'shop', but it has no module 'api'. List the files "
-                "of 'shop' to check the name, or create the module if it is still missing.",
+                "Python imported the package 'shop', but it has no module 'api', and the "
+                "working directory has no shop/api.py.",
             )
             for output in (
                 "ModuleNotFoundError: No module named 'shop.api'\n",
@@ -682,3 +794,39 @@ def test_import_failures_name_where_python_looked(
     hint = annotate_failure(command, 1, output, workdir=workdir)
 
     assert hint is not None and expected in hint
+
+
+@pytest.mark.parametrize(
+    ("files", "names", "omits"),
+    [
+        # tests/ without __init__.py loses to a regular `tests` package elsewhere.
+        (("tests/test_errors.py",), ("tests/test_errors.py", "tests/__init__.py"), ()),
+        (
+            ("tests/__init__.py", "tests/test_errors.py"),
+            ("tests/test_errors.py", "-m"),
+            ("__init__.py",),
+        ),
+        # A module that is not there: the hint informs and never asks to write it.
+        (("tests/support.py",), ("tests/test_errors.py",), ("create", "Add", "write")),
+    ],
+)
+def test_a_missing_submodule_names_what_the_working_directory_holds(
+    tmp_path: Path, files: tuple[str, ...], names: tuple[str, ...], omits: tuple[str, ...]
+) -> None:
+    for name in files:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).touch()
+    output = (
+        "Traceback (most recent call last):\n"
+        '  File "C:\\Python314\\Lib\\unittest\\loader.py", line 137, in loadTestsFromName\n'
+        "ModuleNotFoundError: No module named 'tests.test_errors'\n\n"
+        "FAILED (errors=1)"
+    )
+
+    hint = annotate_failure("python -m unittest tests.test_errors", 1, output, workdir=tmp_path)
+
+    assert hint is not None
+    for text in names:
+        assert text in hint
+    for text in omits:
+        assert text not in hint
