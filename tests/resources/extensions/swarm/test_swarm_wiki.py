@@ -14,6 +14,9 @@ from resources.extensions.swarm.wiki_text import (
     WIKI_CONFLICT_RETRY,
     WIKI_DIFFERENCE,
     WIKI_DIFFERENCES_MORE,
+    WIKI_EDIT_APPLIED,
+    WIKI_EDIT_HELD,
+    WIKI_EDIT_MISS,
     WIKI_LIST_MATCHES,
     WIKI_LIST_NO_MATCH,
     WIKI_LIST_NO_WORD_MATCH,
@@ -565,6 +568,22 @@ async def test_wiki_request_ids_come_from_the_tool_call(board):
             "Nothing changed: the page already holds this change.",
         ),
         (
+            "Intro\nStatus: final\nNext: review\nTimeout is 30 seconds for retries\nEnd",
+            {
+                "edits": [
+                    {
+                        "old_text": "Status: done\nNext: review",
+                        "new_text": "Status: final\nNext: review",
+                    },
+                    {
+                        "old_text": "Timeout is 20 seconds for retries",
+                        "new_text": "Timeout is 30 seconds for retries",
+                    },
+                ]
+            },
+            WIKI_STATUS["unchanged_edits"],
+        ),
+        (
             "First finding",
             {"title": "Notes", "expected_revision": 1},
             "Nothing changed: the page already holds this change.",
@@ -584,6 +603,69 @@ async def test_wiki_changes_the_page_already_holds_change_nothing(
     result = await invoke(board, {"action": "update", "page_id": page_id, **arguments})
     assert result["data"]["status"] == status
     assert await stored(board, page_id) == before
+
+
+@pytest.mark.asyncio
+async def test_wiki_update_edits_apply_together_or_not_at_all(board):
+    page_id = await create(board, "# Claims\n| B01 | *free* |\n| B02 | *free* |\n| B03 | *free* |")
+    first = {"old_text": "| B01 | *free* |", "new_text": "| B01 | Ada |"}
+    missing = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "edits": [first, {"old_text": "| B05 | *free* |", "new_text": "| B05 | Ada |"}],
+        },
+    )
+    assert missing["error"]["code"] == "wiki_edit_conflict"
+    assert WIKI_EDIT_MISS.format(number=2, explanation="") in missing["error"]["message"]
+    assert WIKI_EDIT_MISS.format(number=1, explanation="") not in missing["error"]["message"]
+    assert (await stored(board, page_id))["revision"] == 1
+    # The file edit Tool's spelling, without page_id: one revision holds every edit.
+    applied = await invoke(
+        board,
+        {
+            "edits": [
+                {"old_string": "| B01 | *free* |", "new_string": "| B01 | Ada |"},
+                {"old_text": "| B03 | *free* |", "new_text": "| B03 | Bo |"},
+                {"old_text": "# Claims", "new_text": "# Claims\nClaim one row at a time."},
+            ]
+        },
+    )
+    assert applied["ok"], applied
+    current = await stored(board, page_id)
+    assert (current["revision"], current["content"]) == (
+        2,
+        "# Claims\nClaim one row at a time.\n| B01 | Ada |\n| B02 | *free* |\n| B03 | Bo |",
+    )
+    # Each edit names its line in the saved revision.
+    assert all(
+        WIKI_EDIT_APPLIED.format(number=number, line=line) in applied["data"]["status"]
+        for number, line in ((1, 3), (2, 5), (3, 1))
+    ), applied["data"]["status"]
+    again = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "edits": [first, {"old_text": "| B02 | *free* |", "new_text": "| B02 | Cy |"}],
+        },
+    )
+    assert WIKI_EDIT_HELD.format(number=1, line=3) in again["data"]["status"]
+    assert (await stored(board, page_id))["revision"] == 3
+    refused = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "edits": [
+                {"old_text": "| B02 | Cy |", "new_text": "| B02 | Dee |"},
+                {"old_text": "| B03 | Bo |", "new_text": "", "replace_all": True},
+            ],
+        },
+    )
+    assert refused["error"]["code"] == "invalid_arguments"
+    assert (await stored(board, page_id))["revision"] == 3
 
 
 @pytest.mark.asyncio

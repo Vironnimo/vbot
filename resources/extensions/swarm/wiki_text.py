@@ -124,7 +124,13 @@ WIKI_STATUS = {
     "unchanged": "Nothing changed: the page already holds this change.",
     "unchanged_create": "Nothing changed: an identical page already exists.",
     "unchanged_delete": "Nothing changed: the page is already deleted.",
+    "unchanged_edits": "Nothing changed: the page already holds these changes.",
+    # An update's edits, each named on its own line below the status.
+    "edits": "Applied {every} in one revision:",
+    "edits_held": "Applied {applied} in one revision; the page already held {held}:",
 }
+WIKI_EDIT_APPLIED = "edit {number}: replaced the passage at line {line}."
+WIKI_EDIT_HELD = "edit {number}: the page already held this change, at line {line}."
 WIKI_REVISION_CURRENT = "{revision} (current), saved by {author}"
 WIKI_REVISION_OLDER = "{revision} (the current revision is {current}), saved by {author}"
 WIKI_READ_DELETED = "This revision deleted the page. Restore it with {call}"
@@ -214,6 +220,15 @@ WIKI_NEEDS = {
     "content": "create needs content: the page's Markdown.",
     "title": "create needs a title.",
     "revision": "restore needs revision: the saved revision to bring back. See them with {call}.",
+    "edit": (
+        "Each item of edits needs old_text, the passage to replace, and new_text, its "
+        "replacement. Received for edit {number}: {received}."
+    ),
+    "edits_with": (
+        "Send edits without {fields}: put every passage to replace in edits as old_text and "
+        "new_text, or send content alone to replace the whole page."
+    ),
+    "edits_many": "edits holds {count} edits; send at most {maximum} in one call.",
 }
 WIKI_FIELD_ELSEWHERE = "{field} is used by {users}, not by {action}. Repeat the call without it."
 WIKI_FIELD_UNKNOWN = "swarm_wiki has no field {field}. Repeat the call without it."
@@ -252,6 +267,15 @@ WIKI_CHANGED_SINCE = (
     "what changed with {call}, then decide whether your change still applies; if it does, "
     "repeat the call with old_text as the page has it now."
 )
+# An update's edits are saved together or not at all.
+WIKI_EDITS_NONE = (
+    "Nothing changed: {every} are saved together or not at all, and {failed} could not be applied."
+)
+WIKI_EDIT_MISS = "Edit {number}: {explanation}"
+WIKI_EDITS_RETRY = "Send {every} again with {failed} corrected or left out."
+# All of an update's edits: "both edits", "all 3 edits".
+WIKI_EDITS_BOTH = "both edits"
+WIKI_EDITS_ALL = "all {total} edits"
 WIKI_AMBIGUOUS = (
     "old_text occurs {count} times, {where}. Include neighboring text so it occurs only once."
 )

@@ -149,6 +149,8 @@ _WIKI_FIELDS = SpellingAliases(
         "include_deleted": ("show_deleted", "with_deleted", "deleted"),
     }
 )
+# The fields of one item of a swarm_wiki update's edits, by spelling.
+_WIKI_EDIT_FIELDS = {"oldtext": "old_text", "newtext": "new_text"}
 _WIKI_ACTIONS = SpellingAliases(
     {
         "list": (
@@ -310,6 +312,17 @@ def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
         normalized.pop("expected_revision", None)
     if normalized.get("query") in (None, ""):
         normalized.pop("query", None)
+    edits = normalized.get("edits")
+    if isinstance(edits, list):
+        normalized["edits"] = edits = [_wiki_edit(item) for item in edits]
+        # A list of one edit is the call's own old_text and new_text.
+        if (
+            len(edits) == 1
+            and isinstance(edits[0], dict)
+            and edits[0].keys() == {"old_text", "new_text"}
+            and not {"old_text", "new_text"} & normalized.keys()
+        ):
+            normalized.update(normalized.pop("edits")[0])
     if "action" not in normalized:
         implied = _implied_wiki_action(normalized)
         if implied is not None:
@@ -456,6 +469,21 @@ def _action_normalizer(
     return normalize
 
 
+def _wiki_edit(item: Any) -> Any:
+    """Name the fields of one of an update's edits as swarm_wiki does."""
+
+    if not isinstance(item, dict):
+        return item
+    named: Json = {}
+    for key, value in item.items():
+        canonical = _WIKI_FIELDS.get(key) or _WIKI_EDIT_FIELDS.get(spelling(key), "")
+        field = canonical if canonical in _WIKI_EDIT_FIELDS.values() else str(key)
+        if field in named:
+            return item  # Two spellings of one field; the handler names both.
+        named[field] = value
+    return named
+
+
 def _recipient_list(value: Any) -> Any:
     """Return recipients as a list of meaningful strings, splitting listed strings.
 
@@ -487,7 +515,7 @@ def _implied_board_action(arguments: Json) -> str | None:
 
 
 def _implied_wiki_action(arguments: Json) -> str | None:
-    if "old_text" in arguments or "new_text" in arguments:
+    if {"old_text", "new_text", "edits"} & arguments.keys():
         return "update"
     if "page_id" in arguments and ("content" in arguments or "title" in arguments):
         return "update"
