@@ -172,12 +172,14 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     empty page with ``session_id: null``. An
     ``after`` read appends to the caller's page (``incremental``); its
     ``background_command_statuses`` then cover only the appended records and
-    the Session's live background commands, for the caller to merge, while
+    every live background command of the Session, for the caller to merge (a
+    ``running`` it holds that the read leaves out has ended), while
     ``background_commands_still_running`` is always the complete list. An
     ``after`` read with nothing appended returns an empty page without
-    ``session_usage``, ``context_usage``, either background field or
-    ``compaction_policy``: the caller's values stay current. A ``before`` page
-    carries neither background field nor the Compaction Policy.
+    ``session_usage``, ``context_usage`` or ``compaction_policy``: the
+    caller's values stay current; its background fields report the live
+    commands only. A ``before`` page carries neither background field nor the
+    Compaction Policy.
     """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
     _reject_unsupported(params, supported_fields, "chat.history")
@@ -286,12 +288,14 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         if context_usage is not None and "context_window" not in context_usage:
             context_usage = with_context_window(context_usage, read.context_window)
         response["context_usage"] = context_usage
-        if before is None:
-            statuses, still_running = _current_command_statuses(
-                state, address, projection.background_command_statuses
-            )
-            response["background_command_statuses"] = statuses
-            response["background_commands_still_running"] = still_running
+    if before is None:
+        statuses, still_running = _current_command_statuses(
+            state,
+            address,
+            {} if projection is None else projection.background_command_statuses,
+        )
+        response["background_command_statuses"] = statuses
+        response["background_commands_still_running"] = still_running
     if reflection_runs is not None:
         response["reflection_runs"] = reflection_runs
     if read.compaction_policy is not None:

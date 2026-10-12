@@ -448,6 +448,15 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     assert delta["background_command_statuses"] == {"cmd_one": "completed", "cmd_new": "completed"}
     assert delta["background_commands_still_running"] == []
 
+    # A read that finds nothing appended still reports the live commands, so
+    # the caller learns that a command it holds as running ended in a restart.
+    commands.reports.clear()
+    commands.add("cmd_next", "running")
+    unchanged = await history.read(after=delta["next_after"])
+    assert unchanged["messages"] == []
+    assert unchanged["background_command_statuses"] == {"cmd_next": "running"}
+    assert unchanged["background_commands_still_running"] == []
+
     # An older page carries neither.
     older = await history.read(before=first["next_before"])
     assert "background_command_statuses" not in older
@@ -618,7 +627,7 @@ async def test_history_increments_after_a_cursor_and_resets_after_an_edit(
 
 
 @pytest.mark.asyncio
-async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
+async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_worker_hop(
     history: _History, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = history.session()
@@ -669,6 +678,8 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
         "history_reset": False,
         "has_newer": False,
         "has_more": False,
+        "background_command_statuses": {},
+        "background_commands_still_running": [],
     }
 
     monkeypatch.undo()

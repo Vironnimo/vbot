@@ -132,54 +132,79 @@ describe('History reads', () => {
     ['epoch_changed', true],
     ['resumed', false],
   ])(
-    'after a %s reconnect, reads loaded Histories again in full only when it may have missed an end',
-    async (replayStatus, readAgain) => {
-      const page = (statuses, nextAfter) => ({
-        messages: [],
-        history_generation: 'g1',
-        next_after: nextAfter,
-        incremental: false,
-        background_command_statuses: statuses,
-        background_commands_still_running: [],
-      });
+    'after a %s reconnect, reads the shown History on only when it may have missed an end',
+    async (replayStatus, readOn) => {
       const loadChatHistory = vi
         .fn()
-        .mockResolvedValueOnce(page({ cmd_one: 'running' }, 'cursor-1'))
-        .mockResolvedValueOnce(page({ cmd_two: 'running' }, 'cursor-1'))
-        // vBot restarted: the command it ran is gone, and with it its status.
-        .mockResolvedValueOnce(page({}, 'cursor-2'));
+        .mockResolvedValueOnce({
+          messages: [{ id: 'reply', role: 'assistant', content: 'Hello' }],
+          history_generation: 'g1',
+          next_after: 'cursor-1',
+          next_before: 'before-1',
+          has_more: true,
+          incremental: false,
+          background_command_statuses: {
+            cmd_one: 'running',
+            cmd_two: 'running',
+            cmd_three: 'completed',
+          },
+          background_commands_still_running: [],
+        })
+        .mockResolvedValueOnce({
+          messages: [{ id: 'older', role: 'user', content: 'Hi' }],
+          has_more: false,
+        })
+        // vBot restarted while cmd_one ran; it reports every live command.
+        .mockResolvedValueOnce({
+          messages: [],
+          history_generation: 'g1',
+          next_after: 'cursor-1',
+          incremental: true,
+          history_reset: false,
+          runs: [],
+          background_command_statuses: { cmd_two: 'running' },
+          background_commands_still_running: [],
+        });
+      const loadReflectionRuns = vi
+        .fn()
+        .mockResolvedValue({ reflection_runs: [] });
       const { chatState, controller } = setupController({
-        operationOverrides: { loadChatHistory },
-        isDisplayedSession: (_agentId, sessionId) => sessionId === 'shown',
+        operationOverrides: { loadChatHistory, loadReflectionRuns },
+        isDisplayedSession: () => true,
       });
       await controller.loadHistoryForSession('alpha', 'shown');
-      await controller.loadHistoryForSession('alpha', 'hidden');
       const shown = chatState.sessions['alpha::shown'];
-      const hidden = chatState.sessions['alpha::hidden'];
+      await controller.loadOlderHistory(shown);
 
       controller.applyConnectionSnapshot({
         replay_status: replayStatus,
         active_runs: [],
       });
-      if (readAgain) {
+      // A read on carries no reflections; they are read on their own.
+      await vi.waitFor(() => expect(loadReflectionRuns).toHaveBeenCalled());
+      if (readOn) {
         await vi.waitFor(() =>
-          expect(shown.backgroundCommandStatuses).toEqual({}),
+          expect(shown.backgroundCommandStatuses.cmd_one.status).toBe('ended'),
         );
-        expect(loadChatHistory).toHaveBeenCalledTimes(3);
         expect(loadChatHistory).toHaveBeenLastCalledWith({
           agent_id: 'alpha',
           session_id: 'shown',
-          limit: 100,
+          limit: 500,
+          after: 'cursor-1',
         });
-        // A hidden Session reads in full once shown.
-        expect(hidden.historyAfter).toBe('');
       } else {
         expect(loadChatHistory).toHaveBeenCalledTimes(2);
-        expect(shown.backgroundCommandStatuses).toEqual({
-          cmd_one: { status: 'running', stillRunning: false },
-        });
-        expect(hidden.historyAfter).toBe('cursor-1');
       }
+      expect(shown.backgroundCommandStatuses).toEqual({
+        cmd_one: { status: readOn ? 'ended' : 'running', stillRunning: false },
+        cmd_two: { status: 'running', stillRunning: false },
+        cmd_three: { status: 'completed', stillRunning: false },
+      });
+      // The older pages the user loaded stay.
+      expect(shown.messages.map((message) => message.id)).toEqual([
+        'older',
+        'reply',
+      ]);
     },
   );
 
