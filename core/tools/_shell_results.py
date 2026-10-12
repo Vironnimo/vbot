@@ -342,7 +342,10 @@ def _unprocessed(report: CommandReport) -> str | None:
     if not report.transcript.processing_failed:
         return None
     log = " and from the log file" if report.log_path is not None else ""
-    return f"[vBot could not process the output after this point; it is missing here{log}.]"
+    return (
+        f"[vBot could not process the output after this point; it is missing here{log}. "
+        "If you need it, run the command again with its output redirected to a file.]"
+    )
 
 
 def _head_and_tail(head: list[str], tail: list[str]) -> tuple[list[str], list[str], int]:
