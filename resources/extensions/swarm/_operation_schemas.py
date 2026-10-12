@@ -214,7 +214,12 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
 _OPERATION_SCHEMAS["wiki"] = {
     **WIKI_PARAMETERS,
     "properties": {
-        **WIKI_PARAMETERS["properties"],
+        # since_revision is a swarm_wiki read option; the Store reads revisions as they are.
+        **{
+            name: value
+            for name, value in WIKI_PARAMETERS["properties"].items()
+            if name != "since_revision"
+        },
         "swarm_id": {"type": "string"},
         "request_id": {"type": "string"},
     },

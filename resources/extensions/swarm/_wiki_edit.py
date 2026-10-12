@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 
 from core.tools.copy_match import copy_warnings, replace_copied
@@ -22,7 +22,7 @@ from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
     find_closest_candidates,
-    first_difference,
+    line_differences,
     replace_fuzzy,
 )
 
@@ -36,6 +36,10 @@ _MAX_OCCURRENCES_SHOWN = 3
 _HINT_MIN_SHARE = 0.5
 _HINT_SCAN_LINES = 5000
 _HINT_LINE_CHARS = 4000
+# A miss names this many lines where old_text differs from the closest passage.
+_DIFFERENCES_SHOWN = 5
+# A read shows at most this many characters (the swarm_wiki read maximum).
+_READ_MAX_CHARS = 20000
 
 
 @dataclass(frozen=True)
@@ -65,15 +69,19 @@ class EditMiss:
     ``lines`` names every distinct line an ambiguous ``old_text`` starts on;
     ``passages`` shows a bounded few of them, or the closest text on a miss.
     ``similar`` marks an ``old_text`` that matched nowhere exactly but resembles
-    several passages. ``difference`` locates where a missing ``old_text`` first
-    differs from the closest passage (``fuzzy_match.first_difference``).
+    several passages. On a miss, ``differences`` names the first few of the
+    ``different_lines`` where ``old_text`` differs from the closest passage
+    (``fuzzy_match.line_differences``), and ``span`` the character offset and
+    length of the passage to read.
     """
 
     occurrences: int
     passages: tuple[Passage, ...]
     lines: tuple[int, ...] = ()
     similar: bool = False
-    difference: dict[str, int | str | bool] | None = None
+    differences: tuple[dict[str, int | str | bool | None], ...] = ()
+    different_lines: int = 0
+    span: tuple[int, int] | None = None
 
 
 def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
@@ -93,6 +101,9 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
     if held is not None:
         return TextEdit(content, held, False)
     emphasis = _emphasis_copy(content, old, new)
+    if isinstance(emphasis, EditMiss) and not emphasis.occurrences:
+        line = emphasis.passages[0].line
+        return replace(emphasis, span=_span(content, line, line))
     if emphasis is not None:
         return emphasis
     if not new.strip() or _replace(content, new, new) is None:
@@ -106,9 +117,42 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
     passages = tuple(
         Passage(candidate.line_number, candidate.text, candidate.truncated)
         for candidate in candidates
+    ) or _fragment_hint(content, old)
+    if not passages:
+        return EditMiss(0, ())
+    compared = (
+        line_differences(content, old, candidates[0].line_number, limit=_DIFFERENCES_SHOWN)
+        if candidates
+        else None
     )
-    difference = first_difference(content, old, candidates[0].line_number) if candidates else None
-    return EditMiss(0, passages or _fragment_hint(content, old), difference=difference)
+    if compared is None:
+        first = passages[0]
+        return EditMiss(0, passages, span=_span(content, first.line, _last_line(first)))
+    return EditMiss(
+        0,
+        passages,
+        differences=compared.differences,
+        different_lines=compared.count,
+        span=_span(content, compared.first_line, compared.last_line),
+    )
+
+
+def _last_line(passage: Passage) -> int:
+    return passage.line + passage.text.count("\n")
+
+
+def _span(content: str, first_line: int, last_line: int) -> tuple[int, int]:
+    """Return the offset and length of page lines ``first_line`` to ``last_line``.
+
+    The offset counts characters as a read does; the length ends with the last
+    line's text and is bounded by what one read shows.
+    """
+
+    starts = [0, *(match.end() for match in _LINE_BREAK.finditer(content))]
+    first = min(max(first_line, 1), len(starts)) - 1
+    last = min(max(last_line, first_line), len(starts))
+    end = len(content[: starts[last]].rstrip("\r\n")) if last < len(starts) else len(content)
+    return starts[first], max(1, min(end - starts[first], _READ_MAX_CHARS))
 
 
 def _emphasis_copy(content: str, old: str, new: str) -> TextEdit | EditMiss | None:

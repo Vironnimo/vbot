@@ -8,11 +8,18 @@ import pytest
 from resources.extensions.swarm.agent_text import REPLAYED
 from resources.extensions.swarm.store import SwarmStoreError
 from resources.extensions.swarm.wiki_text import (
+    WIKI_CHANGES_NONE,
+    WIKI_CONFLICT_CONTENT,
+    WIKI_CONFLICT_RETRY,
+    WIKI_DIFFERENCE,
+    WIKI_DIFFERENCES_MORE,
     WIKI_LIST_MATCHES,
     WIKI_LIST_NO_MATCH,
     WIKI_LIST_NO_WORD_MATCH,
     WIKI_LIST_WORD_MATCHES,
+    WIKI_OFFSET_FROM_END,
     WIKI_OWN_REVISION,
+    WIKI_SINCE_IGNORES,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
     _swarm,
@@ -317,10 +324,8 @@ async def test_wiki_collaboration_conflicts_history_delete_restore(board):
     deleted = await invoke(board, {"action": "delete", "page_id": page_id, "expected_revision": 2})
     assert deleted["ok"], deleted
     assert (await stored(board, page_id))["deleted"]
-    assert visible(await invoke(board, {"action": "list"})) == (
-        'pages: The Wiki has only deleted pages. List them with {"action": "list", '
-        '"include_deleted": true}'
-    )
+    only_deleted = (await invoke(board, {"action": "list"}))["data"]
+    assert continuation(only_deleted["pages"]) == {"action": "list", "include_deleted": True}
     listed = visible(await invoke(board, {"action": "list", "include_deleted": True}))
     # Either racing change may have won, so the title varies.
     assert f"({page_id}), revision 3 by " in listed
@@ -466,7 +471,8 @@ async def test_wiki_results_read_as_text(board):
     assert visible(partial) == (
         f"page_id: {page_id}\ntitle: Plan\nrevision: 1 (current), saved by {author}\n"
         f"link: [Plan](#wiki/{page_id})\nshown: Characters 0 to 6 of 16.\n"
-        f'more: Continue with {{"action": "read", "page_id": "{page_id}", "limit": 6, '
+        f'more: Continue with swarm_wiki {{"action": "read", "page_id": "{page_id}", '
+        '"limit": 6, '
         f'"revision": 1, "offset": 6}}\n\n# Plan'
     )
     assert visible(await invoke(board, {"action": "list"})) == (
@@ -487,7 +493,8 @@ async def test_wiki_results_read_as_text(board):
     deleted = await invoke(board, {"action": "delete", "page_id": page_id})
     assert visible(deleted) == (
         f"page_id: {page_id}\ntitle: Plan\nrevision: 3\n"
-        f'status: Deleted. Restore it with {{"action": "restore", "page_id": "{page_id}", '
+        "status: Deleted. Restore it with swarm_wiki "
+        f'{{"action": "restore", "page_id": "{page_id}", '
         '"revision": 3}'
     )
     # The restore call in the result is copyable as it stands.
@@ -623,23 +630,28 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
         "# Plan\nThe deployment uses three replicas behind the load balancer today.\n"
         "Row 1: value\nRow 2: value\nsame same\nEnd",
     )
-    read_call = f'{{"action": "read", "page_id": "{page_id}"}}'
 
-    async def edit(old, **extra):
-        return visible(
-            await invoke(
-                board,
-                {"action": "update", "page_id": page_id, "old_text": old, "new_text": "x", **extra},
-            )
+    async def edit(old, page=page_id, **extra):
+        return await invoke(
+            board,
+            {"action": "update", "page_id": page, "old_text": old, "new_text": "x", **extra},
         )
 
-    assert await edit("Row 2: valeu") == (
-        "Error (wiki_edit_conflict): old_text does not occur in the current page (revision 1). "
-        "Nothing changed.\nClosest passages:\nline 4:\nRow 2: value\nline 3:\nRow 1: value\n"
-        "First difference, line 4: the page has 'Row 2: value' where old_text has "
-        "'Row 2: valeu'.\n"
-        f"Copy old_text exactly from the page, or read it with {read_call}."
-    )
+    async def miss(old, page=page_id, **extra):
+        """Return the error's lines and what the read call it suggests shows."""
+        message = (await edit(old, page, **extra))["error"]["message"]
+        lines = message.splitlines()
+        assert lines[0].endswith("Nothing changed."), message
+        # The suggested call names the Tool, so it is not sent to the file read Tool.
+        assert " swarm_wiki {" in lines[-1]
+        shown = await invoke(board, continuation(lines[-1]))
+        return lines, shown["data"]["content"]
+
+    # Each line where old_text differs is named, with both versions.
+    lines, passage = await miss("Row 2: valeu")
+    assert passage == "Row 2: value"
+    difference = WIKI_DIFFERENCE.format(line=4, page="'Row 2: value'", copy="'Row 2: valeu'")
+    assert difference in lines
     # Closest passages that overlap show each page line once.
     reviews = await create(
         board,
@@ -648,41 +660,73 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
         "Reviews",
     )
     old = "The team reviewed the rollout plan.\nThe team reviewed the rollback plan."
-    assert visible(
-        await invoke(
-            board,
-            {"action": "update", "page_id": reviews, "old_text": old, "new_text": "x"},
-        )
-    ) == (
-        "Error (wiki_edit_conflict): old_text does not occur in the current page (revision 1). "
-        "Nothing changed.\nClosest passage, at line 2:\nThe team reviews the rollout plan.\n"
-        "The team reviews the rollback plan.\nFirst difference, line 2: the page has 'The team "
-        "reviews the rollout plan.' where old_text has 'The team reviewed the rollout plan.'.\n"
-        'Copy old_text exactly from the page, or read it with {"action": "read", "page_id": '
-        f'"{reviews}"}}.'
-    )
+    lines, passage = await miss(old, reviews)
+    assert passage == "The team reviews the rollout plan.\nThe team reviews the rollback plan."
+    assert lines.count("The team reviews the rollout plan.") == 1
+    assert _differing_lines(lines) == ["2", "3"]
     # A fragment of a longer line points at that line.
-    assert await edit("three replicas behind the proxy") == (
-        "Error (wiki_edit_conflict): old_text does not occur in the current page (revision 1). "
-        "Nothing changed.\nClosest passage, at line 2:\n"
-        "The deployment uses three replicas behind the load balancer today.\n"
-        f"Copy old_text exactly from the page, or read it with {read_call}."
-    )
-    assert await edit("same") == (
+    lines, passage = await miss("three replicas behind the proxy")
+    assert passage == "The deployment uses three replicas behind the load balancer today."
+    assert visible(await edit("same")) == (
         "Error (wiki_edit_conflict): old_text occurs 2 times, all in line 5. Include "
         "neighboring text so it occurs only once. Nothing changed.\nline 5:\nsame same\nEnd"
     )
-    assert await edit("value") == (
+    assert visible(await edit("value")) == (
         "Error (wiki_edit_conflict): old_text occurs 2 times, at lines 3 and 4. Include "
         "neighboring text so it occurs only once. Nothing changed.\nline 3:\nRow 1: value\n"
         "Row 2: value\nline 4:\nRow 2: value\nsame same"
     )
-    await peer_rename(board, page_id)
-    assert (await edit("Row 9: value", expected_revision=1)).startswith(
-        "Error (wiki_revision_conflict): The page changed since revision 1 (now 2), and "
-        "old_text no longer occurs in it. Nothing changed.\n"
+    # A retyped passage names every differing line at once, up to a bound, and tells a
+    # line the copy dropped or added from a changed one.
+    items = [f"Item {number}: the original text of item {number}" for number in range(1, 13)]
+    retyped = await create(board, "\n".join(items), "Retyped")
+    copy = [
+        item.replace("original", "first") if number in {3, 5, 7, 8, 9, 10} else item
+        for number, item in enumerate(items, 1)
+    ][1:10]
+    copy.remove(items[3])
+    copy.insert(3, "An inserted line")
+    lines, passage = await miss("\n".join(copy), retyped)
+    assert passage == "\n".join(items[1:10])
+    assert _differing_lines(lines) == ["3", "4", "5", "old_text 4", "7"]
+    dropped = next(line for line in lines if line.startswith("line 4:"))
+    assert items[3] in dropped and "Item 5" not in dropped
+    assert WIKI_DIFFERENCES_MORE.format(count=3) in lines
+    # A passage edit from an older revision shows what changed since and who changed it.
+    await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "old_text": "Row 1: value",
+            "new_text": "Row 1: ok",
+        },
+        1,
     )
-    assert (await stored(board, page_id))["revision"] == 2
+    lines, passage = await miss("Row 1: value", expected_revision=1)
+    assert lines[0].startswith("The page changed since revision 1 (now 2)")
+    assert board.swarm["participants"][1]["display_name"] in lines[1]
+    assert lines[2:6] == [
+        "@@ -2,3 +2,3 @@",
+        " The deployment uses three replicas behind the load balancer today.",
+        "-Row 1: value",
+        "+Row 1: ok",
+    ]
+    current = await stored(board, page_id)
+    assert passage in current["content"]
+    assert current["revision"] == 2
+
+
+def _differing_lines(lines):
+    """Return the page lines, or "old_text N" lines, an edit miss names as differing."""
+
+    named = []
+    for line in lines:
+        if match := re.match(r"line (\d+)(?:,[^:]*)?: the page has", line):
+            named.append(match[1])
+        elif match := re.match(r"old_text line (\d+) has", line):
+            named.append(f"old_text {match[1]}")
+    return named
 
 
 @pytest.mark.asyncio
@@ -693,26 +737,55 @@ async def test_wiki_conflicts_show_what_changed_and_the_retry(board):
         {"action": "update", "page_id": page_id, "old_text": "pending", "new_text": "done"},
         1,
     )
+    peer = board.swarm["participants"][1]["display_name"]
     stale = {"action": "update", "page_id": page_id, "expected_revision": 1}
-    assert visible(await invoke(board, {**stale, "content": "Replaced"})) == (
-        "Error (wiki_revision_conflict): The page changed since revision 1; the current "
-        "revision is 2. Nothing changed.\nChanges since revision 1:\n@@ -1,3 +1,3 @@\n Intro\n"
-        "-Status: pending\n+Status: done\n End\nApply your change to the current page: replace "
-        "one passage with old_text and new_text, or send the whole content with "
-        "expected_revision 2."
-    )
-    retry = "Repeat the call with expected_revision 2 if it still applies. Nothing changed."
-    assert visible(await invoke(board, {**stale, "title": "Renamed"})) == (
-        "Error (wiki_revision_conflict): The page changed since revision 1; the current "
-        f"revision is 2. {retry}"
-    )
-    assert visible(await invoke(board, {**stale, "expected_revision": 7, "title": "Renamed"})) == (
+    for change, next_step in (
+        ({"content": "Replaced"}, WIKI_CONFLICT_CONTENT),
+        ({"title": "Renamed"}, WIKI_CONFLICT_RETRY),
+    ):
+        message = (await invoke(board, {**stale, **change}))["error"]["message"]
+        first, header, *diff, last = message.splitlines()
+        assert first.endswith("Nothing changed.")
+        assert peer in header
+        assert diff == ["@@ -1,3 +1,3 @@", " Intro", "-Status: pending", "+Status: done", " End"]
+        assert last == next_step.format(current=2)
+    future = await invoke(board, {**stale, "expected_revision": 7, "title": "Renamed"})
+    assert visible(future) == (
         "Error (wiki_revision_conflict): Revision 7 does not exist yet; the current revision "
-        f"is 2. {retry}"
+        "is 2. Repeat the call with expected_revision 2 if it still applies. Nothing changed."
     )
     current = await stored(board, page_id)
     assert (current["revision"], current["title"]) == (2, "Notes")
     assert (await invoke(board, {**stale, "expected_revision": 2, "title": "Renamed"}))["ok"]
+
+
+@pytest.mark.asyncio
+async def test_wiki_read_since_a_revision_shows_what_changed_and_who_changed_it(board):
+    page_id = await create(board, "Intro\nStatus: pending\nEnd")
+    first, second = (board.swarm["participants"][peer]["display_name"] for peer in (1, 2))
+    edit = {"action": "update", "page_id": page_id, "old_text": "pending", "new_text": "done"}
+    assert (await invoke(board, edit, 1))["ok"]
+    rename = {"action": "update", "page_id": page_id, "title": "Status"}
+    assert (await invoke(board, rename, 2))["ok"]
+    read = {"action": "read", "page_id": page_id}
+    changes = (await invoke(board, {**read, "since_revision": 1}))["data"]
+    assert first in changes["changes"] and second in changes["changes"]
+    assert changes["content"] == "@@ -1,3 +1,3 @@\n Intro\n-Status: pending\n+Status: done\n End"
+    assert changes["revision"].startswith("3 (current)")
+    # A rename changes no content; the result names who made it, without a diff.
+    renamed = (await invoke(board, {**read, "since_revision": 2, "offset": 5}))["data"]
+    assert second in renamed["changes"] and first not in renamed["changes"]
+    assert "content" not in renamed
+    assert renamed["note"] == WIKI_SINCE_IGNORES.format(field="offset")
+    current = (await invoke(board, {**read, "since_revision": 3}))["data"]
+    assert (current["changes"], "content" in current) == (WIKI_CHANGES_NONE.format(since=3), False)
+    # With revision, the changes end at that revision.
+    older = (await invoke(board, {**read, "since_revision": 1, "revision": 2}))["data"]
+    assert second not in older["changes"]
+    assert older["content"] == changes["content"]
+    for revisions in ({"since_revision": 4}, {"since_revision": 3, "revision": 2}):
+        refused = await invoke(board, {**read, **revisions})
+        assert refused["error"]["code"] == "invalid_arguments"
 
 
 @pytest.mark.asyncio
@@ -760,7 +833,7 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
             'old_text occurs in w1 ("Release plan") and w2 ("B"); repeat the call with the '
             "page_id of the page you mean.",
         ),
-        ("Missing", 'Find pages with {"action": "list"}.'),
+        ("Missing", 'Find pages with swarm_wiki {"action": "list"}.'),
     ):
         unnamed = await invoke(board, {"action": "update", "old_text": old_text, "new_text": "y"})
         assert visible(unnamed) == (
@@ -771,7 +844,7 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
         missing = await invoke(board, {"action": "read", "page_id": unknown})
         assert visible(missing) == (
             f"Error (wiki_page_not_found): No page {unknown} exists in your group's Wiki. Find "
-            'pages with {"action": "list"}.'
+            'pages with swarm_wiki {"action": "list"}.'
         )
     assert not (await stored(board, "w1"))["deleted"]
     # A deleted page keeps its number, and a new page gets the next one.
@@ -832,21 +905,27 @@ async def test_wiki_reading_calls_run_with_a_note(board):
         "Nothing to show after character 500; the page has 22 characters."
     )
     assert "more" not in past["data"] and "content" not in past["data"]
+    # A query found nowhere on the page shows no content, and the search over all pages.
     missing = await invoke(board, {"action": "read", "page_id": page_id, "query": "x"})
-    assert missing["data"]["found"] == (
-        'No line of this revision contains "x". To search all pages, use '
-        '{"action": "list", "query": "x"}'
-    )
-    assert missing["data"]["content"] == "Findings about parsers"
+    assert continuation(missing["data"]["found"]) == {"action": "list", "query": "x"}
+    assert "content" not in missing["data"]
+    # A negative offset counts back from the end of the page.
+    tail = await invoke(board, {"action": "read", "page_id": page_id, "offset": -7})
+    assert tail["data"]["content"] == "parsers"
+    assert tail["data"]["note"] == WIKI_OFFSET_FROM_END.format(value=-7)
+    # path names the page as page_id does, and a page_id makes the call a read.
+    for call in ({"path": page_id}, {"page_id": page_id, "query": "parsers"}):
+        assert (await invoke(board, call))["data"]["title"] == "Notes"
 
 
 @pytest.mark.asyncio
 async def test_wiki_read_with_query_names_the_lines_that_contain_it(board):
-    lines = ["# Modules", *(f"- module {number}: notes" for number in range(1, 40))]
-    lines[3] = "- errors.py holds MiniError"
-    lines[30] = "- see ERRORS.PY for the codes"
-    page_id = await create(board, "\n".join(lines))
-    offset = len("\n".join(lines[:30])) + 1
+    lines = ["# Modules", *(f"- module {number}: notes about it" for number in range(1, 200))]
+    lines[120] = "- errors.py holds MiniError"
+    lines[150] = "- see ERRORS.PY for the codes"
+    content = "\n".join(lines)
+    page_id = await create(board, content)
+    offset = len("\n".join(lines[:150])) + 1
 
     # The query is found in the whole revision, beyond the window the read shows.
     result = await invoke(
@@ -856,11 +935,23 @@ async def test_wiki_read_with_query_names_the_lines_that_contain_it(board):
     assert result["ok"], result
     assert result["data"]["found"] == (
         'Lines containing "errors.py", ignoring case:\n'
-        f"line 4, character {len(chr(10).join(lines[:3])) + 1}: - errors.py holds MiniError\n"
-        f"line 31, character {offset}: - see ERRORS.PY for the codes"
+        f"line 121, character {content.index(lines[120])}: - errors.py holds MiniError\n"
+        f"line 151, character {offset}: - see ERRORS.PY for the codes"
     )
     assert list(result["data"]).index("found") < list(result["data"]).index("content")
-    assert result["data"]["content"] == "\n".join(lines)[:100]
+    assert result["data"]["content"] == content[:100]
+    # Without offset and limit, the read shows the text around the first line found,
+    # from two lines before it, instead of the whole page.
+    around = await invoke(board, {"action": "read", "page_id": page_id, "query": "errors.py"})
+    start = content.index(lines[118])
+    assert around["data"]["content"] == content[start : start + 2000]
+    assert around["data"]["found"] == result["data"]["found"]
+    assert continuation(around["data"]["more"]) == {
+        "action": "read",
+        "page_id": page_id,
+        "revision": 1,
+        "offset": start + 2000,
+    }
     listed = await invoke(board, {"action": "list", "query": "errors.py"})
     assert listed["data"]["pages"].startswith('Pages containing "errors.py"')
 

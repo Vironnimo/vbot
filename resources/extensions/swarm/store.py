@@ -727,5 +727,13 @@ class SwarmStore:
 
         return cast(dict[int, str], await self._run(wiki_contents, swarm_id, page_id, revisions))
 
+    async def wiki_changes(
+        self, swarm_id: str, page_id: str, since: int, until: int
+    ) -> Json | None:
+        """Return both revisions' content and who saved the revisions between them."""
+        from ._store_wiki import wiki_changes
+
+        return cast(Json | None, await self._run(wiki_changes, swarm_id, page_id, since, until))
+
     async def _run(self, function: Callable[..., Any], *arguments: Any) -> Any:
         return await self._database.run(function, *arguments)
