@@ -77,6 +77,30 @@ _TIMEOUT_PROGRAM_HINT = (
 )
 
 
+# A title in place of a command: one line of at least three plain words that
+# starts with a capitalized word, such as "Check shell files compile and behave".
+# Programs are rarely capitalized; a cmdlet's hyphen, a flag or a file's dot ends
+# the match.
+_PROSE = re.compile(r"[A-Z][a-z]*(?:[ \t]+[^\W_][\w'’-]*){2,}\.?")
+
+
+def _description_as_command(failure: _Failure, missing: str) -> str | None:
+    """The hint for a call whose command holds a description, or None.
+
+    Agents sent the title meant for description as the command; the shell ran
+    its first word, and the not-installed hint sent them to install `Check`.
+    A command equal to the call's description proves nothing: Models also copy
+    a short command into description.
+    """
+    command = failure.command.strip()
+    if not _PROSE.fullmatch(command) or command.split(maxsplit=1)[0] != missing:
+        return None
+    return (
+        f"command holds a description, not a command, so its first word `{missing}` was run "
+        "as a program. Send the command to run in command, and the description in description."
+    )
+
+
 # POSIX: bash/sh report "<name>: command not found", after a prefix such as
 # "bash: line 1: " or "sh: 1: ". The name is a whole run of name characters; the
 # lookbehind keeps a failed attempt from rescanning the rest of the same run.
@@ -88,6 +112,9 @@ def _hint_command_not_found(failure: _Failure) -> str | None:
     if not match:
         return None
     missing = match.group(1)
+    described = _description_as_command(failure, missing)
+    if described is not None:
+        return described
     if missing == "python":
         return (
             "This system has no `python` command: use `python3`, or the interpreter of the "
@@ -194,6 +221,9 @@ def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
     if not match:
         return None
     missing = match.group(1)
+    described = _description_as_command(failure, missing)
+    if described is not None:
+        return described
     equivalent = _POWERSHELL_EQUIVALENTS.get(missing)
     if equivalent is not None:
         return equivalent if isinstance(equivalent, str) else equivalent(failure)

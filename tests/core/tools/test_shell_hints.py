@@ -174,6 +174,13 @@ _BASH_SYNTAX = (
             ["such as -y or --yes, or pipe it into the program within the command."],
             id="prompt_library_closed",
         ),
+        pytest.param(
+            "Run the unit tests",
+            127,
+            "bash: line 1: Run: command not found",
+            ["command holds a description"],
+            id="description_sent_as_command",
+        ),
     ],
 )
 def test_failure_output_gets_the_matching_hint(
@@ -394,6 +401,15 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
             _NOT_RECOGNIZED,
         ),
         ("cargo build", "cargo", "Check with `Get-Command cargo`", _NOT_RECOGNIZED_DE),
+        # A description sent as the command; a missing program keeps its own hint.
+        (
+            "Check shell files compile and behave",
+            "Check",
+            "command holds a description, not a command",
+            _NOT_RECOGNIZED,
+        ),
+        ("Cargo build --release", "Cargo", "Check with `Get-Command Cargo`", _NOT_RECOGNIZED),
+        ("check shell files compile", "check", "Check with `Get-Command check`", _NOT_RECOGNIZED),
     ],
 )
 def test_missing_powershell_command_names_the_equivalent(
