@@ -9,6 +9,7 @@ resolve them against the group and explain any correction.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -22,7 +23,12 @@ from core.tools.call_syntax import (
 from core.tools.contracts import ToolContract
 
 from ._store_values import post_number
-from .agent_text import BOARD_FOREIGN_ACTIONS, INBOX_ONLY_RECEIVE, STATE_ONLY_STATUS
+from .agent_text import (
+    BOARD_FILE_PATH,
+    BOARD_FOREIGN_ACTIONS,
+    INBOX_ONLY_RECEIVE,
+    STATE_ONLY_STATUS,
+)
 
 Json = dict[str, Any]
 
@@ -118,7 +124,13 @@ _BOARD_ELSEWHERE = {
     "receive": "swarm_inbox",
     "checkinbox": "swarm_inbox",
     "wiki": "swarm_wiki",
+    # The Tool's own name sent as the action.
+    "swarmstate": "swarm_state",
+    "swarminbox": "swarm_inbox",
+    "swarmwiki": "swarm_wiki",
 }
+# A file path means the call was meant for a Tool that works with files.
+_BOARD_FILE_FIELDS = frozenset({"path", "filepath"})
 
 _WIKI_FIELDS = SpellingAliases(
     {
@@ -223,6 +235,11 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
     value = _prepare(arguments)
     if not isinstance(value, dict):
         return value
+    path = next(
+        (item for key, item in value.items() if spelling(str(key)) in _BOARD_FILE_FIELDS), None
+    )
+    if isinstance(path, str) and not is_placeholder(path):
+        raise ToolContractError(BOARD_FILE_PATH.format(path=json.dumps(path, ensure_ascii=False)))
     message = next(
         (
             item

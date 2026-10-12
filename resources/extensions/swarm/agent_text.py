@@ -203,6 +203,10 @@ BOARD_FOREIGN_ACTIONS = {
     "swarm_wiki": "swarm_board has no {action} action. Use swarm_wiki to create, find, and edit "
     "shared pages.",
 }
+BOARD_FILE_PATH = (
+    "swarm_board was not run: it reads and writes Board posts, not files, and has no path "
+    "parameter. For the file {path}, use one of your Tools that work with files."
+)
 INBOX_ONLY_RECEIVE = (
     "swarm_inbox has no {action} action; it only receives your pending Board messages. Call it "
     "without arguments, or with limit."

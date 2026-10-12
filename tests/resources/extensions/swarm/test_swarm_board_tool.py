@@ -423,7 +423,10 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
         ({"action": "read", "message": first, "post_id": "#9"}, "message_id"),
         ({"action": "post", "arguments": {"action": "read"}}, "action"),
         ({"action": "status"}, "Use swarm_state to see participants"),
+        ({"action": "swarm_state"}, "Use swarm_state to see participants"),
         ({"action": "check_inbox"}, 'Use {"action": "read"} to read the newest posts'),
+        # A file path names the file the call meant for another Tool.
+        ({"action": "read", "parameters": {"limit": 200, "path": "verify.py"}}, '"verify.py"'),
     ]:
         result, _ = await dispatch(board, arguments)
         assert result["error"]["code"] == "invalid_arguments", result
