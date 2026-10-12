@@ -240,6 +240,18 @@ WIKI_DIFFERENCE_PAGE_ONLY = "line {line}: the page has {page}, which old_text la
 WIKI_DIFFERENCE_COPY_ONLY = "old_text line {line} has {copy}, which the page lacks."
 WIKI_DIFFERENCES_MORE = "{count} more lines differ."
 WIKI_COPY_EXACTLY = "Copy old_text exactly from the page, or read it with {call}."
+# old_text matched an earlier revision: a later one changed that passage, and copying its
+# current text unseen could undo that change.
+WIKI_CHANGED_ABOVE = (
+    "Revision {revision} by {author} changed the passage old_text names, as the changes show. "
+    "Decide from its current text whether your change still applies; if it does, repeat the "
+    "call with old_text as the page has it now."
+)
+WIKI_CHANGED_SINCE = (
+    "old_text matches revision {revision}, and revision {changed} by {author} changed it. Read "
+    "what changed with {call}, then decide whether your change still applies; if it does, "
+    "repeat the call with old_text as the page has it now."
+)
 WIKI_AMBIGUOUS = (
     "old_text occurs {count} times, {where}. Include neighboring text so it occurs only once."
 )

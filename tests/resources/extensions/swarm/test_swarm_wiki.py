@@ -8,6 +8,7 @@ import pytest
 from resources.extensions.swarm.agent_text import REPLAYED
 from resources.extensions.swarm.store import SwarmStoreError
 from resources.extensions.swarm.wiki_text import (
+    WIKI_CHANGED_ABOVE,
     WIKI_CHANGES_NONE,
     WIKI_CONFLICT_CONTENT,
     WIKI_CONFLICT_RETRY,
@@ -20,6 +21,7 @@ from resources.extensions.swarm.wiki_text import (
     WIKI_OFFSET_FROM_END,
     WIKI_OWN_REVISION,
     WIKI_SINCE_IGNORES,
+    WIKI_STATUS,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
     _swarm,
@@ -312,11 +314,13 @@ async def test_wiki_collaboration_conflicts_history_delete_restore(board):
         invoke(board, update, 1),
         invoke(board, {**update, "title": "Another title"}, 2),
     )
-    assert sum(item["ok"] for item in (updated, conflict)) == 1
-    assert (
-        next(item for item in (updated, conflict) if not item["ok"])["error"]["code"]
-        == "wiki_revision_conflict"
-    )
+    # Whichever change lands first, the other never overwrites it: the stale rename
+    # conflicts, and the stale passage edit finds its change already made.
+    assert updated["ok"], updated
+    if conflict["ok"]:
+        assert updated["data"]["status"] == WIKI_STATUS["unchanged"]
+    else:
+        assert conflict["error"]["code"] == "wiki_revision_conflict"
     current = await stored(board, page_id)
     assert current["content"] == "First finding\nRevised finding"
     assert current["revision"] == 2
@@ -554,6 +558,12 @@ async def test_wiki_request_ids_come_from_the_tool_call(board):
             },
             "Nothing changed: the page already holds this change.",
         ),
+        # A table row's empty cells after the change anchor it with the cells before.
+        (
+            "| B01 | 1 (H) | *free* | |\n| B02 | 2 (He) | Alba | |\n| B03 | 3 (Li) | *free* | |",
+            {"old_text": "| B02 | 2 (He) | *free* | |", "new_text": "| B02 | 2 (He) | Alba | |"},
+            "Nothing changed: the page already holds this change.",
+        ),
         (
             "First finding",
             {"title": "Notes", "expected_revision": 1},
@@ -709,18 +719,40 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
         },
         1,
     )
-    lines, passage = await miss("Row 1: value", expected_revision=1)
-    assert lines[0].startswith("The page changed since revision 1 (now 2)")
-    assert board.swarm["participants"][1]["display_name"] in lines[1]
-    assert lines[2:6] == [
+    peer = board.swarm["participants"][1]["display_name"]
+    stale = (await edit("Row 1: value", expected_revision=1))["error"]["message"].splitlines()
+    assert stale[0].startswith("The page changed since revision 1 (now 2)")
+    assert peer in stale[1]
+    assert stale[2:6] == [
         "@@ -2,3 +2,3 @@",
         " The deployment uses three replicas behind the load balancer today.",
         "-Row 1: value",
         "+Row 1: ok",
     ]
+    # Those changes explain the miss, so no passage elsewhere is offered to copy.
+    assert stale[-1] == WIKI_CHANGED_ABOVE.format(revision=2, author=peer)
+    # Without a base revision, the miss names the revision that last held old_text, who
+    # changed it, and the read that shows what changed.
+    lines, changes = await miss("Row 1: value")
+    assert peer in lines[-1] and "revision 1" in lines[-1]
+    assert "-Row 1: value\n+Row 1: ok" in changes
     current = await stored(board, page_id)
-    assert passage in current["content"]
     assert current["revision"] == 2
+    # Among rows of one layout, the row whose words old_text holds is the closest passage,
+    # though another free row resembles it more character by character.
+    symbols = ["H", "He", "Li", "Be", "B", "C", "N", "O"]
+    rows = [
+        f"| B{number:02} | {number} ({symbol}) | *free* |"
+        for number, symbol in enumerate(symbols, 1)
+    ]
+    sheet = await create(
+        board, "\n".join(["# Claims", "| Batch | Elements | Owner |", *rows]), "Claims"
+    )
+    claimed = {"action": "update", "page_id": sheet, "old_text": rows[1]}
+    assert (await invoke(board, {**claimed, "new_text": "| B02 | 2 (He) | Alba |"}, 1))["ok"]
+    lines, _ = await miss(rows[1], sheet)
+    assert next(line for line in lines if line.startswith("| ")) == "| B02 | 2 (He) | Alba |"
+    assert _differing_lines(lines) == ["4"]
 
 
 def _differing_lines(lines):
@@ -755,6 +787,14 @@ async def test_wiki_conflicts_show_what_changed_and_the_retry(board):
         assert peer in header
         assert diff == ["@@ -1,3 +1,3 @@", " Intro", "-Status: pending", "+Status: done", " End"]
         assert last == next_step.format(current=2)
+    # A stale passage edit the peer already made changes nothing; another change of that
+    # passage names the revision and author that changed it, which the changes show.
+    same = {**stale, "old_text": "Status: pending", "new_text": "Status: done"}
+    assert (await invoke(board, same))["data"]["status"] == WIKI_STATUS["unchanged"]
+    other = await invoke(board, {**same, "new_text": "Status: blocked"})
+    lines = other["error"]["message"].splitlines()
+    assert "-Status: pending" in lines and "+Status: done" in lines
+    assert lines[-1] == WIKI_CHANGED_ABOVE.format(revision=2, author=peer)
     future = await invoke(board, {**stale, "expected_revision": 7, "title": "Renamed"})
     assert visible(future) == (
         "Error (wiki_revision_conflict): Revision 7 does not exist yet; the current revision "
