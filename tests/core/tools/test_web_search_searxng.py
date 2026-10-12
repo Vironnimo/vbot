@@ -1,20 +1,24 @@
 """web_search with a keyless SearXNG instance: request parameters, notes about engine
-limits, and the configured address."""
+limits, engines that did not answer, and the configured address."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import respx
 
 from tests.core.tools.web_search_test_support import (
     SEARXNG_ENDPOINT,
+    SEARXNG_SETTINGS,
     assert_failure_envelope,
     assert_success_envelope,
+    make_context,
     result_urls,
     search,
+    web_search_registry,
 )
 
 
@@ -118,6 +122,56 @@ async def test_later_pages_warn_that_results_may_be_skipped(
 
     assert shown == data
     assert params["pageno"] == pageno
+
+
+@pytest.mark.asyncio
+async def test_engines_that_did_not_answer_fail_an_empty_search_instead_of_finding_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Engine names unique to this test: engine health is logged per process.
+    unresponsive = [
+        ["brave-blocked", "too many requests"],
+        ["ddg-slow", "timeout"],
+        ["google-cse-blocked", "Suspended: too many requests"],
+    ]
+    registry = web_search_registry(SEARXNG_SETTINGS)
+    answered = {
+        "title": "vBot docs",
+        "url": "https://example.com/vbot",
+        "content": "vBot documentation",
+        "engines": ["brave-blocked"],
+    }
+    responses = [
+        {"results": [], "unresponsive_engines": unresponsive},
+        {"results": [], "unresponsive_engines": unresponsive},
+        # Results while engines fail are a normal success without a note.
+        {"results": [answered], "unresponsive_engines": unresponsive[1:]},
+    ]
+    contexts = [make_context(tmp_path) for _ in responses]
+    with caplog.at_level("INFO", logger="vbot.tools.web_search"), respx.mock() as router:
+        router.get(SEARXNG_ENDPOINT).mock(
+            side_effect=[httpx.Response(200, json=payload) for payload in responses]
+        )
+        results = [await registry.dispatch(context, {"query": "vbot"}) for context in contexts]
+
+    for result, context in zip(results[:2], contexts[:2], strict=True):
+        error = assert_failure_envelope(result, "provider_request_failed")
+        assert error["retryable"] is True
+        for name, reason in unresponsive:
+            assert f"{name} ({reason})" in error["message"]
+        # The user is not told that nothing was found.
+        assert context.presentation_details == []
+        assert context.presentation_facts == []
+    data = assert_success_envelope(results[2])
+    assert result_urls(data) == ["https://example.com/vbot"]
+    assert "note" not in data
+    # Each engine is logged when it stops answering and when it answers again.
+    logged = [(record.levelname, record.getMessage()) for record in caplog.records]
+    assert [level for level, message in logged if "brave-blocked" in message] == [
+        "WARNING",
+        "INFO",
+    ]
+    assert [level for level, message in logged if "ddg-slow" in message] == ["WARNING"]
 
 
 @pytest.mark.asyncio
