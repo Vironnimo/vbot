@@ -197,7 +197,10 @@ Roots (`_resolve_roots`):
   working directory it was resolved against, since Agents pass paths relative to
   another directory (Sessions, 2026-09: 48 `path_not_found` failures, mostly
   relative roots). When every root is missing, the call fails with `path_not_found`, ending
-  `Nothing was searched. Correct path, or omit it to search the working directory.`
+  `Nothing was searched. Correct path, or omit it to search the working directory.`,
+  or, when every missing root came from `args`, `Nothing was searched. Correct the
+  path[s] in args, or remove it [them] to search the working directory.`, since
+  `path` was not set.
 - A missing root that is a bare Swarm Wiki page number in the working directory
   (`w2`, `w2.md`) names the `swarm_wiki` read call instead of the working directory
   when `swarm_wiki` is offered, carrying a single plain-text pattern as `query`:
@@ -210,6 +213,16 @@ Roots (`_resolve_roots`):
   search missing words as further patterns. Words are missing operands without a
   path separator. The suggestion takes the form `pattern "a|b|c"`, or repeated
   `-e` with `-F`.
+- When `pattern` (or `-e`) set the pattern, every `args` item without a leading
+  `-` is a path, so `pattern: "class "` with `args: ["def ", "return Result"]`
+  failed with two missing paths and no sign that `args` takes options (Swarm
+  review 2026-10-12). For a content search, missing operands without a path
+  separator and without a similar existing path get a warning that names them
+  and the call that searches them as further patterns: the sent `args` with `-e`
+  before each of them (`_operand_pattern_warning`; verified: `pattern` and `-e`
+  items combine). They stay paths, by the rule above: a missing path can also be
+  mistyped, and searching it as text instead would search other files for other
+  text without the Agent asking for it.
 - When `--files` was given operands, the warning points to `-l` for listing files
   by contents.
 - Real calls showed this shape (Sessions, 2026-09 and 2026-10): several search
@@ -527,6 +540,8 @@ blank placeholders, so no sentence has to warn about them.
 | Help: `Output: content names each file on its own line, followed by line:text for its matching lines and line-text for context lines.` | States the heading layout (Results and Paging -> Content lines) for an Agent that asks how to read results (F4); it replaced `content shows path:line:text for matching lines and path-line-text for context lines` with the layout change (2026-10-12). |
 | `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
 | Unclear flag value: `search_files was not run: "ignore_case" must be true or false; received "maybe".` (lists: `must be a value or a list of values`) | A flag field the call cannot read used to stay an unknown field; unknown fields can now run without effect (`tools.md` -> Unknown fields), which would search without the flag the Agent asked for (F3). |
+| Warning, and in `path_not_found`, for args items read as paths while `pattern` is set: `args takes ripgrep options, and an item without a leading - is a path, so "<item>" [and "<item>"] was [were] read as a path [paths]. To search it [them] as another pattern [further patterns], put -e before it [each]: args [<the sent args with "-e" before each such item>].` | An Agent passed further patterns as plain `args` items next to `pattern` and got only `Path not found: def`, which did not say that `args` takes options or how to pass more patterns (F2, F5; Swarm review 2026-10-12). The first sentence names the rule the Agent missed, the second the ready call, which keeps the other `args` items, since Agents send a suggested call as it stands. Not for an item with a path separator or a similar existing path, which reads as a mistyped path. |
+| `path_not_found` ending when every missing root came from `args`: `Nothing was searched. Correct the path[s] in args, or remove it [them] to search the working directory.` | The former ending, `Correct path, or omit it ...`, named the `path` field, which such a call did not set (F5). |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
 covered by `test_search_files_arguments.py` (the help examples run against a

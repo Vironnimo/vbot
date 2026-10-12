@@ -633,6 +633,95 @@ def test_bash_syntax_and_quoting_that_break_powershell_are_named(
         assert annotate_failure(command, 1, output) is None
 
 
+@pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize(
+    ("command", "doubled"),
+    [
+        # Text copied from a web page: PowerShell ends the string at \u201a, so the
+        # program gets two arguments, or the rest is a ParserError.
+        (
+            "python cite.py --quote 'K\u00f6ln (lateinisch \u201aColonia\u2018) liegt am Rhein'",
+            "\u201a\u201a",
+        ),
+        ("$q = 'it\u2019s'; python cite.py --quote $q", "\u2019\u2019"),
+        ('python cite.py --quote "er sagte \u201eja\u201c"', "\u201e\u201e"),
+        # Doubled, of the other kind, in a here-string or in a comment: literal text.
+        ("python cite.py --quote 'lateinisch \u201a\u201aColonia\u2018\u2018'", None),
+        ('python cite.py --quote "it\u2019s \u201aja\u2018"', None),
+        ("python cite.py --quote '\u201eja\u201c'", None),
+        ("python cite.py --quote @'\nit\u2019s \u201aColonia\u2018\n'@", None),
+        ("python cite.py  # it\u2019s", None),
+    ],
+)
+def test_typographic_quotes_that_end_a_powershell_string_are_named(
+    monkeypatch: pytest.MonkeyPatch, command: str, doubled: str | None, exit_code: int
+) -> None:
+    output = "ParserError: Unexpected token in expression or statement." if exit_code else ""
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, exit_code, output)
+
+    if doubled is None:
+        assert hint is None
+    else:
+        # The hint names the fix: the quote written twice.
+        assert hint is not None and doubled in hint
+    # Bash takes typographic quotes as text.
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, 0, output) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "printed", "failed", "program"),
+    [
+        ("python build.py 2>&1 | Select-Object -First 8", 8, (), "python"),
+        (
+            "python build.py | Select-Object -First 8",
+            8,
+            ("python.exe exited with code 1",),
+            "python",
+        ),
+        (
+            "& 'C:/venv/Scripts/python.exe' build.py | Select-String step | select -f 8; 'done'",
+            9,
+            (),
+            "python",
+        ),
+        ("Write-Output start; node build.js | Select-Object -First:8", 40, (), "node"),
+        # The program ended before 8 lines, -Wait lets it finish, a query loses
+        # nothing, and -Last and head read to the end.
+        ("python build.py 2>&1 | Select-Object -First 20", 8, (), None),
+        ("python build.py | Select-Object -First 8 -Wait", 8, (), None),
+        ("git log --oneline | Select-Object -First 8", 8, (), None),
+        ("python build.py | Select-Object -Last 8", 8, (), None),
+        ("python build.py | head -n 8", 8, (), None),
+        ("Write-Output '| Select-Object -First 1'; python build.py", 8, (), None),
+    ],
+)
+def test_a_select_first_stage_that_stopped_a_program_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    printed: int,
+    failed: tuple[str, ...],
+    program: str | None,
+) -> None:
+    # Long output keeps only its first and last lines.
+    output = "\n".join(f"step {n}" for n in range(min(printed, 4)))
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, 0, output, failed_programs=failed, output_lines=printed)
+
+    if program is None:
+        assert hint is None
+    else:
+        assert hint is not None and program in hint and "-Wait" in hint
+        # A failed program of that name confirms the stop.
+        assert ("most likely" in hint) is not failed
+    # Select-Object is PowerShell's.
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, 0, output, failed_programs=failed) is None
+
+
 def _project(tmp_path: Path) -> Path:
     """A working directory holding the package `shop` and a `tests` folder."""
     (tmp_path / "shop").mkdir()
@@ -664,6 +753,10 @@ def _suggested_call(hint: str | None) -> str:
     return spans[-1]
 
 
+_PYTHONPATH = {True: "$env:PYTHONPATH = (Get-Location).Path; ", False: "PYTHONPATH=. "}
+
+
+@pytest.mark.parametrize("powershell", [False, True])
 @pytest.mark.parametrize(
     ("command", "module", "call"),
     [
@@ -685,21 +778,40 @@ def _suggested_call(hint: str | None) -> str:
             "shop",
             "python -m tests.test_cart --impl shop.fast.total 20000 'two words'",
         ),
+        # -m cannot run a script from a directory that is no module name.
+        (
+            "python .scratch/probe.py --offline",
+            "shop",
+            "{pythonpath}python .scratch/probe.py --offline",
+        ),
+        (
+            "python -X utf8 .scratch/probe.py 2>&1",
+            "shop",
+            "{pythonpath}python -X utf8 .scratch/probe.py",
+        ),
     ],
 )
 def test_module_not_found_from_script_run_by_path_names_module_run(
-    tmp_path: Path, command: str, module: str, call: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    powershell: bool,
+    command: str,
+    module: str,
+    call: str,
 ) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", powershell)
     workdir = _project(tmp_path)
-    script = workdir / "tests" / "test_cart.py"
+    scratch = ".scratch" in command
+    script = workdir / (".scratch/probe.py" if scratch else "tests/test_cart.py")
 
     hint = annotate_failure(
         command.format(script=f'"{script}"'), 1, _import_traceback(script, module), workdir=workdir
     )
 
     assert hint is not None
-    assert hint.startswith(_RUN_AS_MODULE.format(module=module).split(" Run it as")[0])
-    assert _suggested_call(hint) == call
+    if not scratch:
+        assert hint.startswith(_RUN_AS_MODULE.format(module=module).split(" Run it as")[0])
+    assert _suggested_call(hint) == call.format(pythonpath=_PYTHONPATH[powershell])
 
 
 def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -> None:

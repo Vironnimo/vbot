@@ -9,7 +9,9 @@ names the next action.
 
 Design rules (keep them when adding a pattern):
 
-* Only non-zero exit codes get a hint; success is never annotated.
+* Only non-zero exit codes get a hint, except for a command that did not run as
+  written, which the command text shows: a typographic quote that ended a
+  PowerShell string, or a Select-Object -First stage that stopped a program.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
@@ -28,9 +30,10 @@ Design rules (keep them when adding a pattern):
 
 from __future__ import annotations
 
+import bisect
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -489,6 +492,221 @@ def _has_bash_quote_idiom(text: str) -> bool:
     return any(idiom in text for idiom in _BASH_QUOTE_IDIOMS)
 
 
+# PowerShell takes the typographic quotes for quotes of their kind, as it does ' and ".
+_SINGLE_QUOTES = "'‘’‚‛"
+_DOUBLE_QUOTES = '"“”„'
+# Where something in PowerShell code can start a string, a comment or an escape.
+_CODE_MARK = re.compile(rf"[#<@`{_SINGLE_QUOTES}{_DOUBLE_QUOTES}]")
+_SINGLE_MARK = re.compile(rf"[{_SINGLE_QUOTES}]")
+_DOUBLE_MARK = re.compile(rf"[`{_DOUBLE_QUOTES}]")
+_HERE_STRING_START = re.compile(rf"@([{_SINGLE_QUOTES}{_DOUBLE_QUOTES}])[ \t]*\r?\n")
+# A comment's # starts a token: after a blank, a separator or a bracket.
+_TOKEN_BOUNDARY = frozenset(" \t\r\n;|&(){},")
+
+
+@dataclass(frozen=True)
+class _PowerShellCode:
+    """A PowerShell command with the contents of its strings and comments blanked.
+
+    Offsets are the command's own. ``early_end`` is the first string opened with
+    ' or " that a typographic quote of the same kind ended: (opening offset,
+    closing offset).
+    """
+
+    text: str
+    early_end: tuple[int, int] | None
+
+
+def _powershell_code(command: str) -> _PowerShellCode:
+    """Blank strings, here-strings and comments of *command*, in one linear pass.
+
+    Inside single quotes, two quotes of that kind in a row are one literal
+    quote; inside double quotes, so are two double quotes or a backtick and the
+    character after it. PowerShell counts every typographic quote of a kind as
+    a quote of that kind (``it’s`` ends ``'it’s'`` early).
+    """
+    code = list(command)
+    early_end: tuple[int, int] | None = None
+    end = len(command)
+
+    def blank(start: int, stop: int) -> None:
+        for index in range(start, min(stop, end)):
+            if code[index] not in "\r\n":
+                code[index] = " "
+
+    position = 0
+    while mark := _CODE_MARK.search(command, position):
+        start = mark.start()
+        char = command[start]
+        if char == "`":
+            position = start + 2
+        elif char == "#":
+            if start and command[start - 1] not in _TOKEN_BOUNDARY:
+                position = start + 1
+                continue
+            stop = command.find("\n", start)
+            stop = end if stop < 0 else stop
+            blank(start, stop)
+            position = stop
+        elif char == "<":
+            if not command.startswith("<#", start):
+                position = start + 1
+                continue
+            stop = command.find("#>", start + 2)
+            stop = end if stop < 0 else stop + 2
+            blank(start, stop)
+            position = stop
+        elif char == "@":
+            opener = _HERE_STRING_START.match(command, start)
+            if opener is None:
+                position = start + 1
+                continue
+            kind = _SINGLE_QUOTES if opener[1] in _SINGLE_QUOTES else _DOUBLE_QUOTES
+            close = re.compile(rf"\n[{kind}]@").search(command, opener.end())
+            stop = end if close is None else close.start()
+            blank(opener.end(), stop)
+            position = end if close is None else close.end()
+        else:
+            single = char in _SINGLE_QUOTES
+            inner = _SINGLE_MARK if single else _DOUBLE_MARK
+            kind = _SINGLE_QUOTES if single else _DOUBLE_QUOTES
+            index = start + 1
+            stop = end
+            while found := inner.search(command, index):
+                at = found.start()
+                if command[at] == "`" or at + 1 < end and command[at + 1] in kind:
+                    index = at + 2
+                else:
+                    stop = at
+                    break
+            blank(start + 1, stop)
+            if early_end is None and stop < end and char in "'\"" and command[stop] != char:
+                early_end = (start, stop)
+            position = stop + 1
+    return _PowerShellCode("".join(code), early_end)
+
+
+_STRING_SHOWN_CHARS = 40
+
+
+def _hint_typographic_quote(command: str) -> str | None:
+    """Name a typographic quote that ended a string early.
+
+    Agents quote text copied from web pages: ``--quote 'Köln (lateinisch ‚Colonia‘) ...'``
+    was cut at ‚, so the program got two arguments, or PowerShell reported a
+    ParserError, and nothing said why. Read from the command alone, whatever the
+    exit code: the command did not run as written either way.
+    """
+    if not _POWERSHELL:
+        return None
+    early_end = _powershell_code(command).early_end
+    if early_end is None:
+        return None
+    start, stop = early_end
+    single = command[start] == "'"
+    kind, name = (_SINGLE_QUOTES, "single") if single else (_DOUBLE_QUOTES, "double")
+    typographic = "".join(dict.fromkeys(char for char in command if char in kind[1:]))
+    listed = " and ".join(typographic) if len(typographic) <= 2 else ", ".join(typographic)
+    plural = len(typographic) > 1
+    text = command[start + 1 : stop]
+    if len(text) > _STRING_SHOWN_CHARS:
+        text = text[: _STRING_SHOWN_CHARS - 3] + "..."
+    doubled = " and ".join(char * 2 for char in typographic)
+    return (
+        f"PowerShell reads {listed} as {name} quote{'s' if plural else ''}, so {command[stop]} "
+        f"ended the string {command[start]}{text}{command[stop]} early and the command did not "
+        f"run as written. Inside {name} quotes, write {'each of them' if plural else 'it'} "
+        f"twice ({doubled}), or pass the text in a here-string: @' on its own line, the text, "
+        "then '@ at the start of a line."
+    )
+
+
+# A stage that stops the commands before it in its pipeline once N lines have
+# passed: Select-Object -First N (any prefix down to -f) without -Wait. The
+# bootstrap's head reads its input to the end. The stage's text runs to the
+# next pipe or statement.
+_FIRST_STAGE = re.compile(
+    r"(?<!\|)\|(?!\|)[ \t]*+(?:Select-Object|select)(?=[ \t])(?P<arguments>[^|;\n]*+)",
+    re.IGNORECASE,
+)
+_FIRST_COUNT = re.compile(
+    r"(?:^|[ \t])-f(?:i(?:r(?:st?)?)?)?(?:[ \t]*+:[ \t]*+|[ \t]++)(\d+)", re.I
+)
+_WAIT = re.compile(r"(?:^|[ \t])-w(?:a(?:it?)?)?(?=[ \t:]|$)", re.I)
+# Where a pipeline starts: after a statement separator or an opening bracket.
+_PIPELINE_START = re.compile(r"[;\n{(]|&&|\|\|")
+# The program a pipeline starts with, after PowerShell's call operator.
+_PIPELINE_PROGRAM = re.compile(r"[ \t]*+(?:&[ \t]*+)?(\"[^\"]*+\"|'[^']*+'|[^\s|;&(){}]++)")
+# Programs that do work before or after printing, as opposed to queries such as
+# git log or rg, which lose nothing when they are stopped early.
+_WORKING_PROGRAMS = frozenset(
+    {
+        *("python", "python3", "py", "pythonw", "pytest", "uv", "uvx", "poetry", "pipenv"),
+        *("tox", "nox", "node", "npm", "npx", "pnpm", "yarn", "bun", "deno", "tsx"),
+        *("ruby", "perl", "php", "dotnet", "cargo", "go", "java", "gradle", "gradlew"),
+        *("mvn", "make", "cmake", "msbuild", "pwsh", "powershell"),
+    }
+)
+_SCRIPT_SUFFIXES = (".py", ".ps1", ".js", ".mjs", ".cmd", ".bat")
+
+
+def _working_program(word: str) -> str | None:
+    """The program *word* names, as written without its path, when it does work."""
+    name = re.split(r"[/\\]", word.strip("'\""))[-1]
+    if name.lower().endswith(_SCRIPT_SUFFIXES):
+        return name
+    stem = name[:-4] if name.lower().endswith(".exe") else name
+    return stem if re.sub(r"[\d.]+$", "", stem.lower()) in _WORKING_PROGRAMS else None
+
+
+def _hint_first_stage(
+    command: str, output_lines: int, failed_programs: Sequence[str]
+) -> str | None:
+    """Name a program a Select-Object -First stage stopped before it finished.
+
+    PowerShell stops the commands before Select-Object -First N once N lines
+    have passed it, native programs included: ``python build.py | Select-Object
+    -First 8`` printed 8 progress lines and never wrote the file it writes at
+    the end, and the result looked normal. Only a program that does work counts,
+    and only when the output reached N lines; a failed program of that name
+    confirms the stop.
+    """
+    if not _POWERSHELL or "|" not in command:
+        return None
+    code = _powershell_code(command).text
+    starts = [0, *(match.end() for match in _PIPELINE_START.finditer(code))]
+    for stage in _FIRST_STAGE.finditer(code):
+        arguments = stage["arguments"]
+        count = _FIRST_COUNT.search(arguments)
+        if count is None or _WAIT.search(arguments):
+            continue
+        lines = int(count[1])
+        if not 0 < lines <= output_lines:
+            continue
+        start = starts[bisect.bisect_right(starts, stage.start()) - 1]
+        first = _PIPELINE_PROGRAM.match(code, start, stage.start())
+        if first is None:
+            continue
+        program = _working_program(command[first.start(1) : first.end(1)])
+        if program is None:
+            continue
+        written = " ".join(command[stage.start() + 1 : stage.end()].split())
+        stem = program.lower().removesuffix(".exe")
+        confirmed = any(
+            entry.split(" exited ", 1)[0].lower().removesuffix(".exe") == stem
+            for entry in failed_programs
+        )
+        stopped = "was stopped" if confirmed else "was most likely stopped"
+        return (
+            f"`{written}` stops {program} once {lines} lines have passed it, and the output "
+            f"reached {lines} lines: {program} {stopped} before it finished, and what it does "
+            "after that, such as writing files, did not happen. To let it finish, run it "
+            "without that stage (long output keeps its first and last lines) or add -Wait to "
+            "Select-Object."
+        )
+    return None
+
+
 # A word of the command, between blanks, quotes, parentheses and separators.
 _COMMAND_WORD = re.compile(r"[^\s'\"(),;|&]++")
 # A program reports a wildcard word it was given; at most this many such words are checked.
@@ -547,10 +765,11 @@ _MISSING_MODULE = re.compile(
 )
 # A Python script run by its path, such as `python tests/test_x.py` or `py -u tools\run.py`:
 # the interpreter as written, its options (after a closing quote of the
-# interpreter's path), and the script.
+# interpreter's path; -X and -W with their value, as in `-X utf8`), and the script.
 _PYTHON_SCRIPT = re.compile(
     r"(?:^|[\s;&|('\"])(?P<interpreter>(?:[^\s;&|()'\"]*[/\\])?(?:python[\d.]*|py)(?:\.exe)?)"
-    r"(?P<options>['\"]?(?:\s+-[A-Za-z]\w*)*)\s+['\"]?(?P<script>[^\s;&|<>'\"]+\.py)\b",
+    r"(?P<options>['\"]?(?:\s+-(?:[XW][ \t]*+[^\s;&|<>'\"-][^\s;&|<>'\"]*+|[A-Za-z]\w*))*)"
+    r"\s+['\"]?(?P<script>[^\s;&|<>'\"]+\.py)\b",
     re.I | re.M,
 )
 
@@ -601,11 +820,20 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
             "with -m, such as `python -m pytest`, or add the working directory to PYTHONPATH."
         )
     script, run = found
-    return (
+    cause = (
         f"Python cannot import '{name}' because running `{script.as_posix()}` by path puts "
         f"its directory `{script.parent.as_posix()}` on the import path instead of the "
-        f"working directory, where '{name}' is. Run it as a module from the working "
-        f"directory instead: {_run_as_module(failure.command, script, run)}."
+        f"working directory, where '{name}' is."
+    )
+    if all(part.isidentifier() for part in script.with_suffix("").parts):
+        return (
+            f"{cause} Run it as a module from the working directory instead: "
+            f"{_run_as_module(failure.command, script, run)}."
+        )
+    # A directory such as .scratch is no module name, so -m cannot run the script.
+    return (
+        f"{cause} Put the working directory on the import path for this run: "
+        f"{_run_with_working_directory(failure.command, run)}."
     )
 
 
@@ -719,9 +947,24 @@ def _run_as_module(command: str, script: Path, run: re.Match[str]) -> str:
     stay unchanged: one suggestion dropped `--impl minidb.sqlite_float.format_real`,
     which chose the implementation the script tested.
     """
-    dotted = script.with_suffix("").parts
-    if not all(part.isidentifier() for part in dotted):
-        return "`python -m` with its dotted module name and the same arguments"
+    start, _script_end, rest = _script_call(command, run)
+    call = f"{command[start : run.end('options')]} -m {'.'.join(script.with_suffix('').parts)}"
+    return _shown_call(call, rest)
+
+
+def _run_with_working_directory(command: str, run: re.Match[str]) -> str:
+    """The Python call that ran a script by path, with the working directory on PYTHONPATH.
+
+    For a script in a directory that is no module name, such as ``.scratch``,
+    where -m cannot run it. The variable is set in the shell's own syntax.
+    """
+    start, script_end, rest = _script_call(command, run)
+    setting = "$env:PYTHONPATH = (Get-Location).Path; " if _POWERSHELL else "PYTHONPATH=. "
+    return _shown_call(f"{setting}{command[start:script_end]}", rest)
+
+
+def _script_call(command: str, run: re.Match[str]) -> tuple[int, int, str]:
+    """Where the Python call *run* starts and its script ends, and the arguments after it."""
     start = run.start("interpreter")
     if start > 0 and command[start - 1] in "'\"":
         # A quoted interpreter path, run with PowerShell's call operator.
@@ -733,8 +976,10 @@ def _run_as_module(command: str, script: Path, run: re.Match[str]) -> str:
     if end < len(command) and command[end] in "'\"":
         end += 1
     arguments = _SCRIPT_ARGUMENTS.match(command, end)
-    rest = arguments[0].rstrip() if arguments else ""
-    call = f"{command[start : run.end('options')]} -m {'.'.join(dotted)}"
+    return start, end, arguments[0].rstrip() if arguments else ""
+
+
+def _shown_call(call: str, rest: str) -> str:
     if len(rest) > _ARGUMENTS_SHOWN_CHARS:
         return f"`{call}` followed by the same arguments"
     return f"`{call}{rest}`"
@@ -940,23 +1185,54 @@ def annotate_failure(
     *,
     workdir: Path | None = None,
     offers: Callable[[str], bool] = _offers_none,
+    failed_programs: Sequence[str] = (),
+    output_lines: int | None = None,
 ) -> str | None:
     """Return one short next action for a failed command, or None.
 
     *output* is the command's output as the Agent reads it; only its first and
     last ``_SCAN_CHARS`` characters are examined. *workdir* is the directory the
     command started in, when known. *offers* tells whether the Agent is offered
-    the Tool of a registry name; a hint names only offered Tools. Returns None
-    for exit code 0 or None, so successful and undetermined runs stay unannotated.
+    the Tool of a registry name; a hint names only offered Tools.
+    *failed_programs* are the command's failed child programs
+    (``<name> exited with code <code>``) and *output_lines* the number of lines
+    it printed (the lines of *output* when omitted).
+
+    A command that did not run as written gets a hint whatever its exit code: a
+    typographic quote ended a string early (first, since every error follows
+    from it), or a Select-Object -First stage stopped a program before it
+    finished (last). Otherwise exit code 0 or None stays unannotated.
     """
-    if not exit_code:
-        return None
+    command = command or ""
     output = output or ""
+    try:
+        quote = _hint_typographic_quote(command)
+    except Exception:
+        quote = None
+    if quote:
+        return quote
+    hint = _failure_hint(command, exit_code, output, workdir, offers) if exit_code else None
+    if hint:
+        return hint
+    lines = len(output.splitlines()) if output_lines is None else output_lines
+    try:
+        return _hint_first_stage(command, lines, failed_programs)
+    except Exception:
+        return None
+
+
+def _failure_hint(
+    command: str,
+    exit_code: int,
+    output: str,
+    workdir: Path | None,
+    offers: Callable[[str], bool],
+) -> str | None:
     window = output
     if len(output) > 2 * _SCAN_CHARS:
         window = f"{output[:_SCAN_CHARS]}\n{output[-_SCAN_CHARS:]}"
     if window:
-        failure = _Failure(command or "", window, workdir, offers, _error_start(window))
+        failure = _Failure(command, window, workdir, offers, _error_start(window))
         for hint_for in _OUTPUT_HINTS:
             try:
                 hint = hint_for(failure)
@@ -964,7 +1240,7 @@ def annotate_failure(
                 continue
             if hint:
                 return hint
-    if exit_code == 124 and _TIMEOUT_PROGRAM.search(command or ""):
+    if exit_code == 124 and _TIMEOUT_PROGRAM.search(command):
         return _TIMEOUT_PROGRAM_HINT
     return _EXIT_CODE_HINTS.get(exit_code)
 

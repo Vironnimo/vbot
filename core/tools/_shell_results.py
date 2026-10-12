@@ -267,11 +267,21 @@ def failed_programs(report: CommandReport) -> tuple[str, ...]:
 
 
 def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | None:
-    """A hint for a command that failed on its own; a stop by vBot explains itself."""
+    """A hint for a command that failed or did not run as written.
+
+    A stop by vBot explains itself and gets none. The line count is the
+    command's own, since a long *output* keeps only its first and last lines.
+    """
     if report.stop_reason is not None:
         return None
     return annotate_failure(
-        report.command, report.exit_code, output, workdir=report.workdir, offers=names
+        report.command,
+        report.exit_code,
+        output,
+        workdir=report.workdir,
+        offers=names,
+        failed_programs=report.failed_programs,
+        output_lines=report.transcript.total_lines,
     )
 
 
