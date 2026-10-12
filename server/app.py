@@ -372,6 +372,7 @@ def create_app(
                 _unregister_skill_change_bridge(app.state)
                 _unregister_model_catalog_change_bridge(app.state)
                 _unregister_terminal_change_bridge(app.state)
+                _unregister_command_status_bridge(app.state)
                 _unregister_recall_index_status_bridge(app.state)
                 await _shutdown_log_viewer(app.state.log_viewer, server_logger)
                 await _shutdown_device_flow_engine(
@@ -380,9 +381,6 @@ def create_app(
                 )
                 await _shutdown_model_list_refreshes(app_runtime)
                 runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
-                # The Runtime's shutdown stops the background commands; their
-                # final statuses still reach the accessors that stay connected.
-                _unregister_command_status_bridge(app.state)
             finally:
                 if on_stopped is not None:
                     on_stopped(runtime_stopped_cleanly)
