@@ -356,18 +356,32 @@ def _read_hint(error: JsonObject) -> str:
 
 
 def _written_text(error: JsonObject, shown: set[int]) -> list[str]:
-    """Name the earlier edits of the call that wrote lines the failure shows."""
+    """Name the earlier edits of the call that wrote lines the failure shows.
+
+    The edit that ``replaced_by`` names replaced the failed edit's old text.
+    """
     parts = []
     for item in error.get("written") or []:
         first, last = int(item["first"]), int(item["last"])
         if shown.intersection(range(first, last + 1)):
             lines = f"line {first}" if first == last else f"lines {first}-{last}"
             parts.append((str(item["label"]), lines))
-    if not parts:
-        return []
-    (label, lines), *rest = parts
-    sentence = f"{label[:1].upper()}{label[1:]} of this call wrote {lines}"
-    return [sentence + "".join(f"; {other} wrote {more}" for other, more in rest) + "."]
+    sentences = []
+    replaced = str(error.get("replaced_by") or "")
+    if replaced:
+        wrote = "".join(f" and wrote {lines}" for label, lines in parts if label == replaced)
+        parts = [part for part in parts if part[0] != replaced]
+        sentences.append(
+            f"{replaced[:1].upper()}{replaced[1:]} of this call already replaced this "
+            f"old_string{wrote}; merge the two edits into one."
+        )
+    if parts:
+        (label, lines), *rest = parts
+        sentence = f"{label[:1].upper()}{label[1:]} of this call wrote {lines}"
+        sentences.append(
+            sentence + "".join(f"; {other} wrote {more}" for other, more in rest) + "."
+        )
+    return sentences
 
 
 def _join_text(join: JsonObject) -> str:

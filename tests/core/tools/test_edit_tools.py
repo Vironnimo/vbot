@@ -481,8 +481,10 @@ NUL = (
             "text_not_found",
             "a.txt, edit 2 of 3: old_string was not found.\n"
             f"{NOT_FOUND.replace('in the file', 'in the file after edit 1')}\n"
-            "None of the 3 edits were applied, so no file was changed. Send all 3 edits again "
-            "with edit 2 corrected or left out.",
+            # An earlier edit of the call replaced the text: the edits belong together.
+            "Edit 1 of this call already replaced this old_string; merge the two edits into "
+            "one.\nNone of the 3 edits were applied, so no file was changed. Send all 3 edits "
+            "again with edit 2 corrected or left out.",
             id="second-of-three-not-found",
         ),
         pytest.param(
@@ -508,7 +510,8 @@ NUL = (
             # The text edit 1 left is named as such, and so are the lines it wrote.
             "The closest text in the file after edit 1, line 3:\n3|     log(total)\n"
             "First difference: after edit 1, line 3 reads '    log(total)' where old_string has "
-            "'print(total)'.\nEdit 1 of this call wrote line 3.\n"
+            "'print(total)'.\nEdit 1 of this call already replaced this old_string and wrote "
+            "line 3; merge the two edits into one.\n"
             "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
             "corrected or left out.",
             id="text-an-earlier-edit-replaced",

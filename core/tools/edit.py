@@ -501,6 +501,8 @@ def _edit_failure(
         ]
         after = "edit 1" if number == 2 else f"edits 1-{number - 1}"
         error = {**error, "after": after, "written": written}
+        if error.get("replaced_by"):
+            error["replaced_by"] = str(error["replaced_by"]).split(" of ")[0]
     # Further edits refused with the first, such as other edits that only join lines.
     also = error.get("also") or []
     numbers = [n for n in [number, *(number_of(item["label"]) for item in also)] if n is not None]

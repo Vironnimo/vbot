@@ -95,10 +95,13 @@ def apply_hunks(
     returned change end, is where the line holding the file's last change starts;
     it orders the occurrences of lines a later hunk matches. A hunk that fails
     after others applied carries ``written`` in its error details: the lines of
-    the text it saw that each earlier hunk wrote, as ``{label, first, last}``.
+    the text it saw that each earlier hunk wrote, as ``{label, first, last}``,
+    and ``replaced_by``, the label of the earlier hunk that replaced its old text.
     """
     notes: list[str] = []
     written: list[tuple[str, int, int]] = []
+    # The text each hunk that changed it saw, in order.
+    seen: list[tuple[str, str]] = []
     # Edits that would only join lines are refused together: the first carries the others.
     joins: list[_PatchError] = []
     for hunk in hunks:
@@ -118,8 +121,12 @@ def apply_hunks(
                 error.details["written"] = [
                     {"label": label, "first": first, "last": last} for label, first, last in written
                 ]
+            replaced_by = _replaced_by(seen, hunk) if error.code == "text_not_found" else None
+            if replaced_by is not None:
+                error.details["replaced_by"] = replaced_by
             raise
         if edited != content:
+            seen.append((hunk.label, content))
             previous = _change_end_line(content, edited)
             written = _track_written(written, content, edited, hunk.label)
         content = edited
@@ -132,6 +139,21 @@ def apply_hunks(
             ]
         raise first
     return content, notes, previous
+
+
+def _replaced_by(seen: list[tuple[str, str]], hunk: _Hunk) -> str | None:
+    """Name the earlier hunk that replaced the old text ``hunk`` replaces, if one did.
+
+    That is the last hunk whose text held it, matched precisely: the hunks after
+    it never saw it.
+    """
+    old = hunk.replacement.old if hunk.replacement is not None else ""
+    if not old:
+        return None
+    for label, before in reversed(seen):
+        if replace_fuzzy(before, old, old, replace_all=False, typographic=True) is not None:
+            return label
+    return None
 
 
 def _track_written(
