@@ -26,6 +26,7 @@ import pytest_asyncio
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools.command_manager import (
     COMMAND_HEAD_LINES,
     COMMAND_MEMORY_LINE_MAX_CHARS,
@@ -146,6 +147,38 @@ async def test_log_file_has_every_line_whole_and_shows_the_current_line_live(
         "y" * COMMAND_MEMORY_LINE_MAX_CHARS,
         "last",
     )
+
+
+@pytest.mark.asyncio
+async def test_output_that_cannot_be_cleaned_is_still_read_and_discarded(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    command_id, process = await harness.launch()
+    log_path = harness.manager.report(command_id).log_path
+    process.write("collected 3 items\n")
+    await turns()
+
+    def broken(cleaner: OutputCleaner, data: bytes) -> OutputUpdate:
+        raise ValueError("cleaner bug")
+
+    monkeypatch.setattr(OutputCleaner, "feed", broken)
+    for number in range(3):
+        process.write(f"lost line {number}\n")
+    await turns()
+
+    # The pipe is still read: the command never waits on a full one.
+    assert process.unread == 0
+    process.exit(1)
+    report = await harness.finish(command_id)
+    assert (report.status, report.exit_code) == ("failed", 1)
+    transcript = report.transcript
+    assert (transcript.head + transcript.tail, transcript.processing_failed) == (
+        ("collected 3 items",),
+        True,
+    )
+    assert log_path is not None and log_path.read_text(encoding="utf-8") == "collected 3 items\n"
+    errors = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(errors) == 1
 
 
 @pytest.mark.asyncio

@@ -277,6 +277,9 @@ def command_output_text(report: CommandReport) -> str:
         noun = "line" if omitted == 1 else "lines"
         lines.append(f"[... {omitted:,} {noun} omitted{where} ...]")
     lines.extend(tail)
+    unprocessed = _unprocessed(report)
+    if unprocessed is not None:
+        lines.append(unprocessed)
     stage = _holding_stage(report.command) if report.stop_reason is not None else None
     if stage is not None:
         lines.append(
@@ -297,6 +300,9 @@ def running_output_text(report: CommandReport) -> str:
     if omitted:
         noun = "line" if omitted == 1 else "lines"
         kept.insert(0, f"[... {omitted:,} earlier {noun} omitted{where} ...]")
+    unprocessed = _unprocessed(report)
+    if unprocessed is not None:
+        kept.append(unprocessed)
     stage = _holding_stage(report.command)
     if stage is not None:
         log = " and in the log file" if report.log_path is not None else ""
@@ -305,6 +311,14 @@ def running_output_text(report: CommandReport) -> str:
             "pipe has finished.]"
         )
     return "\n".join(kept)
+
+
+def _unprocessed(report: CommandReport) -> str | None:
+    """The marker after the last line when vBot could not process the rest."""
+    if not report.transcript.processing_failed:
+        return None
+    log = " and from the log file" if report.log_path is not None else ""
+    return f"[vBot could not process the output after this point; it is missing here{log}.]"
 
 
 def _head_and_tail(head: list[str], tail: list[str]) -> tuple[list[str], list[str], int]:

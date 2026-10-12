@@ -85,6 +85,8 @@ class CommandTranscript:
     tail: tuple[str, ...]
     omitted_lines: int
     total_lines: int
+    # Cleaning failed: the output after the last line is missing, also from the log file.
+    processing_failed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

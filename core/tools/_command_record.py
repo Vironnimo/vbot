@@ -418,9 +418,9 @@ class CommandRecord:
                 # The next chunk is read once the previous one is cleaned: a
                 # command that prints faster waits for its pipe.
                 while data := await self._process.read():
-                    await self._output.feed(data)
                     self._activity += 1
-                    self._output_changed()
+                    if not self._output.failed:
+                        await self._feed(data)
             except Exception:
                 _LOGGER.error(
                     "Reading the output of command %s failed; it keeps running until it "
@@ -436,6 +436,18 @@ class CommandRecord:
         finally:
             self._eof.set()
             self._output_changed()
+
+    async def _feed(self, data: bytes) -> None:
+        try:
+            await self._output.feed(data)
+        except Exception:
+            # The pipe is still read, so the command never waits on a full pipe.
+            _LOGGER.error(
+                "Cleaning the output of command %s failed; its later output is read and discarded",
+                self.command_id,
+                exc_info=True,
+            )
+        self._output_changed()
 
     def _output_changed(self) -> None:
         if self._output.log_pending and (self._flush_task is None or self._flush_task.done()):

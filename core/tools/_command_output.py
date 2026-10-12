@@ -45,7 +45,8 @@ class CommandOutput:
     """The clean output of one command: transcript, newest lines and log file.
 
     Used from the Event Loop. ``feed``, ``end`` and ``flush_log`` apply in the
-    order they are called.
+    order they are called. Once cleaning fails, later output is discarded and
+    the transcript says so.
     """
 
     def __init__(self, cleaner: HostedObject) -> None:
@@ -56,6 +57,7 @@ class CommandOutput:
         self._current: str | None = None
         self._log_pending = False
         self._ended = False
+        self._failed = False
         self._closed = False
 
     @classmethod
@@ -78,16 +80,32 @@ class CommandOutput:
     # Feeding
 
     async def feed(self, data: bytes) -> None:
-        """Clean output bytes; returns once their lines are in the transcript."""
-        if data and not self._ended:
-            self._apply(await self._cleaner.call("feed", data))
+        """Clean output bytes; returns once their lines are in the transcript.
+
+        Raises when cleaning fails; from then on the output is ``failed``.
+        """
+        if not data or self._ended or self._failed:
+            return
+        try:
+            update = await self._cleaner.call("feed", data)
+        except Exception:
+            self._failed = True
+            raise
+        self._apply(update)
 
     async def end(self) -> None:
         """The output ended: complete the line still being written."""
         if self._ended:
             return
         self._ended = True
-        self._apply(await self._cleaner.call("end"))
+        if not self._failed:
+            self._apply(await self._cleaner.call("end"))
+
+    @property
+    def failed(self) -> bool:
+        """Cleaning failed: later output is discarded, and the transcript and
+        the log file end where cleaning stopped."""
+        return self._failed
 
     def _apply(self, update: OutputUpdate) -> None:
         self._head.extend(update.head_added)
@@ -116,6 +134,7 @@ class CommandOutput:
             tail=tuple(tail),
             omitted_lines=total - len(self._head) - len(tail),
             total_lines=total,
+            processing_failed=self._failed,
         )
 
     def latest(self, lines: int) -> str:
@@ -136,11 +155,11 @@ class CommandOutput:
     def log_pending(self) -> bool:
         """Output reached the log file's buffer or changed its current line since
         the last flush."""
-        return self._log_pending and not self._closed
+        return self._log_pending and not self._closed and not self._failed
 
     async def flush_log(self) -> None:
         """Flush the log file and show the current line at its end."""
-        if self._closed:
+        if self._closed or self._failed:
             return
         self._log_pending = False
         await self._cleaner.call("flush_log")
