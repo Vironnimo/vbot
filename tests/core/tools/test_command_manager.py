@@ -482,29 +482,33 @@ async def test_acknowledging_a_shown_end_withdraws_a_result_not_yet_handed_over(
 ) -> None:
     pending_id, pending = await harness.launch()
     handed_id, handed = await harness.launch()
-    for command_id in (pending_id, handed_id):
+    claimed_id, claimed = await harness.launch()
+    for command_id in (pending_id, handed_id, claimed_id):
         harness.manager.to_background(command_id, deliver=True)
     # Before the end there is nothing to acknowledge.
     harness.manager.acknowledge(pending_id)
-    pending.exit(0)
-    handed.exit(0)
-    await harness.finish(pending_id)
-    await harness.finish(handed_id)
+    for process in (pending, handed, claimed):
+        process.exit(0)
+    for command_id in (pending_id, handed_id, claimed_id):
+        await harness.finish(command_id)
     deliveries = {
         submission["notice_id"]: future
         for submission, future in zip(harness.sink.submissions, harness.sink.futures, strict=True)
     }
     deliveries[f"command:{handed_id}"].set_result(None)
+    # A delivery is building the message that carries this result.
+    harness.sink.claimed.add(f"command:{claimed_id}")
     await turns()
 
-    harness.manager.acknowledge(pending_id)
-    harness.manager.acknowledge(handed_id)
-    harness.manager.acknowledge("cmd_unknown")
+    for command_id in (pending_id, handed_id, claimed_id, "cmd_unknown"):
+        harness.manager.acknowledge(command_id)
 
-    assert len(harness.sink.submissions) == 2
-    assert harness.sink.cancellations == [f"command:{pending_id}"]
+    assert len(harness.sink.submissions) == 3
+    assert harness.sink.cancellations == [f"command:{pending_id}", f"command:{claimed_id}"]
     await turns()
     assert deliveries[f"command:{pending_id}"].cancelled()
+    # The claimed result is delivered once, as submitted.
+    assert not deliveries[f"command:{claimed_id}"].done()
 
 
 @pytest.mark.asyncio

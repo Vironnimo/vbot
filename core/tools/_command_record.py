@@ -278,21 +278,15 @@ class CommandRecord:
             self.withdraw_delivery()
 
     def withdraw_delivery(self) -> None:
-        """Deliver no result: disarm it, and withdraw one already submitted."""
+        """Deliver no result: disarm it, and withdraw one already submitted.
+
+        A submitted result whose delivery already claimed it stays: it is
+        delivered once, as submitted.
+        """
         self._deliver = False
         task = self._delivery_task
-        sink = self._services.trigger_service
-        if task is None or task.done():
+        if task is None or task.done() or not self._withdraw_submission():
             return
-        if sink is not None:
-            target = self._delivered_to
-            with contextlib.suppress(Exception):
-                sink.cancel_completion(
-                    target.agent_id,
-                    target.session_id,
-                    notice_id=self.notice_id,
-                    project_id=target.project_id,
-                )
         # Without a running Event Loop (Runtime stop), nothing is left to cancel.
         with contextlib.suppress(RuntimeError):
             task.cancel()
@@ -606,9 +600,30 @@ class CommandRecord:
             return
         self._delivery_task = self._task(self._await_delivery(delivery), "delivery")
 
+    def _withdraw_submission(self) -> bool:
+        """Withdraw the submitted result from the sink; whether it was withdrawn."""
+        sink = self._services.trigger_service
+        if sink is None:
+            return True
+        target = self._delivered_to
+        try:
+            return sink.cancel_completion(
+                target.agent_id,
+                target.session_id,
+                notice_id=self.notice_id,
+                project_id=target.project_id,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Could not withdraw the result of command %s", self.command_id, exc_info=True
+            )
+            return False
+
     async def _await_delivery(self, delivery: Awaitable[None]) -> None:
         try:
-            await delivery
+            # Only the sink withdraws a submitted result; stopping to follow
+            # the delivery leaves it alone.
+            await asyncio.shield(delivery)
         except RunAdmissionBlockedError:
             # The command's execution owner closed (for example its temporary
             # group): an expected end of its lifecycle, not a delivery fault.
