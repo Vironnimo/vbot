@@ -225,7 +225,7 @@ class CommandManager:
         """``aclose`` without an Event Loop: each kill blocks the calling thread.
 
         Raises ``CommandManagerError`` naming the commands whose kill was not
-        confirmed.
+        confirmed; they are released all the same.
         """
         self._closed = True
         self._stop_sweeper()
@@ -240,8 +240,10 @@ class CommandManager:
 
         The kills run off the Event Loop and in parallel; each may wait for
         the operating system to confirm it. Nothing is delivered any more: a
-        result not yet handed over is withdrawn. Raises ``CommandManagerError``
-        naming the commands whose kill was not confirmed.
+        result not yet handed over is withdrawn. A command whose kill was not
+        confirmed is released all the same, with its surviving processes
+        logged: Runtime stop does not wait for them. Raises
+        ``CommandManagerError`` naming those commands.
         """
         self._closed = True
         self._stop_sweeper()
@@ -369,7 +371,9 @@ class CommandManager:
         the processes it left running; a finished command is returned
         unchanged. Raises ``CommandStopError`` (naming the survivors) when the
         kill is not confirmed; the command then stays live and a later stop
-        retries.
+        retries. Unless it ended meanwhile, it runs on as if not stopped: an
+        end it reaches by itself reports its exit code, and a background
+        result is delivered unless a ``scope`` stop withdrew it.
         """
         record = self._get(command_id)
         await record.stop(reason)
