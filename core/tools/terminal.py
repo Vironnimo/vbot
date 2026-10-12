@@ -559,11 +559,17 @@ async def _subagent_holders(
     subagents: SubAgentTree | None, owner: TerminalOwner, terminals: Sequence[TerminalInfo]
 ) -> Mapping[SessionAddress, str]:
     """The Sessions of this Session's Sub-Agents (any depth) by Sub-Agent id, when one of
-    *terminals* is attached to another Session."""
+    *terminals* is attached to another Session.
+
+    A Session the user took over, and every Session below it, works for the user, so
+    its terminals count as another Session's.
+    """
     if subagents is None or all(info.attachment in (None, owner) for info in terminals):
         return {}
     return {
-        subagent.session: subagent.id for subagent in await subagents.subagents(_address(owner))
+        subagent.session: subagent.id
+        for subagent in await subagents.subagents(_address(owner))
+        if subagent.within_takeover is None
     }
 
 

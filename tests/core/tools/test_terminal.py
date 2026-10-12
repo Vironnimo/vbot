@@ -588,10 +588,16 @@ async def test_start_rejects_unresolvable_workdirs_before_spawn(
 
 
 class _SubAgents:
-    """The caller's Sub-Agent Sessions at every depth, as the coordinator reports them."""
+    """The caller's Sub-Agent Sessions at every depth, as the coordinator reports them.
 
-    def __init__(self, sessions: Mapping[SessionAddress, str]) -> None:
+    The Sub-Agents in *taken_over* are ones whose Session the user took over.
+    """
+
+    def __init__(
+        self, sessions: Mapping[SessionAddress, str], taken_over: Sequence[str] = ()
+    ) -> None:
         self.sessions = dict(sessions)
+        self.taken_over = set(taken_over)
         self.callers: list[SessionAddress] = []
 
     async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
@@ -603,9 +609,10 @@ class _SubAgents:
                 agent_id=session.agent_id,
                 session=session,
                 parent_id=None,
-                status="working",
+                status="taken over by the user" if subagent_id in self.taken_over else "working",
                 last_tool=None,
                 activity_file=None,
+                within_takeover=subagent_id if subagent_id in self.taken_over else None,
             )
             for session, subagent_id in self.sessions.items()
         ]
@@ -622,13 +629,15 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A terminal attached to a Sub-Agent's Session (any depth) names that Sub-Agent in
-    list and status; one attached to any other Session stays ``other``."""
+    list and status; one attached to any other Session, or to a Session the user took
+    over, stays ``other``."""
     monkeypatch.setattr(manager_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, _factory = manager
     grandchild = TerminalOwner("project-a", "helper", "session-grandchild")
     stranger = TerminalOwner("project-a", "agent-a", "session-b")
+    taken = TerminalOwner("project-a", "helper", "session-taken")
     terminal_ids: list[str] = []
-    for holder in (grandchild, stranger, None):
+    for holder in (grandchild, stranger, taken, None):
         started = await terminal_manager.spawn_for_operator(
             command=None, arguments=[], cwd=tmp_path
         )
@@ -636,7 +645,11 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
             terminal_manager.attach(started["terminal_id"], holder, origin_run_id="run-b")
         terminal_ids.append(started["terminal_id"])
     subagents = _SubAgents(
-        {SessionAddress("project-a", "helper", "session-grandchild"): "sub_grandchild"}
+        {
+            SessionAddress("project-a", "helper", "session-grandchild"): "sub_grandchild",
+            SessionAddress("project-a", "helper", "session-taken"): "sub_taken",
+        },
+        taken_over=["sub_taken"],
     )
     arguments: JsonObject = {"action": "list"}
 
@@ -645,6 +658,7 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
     rows = {row["terminal_id"]: row for row in cast(dict[str, Any], listed["data"])["terminals"]}
     assert [(rows[id_]["attached"], rows[id_].get("subagent")) for id_ in terminal_ids] == [
         ("subagent", "sub_grandchild"),
+        ("other", None),
         ("other", None),
         ("no", None),
     ]
@@ -667,6 +681,7 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
     # One layout: status shows who holds the terminal as list does.
     assert [(item["attached"], item.get("subagent")) for item in statuses] == [
         ("subagent", "sub_grandchild"),
+        ("other", None),
         ("other", None),
         ("no", None),
     ]

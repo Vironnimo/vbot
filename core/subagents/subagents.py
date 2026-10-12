@@ -158,6 +158,9 @@ class SubAgentState:
     ``agent_id`` is the address ``subagent`` accepts for its Agent. ``parent_id``
     names the caller's Sub-Agent it works for, ``None`` for a direct Sub-Agent of
     the caller. ``last_tool`` is the Tool its working turn called last.
+    ``within_takeover`` names the topmost Sub-Agent below the caller whose Session
+    the user took over, when that is this one or one above it: what this
+    Sub-Agent's Session runs then works for the user, not for the caller.
     """
 
     id: str
@@ -168,6 +171,7 @@ class SubAgentState:
     status: SubAgentStatus
     last_tool: str | None
     activity_file: str | None
+    within_takeover: str | None = None
 
 
 class SubAgentTree(Protocol):
@@ -175,8 +179,10 @@ class SubAgentTree(Protocol):
 
     ``background_tasks`` lists, checks and stops them and the background commands
     of their Sessions; ``terminal`` names the Sub-Agent whose Session holds a
-    terminal. :class:`SubAgentCoordinator` implements it. The Tools import it for
-    annotations only, because this package imports the Tool package.
+    terminal. Both stop at a takeover: what runs within one
+    (``SubAgentState.within_takeover``) works for the user. :class:`SubAgentCoordinator`
+    implements it. The Tools import it for annotations only, because this package
+    imports the Tool package.
     """
 
     async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
@@ -409,9 +415,16 @@ class SubAgentCoordinator:
         sessions = runtime.chat_sessions
         tree = await sessions.run_async(descendants, sessions, caller)
         ids = {link.session: link.id for link in tree}
+        # Breadth first, a Parent's takeover is known before its children's.
+        takeovers: dict[SessionAddress, str] = {}
         states: list[SubAgentState] = []
         for link in tree:
             address = link.session
+            takeover = takeovers.get(link.parent) or (
+                link.id if link.taken_over_at is not None else None
+            )
+            if takeover is not None:
+                takeovers[address] = takeover
             run = runtime.chat_run_manager.active_run(
                 agent_id=address.agent_id,
                 session_id=address.session_id,
@@ -436,6 +449,7 @@ class SubAgentCoordinator:
                     status=status,
                     last_tool=last_tool,
                     activity_file=self._activities.path(address),
+                    within_takeover=takeover,
                 )
             )
         return states
