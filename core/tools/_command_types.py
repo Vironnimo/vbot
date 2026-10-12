@@ -263,12 +263,18 @@ class CommandLaunchError(CommandManagerError):
 class CommandStopError(CommandManagerError):
     """The operating system did not confirm the kill; ``survivors`` may still run.
 
-    The command stays live; stopping it again retries the kill.
+    The command stays live; stopping it again retries the kill. ``kill_sent``
+    tells whether the kill reached its processes: then the stop keeps its
+    reason, and the end the kill causes reads ``stopped``. Otherwise, unless
+    it ended meanwhile, the command runs on as if not stopped.
     """
 
-    def __init__(self, message: str, *, survivors: tuple[RunningProcess, ...]) -> None:
+    def __init__(
+        self, message: str, *, survivors: tuple[RunningProcess, ...], kill_sent: bool = False
+    ) -> None:
         super().__init__(message)
         self.survivors = survivors
+        self.kill_sent = kill_sent
 
 
 __all__ = [

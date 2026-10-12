@@ -86,6 +86,13 @@ class ProcessTreeFacts:
     nonzero_exits: tuple[ProgramExit, ...]
 
 
+class KillNotConfirmedError(OSError):
+    """The kill reached the tree, but not every process ended within the wait.
+
+    Processes that end later end because of the kill.
+    """
+
+
 class ProcessTree(Protocol):
     """The process tree of one shell command or of one terminal's program."""
 
@@ -95,7 +102,12 @@ class ProcessTree(Protocol):
         """How many failed child exits are recorded so far; does not block."""
 
     def terminate(self) -> None:
-        """Kill every process of the tree; raise OSError when that is not confirmed."""
+        """Kill every process of the tree and wait until none runs.
+
+        Raises ``KillNotConfirmedError`` when the kill was sent but processes
+        still ran after the wait or could not be checked, and another OSError
+        when the operating system refused the kill, so no process got it.
+        """
 
     def close(self) -> None:
         """Release tracking resources once the tree has ended or was terminated.
@@ -170,18 +182,35 @@ class _PosixSessionTree:
     def terminate(self) -> None:
         kill = cast(Any, os).killpg
         hard = getattr(signal, "SIGKILL", signal.SIGTERM)
-        with contextlib.suppress(ProcessLookupError, PermissionError):
+        # Whether the kill reached a process: only then can the tree be ending of it.
+        sent = False
+        try:
             kill(self._sid, hard)
+            sent = True
+        except ProcessLookupError, PermissionError:
+            # No process left in the group, or none vBot may signal; members
+            # in other groups of the session are killed one by one below.
+            pass
         deadline = time.monotonic() + _TERMINATE_CONFIRM_SECONDS
         while True:
             members = self._live_members()
             if not members:
                 return
             for process in members:
-                with contextlib.suppress(Exception):
+                try:
                     process.kill()
+                except Exception:
+                    continue
+                sent = True
+            if not sent:
+                raise OSError(
+                    f"The operating system refused to kill the {len(members)} processes "
+                    "of the command"
+                )
             if time.monotonic() >= deadline:
-                raise OSError(f"{len(members)} processes of the command survived the kill")
+                raise KillNotConfirmedError(
+                    f"{len(members)} processes of the command survived the kill"
+                )
             time.sleep(_TERMINATE_POLL_SECONDS)
 
     def _live_members(self) -> list[Any]:
@@ -558,12 +587,19 @@ class _WindowsJobTree:
 
     def terminate(self) -> None:
         if not self._k.TerminateJobObject(self._job, 1):
+            # Refused: no process of the Job got the kill.
             raise self._kernel.error()
         deadline = time.monotonic() + _TERMINATE_CONFIRM_SECONDS
-        while self._active() and time.monotonic() < deadline:
-            self._empty.wait(_TERMINATE_POLL_SECONDS)
-        if self._active():
-            raise OSError("Processes of the command survived the job termination")
+        try:
+            while self._active() and time.monotonic() < deadline:
+                self._empty.wait(_TERMINATE_POLL_SECONDS)
+            active = self._active()
+        except OSError as error:
+            raise KillNotConfirmedError(
+                f"Whether the processes of the command ended after the kill is unknown: {error}"
+            ) from error
+        if active:
+            raise KillNotConfirmedError("Processes of the command survived the job termination")
 
     def _active(self) -> int:
         accounting = _BasicAccounting()
@@ -606,6 +642,7 @@ def _image_name(kernel32: Any, handle: Any) -> str:
 __all__ = [
     "IDLE_CPU_SECONDS",
     "TREE_POLL_SECONDS",
+    "KillNotConfirmedError",
     "ProcessTree",
     "ProcessTreeFacts",
     "ProcessTreeTracker",
