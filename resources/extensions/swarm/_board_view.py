@@ -29,6 +29,8 @@ _EVERYONE = frozenset({"all", "everyone", "everybody", "here", "channel", "team"
 _USER = frozenset({"user", "theuser", "human", "operator", "owner"})
 _EXCERPT_CHARS = 80
 _CLOSE_MATCH = 0.85
+# Posts on a read page when the call sends no limit, as SwarmStore.read_posts applies it.
+PAGE_LIMIT = 20
 
 
 def call_text(arguments: Mapping[str, Any]) -> str:
@@ -224,12 +226,19 @@ def close_discussion(value: str, discussions: Sequence[Json]) -> Json | None:
 
 
 def post_block(
-    post: Json, roster: Roster, main_id: str, *, with_discussion: bool, opening: bool = False
+    post: Json,
+    roster: Roster,
+    main_id: str,
+    *,
+    with_discussion: bool,
+    opening: bool = False,
+    page: bool = False,
 ) -> str:
     """Render one post as a header line and its verbatim text.
 
     With ``opening``, a long main-discussion post that reached the reader only
     through the main discussion shows its opening and the call to read it all.
+    With ``page``, a post the reader has seen shows only what ``page_body`` keeps.
     """
 
     details = []
@@ -246,7 +255,8 @@ def post_block(
     header = f"[{post_ref(post['sequence'])}] {post['author']['name']}"
     if details:
         header += f" ({'; '.join(details)})"
-    return f"{header}:\n{_body(post, opening=opening)}"
+    body = page_body(post, roster.self_id) if page else _body(post, opening=opening)
+    return f"{header}:\n{body}"
 
 
 def delivered_chars(post: Json) -> int:
@@ -256,14 +266,52 @@ def delivered_chars(post: Json) -> int:
 
 
 def _body(post: Json, *, opening: bool) -> str:
-    body = str(post["text"])
     if opening and shortened(post):
-        start = _opening(body)
-        body = f"{start} ...\n" + text.POST_SHORTENED.format(
-            count=len(body) - len(start),
-            call=call_text({"action": "read", "message_id": post_ref(post["sequence"])}),
-        )
-    return body
+        return _opening_body(post)
+    return str(post["text"])
+
+
+def _opening_body(post: Json) -> str:
+    body = str(post["text"])
+    start = _opening(body)
+    return f"{start} ...\n" + text.POST_SHORTENED.format(
+        count=len(body) - len(start), call=_read_call(post)
+    )
+
+
+def _read_call(post: Json) -> str:
+    return call_text({"action": "read", "message_id": post_ref(post["sequence"])})
+
+
+def seen(post: Json, reader_id: str) -> bool:
+    """Whether the reader has seen the post's text: its own post, or one delivered to it.
+
+    A post outside the reader's audience (``pending`` absent) may never have reached it.
+    """
+
+    author = post["author"]
+    own = author["kind"] == "participant" and author["id"] == reader_id
+    return own or post.get("pending") is False
+
+
+def page_body(post: Json, reader_id: str) -> str:
+    """The text a read page shows for ``post``.
+
+    A post the reader has seen shows its opening when it is long, or only the call
+    that reads it; every other post shows whole, so a page repeats little.
+    """
+
+    if not seen(post, reader_id):
+        return str(post["text"])
+    if len(post["text"]) > text.FULL_POST_CHARS:
+        return _opening_body(post)
+    return text.POST_SEEN.format(count=len(post["text"]), call=_read_call(post))
+
+
+def page_chars(post: Json, reader_id: str) -> int:
+    """The length of the text a read page shows for ``post``; page budgets count it."""
+
+    return len(page_body(post, reader_id))
 
 
 def shortened(post: Json) -> bool:
@@ -286,11 +334,11 @@ def _opening(value: str) -> str:
     return cut.rstrip()
 
 
-def posts_text(
-    posts: Iterable[Json], roster: Roster, main_id: str, *, with_discussion: bool = False
-) -> str:
+def page_text(posts: Iterable[Json], roster: Roster, main_id: str) -> str:
+    """Render the posts of a read page; posts the reader has seen show compactly."""
+
     return "\n\n".join(
-        post_block(post, roster, main_id, with_discussion=with_discussion) for post in posts
+        post_block(post, roster, main_id, with_discussion=False, page=True) for post in posts
     )
 
 
@@ -327,14 +375,16 @@ def delivery_text(
     *,
     inbox: bool,
     automatic: bool,
+    skipped: Sequence[Json] = (),
 ) -> str:
-    """Render one automatic delivery: guidance, messages, and what remains pending.
+    """Render one automatic delivery: guidance, skipped posts, messages, and what remains.
 
     With ``automatic``, every route delivers while the participant runs, so the
-    rest follows without a call.
+    rest follows without a call. ``skipped`` holds the store's per-discussion
+    summary of older posts the batch passed over.
     """
 
-    parts = [prefix, messages_text(posts, roster, main_id)]
+    parts = [prefix, _skipped_text(skipped, main_id), messages_text(posts, roster, main_id)]
     if remaining:
         key = (
             ("automatic_one" if remaining == 1 else "automatic_many")
@@ -345,6 +395,43 @@ def delivery_text(
         )
         parts.append(text.DELIVERY_MORE[key].format(count=remaining))
     return "\n\n".join(part for part in parts if part)
+
+
+def _skipped_text(groups: Sequence[Json], main_id: str) -> str:
+    """Say which older posts a delivery skipped, with the read call for each discussion."""
+
+    if not groups:
+        return ""
+    count = sum(group["count"] for group in groups)
+    if len(groups) > 1:
+        reads = [
+            text.DELIVERY_SKIPPED_READ.format(
+                call=_skipped_read(group, main_id),
+                discussion=post_discussion_label(group, main_id),
+            )
+            for group in groups
+        ]
+        return text.DELIVERY_SKIPPED["discussions"].format(count=count, reads=spoken_list(reads))
+    (group,) = groups
+    return text.DELIVERY_SKIPPED["one" if count == 1 else "many"].format(
+        count=count,
+        discussion=post_discussion_label(group, main_id),
+        call=_skipped_read(group, main_id),
+    )
+
+
+def _skipped_read(group: Json, main_id: str) -> str:
+    """The read call that shows a discussion's skipped posts, newest page first."""
+
+    arguments: Json = {"action": "read"}
+    if group["before"] is not None:
+        arguments["before"] = post_ref(group["before"])
+    elif group["discussion_id"] != main_id:
+        arguments["discussion_id"] = discussion_ref(group["discussion_sequence"])
+    # A shorter page holds exactly the skipped stretch; a longer one pages on.
+    if group["span"] < PAGE_LIMIT:
+        arguments["limit"] = group["span"]
+    return call_text(arguments)
 
 
 def wake_text(routes: Sequence[str]) -> str:
@@ -411,6 +498,9 @@ def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
     else:
         key = f"{amount}_no_inbox"
     data: Json = {"pending": text.STATE_PENDING[key].format(count=count)}
+    if not count and status["wake_on_messages"]:
+        # Nothing to receive: the reader is polling, and ending the reply is how to wait.
+        data["pending"] += " " + text.STATE_WAIT
     if not automatic:
         data["delivery"] = " ".join(
             text.STATE_DELIVERY[
@@ -518,6 +608,7 @@ def with_notes(data: Json, notes: Sequence[str]) -> Json:
 
 
 __all__ = [
+    "PAGE_LIMIT",
     "Recipients",
     "Roster",
     "automatic_delivery",
@@ -532,12 +623,15 @@ __all__ = [
     "excerpt",
     "messages_text",
     "news_text",
+    "page_body",
+    "page_chars",
+    "page_text",
     "post_block",
     "post_discussion_label",
     "post_suggestion",
-    "posts_text",
     "queued_text",
     "resolve_recipients",
+    "seen",
     "shortened",
     "status_data",
     "unknown_recipients_message",

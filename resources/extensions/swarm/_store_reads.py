@@ -8,6 +8,7 @@ from __future__ import annotations
 import sqlite3
 from difflib import get_close_matches
 
+from ._board_view import page_chars
 from ._store_database import (
     ALIASED_DISCUSSION_COLUMNS,
     ALIASED_POST_COLUMNS,
@@ -36,7 +37,11 @@ from ._store_values import (
 )
 
 # Whether a post in the reader's audience (``r``) has not reached it yet; NULL outside it.
-_PENDING = "CASE WHEN r.post_id IS NULL THEN NULL ELSE r.delivered_at IS NULL END AS pending"
+# A post an automatic delivery skipped counts as delivered but has not been shown.
+_PENDING = (
+    "CASE WHEN r.post_id IS NULL THEN NULL "
+    "ELSE (r.delivered_at IS NULL OR r.skipped IS NOT NULL) END AS pending"
+)
 # The number of the post a human-read post answers, for the Board page.
 _HUMAN_REPLY_SEQUENCE = (
     "(SELECT q.sequence FROM posts q WHERE q.id=posts.reply_to) AS reply_sequence"
@@ -162,10 +167,10 @@ def _read_posts(
             ).fetchone()
             if anchor is None:
                 raise SwarmStoreError("message_not_found", field="before")
-            if discussion_id is not None and discussion_id != anchor["discussion_id"]:
-                _discussion(connection, swarm_id, discussion_id)
-                raise SwarmStoreError("before_discussion_mismatch", field="before")
-            discussion_id, before_sequence = anchor["discussion_id"], int(anchor["sequence"])
+            # Post numbers count across the Board, so a post of another discussion
+            # also ends a page of the named one.
+            discussion_id = discussion_id or anchor["discussion_id"]
+            before_sequence = int(anchor["sequence"])
         discussion_id = discussion_id or _main(connection, swarm_id)
         _discussion(connection, swarm_id, discussion_id)
         return _post_page(
@@ -348,7 +353,10 @@ def _post_page(
         "ORDER BY p.sequence DESC LIMIT ? OFFSET ?",
         (participant_id, swarm_id, discussion_id, high_water, limit + 1, offset),
     ).fetchall()
-    selected = _budgeted_rows(rows, limit, batch_chars)
+    # Posts the reader has seen show compactly, so they count with that length.
+    selected = _budgeted_rows(
+        rows, limit, batch_chars, size=lambda post: page_chars(post, participant_id)
+    )
     values = [_post(row) for row in reversed(selected)]
     more = len(rows) > len(selected)
     return Page(

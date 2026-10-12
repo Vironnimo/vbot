@@ -9,6 +9,7 @@ from resources.extensions.swarm.agent_text import (
     STATE_DELIVERY,
     STATE_PENDING,
     STATE_ROUTES,
+    STATE_WAIT,
     STATE_WAKE_ADDRESSED,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
@@ -44,6 +45,9 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
     automatic, _ = await dispatch(board, {}, name="swarm_state")
     assert set(automatic["data"]) == {"pending", "wake", "content"}
     assert automatic["data"]["pending"] == STATE_PENDING["one_automatic"]
+    # With nothing to receive, the reader is polling: ending the reply is how to wait.
+    author, _ = await dispatch(board, {}, peer=1, name="swarm_state")
+    assert author["data"]["pending"] == f"{STATE_PENDING['none_automatic']} {STATE_WAIT}"
     swarm = await board.store.get_swarm(board.swarm["id"])
     await board.store.apply_delivery_settings(
         swarm["id"],
@@ -84,6 +88,20 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
         # The Inbox receipt was never saved with a Tool Result, so the post stays pending.
         again, _ = await dispatch(board, {}, name="swarm_state")
         assert visible(again).splitlines()[0] == pending
+    # Where no post starts a Run, ending the reply waits for nothing.
+    swarm = await board.store.get_swarm(board.swarm["id"])
+    await board.store.apply_delivery_settings(
+        swarm["id"],
+        {
+            **swarm["delivery"],
+            **{route: {"mode": "all", "wake_idle": False} for route in STATE_ROUTES},
+        },
+        expected_revision=swarm["settings_revision"],
+        request_id="no-wake",
+        actor="test",
+    )
+    sleeping, _ = await dispatch(board, {}, peer=1, name="swarm_state")
+    assert sleeping["data"]["pending"] == STATE_PENDING["none_automatic"]
 
 
 @pytest.mark.asyncio

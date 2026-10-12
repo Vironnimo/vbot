@@ -40,6 +40,14 @@ def _call_request_id(context: ToolContext) -> str:
     )
 
 
+def _call_step_id(context: ToolContext) -> str | None:
+    """Identify the Model response whose Tool Calls include this one; None outside a Run."""
+
+    if not context.run_id:
+        return None
+    return _hash([context.session_id, context.run_id, context.iteration_number])
+
+
 def _management_page(page: Page) -> Json:
     result: Json = {"entries": list(page.entries), "has_more": page.has_more}
     # A read after a post number continues with a new number, not a cursor.

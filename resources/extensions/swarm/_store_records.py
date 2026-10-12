@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 
 from core.utils.timestamps import utc_now_timestamp
 
@@ -74,22 +75,26 @@ def _record_lifecycle_request(
 
 
 def _budgeted_rows(
-    rows: list[sqlite3.Row], limit: int, batch_chars: int, *, delivered: bool = False
+    rows: list[sqlite3.Row],
+    limit: int,
+    batch_chars: int,
+    *,
+    size: Callable[[Json], int] = delivered_chars,
 ) -> list[sqlite3.Row]:
-    """The leading ``rows``, at most ``limit``, whose texts fit ``batch_chars``.
+    """The leading ``rows``, at most ``limit``, whose shown texts fit ``batch_chars``.
 
-    The first row always fits. Board pages show whole posts. With ``delivered``,
-    each post counts with the text a delivery shows, which is only the Opening of
-    a long post on the reader's main route (``delivered_chars``).
+    The first row always fits. Each post counts with the text its reader is shown:
+    by default what a delivery shows, which is only the Opening of a long post on
+    the reader's main route (``delivered_chars``); read pages pass their own measure.
     """
     selected: list[sqlite3.Row] = []
     chars = 0
     for row in rows[:limit]:
-        size = delivered_chars(_post(row)) if delivered else len(str(row["text"]))
-        if selected and chars + size > batch_chars:
+        shown = size(_post(row))
+        if selected and chars + shown > batch_chars:
             break
         selected.append(row)
-        chars += size
+        chars += shown
     return selected
 
 
@@ -109,7 +114,7 @@ def _pending_rows(
         "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence LIMIT ?",
         (swarm_id, participant_id, limit),
     ).fetchall()
-    return _budgeted_rows(candidates, limit, batch_chars, delivered=True)
+    return _budgeted_rows(candidates, limit, batch_chars)
 
 
 def _human_posts(connection: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[Json]:
