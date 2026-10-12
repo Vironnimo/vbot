@@ -352,115 +352,88 @@ async def test_status_of_an_ended_command_acknowledges_only_this_sessions_delive
     assert tasks.commands.sink.cancellations == ([f"command:{command_id}"] if own else [])
 
 
-def _stop_text(subagent_id: str) -> str:
-    return f'To stop it, call background_tasks {{"action": "stop", "id": "{subagent_id}"}}.'
+_SUBAGENT_ID = re.compile(r"\bsub_[a-z0-9]+")
+
+
+def other_subagents(text: str, subagent_id: str) -> list[str]:
+    """The Sub-Agents *text* names besides *subagent_id*, outside the calls it names."""
+    named = _SUBAGENT_ID.findall(_CALL.sub("", text))
+    return [found for found in named if found != subagent_id]
 
 
 @pytest.mark.parametrize(
-    ("status", "deeper", "subagent_tool", "next_text"),
+    ("status", "deeper", "subagent_tool", "stops", "sends"),
     [
-        (
-            "working",
-            False,
-            True,
-            "The Sub-Agent is working; its answer arrives as a new message when its turn ends, "
-            "so do not poll for it. " + _stop_text("sub_child"),
-        ),
-        (
-            "queued",
-            True,
-            True,
-            "The Sub-Agent is working for your Sub-Agent sub_child, which receives its answer. "
-            + _stop_text("sub_grandchild"),
-        ),
-        (
-            "idle",
-            False,
-            True,
-            "The Sub-Agent is idle. To give it more work, send it a message with subagent "
-            "action send.",
-        ),
+        # Its answer arrives by itself; stopping it is the one call to offer.
+        ("working", False, True, True, False),
+        # A deeper Sub-Agent works for its own Parent, which the text names.
+        ("queued", True, True, True, False),
+        ("idle", False, True, False, True),
         # Without subagent, the Agent cannot give it more work.
-        ("idle", False, False, "The Sub-Agent is idle."),
-        (
-            "idle",
-            True,
-            True,
-            "The Sub-Agent is idle; only your Sub-Agent sub_child can send it messages.",
-        ),
-        (
-            "taken over by the user",
-            False,
-            True,
-            "The user took over this Sub-Agent by writing in its Session; it works for the "
-            "user, and vBot no longer sends you its answers.",
-        ),
+        ("idle", False, False, False, False),
+        # Only its own Parent, which the text names, can message a deeper Sub-Agent.
+        ("idle", True, True, False, False),
+        # It works for the user: nothing it runs is the caller's any more.
+        ("taken over by the user", False, True, False, False),
     ],
     ids=["working", "queued-deeper", "idle", "idle-without-subagent", "idle-deeper", "taken-over"],
 )
 @pytest.mark.asyncio
 async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
-    tasks: Tasks, status: Any, deeper: bool, subagent_tool: bool, next_text: str
+    tasks: Tasks,
+    status: Any,
+    deeper: bool,
+    subagent_tool: bool,
+    stops: bool,
+    sends: bool,
 ) -> None:
     subagent = dataclasses.replace(tasks.subagents.child, status=status)
+    taken_over = status == "taken over by the user"
     if deeper:
         subagent = dataclasses.replace(
             subagent, id="sub_grandchild", session=GRANDCHILD, parent_id="sub_child"
         )
         tasks.subagents.grandchild = subagent
     else:
+        # The tree marks a Sub-Agent the user took over as the boundary of its own takeover.
+        if taken_over:
+            subagent = dataclasses.replace(subagent, within_takeover=subagent.id)
         tasks.subagents.child = subagent
         tasks.subagents.running = ["background command cmd_a (serve)"]
     tools = (SHELL_TOOL_NAME, SUBAGENT) if subagent_tool else (SHELL_TOOL_NAME,)
 
     shown = data(await tasks.call({"action": "status", "id": subagent.id}, tools=tools))
 
-    assert shown["next"] == next_text
+    # The call it offers, the Tool that gives it more work, and the Parent of a deeper one.
+    assert calls(shown["next"]) == ([{"action": "stop", "id": subagent.id}] if stops else [])
+    assert (SUBAGENT in _CALL.sub("", shown["next"])) is sends
+    assert other_subagents(shown["next"], subagent.id) == (["sub_child"] if deeper else [])
     assert (shown["id"], shown["type"], shown["status"]) == (subagent.id, "subagent", status)
     assert shown["project_id"] == "project-a"
-    # Only a working turn has a last Tool; only work it still runs is named.
+    # Only a working turn has a last Tool; only work it still runs for the caller is named.
     assert ("last_tool" in shown) is (status == "working")
-    assert shown.get("running") == (None if deeper else ["background command cmd_a (serve)"])
+    running = None if deeper or taken_over else ["background command cmd_a (serve)"]
+    assert shown.get("running") == running
     assert tasks.subagents.stopped == []
 
 
 @pytest.mark.parametrize(
-    ("status", "deeper", "note"),
+    ("status", "deeper", "subagent_tool", "continues"),
     [
-        (
-            "working",
-            False,
-            "Stopped: its current turn, its queued messages, its background commands and "
-            "terminals, and its own Sub-Agents. Its Session keeps the history; send it a "
-            "message to continue.",
-        ),
-        # Only its own Parent can message a deeper Sub-Agent.
-        (
-            "working",
-            True,
-            "Stopped: its current turn, its queued messages, its background commands and "
-            "terminals, and its own Sub-Agents. Its Session keeps the history; your Sub-Agent "
-            "sub_child can send it a message to continue.",
-        ),
+        ("working", False, True, True),
+        # Only its own Parent, which the note names, can message a deeper Sub-Agent.
+        ("working", True, True, True),
+        # Without subagent, the caller cannot message it.
+        ("working", False, False, False),
         # The user continues a Sub-Agent it took over; subagent send refuses it.
-        (
-            "taken over by the user",
-            False,
-            "Stopped: its current turn, its queued messages, its background commands and "
-            "terminals, and its own Sub-Agents. Its Session keeps the history.",
-        ),
-        (
-            "idle",
-            False,
-            "Sub-Agent sub_child and its own Sub-Agents were idle and ran no background "
-            "commands or terminals, so nothing needed stopping.",
-        ),
+        ("taken over by the user", False, True, False),
+        ("idle", False, True, False),
     ],
-    ids=["working", "working-deeper", "taken-over", "idle"],
+    ids=["working", "working-deeper", "working-without-subagent", "taken-over", "idle"],
 )
 @pytest.mark.asyncio
 async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
-    tasks: Tasks, status: Any, deeper: bool, note: str
+    tasks: Tasks, status: Any, deeper: bool, subagent_tool: bool, continues: bool
 ) -> None:
     working = status != "idle"
     subagent = dataclasses.replace(
@@ -473,11 +446,13 @@ async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
         tasks.subagents.grandchild = subagent
     else:
         tasks.subagents.child = subagent
+    tools = (SHELL_TOOL_NAME, SUBAGENT) if subagent_tool else (SHELL_TOOL_NAME,)
 
-    result = await tasks.call({"action": "stop", "id": subagent.id})
+    result = await tasks.call({"action": "stop", "id": subagent.id}, tools=tools)
     stopped = data(result)
 
     assert tasks.subagents.stopped == [subagent.id]
+    (note,) = stopped.pop("notes")
     assert stopped == {
         "id": subagent.id,
         "type": "subagent",
@@ -485,8 +460,11 @@ async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
         "session_id": subagent.session.session_id,
         "project_id": "project-a",
         "status": "stopped" if working else "idle",
-        "notes": [note],
     }
+    # The note names a message as the way to continue only where the caller can have one
+    # sent, and the Parent that sends it to a deeper Sub-Agent.
+    assert ("send" in note) is continues
+    assert other_subagents(note, subagent.id) == (["sub_child"] if continues and deeper else [])
     shown = tasks.registry.display_for_call(
         BACKGROUND_TASKS_TOOL_NAME, {"action": "stop", "id": subagent.id}, result=result
     )["details"]
@@ -533,6 +511,40 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
         (submission,) = tasks.commands.sink.submissions
         assert (report.stop_reason, submission["session_id"]) == ("parent", CHILD.session_id)
         assert "sub_child" in stopped["notes"][0]
+        await _later_reads_speak_to_their_reader(tasks, command_id, stopped)
+
+
+async def _later_reads_speak_to_their_reader(
+    tasks: Tasks, parent_stopped: str, fresh: JsonObject
+) -> None:
+    """Why a Sub-Agent's commands were stopped, read later by it and by its Parent.
+
+    The Parent stopped *parent_stopped* and got *fresh*; the Sub-Agent stops a
+    second command itself.
+    """
+    own_stopped, _ = await tasks.background(owner=CHILD)
+    await tasks.call({"action": "stop", "id": own_stopped}, owner=CHILD)
+    await tasks.commands.finish(own_stopped)
+
+    async def reason(command_id: str, reader: SessionAddress) -> str:
+        shown = data(await tasks.call({"action": "status", "id": command_id}, owner=reader))
+        because: str = shown["stopped_because"]
+        return because
+
+    parent_stop = {reader: await reason(parent_stopped, reader) for reader in (OWNER, CHILD)}
+    child_stop = {reader: await reason(own_stopped, reader) for reader in (OWNER, CHILD)}
+    again = data(await tasks.call({"action": "stop", "id": parent_stopped}))
+
+    # The Parent reads both as stops in sub_child's Session and tells them apart; neither
+    # says that the Parent itself stopped it, which only the fresh result knows.
+    assert "sub_child" in parent_stop[OWNER] and "sub_child" in child_stop[OWNER]
+    assert len({parent_stop[OWNER], child_stop[OWNER], fresh["stopped_because"]}) == 3
+    # A repeated stop stops nothing and reads the stop like a later status.
+    assert again["stopped_because"] == parent_stop[OWNER]
+    # The Sub-Agent's own reads speak to it: its own stop reads like the Parent's fresh one.
+    assert child_stop[CHILD] == fresh["stopped_because"]
+    assert parent_stop[CHILD] != child_stop[CHILD]
+    assert not any("sub_child" in text for text in (parent_stop[CHILD], child_stop[CHILD]))
 
 
 @pytest.mark.parametrize("leftovers", [False, True], ids=["ended", "left-processes-running"])
@@ -591,19 +603,16 @@ async def test_an_unconfirmed_stop_names_what_still_ran_and_how_to_retry(
         # Without an action an id is only looked at, also under a harness's name.
         ({"shell_id": "{id}"}, "looked-at", ()),
         # Claude Code's TaskOutput and BashOutput: nothing waits for a task or filters
-        # its output, and the call says so.
+        # its output, and the call says so, naming the fields of each note.
         (
             {"task_id": "{id}", "block": True, "timeout": 30000},
             "looked-at",
-            ("block and timeout have no effect: background_tasks never waits.",),
+            (("block", "timeout"),),
         ),
         ({"task_id": "{id}", "block": False, "timeout": 30000}, "looked-at", ()),
-        (
-            {"bash_id": "{id}", "filter": "error"},
-            "looked-at",
-            ("filter has no effect: the output is shown unfiltered.",),
-        ),
-        ({"action": "status", "id": "{id}", "wait": True}, "running", ("wait has no effect",)),
+        ({"bash_id": "{id}", "filter": "error"}, "looked-at", (("filter",),)),
+        ({"task_id": "sub_child", "filter": "error"}, "subagent-looked-at", (("filter",),)),
+        ({"action": "status", "id": "{id}", "wait": True}, "running", (("wait",),)),
     ],
     ids=[
         "kill-task_id",
@@ -615,12 +624,13 @@ async def test_an_unconfirmed_stop_names_what_still_ran_and_how_to_retry(
         "TaskOutput-block",
         "TaskOutput-no-block",
         "BashOutput-filter",
+        "TaskOutput-filter-subagent",
         "wait-field",
     ],
 )
 @pytest.mark.asyncio
 async def test_other_harnesses_shapes_reach_the_intended_action(
-    tasks: Tasks, arguments: JsonObject, outcome: str, ignored: tuple[str, ...]
+    tasks: Tasks, arguments: JsonObject, outcome: str, ignored: tuple[tuple[str, ...], ...]
 ) -> None:
     command_id, process = await tasks.background()
     sent = json.loads(json.dumps(arguments).replace("{id}", command_id))
@@ -633,17 +643,25 @@ async def test_other_harnesses_shapes_reach_the_intended_action(
     if outcome == "listed":
         assert [row["id"] for row in result["tasks"]] == ["sub_child", command_id]
         return
-    assert result["status"] == ("stopped" if outcome == "stopped" else "running")
+    subagent = outcome == "subagent-looked-at"
+    task_id = "sub_child" if subagent else command_id
+    assert result.get("id", result.get("command_id")) == task_id
+    assert result["status"] == (
+        "working" if subagent else "stopped" if outcome == "stopped" else "running"
+    )
     assert process.tree.terminations == (1 if outcome == "stopped" else 0)
     notes = result.get("notes", [])
-    if outcome == "looked-at":
+    if outcome.endswith("looked-at"):
         # The first note names the stop the Agent may have meant.
-        assert calls(notes[0]) == [{"action": "stop", "id": command_id}]
+        assert calls(notes[0]) == [{"action": "stop", "id": task_id}]
         notes = notes[1:]
     assert len(notes) == len(ignored)
-    for note, start in zip(notes, ignored, strict=True):
-        assert note.startswith(start)
-    if "filter" in sent:
+    for note, fields in zip(notes, ignored, strict=True):
+        assert all(field in note for field in fields), note
+    if subagent:
+        # What the Sub-Agent did is in its activity log, where the Agent can search it.
+        assert "/tmp/sub_child.md" in notes[0]
+    elif "filter" in sent:
         # The complete output is where the Agent can search it.
         output_file(notes[0])
 
@@ -652,11 +670,26 @@ async def test_other_harnesses_shapes_reach_the_intended_action(
 async def test_a_subagents_session_id_names_that_subagent(tasks: Tasks) -> None:
     shown = data(await tasks.call({"action": "status", "session_id": CHILD.session_id}))
     unknown = error(await tasks.call({"action": "stop", "id": SIBLING.session_id}))
+    # A message for it is refused with the subagent call that sends it.
+    message = error(
+        await tasks.call({"action": "send", "id": CHILD.session_id, "content": "hurry"})
+    )
+    unknown_message = error(
+        await tasks.call({"action": "send", "id": SIBLING.session_id, "content": "hurry"})
+    )
 
     assert shown["id"] == "sub_child"
     assert shown["notes"] == [f"session_id {CHILD.session_id} was read as Sub-Agent sub_child."]
     assert unknown["code"] == "task_not_found"
     assert tasks.subagents.stopped == []
+    assert message["code"] == "invalid_arguments"
+    sent = message["message"]
+    assert 'subagent {"action": "send", "id": "sub_child", "content": "hurry"}' in sent
+    # A Session of no Sub-Agent of the caller names no call that cannot work.
+    assert unknown_message["code"] == "invalid_arguments"
+    assert SUBAGENT in unknown_message["message"]
+    assert SIBLING.session_id not in unknown_message["message"]
+    assert "{" not in unknown_message["message"]
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, tzinfo
 from typing import Any
@@ -135,6 +136,9 @@ _SESSION_ID_PREFIX = "ses_"
 # which the handler refuses, naming ``background_tasks`` only when the Agent can
 # call it.
 _TASK_ID_SENT = "task_id_sent"
+# A task id in agent_id, which otherwise names an Agent: only the generated form,
+# so that an Agent named such as sub_reviewer stays an Agent.
+_GENERATED_TASK_ID = re.compile(r"(?:sub|cmd)_[0-9a-z]{12,16}")
 
 
 _STATUS_RUNTIME_CONTRACT = compile_tool_contract(
@@ -159,6 +163,13 @@ def _normalize_status_arguments(arguments: Any) -> Any:
     session_id = repaired.get("session_id")
     if _TASK_ID_SENT not in repaired and _is_task_id(session_id):
         repaired[_TASK_ID_SENT] = repaired.pop("session_id").strip()
+    agent_id = repaired.get("agent_id")
+    if (
+        _TASK_ID_SENT not in repaired
+        and isinstance(agent_id, str)
+        and _GENERATED_TASK_ID.fullmatch(agent_id.strip())
+    ):
+        repaired[_TASK_ID_SENT] = repaired.pop("agent_id").strip()
     if is_placeholder(repaired.get("session_id"), _CURRENT_SESSION_WORDS):
         repaired.pop("session_id", None)
     if is_placeholder(repaired.get("agent_id")):
