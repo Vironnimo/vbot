@@ -668,39 +668,49 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("task_id", "offered", "named_call"),
-    [
-        ("sub_child", ("background_tasks",), {"action": "status", "id": "sub_child"}),
-        ("cmd_build", (), None),
-    ],
+    ("task_id", "offered"),
+    [("cmd_build", ("background_tasks",)), ("sub_child", ())],
 )
 async def test_ids_of_background_tasks_are_refused_before_anything_runs(
     manager: tuple[TerminalManager, AdapterFactory],
     tmp_path: Path,
     task_id: str,
     offered: tuple[str, ...],
-    named_call: JsonObject | None,
 ) -> None:
     """A background command or Sub-Agent is never a terminal: every action refuses its id,
-    and names the background_tasks call only when the Agent can make it."""
+    and names the background_tasks call (stop for kill) only when the Agent can make it."""
     terminal_manager, factory = manager
     context = make_context(tmp_path, offered_tools=offered)
-
-    for action in ("start", "status", "wait", "input", "kill", "attach", "detach"):
-        result = await call(
-            terminal_manager,
-            context,
+    calls: list[tuple[JsonObject, str]] = [
+        (
             {"action": action, "terminal_id": task_id, "text": "y"}
             if action in {"start", "input"}
             else {"action": action, "terminal_id": task_id},
+            "stop" if action == "kill" else "status",
         )
+        for action in ("start", "status", "wait", "input", "kill", "attach", "detach")
+    ]
+    # Other harnesses' fields and stop action for a background shell reach the same refusal.
+    calls += [
+        ({"action": "kill", "process_id": task_id}, "stop"),
+        ({"action": "KillShell", "shell_id": task_id}, "stop"),
+        ({"action": "status", "bash_id": task_id}, "status"),
+    ]
+
+    for arguments, verb in calls:
+        result = await call(terminal_manager, context, arguments)
         assert result["ok"] is False
-        assert result["error"]["code"] == "not_a_terminal"
+        assert result["error"]["code"] == "not_a_terminal", arguments
         message = str(result["error"]["message"])
         assert task_id in message
-        mentioned = re.findall(r"background_tasks (\{.*?\})", message)
-        assert [json.loads(found) for found in mentioned] == ([named_call] if named_call else [])
-        assert ("background_tasks" in message) is (named_call is not None)
+        mentioned = [
+            json.loads(found) for found in re.findall(r"background_tasks (\{.*?\})", message)
+        ]
+        assert mentioned == ([{"action": verb, "id": task_id}] if offered else [])
+        assert ("background_tasks" in message) is bool(offered)
+    # A terminal's own id under such a field names no terminal.
+    other = await call(terminal_manager, context, {"action": "kill", "process_id": "term_x"})
+    assert other["error"]["code"] == "invalid_arguments"
     assert terminal_manager.list_terminals() == [] and factory.calls == []
 
 

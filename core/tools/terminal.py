@@ -220,10 +220,9 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "For wait: a case-insensitive regular expression (Python syntax), matched line "
-                "by line; the wait ends when the output matches it, such as a server's ready "
-                "line. Output printed before the call counts, except output before your last "
-                "input and the echo of that input. Omit to wait for the exit, or for the "
-                "program to go idle."
+                "by line; the wait ends when the output matches it, such as a prompt. Output "
+                "printed before the call counts, except output before your last input and the "
+                "echo of that input. Omit to wait for the exit, or for the program to go idle."
             ),
         },
         "timeout": {
@@ -318,7 +317,7 @@ async def _handle_terminal(
             retryable=False,
         )
     if isinstance(terminal_id, str):
-        refusal = _background_task_refusal(context, terminal_id.strip())
+        refusal = _background_task_refusal(context, terminal_id.strip(), action)
         if refusal is not None:
             return tool_failure("not_a_terminal", refusal, retryable=False)
 
@@ -1235,8 +1234,11 @@ def _closed_message(terminal_manager: TerminalManager, terminal_id: str, action:
     return message
 
 
-def _background_task_refusal(context: ToolContext, task_id: str) -> str | None:
-    """Refuse the id of a background command or Sub-Agent, which ``background_tasks`` serves."""
+def _background_task_refusal(context: ToolContext, task_id: str, action: str) -> str | None:
+    """Refuse the id of a background command or Sub-Agent, which ``background_tasks`` serves.
+
+    A ``kill`` gets the call that stops the task; every other action the one that shows it.
+    """
     if task_id.startswith(COMMAND_ID_PREFIX):
         task = "a background command"
     elif task_id.startswith(SUBAGENT_ID_PREFIX):
@@ -1248,7 +1250,7 @@ def _background_task_refusal(context: ToolContext, task_id: str) -> str | None:
     # Agent can call it, as the shell results name it (``named_tools``).
     if not context.can_call(BACKGROUND_TASKS_TOOL_NAME):
         return refusal
-    call = json.dumps({"action": "status", "id": task_id})
+    call = json.dumps({"action": "stop" if action == "kill" else "status", "id": task_id})
     return (
         f"{refusal} Use {BACKGROUND_TASKS_TOOL_NAME} for it, such as "
         f"{BACKGROUND_TASKS_TOOL_NAME} {call}."

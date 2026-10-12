@@ -7,7 +7,9 @@ ending in a line break to submit it, and every optional field filled with a
 placeholder. The normalizer maps each shape whose intent is exact onto the
 advertised fields and drops values that request nothing. A value that asks for
 an effect the chosen action cannot provide fails before anything runs, with the
-call that provides it.
+call that provides it. A background shell's id under another harness's field
+(``shell_id``, ``KillShell``) reaches the handler as ``terminal_id``, which
+refuses it with the ``background_tasks`` call that serves it.
 """
 
 from __future__ import annotations
@@ -19,7 +21,13 @@ import shlex
 from functools import cache
 from typing import Any
 
-from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
+from core.tools._background_tasks_arguments import COMMAND_ID_PREFIX, SUBAGENT_ID_PREFIX
+from core.tools.call_syntax import (
+    SpellingAliases,
+    is_placeholder,
+    normalize_call_arguments,
+    spelling,
+)
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.terminal_manager import TERMINAL_INPUT_KEY_SEQUENCES
 
@@ -31,8 +39,6 @@ _ENTER = TERMINAL_INPUT_KEY_SEQUENCES["enter"]
 
 _FIELD_ALIASES = SpellingAliases(
     {
-        # Background-command ids of other harnesses (process_id, bash_id, shell_id,
-        # task_id) belong to background_tasks.
         "terminal_id": ("session_id", "terminal", "term_id", "terminal_session_id", "id"),
         "command": ("cmd", "program", "executable"),
         "workdir": ("cwd", "dir", "directory", "working_directory", "working_dir"),
@@ -124,6 +130,13 @@ _ACTION_VALUES = {
 }
 # Flags other harnesses use to press Enter after the input.
 _ENTER_FLAGS = frozenset({"enter", "submit", "pressenter", "sendenter", "appendenter"})
+# Background-shell id fields and the stop action of other harnesses (Claude Code
+# KillShell, Codex). They name a terminal only when they hold the id of a
+# background command or Sub-Agent: the handler then refuses it with the
+# background_tasks call that serves it. Any other value names nothing here.
+_BACKGROUND_ID_FIELDS = frozenset({"processid", "procid", "bashid", "shellid", "taskid"})
+_BACKGROUND_ID_PREFIXES = (COMMAND_ID_PREFIX, SUBAGENT_ID_PREFIX)
+_KILL_SHELL = "killshell"
 
 _KEY_ALIASES = {
     **{re.sub(r"[\s_+-]+", "", name): name for name in TERMINAL_INPUT_KEY_SEQUENCES},
@@ -219,6 +232,7 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
     )
     if not isinstance(normalized, dict):
         return normalized
+    _read_background_ids(normalized)
     press_enter = _pop_enter_flags(normalized)
     if normalized.get("action") == _SUBMIT:
         normalized["action"] = "input"
@@ -311,6 +325,36 @@ def _action_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
     return _ACTION_VALUES.get(re.sub(r"[\s_-]+", "", value.casefold()), value)
+
+
+def _read_background_ids(arguments: dict[str, Any]) -> None:
+    """Read another harness's background-shell id as terminal_id, and KillShell as kill,
+    when the id is a background command's or Sub-Agent's."""
+    for key in list(arguments):
+        value = arguments[key]
+        if spelling(key) not in _BACKGROUND_ID_FIELDS or not _is_background_id(value):
+            continue
+        current = arguments.get("terminal_id")
+        if not is_placeholder(current) and current != value:
+            raise ValueError(
+                _not_run(
+                    f"terminal_id is {json.dumps(current)} and {key} is {json.dumps(value)}; "
+                    "send only the intended one."
+                )
+            )
+        del arguments[key]
+        arguments["terminal_id"] = value
+    action = arguments.get("action")
+    if (
+        isinstance(action, str)
+        and spelling(action) == _KILL_SHELL
+        and _is_background_id(arguments.get("terminal_id"))
+    ):
+        arguments["action"] = "kill"
+
+
+def _is_background_id(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().startswith(_BACKGROUND_ID_PREFIXES)
 
 
 def _pop_enter_flags(arguments: dict[str, Any]) -> bool:
