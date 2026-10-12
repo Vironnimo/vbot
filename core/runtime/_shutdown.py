@@ -116,6 +116,10 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         runtime._close_extension_databases,
         runtime._close_extension_databases,
     )
+    if (provider_usage := runtime._provider_usage) is not None:
+        # A sample reads Provider credentials through the Runtime, which refuses
+        # once readiness is withdrawn; stop the sampler while they are readable.
+        yield _Step("provider_usage_sampler", provider_usage.stop, provider_usage.astop)
     yield _Step("readiness", None, partial(_withdraw_readiness, runtime))
 
     if (channels := runtime._channel_service) is not None:
@@ -153,7 +157,7 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
 
     if (speech := runtime._speech) is not None:
         yield _Step("speech", speech.close, speech.aclose)
-    if (provider_usage := runtime._provider_usage) is not None:
+    if provider_usage is not None:
         yield _Step("provider_usage", provider_usage.close, provider_usage.aclose)
     # Every Provider call has ended; persist the Debug traces they handed off.
     yield _Step("debug_traces", None, drain_debug_traces)
