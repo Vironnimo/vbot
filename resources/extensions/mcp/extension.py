@@ -245,8 +245,8 @@ class MCPService:
     def _publish(self, runner: ConnectionRunner, catalog: dict[str, Any] | None) -> None:
         """Publish the connection Tool and the remote Tools of *catalog*.
 
-        ``None`` means no catalog has arrived yet on this runner: the description
-        keeps the last known Tool names and no remote Tool is registered.
+        ``None`` means no catalog has arrived yet on this runner: ``target`` keeps
+        listing the last known Tool names and no remote Tool is registered.
         """
         if self._closed or self.runners.get(runner.id) is not runner:
             return
@@ -268,7 +268,7 @@ class MCPService:
                 "name": parent,
                 "description": self.catalogs.description(runner.id, about),
                 "summary": self.catalogs.summary(runner.id, about),
-                "parameters": MCP_PARAMETERS,
+                "parameters": self.catalogs.parameters(runner.id),
                 "handler": self._handler(runner.id),
                 "ready": lambda: bool(self.connections.get(runner.id, {}).get("enabled")),
                 "readiness_hint": disabled,
@@ -276,7 +276,7 @@ class MCPService:
                 "open_input_schema": True,
                 "requires_opt_in": True,
                 "argument_normalizer": browse_normalizer(parent),
-                "definition_change_note": self.catalogs.change_note(runner.id),
+                "announce_changes": ["parameters.target"],
             }
         ]
         for tool in (catalog or {}).get("tools", []):

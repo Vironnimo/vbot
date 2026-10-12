@@ -89,6 +89,7 @@ Review labels such as "Review B12" name the reviews of 2026-10-12: `tools/shell/
 |---|---|
 | Role block: `You are a Sub-Agent: another Agent, your Parent Agent, delegated work to you ...` | Without it a Sub-Agent takes the brief as the user's request and addresses the user. |
 | Role block: `vBot sends the final answer of each of your turns to your Parent Agent. ...` | Every final answer is forwarded; a Sub-Agent that ends a turn while work still runs must say so instead of presenting a result. |
+| Role block: `When you find that the task cannot be done as briefed, ... do not switch to a different task on your own. ...` | A Sub-Agent that silently substitutes another approach or scope hands the Parent a result it integrates unknowingly. A question via `message_parent` cannot be awaited within the turn, so a Sub-Agent blocked on the decision ends its turn with the finding instead; one that can continue asks and continues. |
 | Role block: `vBot starts a new turn for you when background work you started delivers ...` | Sub-Agents otherwise poll or wait on background work they can leave running. |
 | Role block: `If the user writes in this Session, vBot stops sending your answers ...` | Takeover changes who reads the answers; the block stays pinned after it. |
 | `PARENT_AGENT_INPUT_SYSTEM_REMINDER` | Marks Parent messages as not from the user. |

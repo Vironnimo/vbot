@@ -25,6 +25,7 @@ from core.prompts._catalog import (
     load_bundled_default_layout,
 )
 from core.prompts._formatting import (
+    _channel_line,
     _format_channel_list,
     _format_on_demand_tool_list,
     _format_skill_catalog,
@@ -37,6 +38,7 @@ from core.prompts._types import (
     BLOCK_OWNER_IDENTITY,
     BLOCK_OWNER_SKILL_MANAGE,
     BLOCK_OWNER_SUBAGENT_SESSION,
+    CHANNEL_LIST_PRODUCER,
     CORE_AGENT_BODY_BLOCK_ID,
     CORE_CHANNELS_BLOCK_ID,
     CORE_IDENTITY_RUNTIME_BLOCK_ID,
@@ -74,6 +76,7 @@ from core.prompts._types import (
 )
 from core.prompts.blocks import (
     BLOCK_KIND_DATA,
+    BlockCatalog,
     BlockDefinition,
     BlockProducer,
     BlockRenderContext,
@@ -90,6 +93,7 @@ from core.prompts.blocks import (
     expand_workspace_includes,
     render_dynamic_block,
     render_prompt_file,
+    resolve_block_text,
     resolve_layout,
     with_pinned_texts,
 )
@@ -163,6 +167,9 @@ __all__ = [
 
 PROMPT_WORKER_LIMIT = 4
 _LOGGER = get_logger("prompts")
+# Names the Channels ``core:channels`` lists when a change is told entry by entry:
+# "{title} changed since your System Prompt listed them."
+CHANNEL_CATALOG_TITLE = "Your configured channels"
 
 # ``(registry name, summary)`` of each On-demand Tool, resolved on first use.
 OnDemandEntries = Callable[[], tuple[tuple[str, str], ...]]
@@ -324,10 +331,10 @@ class SystemPromptManager:
         classifies the Agent's live Tools (``core.tools.on_demand``), and the
         live ``tool_list`` leaves them out.
 
-        ``pinned_blocks`` maps Tool and Extension dynamic block ids to the text each
-        emits instead of rendering (Chat passes its prompt epoch's pinned texts,
-        see :meth:`render_dynamic_blocks`); the gates still apply, and a dynamic
-        block without a pinned text renders live.
+        ``pinned_blocks`` maps the ids of Tool and Extension dynamic blocks and of
+        ``core:channels`` to the text each emits instead of rendering (Chat passes
+        its prompt epoch's pinned texts, see :meth:`render_dynamic_blocks`); the
+        gates still apply, and such a block without a pinned text renders live.
 
         ``thinking_effort`` is the effort the runtime block names (Chat passes its
         prompt epoch's pinned effort, ``""`` for the provider default); ``None``
@@ -402,11 +409,12 @@ class SystemPromptManager:
         on_demand_tools: Sequence[tuple[str, str]] | None = None,
         session_tool_grants: Sequence[str] = (),
     ) -> dict[str, RenderedBlock]:
-        """Render live the Tool and Extension dynamic blocks a build with these inputs shows.
+        """Render live the blocks a build with these inputs shows that follow live state.
 
-        Covers every contributed block with a ``render`` that is enabled and whose
-        owner is active (gates 1 and 2), only those in *block_ids* when given and
-        none in *skip*, keyed by block id. Each renders exactly as
+        Covers every contributed block with a ``render`` and the ``core:channels``
+        block, which lists the Agent's enabled Channels, when enabled and owner
+        active (gates 1 and 2); only those in *block_ids* when given and none in
+        *skip*, keyed by block id. Each renders exactly as
         :meth:`build_system_prompt` renders it without a pinned text; an empty text
         is kept (the block collapses), a failing render is left out. Chat pins
         these texts per prompt epoch and compares later renders with them to tell
@@ -414,15 +422,13 @@ class SystemPromptManager:
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
-        effective_tool_names = _tool_names(
-            effective_tool_definitions,
-            self._on_demand_entries(
-                agent,
-                effective_tool_definitions=effective_tool_definitions,
-                on_demand_tools=on_demand_tools,
-                session_tool_grants=session_tool_grants,
-            ),
+        on_demand = self._on_demand_entries(
+            agent,
+            effective_tool_definitions=effective_tool_definitions,
+            on_demand_tools=on_demand_tools,
+            session_tool_grants=session_tool_grants,
         )
+        effective_tool_names = _tool_names(effective_tool_definitions, on_demand)
         context = self._render_context(
             agent,
             scope_key,
@@ -438,10 +444,17 @@ class SystemPromptManager:
         owner_activity = self._owner_activity(
             effective_tool_names, session_tool_grants, subagent_session=subagent_session
         )
-        dynamic = [definition for definition in self._catalog.definitions if definition.render]
-        layout = _selected_layout(agent, dynamic, self._catalog.resolve_layout(scope_key))
+        live = [
+            *(
+                definition
+                for definition in self._catalog.core_text_definitions(prompt_scope, agent.id)
+                if definition.id == CORE_CHANNELS_BLOCK_ID
+            ),
+            *(definition for definition in self._catalog.definitions if definition.render),
+        ]
+        layout = _selected_layout(agent, live, self._catalog.resolve_layout(scope_key))
         rendered: dict[str, RenderedBlock] = {}
-        for block in resolve_layout(dynamic, layout):
+        for block in resolve_layout(live, layout):
             definition = block.definition
             if (
                 not block.enabled
@@ -450,10 +463,47 @@ class SystemPromptManager:
                 or not owner_activity.is_owner_active(definition.owner, agent)
             ):
                 continue
+            if definition.render is None:
+                text = resolve_block_text(
+                    block,
+                    context,
+                    override_resolver=self._catalog.override_resolver(prompt_scope),
+                    producers=self._build_producers(
+                        agent,
+                        None,
+                        None,
+                        effective_tool_definitions=effective_tool_definitions,
+                        on_demand=on_demand,
+                        session_tool_grants=session_tool_grants,
+                    ),
+                    replacements=self._runtime_replacements(agent),
+                )
+                rendered[definition.id] = RenderedBlock(
+                    text, self._channel_catalog(definition, agent, prompt_scope, scope_key)
+                )
+                continue
             value = render_dynamic_block(definition, context)
             if value is not None:
                 rendered[definition.id] = value
         return rendered
+
+    def _channel_catalog(
+        self,
+        definition: BlockDefinition,
+        agent: PromptAgent,
+        prompt_scope: PromptScope,
+        scope_key: str,
+    ) -> BlockCatalog:
+        """The Channels ``core:channels`` lists, framed by the block's own text."""
+        override = self._catalog.override_resolver(prompt_scope)(definition, scope_key)
+        return BlockCatalog(
+            title=CHANNEL_CATALOG_TITLE,
+            entries=tuple(
+                (channel.id, _channel_line(channel))
+                for channel in self._agent_enabled_channels(agent)
+            ),
+            frame=override if override is not None else definition.default_text or "",
+        )
 
     def _render_context(
         self,
@@ -538,12 +588,13 @@ class SystemPromptManager:
         can never be shadowed by a contributor or a custom block. A custom
         ``user:`` block has no contributor definition; it is synthesized from the
         scope's *layout* (its existence is layout entry + override file, T1) so it
-        renders its override text. A contributed dynamic block named in
-        *pinned_blocks* emits its pinned text instead of rendering.
+        renders its override text. A block named in *pinned_blocks* (a contributed
+        dynamic block or ``core:channels``) emits its pinned text instead of rendering.
         """
         contributed = self._catalog.definitions
+        core = self._catalog.core_text_definitions(prompt_scope, agent.id)
         definitions = [
-            *self._catalog.core_text_definitions(prompt_scope, agent.id),
+            *(with_pinned_texts(core, pinned_blocks) if pinned_blocks else core),
             memory_block_definition(),
             *self._data_block_definitions(agent_body=agent_body),
             *(with_pinned_texts(contributed, pinned_blocks) if pinned_blocks else contributed),
@@ -931,7 +982,7 @@ class SystemPromptManager:
         return {
             "tool_list": tool_list,
             ON_DEMAND_TOOL_LIST_PRODUCER: on_demand_tool_list,
-            "channel_list": channel_list,
+            CHANNEL_LIST_PRODUCER: channel_list,
             "skill_catalog": skill_catalog_text,
             MEMORY_FILES_PRODUCER_NAME: memory_files,
         }

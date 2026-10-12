@@ -49,6 +49,12 @@ def _description(registry) -> str:
     return str(registry.get("mcp_example").description)
 
 
+def _tools(registry) -> str:
+    """What the connection Tool's ``target`` lists after its fixed text."""
+    target = registry.get("mcp_example").parameters["properties"]["target"]["description"]
+    return str(target).split("describe and call. ", 1)[1]
+
+
 _DISABLED = (
     "Error (tool_not_ready): The MCP connection example is disabled, so nothing was run. "
     "Tell the user to enable it in Settings -> Integrations -> Extensions -> MCP connections "
@@ -208,19 +214,16 @@ async def test_description_only_save_republishes_without_reconnecting(host, monk
         assert service.runners["example"] is runner
         assert started == [runner]
         assert service.store.load()["example"]["description"] == "Studio Blender."
-        assert _description(registry) == (
-            f"MCP connection example: Studio Blender. {_USAGE} "
-            "Tools: get_scene_info, execute_blender_code"
-        )
+        assert _description(registry) == f"MCP connection example: Studio Blender. {_USAGE}"
+        assert _tools(registry) == "Tools: get_scene_info, execute_blender_code"
         assert registry.get(remote_tool_name("example", "get_scene_info")) is not None
 
         # Any other change replaces the connection; its Tool names stay until a new catalog.
         await service.manage("save", {"connection": {**_CONNECTION, "command": "other"}})
 
         assert service.runners["example"] is not runner
-        assert _description(registry) == (
-            f"MCP connection example: Blender. {_USAGE} Tools: get_scene_info, execute_blender_code"
-        )
+        assert _description(registry) == f"MCP connection example: Blender. {_USAGE}"
+        assert _tools(registry) == "Tools: get_scene_info, execute_blender_code"
     finally:
         await service.close()
 
@@ -244,20 +247,20 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
     try:
         service, registry = await restart()
         await service.manage("save", {"connection": _CONNECTION})
-        assert _description(registry) == f"MCP connection example. {_USAGE} {_NO_TOOLS}"
+        assert _tools(registry) == _NO_TOOLS
         service._publish(service.runners["example"], _CATALOG)
-        known = _description(registry)
-        assert known.endswith("Tools: get_scene_info, execute_blender_code")
+        known = _tools(registry)
+        assert known == "Tools: get_scene_info, execute_blender_code"
         await stop(service)
 
         service, registry = await restart()
-        assert _description(registry) == known
+        assert _tools(registry) == known
         await service.manage("remove", {"id": "example"})
         await stop(service)
 
         service, registry = await restart()
         await service.manage("save", {"connection": _CONNECTION})
-        assert _description(registry) == f"MCP connection example. {_USAGE} {_NO_TOOLS}"
+        assert _tools(registry) == _NO_TOOLS
         await stop(service)
     finally:
         databases.close()

@@ -366,7 +366,9 @@ async def test_readiness_never_removes_a_listed_tool_and_a_tool_ready_later_is_a
 
 
 @pytest.mark.asyncio
-async def test_a_changed_tool_schema_is_announced_and_validates_calls(tmp_path: Path) -> None:
+async def test_an_announced_tool_change_reaches_the_session_and_validates_calls(
+    tmp_path: Path,
+) -> None:
     tools, dispatched = _name_recording_tools()
 
     def register_probe(parameters: JsonObject, **options: Any) -> None:
@@ -399,8 +401,8 @@ async def test_a_changed_tool_schema_is_announced_and_validates_calls(tmp_path: 
             "required": ["count"],
             "additionalProperties": False,
         },
-        # The Tool's own account of the change rides along with the announcement.
-        definition_change_note=lambda _old, _new: "Probe now counts.",
+        # The Tool declares which of its changes reach a Session that knows it.
+        announce_changes=["parameters"],
     )
     await loop.send("coder", "Use it", session_id="session-one")
 
@@ -409,7 +411,7 @@ async def test_a_changed_tool_schema_is_announced_and_validates_calls(tmp_path: 
     assert _announced(runtime) == [("changed", "probe")]
     reminders = _reminders(runtime.adapter.requests[1])
     assert "The Tool probe changed in this Session." in reminders
-    assert "\nChange: Probe now counts.\nDescription: Probe Tool.\n" in reminders
+    assert "\nDescription: Probe Tool.\n" in reminders
     assert _tools_sent(runtime) == [_tools_sent(runtime)[0]] * 3
 
 

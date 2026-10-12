@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,11 +23,11 @@ from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools")
 ToolReadinessPredicate = Callable[[], bool]
-# Called with the definition the Model was last told about and the current one
-# (``{name, description, parameters}``) when a Tool's registered definition
-# changed; returns short English text telling the Model what changed, or
-# ``None`` to stay silent about a change that leaves the parameters as they are.
-ToolDefinitionChangeNote = Callable[[JsonObject, JsonObject], str | None]
+# What a Tool's ``announce_changes`` can name: its description, any part of its
+# parameters, or one parameter as ``parameters.<name>``.
+ANNOUNCE_DESCRIPTION = "description"
+ANNOUNCE_PARAMETERS = "parameters"
+_ANNOUNCE_PARAMETER_PREFIX = "parameters."
 # The longest one-line summary an On-demand Tool listing shows for a Tool.
 MAX_TOOL_SUMMARY_LENGTH = 200
 _WHITESPACE = re.compile(r"\s+")
@@ -192,15 +192,11 @@ class Tool:
         repr=False,
         compare=False,
     )
-    # Optional, cheap and I/O-free. Chat keeps a Session's Tool list unchanged
-    # until Compaction and announces a changed parameter schema by itself; a
-    # change of the description alone reaches the Model only when this returns
-    # text, which the announcement carries.
-    definition_change_note: ToolDefinitionChangeNote | None = field(
-        default=None,
-        repr=False,
-        compare=False,
-    )
+    # The parts of this Tool's definition whose change Chat announces to a
+    # Session that already knows the Tool (:func:`definition_change_announced`).
+    # Chat keeps a Session's Tool list unchanged until Compaction; a change of
+    # any part not named here reaches the Model only with the next prompt epoch.
+    announce_changes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.summary is not None:
@@ -214,8 +210,9 @@ class Tool:
             object.__setattr__(self, "summary", summary)
         if self.argument_normalizer is not None and not callable(self.argument_normalizer):
             raise ValueError("argument_normalizer must be callable")
-        if self.definition_change_note is not None and not callable(self.definition_change_note):
-            raise ValueError("definition_change_note must be callable")
+        object.__setattr__(
+            self, "announce_changes", _checked_announce_changes(self.announce_changes)
+        )
         if self.activation not in TOOL_ACTIVATION_KINDS:
             raise ValueError(f"Unsupported Tool activation: {self.activation}")
         if not isinstance(self.requires_opt_in, bool):
@@ -255,6 +252,57 @@ class Tool:
         object.__setattr__(self, "parameters", copy.deepcopy(contract.input_schema))
         object.__setattr__(self, "result_schema", copy.deepcopy(contract.result_schema))
         object.__setattr__(self, "contract", contract)
+
+
+def _checked_announce_changes(parts: Any) -> tuple[str, ...]:
+    if isinstance(parts, str) or not isinstance(parts, (list, tuple)):
+        raise ValueError("announce_changes must be a list of definition parts")
+    for part in parts:
+        if not isinstance(part, str) or not (
+            part in (ANNOUNCE_DESCRIPTION, ANNOUNCE_PARAMETERS)
+            or (
+                part.startswith(_ANNOUNCE_PARAMETER_PREFIX)
+                and part[len(_ANNOUNCE_PARAMETER_PREFIX) :].strip()
+            )
+        ):
+            raise ValueError(
+                "announce_changes entries must be 'description', 'parameters' or "
+                f"'parameters.<name>', not {part!r}"
+            )
+    return tuple(dict.fromkeys(parts))
+
+
+def definition_change_announced(
+    parts: Sequence[str], known: Mapping[str, Any], current: Mapping[str, Any]
+) -> bool:
+    """Return whether a part named in ``announce_changes`` differs between two definitions.
+
+    Both are Model definitions (``{name, description, parameters}``): the one the
+    Model was last told about and the current one. ``parameters.<name>`` covers
+    that parameter's schema and whether it is required.
+    """
+
+    for part in parts:
+        if part == ANNOUNCE_DESCRIPTION:
+            if known.get("description") != current.get("description"):
+                return True
+        elif part == ANNOUNCE_PARAMETERS:
+            if known.get("parameters") != current.get("parameters"):
+                return True
+        elif _parameter_shape(known, part) != _parameter_shape(current, part):
+            return True
+    return False
+
+
+def _parameter_shape(definition: Mapping[str, Any], part: str) -> tuple[Any, bool]:
+    name = part[len(_ANNOUNCE_PARAMETER_PREFIX) :]
+    parameters = definition.get("parameters")
+    if not isinstance(parameters, Mapping):
+        return None, False
+    properties = parameters.get("properties")
+    required = parameters.get("required")
+    schema = properties.get(name) if isinstance(properties, Mapping) else None
+    return schema, isinstance(required, list) and name in required
 
 
 def _checked_unadvertised_parameters(

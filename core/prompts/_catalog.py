@@ -13,10 +13,10 @@ from core.memory import (
 from core.prompts._types import (
     AGENT_SCOPE_KEY_PREFIX,
     BLOCK_OWNER_ALWAYS,
-    BLOCK_OWNER_CHANNEL,
     BLOCK_OWNER_IDENTITY,
     BLOCK_OWNER_SKILL_MANAGE,
     BLOCK_OWNER_SUBAGENT_SESSION,
+    CHANNEL_LIST_PRODUCER,
     CORE_AGENT_BODY_BLOCK_ID,
     CORE_CHANNELS_BLOCK_ID,
     CORE_IDENTITY_RUNTIME_BLOCK_ID,
@@ -364,8 +364,12 @@ class PromptBlockCatalog:
             ),
             BlockDefinition(
                 id=CORE_CHANNELS_BLOCK_ID,
-                owner=BLOCK_OWNER_CHANNEL,
+                # The channel list decides whether the block shows, so a Session's
+                # pinned text (``PromptManager.render_dynamic_blocks``) decides it
+                # for the whole prompt epoch.
+                owner=BLOCK_OWNER_ALWAYS,
                 default_text=self._read_prompt_fragment(prompt_scope, agent_id, "channels.md"),
+                requires_generated=CHANNEL_LIST_PRODUCER,
             ),
             BlockDefinition(
                 id=CORE_SKILLS_BLOCK_ID,

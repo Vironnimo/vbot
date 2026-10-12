@@ -29,18 +29,19 @@ def _format_on_demand_tool_list(entries: Sequence[tuple[str, str]]) -> str:
 
 
 def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
-    # No ``- None`` fallback anymore: the ``core:channels`` block is owner
-    # ``channel``, so with no enabled channels the whole block gates out (D5). This
-    # producer is only invoked when at least one channel is enabled.
-    lines: list[str] = []
-    for channel in channels:
-        target_hint = (
-            "default target available"
-            if len(channel.allowed_chat_ids) == 1
-            else "explicit target required"
-        )
-        lines.append(f"- {channel.id}: {channel.platform} ({target_hint})")
-    return "\n".join(lines)
+    # The ``core:channels`` block requires this producer, so with no enabled
+    # channels the whole block renders nothing.
+    return "\n".join(_channel_line(channel) for channel in channels)
+
+
+def _channel_line(channel: ChannelPromptMetadata) -> str:
+    """The line the ``core:channels`` block shows for one enabled channel."""
+    target_hint = (
+        "default target available"
+        if len(channel.allowed_chat_ids) == 1
+        else "explicit target required"
+    )
+    return f"- {channel.id}: {channel.platform} ({target_hint})"
 
 
 def _format_skill_catalog(skills: Sequence[SkillPromptMetadata]) -> str:

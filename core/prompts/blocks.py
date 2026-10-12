@@ -702,14 +702,15 @@ def render_dynamic_block(
 def with_pinned_texts(
     definitions: Sequence[BlockDefinition], pinned: Mapping[str, str]
 ) -> list[BlockDefinition]:
-    """Return *definitions* with each dynamic block named in *pinned* emitting that text.
+    """Return *definitions* with each block named in *pinned* emitting that text.
 
     The block keeps its id, owner and kind, so the gates treat it as before; only
-    its render is replaced by the pinned text.
+    its render, or its text and the expansion of its markers, is replaced by the
+    pinned text.
     """
     return [
-        replace(definition, render=_fixed_render(pinned[definition.id]))
-        if definition.render is not None and definition.id in pinned
+        replace(definition, default_text=None, render=_fixed_render(pinned[definition.id]))
+        if definition.id in pinned
         else definition
         for definition in definitions
     ]

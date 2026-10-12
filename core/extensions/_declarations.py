@@ -21,7 +21,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 13
+API_VERSION = 14
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
 CommandHandler = Callable[..., Any]
@@ -157,6 +157,8 @@ class ToolDeclaration:
     # Local family id declared through ``register_tool_family``. The apply phase
     # namespaces it by Extension identity before it reaches ToolRegistry.
     family: str | None = None
+    # Definition parts whose change reaches a Session that already knows the Tool.
+    announce_changes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

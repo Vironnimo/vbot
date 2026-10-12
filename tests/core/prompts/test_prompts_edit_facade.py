@@ -76,7 +76,6 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
     assert soul["kind"] == "data"
     assert soul["editable"] is False
     assert "text" not in soul
-    assert by_id["core:channels"]["owner"] == "channel"
     assert by_id["core:identity_runtime"]["owner"] == "identity"
     assert by_id["core:identity_runtime"]["editable"] is True
     assert by_id["core:working_project"]["editable"] is False

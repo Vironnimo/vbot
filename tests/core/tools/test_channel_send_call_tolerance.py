@@ -124,16 +124,9 @@ def test_the_call_selects_one_channel(
         pytest.param(
             "other-agent",
             {"channel_id": "tg-main", "message": "Hi"},
-            "invalid_arguments",
-            "Channel tg-main belongs to agent agent-2, not agent-1",
-            id="other-agents-channel",
-        ),
-        pytest.param(
-            "none",
-            {"channel_id": "tg-gone", "message": "Hi"},
             "channel_not_found",
-            "Channel not found: tg-gone",
-            id="removed-channel",
+            "Agent agent-1 has no enabled Channel to send through.",
+            id="other-agents-channel",
         ),
         pytest.param(
             "none",

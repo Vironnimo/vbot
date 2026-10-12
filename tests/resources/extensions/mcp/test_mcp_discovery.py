@@ -36,6 +36,10 @@ def _definitions(registry):
     return registry.provider_definitions(profile_context=_PROFILE, allowed_tools=["mcp_example"])
 
 
+def _target(definition) -> str:
+    return str(definition["parameters"]["properties"]["target"]["description"])
+
+
 def _tool(name):
     return {"name": name, "description": "test-owned", "inputSchema": {"type": "object"}}
 
@@ -47,13 +51,17 @@ def test_remote_names_are_stable_unique_and_provider_safe():
 
 
 @pytest.mark.asyncio
-async def test_connection_description_lists_remote_tool_names_through_disconnects(
+async def test_connection_target_lists_remote_tool_names_through_disconnects(
     context_service,
 ):
     service, registry, runner, calls = context_service
     before = _definitions(registry)
-    assert before[0]["description"] == f"MCP connection example. {_USAGE} Tools: inspect"
+    assert before[0]["description"] == f"MCP connection example. {_USAGE}"
+    assert _target(before[0]).endswith("describe and call. Tools: inspect")
     assert registry.get("mcp_example").summary == "MCP connection example."
+    # A Session that knows the connection Tool hears when its listed names change,
+    # not when the server's title or the user's description does.
+    assert registry.get("mcp_example").announce_changes == ("parameters.target",)
     runner.catalog["server_info"] = {"name": "blender-mcp", "title": "Blender"}
     runner.catalog["tools"].extend(
         {
@@ -66,12 +74,12 @@ async def test_connection_description_lists_remote_tool_names_through_disconnect
     service._publish(runner, runner.catalog)
     after = _definitions(registry)
 
-    # The parameters stay fixed; the description names the server and lists the Tools
-    # in server order, cut to about 3000 characters with the count of the rest.
+    # The description names the server; target lists the Tools in server order, cut
+    # to about 3000 characters with the count of the rest.
     assert [entry["name"] for entry in after] == ["mcp_example"]
-    assert after[0]["parameters"] == before[0]["parameters"]
-    heading, listing = after[0]["description"].split(" Tools: ", 1)
-    assert heading == f"MCP connection example: Blender. {_USAGE}"
+    assert after[0]["description"] == f"MCP connection example: Blender. {_USAGE}"
+    fixed, listing = _target(after[0]).split(" Tools: ", 1)
+    assert _target(before[0]).startswith(f"{fixed} Tools: ")
     # Listed on demand, the connection shows only the heading, not its Tool names.
     assert registry.get("mcp_example").summary == "MCP connection example: Blender."
     *shown, more = listing.split(", ")
@@ -92,46 +100,6 @@ async def test_connection_description_lists_remote_tool_names_through_disconnect
     await service.manage("disconnect", {"id": "example"})
 
     assert _definitions(registry) == after
-
-
-@pytest.mark.asyncio
-async def test_connection_tool_announces_added_and_removed_tool_names(context_service):
-    service, registry, runner, calls = context_service
-    note = registry.get("mcp_example").definition_change_note
-
-    def published(**catalog):
-        runner.catalog.update(catalog)
-        service._publish(runner, runner.catalog)
-        return _definitions(registry)[0]
-
-    first = _definitions(registry)[0]
-    added = published(tools=[_tool("inspect"), _tool("render")])
-    assert note(first, added) == "Tools added on this connection: render."
-    # A new server title or user description alone is not announced.
-    titled = published(server_info={"name": "Blender"})
-    assert titled["description"] != added["description"]
-    assert note(added, titled) is None
-    reordered = published(tools=[_tool("render"), _tool("inspect")])
-    assert note(titled, reordered) is None
-    changed = published(tools=[_tool("render"), _tool("snapshot")])
-    assert note(reordered, changed) == (
-        "Tools added on this connection: snapshot. Tools removed: inspect."
-    )
-    assert note(changed, published(tools=[])) == "Tools removed: render, snapshot."
-
-    # A description published before a restart is read from its own Tool list. Added
-    # names need its complete list; removed names are those it shows.
-    current = published(tools=[_tool("inspect"), _tool("render")])
-    earlier = f"MCP connection example: Tools: fake. {_USAGE} Tools: inspect, old_tool"
-    assert note({**first, "description": earlier}, current) == (
-        "Tools added on this connection: render. Tools removed: old_tool."
-    )
-    cut_short = (
-        f"MCP connection example. {_USAGE} Tools: old_tool, ... and 3 more; search lists all."
-    )
-    assert note({**first, "description": cut_short}, current) == "Tools removed: old_tool."
-    legacy = "Discover and use this MCP connection's tools, resources, and prompts."
-    assert note({**first, "description": legacy}, current) is None
 
 
 def test_guidance_block_renders_while_a_connection_tool_is_listed(tmp_path):

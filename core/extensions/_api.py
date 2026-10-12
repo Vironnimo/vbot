@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +124,7 @@ class ExtensionAPI:
         unadvertised_parameters: dict[str, Any] | None = None,
         argument_normalizer: Callable[[Any], Any] | None = None,
         family: str | None = None,
+        announce_changes: Sequence[str] = (),
     ) -> None:
         """Declare an agent tool, mirroring ``ToolRegistry.register``.
 
@@ -143,7 +144,10 @@ class ExtensionAPI:
         precondition, surfaced by the ``tool.list`` RPC. ``summary`` is an
         optional one-sentence, Model-facing text that lists the Tool where its
         full definition is not shown (an Agent loading Tools on demand); without
-        it, the description's first sentence is used.
+        it, the description's first sentence is used. ``announce_changes``
+        names the parts of the definition (``description``, ``parameters`` or
+        ``parameters.<name>``) whose change reaches a Session that already
+        knows the Tool; any other change waits for its next prompt epoch.
         """
         self._declarations.tools.append(
             ToolDeclaration(
@@ -164,6 +168,7 @@ class ExtensionAPI:
                 unadvertised_parameters=unadvertised_parameters,
                 argument_normalizer=argument_normalizer,
                 family=family,
+                announce_changes=tuple(announce_changes),
             )
         )
 
