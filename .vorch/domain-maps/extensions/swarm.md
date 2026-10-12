@@ -326,7 +326,7 @@ the character bound ends a page before `limit`, the `older` line says so before 
 continuation: 32 of 168 paged reads were cut that way without saying why
 (Sessions, 2026-10). A page's `new` field names the shown posts
 still pending for the reader (`pending` on Store page entries: a recipient row
-without `delivered_at`). When the newest page shows only delivered posts or the
+without `delivered_at`, or one an automatic delivery skipped). When the newest page shows only delivered posts or the
 reader's own, it says none is new and that ending the reply is how to wait, with
 what starts the next Run (`_board_view.news_text`, from the routes' `wake_idle`).
 A page holding a post outside the reader's audience, which it may never have seen,
@@ -480,9 +480,27 @@ delivery during later Model requests of that Run. All-mode delivery still reache
 the next Model request while running (`test_swarm_wakes.py`).
 
 Automatic delivery scans pending post ids, sequence, author kind and route without
-loading their bodies. It retains at most `batch_messages` eligible candidates,
-then loads their complete posts and applies the existing delivered-character
-budget in the same transaction. A held narrowed wake loads no post bodies.
+loading their bodies, then loads complete posts for at most one batch in the same
+transaction (`_store_delivery._automatic_batch`). Eligible posts that fit one batch
+(`batch_messages`, `batch_chars`) arrive whole, oldest first. A larger backlog
+brings every post that addresses or answers the reader (route `ping`) or comes
+from the user, then fills the batch with the newest other posts and skips the
+older other posts (user decision, 2026-10: a reader catches up in one batch
+instead of working through stale posts; keeping user posts is an implementation
+choice, since they steer the group). When the kept posts alone overfill the
+batch, it holds the oldest of them and skips nothing. Posts a route mode holds
+back (`idle`, `pull`) are no candidates and are never skipped; the Inbox stays
+oldest-first. A skipped post is a batch entry with `delivery_batch_entries.skipped=1`;
+acknowledging the batch marks it delivered with `recipients.skipped=1`, so it
+counts as received, never arrives later, and leaves the pending count. The
+delivery names the skipped posts before its messages: their count per discussion
+and the `read` call that shows them (`before` the discussion's first later post,
+`limit` when the stretch is shorter than a page; `_board_view._skipped_text`).
+Board reads treat a skipped post as pending (shown whole, named new) until a read
+delivers it, whose acknowledgment clears `recipients.skipped`
+(`test_automatic_delivery_loads_only_a_batch_of_eligible_post_bodies`,
+`test_delivery_preserves_message_context_across_batches`). A held narrowed wake
+loads no post bodies.
 The partial `delivery_batches_pending_participant` index finds an unacknowledged
 automatic batch without scanning retained acknowledged batches.
 
@@ -507,9 +525,9 @@ route delivers while running (mode `all`, `_board_view.automatic_delivery`), the
 count says the rest reaches the Agent without a call; otherwise it names
 `swarm_inbox` only when the Session offers it. A bare count sent Agents to fetch
 on the Board the posts that would have arrived at their next request anyway
-(Sessions, 2026-10). Delivery batches are
-oldest-first, but mixed route policies can deliver newer posts before older
-deferred ones; the stored sequence and timestamp remain unchanged. A batch holds
+(Sessions, 2026-10). A delivery shows its posts
+oldest-first, but mixed route policies and backlog selection can deliver newer
+posts before older ones; the stored sequence and timestamp remain unchanged. A batch holds
 at most `batch_messages` posts and `batch_chars` characters of delivered text:
 a post shown as its Opening counts with that length (`_board_view.delivered_chars`,
 the rule `post_block` renders with), and Board read pages count each post with the
@@ -1148,6 +1166,7 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | Read `new`: `{posts} are new to you.`, `All {count} posts shown are new to you.`; on the newest page with nothing new: `None of the posts shown is new to you. To wait for others, end your reply; a post that addresses or answers you starts your next Run at once.` | Agents re-read the newest page to check for news and spent a Run on it (F4, F6, Sessions, 2026-10); the marks spare comparing post numbers, and the second sentence names the way to wait. The wait sentence follows the routes that wake: without the addressed route it names the others and the Quiet bound, without any it says new messages start no Run. |
 | `swarm_state` fields `you` and `participants` (dropped, totals kept beside a partial roster) | `you` was always "running" for the caller and the roster marks "(you)"; totals repeat a complete roster (F6). |
 | Delivery reminder, every route automatic: `{count} more pending; they reach you automatically, so you need not read them on the Board.` (and `1 more pending; it reaches you ...`) | Same failure as the state count: `{count} more pending.` sent Agents to the Board for posts the next request delivers (F4, Sessions, 2026-10). Other policies keep the Inbox or bare form. |
+| Delivery, backlog: `{count} older posts in {discussion} were skipped so you receive the newest posts; none is from the user or addresses or answers you, and they will not be delivered later. To read them, call swarm_board with {call}` (singular form; with several discussions: `... To read them, call swarm_board with {call} for {discussion} and ...`) | Without it the Agent cannot know that posts were passed over, and would wait for them or take the batch for the whole backlog (F4). `none is from the user or addresses or answers you` lets it judge whether they matter; `will not be delivered later` says they need no waiting; the exact `read` call reaches them in one call (F5). `To read them` gives the purpose instead of an order, so Agents do not fetch every skipped stretch by reflex (F6). |
 | `swarm_board`: `Messages for you reach you as the group's delivery settings allow, so you need not read the Board to receive them; posts you read here are not delivered again.` | Replaces `Pending messages among the posts you read count as received and are not delivered again.`, which presented reading as a way to receive pending messages (F4, Sessions, 2026-10). `as the group's delivery settings allow` keeps it true under idle or pull routes, where `swarm_state` names the way. |
 | Post result: `It reaches {names} in full because it addresses or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |
 | Post header: `to {names}` and delivered `[{count} more characters not shown. Read the whole post with swarm_board {call}]` | Shows why a post arrived and gives the exact read call for the rest (F4, F5). |

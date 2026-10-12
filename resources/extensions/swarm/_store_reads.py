@@ -37,7 +37,11 @@ from ._store_values import (
 )
 
 # Whether a post in the reader's audience (``r``) has not reached it yet; NULL outside it.
-_PENDING = "CASE WHEN r.post_id IS NULL THEN NULL ELSE r.delivered_at IS NULL END AS pending"
+# A post an automatic delivery skipped counts as delivered but has not been shown.
+_PENDING = (
+    "CASE WHEN r.post_id IS NULL THEN NULL "
+    "ELSE (r.delivered_at IS NULL OR r.skipped IS NOT NULL) END AS pending"
+)
 # The number of the post a human-read post answers, for the Board page.
 _HUMAN_REPLY_SEQUENCE = (
     "(SELECT q.sequence FROM posts q WHERE q.id=posts.reply_to) AS reply_sequence"

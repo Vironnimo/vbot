@@ -29,6 +29,8 @@ _EVERYONE = frozenset({"all", "everyone", "everybody", "here", "channel", "team"
 _USER = frozenset({"user", "theuser", "human", "operator", "owner"})
 _EXCERPT_CHARS = 80
 _CLOSE_MATCH = 0.85
+# Posts on a read page when the call sends no limit, as SwarmStore.read_posts applies it.
+PAGE_LIMIT = 20
 
 
 def call_text(arguments: Mapping[str, Any]) -> str:
@@ -373,14 +375,16 @@ def delivery_text(
     *,
     inbox: bool,
     automatic: bool,
+    skipped: Sequence[Json] = (),
 ) -> str:
-    """Render one automatic delivery: guidance, messages, and what remains pending.
+    """Render one automatic delivery: guidance, skipped posts, messages, and what remains.
 
     With ``automatic``, every route delivers while the participant runs, so the
-    rest follows without a call.
+    rest follows without a call. ``skipped`` holds the store's per-discussion
+    summary of older posts the batch passed over.
     """
 
-    parts = [prefix, messages_text(posts, roster, main_id)]
+    parts = [prefix, _skipped_text(skipped, main_id), messages_text(posts, roster, main_id)]
     if remaining:
         key = (
             ("automatic_one" if remaining == 1 else "automatic_many")
@@ -391,6 +395,43 @@ def delivery_text(
         )
         parts.append(text.DELIVERY_MORE[key].format(count=remaining))
     return "\n\n".join(part for part in parts if part)
+
+
+def _skipped_text(groups: Sequence[Json], main_id: str) -> str:
+    """Say which older posts a delivery skipped, with the read call for each discussion."""
+
+    if not groups:
+        return ""
+    count = sum(group["count"] for group in groups)
+    if len(groups) > 1:
+        reads = [
+            text.DELIVERY_SKIPPED_READ.format(
+                call=_skipped_read(group, main_id),
+                discussion=post_discussion_label(group, main_id),
+            )
+            for group in groups
+        ]
+        return text.DELIVERY_SKIPPED["discussions"].format(count=count, reads=spoken_list(reads))
+    (group,) = groups
+    return text.DELIVERY_SKIPPED["one" if count == 1 else "many"].format(
+        count=count,
+        discussion=post_discussion_label(group, main_id),
+        call=_skipped_read(group, main_id),
+    )
+
+
+def _skipped_read(group: Json, main_id: str) -> str:
+    """The read call that shows a discussion's skipped posts, newest page first."""
+
+    arguments: Json = {"action": "read"}
+    if group["before"] is not None:
+        arguments["before"] = post_ref(group["before"])
+    elif group["discussion_id"] != main_id:
+        arguments["discussion_id"] = discussion_ref(group["discussion_sequence"])
+    # A shorter page holds exactly the skipped stretch; a longer one pages on.
+    if group["span"] < PAGE_LIMIT:
+        arguments["limit"] = group["span"]
+    return call_text(arguments)
 
 
 def wake_text(routes: Sequence[str]) -> str:
@@ -564,6 +605,7 @@ def with_notes(data: Json, notes: Sequence[str]) -> Json:
 
 
 __all__ = [
+    "PAGE_LIMIT",
     "Recipients",
     "Roster",
     "automatic_delivery",

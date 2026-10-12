@@ -12,6 +12,7 @@ from core.sessions import DeliveryReceipt, SessionAddress
 from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
 
+from ._board_view import delivered_chars
 from ._store_database import (
     ALIASED_POST_COLUMNS,
     POST_CONTEXT_COLUMNS,
@@ -45,7 +46,11 @@ def _delivery_rows(
     participant_id: str,
     post_ids: Sequence[str],
 ) -> list[sqlite3.Row]:
-    """Load full posts only after their delivery candidates have been selected."""
+    """Load full posts only after their delivery candidates have been selected.
+
+    A post an automatic batch skipped counts as delivered but has not been shown,
+    so a Board read that shows it still delivers it.
+    """
     if not post_ids:
         return []
     placeholders = ",".join("?" for _ in post_ids)
@@ -53,9 +58,121 @@ def _delivery_rows(
         f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} "
         "FROM recipients r JOIN posts p ON p.id=r.post_id "
         "JOIN discussions d ON d.id=p.discussion_id "
-        f"WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL AND p.id IN ({placeholders}) ORDER BY p.sequence",
+        f"WHERE p.swarm_id=? AND r.participant_id=? AND (r.delivered_at IS NULL OR r.skipped IS NOT NULL) AND p.id IN ({placeholders}) ORDER BY p.sequence",
         (swarm_id, participant_id, *post_ids),
     ).fetchall()
+
+
+def _pending_outside(
+    connection: sqlite3.Connection, swarm_id: str, participant_id: str, receipt_id: str
+) -> int:
+    """Count the participant's pending posts that the batch ``receipt_id`` leaves pending."""
+    return int(
+        connection.execute(
+            "SELECT COUNT(*) FROM recipients r JOIN posts p ON p.id=r.post_id "
+            "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL "
+            "AND r.post_id NOT IN (SELECT post_id FROM delivery_batch_entries WHERE receipt_id=?)",
+            (swarm_id, participant_id, receipt_id),
+        ).fetchone()[0]
+    )
+
+
+def _automatic_batch(
+    connection: sqlite3.Connection,
+    swarm_id: str,
+    participant_id: str,
+    candidates: Sequence[tuple[str, int, bool]],
+    limit: int,
+    batch_chars: int,
+) -> tuple[list[sqlite3.Row], list[str]]:
+    """Select one automatic batch from the eligible pending posts, oldest first.
+
+    ``candidates`` are (post ID, sequence, kept) in sequence order; kept posts
+    address or answer the reader, or come from the user. A backlog that fits one
+    batch arrives whole. A larger one brings every kept post that fits and fills the
+    rest with the newest other posts; the older other posts it passes over are
+    returned as skipped, to count as delivered. Full posts are loaded for at most
+    one batch, and a batch that cannot hold every kept post skips nothing.
+    """
+    loaded: dict[str, sqlite3.Row] = {}
+
+    def load(post_ids: Sequence[str]) -> list[sqlite3.Row]:
+        missing = [post_id for post_id in post_ids if post_id not in loaded]
+        for row in _delivery_rows(connection, swarm_id, participant_id, missing):
+            loaded[str(row["id"])] = row
+        return [loaded[post_id] for post_id in post_ids if post_id in loaded]
+
+    if len(candidates) <= limit:
+        rows = load([post_id for post_id, _, _ in candidates])
+        batch = _budgeted_rows(rows, limit, batch_chars)
+        if len(batch) == len(rows):
+            return batch, []
+    kept_ids = [post_id for post_id, _, kept in candidates if kept]
+    kept = _budgeted_rows(load(kept_ids[:limit]), limit, batch_chars)
+    room = limit - len(kept)
+    others = [post_id for post_id, _, kept in candidates if not kept]
+    if len(kept) < len(kept_ids) or not room or not others:
+        return kept, []
+    chars = batch_chars - sum(delivered_chars(_post(row)) for row in kept)
+    newest: list[sqlite3.Row] = []
+    for row in reversed(load(others[-room:])):
+        shown = delivered_chars(_post(row))
+        if (kept or newest) and shown > chars:
+            break
+        newest.append(row)
+        chars -= shown
+    if not newest:
+        return kept, []
+    oldest = int(newest[-1]["sequence"])
+    skipped = [post_id for post_id, sequence, kept in candidates if not kept and sequence < oldest]
+    return sorted([*kept, *newest], key=lambda row: int(row["sequence"])), skipped
+
+
+def _skipped_summary(
+    connection: sqlite3.Connection, swarm_id: str, post_ids: Sequence[str]
+) -> list[Json]:
+    """Describe skipped posts per discussion, with what a read of them needs.
+
+    ``before`` is the discussion's first post after its newest skipped one (None
+    when there is none), and ``span`` counts the discussion's posts from its oldest
+    skipped one up to ``before``, so one read page can hold them all.
+    """
+    if not post_ids:
+        return []
+    placeholders = ",".join("?" for _ in post_ids)
+    groups = connection.execute(
+        "SELECT p.discussion_id,d.sequence AS discussion_sequence,d.title AS discussion_title,"
+        "COUNT(*) AS count,MIN(p.sequence) AS oldest,MAX(p.sequence) AS newest "
+        "FROM posts p JOIN discussions d ON d.id=p.discussion_id "
+        f"WHERE p.swarm_id=? AND p.id IN ({placeholders}) GROUP BY p.discussion_id ORDER BY MIN(p.sequence)",
+        (swarm_id, *post_ids),
+    ).fetchall()
+    summary: list[Json] = []
+    for group in groups:
+        before = connection.execute(
+            "SELECT MIN(sequence) FROM posts WHERE swarm_id=? AND discussion_id=? AND sequence>?",
+            (swarm_id, group["discussion_id"], group["newest"]),
+        ).fetchone()[0]
+        span = connection.execute(
+            "SELECT COUNT(*) FROM posts WHERE swarm_id=? AND discussion_id=? AND sequence>=? AND sequence<?",
+            (
+                swarm_id,
+                group["discussion_id"],
+                group["oldest"],
+                int(group["newest"]) + 1 if before is None else before,
+            ),
+        ).fetchone()[0]
+        summary.append(
+            {
+                "discussion_id": group["discussion_id"],
+                "discussion_sequence": int(group["discussion_sequence"]),
+                "discussion_title": group["discussion_title"],
+                "count": int(group["count"]),
+                "before": None if before is None else int(before),
+                "span": int(span),
+            }
+        )
+    return summary
 
 
 def _prepare_delivery(
@@ -102,18 +219,12 @@ def _prepare_delivery(
                 "INSERT INTO delivery_batch_entries(receipt_id,post_id,participant_id) VALUES(?,?,?)",
                 (receipt_id, entry["id"], participant_id),
             )
-        pending_remaining = int(
-            connection.execute(
-                "SELECT COUNT(*) FROM recipients r JOIN posts p ON p.id=r.post_id WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL",
-                (swarm_id, participant_id),
-            ).fetchone()[0]
-        ) - len(entries)
         return {
             "entries": entries,
             "receipt_id": receipt_id,
             "content_hash": content_hash,
             "effect_kind": effect_kind,
-            "pending_remaining": max(0, pending_remaining),
+            "pending_remaining": _pending_outside(connection, swarm_id, participant_id, receipt_id),
         }
 
     return db._write(operation)
@@ -172,9 +283,16 @@ def _prepare_automatic_delivery(
                 f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} FROM delivery_batch_entries e JOIN posts p ON p.id=e.post_id "
                 "JOIN recipients r ON r.post_id=p.id AND r.participant_id=e.participant_id "
                 "JOIN discussions d ON d.id=p.discussion_id "
-                "WHERE e.receipt_id=? ORDER BY p.sequence",
+                "WHERE e.receipt_id=? AND e.skipped IS NULL ORDER BY p.sequence",
                 (prepared["receipt_id"],),
             ).fetchall()
+            skipped = [
+                str(row["post_id"])
+                for row in connection.execute(
+                    "SELECT post_id FROM delivery_batch_entries WHERE receipt_id=? AND skipped IS NOT NULL",
+                    (prepared["receipt_id"],),
+                )
+            ]
             wake = (
                 announce
                 and newest > announced
@@ -196,12 +314,14 @@ def _prepare_automatic_delivery(
                 )
             return {
                 "entries": [_post(row) for row in rows],
+                "skipped": _skipped_summary(connection, swarm_id, skipped),
                 "receipt_id": prepared["receipt_id"],
                 "content_hash": prepared["content_hash"],
                 "effect_kind": prepared["effect_kind"],
                 "wake": wake,
-                "pending_remaining": _pending_count(connection, swarm_id, participant_id)
-                - len(rows),
+                "pending_remaining": _pending_outside(
+                    connection, swarm_id, participant_id, prepared["receipt_id"]
+                ),
                 "settings_revision": int(prepared["settings_revision"]),
                 "replayed": True,
             }
@@ -212,7 +332,7 @@ def _prepare_automatic_delivery(
             "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence",
             (swarm_id, participant_id),
         )
-        eligible_ids: list[str] = []
+        candidates: list[tuple[str, int, bool]] = []
         pending_count = 0
         newest = 0
         can_wake = False
@@ -227,8 +347,9 @@ def _prepare_automatic_delivery(
                 continue
             if policy["mode"] == "idle" and participant["state"] != "idle":
                 continue
-            if len(eligible_ids) < settings["batch_messages"]:
-                eligible_ids.append(str(row["id"]))
+            # A post that addresses or answers the reader, or the user's, is never skipped.
+            kept = row["route_class"] == "ping" or row["author_kind"] == "user"
+            candidates.append((str(row["id"]), int(row["sequence"]), kept))
         epoch = connection.execute(
             "SELECT epoch,is_open FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
         ).fetchone()
@@ -242,14 +363,17 @@ def _prepare_automatic_delivery(
             and can_wake
             and participant["state"] in {"idle"}
         )
-        rows = (
-            _budgeted_rows(
-                _delivery_rows(connection, swarm_id, participant_id, eligible_ids),
+        rows, skipped = (
+            _automatic_batch(
+                connection,
+                swarm_id,
+                participant_id,
+                candidates,
                 settings["batch_messages"],
                 settings["batch_chars"],
             )
-            if eligible_ids and not (wake_routes is not None and not wake)
-            else []
+            if candidates and not (wake_routes is not None and not wake)
+            else ([], [])
         )
         if wake:
             connection.execute(
@@ -273,13 +397,14 @@ def _prepare_automatic_delivery(
             }
         receipt_id = new_id("rcp")
         entries = [_post(row) for row in rows]
-        content_hash = _hash(
-            {
-                "effect_kind": "swarm_automatic",
-                "posts": entries,
-                "revision": int(settings_row["revision"]),
-            }
-        )
+        content: Json = {
+            "effect_kind": "swarm_automatic",
+            "posts": entries,
+            "revision": int(settings_row["revision"]),
+        }
+        if skipped:
+            content["skipped"] = skipped
+        content_hash = _hash(content)
         connection.execute(
             "INSERT INTO delivery_batches(receipt_id,participant_id,content_hash,effect_kind,created_at,settings_revision) VALUES(?,?,?,?,?,?)",
             (
@@ -296,13 +421,19 @@ def _prepare_automatic_delivery(
                 "INSERT INTO delivery_batch_entries(receipt_id,post_id,participant_id) VALUES(?,?,?)",
                 (receipt_id, entry["id"], participant_id),
             )
+        for post_id in skipped:
+            connection.execute(
+                "INSERT INTO delivery_batch_entries(receipt_id,post_id,participant_id,skipped) VALUES(?,?,?,1)",
+                (receipt_id, post_id, participant_id),
+            )
         return {
             "entries": entries,
+            "skipped": _skipped_summary(connection, swarm_id, skipped),
             "receipt_id": receipt_id,
             "content_hash": content_hash,
             "effect_kind": "swarm_automatic",
             "wake": wake,
-            "pending_remaining": pending_count - len(entries),
+            "pending_remaining": pending_count - len(entries) - len(skipped),
             "settings_revision": int(settings_row["revision"]),
             "admission_boundary": resolved_boundary,
         }
@@ -474,17 +605,26 @@ def _acknowledge_delivery(
         if prepared["acknowledged"]:
             return True
         connection.execute(
-            "UPDATE recipients SET delivered_at=?,carrier_kind=?,carrier_sequence=? "
+            "UPDATE recipients SET delivered_at=?,carrier_kind=?,carrier_sequence=?,"
+            "skipped=(SELECT e.skipped FROM delivery_batch_entries e WHERE e.receipt_id=? "
+            "AND e.post_id=recipients.post_id AND e.participant_id=recipients.participant_id) "
             "WHERE participant_id=? AND delivered_at IS NULL AND post_id IN "
             "(SELECT post_id FROM delivery_batch_entries WHERE receipt_id=? AND participant_id=?)",
             (
                 utc_now_timestamp(),
                 location["kind"],
                 location["sequence"],
+                receipt.receipt_id,
                 prepared["participant_id"],
                 receipt.receipt_id,
                 prepared["participant_id"],
             ),
+        )
+        # A skipped post this batch shows has now reached its reader.
+        connection.execute(
+            "UPDATE recipients SET skipped=NULL WHERE participant_id=? AND skipped IS NOT NULL AND post_id IN "
+            "(SELECT post_id FROM delivery_batch_entries WHERE receipt_id=? AND participant_id=? AND skipped IS NULL)",
+            (prepared["participant_id"], receipt.receipt_id, prepared["participant_id"]),
         )
         connection.execute(
             "UPDATE delivery_batches SET acknowledged_at=?,carrier_kind=?,carrier_sequence=? WHERE receipt_id=?",

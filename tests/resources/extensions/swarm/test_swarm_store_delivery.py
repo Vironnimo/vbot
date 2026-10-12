@@ -301,7 +301,7 @@ async def test_automatic_delivery_loads_only_a_batch_of_eligible_post_bodies(
         sid,
         {
             **swarm["delivery"],
-            "batch_messages": 2,
+            "batch_messages": 3,
             "main": {"mode": "idle", "wake_idle": True},
         },
         expected_revision=1,
@@ -310,6 +310,7 @@ async def test_automatic_delivery_loads_only_a_batch_of_eligible_post_bodies(
     )
     await store.set_participant_state(sid, recipient, "running" if state == "running" else "idle")
     posts = []
+    sequences = []
     for index in range(6):
         post = await store.post(
             sid,
@@ -319,6 +320,7 @@ async def test_automatic_delivery_loads_only_a_batch_of_eligible_post_bodies(
             request_id=f"bounded-{index}",
         )
         posts.append(post["post_id"])
+        sequences.append(post["sequence"])
 
     loaded_posts = []
 
@@ -333,17 +335,29 @@ async def test_automatic_delivery_loads_only_a_batch_of_eligible_post_bodies(
         batch = await store.prepare_automatic_delivery(
             sid, recipient, expected_epoch=swarm["epoch"]
         )
-        expected = [posts[3], posts[5]]
+        # Main posts wait for the idle reader; held posts are never skipped.
+        expected, skipped = [posts[3], posts[5]], []
     else:
         batch = await store.prepare_wake(
             sid, recipient, expected_epoch=swarm["epoch"], wake_routes=frozenset({"ping"})
         )
-        expected = [] if state == "quiet" else posts[:2]
+        # A backlog larger than the batch keeps the addressed posts, fills the rest
+        # with the newest other post, and skips the older ones.
+        expected = [] if state == "quiet" else posts[3:]
+        skipped = (
+            []
+            if state == "quiet"
+            else [{"count": 3, "before": sequences[3], "span": 3, "discussion_sequence": 1}]
+        )
     assert [entry["id"] for entry in batch["entries"]] == expected
-    assert loaded_posts == expected
-    assert batch["pending_remaining"] == len(posts) - len(expected)
-    # The addressed post at the end can wake an idle reader even though the
-    # first batch contains only older ordinary posts. A quiet scan freezes none.
+    assert sorted(loaded_posts) == sorted(expected)
+    assert [
+        {key: group[key] for key in ("count", "before", "span", "discussion_sequence")}
+        for group in batch.get("skipped", [])
+    ] == skipped
+    assert batch["pending_remaining"] == len(posts) - len(expected) - 3 * len(skipped)
+    # An addressed post wakes an idle reader. A quiet scan, which wakes only for
+    # addressed posts, freezes none.
     assert batch["wake"] is (state == "idle")
     assert len((await store.list_prepared_deliveries()).entries) == bool(expected)
     if expected:
@@ -351,6 +365,8 @@ async def test_automatic_delivery_loads_only_a_batch_of_eligible_post_bodies(
             sid, recipient, expected_epoch=swarm["epoch"]
         )
         assert replay["entries"] == batch["entries"]
+        assert replay["skipped"] == batch["skipped"]
+        assert replay["pending_remaining"] == batch["pending_remaining"]
         assert replay["receipt_id"] == batch["receipt_id"]
         assert replay["content_hash"] == batch["content_hash"]
 

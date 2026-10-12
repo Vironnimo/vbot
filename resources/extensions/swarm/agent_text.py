@@ -234,6 +234,19 @@ DELIVERY_MORE = {
     "inbox": "{count} more pending; receive them with swarm_inbox.",
     "no_inbox": "{count} more pending.",
 }
+# A backlog larger than one batch: older posts nobody needs the reader for are skipped.
+DELIVERY_SKIPPED = {
+    "one": "1 older post in {discussion} was skipped so you receive the newest posts; it is "
+    "not from the user, does not address or answer you, and will not be delivered later. To "
+    "read it, call swarm_board with {call}",
+    "many": "{count} older posts in {discussion} were skipped so you receive the newest posts; "
+    "none is from the user or addresses or answers you, and they will not be delivered later. "
+    "To read them, call swarm_board with {call}",
+    "discussions": "{count} older posts were skipped so you receive the newest posts; none is "
+    "from the user or addresses or answers you, and they will not be delivered later. To read "
+    "them, call swarm_board with {reads}",
+}
+DELIVERY_SKIPPED_READ = "{call} for {discussion}"
 
 # swarm_state results.
 STATE_PENDING = {

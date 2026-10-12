@@ -227,8 +227,15 @@ async def test_wake_announces_only_its_first_batch_so_the_remainder_wakes_again(
             request_id="small-batches",
             actor="test",
         )
+        # Posts that address the reader are never skipped, so a backlog arrives in batches.
         for index in range(3):
-            await store.post(sid, env.sender, text=f"Post {index}", request_id=f"post-{index}")
+            await store.post(
+                sid,
+                env.sender,
+                text=f"Post {index}",
+                recipients=[env.recipient],
+                request_id=f"post-{index}",
+            )
         assert (await store.prepare_wake(env.sid, env.recipient, expected_epoch=0))["wake"]
         # A Run that ends after its first request received only the first batch.
         assert await _run_wake(env, "first-run") == ["Post 0", "Post 1"]

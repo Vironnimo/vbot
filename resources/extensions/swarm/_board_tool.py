@@ -17,6 +17,7 @@ from core.tools import ToolContext
 
 from . import agent_text as text
 from ._board_view import (
+    PAGE_LIMIT,
     Roster,
     call_text,
     close_discussion,
@@ -61,8 +62,6 @@ _REFERENCES = ("discussion_id", "message_id", "reply_to", "before")
 # Participants whose work ended; they read new posts only once the user resumes them.
 _STOPPED = frozenset({"failed", "cancelled", "interrupted"})
 _MAX_LIMIT = 100
-# Posts on a page when the call sends no limit, as SwarmStore.read_posts applies it.
-_PAGE_LIMIT = 20
 _MAX_TEXT = {"text": 16000, "title": 120}
 
 
@@ -278,7 +277,7 @@ class BoardCall:
             }
             if "limit" in query:
                 continuation["limit"] = query["limit"]
-            data["older"] = _older(page.entries, query.get("limit", _PAGE_LIMIT), continuation)
+            data["older"] = _older(page.entries, query.get("limit", PAGE_LIMIT), continuation)
         if page.entries:
             data["content"] = page_text(page.entries, self.roster, self.main)
         return data
@@ -387,7 +386,7 @@ class BoardCall:
         if recent["has_more"] and recent["entries"]:
             result["older"] = _older(
                 recent["entries"],
-                _PAGE_LIMIT,
+                PAGE_LIMIT,
                 {
                     "action": "read",
                     "discussion_id": discussion_ref(row["sequence"]),
