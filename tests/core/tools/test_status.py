@@ -466,6 +466,11 @@ def test_status_tool_rejects_agent_id_without_session_id(tmp_path: Path) -> None
             ("coder", "ses_abcdefghijkl"),
         ),
         ({"id": "ses_abcdefghijkl", "agent_id": "worker"}, ("worker", "ses_abcdefghijkl")),
+        # An Agent's name that starts like a task id is no task id.
+        (
+            {"agent_id": "sub_reviewer", "session_id": "ses_abcdefghijkl"},
+            ("sub_reviewer", "ses_abcdefghijkl"),
+        ),
     ],
 )
 def test_status_tool_reads_clear_targets_written_other_ways(
@@ -508,6 +513,14 @@ def test_status_tool_reads_clear_targets_written_other_ways(
             "status reports a chat Session and takes session_id, with agent_id for another "
             "Agent's Session.",
         ),
+        (
+            {"agent_id": "cmd_abcdefghijkl"},
+            True,
+            "status was not run: cmd_abcdefghijkl is a background command id. To see that "
+            'command, call background_tasks {"action": "status", "id": "cmd_abcdefghijkl"}. '
+            "status reports a chat Session and takes session_id, with agent_id for another "
+            "Agent's Session.",
+        ),
         # background_tasks is named only when the Agent can call it.
         (
             {"id": "sub_abcdefghijkl"},
@@ -544,6 +557,7 @@ def test_status_tool_reads_clear_targets_written_other_ways(
         "subagent-id",
         "work_id-first",
         "command-id-as-session_id",
+        "command-id-as-agent_id",
         "subagent-id-without-background_tasks",
         "command-id-without-background_tasks",
         "unknown-id",
