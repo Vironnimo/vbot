@@ -288,7 +288,7 @@ def test_real_integrated_shell_declares_its_prompt_and_command_start(
     try:
         _read_signals_until_prompt(adapter, emulator)
         adapter.write("echo vbot\r")
-        signals = _read_signals_until_prompt(adapter, emulator)
+        signals = _read_signals_until_prompt(adapter, emulator, after_command=shell != "cmd.exe")
     finally:
         adapter.terminate()
         adapter.close()
@@ -299,11 +299,15 @@ def test_real_integrated_shell_declares_its_prompt_and_command_start(
         assert "command" in signals
 
 
-def _read_signals_until_prompt(adapter: TerminalAdapter, emulator: TerminalEmulator) -> list[str]:
-    """The shell's signals up to and including the next prompt."""
+def _read_signals_until_prompt(
+    adapter: TerminalAdapter, emulator: TerminalEmulator, *, after_command: bool = False
+) -> list[str]:
+    """Read through the next prompt, after a command start when requested."""
     signals: list[str] = []
     deadline = time.monotonic() + 60
-    while "prompt" not in signals:
+    # Shell integration and the line editor can announce the same prompt in
+    # separate reads. The second startup mark is not the command's next prompt.
+    while not signals or signals[-1] != "prompt" or (after_command and "command" not in signals):
         assert time.monotonic() < deadline, f"no prompt mark; signals {signals}"
         try:
             chunk = adapter.read(4096)
