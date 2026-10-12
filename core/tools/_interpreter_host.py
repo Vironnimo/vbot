@@ -38,6 +38,9 @@ from . import _hosted_objects
 _LOGGER = get_logger("tools.interpreter_host")
 DEFAULT_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
 _WORKER_JOIN_SECONDS = 2.0
+# A worker that has not started by then counts as failed, so a start that never
+# resolves cannot hold every later launch. A start takes 35-90 ms (2026-10-12).
+_WORKER_START_SECONDS = 30.0
 
 
 class HostedObject(Protocol):
@@ -122,21 +125,17 @@ class InterpreterHost:
     def prepare(self) -> None:
         """Start one more worker unless the limit is reached; blocks briefly.
 
-        While no worker runs yet and every allowed one is still starting, it
-        waits until one started or every start failed, so the next ``open``
-        has a worker. A subinterpreter that cannot start stops the host from
-        adding more workers; once none started and none is starting, the host
-        runs its objects inline.
+        It returns once a worker runs, the host runs its objects inline or it
+        closed, so the next ``open`` never waits: while no worker runs yet and
+        starts are in flight, its own included, it waits until one started or
+        every start failed. A subinterpreter that cannot start, or does not
+        start within ``_WORKER_START_SECONDS``, stops the host from adding
+        more workers; once none started and none is starting, the host runs
+        its objects inline.
         """
         with self._changed:
-            while True:
-                if self._inline or self._closed:
-                    return
-                if len(self._workers) + self._starting < self._limit:
-                    break
-                if self._workers or not self._starting:
-                    return
-                self._changed.wait()
+            if not self._await_room():
+                return
             self._starting += 1
             index = self._started
             self._started += 1
@@ -159,6 +158,11 @@ class InterpreterHost:
                 "running on the Event Loop" if fallback else "starting no more workers",
                 exc_info=True,
             )
+            # Another start may still give a worker: wait for it here, off the
+            # Event Loop, so that ``open`` does not. The lowered limit leaves
+            # no room for another start of this call.
+            with self._changed:
+                self._await_room()
             return
         with self._changed:
             self._starting -= 1
@@ -168,6 +172,22 @@ class InterpreterHost:
                 return
         worker.stop()
         worker.join(_WORKER_JOIN_SECONDS)
+
+    def _await_room(self) -> bool:
+        """Whether one more worker may start now; called with the lock held.
+
+        While no worker runs and starts are in flight, it waits until one
+        started, every start failed or the host closed. Every start resolves
+        within ``_WORKER_START_SECONDS``, so the wait ends.
+        """
+        while True:
+            if self._inline or self._closed:
+                return False
+            if len(self._workers) + self._starting < self._limit:
+                return True
+            if self._workers or not self._starting:
+                return False
+            self._changed.wait()
 
     def close(self) -> None:
         """Stop the workers after the calls already made; later calls fail."""
@@ -274,7 +294,17 @@ class _InterpreterWorker:
             daemon=True,
         )
         self._thread.start()
-        started.result()
+        try:
+            started.result(_WORKER_START_SECONDS)
+        except BaseException as error:
+            # Nothing uses this worker: its thread ends once its start ends.
+            self.stop()
+            if isinstance(error, TimeoutError) and not started.done():
+                raise TimeoutError(
+                    f"The {name} subinterpreter did not start within "
+                    f"{_WORKER_START_SECONDS:g} seconds"
+                ) from None
+            raise
 
     async def submit(self, function: Callable[..., Any], *arguments: Any) -> Any:
         loop = asyncio.get_running_loop()
@@ -302,7 +332,8 @@ class _InterpreterWorker:
             self._jobs.put(job)
 
     def _run(self, bootstrap: str, started: concurrent.futures.Future[None]) -> None:
-        # Every failure to start resolves ``started``: the host waits for it.
+        # Every failure to start resolves ``started``, which the starting
+        # thread waits for (at most ``_WORKER_START_SECONDS``).
         try:
             from concurrent import interpreters
 
