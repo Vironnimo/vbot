@@ -176,13 +176,20 @@ def _repair_components(missing: Path) -> Path | None:
     return current
 
 
-def missing_file_message(missing: Path, cwd: Path) -> str:
-    """Build a not-found error that names paths the next call can use."""
+def missing_file_message(missing: Path, cwd: Path, *, elsewhere: str | None = None) -> str:
+    """Build a not-found error that names paths the next call can use.
+
+    ``elsewhere`` is a sentence naming another Tool's call for what the path names
+    instead, such as a Swarm Wiki page (``_swarm_references.wiki_page_call``).
+    """
     label = display_search_path(missing, cwd=cwd)
     suggestions = corrected_paths(missing, cwd)
     if suggestions:
         similar = ", ".join(display_search_path(candidate, cwd=cwd) for candidate in suggestions)
-        return f"File not found: {label} (similar: {similar})."
+        message = f"File not found: {label} (similar: {similar})."
+        return f"{message} {elsewhere}" if elsewhere else message
+    if elsewhere:
+        return f"{label} is not a file. {elsewhere}"
     parent = missing.parent
     shown = display_search_path(parent, cwd=cwd)
     if parent.is_dir():

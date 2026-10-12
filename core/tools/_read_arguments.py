@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from functools import cache
 from typing import Any, TypeGuard
 
+from core.tools._swarm_references import board_post_call
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import model_tool_name
@@ -148,12 +150,18 @@ def normalize_read_arguments(arguments: Any) -> Any:
 
     A call that asks read to change a file (``command`` other than ``view``) comes
     back as its ``command`` and ``path`` alone; the handler refuses it naming the
-    Tool the Agent changes files with (``change_command_refusal``).
+    Tool the Agent changes files with (``change_command_refusal``). A call that names
+    a Swarm Board post as ``message_id`` instead of a path comes back as that
+    ``message_id``; the handler refuses it naming the Board call
+    (``message_id_refusal``).
     """
     if isinstance(arguments, dict):
         command = _change_command(arguments)
         if command is not None:
             return command
+        post = _board_post(arguments)
+        if post is not None:
+            return post
         arguments = _one_file(_without_remarks(arguments))
     normalized = normalize_call_arguments(
         _repair_contract(),
@@ -197,6 +205,23 @@ def _change_command(arguments: dict[str, Any]) -> dict[str, Any] | None:
                 call["path"] = path
             return call
     return None
+
+
+def _board_post(arguments: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a call that names a post as ``message_id`` instead of a path as that post."""
+    posts = [value for key, value in arguments.items() if spelling(key) == "messageid"]
+    paths = [key for key in arguments if _FIELD_ALIASES.get(key, spelling(key)) == "path"]
+    if len(posts) != 1 or paths:
+        return None
+    # The path only satisfies the contract: the handler refuses before reading it.
+    return {"message_id": posts[0], "path": "."}
+
+
+def message_id_refusal(message_id: Any, offers: Callable[[str], bool]) -> str:
+    """Refuse a read of ``message_id``, naming the Swarm Board call when it is offered."""
+    message = "read has no message_id: it shows the file or lists the directory given as path."
+    post = board_post_call(message_id, offers)
+    return f"{message} {post}" if post else message
 
 
 def change_command_refusal(command: Any, edit_tool: str | None) -> str:
@@ -435,4 +460,9 @@ def _literal(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-__all__ = ["READ_HIDDEN_PARAMETERS", "change_command_refusal", "normalize_read_arguments"]
+__all__ = [
+    "READ_HIDDEN_PARAMETERS",
+    "change_command_refusal",
+    "message_id_refusal",
+    "normalize_read_arguments",
+]

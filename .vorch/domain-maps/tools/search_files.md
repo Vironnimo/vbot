@@ -198,6 +198,14 @@ Roots (`_resolve_roots`):
   another directory (Sessions, 2026-09: 48 `path_not_found` failures, mostly
   relative roots). When every root is missing, the call fails with `path_not_found`, ending
   `Nothing was searched. Correct path, or omit it to search the working directory.`
+- A missing root that is a bare Swarm Wiki page number in the working directory
+  (`w2`, `w2.md`) names the `swarm_wiki` read call instead of the working directory
+  when `swarm_wiki` is offered, carrying a single plain-text pattern as `query`:
+  `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki
+  {"action": "read", "page_id": "w2", "query": "Neumaier"}.` A regular expression
+  is left out, since the Wiki searches plain text (`wiki_page_call` in
+  `core/tools/_swarm_references.py`; Swarm Sessions, 2026-10-12: three searches
+  with `path: ["w2"]` or `["w3"]`).
 - When the pattern came from the first `args` operand, the warning shows how to
   search missing words as further patterns. Words are missing operands without a
   path separator. The suggestion takes the form `pattern "a|b|c"`, or repeated
@@ -517,6 +525,7 @@ blank placeholders, so no sentence has to warn about them.
 | limit: `Results per page.` plus schema default 100 | Plannable number (F6). |
 | offset: `Pass next_offset to continue.` | Continuation uses the returned value, never a computed one (F4); Agents sent `offset: 0` in 213 of 217 calls that set it (Sessions, 2026-09). |
 | Help: `Output: content names each file on its own line, followed by line:text for its matching lines and line-text for context lines.` | States the heading layout (Results and Paging -> Content lines) for an Agent that asks how to read results (F4); it replaced `content shows path:line:text for matching lines and path-line-text for context lines` with the layout change (2026-10-12). |
+| `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
 covered by `test_search_files_arguments.py` (the help examples run against a
