@@ -15,11 +15,17 @@ A literal match in the Markdown also counts, so a query copied from a result
 with its syntax finds that place exactly. Only when neither finds anything is
 the query's own Markdown read as presentation too; a link address it names must
 then still stand in the matched passage.
+
+A match may start or end inside a longer word, so a stem such as ``magnet``
+finds ``magnetic`` and ``Eisen`` finds the compound ``Gusseisen``. When every
+match starts inside a longer word (``used by`` only in ``caused by``), the
+result names such words, so the text is not taken for the one searched.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 
 from core.tools.fuzzy_match import SearchText, fold_for_search
@@ -38,7 +44,72 @@ _INLINE = re.compile(
     r"|(?P<pipe>\|)"
 )
 _LINK_TEXT_LIMIT = 2_000
+# Scripts written without spaces between words (Thai, Lao, Myanmar, Khmer, and
+# CJK with kana; Hangul uses spaces), where a match never starts "inside a word".
+_UNSPACED = re.compile(r"[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u2e80-\u9fff\uf900-\ufaff]")
+# How far a longer word named in a result reaches on each side of its match.
+_WORD_REACH = 40
+_NAMED_WORDS = 3
 type _Replacement = tuple[int, int, str]
+
+
+@dataclass(frozen=True, slots=True)
+class FoundText:
+    """Where ``find`` text occurs, as ``find_spans`` returns it.
+
+    ``spans`` are the ranges to show, in order. When every match starts inside
+    a longer word, ``inside_words`` names up to three such words.
+    """
+
+    spans: list[tuple[int, int]]
+    inside_words: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _Match:
+    """One match in the saved text, and where it was found for naming its word.
+
+    ``inside`` holds the searched text and the match's range in it when the match
+    starts inside a longer word.
+    """
+
+    start: int
+    end: int
+    inside: tuple[str, int, int] | None
+
+
+def _word_character(character: str) -> bool:
+    return character.isalnum() and not _UNSPACED.match(character)
+
+
+def _match(
+    text: str, span: tuple[int, int], searched: str, found: tuple[int, int], query: str
+) -> _Match:
+    """Record a match at ``span`` of ``text``, found at ``found`` in ``searched``.
+
+    It starts inside a word only where both texts continue a word before it, so
+    a link or image whose syntax the readable text drops still ends a word.
+    """
+    start, end = span
+    inside = (
+        bool(query)
+        and _word_character(query[0])
+        and found[0] > 0
+        and _word_character(searched[found[0] - 1])
+        and start > 0
+        and _word_character(text[start - 1])
+    )
+    return _Match(start, end, (searched, *found) if inside else None)
+
+
+def _longer_word(searched: str, start: int, end: int) -> str:
+    """Return the longer word around a match, such as ``caused by`` for ``used by``."""
+    first, last = start, end
+    while first > start - _WORD_REACH and first > 0 and _word_character(searched[first - 1]):
+        first -= 1
+    while last < end + _WORD_REACH and last < len(searched) and _word_character(searched[last]):
+        last += 1
+    return searched[first:last]
 
 
 def _opening_bracket(text: str, close: int) -> int | None:
@@ -163,21 +234,22 @@ def _search(readable: SearchText, query: str) -> list[tuple[int, int]]:
     ]
 
 
-def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> list[tuple[int, int]]:
-    """Return the ranges of ``text`` from ``offset`` on that ``find`` matches, in order.
+def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> FoundText:
+    """Return where ``find`` matches ``text`` from ``offset`` on.
 
     ``markdown`` says the text is a Markdown rendering whose syntax is presentation.
     Overlapping matches merge into one range.
     """
     readable = _readable(text, markdown)
-    spans = [
-        (offset + found.start(), offset + found.end())
-        for found in re.finditer(re.escape(find), text[offset:], re.IGNORECASE)
+    matches = [
+        _match(text, found.span(), text, found.span(), find)
+        for found in re.finditer(re.escape(find), text, re.IGNORECASE)
     ]
     plain = fold_for_search(find).text.strip()
-    spans += [readable.original(*found) for found in _search(readable, plain)]
-    spans = [span for span in spans if span[0] >= offset]
-    if not spans and markdown:
+    for found in _search(readable, plain):
+        matches.append(_match(text, readable.original(*found), readable.text, found, plain))
+    matches = [match for match in matches if match.start >= offset]
+    if markdown and not matches:
         replacements, addresses = _presentation(find)
         query = fold_for_search(find, replacements).text.strip()
         if query != plain:
@@ -187,11 +259,18 @@ def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> list
                 # the next readable character starts.
                 passage = text[start : readable.resume(found[1])]
                 if start >= offset and all(address in passage for address in addresses):
-                    spans.append((start, end))
+                    matches.append(_match(text, (start, end), readable.text, found, query))
+    matches.sort(key=lambda match: (match.start, match.end))
     merged: list[tuple[int, int]] = []
-    for start, end in sorted(spans):
-        if merged and start < merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    for match in matches:
+        if merged and match.start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], match.end))
         else:
-            merged.append((start, end))
-    return merged
+            merged.append((match.start, match.end))
+    words: dict[str, str] = {}
+    if all(match.inside is not None for match in matches):
+        for match in matches:
+            if match.inside is not None and len(words) < _NAMED_WORDS:
+                word = _longer_word(*match.inside)
+                words.setdefault(word.casefold(), word)
+    return FoundText(merged, tuple(words.values()))
