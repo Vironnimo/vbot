@@ -50,6 +50,7 @@ from core.tools.fuzzy_match import (
     FuzzyReplacement,
     dominant_line_ending,
     find_closest_candidates,
+    find_closest_passages,
     first_difference,
     preserve_typography,
     replace_fuzzy,
@@ -1175,38 +1176,90 @@ def _not_found(
     if split is not None:
         return split
     place = rewrapped_place(content, old) if source == "old_string" else None
+    # Every word of old_string is there, in order: only whitespace differs.
+    places = [place] if place is not None else []
     details: JsonObject = (
-        # Every word of old_string is there, in order: only whitespace differs.
-        {"candidates": [_place_excerpt(content, *place)]}
-        if place is not None
-        else _candidates(content, old)
+        {"candidates": _place_excerpts(content, places)} if places else _candidates(content, old)
     )
+    if source == "old_string" and not details["candidates"]:
+        # No whole lines are alike: the closest text can be part of a line, or
+        # lines that old_string breaks in other places.
+        places = find_closest_passages(content, old)
+        details["candidates"] = _place_excerpts(content, places)
     if part is not None and not details["candidates"]:
         details["part_of"] = part
     if details["candidates"]:
+        if places:
+            line, character = _place_start(content, places[0][0])
+        else:
+            line, character = int(details["candidates"][0]["line"]), 1
         difference = first_difference(
             content,
             old,
-            details["candidates"][0]["line"],
-            placed=place is not None,
+            line,
+            placed=bool(places),
             whole_lines=source == "patch",
+            character=character,
         )
         if difference is not None:
             details["difference"] = {**difference, "source": source}
     return details
 
 
-def _place_excerpt(content: str, first: int, last: int) -> JsonObject:
-    """Show lines ``first``-``last``, at most as many as a closest-text candidate."""
+def _place_start(content: str, start: int) -> tuple[int, int]:
+    """Return the line and character at offset ``start``; character 1 after indentation."""
+    starts = [0, *(found.end() for found in _BREAK.finditer(content))]
+    number = bisect_right(starts, start)
+    line_start = starts[number - 1]
+    if not content[line_start:start].strip():
+        return number, 1
+    return number, start - line_start + 1
+
+
+def _place_excerpts(content: str, places: list[tuple[int, int]]) -> list[JsonObject]:
+    """Show the lines of each (start, end) place, at most as many as a closest-text candidate.
+
+    A place on a line longer than 240 characters shows the 240-character part
+    of that line around it, numbered ``line:character``; a place within a part
+    shown already is not shown again.
+    """
     lines = split_text_lines(content)
-    shown = min(last, first + _PLACE_MAX_LINES - 1)
-    excerpt = file_excerpt(lines, first, shown)
-    if shown < last:
-        excerpt["truncated"] = True
-        excerpt["continuations"].append(
-            {"offset": f"{shown + 1}:1", "limit": min(_PLACE_MAX_LINES, last - shown)}
-        )
-    return excerpt
+    starts = [0, *(found.end() for found in _BREAK.finditer(content))]
+    excerpts: list[JsonObject] = []
+    # The parts of each line an excerpt shows, as [start, end) character offsets.
+    shown: dict[int, list[tuple[int, int]]] = {}
+    for start, end in places:
+        first = bisect_right(starts, start)
+        last = bisect_right(starts, max(start, end - 1))
+        index = start - starts[first - 1]
+        if any(left <= index < right for left, right in shown.get(first, [])):
+            continue
+        visible = min(last, first + _PLACE_MAX_LINES - 1)
+        excerpt = file_excerpt(lines, first, visible)
+        line = lines[first - 1]
+        if len(line) > 240:
+            left, right = _window(line, index, 0)
+            rest = excerpt["text"].split("\n")[1:]
+            excerpt["text"] = "\n".join([line[left:right], *rest])
+            if left:
+                excerpt["character"] = left + 1
+            excerpt["truncated"] = right < len(line) or any(
+                len(other) > 240 for other in lines[first:visible]
+            )
+            excerpt["continuations"] = [
+                *([{"offset": f"{first}:{right + 1}", "limit": 1}] if right < len(line) else []),
+                *excerpt["continuations"][1:],
+            ]
+            shown.setdefault(first, []).append((left, right))
+        else:
+            shown[first] = [(0, len(line))]
+        if visible < last:
+            excerpt["truncated"] = True
+            excerpt["continuations"].append(
+                {"offset": f"{visible + 1}:1", "limit": min(_PLACE_MAX_LINES, last - visible)}
+            )
+        excerpts.append(excerpt)
+    return excerpts
 
 
 _PLACE_MAX_LINES = 8

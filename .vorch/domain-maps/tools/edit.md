@@ -219,7 +219,11 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   breaks shows that place, and a first difference that is a line break says
   where the file and `old_string` break the line (`First difference, line N:
   the file breaks this line after '...'; old_string continues it with '...'.`,
-  `apply_patch.md` -> Matching and recovery).
+  `apply_patch.md` -> Matching and recovery). When no whole lines resemble
+  `old_string`, the closest passages anywhere in the text show instead: part of
+  a long line in a `line:character|` window, and the first difference from that
+  place on (`find_closest_passages`; coverage:
+  `test_closest_text_inside_a_long_line_shows_its_place_and_first_difference`).
   Each part needs 2 lines with a word of 3 or more characters: in a replay of
   582 failed calls (2026-10), 4 of 8 such reports rested on single lines, one of
   them `return tool_success(result)` of another function; the first difference
@@ -248,6 +252,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `edits[].replace_all`: `Replace every occurrence. Omit to replace one.` | Weak Models fill every field; a filled `replace_all: true` changes text the Agent did not mean (F3). |
 | `path`, `edits[].new_string`: no text | The names say the role, both path forms are accepted, and `""` deleting is trained behavior (review 2026-10-10). |
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
+| Closest text inside a long line: `The closest text in the file, line 1:`, `1:9809| <240 characters around it>`, `First difference, file line 1, character 9915; copied line 1, character 31 (excerpts truncated):` with both windows | Replaces `No similar text is in the file; read(path=...) shows its current content.`, which 17 of 38 `old_string` failures in 637 replayable calls got; 5 of them had the text in the file as part of a long JSON or prose line, as one-line JSON copied pretty-printed, or rewritten since (Sessions 2026-10-07 to 2026-10-12). The report has the shape of the whole-line one, so the Agent reads it the same way. |
 | Places on one line or a long line: `(line 1, characters 82 and 3021; line 4)`, each shown as `1:3001| <240 characters around it>` under `Where it occurs:` | 4 ambiguity reports in 3 calls named 2 places as `(line 1)` of a one-line JSON file and showed only its first 240 characters, neither place (Swarm run 2026-10-12); the Agent could not see which text tells them apart. The `line:character` gutter is `read`'s for a continued line. |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | Match report for edit K > 1: `The closest text in the file after edits 1-4, line 287:`, `First difference: after edits 1-4, line 287 reads '...' where old_string has '...'.`, `Edit 2 of this call wrote line 287.` | Replaces `the file has` plus a trailing `Line numbers count the text as edits 1-4 left it.`: the report said the file had `Param(1)` at line 287, which edit 2 of the same call had written; the file held `Param(0)` (Swarm Run 2026-10). The trailing sentence came after the text it qualified, and naming the edit shows that the failed edit's place overlaps a change the call already makes. |

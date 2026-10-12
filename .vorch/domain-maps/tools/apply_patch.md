@@ -337,7 +337,25 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   candidate's line; longer copies are aligned by the lines the file holds.
   An `old_string` whose words are all at exactly one place of the file, with
   other whitespace between them (`rewrapped_place`), shows that place (at most 8
-  lines) as its candidate, and its first difference starts there. A first
+  lines) as its candidate, and its first difference starts there. When no
+  whole-line window resembles an `old_string`, the closest passages anywhere in
+  the text show instead (`find_closest_passages`): both sides compare with each
+  whitespace run as one space, so part of a long line and a line broken in other
+  places are found. The copy's rarest words place them; at most 40 places are
+  compared with its first 400 characters, and at most 3 passages show, each with
+  >= 0.60 similarity and within 0.1 of the closest. Diagnostic only, like the
+  whole-line candidates. A place on a line longer than 240 characters shows the
+  240-character window around it, numbered `line:character|` like an ambiguity
+  window (`_place_excerpts`), and the first difference compares the copy's
+  first line from the place on (`first_difference(character=...)`), unless the
+  copy starts with a line break. Evidence: 17 of 38 `old_string` failures in
+  637 replayable `edit` calls said `No similar text`; 5 now show the place
+  (part of a long JSON or prose line, a one-line JSON file copied
+  pretty-printed, a line rewritten since), the other 12 held text the file
+  lacks (Sessions 2026-10-07 to 2026-10-12). Whitespace between JSON tokens
+  stays a difference for matching: 1 of the 637 calls differed only there, and
+  its new text, written as sent, would have put pretty-printed lines into a
+  one-line file; the report now names the place and the differing `}`. A first
   difference that is a line break in another place carries `break` (`file`,
   `copy`, or `start` for a copied line that starts a line the file continues)
   with the text on both sides, and the report says so (`the file breaks this

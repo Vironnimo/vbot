@@ -483,13 +483,149 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
     return candidates
 
 
+# A passage needs this many words of the pattern to be told from text alike by chance.
+_PASSAGE_MIN_WORDS = 3
+# Passages are compared with at most this many characters of the pattern.
+_PASSAGE_MAX_CHARS = 400
+# The pattern's rarest words place passages, each at most this many times.
+_PASSAGE_ANCHORS = 4
+_PASSAGE_ANCHOR_PLACES = 20
+# At most this many places are compared with the pattern.
+_PASSAGE_COMPARISONS = 40
+# Passages scoring this much less than the closest one are not shown beside it.
+_PASSAGE_MARGIN = 0.1
+# Matching blocks shorter than this are chance; they do not widen a passage.
+_PASSAGE_BLOCK_CHARS = 4
+_PASSAGE_WORD_RE = re.compile(r"\w{3,}")
+
+
+def find_closest_passages(content: str, pattern: str) -> list[tuple[int, int]]:
+    """Return the spans of ``content`` most like ``pattern``, wherever its lines break.
+
+    For a pattern whole lines do not resemble: part of a longer line, or text
+    whose line breaks fall in other places than the file's. Both sides compare
+    with every whitespace run as one space. Like ``find_closest_candidates``,
+    the spans only rank diagnostic excerpts and never authorize a replacement.
+    Each span starts where the pattern's first word would be; the closest
+    comes first.
+    """
+    wanted = " ".join(_folded(pattern, typographic=True).split())[:_PASSAGE_MAX_CHARS]
+    if len(_WORD_RE.findall(wanted)) < _PASSAGE_MIN_WORDS:
+        return []
+    folded, spans = _normalize_with_spans(content, typographic=True)
+    tokens = [found.span() for found in re.finditer(r"\S+", folded)]
+    if not tokens:
+        return []
+    text = " ".join(folded[start:end] for start, end in tokens)
+    # Where each token starts in ``text``.
+    starts = [0]
+    for start, end in tokens[:-1]:
+        starts.append(starts[-1] + end - start + 1)
+
+    places = _passage_places(text, wanted)
+    counts = Counter(wanted)
+    slack = len(wanted) // 4 + 10
+    scored: list[tuple[float, int, int, bool]] = []
+    for place in places[:_PASSAGE_COMPARISONS]:
+        begin = max(0, place - slack)
+        region = text[begin : place + len(wanted) + slack]
+        # Matched characters within any span are at most those both sides hold.
+        common = sum((counts & Counter(region)).values())
+        if 2 * common / (len(wanted) + common) < _CANDIDATE_MIN_SIMILARITY:
+            continue
+        found = _passage_in(wanted, region)
+        if found is not None:
+            score, start, end, exact = found
+            scored.append((score, begin + start, begin + end, exact))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    chosen: list[tuple[int, int, bool]] = []
+    for score, start, end, exact in scored:
+        if score < max(_CANDIDATE_MIN_SIMILARITY, scored[0][0] - _PASSAGE_MARGIN):
+            break
+        if all(end <= other_start or start >= other_end for other_start, other_end, _ in chosen):
+            chosen.append((start, end, exact))
+            if len(chosen) == _CANDIDATE_RESULT_LIMIT:
+                break
+
+    def original(index: int, *, end: bool) -> int:
+        token = bisect_right(starts, index) - 1
+        token_start, token_end = tokens[token]
+        position = min(token_start + index - starts[token], token_end - 1)
+        return spans[position][1] if end else spans[position][0]
+
+    result = []
+    for start, end, exact in chosen:
+        token = bisect_right(starts, start) - 1
+        # A start the pattern's first characters do not show moves to the nearer word start.
+        if not exact and start > starts[token]:
+            length = tokens[token][1] - tokens[token][0]
+            nearer = token + 1 if start - starts[token] > length // 2 else token
+            start = starts[min(nearer, len(starts) - 1)]
+        result.append((original(start, end=False), original(max(start, end - 1), end=True)))
+    return result
+
+
+def _passage_places(text: str, wanted: str) -> list[int]:
+    """Return where ``wanted`` would start in ``text``, placed by its rarest words first."""
+    words = {word: text.count(word) for word in set(_PASSAGE_WORD_RE.findall(wanted))}
+    anchors = sorted(
+        (word for word, count in words.items() if count), key=lambda word: (words[word], -len(word))
+    )[:_PASSAGE_ANCHORS]
+    places: list[int] = []
+    for word in anchors:
+        offsets = [found.start() for found in re.finditer(re.escape(word), wanted)][:3]
+        position = text.find(word)
+        for _ in range(_PASSAGE_ANCHOR_PLACES):
+            if position < 0:
+                break
+            for offset in offsets:
+                place = max(0, position - offset)
+                # Places close together compare one region.
+                if all(abs(place - other) > len(wanted) // 8 for other in places):
+                    places.append(place)
+            position = text.find(word, position + 1)
+    return places
+
+
+def _passage_in(wanted: str, region: str) -> tuple[float, int, int, bool] | None:
+    """Score the part of ``region`` most like ``wanted``: (similarity, start, end, exact).
+
+    ``start`` is where the first character of ``wanted`` would be; ``exact``
+    says that character is there.
+    """
+    blocks = [
+        block
+        for block in SequenceMatcher(None, wanted, region, autojunk=False).get_matching_blocks()
+        if block.size
+    ]
+    marked = [block for block in blocks if block.size >= _PASSAGE_BLOCK_CHARS]
+    if not marked:
+        return None
+    first, last = marked[0], marked[-1]
+    left, right = first.b, last.b + last.size
+    matched = sum(
+        block.size for block in blocks if left <= block.b and block.b + block.size <= right
+    )
+    score = 2 * matched / (len(wanted) + right - left)
+    start = max(0, first.b - first.a)
+    end = min(len(region), right + len(wanted) - last.a - last.size)
+    return score, start, end, first.a == 0
+
+
 def first_difference(
-    content: str, copy: str, start: int, *, placed: bool = False, whole_lines: bool = False
+    content: str,
+    copy: str,
+    start: int,
+    *,
+    placed: bool = False,
+    whole_lines: bool = False,
+    character: int = 1,
 ) -> dict[str, int | str | bool] | None:
     """Locate where ``copy`` first differs from ``content`` near line ``start``.
 
     ``start`` is the 1-based line of the closest candidate for ``copy``;
-    ``placed`` says it holds the copy's first word. Lines compare with runs of
+    ``placed`` says it holds the copy's first word, from its 1-based
+    ``character`` on when that is known. Lines compare with runs of
     whitespace collapsed. The result names the file line and the copied line
     with 1-based character positions, and at most 240-character windows of
     both lines around the difference. ``None`` means every copied line matches
@@ -506,8 +642,12 @@ def first_difference(
         if number > len(file_lines):
             return None
         actual = file_lines[number - 1]
-        if _loose(actual) != _loose(wanted):
-            file_position, copy_position = _difference_positions(actual, wanted)
+        # The copy's first line compares from where it starts in the file line,
+        # unless the copy claims to start a line.
+        skip = character - 1 if position == first and not (whole_lines or first > 0) else 0
+        if _loose(actual[skip:]) != _loose(wanted):
+            file_position, copy_position = _difference_positions(actual[skip:], wanted)
+            file_position += skip
             file_start, file_text = _difference_window(actual, file_position)
             copy_start, copy_text = _difference_window(wanted, copy_position)
             following = (
@@ -525,11 +665,11 @@ def first_difference(
                 "copy": copy_text,
                 "truncated": len(file_text) < len(actual) or len(copy_text) < len(wanted),
                 **_break_difference(
-                    actual,
+                    actual[skip:],
                     wanted,
                     following,
-                    starts=position == first and (whole_lines or first > 0),
-                    part=position == first and not (whole_lines or first > 0),
+                    starts=position == first and not skip and (whole_lines or first > 0),
+                    part=position == first and not skip and not (whole_lines or first > 0),
                 ),
             }
     return None
@@ -1231,11 +1371,12 @@ def _match_rewrapped(content: str, old: str) -> list[tuple[int, int]]:
 
 
 def rewrapped_place(content: str, old: str) -> tuple[int, int] | None:
-    """Return the lines that hold every word of ``old`` in order, if exactly one place does.
+    """Return the span that holds every word of ``old`` in order, if exactly one place does.
 
     Any whitespace stands for any other between the words; leading and trailing
-    whitespace counts for nothing. A failure report shows this place: there
-    ``old`` differs from the file only in its whitespace.
+    whitespace counts for nothing, so the span runs from the first word to the
+    last. A failure report shows this place: there ``old`` differs from the
+    file only in its whitespace.
     """
     _lead, core, _trail = _rewrapped_parts(old)
     if not core:
@@ -1247,10 +1388,7 @@ def rewrapped_place(content: str, old: str) -> tuple[int, int] | None:
         return None
     start, end = found[0]
     spans = _normalize_with_spans(content, typographic=True)[1]
-    return (
-        _line_number_at(content, spans[start][0]),
-        _line_number_at(content, spans[end - 1][0]),
-    )
+    return spans[start][0], spans[end - 1][1]
 
 
 def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
@@ -1556,6 +1694,7 @@ __all__ = [
     "LineDifferences",
     "dominant_line_ending",
     "find_closest_candidates",
+    "find_closest_passages",
     "line_differences",
     "replace_fuzzy",
     "preserve_typography",
