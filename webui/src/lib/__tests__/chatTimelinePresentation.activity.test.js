@@ -901,6 +901,7 @@ describe('background command rows', () => {
       {},
       { cmd_one: state('running') },
       { cmd_one: state('stopped') },
+      {},
       nowMs,
     );
 

@@ -268,11 +268,16 @@ export const isRowCancellable = (row) => {
   return false;
 };
 
+// A Sub-Agent's task stays running while background commands it or its own
+// Sub-Agents started still run after its Run (`subAgentCommands`, from
+// `runningSubAgentCommands`); `workRunning` marks that only those run, and
+// `runDotStatus` is the state of its Run alone.
 export const backgroundTasks = (
   timelineItems,
   subAgentStatuses = {},
   backgroundCommandStatuses = {},
   commandStatuses = {},
+  subAgentCommands = {},
   nowMs = Date.now(),
 ) => {
   const tasks = [];
@@ -287,8 +292,12 @@ export const backgroundTasks = (
       }
       // A refused `run` started no Sub-Agent; only started ones are work.
       if (isSubAgentSpawnTool(child) && subAgentNavigationTarget(child)) {
-        const dotStatus = subAgentDotStatus(child, subAgentStatuses);
+        const runDotStatus = subAgentDotStatus(child, subAgentStatuses);
         const subAgentId = trimmedString(subAgentResultData(child).id);
+        const runningCommands =
+          (subAgentId && subAgentCommands?.[subAgentId]) || [];
+        const workRunning =
+          runDotStatus !== 'running' && runningCommands.length > 0;
         tasks.push({
           subAgentId,
           id: subAgentId
@@ -296,20 +305,21 @@ export const backgroundTasks = (
             : `${item.id ?? itemIndex}:${child.id ?? child.toolCallId ?? childIndex}`,
           kind: 'subagent',
           tool: child,
-          dotStatus,
+          dotStatus: workRunning ? 'running' : runDotStatus,
+          runDotStatus,
+          workRunning,
+          runningCommands,
           label: subAgentAgentId(child),
           agentId: subAgentAgentId(child),
           description: subAgentDescription(child),
           target: subAgentNavigationTarget(child),
           lastToolName:
-            dotStatus === 'running'
+            runDotStatus === 'running'
               ? subAgentLastToolName(child, subAgentStatuses)
               : '',
-          timeLabel: subAgentToolStatusLabel(
-            child,
-            dotStatus,
-            subAgentStatuses,
-          ),
+          timeLabel: workRunning
+            ? t('chat.subAgentCommandsRunning')
+            : subAgentToolStatusLabel(child, runDotStatus, subAgentStatuses),
           order,
         });
         order += 1;
@@ -417,6 +427,7 @@ const COMMAND_DOT_STATUSES = {
 // Only how it ended is unknown.
 const COMMAND_DOT_ENDED = 'ended';
 const COMMAND_STATE_ENDED = { status: 'ended', stillRunning: false };
+const COMMAND_STATE_RUNNING = { status: 'running', stillRunning: false };
 
 function commandState(value) {
   if (!isPlainObject(value)) {
@@ -455,6 +466,30 @@ export function laterCommandState(left, right) {
     stillRunning: leftState.stillRunning && rightState.stillRunning,
   };
 }
+
+// The background commands a Session's Sub-Agents (at every depth) still run,
+// by the id of the Session's own Sub-Agent above them, as `{ kind: 'command',
+// id, label }`: those its last History read listed (`{ subAgentId,
+// sessionId, commandId, label }`, all running or leaving processes running
+// then) that no live state of their own Session (`commandStatuses`, by
+// Session id) shows ended since.
+export const runningSubAgentCommands = (entries, commandStatuses = {}) => {
+  const bySubAgent = {};
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const state = laterCommandState(
+      COMMAND_STATE_RUNNING,
+      commandStatuses?.[entry?.sessionId]?.[entry?.commandId],
+    );
+    if (state.status === 'running' || state.stillRunning) {
+      (bySubAgent[entry.subAgentId] ??= []).push({
+        kind: 'command',
+        id: entry.commandId,
+        label: entry.label,
+      });
+    }
+  }
+  return bySubAgent;
+};
 
 // The end a `bash` result shows itself: a call that returned once its shell
 // exited names a command only when processes it started still ran.

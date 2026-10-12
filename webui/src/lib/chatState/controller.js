@@ -52,7 +52,6 @@ import {
   loadHistory,
   hasRetainedTerminalRunProjection,
   attachableHistoryRun,
-  invalidateLoadedHistory,
   prependHistory,
   truncateSessionForEdit,
 } from './history.js';
@@ -84,6 +83,7 @@ function historyLoadOptions(history) {
     compactionPolicy: history?.compaction_policy,
     backgroundCommandStatuses: history?.background_command_statuses,
     backgroundCommandsStillRunning: history?.background_commands_still_running,
+    subAgentBackgroundCommands: history?.subagent_background_commands,
   };
 }
 
@@ -184,6 +184,7 @@ export function createChatController({
     loadSubAgentWork,
     reconcileSubAgentRows,
     stopCommand,
+    stopSubAgentWork,
   } = childTasks;
   const activity = createChatActivity({
     chatState,
@@ -378,6 +379,9 @@ export function createChatController({
           background_commands_still_running:
             page.background_commands_still_running ??
             result.background_commands_still_running,
+          subagent_background_commands:
+            page.subagent_background_commands ??
+            result.subagent_background_commands,
         };
       after = page.next_after;
     } while (result?.has_newer);
@@ -984,19 +988,15 @@ export function createChatController({
       }
     }
     // A replay gap or a server restart may have lost the end of a background
-    // command. Its live state starts over (App's map with it), and each
-    // loaded History is read again in full, whose statuses replace the
-    // durable ones: the displayed Session's now, the others' when shown.
+    // command. Its live state starts over (App's map with it), and the
+    // displayed Session reads its History on: the read reports every live
+    // command, so a durable `running` it leaves out has ended. The other
+    // Sessions read on when shown.
     const commandEndsMissed =
       snapshot.replay_status === 'gap' ||
       snapshot.replay_status === 'epoch_changed';
     if (commandEndsMissed) {
       childTasks.forgetLearnedCommandStatuses();
-      for (const sessionState of Object.values(chatState.sessions)) {
-        if (sessionState.historyLoaded) {
-          invalidateLoadedHistory(sessionState);
-        }
-      }
     }
     runStream.applyConnectionSnapshot(snapshot);
     for (const sessionState of Object.values(chatState.sessions)) {
@@ -1004,14 +1004,17 @@ export function createChatController({
         continue;
       }
       if (commandEndsMissed && sessionState.historyLoaded) {
-        // A read in full also reads the reflections.
+        // Only a read without a cursor (in full) also reads the reflections.
+        const readsInFull = !sessionState.historyAfter;
         void loadHistoryForSession(
           sessionState.agentId,
           sessionState.sessionId,
         );
-      } else {
-        void reflections.refresh(sessionState);
+        if (readsInFull) {
+          continue;
+        }
       }
+      void reflections.refresh(sessionState);
     }
     return true;
   }
@@ -1186,6 +1189,7 @@ export function createChatController({
     sendToNewSession,
     stopAll,
     stopCommand,
+    stopSubAgentWork,
     syncAgentActivity,
     syncSessionQueue,
     undoReflection: reflections.undo,

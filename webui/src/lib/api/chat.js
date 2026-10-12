@@ -367,9 +367,11 @@ export function stopAll(agentId, sessionId, options = {}) {
   );
 }
 
-// Stops one background command of a Session for the user; its Agent then
-// receives the stopped result. Resolves to `{ stopped }`, false when the
-// command had already ended.
+// Stops one background command of a Session for the user, or the processes
+// it left running after its shell exited; a stopped command's Agent then
+// receives the stopped result. Resolves to `{ stopped, status }`: `stopped`
+// is false when nothing of the command ran any longer, `status` is its
+// status afterwards.
 export function stopCommand(sessionId, commandId, options = {}) {
   requireNonEmptyString(
     sessionId,
@@ -390,7 +392,8 @@ export function stopCommand(sessionId, commandId, options = {}) {
 }
 
 // Reads a background command's status and its newest output lines as plain
-// text: `{ status, output }`.
+// text: `{ status, still_running, output }`; `still_running` is true while
+// processes it started still run after its shell exited.
 export function loadCommandOutput(sessionId, commandId, options = {}) {
   requireNonEmptyString(
     sessionId,

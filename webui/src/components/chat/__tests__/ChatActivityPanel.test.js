@@ -801,6 +801,69 @@ describe('ChatActivityPanel', () => {
     });
   });
 
+  it('keeps a Sub-Agent whose Run ended running while commands below it run, and stops them from its row', async () => {
+    const finished = subAgentTask({
+      id: 'a',
+      agentId: 'alba',
+      status: 'completed',
+    });
+    const onStopSubAgentWork = vi.fn();
+    const onCancelSubAgent = vi.fn();
+    const devServer = { kind: 'command', id: 'cmd_dev', label: 'npm run dev' };
+    openPanel({
+      timelineItems: [runItem([finished])],
+      subAgentCommands: { 'sub-a': [devServer] },
+      // Its last inspection found the same command and a terminal.
+      subAgentWork: {
+        'sub-a': [devServer, { kind: 'terminal', id: 'term_1', label: 'bash' }],
+      },
+      onStopSubAgentWork,
+      onCancelSubAgent,
+    });
+
+    const row = rowContaining('alba');
+    expect(row.closest('.chat-activity__group--running')).not.toBeNull();
+    expect(row.querySelector('[data-status="running"]')).not.toBeNull();
+    expect(row.querySelector('.chat-activity__task-time').textContent).toBe(
+      `· ${t('chat.subAgentCommandsRunning')}`,
+    );
+    expect(
+      row.querySelector('.chat-activity__task-link').getAttribute('aria-label'),
+    ).toBe(
+      t('chat.activity.taskAria', {
+        agent: 'alba',
+        status: status('commandsRunning'),
+      }),
+    );
+
+    vi.useFakeTimers();
+    row.dispatchEvent(new Event('pointerenter', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    const tooltipElement = document.getElementById('app-tooltip');
+    expect(
+      tooltipElement.querySelector('.app-tooltip__title')?.textContent,
+    ).toBe(status('commandsRunning'));
+    const details = Array.from(
+      tooltipElement.querySelectorAll('dt'),
+      (term) => [term.textContent, term.nextElementSibling.textContent],
+    );
+    expect(details).toContainEqual([t('chat.details.openTerminal'), 'bash']);
+    // The command its inspection found too shows once.
+    expect(
+      details.filter(([label]) => label === t('chat.details.runningCommand')),
+    ).toEqual([[t('chat.details.runningCommand'), 'npm run dev']]);
+    vi.useRealTimers();
+
+    const stop = row.querySelector('[data-cancel-kind="subagent"]');
+    expect(stop.getAttribute('aria-label')).toBe(
+      t('chat.activity.stopSubAgentWorkAria', { agent: 'alba' }),
+    );
+    stop.click();
+    await Promise.resolve();
+    expect(onStopSubAgentWork).toHaveBeenCalledWith({ tool: finished });
+    expect(onCancelSubAgent).not.toHaveBeenCalled();
+  });
+
   it('shows the further of the live and durable command states, times and stop controls on panel rows', () => {
     const timing = {
       started_at: '2026-09-04T12:00:00+00:00',

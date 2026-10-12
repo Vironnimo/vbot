@@ -23,6 +23,7 @@ from core.runs import ChatRunManager, RunAdmission, RunKind
 from core.sessions import ChatSession, SessionAddress
 from core.settings.normalizers import normalize_compaction_settings
 from core.skills import SkillAuthoringService
+from core.subagents.links import link_session
 from core.tools.tools import tool_success
 from server.file_delivery import FileDelivery
 from server.rpc import chat_methods
@@ -64,7 +65,12 @@ class _Commands:
     ) -> None:
         owner = SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
         self.reports[command_id] = SimpleNamespace(
-            command_id=command_id, owner=owner, status=status, still_running=still_running
+            command_id=command_id,
+            owner=owner,
+            status=status,
+            still_running=still_running,
+            finished=status != "running" and not still_running,
+            label=f"label of {command_id}",
         )
 
     def commands(self, owners: Collection[SessionAddress]) -> list[SimpleNamespace]:
@@ -425,6 +431,24 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     commands.add("cmd_one", "completed", "node (pid 7)")
     commands.add("cmd_new", "running")
     commands.add("cmd_source", "running", session_id="session-source")
+    # Its Sub-Agent and that one's own Sub-Agent run commands too.
+    for subagent_id, child, parent in (
+        ("sub_child", "session-child", "session-one"),
+        ("sub_grandchild", "session-grandchild", "session-child"),
+    ):
+        history.session(child)
+        link_session(
+            history.sessions,
+            SessionAddress(project_id=None, agent_id="coder", session_id=child),
+            subagent_id=subagent_id,
+            parent=SessionAddress(project_id=None, agent_id="coder", session_id=parent),
+            run_id="run-parent",
+            tool_call_id=None,
+            tool_call_index=None,
+        )
+    commands.add("cmd_child", "running", session_id="session-child")
+    commands.add("cmd_grandchild", "failed", "vite (pid 9)", session_id="session-grandchild")
+    commands.add("cmd_grandchild_done", "completed", session_id="session-grandchild")
 
     # A replacement read carries the complete map: deliveries applied, the
     # Session's own background commands at their current status, and none for
@@ -437,6 +461,22 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     }
     assert first["background_commands_still_running"] == ["cmd_one"]
     assert all(message["role"] != "note" for message in first["messages"])
+    # The commands its Sub-Agents still run, at every depth, each under the
+    # Session's own Sub-Agent above it.
+    assert sorted(first["subagent_background_commands"], key=lambda entry: entry["command_id"]) == [
+        {
+            "subagent_id": "sub_child",
+            "session_id": "session-child",
+            "command_id": "cmd_child",
+            "label": "label of cmd_child",
+        },
+        {
+            "subagent_id": "sub_child",
+            "session_id": "session-grandchild",
+            "command_id": "cmd_grandchild",
+            "label": "label of cmd_grandchild",
+        },
+    ]
 
     # An incremental read carries the appended records' statuses and those of
     # the Session's live commands; the still-running list is always complete.
@@ -448,10 +488,21 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     assert delta["background_command_statuses"] == {"cmd_one": "completed", "cmd_new": "completed"}
     assert delta["background_commands_still_running"] == []
 
+    # A read that finds nothing appended still reports the live commands, so
+    # the caller learns that a command it holds as running ended in a restart.
+    commands.reports.clear()
+    commands.add("cmd_next", "running")
+    unchanged = await history.read(after=delta["next_after"])
+    assert unchanged["messages"] == []
+    assert unchanged["background_command_statuses"] == {"cmd_next": "running"}
+    assert unchanged["background_commands_still_running"] == []
+    assert unchanged["subagent_background_commands"] == []
+
     # An older page carries neither.
     older = await history.read(before=first["next_before"])
     assert "background_command_statuses" not in older
     assert "background_commands_still_running" not in older
+    assert "subagent_background_commands" not in older
 
 
 # ---------------------------------------------------------------------------
@@ -618,7 +669,7 @@ async def test_history_increments_after_a_cursor_and_resets_after_an_edit(
 
 
 @pytest.mark.asyncio
-async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
+async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_worker_hop(
     history: _History, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = history.session()
@@ -669,6 +720,9 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
         "history_reset": False,
         "has_newer": False,
         "has_more": False,
+        "background_command_statuses": {},
+        "background_commands_still_running": [],
+        "subagent_background_commands": [],
     }
 
     monkeypatch.undo()

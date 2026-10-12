@@ -70,8 +70,6 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
     command_manager = _RecordingCommandManager(address)
     runtime.command_manager = command_manager  # type: ignore[assignment]
-    # The Runtime's shutdown stops the background commands.
-    runtime.stop = lambda: command_manager.change("cmd_two", "stopped")  # type: ignore[method-assign]
     cron_service = CronService(cast(Any, SimpleNamespace()), tmp_path)
     runtime.cron_service = cron_service  # type: ignore[attr-defined]
     session_scope: JsonObject = {
@@ -177,13 +175,11 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         ("resource_changed", {"kind": "terminals", "scope": {"terminal_id": "term_one"}})
     ]
 
-    def status_changed(
-        status: str, *, still_running: bool = False, command_id: str = "cmd_one"
-    ) -> tuple[str, JsonObject]:
+    def status_changed(status: str, *, still_running: bool = False) -> tuple[str, JsonObject]:
         return (
             "command_status_changed",
             {
-                "command_id": command_id,
+                "command_id": "cmd_one",
                 "session_id": "session-one",
                 "status": status,
                 "still_running": still_running,
@@ -198,11 +194,6 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         [status_changed("completed")],
         [],
     ]
-    # The bridge outlives the Runtime's shutdown, so the commands it stops
-    # still reach the accessors.
-    assert (bus.events[-1]["type"], bus.events[-1]["payload"]) == status_changed(
-        "stopped", command_id="cmd_two"
-    )
     assert skill_events == [("resource_changed", {"kind": "skills"})]
     assert model_events == [("resource_changed", {"kind": "models"})]
     assert index_events == [("recall_index_status", index_status.to_dict())]

@@ -4,6 +4,7 @@ import {
   isSubAgentSendTool,
   isSubAgentSpawnTool,
   resolveSubAgentCancelPlan,
+  runningSubAgentCommands,
   subAgentAction,
   subAgentAgentId,
   subAgentDescription,
@@ -317,6 +318,75 @@ describe('Sub-Agent rows', () => {
         description: 'Review pass',
         target: { agentId: 'reviewer', sessionId: 'session-reviewer' },
       }),
+    );
+  });
+
+  it('keeps a Sub-Agent whose Run ended running while commands below it run, until their own Session reports them ended', () => {
+    const listed = [
+      ['session-child', 'cmd_dev', 'npm run dev'],
+      ['session-grandchild', 'cmd_serve', 'npm run serve &'],
+      ['session-child', 'cmd_test', 'npm test'],
+    ].map(([sessionId, commandId, label]) => ({
+      subAgentId: 'sub_child',
+      sessionId,
+      commandId,
+      label,
+    }));
+    const live = (states) =>
+      runningSubAgentCommands(listed, {
+        // Another Session's state of the same command does not count.
+        'session-fork': { cmd_dev: { status: 'ended', stillRunning: false } },
+        ...states,
+      });
+    const task = (subAgentCommands) =>
+      backgroundTasks(
+        [
+          {
+            id: 'run',
+            type: 'assistant_run',
+            items: [runningSubAgentTool({ type: 'tool_call' })],
+          },
+        ],
+        { 'run:run-child': 'completed' },
+        {},
+        {},
+        subAgentCommands,
+      )[0];
+
+    // Processes a command left running keep it listed; an end settles one.
+    const running = live({
+      'session-child': {
+        cmd_test: { status: 'completed', stillRunning: false },
+      },
+      'session-grandchild': {
+        cmd_serve: { status: 'completed', stillRunning: true },
+      },
+    });
+    expect(running).toEqual({
+      sub_child: [
+        { kind: 'command', id: 'cmd_dev', label: 'npm run dev' },
+        { kind: 'command', id: 'cmd_serve', label: 'npm run serve &' },
+      ],
+    });
+    expect(task(running)).toEqual(
+      expect.objectContaining({
+        dotStatus: 'running',
+        runDotStatus: 'success',
+        workRunning: true,
+        runningCommands: running.sub_child,
+        lastToolName: '',
+        timeLabel: t('chat.subAgentCommandsRunning'),
+      }),
+    );
+
+    const ended = { status: 'stopped', stillRunning: false };
+    const settled = live({
+      'session-child': { cmd_dev: ended, cmd_test: ended },
+      'session-grandchild': { cmd_serve: ended },
+    });
+    expect(settled).toEqual({});
+    expect(task(settled)).toEqual(
+      expect.objectContaining({ dotStatus: 'success', workRunning: false }),
     );
   });
 
