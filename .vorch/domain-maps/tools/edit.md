@@ -59,8 +59,10 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   root path) and refused when it names another file. Refused before any effect,
   each naming the call to send: `edits` beside flat fields, a root `replace_all`
   beside `edits`, `content` (points to `write`), no path, no change, a half pair,
-  an item that is not an object, an unknown item field, a field given twice with
-  different values. Coverage:
+  an item that is not an object, an unknown item field with a value, a field
+  given twice with different values. An unknown item field with an empty value
+  (`""`, `null`, `[]`, `{}`) requests nothing and is dropped, by the root rule
+  of `ToolContract.normalize_arguments` applied to the item. Coverage:
   `test_other_edit_spellings_make_the_same_change`,
   `test_edits_text_with_unescaped_quotes_runs_only_when_it_has_one_reading`,
   `test_open_or_misdirected_calls_say_which_call_to_send`.

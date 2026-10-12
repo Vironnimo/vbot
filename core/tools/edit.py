@@ -372,6 +372,9 @@ def _edit_item(item: Any, number: int) -> Any:
         if field not in (*_EDIT_FIELDS, "path"):
             field = next((name for name in _EDIT_FIELDS if spelling(name) == spelling(key)), key)
         if field not in (*_EDIT_FIELDS, "path"):
+            if not _edit_item_contract().normalize_arguments({key: value}):
+                # An empty value under a name that is not a field requests nothing.
+                continue
             raise ValueError(
                 f'edits item {number} has "{key}", which is not a field of an edit. Each edit '
                 "takes old_string, new_string and replace_all."

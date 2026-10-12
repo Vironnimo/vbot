@@ -328,6 +328,9 @@ async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> Non
             "edits": [{"path": "./a.py", "old_string": "x = 1", "new_string": "x = 3"}],
         },
         {"edits": [{"file_path": "a.py", "old_string": "x = 1", "new_string": "x = 3"}]},
+        # An empty value under a name that is not a field requests nothing; a
+        # value there is refused (item-unknown-field).
+        {"path": "a.py", "edits": [{"old_string": "x = 1", "new_string": "x = 3", "new_2": ""}]},
     ],
 )
 async def test_other_edit_spellings_make_the_same_change(tmp_path, arguments) -> None:
