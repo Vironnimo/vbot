@@ -68,7 +68,7 @@ def _mcp_scenario(case_name: str) -> ProbeScenario:
 
     expected_arguments = MCP_CASE_ARGUMENTS[case_name]
     rendered = json.dumps(expected_arguments, ensure_ascii=False, separators=(",", ":"))
-    description = connection_description("example", "Example", ("inspect", "update"))
+    description = connection_description("example", "Example")
     return ProbeScenario(
         "mcp",
         [{"name": "mcp_example", "description": description, "parameters": MCP_PARAMETERS}],
