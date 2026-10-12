@@ -20,6 +20,12 @@ _HIDDEN = re.compile(
     re.I,
 )
 _STRIP = {"script", "style", "template", "head", "object", "embed"}
+# Navigation is never the main content, also where a site puts it inside its
+# main landmark (Wikipedia's page toolbar, navboxes). Header, footer and aside
+# inside it are the content's own title, byline and notes, so only a page
+# without main markup loses them.
+_NAVIGATION = "nav, [role=navigation]"
+_PAGE_FURNITURE = f"{_NAVIGATION}, header, footer, aside, [role=banner], [role=contentinfo]"
 _MAX_HTML_CHARS = 4_000_000
 _MAX_NODES = 100_000
 _MAX_DEPTH = 200
@@ -154,6 +160,35 @@ def _clean(soup: BeautifulSoup, base: str) -> None:
         comment.extract()
 
 
+def _is_language_list(node: Tag) -> bool:
+    """Whether a list only links to versions of the page in other languages.
+
+    Such a list (Wikipedia's 200-odd interlanguage links sit in the article's
+    title bar) marks every link with ``hreflang`` and holds no other text.
+    """
+    links = node.find_all("a")
+    return (
+        len(links) >= 2
+        and all(link.has_attr("hreflang") for link in links)
+        and node.get_text(strip=True) == "".join(link.get_text(strip=True) for link in links)
+    )
+
+
+def _drop_navigation(root: Tag, selectors: str) -> None:
+    """Remove navigation and language lists from a main view in progress."""
+    for node in list(root.select(selectors)):
+        if node.attrs is not None:  # not already removed with an ancestor
+            node.decompose()
+    lists = {
+        id(parent): parent
+        for link in root.select("a[hreflang]")
+        if (parent := link.find_parent(["ul", "ol", "menu"])) is not None
+    }
+    for node in lists.values():
+        if node.attrs is not None and _is_language_list(node):
+            node.decompose()
+
+
 def extract_views(
     html: str, url: str, include_links: bool = True
 ) -> tuple[str, str, dict[str, str], list[str]]:
@@ -213,15 +248,13 @@ def extract_views(
         for node in candidates
         if not any(id(parent) in candidate_ids for parent in node.parents)
     ]
+    # The page view is already rendered, so what the main view drops stays
+    # searchable there.
+    for node in selected:
+        _drop_navigation(node, _NAVIGATION)
     main = "\n\n".join(str(converter.convert_soup(node)).strip() for node in selected).strip()
     if not main:
-        # Keep complementary content in the already-rendered page view.
-        selectors = (
-            "nav, header, footer, aside, [role=navigation], [role=banner], [role=contentinfo]"
-        )
-        for node in list(body.select(selectors)):
-            if node.attrs is not None:
-                node.decompose()
+        _drop_navigation(body, _PAGE_FURNITURE)
         main = str(converter.convert_soup(body)).strip() or page
     if "[Embedded " in page:
         warnings.append(
