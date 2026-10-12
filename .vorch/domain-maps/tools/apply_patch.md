@@ -241,8 +241,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
      lines are then added too. The remaining unchanged and removed lines must
      hold at least 4 characters and match once, precisely; a re-read line
      beyond them must not resemble (ratio >= 0.6) the file lines next to the
-     match on that side, where it can be a file line copied with errors. A note
-     names the line or the count (`_UNMARKED_NOTE`, `_UNMARKED_LINES_NOTE`,
+     match on that side, where it can be a file line copied with errors. Like
+     step 7, step 8 does not run on a precise-only path: after an earlier
+     failure in the file, a line the file lacks can be one the failed change
+     would have written. A note names the line or the count (`_UNMARKED_NOTE`, `_UNMARKED_LINES_NOTE`,
      `_UNMARKED_BLANK_NOTE`). Evidence (replay of 7881 calls, 2026-10): 60
      calls refused in whole or part now apply (2 through empty lines alone).
      The re-read lines are continuation lines of a wrapped call or string, or

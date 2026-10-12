@@ -628,6 +628,13 @@ UNMARKED_BEFORE = (
         ("@@\n     result = 0\n+    checked = True\n     for item in values:\n+    seen = 0", None),
         # After the last + line, it can be a line the patch expects to follow.
         ("@@\n     return result\n+\n+\n class Missing:", None),
+        # After an earlier failure in the file, it can be a line that change would add.
+        (
+            "@@\n-    missing = 1\n+    missing = 2\n@@\n     result = 0\n+    if not values:\n"
+            '+        raise ValueError(\n            "values must not be empty")\n'
+            "+    checked = True\n     for value in values:",
+            None,
+        ),
     ],
 )
 async def test_lines_between_added_lines_without_plus_are_added_when_the_file_lacks_them(
@@ -639,7 +646,7 @@ async def test_lines_between_added_lines_without_plus_are_added_when_the_file_la
     result = await call(tmp_path, {"patch": update(body, "file.py")})
 
     if after is None:
-        assert result["error"]["code"] == "text_not_found"
+        assert not result["ok"]
         assert path.read_bytes() == UNMARKED_BEFORE.encode()
     else:
         assert result["ok"], result

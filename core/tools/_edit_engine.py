@@ -688,8 +688,12 @@ def _unmarked_additions(
     must match once, precisely, from ``start``. A line so read that borders
     no unchanged or removed line on one side must not resemble the file lines on
     that side of the match: there it could be a copy of one of them with errors.
+    Not after an earlier failure in the file (``precise_only``): a line the file
+    lacks can then be one the failed change would have written.
     Returns the hunk as read, the match in ``content[start:]`` and the note.
     """
+    if hunk.precise_only:
+        return None
     lines = hunk.lines
     present = {_loose(line) for line in split_text_lines(content)}
     unmarked = [
