@@ -326,7 +326,7 @@ def _function_arguments_delta(
         state.emitted_tool_arguments[tool_call_id] += delta
         arguments_delta = delta
     else:
-        arguments_delta = _record_tool_argument_snapshot(tool_call_id, delta, state)
+        arguments_delta = _first_tool_argument_delta(tool_call_id, delta, state)
         state.started_tool_argument_deltas.add(tool_call_id)
     # The durable Responses replay carrier must agree with the canonical Call,
     # even when the terminal event omits its output array.
@@ -401,24 +401,47 @@ def _output_item_event_deltas(
     return deltas
 
 
-def _record_tool_argument_snapshot(
+def _first_tool_argument_delta(
     tool_call_id: str,
     delta: str,
     state: ResponsesStreamState,
 ) -> str | None:
-    emitted_arguments = state.emitted_tool_arguments.get(tool_call_id, "")
-    if not emitted_arguments:
-        state.emitted_tool_arguments[tool_call_id] = delta
-        return delta
-    if delta == emitted_arguments:
-        return None
-    if delta.startswith(emitted_arguments):
-        suffix = delta[len(emitted_arguments) :]
-        state.emitted_tool_arguments[tool_call_id] = delta
-        return suffix or None
+    """Reconcile a call's first argument event with its initial item snapshot.
 
-    state.emitted_tool_arguments[tool_call_id] = emitted_arguments + delta
-    return delta
+    ``output_item.added`` may already carry the start of the arguments. The
+    first delta event then either restates that start, possibly with more, or
+    continues it as an ordinary fragment.
+    """
+
+    emitted_arguments = state.emitted_tool_arguments.get(tool_call_id, "")
+    if emitted_arguments and not delta.startswith(emitted_arguments):
+        state.emitted_tool_arguments[tool_call_id] = emitted_arguments + delta
+        return delta
+    return _record_tool_argument_snapshot(tool_call_id, delta, state)
+
+
+def _record_tool_argument_snapshot(
+    tool_call_id: str,
+    snapshot: str,
+    state: ResponsesStreamState,
+) -> str | None:
+    """Return the part of a whole-arguments snapshot that no delta has emitted yet.
+
+    Output items carry a call's arguments as a whole: ``output_item.added`` their
+    start (often nothing), ``output_item.done`` and the terminal output the
+    complete text. A snapshot that extends the emitted arguments contributes its
+    missing suffix. Any other snapshot adds nothing: it restates the emitted
+    arguments, possibly spelled differently (whitespace, escaping, key order),
+    and appended it would turn one call into consecutive argument values that
+    expand into duplicate sibling calls. Emitted deltas cannot be taken back,
+    so where a snapshot contradicts them the streamed arguments stand.
+    """
+
+    emitted_arguments = state.emitted_tool_arguments.get(tool_call_id, "")
+    if not snapshot.startswith(emitted_arguments):
+        return None
+    state.emitted_tool_arguments[tool_call_id] = snapshot
+    return snapshot[len(emitted_arguments) :] or None
 
 
 def _completed_event_deltas(
