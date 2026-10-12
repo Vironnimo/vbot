@@ -28,6 +28,7 @@ from core.sessions import (
     SUBAGENT_TAKEN_OVER_AT_META_KEY,
     SessionAddress,
 )
+from core.subagents import SubAgentState
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
     FACTS_NOTHING_RUNNING_TEXT,
@@ -49,7 +50,7 @@ pytestmark = pytest.mark.asyncio
 @pytest_asyncio.fixture
 async def commands(harness: SubAgentHarness, tmp_path: Path) -> AsyncIterator[CommandHarness]:
     """Background commands of the harness's Sessions, on fake processes."""
-    async with command_harness(tmp_path) as subject:
+    async with command_harness(tmp_path, max_live=4) as subject:
         harness.use_commands(subject.manager)
         yield subject
 
@@ -885,8 +886,19 @@ async def test_parallel_starts_respect_the_active_limit_with_a_stale_count(
     assert len(harness.loop.turns) == 1
 
 
+def _take_over(harness: SubAgentHarness, session: SessionAddress) -> None:
+    """Mark *session* taken over, as the user's first message in it does."""
+    harness.sessions.mutate_metadata(
+        session,
+        lambda metadata: metadata.__setitem__(
+            SUBAGENT_TAKEN_OVER_AT_META_KEY, "2026-10-07T12:00:00+00:00"
+        ),
+    )
+    harness.coordinator.subagent_taken_over(session)
+
+
 async def test_takeover_hands_the_subagent_and_its_work_to_the_user(
-    harness: SubAgentHarness, commands: CommandHarness
+    harness: SubAgentHarness, commands: CommandHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     harness.loop.hold("review")
     data = await harness.spawn("review")
@@ -894,14 +906,10 @@ async def test_takeover_hands_the_subagent_and_its_work_to_the_user(
     deep = await harness.spawn("deep", child)
     serve = await _background_command(commands, child, "Serve")
     tests = await _background_command(commands, harness.subagent_session(deep["id"]), "Test")
+    # The tree as a call read it just before the user took over.
+    stale = await harness.coordinator.subagents(harness.parent)
 
-    harness.sessions.mutate_metadata(
-        child,
-        lambda metadata: metadata.__setitem__(
-            SUBAGENT_TAKEN_OVER_AT_META_KEY, "2026-10-07T12:00:00+00:00"
-        ),
-    )
-    harness.coordinator.subagent_taken_over(child)
+    _take_over(harness, child)
     # The takeover notice is independent of the Run's answer forwarding.
     await harness.triggers.wait_for_notice(f"subagent-takeover:{data['id']}")
     await harness.finished("review")
@@ -914,31 +922,72 @@ async def test_takeover_hands_the_subagent_and_its_work_to_the_user(
     gone = await harness.message_parent("question", child)
     assert gone["error"]["code"] == "subagent_taken_over"
 
-    # The Parent keeps the taken-over Sub-Agent's row; what its Session runs, and the
-    # Sub-Agents below it, work for the user.
+    # Another Sub-Agent of the Parent, whose own Sub-Agent the user took over and works in.
+    outer = await harness.spawn("outer")
+    outer_session = harness.subagent_session(outer["id"])
+    inner = await harness.spawn("inner", outer_session)
+    inner_session = harness.subagent_session(inner["id"])
+    await harness.settle()
+    _take_over(harness, inner_session)
+    harness.loop.hold("user work")
+    user_run = await harness.start_turn(inner_session, "user work", kind=RunKind.USER)
+    build = await _background_command(commands, outer_session, "Build")
+    watch = await _background_command(commands, inner_session, "Watch")
+
+    # The Parent keeps the taken-over Sub-Agents' rows; what their Sessions run, and the
+    # Sub-Agents below them, work for the user.
     listed = await harness.background_tasks({"action": "list"})
     assert [(row["id"], row["status"]) for row in listed["data"]["tasks"]] == [
-        (data["id"], "taken over by the user")
+        (data["id"], "taken over by the user"),
+        (outer["id"], "idle"),
+        (inner["id"], "taken over by the user"),
+        (build, "running"),
     ]
     shown = await harness.background_tasks({"action": "status", "id": data["id"]})
     assert "running" not in shown["data"]
     # Each refusal names the task and the Sub-Agents up to the one the user took over, and
-    # offers no call: what happens to the task is the user's to decide.
+    # offers no call: what happens to the task is the user's to decide. No Agent above
+    # stops a Sub-Agent the user took over.
     for task_id, action, named in [
         (serve, "stop", (serve, data["id"])),
         (tests, "status", (tests, deep["id"], data["id"])),
         (deep["session_id"], "stop", (deep["id"], data["id"])),
+        (data["id"], "stop", (data["id"],)),
+        (inner["id"], "stop", (inner["id"],)),
+        (watch, "stop", (watch, inner["id"])),
     ]:
         refusal = await harness.background_tasks({"action": action, "id": task_id})
         assert refusal["error"]["code"] == "subagent_taken_over"
         message = refusal["error"]["message"]
         assert all(name in message for name in named), message
         assert "{" not in message
-    assert [commands.manager.status(serve), commands.manager.status(tests)] == ["running"] * 2
+    # A stop that read the tree before the takeover is refused all the same.
+    stale_reads: list[list[SubAgentState]] = []
+    current_tree = harness.coordinator.subagents
 
-    # Stopping the taken-over Sub-Agent as a whole still stops everything below it.
-    stopped = await harness.background_tasks({"action": "stop", "id": data["id"]})
+    async def stale_once(caller: SessionAddress) -> list[SubAgentState]:
+        return stale_reads.pop() if stale_reads else await current_tree(caller)
+
+    monkeypatch.setattr(harness.coordinator, "subagents", stale_once)
+    for raced, named in [(data["id"], (data["id"],)), (deep["id"], (deep["id"], data["id"]))]:
+        stale_reads.append(stale)
+        refusal = await harness.background_tasks({"action": "stop", "id": raced})
+        assert refusal["error"]["code"] == "subagent_taken_over"
+        assert all(name in refusal["error"]["message"] for name in named)
+    assert [commands.manager.status(task) for task in (serve, tests, watch)] == ["running"] * 3
+
+    # Stopping a Sub-Agent above a takeover stops its own work and ends there.
+    stopped = await harness.background_tasks({"action": "stop", "id": outer["id"]})
     assert stopped["data"]["status"] == "stopped"
+    assert inner["id"] in stopped["data"]["notes"][-1]
+    assert (await commands.finish(build)).stop_reason == "scope"
+    # Nor does the Parent's Stop all reach the user's Sub-Agents.
+    await harness.coordinator.stop_tree(harness.parent)
+    assert [commands.manager.status(task) for task in (serve, tests, watch)] == ["running"] * 3
+    assert user_run.cancel_requested is False
+
+    # The user's Stop all in the Session the user took over stops everything below it.
+    await harness.coordinator.stop_tree(child)
     for command_id in (serve, tests):
         assert (await commands.finish(command_id)).stop_reason == "scope"
 

@@ -17,7 +17,7 @@ from core.projects import ProjectStore
 from core.providers.tool_schema import render_tool_definitions
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
-from core.subagents import SubAgentState
+from core.subagents import SubAgentState, SubAgentStopOutcome
 from core.tools import terminal as terminal_module
 from core.tools import terminal_manager as manager_module
 from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
@@ -620,7 +620,9 @@ class _SubAgents:
     async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
         raise AssertionError("terminal asks only which Sessions are Sub-Agents'")
 
-    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+    async def stop_subagent(
+        self, context: ToolContext, subagent: SubAgentState
+    ) -> SubAgentStopOutcome:
         raise AssertionError("terminal never stops a Sub-Agent")
 
 

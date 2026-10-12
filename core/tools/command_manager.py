@@ -518,6 +518,17 @@ class CommandManager:
             for record in self._records.values()
         )
 
+    def has_unfinished_background(self, *, besides: CommandOwner | None = None) -> bool:
+        """Whether a background command of a Session other than *besides* is still unfinished.
+
+        Running, or ended with processes still running. An in-memory scan, cheap
+        enough to decide whether a lookup of the Sessions that own them is worth it.
+        """
+        return any(
+            record.background and not record.finished and record.owner != besides
+            for record in self._records.values()
+        )
+
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
         """Stop the commands of an Extension execution group (reason ``scope``).
 

@@ -114,9 +114,10 @@ _TAKEN_OVER = "taken over by the user"
 class _Tree:
     """What one call sees: the caller's Sub-Agents and the Sessions whose commands it sees.
 
-    A takeover is a boundary: the caller keeps the row of a Sub-Agent the user took
-    over and can stop it as a whole, but what its Session runs and the Sub-Agents
-    below it work for the user (``SubAgentState.within_takeover``).
+    A takeover is a boundary: the caller keeps the row and the status of a Sub-Agent
+    the user took over, but that Sub-Agent, what its Session runs and the Sub-Agents
+    below it work for the user (``SubAgentState.within_takeover``), and no stop of
+    the caller reaches them.
     """
 
     subagents: Sequence[SubAgentState]
@@ -180,15 +181,17 @@ class BackgroundTasksTool:
         if taken_over is not None:
             return tool_failure("subagent_taken_over", taken_over)
         if task_id.startswith(SUBAGENT_ID_PREFIX):
-            data = await self._subagent_task(context, task_id, action, tree)
+            data = await self._subagent_task(context, caller, task_id, action, tree)
         else:
             data = await self._command_task(context, task_id, action, names, tree)
         if data.get("ok") is False:
             return data
         if arguments.get(ACTION_MISSING) is True:
-            notes.append(
-                f"action is missing, so the status is shown. To stop it, call {stop_call(task_id)}."
-            )
+            missing = "action is missing, so the status is shown."
+            if self._taken_over(task_id, "stop", tree) is None:
+                # The user's Sub-Agent is the user's to stop.
+                missing += f" To stop it, call {stop_call(task_id)}."
+            notes.append(missing)
         if no_effect:
             if task_id.startswith(SUBAGENT_ID_PREFIX):
                 subagent = tree.subagent(task_id)
@@ -238,7 +241,12 @@ class BackgroundTasksTool:
         )
 
     async def _subagent_task(
-        self, context: ToolContext, subagent_id: str, action: str, tree: _Tree
+        self,
+        context: ToolContext,
+        caller: SessionAddress,
+        subagent_id: str,
+        action: str,
+        tree: _Tree,
     ) -> JsonObject:
         subagent = tree.subagent(subagent_id)
         if subagent is None or self._subagents is None:
@@ -255,17 +263,23 @@ class BackgroundTasksTool:
                 data["running"] = list(running)
             data["next"] = _subagent_next(subagent, can_send=context.can_call(SUBAGENT_TOOL_NAME))
             return data
-        stopped = await self._subagents.stop_subagent(context, subagent)
+        outcome = await self._subagents.stop_subagent(context, subagent)
+        if outcome == _TAKEN_OVER:
+            # The user took it over, or a Sub-Agent above it, after this call read the tree.
+            fresh = await self._tree(caller)
+            refusal = self._taken_over(subagent_id, action, fresh)
+            if refusal is None:
+                return tool_failure("task_not_found", self._not_found(subagent_id, action, fresh))
+            return tool_failure("subagent_taken_over", refusal)
         data = _subagent_identity(subagent)
-        if stopped:
+        if outcome == "stopped":
             data["status"] = "stopped"
             note = (
                 "Stopped: its current turn, its queued messages, its background commands and "
                 "terminals, and its own Sub-Agents. Its Session keeps the history"
             )
-            if subagent.status == _TAKEN_OVER or not context.can_call(SUBAGENT_TOOL_NAME):
-                # A taken-over Sub-Agent works for the user, and subagent send refuses
-                # it; without subagent, the caller cannot reach it with a message.
+            if not context.can_call(SUBAGENT_TOOL_NAME):
+                # Without subagent, the caller cannot reach it with a message.
                 note += "."
             else:
                 # Only the Sub-Agent's own Parent can message it.
@@ -281,7 +295,13 @@ class BackgroundTasksTool:
                 f"Sub-Agent {subagent.id} and its own Sub-Agents were idle and ran no background "
                 "commands or terminals, so nothing needed stopping."
             )
-        data["notes"] = [note]
+        notes = [note]
+        kept = _taken_over_below(subagent, tree)
+        if kept is not None:
+            # The stop ends where the user took over; without this the Agent reports
+            # the user's own work as stopped.
+            notes.append(kept)
+        data["notes"] = notes
         return data
 
     async def _command_task(
@@ -438,18 +458,24 @@ class BackgroundTasksTool:
     def _taken_over(self, task_id: str, action: str, tree: _Tree) -> str | None:
         """The refusal of *task_id* when it works within a takeover, else None.
 
-        The taken-over Sub-Agent itself stays the caller's to check and stop. The
+        The caller can still check the taken-over Sub-Agent itself, but not stop it:
+        the user decided that a Session the user took over belongs to the user. The
         refusal names the state and the user as the way on; one that reads as a
         permission problem invites retries with other id spellings.
         """
         if task_id.startswith(SUBAGENT_ID_PREFIX):
             subagent = next((item for item in tree.everyone if item.id == task_id), None)
-            if subagent is None or subagent.within_takeover in (None, task_id):
+            if subagent is None or subagent.within_takeover is None:
                 return None
-            state = (
-                f"{task_id} works below Sub-Agent {subagent.within_takeover}, whose Session the "
-                "user took over and now works in."
-            )
+            if subagent.within_takeover == task_id:
+                if action != "stop":
+                    return None
+                state = f"{task_id} is a Sub-Agent the user took over and now works in."
+            else:
+                state = (
+                    f"{task_id} works below Sub-Agent {subagent.within_takeover}, whose Session "
+                    "the user took over and now works in."
+                )
             outcome = "answer"
         elif task_id.startswith(COMMAND_ID_PREFIX):
             try:
@@ -538,6 +564,35 @@ def _subagent_identity(subagent: SubAgentState) -> JsonObject:
     if subagent.session.project_id is not None:
         data["project_id"] = subagent.session.project_id
     return data
+
+
+def _taken_over_below(subagent: SubAgentState, tree: _Tree) -> str | None:
+    """Name the Sub-Agents below *subagent* that the user took over, which its stop left running."""
+    parents = {item.id: item.parent_id for item in tree.everyone}
+
+    def below(item_id: str) -> bool:
+        seen = {item_id}
+        parent_id = parents.get(item_id)
+        while parent_id is not None and parent_id not in seen:
+            if parent_id == subagent.id:
+                return True
+            seen.add(parent_id)
+            parent_id = parents.get(parent_id)
+        return False
+
+    kept = [item.id for item in tree.everyone if item.within_takeover == item.id and below(item.id)]
+    if not kept:
+        return None
+    if len(kept) == 1:
+        return (
+            f"Not stopped: Sub-Agent {kept[0]}, which the user took over and now works in, "
+            "with everything below it."
+        )
+    named = f"{', '.join(kept[:-1])} and {kept[-1]}"
+    return (
+        f"Not stopped: Sub-Agents {named}, which the user took over and now works in, "
+        "with everything below them."
+    )
 
 
 def _subagent_fields(subagent: SubAgentState, *, with_project: bool = False) -> JsonObject:

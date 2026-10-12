@@ -24,7 +24,7 @@ import pytest_asyncio
 from core.runtime import _bootstrap
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
-from core.subagents import SubAgentState
+from core.subagents import SubAgentState, SubAgentStopOutcome
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS, ToolAccess, resolve_tool_access
 from core.tools.background_tasks import (
     BACKGROUND_TASKS_TOOL_NAME,
@@ -75,6 +75,8 @@ class FakeSubAgents:
         self.grandchild: SubAgentState | None = None
         self.running: list[str] = []
         self.stopped: list[str] = []
+        # The user takes over sub_child between the call's read of the tree and its stop.
+        self.taken_over_meanwhile = False
 
     async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
         if caller != OWNER:
@@ -84,10 +86,16 @@ class FakeSubAgents:
     async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
         return self.running if subagent.id == self.child.id else ()
 
-    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+    async def stop_subagent(
+        self, context: ToolContext, subagent: SubAgentState
+    ) -> SubAgentStopOutcome:
+        if self.taken_over_meanwhile:
+            self.child = dataclasses.replace(
+                self.child, status="taken over by the user", within_takeover=self.child.id
+            )
+            return "taken over by the user"
         self.stopped.append(subagent.id)
-        # A taken-over Sub-Agent's status does not say whether its turn runs; here it does.
-        return subagent.status != "idle" or bool(self.running)
+        return "stopped" if subagent.status != "idle" or self.running else "idle"
 
 
 class Tasks:
@@ -414,31 +422,55 @@ async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
     assert ("last_tool" in shown) is (status == "working")
     running = None if deeper or taken_over else ["background command cmd_a (serve)"]
     assert shown.get("running") == running
+    if taken_over:
+        # A call without action offers no stop either: the user's Sub-Agent is the user's to stop.
+        looked = data(await tasks.call({"id": subagent.id}, tools=tools))
+        assert looked["status"] == status
+        assert calls(" ".join(looked["notes"])) == []
     assert tasks.subagents.stopped == []
 
 
 @pytest.mark.parametrize(
-    ("status", "deeper", "subagent_tool", "continues"),
+    ("status", "deeper", "subagent_tool", "continues", "takeover"),
     [
-        ("working", False, True, True),
+        ("working", False, True, True, None),
         # Only its own Parent, which the note names, can message a deeper Sub-Agent.
-        ("working", True, True, True),
+        ("working", True, True, True, None),
         # Without subagent, the caller cannot message it.
-        ("working", False, False, False),
-        # The user continues a Sub-Agent it took over; subagent send refuses it.
-        ("taken over by the user", False, True, False),
-        ("idle", False, True, False),
+        ("working", False, False, False, None),
+        ("idle", False, True, False, None),
+        # The stop ends at a Sub-Agent below that the user took over, which a note names.
+        ("working", False, True, True, "below"),
+        # A Sub-Agent the user took over belongs to the user: its stop is refused,
+        # also when the takeover came after the call read the tree.
+        ("taken over by the user", False, True, False, "it"),
+        ("working", False, True, False, "meanwhile"),
     ],
-    ids=["working", "working-deeper", "working-without-subagent", "taken-over", "idle"],
+    ids=[
+        "working",
+        "working-deeper",
+        "working-without-subagent",
+        "idle",
+        "taken-over-below",
+        "taken-over",
+        "taken-over-meanwhile",
+    ],
 )
 @pytest.mark.asyncio
 async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
-    tasks: Tasks, status: Any, deeper: bool, subagent_tool: bool, continues: bool
+    tasks: Tasks,
+    status: Any,
+    deeper: bool,
+    subagent_tool: bool,
+    continues: bool,
+    takeover: str | None,
 ) -> None:
     working = status != "idle"
     subagent = dataclasses.replace(
         tasks.subagents.child, status=status, last_tool="bash" if status == "working" else None
     )
+    if takeover == "it":
+        subagent = dataclasses.replace(subagent, within_takeover=subagent.id)
     if deeper:
         subagent = dataclasses.replace(
             subagent, id="sub_grandchild", session=GRANDCHILD, parent_id="sub_child"
@@ -446,13 +478,34 @@ async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
         tasks.subagents.grandchild = subagent
     else:
         tasks.subagents.child = subagent
+    if takeover == "below":
+        tasks.subagents.grandchild = dataclasses.replace(
+            subagent,
+            id="sub_grandchild",
+            session=GRANDCHILD,
+            parent_id=subagent.id,
+            status="taken over by the user",
+            within_takeover="sub_grandchild",
+        )
+    tasks.subagents.taken_over_meanwhile = takeover == "meanwhile"
     tools = (SHELL_TOOL_NAME, SUBAGENT) if subagent_tool else (SHELL_TOOL_NAME,)
 
     result = await tasks.call({"action": "stop", "id": subagent.id}, tools=tools)
-    stopped = data(result)
 
+    if takeover in ("it", "meanwhile"):
+        refusal = error(result)
+        assert refusal["code"] == "subagent_taken_over"
+        assert refusal["message"].startswith("Nothing was stopped")
+        assert subagent.id in refusal["message"]
+        assert tasks.subagents.stopped == []
+        return
+    stopped = data(result)
     assert tasks.subagents.stopped == [subagent.id]
-    (note,) = stopped.pop("notes")
+    if takeover == "below":
+        note, kept = stopped.pop("notes")
+        assert other_subagents(kept, subagent.id) == ["sub_grandchild"]
+    else:
+        (note,) = stopped.pop("notes")
     assert stopped == {
         "id": subagent.id,
         "type": "subagent",
