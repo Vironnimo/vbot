@@ -669,7 +669,6 @@ def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadSt
     batch = change_batch(context, {**_EDIT_TEMPLATES, **already})
     operations = _edit_operations(arguments["path"], edits)
     run_operations(context, state, batch, operations, one_write=True)
-    files = file_reports(context, batch)
     [outcome] = batch.results
     refused: list[JsonObject] = [
         {"code": "invalid_arguments", "message": edit[_REFUSED], "label": f"edit {n} of {total}"}
@@ -677,16 +676,18 @@ def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadSt
         if _REFUSED in edit
     ]
     skipped = outcome.get("failures") or []
-    if outcome["status"] == "failed" and not skipped:
-        # A problem of the whole call, such as a missing file.
-        return _edit_failure(context, [outcome["error"], *refused], total)
-    errors = sorted([*refused, *skipped], key=lambda error: _edit_number(error, total) or 0)
     # Edits that matched and changed nothing, in a call that changed the file.
     unchanged = [
         n
         for n in (_edit_number({"label": label}, total) for label in outcome.get("unchanged") or [])
         if n is not None
     ]
+    applied = total - len(refused) - len(skipped) - len(unchanged)
+    files = file_reports(context, batch, edits=applied)
+    if outcome["status"] == "failed" and not skipped:
+        # A problem of the whole call, such as a missing file.
+        return _edit_failure(context, [outcome["error"], *refused], total)
+    errors = sorted([*refused, *skipped], key=lambda error: _edit_number(error, total) or 0)
     no_ops: list[JsonObject] = [
         {
             "status": "unchanged",

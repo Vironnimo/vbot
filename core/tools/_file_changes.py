@@ -769,8 +769,14 @@ def _move_pairs(moves: dict[str, str]) -> dict[str, str]:
     return pairs
 
 
-def file_reports(context: ToolContext, batch: ChangeBatch) -> list[_FileReport]:
-    """Report each changed file's net effect, and record its diff for the user's display."""
+def file_reports(
+    context: ToolContext, batch: ChangeBatch, *, edits: int | None = None
+) -> list[_FileReport]:
+    """Report each changed file's net effect, and record its diff for the user's display.
+
+    The display also counts the ``edits`` applied, when given, and the changed
+    files when there are several.
+    """
     effects = [effect for effect in _file_effects(batch) if effect[1] != effect[2]]
     by_label = {batch.shown(path): (path, before, after) for path, before, after in effects}
     # A completed move reads as one entry: its source deletion plus destination addition.
@@ -829,9 +835,12 @@ def file_reports(context: ToolContext, batch: ChangeBatch) -> list[_FileReport]:
         if after.exists:
             report.notes = batch.warnings.get(path, [])
         reports.append(report)
-    if effects:
+    if entries:
         context.add_display_line_changes(added=added, removed=removed)
-        context.add_display_count(len(effects), "files")
+        if edits:
+            context.add_display_count(edits, "edits")
+        if len(entries) > 1:
+            context.add_display_count(len(entries), "files")
     return reports
 
 

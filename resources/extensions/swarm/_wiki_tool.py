@@ -142,13 +142,16 @@ class WikiCall:
             accepted = accepted | {"page_id"}
         for field in sorted(arguments.keys() - accepted):
             users = [name for name, fields in _ACTION_FIELDS.items() if field in fields]
-            raise AgentCallError(
-                "invalid_arguments",
+            message = (
                 text.WIKI_FIELD_ELSEWHERE.format(
                     action=action, field=field, users=spoken_list(users)
                 )
                 if users
-                else text.WIKI_FIELD_UNKNOWN.format(field=field),
+                else text.WIKI_FIELD_UNKNOWN.format(field=field)
+            )
+            raise AgentCallError(
+                "invalid_arguments",
+                _nothing_changed(message) if action in MUTATIONS else message,
             )
         arguments.pop("request_id", None)
         self._require(action, arguments)
@@ -191,7 +194,7 @@ class WikiCall:
         def missing(key: str, **values: Any) -> AgentCallError:
             return AgentCallError(
                 "invalid_arguments",
-                f"{text.WIKI_NEEDS[key].format(**values)} {text.NOTHING_CHANGED}",
+                _nothing_changed(text.WIKI_NEEDS[key].format(**values)),
             )
 
         if action not in {"list", "create"} and not arguments.get("page_id"):
@@ -200,15 +203,16 @@ class WikiCall:
             if action != "update" or not isinstance(old_text, str) or not old_text.strip():
                 message = text.WIKI_NEEDS["page_id"].format(action=action)
                 if action in MUTATIONS:
-                    message += f" {text.NOTHING_CHANGED}"
+                    message = _nothing_changed(message)
                 raise AgentCallError("invalid_arguments", message)
         if action == "update":
+            passage = [field for field in ("old_text", "new_text") if field in arguments]
+            if "content" in arguments and passage:
+                raise missing("one_change", fields=" and ".join(passage))
             if "new_text" in arguments and "old_text" not in arguments:
                 raise missing("old_text")
             if "old_text" in arguments and "new_text" not in arguments:
                 raise missing("new_text")
-            if "old_text" in arguments and "content" in arguments:
-                raise missing("one_change")
             if not {"old_text", "content", "title"} & arguments.keys():
                 raise missing("change")
         if action == "create":
@@ -236,10 +240,11 @@ class WikiCall:
         if existing is not None:
             raise AgentCallError(
                 "invalid_arguments",
-                text.WIKI_CREATE_EXISTING.format(
-                    title=existing["title"], page_id=wiki_ref(existing["number"])
-                )
-                + f" {text.NOTHING_CHANGED}",
+                _nothing_changed(
+                    text.WIKI_CREATE_EXISTING.format(
+                        title=existing["title"], page_id=wiki_ref(existing["number"])
+                    )
+                ),
             )
         self.notes.append(text.WIKI_CREATE_IGNORED_ID.format(value=value))
 
@@ -264,7 +269,7 @@ class WikiCall:
             message = text.WIKI_PAGES_HOLD_TEXT.format(pages=spoken_list(named))
         else:
             message = text.WIKI_NEEDS["page_id"].format(action="update")
-        raise AgentCallError("invalid_arguments", f"{message} {text.NOTHING_CHANGED}")
+        raise AgentCallError("invalid_arguments", _nothing_changed(message))
 
     async def _name_by_number(self, arguments: Json) -> None:
         """Refer to a page the call names exactly by its number, as results show it."""
@@ -314,11 +319,8 @@ class WikiCall:
         """Return the Agent-facing explanation of a failed call."""
 
         def closing(message: str) -> str:
-            # A failed change says so in its first line, before any evidence lines.
-            if action not in MUTATIONS:
-                return message
-            head, separator, evidence = message.partition("\n")
-            return f"{head} {text.NOTHING_CHANGED}{separator}{evidence}"
+            # A failed change says so first.
+            return _nothing_changed(message) if action in MUTATIONS else message
 
         details = error.details
         page_id = arguments.get("page_id", "")
@@ -749,6 +751,12 @@ def _page_match(value: str, pages: list[Json]) -> tuple[Json, bool] | None:
     return None
 
 
+def _nothing_changed(message: str) -> str:
+    """Open the explanation of a failed change with what it applied: nothing."""
+
+    return f"{text.NOTHING_CHANGED} {message}"
+
+
 def _miss_message(details: Json, page_id: str, changes: tuple[str, str] | None) -> str:
     """Explain an old_text that identifies no single passage, with line hints."""
 
@@ -820,6 +828,13 @@ def _difference(item: Json) -> str:
         )
     if item["copy"] is None:
         return text.WIKI_DIFFERENCE_PAGE_ONLY.format(line=item["line"], page=repr(item["file"]))
+    if item.get("spacing"):
+        return text.WIKI_DIFFERENCE_SPACING.format(
+            line=item["line"],
+            page=repr(item["file"]),
+            copy=repr(item["copy"]),
+            side=item["spacing"],
+        )
     template = text.WIKI_DIFFERENCE_CUT if item["truncated"] else text.WIKI_DIFFERENCE
     return template.format(line=item["line"], page=repr(item["file"]), copy=repr(item["copy"]))
 

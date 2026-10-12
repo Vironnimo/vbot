@@ -104,6 +104,13 @@ already be full. An error the command's own text silenced does not count: its
 command passes ``-ErrorAction SilentlyContinue`` or ``Ignore``, it or an
 enclosing command redirects the error stream (``2>$null``, ``2>&1``,
 ``*>...``), or ``$ErrorActionPreference`` is SilentlyContinue at the end.
+
+Silenced errors. A silenced error still fails its statement, so a last statement
+such as ``Get-ChildItem missing -ErrorAction SilentlyContinue | Select-Object
+Name`` exits with 1 while the output shows no error. When the code 1 comes from
+the last statement's failure (no native program set ``$LASTEXITCODE``) and every
+error recorded since the baseline was silenced, the error stream names the
+newest of them. ``-ErrorAction Ignore`` records none, so it gets no note.
 """
 
 from __future__ import annotations
@@ -144,6 +151,11 @@ POWERSHELL_ERROR_NOTE = (
     "PowerShell recorded errors before exiting with code 0, which includes errors the "
     "command caught. Check the error output and verify any changed files before relying "
     "on this result."
+)
+# Exit code 1 from a failed last statement whose only new errors the command
+# silenced: the output looks complete and shows no error.
+POWERSHELL_SILENCED_ERROR_NOTE = (
+    "Exit code 1 comes from an error the command silenced, so the output does not show it."
 )
 # Read $? before any bookkeeping changes it or $LASTEXITCODE. The statement only
 # records the code; the bootstrap exits after the command's output is formatted.
@@ -325,14 +337,24 @@ REPORT_STATEMENTS = r"""function __vbotSilenced($record, $ast) {
 }
 function __vbotReporter($ast, $initial) {
     {
+        param($status)
+        $silenced = $null
         $shown = foreach ($record in @($global:Error)) {
             if ([object]::ReferenceEquals($record, $initial)) { break }
             if (-not (__vbotSilenced $record $ast)) { $record; break }
+            if ($null -eq $silenced) { $silenced = $record }
         }
-        if ($null -eq $shown) { return }
+        if ($status) {
+            if ($null -ne $shown -or $null -eq $silenced) { return }
+            $shown = $silenced
+            $note = '{silenced_note} Silenced error: '
+        } else {
+            if ($null -eq $shown) { return }
+            $note = '{note} Latest error: '
+        }
         $summary = "$shown" -replace '\s+', ' '
         if ($summary.Length -gt 500) { $summary = $summary.Substring(0, 500) + '...' }
-        [Console]::Error.WriteLine('{note} Latest error: ' + $summary)
+        [Console]::Error.WriteLine($note + $summary)
     }.GetNewClosure()
 }
 """
@@ -431,6 +453,10 @@ Remove-Variable -Name __vbot* -Scope Global
 . __vbotInvoke | Out-Default
 $__vbotExitCode = Get-Variable -Name __vbotExitCode -Scope Global -ValueOnly -ErrorAction Ignore
 if (-not $__vbotExitCode) { __vbotReport; exit 0 }
+if ($__vbotExitCode -eq 1 -and
+    -not (Get-Variable -Name LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore)) {
+    __vbotReport 1
+}
 exit $__vbotExitCode
 """
 RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS)
@@ -471,7 +497,9 @@ def _joined(template: str, **expressions: str) -> str:
 # the request runs before the command is known; the error baseline follows it.
 POWERSHELL_BOOTSTRAP = (
     f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n"
-    + REPORT_STATEMENTS.replace("{note}", _escaped(POWERSHELL_ERROR_NOTE))
+    + REPORT_STATEMENTS.replace("{note}", _escaped(POWERSHELL_ERROR_NOTE)).replace(
+        "{silenced_note}", _escaped(POWERSHELL_SILENCED_ERROR_NOTE)
+    )
     + WARM_UP_STATEMENTS
     + REQUEST_STATEMENTS.replace(
         "{unreadable}", _joined(REQUEST_UNREADABLE_NOTE, reason="$_.Exception.Message")
@@ -527,6 +555,7 @@ __all__ = [
     "PLAIN_TEXT_STATEMENT",
     "POWERSHELL_BOOTSTRAP",
     "POWERSHELL_ERROR_NOTE",
+    "POWERSHELL_SILENCED_ERROR_NOTE",
     "REQUEST_UNREADABLE_NOTE",
     "SETUP_STATEMENT",
     "UNIX_LINE_FILTERS_STATEMENT",

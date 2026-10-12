@@ -129,6 +129,116 @@ async def test_find_in_code_shows_nearby_matches_once_and_reads_on_after_each_pa
     assert "navigation" not in missing["data"]["content"]
 
 
+_ELEMENT_PAGE = """<main>
+<p><b>Iron</b> is a <a href="/wiki/Element">chemical element</a>; it has symbol Fe.</p>
+<table>
+<tr><th>Property</th><th>Value</th></tr>
+<tr><td><b>Discovery date</b></td><td>approx 3500BC</td></tr>
+<tr><td><a href="/n">Name</a>, <a href="/s">Symbol</a>, <a href="/z">Ordnungszahl</a></td>
+<td>Eisen, Fe, 26</td></tr>
+<tr><td><b>Density</b></td><td>7.87</td></tr>
+</table>
+<ul>
+<li><a href="/group">Group name</a>: Lanthanoid</li>
+<li><a href="/melting"><img src="data:image/png;base64,AA" alt="spark table">
+ Melting point</a>: 1811 K</li>
+<li>Density of solid: 968&nbsp;kg&#8239;m&#8209;3,
+ measured by &ldquo;Smith&rdquo; at &minus;5&nbsp;&deg;C</li>
+</ul>
+</main>"""
+
+
+@pytest.mark.parametrize(
+    ("find", "place"),
+    [
+        ("Iron is a chemical element", "**Iron** is a [chemical element]"),
+        ("Discovery date approx 3500BC", "| **Discovery date** | approx 3500BC |"),
+        ("name, symbol, ordnungszahl eisen", "[Name](https://example.com/n), [Symbol]"),
+        ("Group name: Lanthanoid", "[Group name](https://example.com/group): Lanthanoid"),
+        ("Melting point: 1811", "Melting point](https://example.com/melting): 1811"),
+        ('968 kg m-3, measured by "Smith" at -5 °C', "968 kg"),
+        # Markdown copied from a result finds its place in the readable text too.
+        ("| **Density** | 7.87 |", "| **Density** | 7.87 |"),
+        ("**Density** 7.87", "| **Density** | 7.87 |"),
+        ("[Group name](https://example.com/group): Lanthanoid", "Group name](https"),
+        # Every other character still counts.
+        ("Discovery date approx 3600BC", None),
+        ("Iron is a chemical elements", None),
+        ("Density 7.871", None),
+        ("[Group name](https://example.com/other): Lanthanoid", None),
+        ("968kg", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_find_reads_the_page_text_past_its_markdown(tmp_path, monkeypatch, find, place):
+    install_http_get(monkeypatch, lambda url: make_result(text=_ELEMENT_PAGE, url=url))
+
+    found = await fetch(tmp_path, {"url": "https://example.com/iron", "find": find})
+
+    data = found["data"]
+    if place is None:
+        assert "shown" not in data and "Read on with" not in data["content"]
+    else:
+        assert data["shown"].startswith("1 passage") and place in data["content"]
+
+
+_FILLER = "<p>" + "Filler sentence. " * 40 + "</p>"
+_WORDS_PAGE = _FILLER.join(
+    [
+        "<main><p>Anemias are caused by iron deficiency.</p>",
+        "<p>The environment changes.</p>",
+        "<p>Magnetic fields.</p>",
+        "<p>鉄は元素です。</p></main>",
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    ("find", "places", "named"),
+    [
+        # Found only inside a longer word, which the result names (Swarm run 2026-10-12).
+        ("used by", ["caused by"], "caused by"),
+        # A match inside a word counts, so stems and compounds are found.
+        ("iron", ["iron deficiency", "environment"], None),
+        ("magnet", ["Magnetic"], None),
+        # Scripts without spaces between words have no longer words to name.
+        ("元素です", ["鉄は元素です"], None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_find_names_the_longer_words_that_hold_every_match(
+    tmp_path, monkeypatch, find, places, named
+):
+    install_http_get(monkeypatch, lambda url: make_result(text=_WORDS_PAGE, url=url))
+
+    found = await fetch(tmp_path, {"url": "https://example.com/words", "find": find})
+
+    data = found["data"]
+    assert data["shown"].startswith(f"{len(places)} passage")
+    assert all(place in data["content"] for place in places)
+    if named is not None:
+        assert f'"{named}"' in data["shown"]
+    else:
+        assert data["shown"].count('"') == 2  # only the search text itself is quoted
+
+
+@pytest.mark.asyncio
+async def test_find_in_plain_text_keeps_its_asterisks_and_pipes(tmp_path, monkeypatch):
+    code = "def call(x, **kwargs):\n    return x | kwargs\n"
+    install_http_get(
+        monkeypatch,
+        lambda url: make_result(text=code, url=url, headers={"content-type": "text/plain"}),
+    )
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    ref = (await tool.dispatch(context, {"url": "https://example.com/a.py"}))["data"]["ref"]
+
+    spaced = await tool.dispatch(context, {"ref": ref, "find": "return  x |\tkwargs"})
+    unmarked = await tool.dispatch(context, {"ref": ref, "find": "x, kwargs"})
+
+    assert spaced["data"]["shown"].startswith("1 passage")
+    assert "shown" not in unmarked["data"]
+
+
 @pytest.mark.asyncio
 async def test_search_continuations_recover_all_matches_without_fetching(tmp_path, monkeypatch):
     body = "\n".join("Filler " * 100 + f"Needle{i:02d}" for i in range(30))
@@ -179,6 +289,36 @@ async def test_redundant_url_must_name_the_saved_page(tmp_path, monkeypatch):
     network.assert_awaited_once()
 
 
+def mistyped(ref):
+    """The ref with one character changed, as a copy slip makes."""
+    return "tmp_" + ("b" if ref[4] == "a" else "a") + ref[5:]
+
+
+@pytest.mark.parametrize(
+    ("requested", "final", "other_page"),
+    [
+        ("https://www.example.org/table/element/26/iron", "https://table.example.org/", True),
+        ("https://example.com/docs/page?id=26", "https://example.com/docs/page", True),
+        ("http://example.com/Docs/A%20B/", "https://www.example.com/docs/a b", False),
+        ("https://example.com/docs/", "https://example.com/docs/index.html", False),
+        ("https://example.com/r/x/", "https://example.com/r/x/?rdt=5&utm_source=feed", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_redirect_to_another_page_is_named_with_the_requested_url(
+    tmp_path, monkeypatch, requested, final, other_page
+):
+    install_http_get(monkeypatch, lambda url: make_result(text="Landing page", url=final))
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+
+    fetched = await tool.dispatch(context, {"url": requested})
+    saved = await tool.dispatch(context, {"url": requested, "ref": fetched["data"]["ref"]})
+
+    for data in (fetched["data"], saved["data"]):
+        assert data["url"] == final
+        assert (requested in data.get("note", "")) is other_page
+
+
 @pytest.mark.asyncio
 async def test_refs_are_refused_across_sessions_agents_expiry_and_traversal(tmp_path, monkeypatch):
     install_http_get(monkeypatch, lambda url: make_result(text="A real page", url=url))
@@ -186,23 +326,48 @@ async def test_refs_are_refused_across_sessions_agents_expiry_and_traversal(tmp_
     first = await tool.dispatch(context, {"url": "https://example.com/"})
     ref = first["data"]["ref"]
     for changed in (replace(context, session_id="other"), replace(context, agent_id="other")):
-        result = await tool.dispatch(changed, {"ref": ref})
-        assert result["error"]["code"] == "page_expired"
+        result = await tool.dispatch(changed, {"ref": ref, "find": "real"})
+        assert result["error"]["code"] == "invalid_ref"
+        # Another conversation's page is never offered or named.
+        assert "example.com" not in result["error"]["message"]
     result = await tool.dispatch(context, {"ref": "../settings"})
     assert result["error"]["code"] == "invalid_ref"
-    assert result["error"]["message"] == (
-        '"../settings" is not a web_fetch ref. Refs come from earlier web_fetch results and '
-        "look like tmp_7k2m9x4q1b3c or tmp_7k2m9x4q1b3c.m.12000. To fetch a page, pass its "
-        "address as url."
-    )
+    # A mistyped ref offers the conversation's page with the closest ref as a ready call.
+    unknown = await tool.dispatch(context, {"ref": mistyped(ref) + ".m.5", "find": "real"})
+    assert unknown["error"]["code"] == "invalid_ref"
+    assert json.dumps({"ref": ref + ".m.5", "find": "real"}) in unknown["error"]["message"]
     now = pages.time.time()
     monkeypatch.setattr(pages.time, "time", lambda: now + 73 * 3600)
-    expired = await tool.dispatch(context, {"ref": ref})
+    expired = await tool.dispatch(context, {"ref": ref, "find": "real"})
     assert expired["error"]["code"] == "page_expired"
-    assert expired["error"]["message"] == (
-        f"Saved page {ref} is not available: saved pages expire after 72 hours and can only "
-        "be read in the conversation that fetched them. Fetch the page again with url."
+    # An expired page of this conversation names the call that fetches it again.
+    assert (
+        json.dumps({"url": "https://example.com/", "find": "real"}) in (expired["error"]["message"])
     )
+    # Nor is an expired page offered for a mistyped ref.
+    unknown = await tool.dispatch(context, {"ref": mistyped(ref)})
+    assert unknown["error"]["code"] == "invalid_ref" and ref not in unknown["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_an_unusable_ref_beside_url_fetches_the_url_and_says_why(tmp_path, monkeypatch):
+    network = AsyncMock(
+        side_effect=lambda session, url, max_bytes: make_result(text="Iron page", url=url)
+    )
+    monkeypatch.setattr("core.tools._public_http._http_get", network)
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    url = "https://example.com/iron"
+    ref = (await tool.dispatch(context, {"url": url}))["data"]["ref"]
+
+    for unusable in (mistyped(ref), "not-a-ref"):
+        found = await tool.dispatch(context, {"ref": unusable, "url": url, "find": "iron"})
+        assert found["ok"] and "Iron page" in found["data"]["content"]
+        assert found["data"]["ref"] != ref and unusable in found["data"]["note"]
+    assert network.await_count == 3
+    # A usable ref still reads the saved page without fetching.
+    saved = await tool.dispatch(context, {"ref": ref, "url": url})
+    assert saved["data"]["ref"] == ref and "note" not in saved["data"]
+    assert network.await_count == 3
 
 
 @pytest.mark.asyncio

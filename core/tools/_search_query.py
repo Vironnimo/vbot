@@ -254,6 +254,19 @@ class SearchQuery:
 class _Parsed:
     options: list[tuple[str, str | None, str]] = field(default_factory=list)
     operands: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+# Valued flags whose value a named field of the call can give instead.
+_FLAG_FIELDS = {
+    "glob": "glob",
+    "iglob": "glob",
+    "include": "glob",
+    "regexp": "pattern",
+    "context": "context",
+    "limit": "limit",
+    "offset": "offset",
+}
 
 
 def _is_encoding(value: str) -> bool:
@@ -266,12 +279,27 @@ def _is_encoding(value: str) -> bool:
     return True
 
 
-def _parse_args(tokens: list[str]) -> _Parsed:
+def _parse_args(tokens: list[str], fields: dict[str, str] | None = None) -> _Parsed:
     """Split args into (name, value, as written) options and operands.
 
-    Option values stay literal, even when they look like flags.
+    Option values stay literal, even when they look like flags. A valued flag
+    that ends args without its value is left out with a note when ``fields``
+    (field name -> its value, as shown) gives its value in a named field.
     """
     parsed = _Parsed()
+    fields = fields or {}
+
+    def bare(name: str, written: str) -> bool:
+        """Leave out a flag without a value when a named field gives it."""
+        field_name = _FLAG_FIELDS.get(name)
+        if field_name is None or field_name not in fields:
+            return False
+        parsed.notes.append(
+            f"{written} in args had no value and was ignored; {field_name} gives "
+            f"{fields[field_name]}."
+        )
+        return True
+
     index = 0
     while index < len(tokens):
         token = tokens[index]
@@ -289,6 +317,8 @@ def _parse_args(tokens: list[str]) -> _Parsed:
         if token.startswith("--"):
             name, equals, value = token[2:].partition("=")
             if name in _VALUED and not equals:
+                if index >= len(tokens) and bare(name, token):
+                    continue
                 if index >= len(tokens):
                     raise SearchArgumentError(
                         f'{token} in args needs a value as the next item, for example ["{token}", '
@@ -321,6 +351,8 @@ def _parse_args(tokens: list[str]) -> _Parsed:
                     continue
                 value = letters[position:].removeprefix("=")
                 if not value:
+                    if index >= len(tokens) and bare(name, f"-{letter}"):
+                        break
                     if index >= len(tokens):
                         raise SearchArgumentError(
                             f"-{letter} in args needs a value as the next item, for example "
@@ -341,6 +373,13 @@ def _parse_args(tokens: list[str]) -> _Parsed:
             continue
         parsed.operands.append(token)
     return parsed
+
+
+def _shown(value: str | int | list[str]) -> str:
+    """Show a named field's value as a note quotes it: "*.py", "a", "b" or 2."""
+    if isinstance(value, list):
+        return ", ".join(json.dumps(item, ensure_ascii=False) for item in value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _example_value(name: str) -> str:
@@ -562,7 +601,18 @@ def interpret(
     replaces ripgrep's --replace.
     """
     query = SearchQuery(roots=list(roots), globs=list(globs))
-    parsed = _parse_args(args)
+    # A flag that ends args without its value, beside the field that gives it, is left out.
+    named: dict[str, str | int | list[str] | None] = {
+        "glob": globs or None,
+        "pattern": pattern,
+        "context": context,
+        "limit": limit,
+        "offset": offset,
+    }
+    parsed = _parse_args(
+        args, {name: _shown(value) for name, value in named.items() if value is not None}
+    )
+    query.notes.extend(parsed.notes)
     explicit_patterns = [pattern] if pattern is not None else []
     pattern_sources = 1 if pattern is not None else 0
     mode: Mode | None = OUTPUT_FIELD_MODES.get(output) if output else None

@@ -148,7 +148,8 @@ async def test_domains_are_sent_as_site_operators_and_enforced_on_results(
 
 @pytest.mark.asyncio
 async def test_query_operators_pass_through_unchanged(tmp_path: Path) -> None:
-    query = 'vbot "agent loop" -draft filetype:pdf site:example.com/docs'
+    # Excluding the whole site would drop more than the path the Agent named.
+    query = 'vbot "agent loop" -draft filetype:pdf -site:example.com/docs'
 
     data, request = await _search_brave(tmp_path, {"query": query}, [])
 

@@ -23,6 +23,7 @@ from core.tools._powershell import (
     OUTPUT_COLUMNS,
     POWERSHELL_BOOTSTRAP,
     POWERSHELL_ERROR_NOTE,
+    POWERSHELL_SILENCED_ERROR_NOTE,
     powershell_request,
 )
 from core.tools.command_manager import CommandManager
@@ -225,6 +226,20 @@ _PRINTED_ERROR_TEXT = "; ".join(
             True,
             ("shown-sentinel", "finished"),
         ),
+        # A last statement that failed with an error the command silenced exits with 1,
+        # and the error stream names that error; a native program's own code needs no note.
+        (
+            "Get-ChildItem hidden-sentinel -ErrorAction SilentlyContinue | Select-Object Name",
+            1,
+            False,
+            (POWERSHELL_SILENCED_ERROR_NOTE, "hidden-sentinel"),
+        ),
+        (
+            f"Remove-Item silenced-sentinel -ea 0\n& '{sys.executable}' -c 'raise SystemExit(1)'",
+            1,
+            False,
+            (),
+        ),
         # Explicit control flow and failure status keep their meaning.
         ("Write-Error 'recorded-sentinel'; exit 0", 0, False, ()),
         ("Write-Error 'recorded-sentinel'; $Error.Clear(); 'finished'", 0, False, ()),
@@ -276,6 +291,8 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "parse-error",
         "unknown-pipeline-command",
         "shown-and-silenced",
+        "silenced-last-statement",
+        "silenced-then-native-exit",
         "exit-0",
         "cleared",
         "printed-text-and-quotes",
@@ -292,6 +309,8 @@ async def test_exit_status_and_error_records_follow_the_last_statement(
 
     assert code == exit_code, output
     assert output.count(POWERSHELL_ERROR_NOTE) == (1 if error_record else 0)
+    silenced = POWERSHELL_SILENCED_ERROR_NOTE in shows
+    assert output.count(POWERSHELL_SILENCED_ERROR_NOTE) == (1 if silenced else 0)
     for text in shows:
         assert text in output
     assert "silenced-sentinel" not in output

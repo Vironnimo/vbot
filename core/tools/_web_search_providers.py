@@ -18,9 +18,21 @@ from core.tools._web_search_transport import (
 )
 from core.tools.tools import run_tool_worker
 from core.utils.http_status import HttpRequestFailure
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.web_search")
+
+
+# A blocked provider or search engine fails every search until it recovers, so
+# it is logged when it starts and when it ends, not on every call (logging.md).
+_PROVIDER_CONDITIONS = LoggedConditions()
+
+
+_DUCKDUCKGO_BLOCKED = "duckduckgo-blocked"
+
+
+_MAX_ENGINE_REASON_CHARS = 80
 
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
@@ -283,6 +295,46 @@ def _build_searxng_endpoint(base_url: str) -> tuple[str | None, str | None]:
     return endpoint, None
 
 
+def _unresponsive_engines(payload: Any) -> list[tuple[str, str]]:
+    """Read SearXNG's ``[engine, reason]`` pairs for the engines that did not answer."""
+    raw = payload.get("unresponsive_engines") if isinstance(payload, dict) else None
+    engines: dict[str, str] = {}
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, list | tuple) or not item:
+            continue
+        name = " ".join(_normalize_text(item[0]).split())
+        if not name or name in engines:
+            continue
+        reason = " ".join(_normalize_text(item[1]).split()) if len(item) > 1 else ""
+        engines[name] = reason[:_MAX_ENGINE_REASON_CHARS]
+    return list(engines.items())
+
+
+def _answering_engines(raw_results: Any) -> set[str]:
+    """Return the engines that contributed at least one SearXNG result."""
+    names: set[str] = set()
+    for raw in raw_results if isinstance(raw_results, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        engines = raw.get("engines")
+        for name in [raw.get("engine"), *(engines if isinstance(engines, list) else [])]:
+            text = _normalize_text(name)
+            if text:
+                names.add(text)
+    return names
+
+
+def _log_engine_health(raw_results: Any, unresponsive: list[tuple[str, str]]) -> None:
+    """Log an engine once when it stops answering and once when it answers again."""
+    failing = {name for name, _reason in unresponsive}
+    for name, reason in unresponsive:
+        if _PROVIDER_CONDITIONS.started(("searxng-engine", name)):
+            _LOGGER.warning("SearXNG engine did not answer (engine=%r reason=%r)", name, reason)
+    for name in _answering_engines(raw_results) - failing:
+        if _PROVIDER_CONDITIONS.ended(("searxng-engine", name)):
+            _LOGGER.info("SearXNG engine answers again (engine=%r)", name)
+
+
 async def _search_searxng(
     *,
     base_url: str,
@@ -334,6 +386,10 @@ async def _search_searxng(
         await run_tool_worker(_standardize_searxng_results, raw_results), domains, count, exclude
     )
     normalized_payload: dict[str, Any] = {"results": results}
+    unresponsive = _unresponsive_engines(payload)
+    _log_engine_health(raw_results, unresponsive)
+    if unresponsive:
+        normalized_payload["unresponsive_engines"] = unresponsive
     if recency:
         normalized_payload["recency"] = recency
     warnings: list[str] = []
@@ -372,7 +428,8 @@ async def _search_duckduckgo(
         return None, failure
 
     if response.status_code == _DUCKDUCKGO_RATE_LIMIT_STATUS:
-        _LOGGER.warning("DuckDuckGo web search rate-limited: HTTP 202")
+        if _PROVIDER_CONDITIONS.started(_DUCKDUCKGO_BLOCKED, "rate limit"):
+            _LOGGER.warning("DuckDuckGo web search is rate-limited (status=202)")
         return None, HttpRequestFailure(
             "DuckDuckGo is limiting requests (it answered with an empty page). Wait a while "
             "before searching again; if this keeps happening, tell the user they can choose "
@@ -383,13 +440,16 @@ async def _search_duckduckgo(
     html_text = response.text
     parsed, challenge = await run_tool_worker(_parse_duckduckgo_results, html_text)
     if not parsed and challenge:
-        _LOGGER.warning("DuckDuckGo web search returned a bot-detection challenge")
+        if _PROVIDER_CONDITIONS.started(_DUCKDUCKGO_BLOCKED, "challenge"):
+            _LOGGER.warning("DuckDuckGo web search returned a bot-detection challenge")
         return None, HttpRequestFailure(
             "DuckDuckGo answered with a bot-detection challenge instead of results. Wait a "
             "while before searching again; if this keeps happening, tell the user they can "
             "choose another search provider in Settings under Web search.",
             retryable=True,
         )
+    if _PROVIDER_CONDITIONS.ended(_DUCKDUCKGO_BLOCKED):
+        _LOGGER.info("DuckDuckGo web search answers again")
 
     start = (page - 1) * count
     results = _restrict_results_to_domains(

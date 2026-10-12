@@ -137,8 +137,16 @@ async def test_page_facts_survive_main_content_selection(
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", import_off_loop)
+    # Navigation inside the main landmark (a title bar's language list, a page
+    # toolbar, a navbox) leaves the main view; the title and plain link lists stay.
     html = """<head><base href="https://example.com/docs/"><title>Reference</title></head>
     <body><nav><a href="/">Navigation</a></nav><main>
+    <header><h1>Reference title</h1><ul>
+    <li><a hreflang="de" href="https://de.example.com/ref">Deutsch</a></li>
+    <li><a hreflang="fr" href="https://fr.example.com/ref">Francais</a></li></ul></header>
+    <nav aria-label="Page tools"><a href="/edit">Edit page</a></nav>
+    <ul><li><a href="/see-also">See also link</a></li><li><a href="/more">More link</a></li></ul>
+    <div role="navigation"><a href="/related">Related navbox</a></div>
     <div class="thread-container">Thread fact</div><div id="download-container">Download fact</div>
     <article class="gdpr">GDPR fact</article>
     <ol start="3"><li>Install <pre><code class="language-sh">pip install useful
@@ -163,6 +171,8 @@ async def test_page_facts_survive_main_content_selection(
     assert parser_import_threads and loop_thread not in parser_import_threads
 
     for expected in (
+        "Reference title",
+        "See also link",
         "Thread fact",
         "Download fact",
         "GDPR fact",
@@ -180,7 +190,8 @@ async def test_page_facts_survive_main_content_selection(
     assert "3." in main["content"] and "Then **start** it." in main["content"]
     assert main["title"] == "Reference"
     assert main["note"] == _MAIN_CONTENT_NOTE
-    assert "License fact" not in main["content"] and "License fact" in page["content"]
+    for elsewhere in ("License fact", "Deutsch", "Edit page", "Related navbox"):
+        assert elsewhere not in main["content"] and elsewhere in page["content"]
     for hidden in ("data:image", "Advertisement", "Stale price"):
         assert hidden not in page["content"]
 

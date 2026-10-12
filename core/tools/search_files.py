@@ -12,7 +12,7 @@ import os
 import re
 import shlex
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -37,6 +37,14 @@ from core.tools._search_execution import (
     pattern_retry,
     reference_text,
     widen_type_case,
+)
+from core.tools._search_hints import (
+    can_miss_literal_text,
+    file_name_extensions,
+    finds_fixed_text,
+    literal_text_note,
+    match_count_note,
+    unnamed_files_note,
 )
 from core.tools._search_query import (
     LIST_MODES,
@@ -500,10 +508,20 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
 
 
 def _missing_warnings(
-    query: SearchQuery, roots: _Roots, cwd: Path, offers: Callable[[str], bool]
+    query: SearchQuery,
+    roots: _Roots,
+    cwd: Path,
+    offers: Callable[[str], bool],
+    args: object = None,
 ) -> list[str]:
+    """Name each missing root, and how args operands that were meant otherwise work.
+
+    *args* is the call's args as sent, for a suggestion that keeps its other items.
+    """
     warnings = [_missing_root_message(raw, path, cwd, query, offers) for raw, path in roots.missing]
     missing_operands = [raw for raw, _ in roots.missing if raw in query.operand_roots]
+    if missing_operands and query.searches_contents and not query.pattern_operand:
+        warnings.extend(_operand_pattern_warning(roots, query, cwd, args))
     if missing_operands and query.mode == "list_files":
         warnings.append(
             "--files lists files by name, so every args operand is a path. To list the files "
@@ -526,6 +544,57 @@ def _missing_warnings(
             f"{combined}."
         )
     return warnings
+
+
+def _operand_pattern_warning(
+    roots: _Roots, query: SearchQuery, cwd: Path, args: object
+) -> list[str]:
+    """Say how to search args items that were read as paths as further patterns.
+
+    With pattern set, an args item without a leading - is a path: pattern "class "
+    with args ["def ", "return Result"] reported both items as missing paths.
+    They stay paths, since a missing path can also be mistyped; only items
+    without a path separator and without a similar path count as text.
+    """
+    words = [
+        raw
+        for raw, path in roots.missing
+        if raw in query.operand_roots
+        and "/" not in raw
+        and "\\" not in raw
+        and not corrected_paths(path, cwd)
+    ]
+    if not words:
+        return []
+    if isinstance(args, list) and all(isinstance(item, str) for item in args):
+        suggested: list[str] = []
+        for item in args:
+            suggested += ["-e", item] if item in words else [item]
+    else:
+        suggested = [part for word in words for part in ("-e", word)]
+    listed = " and ".join(f'"{word}"' for word in dict.fromkeys(words))
+    read, search = (
+        ("were read as paths", "them as further patterns, put -e before each")
+        if len(words) > 1
+        else ("was read as a path", "it as another pattern, put -e before it")
+    )
+    return [
+        f"args takes ripgrep options, and an item without a leading - is a path, so {listed} "
+        f"{read}. To search {search}: args {json.dumps(suggested, ensure_ascii=False)}."
+    ]
+
+
+def _nothing_searched(warnings: list[str], roots: _Roots, query: SearchQuery) -> str:
+    """The error when every root is missing, naming the field the missing roots came from."""
+    if all(raw in query.operand_roots for raw, _ in roots.missing):
+        several = len(roots.missing) > 1
+        fix = (
+            f"Correct the path{'s' if several else ''} in args, or remove "
+            f"{'them' if several else 'it'} to search the working directory."
+        )
+    else:
+        fix = "Correct path, or omit it to search the working directory."
+    return f"{' '.join(warnings)} Nothing was searched. {fix}"
 
 
 def _absolute(text: str, cwd: Path) -> Path:
@@ -960,6 +1029,8 @@ def _names_matching(
     try:
         matched = match_names(binary, query, patterns, names, context, budget)
     except SearchRefusedError:
+        # Unmatched names were not checked, so no claim about them holds.
+        listed.complete = False
         return [], listed
     named = [
         entry for entry in listed.entries if entry.label in matched or entry.path.name in matched
@@ -967,32 +1038,8 @@ def _names_matching(
     return named, listed
 
 
-# One file name or path in a content pattern: words, "-" and "/", dots escaped or not.
-_FILE_NAME = re.compile(r"[\w\-/]+(?:\\?\.[\w\-]+)*")
-_EXTENSION = re.compile(r"[\w\-]\\?\.([\w\-]+)$")
 # Shown names of files whose names match a content pattern, before "and N more".
 _NAMED_FILES_SHOWN = 5
-
-
-def _file_name_alternatives(pattern: str) -> list[str] | None:
-    """Return the file names a content pattern lists, or ``None`` when it is no such list.
-
-    ``verify.py``, ``tools/corpus\\.py`` and ``(verify|corpus|fuzz)`` list names;
-    one word without an extension, such as an identifier, does not.
-    """
-    body = pattern.removeprefix("^").removesuffix("$")
-    group = re.fullmatch(r"\((?:\?:)?([^()]*)\)", body)
-    if group:
-        body = group.group(1)
-    alternatives = [
-        alternative.removeprefix("\\b").removesuffix("\\b").removeprefix("^").removesuffix("$")
-        for alternative in body.split("|")
-    ]
-    if not all(_FILE_NAME.fullmatch(alternative) for alternative in alternatives):
-        return None
-    if len(alternatives) == 1 and not _EXTENSION.search(alternatives[0]):
-        return None
-    return alternatives
 
 
 def _note_named_files(
@@ -1011,8 +1058,8 @@ def _note_named_files(
     patterns = query.patterns
     if len(patterns) != 1 or "--invert-match" in query.rg_args:
         return
-    alternatives = _file_name_alternatives(patterns[0])
-    if alternatives is None:
+    extensions = file_name_extensions(patterns[0])
+    if extensions is None:
         return
     named, listed = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
     if budget.stopped or not listed.complete:
@@ -1027,11 +1074,98 @@ def _note_named_files(
         )
         return
     suffixes = {entry.path.suffix.casefold() for entry in listed.entries}
-    extensions = (_EXTENSION.search(alternative) for alternative in alternatives)
-    if any(match and f".{match.group(1).casefold()}" in suffixes for match in extensions):
+    if any(f".{extension}" in suffixes for extension in extensions):
         query.notes.append(
             "The listed files contain text matching pattern; no file name matches it."
         )
+
+
+def _recount(
+    context: ToolContext,
+    query: SearchQuery,
+    scopes: list[Scope],
+    patterns: list[str],
+    cwd: Path,
+    binary: Path,
+    budget: SearchBudget,
+) -> _Found | None:
+    """Count a variant of the query for a note; ``None`` when that count did not finish."""
+    found = _Found()
+    try:
+        for index, scope in enumerate(scopes):
+            result = count_scan(binary, query, patterns, scope, context, budget, cwd)
+            found.take(index, scope, result, cwd)
+    except SearchRefusedError, SearchBoundError:
+        return None
+    if not found.complete or budget.stopped:
+        return None
+    found.finish(query)
+    return found
+
+
+def _note_no_match(
+    context: ToolContext,
+    query: SearchQuery,
+    scopes: list[Scope],
+    patterns: list[str],
+    listed: _Found,
+    cwd: Path,
+    binary: Path,
+    budget: SearchBudget,
+) -> None:
+    """Point a pattern that matched neither contents nor names to what it may mean.
+
+    A regex whose text occurs literally names -F. Otherwise a pattern shaped
+    like file names says that no name matches it either, and how to list
+    similar names; ``listed`` is the listing the names were taken from.
+    """
+    if len(patterns) != 1 or "--invert-match" in query.rg_args:
+        return
+    # A repaired pattern's note already says how it was read.
+    if patterns is query.patterns and not query.literal and can_miss_literal_text(patterns[0]):
+        literal = replace(query, rg_args=[*query.rg_args, "--fixed-strings"], literal=True)
+        found = _recount(context, literal, scopes, patterns, cwd, binary, budget)
+        files = sum(1 for entry in found.entries if entry.count) if found else 0
+        if files:
+            query.notes.append(literal_text_note(patterns[0], files))
+            return
+    if query.mode not in {"content", "files_with_matches"} or not listed.complete:
+        return
+    if budget.stopped:
+        return
+    note = unnamed_files_note(
+        patterns[0],
+        file_list=query.mode == "files_with_matches",
+        files=[(entry.label, entry.path.name) for entry in listed.entries],
+    )
+    if note is not None:
+        query.notes.append(note)
+
+
+def _note_match_count(
+    context: ToolContext,
+    query: SearchQuery,
+    scopes: list[Scope],
+    patterns: list[str],
+    lines: int,
+    cwd: Path,
+    binary: Path,
+    budget: SearchBudget,
+) -> None:
+    """Say how many matches the counted lines hold when some line holds several.
+
+    Only text the Agent can mean to count occurrences of qualifies: fixed text,
+    not a shape such as ``.`` or ``\\w+``.
+    """
+    if query.count_matches or query.multiline or "--invert-match" in query.rg_args:
+        return
+    if not query.literal and not all(finds_fixed_text(pattern) for pattern in patterns):
+        return
+    matching = replace(query, count_matches=True)
+    found = _recount(context, matching, scopes, patterns, cwd, binary, budget)
+    matches = sum(entry.count for entry in found.entries) if found else 0
+    if matches > lines:
+        query.notes.append(match_count_note(matches))
 
 
 def _search(
@@ -1106,20 +1240,20 @@ def _search(
             found.entries = named
             _restart_past_the_end(query, len(named))
             return _Outcome(entry_page(named, query), found, len(named), len(named))
+        _note_no_match(context, query, scopes, patterns, listed, cwd, binary, budget)
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:
             found.ignored.extend(ignored_scan(binary, query, scope, context, budget))
     if query.mode != "content":
         _restart_past_the_end(query, len(found.entries))
-        if (
-            query.mode == "files_with_matches"
-            and lines_total
-            and not query.offset
-            and found.complete
-            and not budget.stopped
-        ):
-            _note_named_files(context, query, scopes, cwd, binary, budget)
+        if lines_total and not query.offset and found.complete and not budget.stopped:
+            if query.mode == "files_with_matches":
+                _note_named_files(context, query, scopes, cwd, binary, budget)
+            elif query.mode == "count":
+                _note_match_count(
+                    context, query, scopes, patterns, lines_total, cwd, binary, budget
+                )
         page = entry_page(found.entries, query)
         return _Outcome(page, found, len(found.entries), lines_total)
     _restart_past_the_end(query, lines_total)
@@ -1158,14 +1292,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             text = reference_text(binary, query.reference_args, context, budget)
             return tool_success({"content": text})
         roots = _resolve_roots(query, cwd)
-        missing = _missing_warnings(query, roots, cwd, context.offers)
+        missing = _missing_warnings(query, roots, cwd, context.offers, arguments.get("args"))
         if not roots.paths:
-            return tool_failure(
-                "path_not_found",
-                " ".join(missing)
-                + " Nothing was searched. Correct path, or omit it to search the working "
-                "directory.",
-            )
+            return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
         _directory_globs(query, roots.paths, cwd)
         outcome = _search(context, query, roots.paths, cwd, binary, budget)
     except (SearchArgumentError, ToolContractError, ValueError) as error:

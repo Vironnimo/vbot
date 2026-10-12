@@ -25,6 +25,9 @@ JsonObject = dict[str, Any]
 CALL_NOTE_FIELD = "note"
 # A label some Models attach to a call; it requests nothing.
 _REMARK = "commentary"
+# The fields of a call sent as one name/value pair: {"name": "command", "value": "ls"}.
+_PAIR_NAME = "name"
+_PAIR_VALUE = "value"
 # Words in the name of an unknown field that make ignoring it unsafe: the field
 # reads as a mode, condition or safety switch of the call, or as a target or
 # content of its own. The call without it could have an effect the Agent did not
@@ -205,6 +208,35 @@ class ToolContract:
             for key, value in normalized.items()
             if key in parameters or (value not in (None, "", [], {}) and key != _REMARK)
         }
+
+    def read_name_value_pair(self, arguments: Any, *, unadvertised: Collection[str] = ()) -> Any:
+        """Read a call sent as one name/value pair as that parameter.
+
+        ``{"name": "command", "value": "ls"}`` is ``{"command": "ls"}`` when
+        neither ``name`` nor ``value`` is a parameter (advertised or in
+        ``unadvertised``), ``name`` is exactly one of the advertised parameters,
+        and every other field is another parameter, or the same one with the
+        same value. Anything else stays as sent, for the owner's repair and
+        validation.
+        """
+        parameters = _closed_root_parameters(self.input_schema)
+        if parameters is None or not isinstance(arguments, dict) or _PAIR_VALUE not in arguments:
+            return arguments
+        known = {*parameters, *unadvertised}
+        field = arguments.get(_PAIR_NAME)
+        if (
+            not isinstance(field, str)
+            or field not in parameters
+            or {_PAIR_NAME, _PAIR_VALUE} & known
+        ):
+            return arguments
+        value = arguments[_PAIR_VALUE]
+        rest = {
+            key: item for key, item in arguments.items() if key not in (_PAIR_NAME, _PAIR_VALUE)
+        }
+        if not rest.keys() - {_REMARK} <= known or rest.get(field, value) != value:
+            return arguments
+        return {**rest, field: value}
 
     def drop_inert_fields(
         self,

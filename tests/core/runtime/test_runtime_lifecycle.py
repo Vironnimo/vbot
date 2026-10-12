@@ -767,6 +767,7 @@ async def test_aclose_cancels_work_and_persists_handed_off_traces(
 _ASYNC_SHUTDOWN = (
     "extension_runtime.aclose",
     "extension_databases.close",
+    "provider_usage.astop",
     "channels.aclose",
     "cron.aclose",
     "bootstrap.aclose",
@@ -798,6 +799,7 @@ _ASYNC_SHUTDOWN = (
 _SYNC_SHUTDOWN = (
     "extensions.fire_shutdown_blocking",
     "extension_databases.close",
+    "provider_usage.stop",
     "channels.stop",
     "cron.stop",
     "bootstrap.stop",
@@ -837,6 +839,7 @@ def _recording_service(
         close=partial(call, "close"),
         fire_shutdown_blocking=partial(call, "fire_shutdown_blocking"),
         aclose=partial(acall, "aclose"),
+        astop=partial(acall, "astop"),
         fire_shutdown=partial(acall, "fire_shutdown"),
         drain_activity=partial(acall, "drain_activity"),
         shutdown=partial(acall, "shutdown"),

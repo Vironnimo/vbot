@@ -65,6 +65,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.web_fetch import WEB_FETCH_TOOL_NAME
 from core.utils.http_status import HttpRequestFailure
 from core.utils.logging import get_logger
 
@@ -146,6 +147,7 @@ _WINDOW_DAYS = (("day", 1.0), ("week", 7.0), ("month", 31.0), ("year", 366.0))
 # Requested periods that match a window closely enough to need no note.
 _EXACT_DAYS = {"day": (1.0, 1.0), "week": (7.0, 7.0), "month": (28.0, 31.0), "year": (360.0, 366.0)}
 _MAX_DESCRIPTION_CHARS = 400
+_MAX_LISTED_ENGINES = 6
 _ISO_DATE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
 
 
@@ -390,6 +392,37 @@ def _no_results(domains: list[str], recency: str) -> str:
     return f"No results found. Try {advice}."
 
 
+def _engines_did_not_answer(
+    engines: list[tuple[str, str]], provider_label: str, *, can_fetch: bool
+) -> str:
+    """Say that the search failed because engines did not answer, not for lack of results."""
+    listed = [f"{name} ({reason})" if reason else name for name, reason in engines]
+    if len(listed) > _MAX_LISTED_ENGINES:
+        listed[_MAX_LISTED_ENGINES - 1 :] = [f"{len(listed) - _MAX_LISTED_ENGINES + 1} more"]
+    if len(listed) == 1:
+        subject, they, these = f"the search engine {listed[0]}", "it does", "this engine is"
+    else:
+        names = f"{', '.join(listed[:-1])} and {listed[-1]}"
+        subject, they, these = f"the search engines {names}", "they do", "these engines are"
+    fetch = ", or read pages whose address you know with web_fetch" if can_fetch else ""
+    return (
+        f"The search returned no results: {subject} did not answer, and any other engine found "
+        f"nothing. Rephrasing will not help while {they} not answer. Try again later{fetch}. If "
+        f"this keeps happening, tell the user that {these} blocked or failing in the "
+        f"{provider_label} search service."
+    )
+
+
+def _widened_note(widened: list[tuple[str, str]]) -> str:
+    """Say how ``site:`` operators with a path were read, or return ""."""
+    if not widened:
+        return ""
+    (operator, domain), *rest = widened
+    readings = [f"{operator} was read as site:{domain}"]
+    readings += [f"{operator} as site:{domain}" for operator, domain in rest]
+    return f"Site restrictions cover whole sites, so {', '.join(readings)}."
+
+
 def _model_view(
     payload: dict[str, Any],
     *,
@@ -438,8 +471,9 @@ async def web_search_handler(
     )
     if exclude_error is not None:
         return _invalid(exclude_error)
+    widened: list[tuple[str, str]] = []
     if not domains and not exclude:
-        query, domains, exclude = split_site_operators(query)
+        query, domains, exclude, widened = split_site_operators(query)
     both = [domain for domain in domains if domain in exclude]
     if both:
         return _invalid(
@@ -469,6 +503,7 @@ async def web_search_handler(
     recency, age_note, age_error = _result_age(arguments)
     if age_error is not None:
         return _invalid(age_error)
+    notes = [note for note in (_widened_note(widened), age_note) if note]
 
     provider = _PROVIDERS[settings["provider"]]
     api_key = ""
@@ -498,15 +533,27 @@ async def web_search_handler(
             attempts_made=failure.attempts_made,
         )
     results = payload.get("results")
-    context.add_display_count(len(results) if isinstance(results, list) else 0, "results")
+    results = results if isinstance(results, list) else []
+    unanswered = payload.get("unresponsive_engines")
+    if not results and unanswered:
+        # Engines that did not answer are why nothing came back: an empty
+        # success would send the Agent rephrasing a query that cannot help.
+        return tool_failure(
+            "provider_request_failed",
+            _engines_did_not_answer(
+                unanswered, provider.label, can_fetch=context.can_call(WEB_FETCH_TOOL_NAME)
+            ),
+            retryable=True,
+        )
+    context.add_display_count(len(results), "results")
     data = _model_view(
         payload,
         domains=domains,
         exclude=exclude,
         page=page,
-        notes=[age_note] if age_note else [],
+        notes=notes,
     )
-    _record_display(context, results if isinstance(results, list) else [], data)
+    _record_display(context, results, data)
     return tool_success(data)
 
 

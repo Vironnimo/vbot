@@ -215,6 +215,23 @@ class _PatchError(Exception):
         return template.format(**values)
 
 
+def quoted(text: str) -> str:
+    """Quote file or call text for a message, character for character.
+
+    Unlike ``repr``, a backslash or quote stays single, as the file holds it:
+    an Agent copies the quoted text into its next call. Whitespace stays too,
+    and the quotes show where trailing spaces end. Only characters that show
+    nothing and are not whitespace (zero-width characters, the byte order mark,
+    control characters) are spelled as escapes, such as ``\\u200b``.
+    """
+    shown = "".join(
+        char if char.isprintable() or char.isspace() else char.encode("unicode_escape").decode()
+        for char in text
+    )
+    quote = '"' if "'" in text and '"' not in text else "'"
+    return f"{quote}{shown}{quote}"
+
+
 @dataclass
 class _Replacement:
     """Replace text (``old_string``) where it occurs, also within lines."""

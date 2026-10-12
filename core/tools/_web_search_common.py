@@ -75,22 +75,41 @@ def _unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-def split_site_operators(query: str) -> tuple[str, list[str], list[str]]:
+def _site(operand: str) -> tuple[str | None, bool]:
+    """Return the host a ``site:`` operand names, and whether it names a path too."""
+    parts = urlsplit(operand if "://" in operand else f"//{operand}")
+    try:
+        host = parts.hostname or ""
+    except ValueError:
+        return None, False
+    domain, error = _canonicalize_domain(host)
+    if error is not None:
+        return None, False
+    return domain, bool(parts.path.strip("/") or parts.query or parts.fragment)
+
+
+def split_site_operators(query: str) -> tuple[str, list[str], list[str], list[tuple[str, str]]]:
     """Move ``site:host`` and ``-site:host`` operators out of the query.
 
-    Operators inside quoted phrases, with a path, or that would leave no search
-    words stay in the query unchanged. ``OR`` connectors and parentheses left
-    empty by the removal are dropped, so ``x (site:a.com OR site:b.com)``
+    Restrictions cover whole sites, so ``site:host/path`` restricts to ``host``;
+    the last list names each such operator with the site it was read as.
+    ``-site:host/path`` stays in the query, since excluding the whole site would
+    drop results the Agent wanted; so do operators inside quoted phrases and
+    operators that would leave no search words. ``OR`` connectors and parentheses
+    left empty by the removal are dropped, so ``x (site:a.com OR site:b.com)``
     becomes ``x`` restricted to both sites.
     """
     included: list[str] = []
     excluded: list[str] = []
+    widened: list[tuple[str, str]] = []
 
     def take(match: re.Match[str]) -> str:
-        domain, error = _canonicalize_domain(match[2])
-        if error is not None or domain is None:
+        domain, path = _site(match[2])
+        if domain is None or (path and match[1]):
             return match[0]
         (excluded if match[1] else included).append(domain)
+        if path:
+            widened.append((match[0], domain))
         return " "
 
     parts = re.split(r'("[^"]*")', query)
@@ -101,7 +120,7 @@ def split_site_operators(query: str) -> tuple[str, list[str], list[str]]:
         for part in parts
     )
     if not included and not excluded:
-        return query, [], []
+        return query, [], [], []
     rest = _EMPTY_GROUP.sub(" ", rest)
     words: list[str] = []
     for word in rest.split():
@@ -111,8 +130,8 @@ def split_site_operators(query: str) -> tuple[str, list[str], list[str]]:
     while words and words[-1] in _CONNECTORS:
         words.pop()
     if not words:
-        return query, [], []
-    return " ".join(words), _unique(included), _unique(excluded)
+        return query, [], [], []
+    return " ".join(words), _unique(included), _unique(excluded), widened
 
 
 def _url_matches_domains(url: str, domains: list[str]) -> bool:

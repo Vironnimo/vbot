@@ -53,6 +53,8 @@ def test_display_names_the_file_and_hides_the_edit_text(tmp_path, arguments, sum
             "added": 2,
             "removed": 0,
         }
+        # One file goes without a file count.
+        assert {f["unit"]: f["value"] for f in facts if f["kind"] == "count"} == {"edits": 1}
 
 
 def test_display_carries_each_changed_files_diff(tmp_path):
@@ -120,6 +122,9 @@ def test_display_carries_each_changed_files_diff(tmp_path):
     ]
     facts = {f["change"]: f["value"] for f in display["facts"] if f["kind"] == "line_change"}
     assert facts == {"added": 3, "removed": 3}
+    # Each hunk, Add, Delete and Move is one edit; a moved file is one file.
+    counts = {f["unit"]: f["value"] for f in display["facts"] if f["kind"] == "count"}
+    assert counts == {"edits": 4, "files": 4}
 
 
 def test_display_diffs_share_one_line_budget_but_count_every_change(tmp_path, monkeypatch):
