@@ -186,8 +186,10 @@ class CommandManager:
     def add_changed_callback(self, callback: CommandChangedCallback) -> Callable[[], None]:
         """Call *callback* with a background command's id when its status may have changed.
 
-        That is when it moves to the background, ends, finishes, and when it is
-        forgotten (``status`` is then None). Returns the unsubscribe function.
+        That is when it moves to the background, ends, when a process it left
+        running ends (``CommandReport.still_running`` shrank), when it
+        finishes, and when it is forgotten (``status`` is then None). Returns
+        the unsubscribe function.
         """
         self._callbacks.append(callback)
 

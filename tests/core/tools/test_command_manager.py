@@ -57,6 +57,7 @@ OTHER = SessionAddress("project-a", "agent-b", "session-b")
 GROUP = RunExecutionOwner("ext", "group-1", "participant", "generation", "epoch-1")
 SERVER = RunningProcess(5001, "server.exe")
 CONSOLE_HOST = RunningProcess(5002, "conhost.exe")
+WORKER = RunningProcess(5003, "worker.exe")
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Objects")
 
@@ -187,7 +188,7 @@ async def test_foreground_output_is_published_until_the_command_moves_to_the_bac
 async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harness) -> None:
     command_id, process = await harness.launch()
     process.write("server started\n")
-    process.exit(0, leftovers=[SERVER, CONSOLE_HOST])
+    process.exit(0, leftovers=[SERVER, WORKER, CONSOLE_HOST])
 
     # The output is drained for a second, then the leftovers must stay quiet for two.
     await harness.advance(2.5)
@@ -197,7 +198,15 @@ async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harn
 
     assert (report.ended, report.finished, report.status) == (True, False, "completed")
     # The console host of a windowless console is no work of the command.
-    assert report.still_running == (SERVER,)
+    assert report.still_running == (SERVER, WORKER)
+    # Listed as the shell lists a command that ended with processes still running.
+    harness.manager.to_background(command_id, deliver=False)
+    harness.changes.clear()
+    # What still runs stays current, and listeners hear when a process ended.
+    process.tree.running.remove(WORKER)
+    await harness.advance(1.0)
+    assert harness.manager.report(command_id).still_running == (SERVER,)
+    assert harness.changes == [command_id]
     process.end_leftovers()
     await harness.advance(1.0)
     report = harness.manager.report(command_id)

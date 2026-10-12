@@ -410,7 +410,9 @@ class CommandRecord:
                 if facts is not None:
                     if not facts.running:
                         break
-                    if not self.ended and self._leftovers_quiet(quiet, facts):
+                    if self.ended:
+                        self._follow_leftovers(facts)
+                    elif self._leftovers_quiet(quiet, facts):
                         self._record_end(facts)
                 await self._wait_or_sleep(self._killed, TREE_POLL_SECONDS)
                 if self._killed.is_set():
@@ -461,6 +463,17 @@ class CommandRecord:
             quiet.started = facts.started
             return False
         return now - quiet.since >= COMMAND_LEFTOVER_QUIET_SECONDS
+
+    def _follow_leftovers(self, facts: ProcessTreeFacts) -> None:
+        """After the end: keep the processes still running current.
+
+        Listeners hear when one of them ended, so a view of what still runs
+        follows; the command's status stays as it ended.
+        """
+        before = {process.pid for process in self._facts.running} if self._facts else set()
+        self._facts = facts
+        if before - {process.pid for process in facts.running}:
+            self._changed()
 
     def _record_end(self, facts: ProcessTreeFacts | None) -> None:
         if self.ended:
