@@ -203,12 +203,13 @@ class WikiCall:
                     message += f" {text.NOTHING_CHANGED}"
                 raise AgentCallError("invalid_arguments", message)
         if action == "update":
+            passage = [field for field in ("old_text", "new_text") if field in arguments]
+            if "content" in arguments and passage:
+                raise missing("one_change", fields=" and ".join(passage))
             if "new_text" in arguments and "old_text" not in arguments:
                 raise missing("old_text")
             if "old_text" in arguments and "new_text" not in arguments:
                 raise missing("new_text")
-            if "old_text" in arguments and "content" in arguments:
-                raise missing("one_change")
             if not {"old_text", "content", "title"} & arguments.keys():
                 raise missing("change")
         if action == "create":

@@ -406,9 +406,11 @@ async def test_wiki_scope_management_recovery_and_targeted_edits(board):
         "new_text": "",
     }
     assert (await invoke(board, edit))["error"]["code"] == "wiki_edit_conflict"
-    assert (await invoke(board, {**edit, "content": "lost"}))["error"][
-        "code"
-    ] == "invalid_arguments"
+    for passage in (edit, {key: value for key, value in edit.items() if key != "old_text"}):
+        assert (await invoke(board, {**passage, "content": "lost"}))["error"][
+            "code"
+        ] == "invalid_arguments"
+    assert (await stored(board, page_id))["content"] == "same same"
     assert not (await invoke(board, {"action": "read", "page_id": page_id, "swarm_id": "foreign"}))[
         "ok"
     ]

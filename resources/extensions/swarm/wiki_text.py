@@ -203,8 +203,8 @@ WIKI_NEEDS = {
     ),
     "new_text": "old_text needs new_text: its replacement, or an empty string to remove it.",
     "one_change": (
-        "Send either old_text with new_text to change one passage, or content to replace the "
-        "whole page, not both."
+        "update received content together with {fields}. Send old_text with new_text to "
+        "replace one passage, or content without them to replace the whole page."
     ),
     "expected_revision": (
         "Replacing the whole content needs expected_revision: the revision your content is "
