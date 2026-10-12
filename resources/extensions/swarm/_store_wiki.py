@@ -29,9 +29,11 @@ from ._store_values import (
     wiki_number,
     wiki_ref,
 )
-from ._wiki_edit import EditMiss, apply_text_edit
+from ._wiki_edit import TextEdit, apply_text_edit, held_in_place, holds_passage
 
 MUTATIONS = {"create", "update", "delete", "restore"}
+# A passage edit that finds nothing looks this many revisions back for one that held old_text.
+_ORIGIN_REVISIONS = 20
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
 # Punctuation around a search word, as in a quoted phrase or a list of terms.
 _WORD_EDGE = "\"'.,;:!?()[]{}<>“”„‘’«»"
@@ -501,24 +503,18 @@ def _mutate(
         ):
             raise SwarmStoreError("invalid_arguments", field="expected_revision", details=state)
         if "old_text" in arguments:
-            edit = apply_text_edit(content, arguments["old_text"], arguments["new_text"])
-            if isinstance(edit, EditMiss):
+            edit = _edit(
+                connection,
+                page_id,
+                current["revision"],
+                content,
+                arguments["old_text"],
+                arguments["new_text"],
+            )
+            if not isinstance(edit, TextEdit):
                 raise SwarmStoreError(
                     "wiki_revision_conflict" if rebase else "wiki_edit_conflict",
-                    details={
-                        **state,
-                        "expected_revision": expected,
-                        "occurrences": edit.occurrences,
-                        "similar": edit.similar,
-                        "lines": list(edit.lines),
-                        "passages": [
-                            {"line": item.line, "text": item.text, "truncated": item.truncated}
-                            for item in edit.passages
-                        ],
-                        "differences": list(edit.differences),
-                        "different_lines": edit.different_lines,
-                        "span": list(edit.span) if edit.span else None,
-                    },
+                    details={**state, "expected_revision": expected, **edit},
                 )
             content, line, notes = edit.content, edit.line, list(edit.notes)
             if content == current["content"] and title == current["title"]:
@@ -558,6 +554,65 @@ def _mutate(
         min(len(previous_content), len(content)),
     )
     return finish(result, changed_offset=changed_offset)
+
+
+def _edit(
+    connection: sqlite3.Connection, page_id: str, current: int, content: str, old: str, new: str
+) -> TextEdit | Json:
+    """Apply one passage edit to ``content``, or return why it found no single passage.
+
+    When old_text occurs nowhere, the newest of the last revisions that held it
+    explains the miss: the next revision changed that passage. If ``content``
+    already holds this edit where that revision had old_text, a peer made it,
+    and the edit applies as already held.
+    """
+
+    edit = apply_text_edit(content, old, new)
+    if isinstance(edit, TextEdit):
+        return edit
+    details: Json = {
+        "occurrences": edit.occurrences,
+        "similar": edit.similar,
+        "lines": list(edit.lines),
+        "passages": [
+            {"line": item.line, "text": item.text, "truncated": item.truncated}
+            for item in edit.passages
+        ],
+        "differences": list(edit.differences),
+        "different_lines": edit.different_lines,
+        "span": list(edit.span) if edit.span else None,
+    }
+    origin = None if edit.occurrences else _origin(connection, page_id, old, current)
+    if origin is not None:
+        revision, before, author = origin
+        line = held_in_place(before, content, old, new)
+        if line is not None:
+            return TextEdit(content, line, False)
+        details["origin"] = {"revision": revision, "author": author}
+    return details
+
+
+def _origin(
+    connection: sqlite3.Connection, page_id: str, old: str, current: int
+) -> tuple[int, str, str] | None:
+    """Return the newest recent revision that holds ``old``, its content, and who
+    saved the next revision, which changed that passage."""
+
+    if not old.strip():
+        return None
+    rows = connection.execute(
+        "SELECT revision,content FROM wiki_revisions WHERE page_id=? AND revision>=? "
+        "AND revision<? ORDER BY revision DESC",
+        (page_id, max(1, current - _ORIGIN_REVISIONS), current),
+    ).fetchall()
+    held = next((row for row in rows if holds_passage(row["content"], old)), None)
+    if held is None:
+        return None
+    author = connection.execute(
+        "SELECT author_name FROM wiki_revisions WHERE page_id=? AND revision=?",
+        (page_id, held["revision"] + 1),
+    ).fetchone()
+    return int(held["revision"]), str(held["content"]), str(author["author_name"])
 
 
 def _content_excerpt(content: str, line: int, changed_offset: int | None) -> Json:

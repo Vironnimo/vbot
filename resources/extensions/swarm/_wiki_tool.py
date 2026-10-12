@@ -20,7 +20,6 @@ from ._board_view import call_text, spoken_list
 from ._extension_values import AgentCallError, Json, _call_request_id
 from ._store_values import wiki_number, wiki_ref
 from ._store_wiki import _FIELDS, MUTATIONS
-from ._wiki_edit import held_in_place, holds_passage
 from .agent_text import FIELD_IGNORED, LIMIT_CLAMPED, REPLAYED
 from .store import SwarmStore, SwarmStoreError
 
@@ -40,8 +39,6 @@ _EXCERPT_CHARS = 200
 _DIFF_LINES = 60
 _DIFF_CHARS = 3000
 _AMBIGUOUS_LINES = 10
-# An edit miss looks this many revisions back for one that held old_text.
-_ORIGIN_REVISIONS = 20
 
 
 # A read with a query names at most this many matching lines, each cut to this length.
@@ -78,9 +75,6 @@ class WikiCall:
         self.since: int | None = None
         # A negative read offset, counted back from the end of the page.
         self.from_end: int | None = None
-        # For a passage edit that found nothing: the recent revision that last held
-        # its old_text, that revision's content, and who saved the next revision.
-        self.origin: tuple[int, str, str] | None = None
 
     async def run(self, arguments: Json) -> tuple[Json, bool]:
         """Run the call; return its rendered result and whether the Wiki changed."""
@@ -294,45 +288,8 @@ class WikiCall:
                 ):
                     return None
                 if attempt or not await self._correct(error, action, arguments):
-                    held = await self._held_in_place(error, arguments)
-                    if held is not None:
-                        return held
                     raise await self._explain(error, action, arguments) from error
         raise AssertionError("unreachable")
-
-    async def _held_in_place(self, error: SwarmStoreError, arguments: Json) -> Json | None:
-        """Return an unchanged result when the page holds new_text where old_text was.
-
-        A passage edit that found nothing learns which recent revision last held
-        its old_text (``self.origin``, for the explanation). When the current
-        revision holds the edit in that passage's place, a peer already made it.
-        """
-
-        details, old = error.details, arguments.get("old_text")
-        if "passages" not in details or details["occurrences"] or not isinstance(old, str):
-            return None
-        page_id, current = arguments["page_id"], details["current_revision"]
-        self.origin = await self._origin(page_id, old, current)
-        if self.origin is None:
-            return None
-        before = self.origin[1]
-        after = (await self.store.wiki_contents(self.sid, page_id, [current])).get(current)
-        line = (
-            held_in_place(before, after, old, arguments["new_text"]) if after is not None else None
-        )
-        if line is None:
-            return None
-        page = await self.store.wiki(
-            self.sid,
-            self.pid,
-            {"action": "read", "page_id": page_id, "revision": current, "limit": 1},
-        )
-        return {
-            **{key: page[key] for key in ("page_id", "number", "title", "revision", "deleted")},
-            "link": page["link"],
-            "unchanged": True,
-            "line": line,
-        }
 
     async def _correct(self, error: SwarmStoreError, action: str, arguments: Json) -> bool:
         """Replace a read-only page reference that names one page; report whether it did."""
@@ -408,8 +365,9 @@ class WikiCall:
                 if expected is not None and expected < current
                 else None
             )
-            # _held_in_place looked for the revision that last held old_text.
-            origin = (self.origin[0], self.origin[2]) if self.origin is not None else None
+            # The recent revision that last held old_text, and who changed that passage.
+            found = details.get("origin")
+            origin = (found["revision"], found["author"]) if found else None
             old = arguments.get("old_text")
             return AgentCallError(
                 error.code,
@@ -433,33 +391,6 @@ class WikiCall:
                 ),
             )
         return error
-
-    async def _origin(self, page_id: str, old: str, current: int) -> tuple[int, str, str] | None:
-        """Return the newest recent revision that holds ``old``, its content, and who
-        saved the next revision.
-
-        That next revision changed the passage ``old`` names, so a miss is a peer's
-        change to weigh rather than a copying error.
-        """
-
-        revisions = list(range(max(1, current - _ORIGIN_REVISIONS), current))
-        if not old.strip() or not revisions:
-            return None
-        contents = await self.store.wiki_contents(self.sid, page_id, revisions)
-        held = next(
-            (
-                revision
-                for revision in reversed(revisions)
-                if revision in contents and holds_passage(contents[revision], old)
-            ),
-            None,
-        )
-        if held is None:
-            return None
-        changes = await self.store.wiki_changes(self.sid, page_id, held, held + 1)
-        if changes is None or not changes["authors"]:
-            return None
-        return held, contents[held], changes["authors"][0]
 
     async def _conflict_message(self, details: Json, arguments: Json) -> str:
         expected, current = details["expected_revision"], details["current_revision"]
