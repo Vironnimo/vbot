@@ -27,6 +27,7 @@ _BASH_SYNTAX = (
     "This is bash syntax: in PowerShell write `if (cond) { ... }`, "
     "`foreach ($f in Get-ChildItem *.md) { ... }`, and `Test-Path` for file tests."
 )
+_FAILED = ("python.exe exited with code 1",)
 
 
 @pytest.mark.parametrize(
@@ -633,6 +634,107 @@ def test_bash_syntax_and_quoting_that_break_powershell_are_named(
         assert annotate_failure(command, 1, output) is None
 
 
+_ESCAPED_QUOTE = 'In PowerShell, \\" does not escape a quote'
+
+
+@pytest.mark.parametrize(
+    ("command", "exit_code", "output", "failed", "named"),
+    [
+        # A quoted title's (English) ran as a command; it is not a missing install.
+        (
+            'python -c "add = {\\"publisher\\": \\"Wikipedia (English)\\"}"',
+            1,
+            _NOT_RECOGNIZED.format(name="English"),
+            _FAILED,
+            "`English`",
+        ),
+        # A later statement exited with 0 after the early end broke the code.
+        (
+            'python -c "print(f\\"{x}\\")"; python check.py',
+            0,
+            "python.exe: ScriptBlock should only be specified as a value of the Command "
+            "parameter.\nchecked",
+            (),
+            "",
+        ),
+        (
+            'python -c "t.replace(\\"a\\", \\"b\\")"; python check.py',
+            0,
+            '  File "<string>", line 1\n    t.replace(\\\n'
+            "SyntaxError: unterminated string literal (detected at line 1)\nchecked",
+            _FAILED,
+            "",
+        ),
+        # A SyntaxError printed as data, a \" that ends a path's string, and a
+        # missing command from outside the string are not the early end's.
+        (
+            'python -c "t.replace(\\"a\\", \\"b\\")"; python report.py',
+            0,
+            "SyntaxError: counted 3 times",
+            (),
+            None,
+        ),
+        (
+            'python check.py "C:\\data\\" --fast; python lint.py',
+            0,
+            "SyntaxError: invalid syntax",
+            _FAILED,
+            None,
+        ),
+        (
+            'cargo build; python -c "print(\\"x\\")"',
+            1,
+            _NOT_RECOGNIZED.format(name="cargo"),
+            (),
+            None,
+        ),
+    ],
+)
+def test_an_escaped_quote_that_ended_a_powershell_string_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    exit_code: int,
+    output: str,
+    failed: tuple[str, ...],
+    named: str | None,
+) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, exit_code, output, failed_programs=failed)
+
+    if named is None:
+        assert hint is None or not hint.startswith(_ESCAPED_QUOTE)
+    else:
+        assert hint is not None and hint.startswith(_ESCAPED_QUOTE) and named in hint
+    # In bash, \" is an escape.
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    hint = annotate_failure(command, exit_code, output, failed_programs=failed)
+    assert hint is None or not hint.startswith(_ESCAPED_QUOTE)
+
+
+@pytest.mark.parametrize(
+    ("command", "piped"),
+    [
+        ("for ($z in 12,31) { python harvest.py $z }", False),
+        ("for ($z in 12,31) { python harvest.py $z } 2>&1 | Select-Object -First 30", True),
+    ],
+)
+def test_a_for_loop_over_values_names_foreach(
+    monkeypatch: pytest.MonkeyPatch, command: str, piped: bool
+) -> None:
+    output = (
+        "ParserError:\nLine |\n   1 |  for ($z in 12,31) { python harvest.py $z }\n"
+        "     |          ~~\n     | Unexpected token 'in' in expression or statement."
+    )
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, 1, output)
+
+    assert hint is not None and "foreach ($z in 12,31) {" in hint
+    # A foreach statement cannot be piped; $( ) around it can.
+    assert ("$(foreach ($z in 12,31) { ... }) 2>&1 | Select-Object -First 30" in hint) is piped
+
+
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize(
     ("command", "doubled"),
@@ -671,61 +773,111 @@ def test_typographic_quotes_that_end_a_powershell_string_are_named(
     assert annotate_failure(command, 0, output) is None
 
 
+# What Python on Windows prints when it writes to an output that was closed.
+_CLOSED_OUTPUT = (
+    "Traceback (most recent call last):\n"
+    '  File "build.py", line 9, in <module>\n'
+    "OSError: [Errno 22] Invalid argument"
+)
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize(
-    ("command", "printed", "failed", "program"),
+    ("command", "output", "failed", "printed", "names"),
     [
-        ("python build.py 2>&1 | Select-Object -First 8", 8, (), "python"),
+        # The closed output's error proves the stop.
         (
             "python build.py | Select-Object -First 8",
+            _CLOSED_OUTPUT,
+            _FAILED,
             8,
-            ("python.exe exited with code 1",),
-            "python",
+            ("`Select-Object -First 8`", "python", "Errno 22", "-Wait"),
+        ),
+        # Otherwise the program's own failure, whose error lines the stage received.
+        (
+            "python check.py --url x 2>&1 | Select-Object -First 3",
+            "usage: check.py [-h]",
+            ("python.exe exited with code 2",),
+            3,
+            ("`Select-Object -First 3`", "python", "code 2"),
         ),
         (
-            "& 'C:/venv/Scripts/python.exe' build.py | Select-String step | select -f 8; 'done'",
-            9,
-            (),
-            "python",
+            "foreach ($u in 'a', 'b') { python check.py $u 2>&1 | Select-String hits | "
+            "Select-Object -First 1 }",
+            "hits=0",
+            _FAILED * 2,
+            2,
+            ("`Select-Object -First 1`", "code 1"),
         ),
-        ("Write-Output start; node build.js | Select-Object -First:8", 40, (), "node"),
-        # The program ended before 8 lines, -Wait lets it finish, a query loses
+        (
+            "& 'C:/venv/Scripts/python.exe' build.py *>&1 | select -f:4; 'done'",
+            "step",
+            _FAILED,
+            5,
+            ("`select -f:4`", "python"),
+        ),
+        # No failed program: it finished its work; its errors bypassed the stage;
+        # a run outside such a pipeline may have failed.
+        ("python build.py 2>&1 | Select-Object -First 8", "step", (), 8, None),
+        ("python build.py | Select-Object -First 8", "ValueError: bad", _FAILED, 8, None),
+        (
+            "python build.py 2>&1 | Select-Object -First 2; python build.py --check",
+            "step",
+            _FAILED,
+            8,
+            None,
+        ),
+        # The output never reached 8 lines, -Wait lets it finish, a query loses
         # nothing, and -Last and head read to the end.
-        ("python build.py 2>&1 | Select-Object -First 20", 8, (), None),
-        ("python build.py | Select-Object -First 8 -Wait", 8, (), None),
-        ("git log --oneline | Select-Object -First 8", 8, (), None),
-        ("python build.py | Select-Object -Last 8", 8, (), None),
-        ("python build.py | head -n 8", 8, (), None),
-        ("Write-Output '| Select-Object -First 1'; python build.py", 8, (), None),
+        ("python build.py 2>&1 | Select-Object -First 20", "step", _FAILED, 8, None),
+        ("python build.py 2>&1 | Select-Object -First 8 -Wait", "step", _FAILED, 8, None),
+        (
+            "git log 2>&1 | Select-Object -First 8",
+            "commit",
+            ("git.exe exited with code 128",),
+            8,
+            None,
+        ),
+        ("python build.py 2>&1 | Select-Object -Last 8", "step", _FAILED, 8, None),
+        ("python build.py 2>&1 | head -n 8", "step", _FAILED, 8, None),
+        ("Write-Output '| Select-Object -First 1'; python build.py 2>&1", "step", _FAILED, 8, None),
     ],
 )
-def test_a_select_first_stage_that_stopped_a_program_is_named(
+def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
     monkeypatch: pytest.MonkeyPatch,
     command: str,
-    printed: int,
+    output: str,
     failed: tuple[str, ...],
-    program: str | None,
+    printed: int,
+    names: tuple[str, ...] | None,
+    exit_code: int,
 ) -> None:
-    # Long output keeps only its first and last lines.
-    output = "\n".join(f"step {n}" for n in range(min(printed, 4)))
     monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
 
-    hint = annotate_failure(command, 0, output, failed_programs=failed, output_lines=printed)
+    hint = annotate_failure(
+        command, exit_code, output, failed_programs=failed, output_lines=printed
+    )
 
-    if program is None:
+    if names is None:
         assert hint is None
     else:
-        assert hint is not None and program in hint and "-Wait" in hint
-        # A failed program of that name confirms the stop.
-        assert ("most likely" in hint) is not failed
+        assert hint is not None
+        for name in names:
+            assert name in hint
+        assert "1 lines" not in hint
+        # Exit code 0 does not show the failure; the hint says so.
+        assert ("code 0" in hint) is (exit_code == 0)
     # Select-Object is PowerShell's.
     monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
     assert annotate_failure(command, 0, output, failed_programs=failed) is None
 
 
 def _project(tmp_path: Path) -> Path:
-    """A working directory holding the package `shop` and a `tests` folder."""
+    """A working directory holding the package `shop`, a `tests` folder and tools/source_id.py."""
     (tmp_path / "shop").mkdir()
     (tmp_path / "tests").mkdir()
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "source_id.py").touch()
     return tmp_path
 
 
@@ -896,6 +1048,15 @@ def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -
             True,
             "runs with another working directory or import path",
         ),
+        # Only a subdirectory has the module; Python does not search there.
+        (
+            "@'\nfrom source_id import source_id\n'@ | python -",
+            "Traceback (most recent call last):\n"
+            '  File "<stdin>", line 1, in <module>\n'
+            "ModuleNotFoundError: No module named 'source_id'\n",
+            True,
+            "tools/source_id.py",
+        ),
     ],
 )
 def test_import_failures_name_where_python_looked(
@@ -942,3 +1103,45 @@ def test_a_missing_submodule_names_what_the_working_directory_holds(
         assert text in hint
     for text in omits:
         assert text not in hint
+
+
+@pytest.mark.parametrize(
+    ("command", "missing", "call"),
+    [
+        # A module name written as the script's path.
+        (
+            "python tools.quote_check.py snippets --find 'a b'; python tools.quote_check.py x",
+            "tools.quote_check.py",
+            "python tools/quote_check.py snippets --find 'a b'",
+        ),
+        # The same name in a subdirectory, and a similar name beside it.
+        (
+            "python -u quote_check.py --limit 1",
+            "quote_check.py",
+            "python -u tools/quote_check.py --limit 1",
+        ),
+        ("python tools/qoute_check.py", "tools/qoute_check.py", "python tools/quote_check.py"),
+        # An interpreter in a variable: the path without a made-up call.
+        ("& $python tools/qoute_check.py", "tools/qoute_check.py", ""),
+        ("python report.py", "report.py", None),
+    ],
+)
+def test_a_script_python_cannot_open_names_the_existing_path(
+    tmp_path: Path, command: str, missing: str, call: str | None
+) -> None:
+    """*call* is the suggested call, "" for a hint without one, None for no hint."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "quote_check.py").touch()
+    # Python names the absolute path in its repr form.
+    output = (
+        f"C:\\Python314\\python.exe: can't open file {str(tmp_path / missing)!r}: "
+        "[Errno 2] No such file or directory"
+    )
+
+    hint = annotate_failure(command, 2, output, workdir=tmp_path)
+
+    if call is None:
+        assert hint is None
+    else:
+        assert hint is not None and "tools/quote_check.py" in hint
+        assert re.findall(r"`([^`]+)`", hint)[-1:] == ([call] if call else [])
