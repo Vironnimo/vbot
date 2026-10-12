@@ -182,6 +182,46 @@ async def test_find_reads_the_page_text_past_its_markdown(tmp_path, monkeypatch,
         assert data["shown"].startswith("1 passage") and place in data["content"]
 
 
+_FILLER = "<p>" + "Filler sentence. " * 40 + "</p>"
+_WORDS_PAGE = _FILLER.join(
+    [
+        "<main><p>Anemias are caused by iron deficiency.</p>",
+        "<p>The environment changes.</p>",
+        "<p>Magnetic fields.</p>",
+        "<p>鉄は元素です。</p></main>",
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    ("find", "places", "named"),
+    [
+        # Found only inside a longer word, which the result names (Swarm run 2026-10-12).
+        ("used by", ["caused by"], "caused by"),
+        # A match inside a word counts, so stems and compounds are found.
+        ("iron", ["iron deficiency", "environment"], None),
+        ("magnet", ["Magnetic"], None),
+        # Scripts without spaces between words have no longer words to name.
+        ("元素です", ["鉄は元素です"], None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_find_names_the_longer_words_that_hold_every_match(
+    tmp_path, monkeypatch, find, places, named
+):
+    install_http_get(monkeypatch, lambda url: make_result(text=_WORDS_PAGE, url=url))
+
+    found = await fetch(tmp_path, {"url": "https://example.com/words", "find": find})
+
+    data = found["data"]
+    assert data["shown"].startswith(f"{len(places)} passage")
+    assert all(place in data["content"] for place in places)
+    if named is not None:
+        assert f'"{named}"' in data["shown"]
+    else:
+        assert data["shown"].count('"') == 2  # only the search text itself is quoted
+
+
 @pytest.mark.asyncio
 async def test_find_in_plain_text_keeps_its_asterisks_and_pipes(tmp_path, monkeypatch):
     code = "def call(x, **kwargs):\n    return x | kwargs\n"

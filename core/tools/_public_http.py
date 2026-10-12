@@ -416,15 +416,38 @@ def _url_parts(url: str) -> tuple[str, str | None, int]:
         ) from error
 
 
+# curl reports a connection the peer cut off during the TLS handshake as a TLS
+# failure; only its reason shows the cut ("Recv failure: Connection was reset",
+# "SSL_ERROR_SYSCALL", "unexpected eof while reading").
+_CUT_OFF_HANDSHAKE = re.compile(
+    r"\b(?:reset|aborted|broken pipe|closed|eof|unexpected_eof|recv failure|send failure"
+    r"|ssl_error_syscall)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_tls_failure(error: RequestException) -> bool:
+    """Whether the site's certificate or TLS setup failed, which repeats on every attempt.
+
+    A handshake the peer cut off is a connection failure instead: the same page
+    often loads seconds later.
+    """
+    from curl_cffi.requests.exceptions import CertificateVerifyError, SSLError
+
+    if isinstance(error, CertificateVerifyError):
+        return True
+    return isinstance(error, SSLError) and not _CUT_OFF_HANDSHAKE.search(_curl_detail(error))
+
+
 def _retries_allowed(error: RequestException) -> int:
     """How often a transport failure is worth repeating.
 
     A broken certificate or TLS setup fails the same way every time. A timeout
     during connection or response transfer gets one more bounded attempt.
     """
-    from curl_cffi.requests.exceptions import CertificateVerifyError, DNSError, SSLError, Timeout
+    from curl_cffi.requests.exceptions import DNSError, Timeout
 
-    if isinstance(error, (SSLError, CertificateVerifyError, DNSError)):
+    if isinstance(error, DNSError) or _is_tls_failure(error):
         return 0
     if isinstance(error, Timeout):
         return 1
@@ -596,7 +619,7 @@ def _curl_detail(error: RequestException) -> str:
 
 def _transport_error(url: str, error: RequestException, attempts: int) -> PublicFetchError:
     """Describe a failure below HTTP: timeout, TLS or connection."""
-    from curl_cffi.requests.exceptions import CertificateVerifyError, DNSError, SSLError, Timeout
+    from curl_cffi.requests.exceptions import DNSError, Timeout
 
     host = urlparse(url).hostname or url
     detail = _curl_detail(error)
@@ -609,7 +632,7 @@ def _transport_error(url: str, error: RequestException, attempts: int) -> Public
             attempts_made=attempts,
             recoverable=True,
         )
-    if isinstance(error, (SSLError, CertificateVerifyError)):
+    if _is_tls_failure(error):
         return PublicFetchError(
             "tls_error",
             f"The secure connection to {host} failed ({detail}). The site's certificate or "

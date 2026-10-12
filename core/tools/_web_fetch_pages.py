@@ -309,7 +309,8 @@ def _find_text(
 
     # Plain text and code, and document text, carry no Markdown syntax to read past.
     markdown = snapshot.get("source") not in _PLAIN_SOURCES
-    for position, match_end in find_spans(text, find, markdown=markdown, offset=offset):
+    found = find_spans(text, find, markdown=markdown, offset=offset)
+    for position, match_end in found.spans:
         first, last = _passage_window(text, offset, position, match_end, size)
         if spans and first <= spans[-1][1] + _ADJACENT_CHARS:
             if last <= spans[-1][1]:
@@ -345,7 +346,11 @@ def _find_text(
             )
         }
     count = f"{len(spans)} passage{'s' if len(spans) != 1 else ''}"
-    data: dict[str, Any] = {"shown": f"{count} matching {_call(find)} {searched}"}
+    # Matches only inside longer words are not the text searched for, as "used by"
+    # in "caused by" is not.
+    words = ", ".join(_call(word) for word in found.inside_words)
+    words = f", only inside longer words such as {words}" if words else ""
+    data: dict[str, Any] = {"shown": f"{count} matching {_call(find)} {searched}{words}"}
     if next_offset is not None:
         data["more"] = (
             "More matches. Continue with "
