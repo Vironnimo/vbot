@@ -23,9 +23,11 @@ empty line does not reach ``$input``, which the closing ``.`` makes harmless.
 Workdir. The bootstrap sets PowerShell's location and the process's current
 directory, which native programs and .NET methods use; a location it cannot
 enter ends the shell with exit code 1 and the reason before the command runs.
-A shell started in its workdir skips both. In a shell started ahead of its
-command, ``cd -`` at the command's start returns to the directory where the
-shell waited; a shell started in its workdir has no earlier location.
+A shell started in its workdir skips both. A shell started ahead of its command
+first undoes its move to where it waited, so the command finds the location
+history and drive locations of a shell started in its workdir: ``cd -`` returns
+to the location PowerShell opened at, and the drive where the shell waited is at
+its root.
 
 Console encodings. Native programs write and read bytes in the console's code
 pages, which default to a legacy OEM page that cannot represent most non-ASCII
@@ -89,6 +91,10 @@ ends, and an ``exit`` before that discards them: ``Get-ChildItem | Select-Object
 Name; exit 0`` prints nothing. The command's output is therefore piped through
 Out-Default, and the bootstrap exits with the recorded code only after that
 pipeline has ended.
+
+Hidden bookkeeping. The command sees none of the bootstrap's variables; it
+runs as a function's dot-sourced body, and the error report keeps what it needs
+in a closure. Only the bootstrap's ``__vbot`` functions remain visible.
 
 Recorded errors. If the last statement succeeded after PowerShell recorded an
 error, the exit status stays 0 but a bounded note is printed to the error
@@ -267,21 +273,25 @@ REQUEST_UNREADABLE_NOTE = (
     "The command did not run: vBot could not read it from the shell's input ({reason}). "
     "Run the command again; if it fails the same way, tell the user."
 )
+# The reason is PowerShell's message, which names the workdir; the bootstrap writes
+# the workdir there with forward slashes, as vBot writes paths for Models.
 WORKDIR_UNAVAILABLE_NOTE = (
-    "The command did not run: vBot could not enter {workdir}: {reason} If the command can "
+    "The command did not run: vBot could not enter the workdir: {reason} If the command can "
     "run in another directory, pass that directory as workdir; otherwise tell the user."
 )
 # How recorded errors are judged and reported, defined before the request arrives.
 # An error record's position names the command that wrote it, so the command's
 # syntax tree shows whether that command silenced it; a record without such a
-# command, such as a caught throw, stays reportable.
-REPORT_STATEMENTS = r"""$__vbotSilenced = {
-    param($record)
+# command, such as a caught throw, stays reportable. __vbotReporter returns the
+# report for one command: a closure over its syntax tree and the error baseline,
+# so no variable the command could see or change holds them. Within the closure
+# $Error is its own module's; PowerShell records errors in $global:Error.
+REPORT_STATEMENTS = r"""function __vbotSilenced($record, $ast) {
     if ($ErrorActionPreference -in 'SilentlyContinue', 'Ignore') { return $true }
     if ($record -isnot [System.Management.Automation.ErrorRecord]) { return $false }
     $info = $record.InvocationInfo
     if (-not $info -or $info.ScriptName) { return $false }
-    $command = $__vbotAst.Find({
+    $command = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.CommandAst] -and
         $node.Extent.StartLineNumber -eq $info.ScriptLineNumber -and
@@ -313,25 +323,28 @@ REPORT_STATEMENTS = r"""$__vbotSilenced = {
     }
     $false
 }
-$__vbotReportErrors = {
-    $shown = foreach ($record in @($Error)) {
-        if ([object]::ReferenceEquals($record, $__vbotInitialError)) { break }
-        if (-not (& $__vbotSilenced $record)) { $record; break }
-    }
-    if ($null -eq $shown) { return }
-    $summary = "$shown" -replace '\s+', ' '
-    if ($summary.Length -gt 500) { $summary = $summary.Substring(0, 500) + '...' }
-    [Console]::Error.WriteLine('{note} Latest error: ' + $summary)
+function __vbotReporter($ast, $initial) {
+    {
+        $shown = foreach ($record in @($global:Error)) {
+            if ([object]::ReferenceEquals($record, $initial)) { break }
+            if (-not (__vbotSilenced $record $ast)) { $record; break }
+        }
+        if ($null -eq $shown) { return }
+        $summary = "$shown" -replace '\s+', ' '
+        if ($summary.Length -gt 500) { $summary = $summary.Substring(0, 500) + '...' }
+        [Console]::Error.WriteLine('{note} Latest error: ' + $summary)
+    }.GetNewClosure()
 }
 """
 REPORT_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REPORT_STATEMENTS)
 # A shell started ahead of its command waits in Windows' system directory
 # (``_command_launch``). While it waits it pays the first use of what follows:
-# type lookups, the parser, PowerShell's utility and file cmdlets, setting the
-# location, formatting, an empty command through Out-Default. That takes about
+# type lookups, the parser, PowerShell's utility and file cmdlets, formatting,
+# the error report, an empty command through Out-Default, and moving back and
+# forth, which leaves the location history as the shell started. That takes about
 # 40 ms from each warm command; a shell started for its command skips it, since
-# the request is already there. None of it writes output or leaves a variable
-# but these; an error it records precedes the baseline.
+# the request is already there. None of it writes output; an error it records
+# precedes the baseline.
 WARM_UP_STATEMENTS = r"""$__vbotUtf8 = [System.Text.Encoding]::UTF8
 if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
     try {
@@ -340,10 +353,13 @@ if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
             '"$a" | % { $_ }', [ref]$null, [ref]$null)
         Import-Module -ErrorAction Stop -Name (
             'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management')
-        Set-Location -LiteralPath $PWD.ProviderPath -ErrorAction Stop
         $null = [pscustomobject]@{ Name = 1 } | Out-String
-        $__vbotCommand = ''
+        $null = __vbotReporter $null $null
+        ${function:__vbotBody} = [scriptblock]::Create('')
         . __vbotInvoke | Out-Default
+        Remove-Variable -Name __vbotWarm* -Scope Global
+        Set-Location - -ErrorAction Stop
+        Set-Location -LiteralPath ([Environment]::CurrentDirectory) -ErrorAction Stop
     } catch {}
 }
 """
@@ -351,6 +367,9 @@ WARM_UP_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", WARM_UP_STATEMENTS)
 # Wait for the request, then apply it: the environment layer, then the location of
 # PowerShell and of the process, unless the shell started there. [NullString]::Value
 # removes a variable, since PowerShell passes $null to a string parameter as ''.
+# A shell that waited elsewhere first undoes its move there, back to where
+# PowerShell opened, so the move to the workdir leaves the location history of a
+# shell started in it; the drive it waited on returns to its root.
 REQUEST_STATEMENTS = r"""$__vbotRequest = @($input)
 try {
     if ($__vbotRequest.Count -lt 4 -or $__vbotRequest[-1] -ne '.') {
@@ -373,8 +392,11 @@ try {
 }
 if ($PWD.ProviderPath -ne $__vbotWorkdir) {
     try {
+        $__vbotDrive = $PWD.Drive
+        try { Set-Location - -ErrorAction Stop } catch {}
         Set-Location -LiteralPath $__vbotWorkdir -ErrorAction Stop
         [Environment]::CurrentDirectory = $__vbotWorkdir
+        if ($__vbotDrive -and $PWD.Drive -ne $__vbotDrive) { $__vbotDrive.CurrentLocation = '' }
     } catch {
         [Console]::Error.WriteLine({unavailable})
         exit 1
@@ -385,7 +407,9 @@ REQUEST_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REQUEST_STATEMENTS)
 # Parse the command after the setup; a syntax error is thrown as PowerShell reports
 # its own. The /dev/null rewrite follows when the command can spell /dev/null. The
 # exit status runs at the end of the last block: the unnamed body, a named end
-# block, or an end block added after begin or process blocks.
+# block, or an end block added after begin or process blocks. The command runs
+# without the bootstrap's variables; the exit status statement sets the only one,
+# and a command that returns before reaching it exits with 0.
 RUN_STATEMENTS = r"""$__vbotParseErrors = $null
 $__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
     $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
@@ -401,16 +425,21 @@ $__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
 } else {
     "$__vbotCommand`n`n$__vbotExitStatus"
 }
-$global:__vbotExitCode = 0
+${function:__vbotReport} = __vbotReporter $__vbotAst $__vbotInitialError
+${function:__vbotBody} = [scriptblock]::Create($__vbotCommand)
+Remove-Variable -Name __vbot* -Scope Global
 . __vbotInvoke | Out-Default
-if ($global:__vbotExitCode -eq 0) { & $__vbotReportErrors }
-exit $global:__vbotExitCode
+$__vbotExitCode = Get-Variable -Name __vbotExitCode -Scope Global -ValueOnly -ErrorAction Ignore
+if (-not $__vbotExitCode) { __vbotReport; exit 0 }
+exit $__vbotExitCode
 """
 RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS)
 # The command runs from the first line. Write-Error names its caller's position,
 # which PowerShell shows only beyond the first line, so no bootstrap line appears in
-# the command's errors. Dot-sourcing the function keeps the command's own scope.
-INVOKE_STATEMENT = "function __vbotInvoke { . ([scriptblock]::Create($__vbotCommand)) }"
+# the command's errors. Dot-sourcing the function and its body keeps the command's
+# own scope; the body is the command's script block, not a function of its own,
+# whose name its errors would show.
+INVOKE_STATEMENT = "function __vbotInvoke { . ${function:__vbotBody} }"
 _QUOTE = re.compile("(['‘’‚‛])")
 # Printable ASCII and whitespace: text PowerShell compares letter by letter.
 _PLAIN_ASCII = re.compile(r"[\t\n\v\f\r -~]*")
@@ -450,8 +479,9 @@ POWERSHELL_BOOTSTRAP = (
         "{unavailable}",
         _joined(
             WORKDIR_UNAVAILABLE_NOTE,
-            workdir="$__vbotWorkdir.Replace('\\', '/')",
-            reason="$_.Exception.Message",
+            reason=(
+                "$_.Exception.Message.Replace($__vbotWorkdir, $__vbotWorkdir.Replace('\\', '/'))"
+            ),
         ),
     )
     + f"{ERROR_RECORD_BASELINE_STATEMENT}\n"

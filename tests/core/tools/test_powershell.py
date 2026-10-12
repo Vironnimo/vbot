@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -36,11 +37,19 @@ pytestmark = pytest.mark.skipif(
 
 
 async def _run(
-    cwd: Path, command: str, *, path: str | None = None, prefix: str = ""
+    cwd: Path,
+    command: str,
+    *,
+    path: str | None = None,
+    prefix: str = "",
+    workdir: Path | None = None,
+    sent: Callable[[bytes], bytes] | None = None,
 ) -> tuple[int | None, str]:
     """Run *command* as the shell Tool does; return its exit code and output.
 
     *path* replaces PATH in the shell's environment; *prefix* runs before the bootstrap.
+    *workdir* is the request's workdir instead of *cwd*, the shell's start directory;
+    *sent* turns the request into what reaches the shell.
     """
     layers = command_environment(RunIdentity("agent-a", "session-a", None))
     environment = layers.base
@@ -51,6 +60,7 @@ async def _run(
         }
     pwsh = shutil.which("pwsh")
     assert pwsh is not None
+    request = powershell_request(command, str(workdir or cwd), layers.changes)
     manager = CommandManager(launcher=PipeLauncher(warm=False))
     try:
         handle = await manager.launch(
@@ -62,7 +72,7 @@ async def _run(
             env=environment,
             origin_run_id="run-a",
             formatter=str,
-            request=powershell_request(command, str(cwd), layers.changes),
+            request=request if sent is None else sent(request),
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
         report = manager.report(handle.command_id)
@@ -160,11 +170,13 @@ _PRINTED_ERROR_TEXT = "; ".join(
             False,
             (),
         ),
+        # The command sees none of the bootstrap's variables.
         (
-            f"& '{sys.executable}' -c 'raise SystemExit(5)'; Write-Output after",
+            f"& '{sys.executable}' -c 'raise SystemExit(5)'\n"
+            "'after, variables: ' + @(Get-Variable __vbot*).Count",
             0,
             False,
-            ("after",),
+            ("after, variables: 0",),
         ),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, False, ("requires-sentinel",)),
@@ -285,6 +297,46 @@ async def test_exit_status_and_error_records_follow_the_last_statement(
     assert "silenced-sentinel" not in output
     # The bootstrap's own statements never fail visibly.
     assert "__vbot" not in output
+
+
+def _without_terminator(request: bytes) -> bytes:
+    return request[: request.rindex(b".\n")]
+
+
+def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:
+    def cut(request: bytes) -> bytes:
+        command = request.splitlines()[2]
+        return request[: request.index(command) + characters]
+
+    return cut
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sent", "workdir"),
+    [
+        (_without_terminator, None),
+        (_cut_in_command(6), None),
+        # Base64 that decodes, cut where a quantum ends.
+        (_cut_in_command(8), None),
+        (lambda _request: b"", None),
+        # A shell that waited elsewhere enters a workdir removed since the call was checked.
+        (None, "gone"),
+    ],
+    ids=["no-terminator", "cut-in-command", "cut-at-base64-boundary", "empty", "workdir-gone"],
+)
+async def test_a_request_the_shell_cannot_read_or_enter_runs_nothing(
+    tmp_path: Path, sent: Callable[[bytes], bytes] | None, workdir: str | None
+) -> None:
+    marker = tmp_path / "ran.txt"
+    command = f"New-Item -ItemType File -Path '{marker}'"
+
+    code, output = await _run(
+        tmp_path, command, workdir=tmp_path / workdir if workdir else None, sent=sent
+    )
+
+    assert code == 1, output
+    assert not marker.exists(), output
 
 
 @pytest.mark.asyncio
