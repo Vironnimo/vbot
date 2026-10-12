@@ -9,6 +9,7 @@ and renders the result as readable text.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, overload
 
@@ -60,6 +61,12 @@ _REQUIRED = {
 # Paging fields request nothing an action without pages could do.
 _PAGING = frozenset({"cursor", "limit", "before", "offset"})
 _REFERENCES = ("discussion_id", "message_id", "reply_to", "before")
+# Tool-call markup a Model leaked into a value, such as "</invoke>" or "<｜tool▁call▁end｜>";
+# no post or discussion reference contains it.
+_MARKUP = re.compile(
+    r"</[|｜A-Za-z]|<[|｜]|<(?:[\w-]+:)?(?:invoke|function_calls|function|parameter|tool_call)\b",
+    re.IGNORECASE,
+)
 # Participants whose work ended; they read new posts only once the user resumes them.
 _STOPPED = frozenset({"failed", "cancelled", "interrupted"})
 _MAX_LIMIT = 100
@@ -74,8 +81,18 @@ def prepare_board_call(arguments: Json) -> tuple[str, list[str]]:
         raise SwarmStoreError("invalid_arguments", field="action")
     notes: list[str] = []
     for field in _REFERENCES:
-        if isinstance(arguments.get(field), str):
-            arguments[field] = arguments[field].strip().strip("\"'`[]<>").strip()
+        value = arguments.get(field)
+        if not isinstance(value, str):
+            continue
+        if _MARKUP.search(value):
+            kind, example = ("discussion", "d2") if field == "discussion_id" else ("post", "#42")
+            raise AgentCallError(
+                "invalid_arguments",
+                text.REFERENCE_MARKUP.format(
+                    field=field, value=_quoted(value), kind=kind, example=example
+                ),
+            )
+        arguments[field] = value.strip().strip("\"'`[]<>").strip()
     named = None
     if action == "post" and "message_id" in arguments:
         # A post that names a post answers it, as with reply_to.

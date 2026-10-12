@@ -440,6 +440,11 @@ MESSAGE_NOT_FOUND = (
     '{field} "{value}" is not a post ID in your group. Find post IDs by reading a discussion, '
     'for example with {{"action": "read"}} for the main discussion.'
 )
+# Tool-call markup a Model leaked into a post or discussion reference.
+REFERENCE_MARKUP = (
+    '{field} arrived as tool-call markup ({value}) instead of a {kind} ID such as "{example}". '
+    "Repeat the call with the {kind} ID alone. The call was not run."
+)
 DISCUSSION_NOT_FOUND = 'discussion_id "{value}" is not a discussion in your group.'
 DISCUSSION_CHOICES = "Discussions: {discussions}."
 DISCUSSION_RETRY = 'Repeat the call with discussion_id "{discussion_id}".'

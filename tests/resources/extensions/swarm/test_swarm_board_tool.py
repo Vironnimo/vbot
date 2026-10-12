@@ -19,6 +19,7 @@ from resources.extensions.swarm.agent_text import (
     MENTION_EVERYONE,
     POST_DUPLICATE,
     POST_SEEN,
+    REFERENCE_MARKUP,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
     _name,
@@ -598,6 +599,22 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     assert unposted["error"]["message"] == (
         'message_id "#9" names no post yet; the newest post is #4.'
     )
+    # Tool-call markup sent as a reference is named as such, never resolved or guessed.
+    for arguments, field, shown in (
+        (
+            {"action": "read", "message_id": "\n</atem:invoke>\n</atem:function_calls>"},
+            "message_id",
+            "</atem:invoke> </atem:function_calls>",
+        ),
+        ({"text": "leaked", "reply_to": "#3</invoke>"}, "reply_to", "#3</invoke>"),
+    ):
+        leaked, _ = await dispatch(board, arguments)
+        assert leaked["error"] == {
+            "code": "invalid_arguments",
+            "message": REFERENCE_MARKUP.format(
+                field=field, value=json.dumps(shown), kind="post", example="#42"
+            ),
+        }, leaked
 
     near_post = stored[:-1] + ("x" if stored[-1] != "x" else "y")
     close_message, _ = await dispatch(board, {"action": "read", "message_id": near_post})
@@ -646,6 +663,7 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     texts = [post["text"] for post in await board_posts(board)]
     assert "misreplied" not in texts
     assert "misaddressed" not in texts
+    assert "leaked" not in texts
 
 
 @pytest.mark.asyncio
