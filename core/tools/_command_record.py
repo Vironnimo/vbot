@@ -437,11 +437,18 @@ class CommandRecord:
             self._finish(None)
 
     def _record_exit(self, exit_code: int, facts: ProcessTreeFacts | None) -> None:
-        """The shell exited: fix its exit code; the command ends unless processes run."""
+        """The shell exited: fix its exit code; the command ends unless processes run.
+
+        Processes that cannot be inspected (*facts* None) may still run: the
+        command keeps running, so its call moves it to the background as any
+        running command and it stays listed and stoppable, until a later poll
+        shows what runs.
+        """
         self._exit_code = exit_code
-        if facts is not None:
-            self._facts = facts
-        if facts is None or not facts.running:
+        if facts is None:
+            return
+        self._facts = facts
+        if not facts.running:
             self._record_end(facts)
 
     def _leftovers_quiet(self, quiet: _QuietWatch, facts: ProcessTreeFacts) -> bool:

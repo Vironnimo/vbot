@@ -48,11 +48,15 @@ class FakeTree:
         self.cpu_seconds = 0.0
         self.started = 1
         self.exits: list[ProgramExit] = []
+        # Raised by the process queries instead of answering.
+        self.facts_error: OSError | None = None
         self.terminate_error: OSError | None = None
         self.terminations = 0
         self.closed = False
 
     def facts(self) -> ProcessTreeFacts:
+        if self.facts_error is not None:
+            raise self.facts_error
         return ProcessTreeFacts(
             tuple(self.running), self.cpu_seconds, self.started, tuple(self.exits)
         )

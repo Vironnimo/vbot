@@ -233,6 +233,23 @@ async def test_working_leftovers_hold_the_end(harness: Harness, activity: str) -
     assert harness.manager.report(command_id).ended
 
 
+@pytest.mark.asyncio
+async def test_processes_that_cannot_be_inspected_at_the_exit_keep_the_command_running(
+    harness: Harness,
+) -> None:
+    command_id, process = await harness.launch()
+    process.tree.facts_error = OSError("access denied")
+    process.exit(0, leftovers=[SERVER])
+
+    # They may still run: the command neither ends nor drops them.
+    await harness.advance(5.0)
+    assert harness.manager.report(command_id).status == "running"
+    process.tree.facts_error = None
+    await harness.advance(3.25)
+    report = harness.manager.report(command_id)
+    assert (report.ended, report.still_running) == (True, (SERVER,))
+
+
 # --- Stops -------------------------------------------------------------------
 
 
