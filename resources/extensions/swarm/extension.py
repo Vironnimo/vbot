@@ -1304,6 +1304,7 @@ class SwarmExtension:
             swarm["main_discussion_id"],
             inbox=_inbox_available(binding),
             automatic=automatic_delivery(swarm["delivery"]),
+            skipped=prepared.get("skipped", ()),
         )
         return PreparedSessionDelivery(
             prepared["receipt_id"],

@@ -194,7 +194,8 @@ def calls(text: str) -> list[JsonObject]:
     return [json.loads(call) for call in _CALL.findall(text)]
 
 
-_OUTPUT_FILE = re.compile(r"(?:written live to|The complete output is in) (\S+)\.(?=\s|$)")
+# Command log files: tmp_<id>.log in Storage.
+_OUTPUT_FILE = re.compile(r"(\S+\.log)(?=[\s.]|$)")
 
 
 def output_file(text: str) -> Path:

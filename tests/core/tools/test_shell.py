@@ -239,6 +239,18 @@ def launched(launcher: FakeLauncher, index: int = 0) -> tuple[str, dict[str, str
     return text(lines[2]), environment
 
 
+# Command log files: tmp_<id>.log in Storage.
+_LOG_PATH = re.compile(r"(\S+\.log)(?=[\s.]|$)")
+
+
+def named_log(text: str) -> str:
+    """The existing log file *text* names, as it names it."""
+    match = _LOG_PATH.search(text)
+    assert match is not None, text
+    assert Path(match[1]).is_file()
+    return match[1]
+
+
 def note(content: str) -> Any:
     """A stored delivery, as the status fold reads it."""
     return SimpleNamespace(role="note", content=content, name=None)
@@ -377,13 +389,10 @@ async def test_long_output_keeps_head_and_tail_and_points_to_the_log_file(shell:
     result = data(await shell.returned(call))
     lines = result["output"].splitlines()
     assert (lines[0], lines[-1]) == ("line 0", "line 499")
-    # The marker names the file with the complete output.
+    # The marker counts the omitted lines and names the file with the complete output.
     omitted = next(line for line in lines if line.startswith("[... "))
-    marker = re.fullmatch(
-        r"\[\.\.\. 380 lines omitted; the complete output is in (\S+) \.\.\.\]", omitted
-    )
-    assert marker is not None, omitted
-    log = Path(marker[1]).read_text(encoding="utf-8").splitlines()
+    assert omitted.startswith("[... 380 lines omitted"), omitted
+    log = Path(named_log(omitted)).read_text(encoding="utf-8").splitlines()
     assert len(log) == 500
 
 
@@ -410,9 +419,7 @@ async def test_output_vbot_could_not_process_is_marked_as_missing(
     assert lines[-2] == "line 199" and lines[-1].startswith("[") and "lost line" not in output
     assert "complete output" not in output
     omitted = next(line for line in lines if line.startswith("[... "))
-    log = re.search(r" is in (\S+) \.\.\.\]$", omitted)
-    assert log is not None, omitted
-    assert Path(log[1]).read_text(encoding="utf-8").splitlines()[-1] == "line 199"
+    assert Path(named_log(omitted)).read_text(encoding="utf-8").splitlines()[-1] == "line 199"
 
 
 @pytest.mark.parametrize(
@@ -563,7 +570,7 @@ async def test_run_in_background_returns_at_once_and_delivers(
         assert body[-1] == f"line {lines - 1}"
         assert any(line.startswith("[... ") and path in line for line in body)
     else:
-        assert body[-1] == f"The complete output is in {path}."
+        assert path in body[-1] and not body[-1].startswith("line ")
     assert Path(path).read_text(encoding="utf-8").splitlines()[-1] == f"line {lines - 1}"
 
 
@@ -579,10 +586,9 @@ async def test_running_output_is_the_newest_lines_and_its_log_file_has_every_lin
     lines = [f"line {number}" for number in range(1, 151)]
     assert result["status"] == "running"
     path = log_file(result["next"])
-    assert result["output"].splitlines() == [
-        f"[... 130 earlier lines omitted; the complete output is in {path} ...]",
-        *lines[-20:],
-    ]
+    marker, *newest = result["output"].splitlines()
+    assert marker.startswith("[... 130 earlier lines omitted") and path in marker, marker
+    assert newest == lines[-20:]
     assert Path(path).read_text(encoding="utf-8").splitlines() == lines
     # The user watched the output arrive while the call waited.
     assert shell.live_output[-1]["tool_call_id"] == "call-a"

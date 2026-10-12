@@ -17,7 +17,9 @@ from core.tools import ToolContext
 
 from . import agent_text as text
 from ._board_view import (
+    PAGE_LIMIT,
     Roster,
+    automatic_delivery,
     call_text,
     close_discussion,
     discussion_choices,
@@ -26,14 +28,14 @@ from ._board_view import (
     everyone_mentions,
     excerpt,
     news_text,
+    page_text,
     post_block,
     post_discussion_label,
     post_suggestion,
-    posts_text,
     queued_text,
     spoken_list,
 )
-from ._extension_values import AgentCallError, Json, _call_request_id
+from ._extension_values import AgentCallError, Json, _call_request_id, _call_step_id
 from ._store_values import discussion_number, discussion_ref, post_number, post_ref
 from .store import Page, SwarmStoreError
 
@@ -194,6 +196,11 @@ class BoardCall:
             data["more"] = text.BOARD_MORE_DISCUSSIONS.format(
                 call=call_text({**arguments, "cursor": page.cursor})
             )
+        # A pending count reads as a to-do; say when the posts arrive without a call.
+        if automatic_delivery(self.swarm["delivery"]) and any(
+            entry["pending_count"] for entry in page.entries
+        ):
+            data["pending"] = text.BOARD_PENDING_AUTOMATIC
         data["content"] = discussions_text(page.entries, self.main)
         return data
 
@@ -217,7 +224,7 @@ class BoardCall:
             return {"content": post_block(post, self.roster, self.main, with_discussion=True)}
         if page.entries:
             anchor = page.entries[0]
-        elif "before" in query:
+        elif "before" in query and "discussion_id" not in query:
             anchor = await self._post(query["before"])
         else:
             anchor = None
@@ -229,6 +236,16 @@ class BoardCall:
             row = await self._discussion(query.get("discussion_id") or self.main)
             discussion_id, number = row["id"], row["sequence"]
             label = discussion_label(number, row["title"], main=discussion_id == self.main)
+        if "before" in query and "discussion_id" in query:
+            before = await self._post(query["before"])
+            if before["discussion_id"] != discussion_id:
+                self.notes.append(
+                    text.BEFORE_OTHER_DISCUSSION.format(
+                        post_id=post_ref(before["sequence"]),
+                        before_discussion=post_discussion_label(before, self.main),
+                        discussion=label,
+                    )
+                )
         count = len(page.entries)
         if "before" in query:
             summary = (
@@ -266,9 +283,9 @@ class BoardCall:
             }
             if "limit" in query:
                 continuation["limit"] = query["limit"]
-            data["older"] = text.BOARD_OLDER.format(call=call_text(continuation))
+            data["older"] = _older(page.entries, query.get("limit", PAGE_LIMIT), continuation)
         if page.entries:
-            data["content"] = posts_text(page.entries, self.roster, self.main)
+            data["content"] = page_text(page.entries, self.roster, self.main)
         return data
 
     async def post(self, arguments: Json) -> Json:
@@ -289,10 +306,17 @@ class BoardCall:
                 self.pid,
                 request_id=_call_request_id(self.context),
                 expected_epoch=self.swarm["epoch"],
+                step_id=_call_step_id(self.context),
                 **values,
             )
         except SwarmStoreError as error:
             raise await self._write_error(error, values) from error
+        if data.get("duplicate"):
+            self.notes.append(text.POST_DUPLICATE.format(post_id=post_ref(data["sequence"])))
+            return {
+                "post_id": post_ref(data["sequence"]),
+                "discussion": await self._label(data["discussion_id"]),
+            }
         long_main = (
             data["discussion_id"] == self.main and len(values["text"]) > text.FULL_POST_CHARS
         )
@@ -366,17 +390,17 @@ class BoardCall:
             "status": text.BOARD_ALREADY_JOINED if data["already"] else text.BOARD_JOINED,
         }
         if recent["has_more"] and recent["entries"]:
-            result["older"] = text.BOARD_OLDER.format(
-                call=call_text(
-                    {
-                        "action": "read",
-                        "discussion_id": discussion_ref(row["sequence"]),
-                        "before": post_ref(recent["entries"][0]["sequence"]),
-                    }
-                )
+            result["older"] = _older(
+                recent["entries"],
+                PAGE_LIMIT,
+                {
+                    "action": "read",
+                    "discussion_id": discussion_ref(row["sequence"]),
+                    "before": post_ref(recent["entries"][0]["sequence"]),
+                },
             )
         if recent["entries"]:
-            result["content"] = posts_text(recent["entries"], self.roster, self.main)
+            result["content"] = page_text(recent["entries"], self.roster, self.main)
         return result
 
     async def leave(self, arguments: Json) -> Json:
@@ -457,16 +481,6 @@ class BoardCall:
                         discussion_choices(discussions, self.main),
                         text.DISCUSSION_CHOOSE,
                     )
-                ),
-            ) from error
-        if error.code == "before_discussion_mismatch":
-            anchor = await self._post(query["before"])
-            raise AgentCallError(
-                "invalid_arguments",
-                text.BEFORE_DISCUSSION_CONFLICT.format(
-                    post_id=post_ref(anchor["sequence"]),
-                    before_discussion=post_discussion_label(anchor, self.main),
-                    discussion=await self._label(query["discussion_id"]),
                 ),
             ) from error
         if error.code == "invalid_cursor":
@@ -566,6 +580,18 @@ class BoardCall:
 
     async def _post(self, reference: str) -> Any:
         return (await self.store.read_posts(self.sid, self.pid, message_id=reference)).entries[0]
+
+
+def _older(entries: Sequence[Json], limit: int, continuation: Json) -> str:
+    """Name the call for the older posts; say when the page's size bound cut it short.
+
+    Pages fill from the newest post, so posts the bound left out are older ones.
+    """
+
+    call = call_text(continuation)
+    if len(entries) < limit:
+        return text.BOARD_OLDER_CUT.format(count=len(entries), limit=limit, call=call)
+    return text.BOARD_OLDER.format(call=call)
 
 
 def _names(reference: str, discussion_id: str, sequence: int) -> bool:

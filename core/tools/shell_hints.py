@@ -15,6 +15,9 @@ Design rules (keep them when adding a pattern):
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
   scanned: hints key on error headers, which open the output or, after long
   progress output, end it.
+* A Python failure is judged from the last traceback's exception line on
+  (``_Failure.error``): what a program printed before it, such as a probe's
+  data, is not its failure.
 * The command is not shortened, so a pattern over it runs in linear time: one
   whose failed attempts each scan on to the end of the command is quadratic and
   can stall the Event Loop.
@@ -55,9 +58,37 @@ class _Failure:
     output: str
     workdir: Path | None
     offers: Callable[[str], bool]
+    # Where the output reports the failure: from the last Python traceback's
+    # exception line on, else all of it.
+    error_start: int = 0
+
+    @property
+    def error(self) -> str:
+        """The output from where it reports the failure on."""
+        return self.output[self.error_start :]
 
     def edit_tool(self) -> str | None:
         return next((name for name in _EDIT_TOOLS if self.offers(name)), None)
+
+
+# A Python traceback header at the start of a line, and the line that ends the
+# traceback: the first one after it that is not indented, the exception.
+_TRACEBACK_HEADER = re.compile(r"^Traceback \(most recent call last\):", re.M)
+_UNINDENTED_LINE = re.compile(r"^\S", re.M)
+
+
+def _error_start(output: str) -> int:
+    """Where *output* reports the failure: the last Python traceback's exception line.
+
+    A probe printed "[Errno 13] Permission denied" as data and then failed with a
+    TypeError; the permission hint answered the data. Without a complete
+    traceback, all of the output counts.
+    """
+    headers = [header.end() for header in _TRACEBACK_HEADER.finditer(output)]
+    if not headers:
+        return 0
+    exception = _UNINDENTED_LINE.search(output, headers[-1])
+    return exception.start() if exception is not None else 0
 
 
 # Exit-code-only hints for codes POSIX shells give a fixed meaning; on Windows
@@ -77,6 +108,30 @@ _TIMEOUT_PROGRAM_HINT = (
 )
 
 
+# A title in place of a command: one line of at least three plain words that
+# starts with a capitalized word, such as "Check shell files compile and behave".
+# Programs are rarely capitalized; a cmdlet's hyphen, a flag or a file's dot ends
+# the match.
+_PROSE = re.compile(r"[A-Z][a-z]*(?:[ \t]+[^\W_][\w'’-]*){2,}\.?")
+
+
+def _description_as_command(failure: _Failure, missing: str) -> str | None:
+    """The hint for a call whose command holds a description, or None.
+
+    Agents sent the title meant for description as the command; the shell ran
+    its first word, and the not-installed hint sent them to install `Check`.
+    A command equal to the call's description proves nothing: Models also copy
+    a short command into description.
+    """
+    command = failure.command.strip()
+    if not _PROSE.fullmatch(command) or command.split(maxsplit=1)[0] != missing:
+        return None
+    return (
+        f"command holds a description, not a command, so its first word `{missing}` was run "
+        "as a program. Send the command to run in command, and the description in description."
+    )
+
+
 # POSIX: bash/sh report "<name>: command not found", after a prefix such as
 # "bash: line 1: " or "sh: 1: ". The name is a whole run of name characters; the
 # lookbehind keeps a failed attempt from rescanning the rest of the same run.
@@ -88,6 +143,9 @@ def _hint_command_not_found(failure: _Failure) -> str | None:
     if not match:
         return None
     missing = match.group(1)
+    described = _description_as_command(failure, missing)
+    if described is not None:
+        return described
     if missing == "python":
         return (
             "This system has no `python` command: use `python3`, or the interpreter of the "
@@ -194,6 +252,9 @@ def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
     if not match:
         return None
     missing = match.group(1)
+    described = _description_as_command(failure, missing)
+    if described is not None:
+        return described
     equivalent = _POWERSHELL_EQUIVALENTS.get(missing)
     if equivalent is not None:
         return equivalent if isinstance(equivalent, str) else equivalent(failure)
@@ -314,6 +375,39 @@ _DOUBLED_QUOTE = re.compile(r"''\w")
 _BASH_SYNTAX = re.compile(
     r"(?:^|[;&|])[ \t]*+(?:(?:then|fi|done)\b|do\b(?![ \t]*+\{)|\[\[?[ \t])", re.M
 )
+# PowerShell's parser refuses bash's `program < file`.
+_INPUT_REDIRECTION = re.compile(rf"[{_QUOTES}]<[{_QUOTES}] operator is reserved for future use")
+# A { } block passed to a native program, as when \" ended a python -c "..." string
+# early: "python.exe: ScriptBlock should only be specified as a value of the Command parameter."
+_SCRIPT_BLOCK_ARGUMENT = "ScriptBlock should only be specified as a value of the Command parameter"
+
+# Python source sent as the command: after blank and comment lines, its first line
+# imports, or defines a function or a class. A PowerShell class opens a { block,
+# also after `class Child : Parent`, so a Python class line ends in its colon.
+_PYTHON_SOURCE = re.compile(
+    r"(?:[ \t]*+(?:#[^\n]*+)?\r?\n)*+[ \t]*+"
+    r"(?:import[ \t]++[\w.]++(?:[ \t]++as[ \t]++\w++)?(?:[ \t]*+,[ \t]*+[\w.]++"
+    r"(?:[ \t]++as[ \t]++\w++)?)*+[ \t]*+(?:[;#][^\n]*+)?\r?$"
+    r"|from[ \t]++[\w.]++[ \t]++import[ \t]"
+    r"|def[ \t]++\w++[ \t]*+\("
+    r"|class[ \t]++\w++[ \t]*+(?:\([^)\n]*+\))?[ \t]*+:[ \t]*+(?:#[^\n]*+)?\r?$)",
+    re.M,
+)
+
+
+def _hint_python_source(failure: _Failure) -> str | None:
+    """Name Python code sent as a PowerShell command.
+
+    PowerShell reads it as its own code and fails on whatever line breaks its
+    grammar, with a ParserError or a "not recognized" error that names no cause.
+    """
+    if not _POWERSHELL or not _PYTHON_SOURCE.match(failure.command):
+        return None
+    return (
+        "The command is Python code, which PowerShell cannot run. Pipe it into Python as a "
+        "here-string: @' on its own line, the code, then '@ at the start of a line, followed "
+        "by `| python -`."
+    )
 
 
 def _here_strings(command: str) -> tuple[list[tuple[str, str]], str]:
@@ -359,10 +453,18 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
                 "line, the text, then '@ at the start of a line, followed by `| python -` or "
                 "`| Set-Content file`."
             )
+        if _INPUT_REDIRECTION.search(output):
+            return (
+                "PowerShell has no < input redirection. Pipe the file into the program "
+                "instead, as in `Get-Content input.txt | python script.py`."
+            )
         if _BASH_SYNTAX.search(outside):
             return _BASH_SYNTAX_HINT
         if _has_bash_quote_idiom(outside):
             return _BASH_QUOTE_HINT
+        return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
+    if _SCRIPT_BLOCK_ARGUMENT in output:
+        # \" ended the string early, and a { } block of the code became an argument.
         return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
     if not _POWERSHELL or "SyntaxError" not in output:
         return None
@@ -443,10 +545,12 @@ _MISSING_MODULE = re.compile(
     r"(?:ModuleNotFoundError|ImportError): No module named '?([\w.]+)'?"
     r"(; '[\w.]+' is not a package)?"
 )
-# A Python script run by its path, such as `python tests/test_x.py` or `py -u tools\run.py`.
+# A Python script run by its path, such as `python tests/test_x.py` or `py -u tools\run.py`:
+# the interpreter as written, its options (after a closing quote of the
+# interpreter's path), and the script.
 _PYTHON_SCRIPT = re.compile(
-    r"(?:^|[\s;&|('\"])(?:[^\s;&|()'\"]*[/\\])?(?:python[\d.]*|py)(?:\.exe)?['\"]?\s+"
-    r"(?:-[A-Za-z]\w*\s+)*['\"]?([^\s;&|<>'\"]+\.py)\b",
+    r"(?:^|[\s;&|('\"])(?P<interpreter>(?:[^\s;&|()'\"]*[/\\])?(?:python[\d.]*|py)(?:\.exe)?)"
+    r"(?P<options>['\"]?(?:\s+-[A-Za-z]\w*)*)\s+['\"]?(?P<script>[^\s;&|<>'\"]+\.py)\b",
     re.I | re.M,
 )
 
@@ -462,7 +566,7 @@ _TRACEBACK_FILE = re.compile(r'^[ \t]*File "([^"\n]*)"', re.M)
 
 
 def _hint_module_not_found(failure: _Failure) -> str | None:
-    match = _MISSING_MODULE.search(failure.output)
+    match = _MISSING_MODULE.search(failure.output, failure.error_start)
     if not match:
         return None
     name = match.group(1)
@@ -474,11 +578,7 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
                 f"package, so it has no submodules. Import '{leaf}' from the module "
                 "that defines it."
             )
-        return (
-            f"Python imported the package '{parent}', but it has no module '{leaf}'. "
-            f"List the files of '{parent}' to check the name, or create the module if "
-            "it is still missing."
-        )
+        return _missing_submodule(name, failure.workdir)
     workdir = failure.workdir
     if workdir is None or not _in_workdir(name, workdir):
         return (
@@ -486,30 +586,76 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
             "of that name. Check the spelling; if the project has a virtual environment, "
             "run its interpreter, otherwise install the package."
         )
-    script = _script_in_subdirectory(failure.command, failure.output, workdir)
-    if script is None and _imported_elsewhere(failure, match.start()):
+    found = _script_in_subdirectory(failure.command, failure.output, workdir)
+    if found is None and _imported_elsewhere(failure, match.start()):
         return (
             f"'{name}' is in the working directory, but the Python process that could not "
             "import it runs with another working directory or import path, such as a process "
             "the command started. Start that process in the working directory, or add the "
             "working directory to its PYTHONPATH."
         )
-    if script is None:
+    if found is None:
         return (
             f"'{name}' is in the working directory, but the working directory is not on "
             "Python's import path for this command. Run Python from the working directory "
             "with -m, such as `python -m pytest`, or add the working directory to PYTHONPATH."
         )
-    run_as = (
-        f"`python -m {'.'.join(script.with_suffix('').parts)}`"
-        if all(part.isidentifier() for part in script.with_suffix("").parts)
-        else "`python -m` with its dotted module name"
-    )
+    script, run = found
     return (
         f"Python cannot import '{name}' because running `{script.as_posix()}` by path puts "
         f"its directory `{script.parent.as_posix()}` on the import path instead of the "
         f"working directory, where '{name}' is. Run it as a module from the working "
-        f"directory instead: {run_as}."
+        f"directory instead: {_run_as_module(failure.command, script, run)}."
+    )
+
+
+def _missing_submodule(name: str, workdir: Path | None) -> str:
+    """The hint for a package that has no module of the imported name.
+
+    "Create the module" fired when tests imported a teammate's module that had
+    not landed yet, inviting Agents to write someone else's file. When the
+    module is in the working directory, Python imported another package of the
+    same name: a ``tests`` folder without ``__init__.py`` lost to an installed
+    ``tests`` package.
+    """
+    parent, _, leaf = name.rpartition(".")
+    parts = name.split(".")
+    top = parts[0]
+    package = Path(*parts[:-1])
+    if workdir is not None:
+        module = next(
+            (
+                path
+                for path in (package / f"{leaf}.py", package / leaf)
+                if (workdir / path).is_file() or (path.name == leaf and (workdir / path).is_dir())
+            ),
+            None,
+        )
+        if module is not None:
+            shown = module.as_posix()
+            if not (workdir / top / "__init__.py").is_file():
+                return (
+                    f"{shown} exists in the working directory, but Python imported another "
+                    f"package named '{top}': the working directory's {top}/ has no __init__.py, "
+                    f"so a '{top}' package elsewhere on the import path shadows it. Add an empty "
+                    f"{top}/__init__.py."
+                )
+            return (
+                f"{shown} exists in the working directory, but Python imported another "
+                f"package named '{top}', which comes earlier on its import path and shadows "
+                "the working directory's. Start Python in the working directory with -m, which "
+                "puts the working directory first."
+            )
+        if (workdir / package).is_dir():
+            return (
+                f"Python imported the package '{parent}', but it has no module '{leaf}', and "
+                f"the working directory has no {package.as_posix()}/{leaf}.py. Check the name "
+                f"against the files in {package.as_posix()}/; if it is right, that module is "
+                "not written yet."
+            )
+    return (
+        f"Python imported the package '{parent}', but it has no module '{leaf}'. Check the "
+        f"name against the files of '{parent}'."
     )
 
 
@@ -531,26 +677,67 @@ def _in_workdir(module: str, workdir: Path) -> bool:
     return (workdir / module).is_dir() or (workdir / f"{module}.py").is_file()
 
 
-def _script_in_subdirectory(command: str, output: str, workdir: Path) -> Path | None:
-    """The script in a subdirectory of ``workdir`` that the command ran by path.
+def _script_in_subdirectory(
+    command: str, output: str, workdir: Path
+) -> tuple[Path, re.Match[str]] | None:
+    """The script in a subdirectory of ``workdir`` that the command ran by path,
+    with the match of the Python call that ran it.
 
     With several scripts, the first one a traceback names wins; None when no
     traceback names one.
     """
-    scripts: list[Path] = []
+    scripts: dict[Path, re.Match[str]] = {}
     for match in _PYTHON_SCRIPT.finditer(command):
-        path = Path(match.group(1).replace("\\", "/"))
+        path = Path(match["script"].replace("\\", "/"))
         if path.is_absolute():
             try:
                 path = path.relative_to(workdir)
             except ValueError:
                 continue
         if len(path.parts) > 1 and ".." not in path.parts and path not in scripts:
-            scripts.append(path)
-    if len(scripts) > 1:
+            scripts[path] = match
+    found = list(scripts.items())
+    if len(found) > 1:
         traceback = output.replace("\\", "/")
-        scripts = [script for script in scripts if f'/{script.as_posix()}"' in traceback]
-    return scripts[0] if scripts else None
+        found = [item for item in found if f'/{item[0].as_posix()}"' in traceback]
+    return found[0] if found else None
+
+
+# Longer arguments are named, not repeated, in a suggested call.
+_ARGUMENTS_SHOWN_CHARS = 400
+# The arguments after a script's path, up to a redirection or the end of its
+# statement: quoted or plain words.
+_SCRIPT_ARGUMENTS = re.compile(
+    r"""(?:[ \t]++(?![0-9*]*+>)(?:'[^'\n]*+'|"[^"\n]*+"|[^\s;&|<>'"])++)*+"""
+)
+
+
+def _run_as_module(command: str, script: Path, run: re.Match[str]) -> str:
+    """The Python call that ran *script* by path, rewritten to run it with -m.
+
+    The interpreter as written, its options and every argument after the script
+    stay unchanged: one suggestion dropped `--impl minidb.sqlite_float.format_real`,
+    which chose the implementation the script tested.
+    """
+    dotted = script.with_suffix("").parts
+    if not all(part.isidentifier() for part in dotted):
+        return "`python -m` with its dotted module name and the same arguments"
+    start = run.start("interpreter")
+    if start > 0 and command[start - 1] in "'\"":
+        # A quoted interpreter path, run with PowerShell's call operator.
+        start -= 1
+        before = command[:start].rstrip(" \t")
+        if before.endswith("&") and not before.endswith("&&"):
+            start = len(before) - 1
+    end = run.end("script")
+    if end < len(command) and command[end] in "'\"":
+        end += 1
+    arguments = _SCRIPT_ARGUMENTS.match(command, end)
+    rest = arguments[0].rstrip() if arguments else ""
+    call = f"{command[start : run.end('options')]} -m {'.'.join(dotted)}"
+    if len(rest) > _ARGUMENTS_SHOWN_CHARS:
+        return f"`{call}` followed by the same arguments"
+    return f"`{call}{rest}`"
 
 
 _CONFLICT = re.compile(r"^CONFLICT |Automatic merge failed|needs merge", re.M)
@@ -631,7 +818,7 @@ _END_OF_INPUT = re.compile(
 
 
 def _hint_end_of_input(failure: _Failure) -> str | None:
-    if not _END_OF_INPUT.search(failure.output):
+    if not _END_OF_INPUT.search(failure.error):
         return None
     hint = (
         "The program asked for input, and commands get none. Pass the answer as an option or "
@@ -643,7 +830,7 @@ def _hint_end_of_input(failure: _Failure) -> str | None:
 
 
 def _hint_already_exists(failure: _Failure) -> str | None:
-    match = re.search(r"(?:fatal|error):.*?'([^']+)' already exists", failure.output)
+    match = re.search(r"(?:fatal|error):.*?'([^']+)' already exists", failure.error)
     if not match:
         return None
     return (
@@ -663,7 +850,7 @@ _PORT_IN_USE = re.compile(
 
 
 def _hint_port_in_use(failure: _Failure) -> str | None:
-    match = _PORT_IN_USE.search(failure.output)
+    match = _PORT_IN_USE.search(failure.error)
     if not match:
         return None
     port = next((group for group in match.groups() if group), "")
@@ -680,7 +867,7 @@ _ACCESS_DENIED = re.compile(r"Access (?:to the path .*? )?is denied")
 
 
 def _hint_permission_denied(failure: _Failure) -> str | None:
-    output = failure.output
+    output = failure.error
     if (
         "Permission denied" not in output
         and "EACCES" not in output
@@ -701,7 +888,8 @@ def _hint_permission_denied(failure: _Failure) -> str | None:
 
 
 def _hint_rate_limit(failure: _Failure) -> str | None:
-    if "API rate limit" not in failure.output and "was submitted too quickly" not in failure.output:
+    error = failure.error
+    if "API rate limit" not in error and "was submitted too quickly" not in error:
         return None
     return (
         "The API rate limit is reached, so an immediate retry fails the same way. Continue "
@@ -723,6 +911,8 @@ def _hint_gh_unknown_json_field(failure: _Failure) -> str | None:
 _OUTPUT_HINTS: tuple[Callable[[_Failure], str | None], ...] = (
     _hint_gh_unknown_json_field,
     _hint_merge_conflict,
+    # Read from the command alone: every error that follows comes from it.
+    _hint_python_source,
     _hint_powershell_prompt,
     _hint_container_tty,
     _hint_end_of_input,
@@ -766,7 +956,7 @@ def annotate_failure(
     if len(output) > 2 * _SCAN_CHARS:
         window = f"{output[:_SCAN_CHARS]}\n{output[-_SCAN_CHARS:]}"
     if window:
-        failure = _Failure(command or "", window, workdir, offers)
+        failure = _Failure(command or "", window, workdir, offers, _error_start(window))
         for hint_for in _OUTPUT_HINTS:
             try:
                 hint = hint_for(failure)

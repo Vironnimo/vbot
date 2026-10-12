@@ -265,6 +265,41 @@ def wiki_contents(
     return {int(row["revision"]): str(row["content"]) for row in rows}
 
 
+def wiki_changes(
+    db: SwarmDatabase, swarm_id: str, page_id: str, since: int, until: int
+) -> Json | None:
+    """Return what changed in one page from revision ``since`` to revision ``until``.
+
+    The result holds both revisions' content and the names of everyone who saved
+    a revision after ``since`` up to ``until``, most recent first. None means one
+    of the two revisions does not exist.
+    """
+
+    with db._read() as connection:
+        page_id = _page_id(connection, swarm_id, page_id)
+        contents = {
+            int(row["revision"]): str(row["content"])
+            for row in connection.execute(
+                "SELECT revision,content FROM wiki_revisions WHERE swarm_id=? AND page_id=? "
+                "AND revision IN (?,?)",
+                (swarm_id, page_id, since, until),
+            )
+        }
+        authors = connection.execute(
+            "SELECT author_name,MAX(revision) AS latest FROM wiki_revisions "
+            "WHERE swarm_id=? AND page_id=? AND revision>? AND revision<=? "
+            "GROUP BY author_id,author_name ORDER BY latest DESC",
+            (swarm_id, page_id, since, until),
+        ).fetchall()
+    if since not in contents or until not in contents:
+        return None
+    return {
+        "before": contents[since],
+        "after": contents[until],
+        "authors": [str(row["author_name"]) for row in authors],
+    }
+
+
 def wiki(
     db: SwarmDatabase,
     swarm_id: str,
@@ -480,7 +515,9 @@ def _mutate(
                             {"line": item.line, "text": item.text, "truncated": item.truncated}
                             for item in edit.passages
                         ],
-                        "difference": edit.difference,
+                        "differences": list(edit.differences),
+                        "different_lines": edit.different_lines,
+                        "span": list(edit.span) if edit.span else None,
                     },
                 )
             content, line, notes = edit.content, edit.line, list(edit.notes)

@@ -54,6 +54,7 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
     assert environment["GIT_TERMINAL_PROMPT"] == "0"
     assert environment["GIT_PAGER"] == environment["GH_PAGER"] == "cat"
     assert environment["PYTHONIOENCODING"] == "utf-8"
+    assert environment["PYTHONUTF8"] == "1"
     assert environment["PAGER"] == "more"
     assert (environment["MODE"], environment["API_TOKEN"]) == ("ci", "secret")
     assert environment["VBOT_RUN_AGENT_ID"] == "agent-1"
@@ -67,6 +68,9 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
     assert layers.base["PAGER"] == "cat"
     per_call = {"MODE", "API_TOKEN", "VBOT_RUN_AGENT_ID", "VBOT_RUN_PROJECT_ID"}
     assert not (per_call | {"VBOT_RUN_SESSION_ID", "VBOT_UPDATE_HANDOFF"}) & layers.base.keys()
+    # Python's UTF-8 mode gives way to the user's own setting.
+    login_base["PYTHONUTF8"] = "0"
+    assert command_environment(RunIdentity("agent-1", "session-1", None)).base["PYTHONUTF8"] == "0"
 
 
 def test_terminal_environment_has_no_command_layers(login_base: dict[str, str]) -> None:
@@ -75,7 +79,7 @@ def test_terminal_environment_has_no_command_layers(login_base: dict[str, str]) 
     assert environment["PAGER"] == "less"
     assert environment["TERM"] == "xterm-256color"
     assert environment["EXTRA"] == "1"
-    assert not {"GIT_EDITOR", "NO_COLOR", "PYTHONUNBUFFERED"} & environment.keys()
+    assert not {"GIT_EDITOR", "NO_COLOR", "PYTHONUNBUFFERED", "PYTHONUTF8"} & environment.keys()
 
 
 def test_server_environment_base_drops_what_vbot_added(monkeypatch: pytest.MonkeyPatch) -> None:

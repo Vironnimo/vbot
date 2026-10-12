@@ -9,6 +9,7 @@ from core.chat.messages import ChatMessage
 from resources.extensions.swarm.agent_text import (
     DELIVERY_MORE,
     DELIVERY_PREFIX,
+    DELIVERY_SKIPPED,
     DISCUSSION_ANNOUNCEMENT,
     EMPTY_INBOX,
 )
@@ -300,15 +301,20 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
     context = replace(board.contexts[1], tool_name="swarm_inbox")
     request_context = delivery_request(board, 1)
     batches = []
+    texts = []
     remaining = []
-    for index in range(3):
+    # The Inbox takes the oldest posts first. Automatic delivery of a backlog larger
+    # than a batch brings the posts that address or answer the reader or come from
+    # the user, then the newest others, and skips the older ones.
+    for index in range(2 if delivery == "automatic" else 3):
         if delivery == "automatic":
             prepared = await board.runtime.before_request(request_context)
             assert prepared is not None
             [text] = prepared.entries
             # Replaying an unacknowledged batch retains both its identity and its text.
             assert await board.runtime.before_request(request_context) == prepared
-            assert text.startswith(f"{DELIVERY_PREFIX}\n\nIn ")
+            assert text.startswith(f"{DELIVERY_PREFIX}\n\n")
+            texts.append(text)
             remaining.append(text.rpartition("\n\n")[2] if "more pending" in text else None)
             message = ChatMessage.note(text)
             receipt = (0, prepared.delivery_id, prepared.content_hash, prepared.effect_kind, "note")
@@ -339,48 +345,61 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
     topic = 'discussion "Discussion title sentinel" (d2)'
     main = "the main discussion (d1)"
     opening_ref = await post_ref(board, opening["opening_post_id"])
+    announcement_ref = await post_ref(board, opening["main_announcement_id"])
     announcement = DISCUSSION_ANNOUNCEMENT.format(
         author_name=author,
         title="Discussion title sentinel",
         discussion_id="d2",
         opening_post_id=opening_ref,
     )
-    assert batches == [
-        [
-            Received(topic, opening_ref, author, "to you", "Opening"),
-            Received(
-                main,
-                await post_ref(board, opening["main_announcement_id"]),
-                author,
-                None,
-                announcement,
-            ),
-        ],
-        [
-            Received(topic, f"#{normal['sequence']}", author, None, "Ordinary discussion post"),
-            Received(
-                topic,
-                f"#{reply['sequence']}",
-                author,
-                f"reply to #{normal['sequence']}; to you",
-                "Reply ping",
-            ),
-        ],
-        [Received(main, f"#{human['sequence']}", "User", None, "Human post")],
-    ]
-    assert remaining == (
-        [
-            DELIVERY_MORE["automatic_many"].format(count=3),
-            DELIVERY_MORE["automatic_one"],
-            None,
-        ]
-        if delivery == "automatic"
-        else [
+    first = Received(topic, opening_ref, author, "to you", "Opening")
+    announced = Received(main, announcement_ref, author, None, announcement)
+    ordinary = Received(topic, f"#{normal['sequence']}", author, None, "Ordinary discussion post")
+    answer = Received(
+        topic,
+        f"#{reply['sequence']}",
+        author,
+        f"reply to #{normal['sequence']}; to you",
+        "Reply ping",
+    )
+    user = Received(main, f"#{human['sequence']}", "User", None, "Human post")
+    if delivery == "inbox":
+        assert batches == [[first, announced], [ordinary, answer], [user]]
+        assert remaining == [
             '3 more pending; call swarm_inbox again with {"limit": 2} to continue.',
             '1 more pending; call swarm_inbox again with {"limit": 2} to continue.',
             None,
         ]
-    )
+    else:
+        # The addressed posts alone fill the first batch, so it skips nothing.
+        assert batches == [[first, answer], [ordinary, user]]
+        assert remaining == [DELIVERY_MORE["automatic_many"].format(count=3), None]
+        read = {"action": "read", "before": f"#{human['sequence']}", "limit": 1}
+        skipped = DELIVERY_SKIPPED["one"].format(discussion=main, call=json.dumps(read))
+        assert texts[1].startswith(f"{DELIVERY_PREFIX}\n\n{skipped}\n\nIn ")
+        assert skipped not in texts[0]
+        # A skipped post counts as delivered, yet a read shows it whole until it has.
+        for shown in (True, False):
+            page, page_context = await dispatch(board, read, peer=1)
+            [post] = received(page["data"]["content"])
+            assert (post.text == announcement) is shown
+            if shown:
+                receipt_id, content_hash, effect = page_context._delivery_receipts[0]
+                await persist_carriers(
+                    board.sessions,
+                    binding.address,
+                    generation_id=binding.generation_id,
+                    owner_name="swarm",
+                    messages=[
+                        ChatMessage.tool(
+                            tool_call_id=page_context.tool_call_id,
+                            name="swarm_board",
+                            content=json.dumps(page),
+                        )
+                    ],
+                    receipts=[(0, receipt_id, content_hash, effect, "tool")],
+                )
+                assert await board.store.reconcile_delivery(receipt_id)
     assert (await board.store.prepare_inbox_delivery(sid, recipient))["entries"] == []
 
 
@@ -450,8 +469,9 @@ async def test_delivery_names_swarm_inbox_only_when_receiving_needs_it(
         request_id="single",
         actor="test",
     )
+    # Posts that address the reader are never skipped, so the second stays pending.
     for text in ("one", "two"):
-        await board.store.post(sid, sender, text=text, request_id=text)
+        await board.store.post(sid, sender, text=text, recipients=[recipient], request_id=text)
     [text] = (await board.runtime.before_request(delivery_request(board, 1))).entries
     assert [message.text for message in received(text)] == ["one"]
     assert text.endswith("\n\n" + DELIVERY_MORE[more].format(count=1))

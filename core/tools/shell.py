@@ -134,8 +134,9 @@ else:
 # that follow it up, the results say when it happens.
 SHELL_TOOL_DESCRIPTION = (
     f"{_OPENING} Long output keeps its first and last lines, and the result names a file "
-    f"with all of it, so there is no need to trim it with {_TRIMMING}. When another tool "
-    "covers the task, use it instead of a shell command."
+    f"with all of it, so there is no need to trim it with {_TRIMMING}. Calls in one message "
+    "run at the same time; chain dependent commands in one call. When another tool covers the "
+    "task, use it instead of a shell command."
 )
 
 _COMMAND_PARAMETER: JsonObject = {"type": "string", "minLength": 1}

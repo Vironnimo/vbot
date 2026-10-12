@@ -143,19 +143,23 @@ async def test_post_pages_keep_complete_messages_with_count_and_character_bounds
 ) -> None:
     started = await _swarm(store)
     swarm = await store.get_swarm(started["swarm_id"])
-    sender = swarm["participants"][0]["id"]
+    sender, reader = (participant["id"] for participant in swarm["participants"])
     for index, size in enumerate((16_000, 16_000, 16_000), start=1):
         await store.post(
             started["swarm_id"], sender, text=str(index) * size, request_id=f"sized-{index}"
         )
 
-    newest = await store.read_posts(started["swarm_id"], sender, limit=20)
-    older = await store.read_posts(started["swarm_id"], sender, cursor=newest.cursor)
+    # Posts new to the reader show whole and fill the character bound one by one.
+    newest = await store.read_posts(started["swarm_id"], reader, limit=20)
+    older = await store.read_posts(started["swarm_id"], reader, cursor=newest.cursor)
 
     assert [len(entry["text"]) for entry in newest.entries] == [16_000]
     assert newest.has_more is True
     assert [len(entry["text"]) for entry in older.entries] == [16_000]
     assert older.has_more is True
+    # The author has seen its posts; a page shows their openings, which all fit.
+    own = await store.read_posts(started["swarm_id"], sender, limit=20)
+    assert len(own.entries) == 3 and own.has_more is False
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ resolve them against the group and explain any correction.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -22,7 +23,12 @@ from core.tools.call_syntax import (
 from core.tools.contracts import ToolContract
 
 from ._store_values import post_number
-from .agent_text import BOARD_FOREIGN_ACTIONS, INBOX_ONLY_RECEIVE, STATE_ONLY_STATUS
+from .agent_text import (
+    BOARD_FILE_PATH,
+    BOARD_FOREIGN_ACTIONS,
+    INBOX_ONLY_RECEIVE,
+    STATE_ONLY_STATUS,
+)
 
 Json = dict[str, Any]
 
@@ -118,17 +124,24 @@ _BOARD_ELSEWHERE = {
     "receive": "swarm_inbox",
     "checkinbox": "swarm_inbox",
     "wiki": "swarm_wiki",
+    # The Tool's own name sent as the action.
+    "swarmstate": "swarm_state",
+    "swarminbox": "swarm_inbox",
+    "swarmwiki": "swarm_wiki",
 }
+# A file path means the call was meant for a Tool that works with files.
+_BOARD_FILE_FIELDS = frozenset({"path", "filepath"})
 
 _WIKI_FIELDS = SpellingAliases(
     {
-        "page_id": ("id", "page", "wiki_id", "wiki_page_id"),
+        "page_id": ("id", "page", "path", "wiki_id", "wiki_page_id"),
         "content": ("body", "text", "markdown", "page_content"),
         "old_text": ("old", "old_string", "old_str", "find_text", "search_text"),
         "new_text": ("new", "new_string", "new_str", "replace_text", "replacement", "replace_with"),
         "query": ("q", "search", "search_query", "find", "keyword", "keywords", "term"),
         "expected_revision": ("base_revision", "expected_rev", "if_revision", "current_revision"),
         "revision": ("version", "rev", "revision_number"),
+        "since_revision": ("since", "since_rev", "since_version", "changes_since", "diff_since"),
         "offset": ("start", "char_offset", "from"),
         "limit": ("count", "max", "max_chars", "max_results", "length", "page_size", "limti"),
         "include_deleted": ("show_deleted", "with_deleted", "deleted"),
@@ -223,6 +236,11 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
     value = _prepare(arguments)
     if not isinstance(value, dict):
         return value
+    path = next(
+        (item for key, item in value.items() if spelling(str(key)) in _BOARD_FILE_FIELDS), None
+    )
+    if isinstance(path, str) and not is_placeholder(path):
+        raise ToolContractError(BOARD_FILE_PATH.format(path=json.dumps(path, ensure_ascii=False)))
     message = next(
         (
             item
@@ -271,7 +289,15 @@ def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
         value,
         fields=_WIKI_FIELDS,
         actions=_action_normalizer(_WIKI_ACTIONS, {}),
-        optional=("page_id", "revision", "offset", "limit", "cursor", "include_deleted"),
+        optional=(
+            "page_id",
+            "revision",
+            "since_revision",
+            "offset",
+            "limit",
+            "cursor",
+            "include_deleted",
+        ),
     )
     if not isinstance(normalized, dict):
         return normalized
@@ -442,10 +468,10 @@ def _implied_wiki_action(arguments: Json) -> str | None:
         return "update"
     if "content" in arguments and "title" in arguments:
         return "create"
-    if "query" in arguments:
-        return "list"
     if "page_id" in arguments and not {"expected_revision"} & arguments.keys():
         return "read"
+    if "query" in arguments:
+        return "list"
     return None
 
 

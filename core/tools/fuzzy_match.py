@@ -59,6 +59,15 @@ _CANDIDATE_OUTPUT_MAX_LINES = 8
 _CANDIDATE_OUTPUT_MAX_CHARS = 1_200
 # A copied line this similar to a file line is a reworded copy of it.
 _SIMILAR_LINE = 0.5
+# File lines past a copy's length that ``line_differences`` still compares, so the
+# passage of a copy that dropped a few lines ends where the copy ends.
+_DIFFERENCE_SLACK_LINES = 3
+# A differing block this large pairs its lines in order instead of by similarity.
+_ALIGN_MAX_CELLS = 2_500
+_ALIGN_LINE_CHARS = 500
+# Pairing two unlike lines still beats leaving both unpaired, so a rewritten line
+# pairs with the line it replaced.
+_UNLIKE_PAIR = 0.01
 
 # Visually-equivalent characters models emit in place of their ASCII forms, keyed
 # by code point so the source stays pure ASCII and the entries are unambiguous.
@@ -137,6 +146,24 @@ class ClosestFuzzyCandidate:
     line_number: int
     text: str
     truncated: bool
+
+
+@dataclass(frozen=True)
+class LineDifferences:
+    """Every line where a copy differs from the passage it was compared with.
+
+    The passage spans file lines ``first_line`` to ``last_line`` (1-based).
+    ``differences`` holds the first few differing lines in passage order and
+    ``count`` all of them. Each names the file ``line`` and the ``copy_line``
+    with at most 240-character windows of both (``file``, ``copy``); a line
+    only the file holds has no copy side, a line only the copy holds no file
+    side (``None``).
+    """
+
+    first_line: int
+    last_line: int
+    differences: tuple[dict[str, int | str | bool | None], ...]
+    count: int
 
 
 def replace_fuzzy(
@@ -423,6 +450,174 @@ def first_difference(content: str, copy: str, start: int) -> dict[str, int | str
                 "truncated": len(file_text) < len(actual) or len(copy_text) < len(wanted),
             }
     return None
+
+
+def line_differences(content: str, copy: str, start: int, *, limit: int) -> LineDifferences | None:
+    """Compare ``copy`` with the passage of ``content`` it was taken from, line by line.
+
+    ``start`` is the 1-based line of the closest candidate for ``copy``; the
+    passage starts where ``first_difference`` aligns the copy. Lines compare
+    with runs of whitespace collapsed, and lines the copy added or dropped are
+    told apart from changed ones, so one missing line does not make every later
+    line differ. File lines before the copy's first line and after its last are
+    not part of the passage. ``None`` when the copy holds no text or the file no
+    line at the aligned place.
+    """
+    file_lines = split_text_lines(content)
+    copy_lines = split_text_lines(copy)
+    marked = [index for index, line in enumerate(copy_lines) if line.strip()]
+    if not marked:
+        return None
+    first, end = marked[0], marked[-1] + 1
+    begin = _aligned_start(file_lines, start, copy_lines, first) - 1
+    wanted = copy_lines[first:end]
+    # A few more file lines than copied, so a dropped line does not cut the passage short.
+    window = file_lines[begin : begin + len(wanted) + _DIFFERENCE_SLACK_LINES]
+    if not window:
+        return None
+    matcher = SequenceMatcher(
+        None, [_loose(line) for line in window], [_loose(line) for line in wanted], autojunk=False
+    )
+    pairs: list[tuple[int | None, int | None]] = []
+    passage: list[int] = []
+    for tag, file_start, file_end, copy_start, copy_end in matcher.get_opcodes():
+        if copy_start == len(wanted):
+            break  # Only file lines after the copy's last line remain.
+        if tag == "equal":
+            passage.extend(range(file_start, file_end))
+            continue
+        leading = not passage and copy_start == 0
+        # The copy's first lines lead into the lines that follow, so they align from the end.
+        block = _aligned_block(
+            window[file_start:file_end], wanted[copy_start:copy_end], from_end=leading
+        )
+        if leading:
+            # File lines before the copy's first line precede the passage.
+            while block and block[0][1] is None:
+                block.pop(0)
+        if copy_end == len(wanted):
+            # File lines after the copy's last line follow the passage.
+            while block and block[-1][1] is None:
+                block.pop()
+        block = [
+            (
+                None if file_index is None else file_start + file_index,
+                None if copy_index is None else copy_start + copy_index,
+            )
+            for file_index, copy_index in block
+        ]
+        pairs.extend(block)
+        passage.extend(index for index, _ in block if index is not None)
+    if not passage:
+        return None
+    passage.sort()
+    shown = [
+        _line_difference(
+            None if file_index is None else (begin + file_index + 1, window[file_index]),
+            None if copy_index is None else (first + copy_index + 1, wanted[copy_index]),
+        )
+        for file_index, copy_index in pairs[:limit]
+    ]
+    return LineDifferences(
+        begin + passage[0] + 1, begin + passage[-1] + 1, tuple(shown), len(pairs)
+    )
+
+
+def _aligned_block(
+    file_lines: list[str], copy_lines: list[str], *, from_end: bool
+) -> list[tuple[int | None, int | None]]:
+    """Pair the lines of one differing block in order, similar lines with each other.
+
+    Each entry pairs a file line with a copied line, by their index in the block,
+    or holds a line the other side lacks. A block too large to compare line by
+    line pairs its lines in order, and its surplus lines stay unpaired.
+    """
+    if from_end:
+        reversed_pairs = _aligned_block(file_lines[::-1], copy_lines[::-1], from_end=False)
+        rows, cols = len(file_lines), len(copy_lines)
+        return [
+            (None if row is None else rows - 1 - row, None if col is None else cols - 1 - col)
+            for row, col in reversed(reversed_pairs)
+        ]
+    rows, cols = len(file_lines), len(copy_lines)
+    if rows * cols > _ALIGN_MAX_CELLS:
+        paired = min(rows, cols)
+        return [
+            *((index, index) for index in range(paired)),
+            *((index, None) for index in range(paired, rows)),
+            *((None, index) for index in range(paired, cols)),
+        ]
+    similarity = [
+        [
+            ratio
+            if (
+                ratio := SequenceMatcher(
+                    None,
+                    _loose(file_line)[:_ALIGN_LINE_CHARS],
+                    _loose(copy_line)[:_ALIGN_LINE_CHARS],
+                    autojunk=False,
+                ).ratio()
+            )
+            >= _SIMILAR_LINE
+            else _UNLIKE_PAIR
+            for copy_line in copy_lines
+        ]
+        for file_line in file_lines
+    ]
+    # best[row][col]: the highest total similarity of the lines from row and col on.
+    best = [[0.0] * (cols + 1) for _ in range(rows + 1)]
+    for row in range(rows - 1, -1, -1):
+        for col in range(cols - 1, -1, -1):
+            best[row][col] = max(
+                similarity[row][col] + best[row + 1][col + 1],
+                best[row + 1][col],
+                best[row][col + 1],
+            )
+    pairs: list[tuple[int | None, int | None]] = []
+    row = col = 0
+    while row < rows and col < cols:
+        if best[row][col] == similarity[row][col] + best[row + 1][col + 1]:
+            pairs.append((row, col))
+            row, col = row + 1, col + 1
+        elif best[row][col] == best[row + 1][col]:
+            pairs.append((row, None))
+            row += 1
+        else:
+            pairs.append((None, col))
+            col += 1
+    pairs.extend((index, None) for index in range(row, rows))
+    pairs.extend((None, index) for index in range(col, cols))
+    return pairs
+
+
+def _line_difference(
+    file_line: tuple[int, str] | None, copy_line: tuple[int, str] | None
+) -> dict[str, int | str | bool | None]:
+    """Describe one differing line: numbered windows of both sides that hold it."""
+    if file_line is not None and copy_line is not None:
+        file_position, copy_position = _difference_positions(file_line[1], copy_line[1])
+    else:
+        file_position = copy_position = 0
+    difference: dict[str, int | str | bool | None] = {
+        "line": None,
+        "copy_line": None,
+        "file": None,
+        "copy": None,
+    }
+    truncated = False
+    for key, side, position in (
+        ("line", file_line, file_position),
+        ("copy_line", copy_line, copy_position),
+    ):
+        if side is None:
+            continue
+        number, text = side
+        _start, window = _difference_window(text, position)
+        difference[key] = number
+        difference["file" if key == "line" else "copy"] = window
+        truncated = truncated or len(window) < len(text)
+    difference["truncated"] = truncated
+    return difference
 
 
 def _loose(text: str) -> str:
@@ -1060,7 +1255,9 @@ __all__ = [
     "AmbiguousFuzzyMatch",
     "ClosestFuzzyCandidate",
     "FuzzyReplacement",
+    "LineDifferences",
     "find_closest_candidates",
+    "line_differences",
     "replace_fuzzy",
     "preserve_typography",
 ]

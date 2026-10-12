@@ -12,7 +12,7 @@ BOARD_DESCRIPTION = (
     "@Name; a name without @ addresses no one. A post reaches the participants it addresses in "
     "full. Other participants receive a main-discussion post longer than "
     f"{FULL_POST_CHARS} characters as its opening lines with the call to read the rest, so "
-    "state the main point first. Create an "
+    "begin with what they most need to know. Create an "
     "additional discussion when several Agents need to work through a specific problem "
     "together; creating it joins it and announces it in the main discussion. Every participant "
     "can read every discussion; joining one makes its future posts reach you in full and "
@@ -127,6 +127,10 @@ DISCUSSION_ANNOUNCEMENT = (
 REPLAYED = (
     "This Tool Call was already applied; its original result is shown and nothing was duplicated."
 )
+POST_DUPLICATE = (
+    "Another call in the same response already posted this text as {post_id}; nothing new was "
+    "saved."
+)
 
 DELIVERY_PREFIX = "New Board messages for you, oldest first."
 RESUME_REMINDER = (
@@ -203,6 +207,10 @@ BOARD_FOREIGN_ACTIONS = {
     "swarm_wiki": "swarm_board has no {action} action. Use swarm_wiki to create, find, and edit "
     "shared pages.",
 }
+BOARD_FILE_PATH = (
+    "swarm_board was not run: it reads and writes Board posts, not files, and has no path "
+    "parameter. For the file {path}, use one of your Tools that work with files."
+)
 INBOX_ONLY_RECEIVE = (
     "swarm_inbox has no {action} action; it only receives your pending Board messages. Call it "
     "without arguments, or with limit."
@@ -226,6 +234,22 @@ DELIVERY_MORE = {
     "inbox": "{count} more pending; receive them with swarm_inbox.",
     "no_inbox": "{count} more pending.",
 }
+# A backlog larger than one batch: older posts nobody needs the reader for are skipped.
+DELIVERY_SKIPPED = {
+    "one": "1 older post in {discussion} was skipped so you receive the newest posts; it is "
+    "not from the user, does not address or answer you, and will not be delivered later. To "
+    "read it, call swarm_board with {call}",
+    "many": "{count} older posts in {discussion} were skipped so you receive the newest posts; "
+    "none is from the user or addresses or answers you, and they will not be delivered later. "
+    "To read them, call swarm_board with {call}",
+    "discussions": "{count} older posts were skipped so you receive the newest posts; none is "
+    "from the user or addresses or answers you, and they will not be delivered later. To read "
+    "them, call swarm_board with {reads}",
+}
+DELIVERY_SKIPPED_READ = "{call} for {discussion}"
+
+# How to wait for others, wherever a result shows that nothing is left to receive.
+WAIT_FOR_OTHERS = "To wait for others, end your reply"
 
 # swarm_state results.
 STATE_PENDING = {
@@ -242,6 +266,9 @@ STATE_PENDING = {
     "many_automatic": "{count} messages for you; they reach you automatically, also while you "
     "are running, so you need not read them on the Board.",
 }
+# Follows a "none" pending line when a post can start the reader's next Run; the
+# wake field then says which posts do.
+STATE_WAIT = f"{WAIT_FOR_OTHERS}."
 STATE_ROUTES = {
     "main": "main-discussion posts",
     "discussion": "posts in discussions you joined",
@@ -269,7 +296,14 @@ STATE_MORE = "More participants exist. Continue with {call}"
 
 # Notes on a call that ran after a repair the Agent should know about.
 LIMIT_CLAMPED = "limit {requested} is above the maximum of {maximum}; used {maximum}."
-CURSOR_AS_BEFORE = "cursor {value} is a post ID, so this shows the posts before it."
+CURSOR_AS_BEFORE = (
+    "cursor {value} is a post ID, so this shows the posts before it. For the newest posts, "
+    "omit cursor."
+)
+BEFORE_OTHER_DISCUSSION = (
+    "before {post_id} is a post of {before_discussion}; this shows the posts of {discussion} "
+    "before it."
+)
 FIELD_IGNORED = "{field} is not used by {action} and was ignored."
 OFFSET_IGNORED = "offset was ignored: {field} already sets where the page starts."
 POST_TITLE_IGNORED = (
@@ -315,13 +349,17 @@ BOARD_NEW = {
 }
 BOARD_NOTHING_NEW = "None of the posts shown is new to you."
 BOARD_WAIT = {
-    "addressed": "To wait for others, end your reply; a post that addresses or answers you "
-    "starts your next Run at once.",
-    "paced": "To wait for others, end your reply; {routes} start your next Run within "
-    "{minutes} minutes.",
+    "addressed": f"{WAIT_FOR_OTHERS}; a post that addresses or answers you starts your next Run "
+    "at once.",
+    "paced": f"{WAIT_FOR_OTHERS}; {{routes}} start your next Run within {{minutes}} minutes.",
 }
 BOARD_ONE_POST = "Post {post_id} in {discussion}."
 BOARD_OLDER = "Older posts exist. Continue with {call}"
+# The page's character bound (the batch_chars setting) ended it before limit.
+BOARD_OLDER_CUT = (
+    "Only {count} of {limit} posts fit the page's size limit; older posts exist. Continue "
+    "with {call}"
+)
 BOARD_MORE_DISCUSSIONS = "More discussions exist. Continue with {call}"
 BOARD_USER_REQUEST = "Post {post_id} holds the user's request. Read it with {call}"
 BOARD_QUEUED = "Queued for {participants}."
@@ -352,9 +390,16 @@ BOARD_JOINED_DETAIL = "joined"
 BOARD_NOT_JOINED_DETAIL = "not joined"
 BOARD_MEMBERS_DETAIL = "members: {count}"
 BOARD_PENDING_DETAIL = "pending for you: {count}"
+# Beside a list that shows pending posts, when every route delivers while running.
+BOARD_PENDING_AUTOMATIC = (
+    "Posts pending for you reach you automatically, also while you are running, so you need "
+    "not read them on the Board."
+)
 POST_HEADER_REPLY = "reply to {post_id}"
 POST_HEADER_TO = "to {names}"
 POST_SHORTENED = "[{count} more characters not shown. Read the whole post with swarm_board {call}]"
+# A read page shows a short post the reader has seen as only this line.
+POST_SEEN = "[{count} characters you have seen before. Read the post with swarm_board {call}]"
 POST_HEADER_IN = "in {discussion}"
 POST_HEADER_MAIN = "the main discussion {discussion_id}"
 POST_HEADER_DISCUSSION = '"{title}" {discussion_id}'
@@ -403,11 +448,6 @@ REPLY_DISCUSSION_CONFLICT = (
     "reply_to {post_id} belongs to {reply_discussion}, but discussion_id names {discussion}. "
     "Omit discussion_id to reply in {reply_discussion}, or omit reply_to to post a new message "
     "in {discussion}. Nothing was saved."
-)
-BEFORE_DISCUSSION_CONFLICT = (
-    "before {post_id} belongs to {before_discussion}, but discussion_id names {discussion}. "
-    "Omit discussion_id to read {before_discussion}, or omit before to read the newest posts "
-    "of {discussion}."
 )
 CREATE_IN_DISCUSSION = (
     "create opens a new discussion, but discussion_id names the existing discussion "

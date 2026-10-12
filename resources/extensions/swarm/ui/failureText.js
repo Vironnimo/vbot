@@ -24,7 +24,6 @@ const CODE_TEXTS = {
 // participants' Tool calls, which the page does not bring about itself. They
 // share one text.
 const UNEXPECTED_CODES = new Set([
-  'before_discussion_mismatch',
   'delivery_unacknowledged',
   'discussion_not_found',
   'execution_epoch_conflict',

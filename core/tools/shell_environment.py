@@ -16,7 +16,8 @@ One owner builds it from explicit layers, each applied over the previous one:
    renders (``dumb``).
 4. **Unattended defaults** (commands only). No editor, pager or credential
    prompt can be answered, so each fails or passes through at once. Programs
-   write plain text without colors, and Python writes each line as it prints it.
+   write plain text without colors, and Python writes each line as it prints it
+   and reads and writes files as UTF-8 unless the login base sets its own mode.
 5. **Agent variables and granted credentials** (commands only).
 6. **Run identity** (commands only): who runs the command, and the one-time
    update handoff. Applied last, so nothing above replaces it.
@@ -95,6 +96,13 @@ _UNATTENDED_DEFAULTS: dict[str, str] = {
     # line by line, the live log and the progress view stay current.
     "PYTHONUNBUFFERED": "1",
 }
+# Defaults that give way to a value the login base sets.
+_UNATTENDED_FALLBACKS: dict[str, str] = {
+    # Python's UTF-8 mode: open() reads and writes UTF-8, as the Agent's files
+    # are, instead of the Windows code page; a script that read a UTF-8 file as
+    # cp1252 garbled every non-ASCII character without an error.
+    "PYTHONUTF8": "1",
+}
 _TERMINAL_TERM = "xterm-256color"
 _COMMAND_TERM = "dumb"
 
@@ -149,6 +157,10 @@ def command_environment(
     base = _instance_environment()
     _apply(base, {"TERM": _COMMAND_TERM})
     _apply(base, _UNATTENDED_DEFAULTS)
+    _apply(
+        base,
+        {name: value for name, value in _UNATTENDED_FALLBACKS.items() if _get(base, name) is None},
+    )
     _remove(base, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV))
     environment = dict(base)
     _apply(environment, variables or {})
