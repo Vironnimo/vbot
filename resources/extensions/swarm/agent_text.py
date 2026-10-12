@@ -127,6 +127,10 @@ DISCUSSION_ANNOUNCEMENT = (
 REPLAYED = (
     "This Tool Call was already applied; its original result is shown and nothing was duplicated."
 )
+POST_DUPLICATE = (
+    "Another call in the same response already posted this text as {post_id}; nothing new was "
+    "saved."
+)
 
 DELIVERY_PREFIX = "New Board messages for you, oldest first."
 RESUME_REMINDER = (

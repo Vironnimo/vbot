@@ -593,7 +593,14 @@ class SwarmStore:
         author_kind: str = "participant",
         author_name: str | None = None,
         expected_epoch: int | None = None,
+        step_id: str | None = None,
     ) -> Json:
+        """Persist an idempotent Board post.
+
+        ``step_id`` names the Model response whose Tool Call requested the post: a
+        second request of that step with an identical post saves nothing and returns
+        the first one's outcome with ``duplicate``.
+        """
         _text(text, "text", 16_000)
         _request_id(request_id)
         if author_kind not in {"participant", "user"}:
@@ -611,6 +618,7 @@ class SwarmStore:
             author_kind,
             author_name,
             expected_epoch,
+            step_id,
         )
 
     async def post_human(

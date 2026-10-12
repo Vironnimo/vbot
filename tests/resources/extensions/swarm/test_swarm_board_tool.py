@@ -15,6 +15,7 @@ from resources.extensions.swarm.agent_text import (
     BOARD_WAIT,
     CURSOR_AS_BEFORE,
     MENTION_EVERYONE,
+    POST_DUPLICATE,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
     _name,
@@ -201,16 +202,26 @@ async def test_invalid_board_calls_have_no_effect(board):
 
 
 @pytest.mark.asyncio
-async def test_board_rejects_forged_context_and_preserves_separate_identical_posts(board):
+async def test_board_rejects_forged_context_and_saves_identical_sibling_posts_once(board):
     foreign = replace(board.contexts[0], session_id=board.contexts[1].session_id)
     result = await board.service.board(foreign, {"action": "list"})
     assert not result["ok"]
-    assert (await call(board, {"action": "post", "text": "first"}))[0]["ok"]
-    repeated, _ = await call(board, {"action": "post", "text": "first"})
-    assert repeated["ok"]
+    first, _ = await call(board, {"action": "post", "text": "first"})
+    # Another Tool Call of the same Model response repeats the post: it saves nothing.
+    sibling, sibling_context = await call(board, {"action": "post", "text": "first"})
+    assert sibling["data"]["post_id"] == first["data"]["post_id"]
+    assert sibling["data"]["note"] == POST_DUPLICATE.format(post_id=first["data"]["post_id"])
+    replay, _ = await call(
+        board, {"action": "post", "text": "first"}, tool_call_id=sibling_context.tool_call_id
+    )
+    assert replay["data"]["post_id"] == first["data"]["post_id"]
+    # A sibling that differs in anything, or the same post in a later response, posts anew.
+    other, _ = await call(board, {"action": "post", "text": "first", "recipients": ["all"]})
+    board.contexts[0] = replace(board.contexts[0], iteration_number=1)
+    later, _ = await call(board, {"action": "post", "text": "first"})
+    assert len({first["data"]["post_id"], other["data"]["post_id"], later["data"]["post_id"]}) == 3
     page = await board.store.read_posts(board.swarm["id"], board.bindings[0].participant_id)
-    assert len(page.entries) == 2
-    assert {entry["text"] for entry in page.entries} == {"first"}
+    assert [entry["text"] for entry in page.entries] == ["first"] * 3
 
 
 @pytest.mark.asyncio

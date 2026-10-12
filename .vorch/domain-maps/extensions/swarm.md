@@ -421,9 +421,16 @@ Audience snapshots survive later join/leave changes. Being addressed (`ping` rou
 routing for that recipient, without creating duplicate deliveries. Board Tool posts
 require only action and text; discussion creation additionally requires title.
 Board callers do not supply request ids. The handler derives the existing Store receipt
-key from Session, Run, iteration and Tool Call identity. Separate Tool Calls with
-identical content create separate posts. Management mutations retain their
-payload-bound request ids.
+key from Session, Run, iteration and Tool Call identity. Sibling `post` calls of one
+Model response (same Session, Run and iteration: `_call_step_id`) with an identical
+payload (discussion, text, reply target and explicit recipients) save one post: the
+Store keeps a second `requests` row per post under the `post_step:` scope, and a
+later identical sibling returns that post's number with a `duplicate` flag, which
+the Tool reports in a note. Posts from different responses are never merged, and
+any difference posts anew. This revises the earlier rule that separate Tool Calls
+with identical content create separate posts (user decision, 2026-10): 3 responses
+of the latest analyzed Runs saved the same post several times, 6 extra posts in all
+(Sessions, 2026-10). Management mutations retain their payload-bound request ids.
 
 The human Board composer retains one request id for retries of an unchanged
 payload after a failed or lost reply. Its fingerprint includes the Swarm,
@@ -1140,6 +1147,7 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_board was not run: it reads and writes Board posts, not files, and has no path parameter. For the file {path}, use one of your Tools that work with files.` | An Agent sent a file read (`path`, `offset`, `limit`) to `swarm_board`; the generic unknown-parameter error listed only Board parameters and did not say the call belongs to another Tool (F1, F5, Sessions, 2026-10). The text names no Tool, since participants' Tool sets differ. |
 | `cursor {value} is a post ID, so this shows the posts before it. For the newest posts, omit cursor.` | One Agent sent `cursor` with rising post numbers 6 times in one Run, apparently for posts after them, and each time received older posts (F3, F5, Sessions, 2026-10). The read keeps running as `before`; the second sentence names the call for the other direction. |
 | `before {post_id} is a post of {before_discussion}; this shows the posts of {discussion} before it.` | Replaces the refusal `before {post_id} belongs to {before_discussion}, but discussion_id names {discussion}. ...`: the read has one clear meaning, since post numbers count across the Board (F5, Sessions, 2026-10). The note says the anchor lies elsewhere, so the Agent does not take the page for the anchor's neighbours (F4). |
+| Post result note: `Another call in the same response already posted this text as {post_id}; nothing new was saved.` (the result then holds only `post_id` and `discussion`) | The call ran but saved nothing; without the note the Agent reads two calls as two posts, or posts again to make up for one it thinks was lost (F4). The `delivery` line is left out, since nothing new was queued. |
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
 | `swarm_wiki` list: `No page contains "{query}" as written; pages containing all of its words, most recently changed first ({count} shown).` and `No page contains "{query}" or all of its words.` | Agents also send keywords where the search takes a phrase: the only missed search of one Run was a three-word query (F3, F6, Sessions, 2026-10). The fallback turns such a miss into a result instead of another search; the header says the phrase missed, so the Agent does not take the pages for exact matches. |
 

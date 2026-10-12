@@ -33,7 +33,7 @@ from ._board_view import (
     queued_text,
     spoken_list,
 )
-from ._extension_values import AgentCallError, Json, _call_request_id
+from ._extension_values import AgentCallError, Json, _call_request_id, _call_step_id
 from ._store_values import discussion_number, discussion_ref, post_number, post_ref
 from .store import Page, SwarmStoreError
 
@@ -299,10 +299,17 @@ class BoardCall:
                 self.pid,
                 request_id=_call_request_id(self.context),
                 expected_epoch=self.swarm["epoch"],
+                step_id=_call_step_id(self.context),
                 **values,
             )
         except SwarmStoreError as error:
             raise await self._write_error(error, values) from error
+        if data.get("duplicate"):
+            self.notes.append(text.POST_DUPLICATE.format(post_id=post_ref(data["sequence"])))
+            return {
+                "post_id": post_ref(data["sequence"]),
+                "discussion": await self._label(data["discussion_id"]),
+            }
         long_main = (
             data["discussion_id"] == self.main and len(values["text"]) > text.FULL_POST_CHARS
         )

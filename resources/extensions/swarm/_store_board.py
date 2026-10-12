@@ -51,6 +51,7 @@ def _post_message(
     author_kind: str,
     author_name: str | None,
     expected_epoch: int | None,
+    step_id: str | None = None,
 ) -> Json:
     def operation(connection: sqlite3.Connection) -> Json:
         if author_kind == "user":
@@ -90,19 +91,37 @@ def _post_message(
             "recipients": recipients,
             "author_kind": author_kind,
         }
+        payload_hash = _hash(payload)
         scope = f"post:{swarm_id}:{sender_id}"
         replay = connection.execute(
             "SELECT payload_hash,outcome FROM requests WHERE scope=? AND request_id=?",
             (scope, request_id),
         ).fetchone()
         if replay is not None:
-            if replay["payload_hash"] != _hash(payload):
+            if replay["payload_hash"] != payload_hash:
                 raise SwarmStoreError("request_conflict")
             outcome = _load(replay["outcome"])
             outcome["replayed"] = True
             return outcome
         if target is not None and target["discussion_id"] != discussion_id_value:
             raise SwarmStoreError("reply_discussion_mismatch")
+        # Identical posts of one Model response are one post: sibling Tool Calls that
+        # repeat it add nothing a reader needs. Separate responses always post anew.
+        step = (f"post_step:{swarm_id}:{sender_id}", _hash([step_id, payload_hash]))
+        sibling = (
+            None
+            if step_id is None
+            else connection.execute(
+                "SELECT outcome FROM requests WHERE scope=? AND request_id=?", step
+            ).fetchone()
+        )
+        if sibling is not None:
+            outcome = {**_load(sibling["outcome"]), "duplicate": True}
+            connection.execute(
+                "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
+                (scope, request_id, payload_hash, _dump(outcome)),
+            )
+            return outcome
         members = connection.execute(
             "SELECT participant_id FROM memberships WHERE discussion_id=?",
             (discussion_id_value,),
@@ -164,8 +183,13 @@ def _post_message(
         }
         connection.execute(
             "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
-            (scope, request_id, _hash(payload), _dump(result)),
+            (scope, request_id, payload_hash, _dump(result)),
         )
+        if step_id is not None:
+            connection.execute(
+                "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
+                (*step, payload_hash, _dump(result)),
+            )
         return result
 
     return db._write(operation)
