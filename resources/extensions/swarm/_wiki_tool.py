@@ -24,6 +24,9 @@ from .agent_text import FIELD_IGNORED, LIMIT_CLAMPED, REPLAYED
 from .store import SwarmStore, SwarmStoreError
 
 _READ_ONLY = frozenset({"list", "read", "history"})
+# Read options the Tool resolves itself around the Store's read.
+_READ_OPTIONS = frozenset({"query", "since_revision"})
+_ACTION_FIELDS = {**_FIELDS, "read": _FIELDS["read"] | _READ_OPTIONS}
 _MAX_LIMIT = {"read": 20000, "list": 100, "history": 100}
 # Preconditions request nothing an action that changes nothing could check.
 _PRECONDITIONS = ("expected_revision",)
@@ -41,6 +44,10 @@ _AMBIGUOUS_LINES = 10
 # A read with a query names at most this many matching lines, each cut to this length.
 _FOUND_LINES = 5
 _FOUND_LINE_CHARS = 200
+# Without offset or limit, it shows this much text from a little before the first of them.
+_AROUND_CHARS = 2000
+_AROUND_LINES_BEFORE = 2
+_AROUND_CHARS_BEFORE = 400
 
 
 class WikiCall:
@@ -61,8 +68,13 @@ class WikiCall:
         self.pid = participant_id
         self.epoch = epoch
         self.notes = notes
-        # Text a read call asked to find in its page.
+        # Text a read call asked to find in its page, and whether to show the text around it.
         self.find: str | None = None
+        self.around = False
+        # The revision a read compares the page with instead of showing its content.
+        self.since: int | None = None
+        # A negative read offset, counted back from the end of the page.
+        self.from_end: int | None = None
 
     async def run(self, arguments: Json) -> tuple[Json, bool]:
         """Run the call; return its rendered result and whether the Wiki changed."""
@@ -76,30 +88,23 @@ class WikiCall:
             await self._name_by_number(arguments)
         # The Store accepts a whole-content update without a base only on the caller's revision.
         unbased = "content" in arguments and "expected_revision" not in arguments
+        if action == "read":
+            return await self._read_call(arguments), False
         if action in MUTATIONS:
             arguments["request_id"] = _call_request_id(self.context)
         data = await self._execute(action, arguments)
-        if data is None:
-            return await self._past_end(arguments), False
+        assert data is not None, "only a read can start past the end"
         if data.get("replayed"):
             self.notes.append(REPLAYED)
         changed = action in MUTATIONS and not data.get("replayed") and not data.get("unchanged")
         if action == "update" and unbased and changed:
             self.notes.append(text.WIKI_OWN_REVISION.format(revision=data["revision"] - 1))
-        if action == "read":
-            rendered = self._read(data)
-            if self.find:
-                content = rendered.pop("content", None)
-                rendered["found"] = await self._find(data, self.find)
-                if content is not None:
-                    rendered["content"] = content
-            return rendered, changed
         if action == "list":
             rendered = self._list(data, arguments)
             unfiltered = not {"query", "include_deleted", "cursor"} & arguments.keys()
             if not data["entries"] and unfiltered and await self.store.wiki_pages(self.sid):
                 rendered["pages"] = text.WIKI_LIST_ONLY_DELETED.format(
-                    call=call_text({"action": "list", "include_deleted": True})
+                    call=_call({"action": "list", "include_deleted": True})
                 )
             return rendered, changed
         if action == "history":
@@ -122,23 +127,21 @@ class WikiCall:
         if action == "read" and "page_id" not in arguments:
             action = arguments["action"] = "list"
             self.notes.append(text.WIKI_LISTED_INSTEAD)
-            for field in ("revision", "offset", "limit"):
+            for field in ("revision", "since_revision", "offset", "limit"):
                 arguments.pop(field, None)
         if action in _READ_ONLY:
             for field in _PRECONDITIONS:
                 if field in arguments:
                     del arguments[field]
                     self.notes.append(FIELD_IGNORED.format(field=field, action=action))
-        if action == "read" and "query" in arguments:
-            # A query on one page asks where its text occurs there.
-            query = arguments.pop("query")
-            self.find = query if isinstance(query, str) and query.strip() else None
+        if action == "read":
+            self._read_options(arguments)
         # create decides about a page_id once it knows whether that page exists.
         accepted = _FIELDS[action] | {"action", "request_id"}
         if action == "create":
             accepted = accepted | {"page_id"}
         for field in sorted(arguments.keys() - accepted):
-            users = [name for name, fields in _FIELDS.items() if field in fields]
+            users = [name for name, fields in _ACTION_FIELDS.items() if field in fields]
             raise AgentCallError(
                 "invalid_arguments",
                 text.WIKI_FIELD_ELSEWHERE.format(
@@ -158,6 +161,31 @@ class WikiCall:
                 arguments["limit"] = maximum
                 self.notes.append(LIMIT_CLAMPED.format(requested=limit, maximum=maximum))
         return action
+
+    def _read_options(self, arguments: Json) -> None:
+        """Take the read options the Store does not know out of a read call."""
+
+        # A query on one page asks where its text occurs there.
+        query = arguments.pop("query", None)
+        self.find = query if isinstance(query, str) and query.strip() else None
+        if "since_revision" in arguments:
+            since = arguments.pop("since_revision")
+            if type(since) is not int or since < 1:
+                raise SwarmStoreError("invalid_arguments", field="since_revision")
+            self.since = since
+            for field in ("offset", "limit"):
+                if field in arguments:
+                    del arguments[field]
+                    self.notes.append(text.WIKI_SINCE_IGNORES.format(field=field))
+        offset = arguments.get("offset")
+        if type(offset) is int and offset < 0:
+            self.from_end = arguments.pop("offset")
+        self.around = (
+            self.find is not None
+            and self.since is None
+            and not {"offset", "limit"} & arguments.keys()
+            and self.from_end is None
+        )
 
     def _require(self, action: str, arguments: Json) -> None:
         def missing(key: str, **values: Any) -> AgentCallError:
@@ -199,7 +227,7 @@ class WikiCall:
         if action == "restore" and "revision" not in arguments:
             raise missing(
                 "revision",
-                call=call_text({"action": "history", "page_id": arguments["page_id"]}),
+                call=_call({"action": "history", "page_id": arguments["page_id"]}),
             )
 
     async def _drop_create_page_id(self, arguments: Json) -> None:
@@ -315,7 +343,7 @@ class WikiCall:
                     text.WIKI_REVISION_MISSING.format(
                         revision=arguments.get("revision"),
                         current=current,
-                        call=call_text({"action": "history", "page_id": page_id}),
+                        call=_call({"action": "history", "page_id": page_id}),
                     )
                 ),
             )
@@ -326,12 +354,18 @@ class WikiCall:
                 "wiki_deleted",
                 closing(
                     text.WIKI_DELETED.format(
-                        current=details["current_revision"], call=call_text(restore)
+                        current=details["current_revision"], call=_call(restore)
                     )
                 ),
             )
         if "passages" in details:
-            return AgentCallError(error.code, closing(_miss_message(details, page_id)))
+            expected = details.get("expected_revision")
+            changes = (
+                await self._changes(page_id, expected, details["current_revision"])
+                if expected is not None and expected < details["current_revision"]
+                else None
+            )
+            return AgentCallError(error.code, closing(_miss_message(details, page_id, changes)))
         if error.code == "wiki_revision_conflict":
             return AgentCallError(
                 "wiki_revision_conflict", closing(await self._conflict_message(details, arguments))
@@ -351,23 +385,20 @@ class WikiCall:
         expected, current = details["expected_revision"], details["current_revision"]
         template = text.WIKI_CONFLICT_FUTURE if expected > current else text.WIKI_CONFLICT
         parts = [template.format(expected=expected, current=current)]
-        if "content" not in arguments:
-            parts.append(text.WIKI_CONFLICT_RETRY.format(current=current))
-            return " ".join(parts)
-        contents = await self.store.wiki_contents(
-            self.sid, arguments["page_id"], [expected, current]
+        # What changed since, and who changed it, decides whether the call still applies.
+        changes = (
+            await self._changes(arguments["page_id"], expected, current)
+            if expected < current
+            else None
         )
-        if expected in contents and current in contents:
-            parts.append(
-                "\n".join(
-                    (
-                        text.WIKI_CONFLICT_DIFF.format(expected=expected),
-                        _bounded_diff(contents[expected], contents[current]),
-                    )
-                )
-            )
-        parts.append(text.WIKI_CONFLICT_CONTENT.format(current=current))
-        return "\n".join(parts)
+        if changes is not None:
+            parts.append("\n".join(part for part in changes if part))
+        parts.append(
+            text.WIKI_CONFLICT_CONTENT.format(current=current)
+            if "content" in arguments
+            else text.WIKI_CONFLICT_RETRY.format(current=current)
+        )
+        return "\n".join(parts) if changes is not None else " ".join(parts)
 
     async def _read_current(self, page_id: str, action: str) -> Json:
         try:
@@ -382,43 +413,146 @@ class WikiCall:
         if "revision" in arguments:
             query["revision"] = arguments["revision"]
         data = await self.store.wiki(self.sid, self.pid, query)
-        rendered = self._read({**data, "content": "", "offset": 0, "total_chars": 0})
-        rendered.pop("content", None)
-        rendered.pop("more", None)
+        rendered = self._metadata(data)
         rendered["shown"] = text.WIKI_READ_PAST_END.format(
             offset=arguments.get("offset"), total=data["total_chars"]
         )
         return rendered
 
-    async def _find(self, data: Json, query: str) -> str:
-        """Name the lines of the read revision that contain ``query``, ignoring case."""
+    async def _read_call(self, arguments: Json) -> Json:
+        """Read a page: its content, the changes since a revision, or the text around a query."""
 
-        content = data["content"]
-        if data["offset"] or len(content) < data["total_chars"]:
-            contents = await self.store.wiki_contents(self.sid, data["page_id"], [data["revision"]])
-            content = contents.get(data["revision"], "")
-        wanted = query.casefold()
-        hits: list[str] = []
-        offset = 0
-        for number, line in enumerate(content.split("\n"), 1):
-            if wanted in line.casefold():
-                clipped = (
-                    line if len(line) <= _FOUND_LINE_CHARS else line[:_FOUND_LINE_CHARS] + "..."
-                )
-                hits.append(
-                    text.WIKI_READ_FOUND_LINE.format(line=number, offset=offset, text=clipped)
-                )
-            offset += len(line) + 1
-        if not hits:
-            return text.WIKI_READ_FOUND_NONE.format(
-                query=query, call=call_text({"action": "list", "query": query})
+        if self.since is not None or self.around or self.from_end is not None:
+            # Learn the revision and its size first; what to show depends on them.
+            probe = {**arguments, "limit": 1}
+            probe.pop("offset", None)
+            data = await self._execute("read", probe)
+            assert data is not None, "a read from the start is never past the end"
+            arguments["page_id"] = probe["page_id"]
+            if self.since is not None:
+                return await self._read_changes(data, arguments)
+            if self.around:
+                return await self._read_around(data, arguments)
+            assert self.from_end is not None
+            arguments["offset"] = max(0, data["total_chars"] + self.from_end)
+            arguments.setdefault("revision", data["revision"])
+            self.notes.append(text.WIKI_OFFSET_FROM_END.format(value=self.from_end))
+        data = await self._execute("read", arguments)
+        if data is None:
+            return await self._past_end(arguments)
+        rendered = self._read(data)
+        if self.find:
+            content = rendered.pop("content", None)
+            found, _ = _found(await self._full_content(data), self.find)
+            rendered["found"] = found
+            if content is not None:
+                rendered["content"] = content
+        return rendered
+
+    async def _read_changes(self, data: Json, arguments: Json) -> Json:
+        since, revision = self.since, data["revision"]
+        assert since is not None
+        if since > revision:
+            if revision == data["current_revision"]:
+                message = text.WIKI_CONFLICT_FUTURE.format(expected=since, current=revision)
+            else:
+                message = text.WIKI_SINCE_AFTER.format(since=since, revision=revision)
+            raise AgentCallError("invalid_arguments", message)
+        rendered = self._metadata(data)
+        if self.find:
+            rendered["found"] = _found(await self._full_content(data), self.find)[0]
+        if since == revision:
+            rendered["changes"] = text.WIKI_CHANGES_NONE.format(since=since)
+            return rendered
+        changes = await self._changes(arguments["page_id"], since, revision)
+        if changes is None:
+            raise AgentCallError(
+                "wiki_revision_not_found",
+                text.WIKI_REVISION_MISSING.format(
+                    revision=since,
+                    current=data["current_revision"],
+                    call=_call({"action": "history", "page_id": arguments["page_id"]}),
+                ),
             )
-        shown = [text.WIKI_READ_FOUND.format(query=query), *hits[:_FOUND_LINES]]
-        if len(hits) > _FOUND_LINES:
-            shown.append(text.WIKI_READ_FOUND_MORE.format(count=len(hits) - _FOUND_LINES))
-        return "\n".join(shown)
+        rendered["changes"], diff = changes
+        if diff:
+            rendered["content"] = diff
+        return rendered
+
+    async def _read_around(self, data: Json, arguments: Json) -> Json:
+        """Show the lines that contain the query and the text around the first of them."""
+
+        assert self.find is not None
+        content = await self._full_content(data)
+        found, first = _found(content, self.find)
+        if first is None:
+            rendered = self._metadata(data)
+            rendered["found"] = found
+            return rendered
+        line, position = first
+        starts = [0, *(index + 1 for index, char in enumerate(content) if char == "\n")]
+        start = max(
+            starts[max(0, line - 1 - _AROUND_LINES_BEFORE)], position - _AROUND_CHARS_BEFORE
+        )
+        end = min(len(content), start + _AROUND_CHARS)
+        next_call = {**arguments, "revision": data["revision"], "offset": end}
+        rendered = self._read(
+            {
+                **data,
+                "offset": start,
+                "content": content[start:end],
+                "next_call": {"arguments": next_call} if end < len(content) else None,
+            }
+        )
+        rendered["shown"] = text.WIKI_READ_AROUND.format(
+            start=start, end=end, total=len(content), line=line
+        )
+        shown = rendered.pop("content", None)
+        rendered["found"] = found
+        if shown is not None:
+            rendered["content"] = shown
+        return rendered
+
+    async def _full_content(self, data: Json) -> str:
+        """Return the complete content of the revision a read returned."""
+
+        if not data["offset"] and len(data["content"]) == data["total_chars"]:
+            return str(data["content"])
+        contents = await self.store.wiki_contents(self.sid, data["page_id"], [data["revision"]])
+        return contents.get(data["revision"], "")
+
+    async def _changes(self, page_id: str, since: int, until: int) -> tuple[str, str] | None:
+        """Return a header naming who changed the page since ``since``, and the bounded diff."""
+
+        changes = await self.store.wiki_changes(self.sid, page_id, since, until)
+        if changes is None:
+            return None
+        authors = spoken_list(changes["authors"])
+        diff = _bounded_diff(changes["before"], changes["after"])
+        if not diff:
+            return text.WIKI_CHANGES_SAME.format(since=since, authors=authors), ""
+        return text.WIKI_CHANGES.format(since=since, authors=authors), diff
 
     def _read(self, data: Json) -> Json:
+        rendered = self._metadata(data)
+        start, content, total = data["offset"], data["content"], data["total_chars"]
+        if not total:
+            rendered["shown"] = text.WIKI_READ_EMPTY
+        elif start or start + len(content) < total:
+            rendered["shown"] = text.WIKI_READ_SHOWN.format(
+                start=start, end=start + len(content), total=total
+            )
+        if data.get("next_call"):
+            rendered["more"] = text.WIKI_READ_MORE.format(
+                call=_call(data["next_call"]["arguments"])
+            )
+        if content:
+            rendered["content"] = content
+        return rendered
+
+    def _metadata(self, data: Json) -> Json:
+        """Return what every read result says about the page and the revision read."""
+
         author = data["author"]["name"]
         revision = (
             text.WIKI_REVISION_CURRENT.format(revision=data["revision"], author=author)
@@ -436,23 +570,10 @@ class WikiCall:
         }
         if data["deleted"]:
             rendered["deleted"] = text.WIKI_READ_DELETED.format(
-                call=call_text(
+                call=_call(
                     {"action": "restore", "page_id": reference, "revision": data["revision"]}
                 )
             )
-        start, content, total = data["offset"], data["content"], data["total_chars"]
-        if not total:
-            rendered["shown"] = text.WIKI_READ_EMPTY
-        elif start or start + len(content) < total:
-            rendered["shown"] = text.WIKI_READ_SHOWN.format(
-                start=start, end=start + len(content), total=total
-            )
-        if data.get("next_call"):
-            rendered["more"] = text.WIKI_READ_MORE.format(
-                call=call_text(data["next_call"]["arguments"])
-            )
-        if content:
-            rendered["content"] = content
         return rendered
 
     def _list(self, data: Json, arguments: Json) -> Json:
@@ -472,7 +593,7 @@ class WikiCall:
         rendered: Json = {"pages": header}
         if data.get("next_call"):
             rendered["more"] = text.WIKI_LIST_MORE.format(
-                call=call_text(data["next_call"]["arguments"])
+                call=_call(data["next_call"]["arguments"])
             )
         blocks = []
         for entry in entries:
@@ -499,7 +620,7 @@ class WikiCall:
         }
         if data.get("next_call"):
             rendered["more"] = text.WIKI_HISTORY_MORE.format(
-                call=call_text(data["next_call"]["arguments"])
+                call=_call(data["next_call"]["arguments"])
             )
         rendered["content"] = "\n".join(
             text.WIKI_HISTORY_ENTRY.format(
@@ -531,7 +652,7 @@ class WikiCall:
             rendered["status"] = status["created"]
         elif action == "delete":
             rendered["status"] = status["deleted"].format(
-                call=call_text(
+                call=_call(
                     {"action": "restore", "page_id": reference, "revision": data["revision"]}
                 )
             )
@@ -560,7 +681,7 @@ class WikiCall:
             rendered["content"] = excerpt["content"]
             if end < excerpt["total_chars"]:
                 rendered["more"] = text.WIKI_READ_MORE.format(
-                    call=call_text(
+                    call=_call(
                         {
                             "action": "read",
                             "page_id": reference,
@@ -570,6 +691,40 @@ class WikiCall:
                     )
                 )
         return rendered
+
+
+def _call(arguments: Json) -> str:
+    """Return a copyable swarm_wiki call, named so it is not sent to another Tool."""
+
+    return f"swarm_wiki {call_text(arguments)}"
+
+
+def _found(content: str, query: str) -> tuple[str, tuple[int, int] | None]:
+    """Name the lines of ``content`` that contain ``query``, ignoring case.
+
+    Also return the line number and character position of the first match, if any.
+    """
+
+    wanted = query.casefold()
+    hits: list[str] = []
+    first: tuple[int, int] | None = None
+    offset = 0
+    for number, line in enumerate(content.split("\n"), 1):
+        position = line.casefold().find(wanted)
+        if position >= 0:
+            first = first or (number, offset + min(position, len(line)))
+            clipped = line if len(line) <= _FOUND_LINE_CHARS else line[:_FOUND_LINE_CHARS] + "..."
+            hits.append(text.WIKI_READ_FOUND_LINE.format(line=number, offset=offset, text=clipped))
+        offset += len(line) + 1
+    if not hits:
+        found = text.WIKI_READ_FOUND_NONE.format(
+            query=query, call=_call({"action": "list", "query": query})
+        )
+        return found, None
+    shown = [text.WIKI_READ_FOUND.format(query=query), *hits[:_FOUND_LINES]]
+    if len(hits) > _FOUND_LINES:
+        shown.append(text.WIKI_READ_FOUND_MORE.format(count=len(hits) - _FOUND_LINES))
+    return "\n".join(shown), first
 
 
 def _named_page(value: str, pages: list[Json]) -> Json | None:
@@ -594,7 +749,7 @@ def _page_match(value: str, pages: list[Json]) -> tuple[Json, bool] | None:
     return None
 
 
-def _miss_message(details: Json, page_id: str) -> str:
+def _miss_message(details: Json, page_id: str, changes: tuple[str, str] | None) -> str:
     """Explain an old_text that identifies no single passage, with line hints."""
 
     passages = details["passages"]
@@ -623,6 +778,8 @@ def _miss_message(details: Json, page_id: str) -> str:
         if expected is not None and expected < current
         else text.WIKI_NOT_FOUND.format(current=current)
     ]
+    if changes is not None:
+        parts.append("\n".join(part for part in changes if part))
     # Closest passages often overlap by all but one line; show each line once.
     distinct: list[Json] = []
     for passage in passages:
@@ -638,16 +795,33 @@ def _miss_message(details: Json, page_id: str) -> str:
             f"{text.WIKI_PASSAGE_LINE.format(line=passage['line'])}\n{_passage(passage)}"
             for passage in distinct[:2]
         )
-    difference = details.get("difference")
-    if difference:
-        cut = difference["truncated"]
-        template = text.WIKI_FIRST_DIFFERENCE_CUT if cut else text.WIKI_FIRST_DIFFERENCE
-        page, copy = repr(difference["file"]), repr(difference["copy"])
-        parts.append(template.format(line=difference["line"], page=page, copy=copy))
-    parts.append(
-        text.WIKI_COPY_EXACTLY.format(call=call_text({"action": "read", "page_id": page_id}))
-    )
+    differences = details.get("differences") or []
+    if differences:
+        shown = [text.WIKI_DIFFERENCES, *map(_difference, differences)]
+        more = details.get("different_lines", 0) - len(differences)
+        if more > 0:
+            shown.append(text.WIKI_DIFFERENCES_MORE.format(count=more))
+        parts.append("\n".join(shown))
+    # A read of the closest passage shows exactly the text to copy.
+    read: Json = {"action": "read", "page_id": page_id}
+    span = details.get("span")
+    if span:
+        read.update(offset=span[0], limit=span[1])
+    parts.append(text.WIKI_COPY_EXACTLY.format(call=_call(read)))
     return "\n".join(parts)
+
+
+def _difference(item: Json) -> str:
+    """Describe one line where old_text differs from the closest passage."""
+
+    if item["line"] is None:
+        return text.WIKI_DIFFERENCE_COPY_ONLY.format(
+            line=item["copy_line"], copy=repr(item["copy"])
+        )
+    if item["copy"] is None:
+        return text.WIKI_DIFFERENCE_PAGE_ONLY.format(line=item["line"], page=repr(item["file"]))
+    template = text.WIKI_DIFFERENCE_CUT if item["truncated"] else text.WIKI_DIFFERENCE
+    return template.format(line=item["line"], page=repr(item["file"]), copy=repr(item["copy"]))
 
 
 def _lines(passage: Json) -> range:

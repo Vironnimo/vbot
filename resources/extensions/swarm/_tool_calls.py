@@ -122,13 +122,14 @@ _BOARD_ELSEWHERE = {
 
 _WIKI_FIELDS = SpellingAliases(
     {
-        "page_id": ("id", "page", "wiki_id", "wiki_page_id"),
+        "page_id": ("id", "page", "path", "wiki_id", "wiki_page_id"),
         "content": ("body", "text", "markdown", "page_content"),
         "old_text": ("old", "old_string", "old_str", "find_text", "search_text"),
         "new_text": ("new", "new_string", "new_str", "replace_text", "replacement", "replace_with"),
         "query": ("q", "search", "search_query", "find", "keyword", "keywords", "term"),
         "expected_revision": ("base_revision", "expected_rev", "if_revision", "current_revision"),
         "revision": ("version", "rev", "revision_number"),
+        "since_revision": ("since", "since_rev", "since_version", "changes_since", "diff_since"),
         "offset": ("start", "char_offset", "from"),
         "limit": ("count", "max", "max_chars", "max_results", "length", "page_size", "limti"),
         "include_deleted": ("show_deleted", "with_deleted", "deleted"),
@@ -271,7 +272,15 @@ def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
         value,
         fields=_WIKI_FIELDS,
         actions=_action_normalizer(_WIKI_ACTIONS, {}),
-        optional=("page_id", "revision", "offset", "limit", "cursor", "include_deleted"),
+        optional=(
+            "page_id",
+            "revision",
+            "since_revision",
+            "offset",
+            "limit",
+            "cursor",
+            "include_deleted",
+        ),
     )
     if not isinstance(normalized, dict):
         return normalized
@@ -442,10 +451,10 @@ def _implied_wiki_action(arguments: Json) -> str | None:
         return "update"
     if "content" in arguments and "title" in arguments:
         return "create"
-    if "query" in arguments:
-        return "list"
     if "page_id" in arguments and not {"expected_revision"} & arguments.keys():
         return "read"
+    if "query" in arguments:
+        return "list"
     return None
 
 

@@ -57,9 +57,19 @@ WIKI_PARAMETERS: dict[str, Any] = {
             "type": "integer",
             "description": "Revision to read or to restore. Omit to read the current revision.",
         },
+        "since_revision": {
+            "type": "integer",
+            "description": (
+                "With read: show what changed since this revision, and who changed it, "
+                "instead of the content."
+            ),
+        },
         "query": {
             "type": "string",
-            "description": "With list: text to find in titles and content, ignoring case.",
+            "description": (
+                "Text to find, ignoring case: list finds the pages that contain it; read shows "
+                "the lines that contain it and the text around the first."
+            ),
         },
         "include_deleted": {
             "type": "boolean",
@@ -119,6 +129,7 @@ WIKI_REVISION_CURRENT = "{revision} (current), saved by {author}"
 WIKI_REVISION_OLDER = "{revision} (the current revision is {current}), saved by {author}"
 WIKI_READ_DELETED = "This revision deleted the page. Restore it with {call}"
 WIKI_READ_SHOWN = "Characters {start} to {end} of {total}."
+WIKI_READ_AROUND = "Characters {start} to {end} of {total}, around line {line}."
 WIKI_READ_EMPTY = "This revision has no content."
 WIKI_READ_PAST_END = "Nothing to show after character {offset}; the page has {total} characters."
 WIKI_READ_MORE = "Continue with {call}"
@@ -145,6 +156,9 @@ WIKI_HISTORY_MORE = "Older revisions exist. Continue with {call}"
 WIKI_HISTORY_ENTRY = "- revision {revision}, {time}, by {author}{title}{deleted}"
 WIKI_HISTORY_TITLE = ', titled "{title}"'
 WIKI_HISTORY_DELETED = ", deleted the page"
+WIKI_CHANGES = "Changes since revision {since}, saved by {authors}:"
+WIKI_CHANGES_SAME = "Since revision {since}, {authors} changed the page but not its content."
+WIKI_CHANGES_NONE = "Nothing changed since revision {since}."
 
 # Notes on calls that ran after a repair.
 WIKI_LISTED_INSTEAD = "read needs page_id, so this lists the pages instead."
@@ -155,6 +169,8 @@ WIKI_OWN_REVISION = (
 )
 WIKI_CREATE_IGNORED_ID = "create makes a new page, so page_id {value} was ignored."
 WIKI_TITLE_FROM_HEADING = 'create needs a title; used the first heading, "{title}".'
+WIKI_OFFSET_FROM_END = "Read offset {value} as counting back from the end of the page."
+WIKI_SINCE_IGNORES = "{field} has no effect with since_revision and was ignored."
 WIKI_PAGE_FROM_TEXT = (
     'page_id was omitted; old_text occurs only in {page_id} ("{title}"), so that page was updated.'
 )
@@ -164,7 +180,7 @@ NOTHING_CHANGED = "Nothing changed."
 WIKI_PAGE_NOT_FOUND = "No page {value} exists in your group's Wiki."
 WIKI_PAGE_SUGGESTION = 'The closest page is "{title}" ({page_id}).'
 WIKI_PAGE_RETRY = 'Repeat the call with page_id "{page_id}" if you meant it.'
-WIKI_PAGE_FIND = 'Find pages with {"action": "list"}.'
+WIKI_PAGE_FIND = 'Find pages with swarm_wiki {"action": "list"}.'
 WIKI_PAGES_HOLD_TEXT = (
     "update needs page_id. old_text occurs in {pages}; repeat the call with the page_id "
     "of the page you mean."
@@ -175,7 +191,7 @@ WIKI_CREATE_EXISTING = (
     "To change that page, use update; to add a separate page, omit page_id."
 )
 WIKI_NEEDS = {
-    "page_id": '{action} needs page_id. Find pages with {{"action": "list"}}.',
+    "page_id": '{action} needs page_id. Find pages with swarm_wiki {{"action": "list"}}.',
     "change": (
         "update needs old_text and new_text to replace one passage, content to replace the "
         "whole page, or title to rename it."
@@ -215,13 +231,14 @@ WIKI_NOT_FOUND_STALE = (
 WIKI_CLOSEST = "Closest passage, at line {line}:"
 WIKI_CLOSEST_SEVERAL = "Closest passages:"
 WIKI_PASSAGE_LINE = "line {line}:"
-WIKI_FIRST_DIFFERENCE = (
-    "First difference, line {line}: the page has {page} where old_text has {copy}."
+WIKI_DIFFERENCES = "Where old_text differs from the page:"
+WIKI_DIFFERENCE = "line {line}: the page has {page} where old_text has {copy}."
+WIKI_DIFFERENCE_CUT = (
+    "line {line}, in excerpts around the difference: the page has {page} where old_text has {copy}."
 )
-WIKI_FIRST_DIFFERENCE_CUT = (
-    "First difference, line {line}, in excerpts around it: the page has {page} where "
-    "old_text has {copy}."
-)
+WIKI_DIFFERENCE_PAGE_ONLY = "line {line}: the page has {page}, which old_text lacks."
+WIKI_DIFFERENCE_COPY_ONLY = "old_text line {line} has {copy}, which the page lacks."
+WIKI_DIFFERENCES_MORE = "{count} more lines differ."
 WIKI_COPY_EXACTLY = "Copy old_text exactly from the page, or read it with {call}."
 WIKI_AMBIGUOUS = (
     "old_text occurs {count} times, {where}. Include neighboring text so it occurs only once."
@@ -236,7 +253,6 @@ WIKI_MORE_LINES = "{count} more lines"
 WIKI_TRUNCATED = "[passage shortened]"
 WIKI_CONFLICT = "The page changed since revision {expected}; the current revision is {current}."
 WIKI_CONFLICT_FUTURE = "Revision {expected} does not exist yet; the current revision is {current}."
-WIKI_CONFLICT_DIFF = "Changes since revision {expected}:"
 WIKI_CONFLICT_DIFF_CUT = "[changes shortened; read the page for the rest]"
 WIKI_CONFLICT_CONTENT = (
     "Apply your change to the current page: replace one passage with old_text and new_text, "
@@ -244,6 +260,10 @@ WIKI_CONFLICT_CONTENT = (
 )
 WIKI_CONFLICT_RETRY = "Repeat the call with expected_revision {current} if it still applies."
 WIKI_DELETED = "The page is deleted (revision {current}). Restore it first with {call}."
+WIKI_SINCE_AFTER = (
+    "since_revision {since} comes after revision {revision}. To see the changes up to the "
+    "current revision, omit revision."
+)
 WIKI_REVISION_MISSING = (
     "Revision {revision} does not exist; the page has revisions 1 to {current}. "
     "See them with {call}."

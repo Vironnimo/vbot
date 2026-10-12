@@ -201,10 +201,20 @@ continuation's revision watermark, so every page of one search uses the same mod
 and the WebUI search gets the same fallback: `list` then carries `matched: "words"`,
 and `WikiIndex.svelte` names the search above the list as one no page holds as
 written, so the user does not take the pages for exact matches. An Agent `read` with `query` (Sessions, 2026-09)
-reads the page as asked and adds `found`, before `content`: up to 5 lines of the
-whole read revision containing the casefolded query, each with its line number and
-starting character (the `offset` unit), or the `list` call that searches all pages
-(`_wiki_tool.py::WikiCall._find`).
+adds `found`, before `content`: up to 5 lines of the whole read revision containing
+the casefolded query, each with its line number and starting character (the `offset`
+unit), or the `list` call that searches all pages (`_wiki_tool.py::_found`). With
+`offset` or `limit` it reads the range asked for. Without them it shows 2000
+characters from up to 2 lines (at most 400 characters) before the first such line,
+with a continuation pinned to the revision, and no content when no line holds the
+query: such reads returned whole pages to Agents looking for one passage (Sessions,
+2026-10; `WikiCall._read_around`). A `read` with `since_revision` shows, instead of
+content, a `changes` header naming everyone who saved a revision after it
+(`SwarmStore.wiki_changes`) and the bounded unified diff up to the revision read
+(current, or `revision`); `offset` and `limit` are ignored with a note, and a
+`since_revision` after the revision read is refused. `query` on read and
+`since_revision` are Tool options resolved by `WikiCall` around the Store's read;
+the management `wiki` schema leaves `since_revision` out.
 
 Create, update, delete and restore preserve full versions with author and timestamp.
 Update supports title/content replacement or one unique `old_text`/`new_text` edit.
@@ -243,11 +253,17 @@ peer's text; each differing line and respelled word returns in the result's
 `test_wiki_old_text_must_not_rest_on_other_text`). Ambiguity is terminal; a copy
 resembling several passages sets `details.similar` and uses
 `WIKI_AMBIGUOUS_SIMILAR`. Misses carry bounded line hints (closest passages, or the line holding
-most of a one-line fragment) in `SwarmStoreError.details`, plus the first line where `old_text`
-differs from the closest passage (`fuzzy_match.first_difference`, the diagnosis `apply_patch`
-uses). The error shows each page line once, dropping a closest passage that overlaps a better
-one, and names that first difference: overlapping windows showed two nearly equal passages
-while the differing line lay beyond both excerpts (Sessions, 2026-09). With an older revision,
+most of a one-line fragment) in `SwarmStoreError.details`, plus the passage's character
+`span` and, against the closest passage, the first 5 lines where `old_text` differs and
+their total count (`differences`, `different_lines`; `fuzzy_match.line_differences`, which
+pairs lines by similarity, so a line the copy dropped or added is named as such and does
+not shift later pairs; `apply_patch` keeps `first_difference`). The error shows each page
+line once, dropping a closest passage that overlaps a better one (overlapping windows
+showed two nearly equal passages while the differing line lay beyond both excerpts,
+Sessions, 2026-09), names every differing line up to the bound, and ends with a read call
+at the span (`offset`, `limit`). Naming only the first difference made one Agent retype a
+passage three times, each attempt failing on the next differing line (Sessions, 2026-10).
+With an older revision,
 only a targeted edit without a title change may proceed. Title changes, delete,
 restore and future revisions otherwise keep strict revision checks. Delete retains
 history, and restore creates a new live revision from the chosen historical content.
@@ -271,7 +287,10 @@ page reference, read-only calls resolve a page title or a unique close stored id
 (`wpg_...`), create
 ignores an unknown `page_id` and takes a missing title from the first Markdown
 heading, `limit` above the action maximum is lowered, `expected_revision` is
-dropped on read-only actions. Writes never resolve a guessed page; they fail with
+dropped on read-only actions, and a negative read `offset` counts back from the end of
+the page (one Agent sent `-6000` to read a page's end, Sessions, 2026-10). Without
+`action`, a call with `page_id` and no change implies `read`, also with `query`;
+`path` is an alias of `page_id` (`_tool_calls.py`). Writes never resolve a guessed page; they fail with
 the suggested page number, and an explicit `page_id` is never overridden. A passage
 `update` (`old_text` with `new_text`) without `page_id` runs on the one live page whose
 current content holds its exact `old_text` (`SwarmStore.wiki_pages(containing=...)`),
@@ -283,11 +302,16 @@ error named (Sessions, 2026-09). With several such pages the call fails naming t
 `page_id`, it fails with the list call. Page numbers (`w3` or `3`) and exact stored ids are
 exact references in every action; the Tool names that page `w3` in the call before
 running it, so results, continuations and errors show the number. Failures name
-the next call: conflicts show the current revision
-(content conflicts add a bounded diff since the base revision), deleted pages the
-restore call, and a content update without `expected_revision` on a peer's revision
-the current one.
-Failed changes say "Nothing changed." in their first line.
+the next call: conflicts show the current revision, deleted pages the restore call,
+and a content update without `expected_revision` on a peer's revision the current one.
+A conflict on an older `expected_revision`, and a passage edit from an older revision
+whose `old_text` no longer matches, add who saved the revisions since and the bounded
+diff (60 lines, 3000 characters), or that only title or deletion state changed: one
+such conflict named neither, and two edits whose passage a peer had replaced had no
+other help (Sessions, 2026-10).
+Failed changes say "Nothing changed." in their first line. Every call a result or
+error suggests is written `swarm_wiki {...}`: one Agent sent a Wiki continuation to the
+file `read` Tool (Sessions, 2026-10).
 
 Board posts are immutable and public within one Swarm. A post, including a
 discussion's opening message, addresses the participants it names after `@` or
@@ -1108,6 +1132,14 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. `or answers` was dropped with the advertised `reply_to`. |
 | `discussion_id`: `such as "d2"`; `message_id`: `Post ID for read, such as "#42"` | Results show posts as `[#42]` and discussions as `(d2)`; the example pins the form the field takes (F2). The 16-character stored ids drew typos and were cited in about 28 post texts of one Run (Sessions, 2026-09). |
 | `swarm_wiki` `page_id`: `Page ID, such as "w3".` | Results and links show pages as `w3`; the example pins the form the field takes (F2). Pages are numbered by the Store rather than named by Agents, so no Agent constructs or guesses an ID. |
+| `swarm_wiki` `query`: `Text to find, ignoring case: list finds the pages that contain it; read shows the lines that contain it and the text around the first.` | Agents already sent `query` with read to find a passage (Sessions, 2026-09), which the text named only for list; two such reads returned whole pages (F6, Sessions, 2026-10). The read clause names what the result shows, so Agents use it to locate a passage instead of guessing offsets. |
+| `swarm_wiki` `since_revision`: `With read: show what changed since this revision, and who changed it, instead of the content.` | After a conflict or a peer's change, Agents reread whole pages to find what changed (F6). `instead of the content` keeps Agents from sending it when they need the page itself. |
+| `swarm_wiki` changes: `Changes since revision {since}, saved by {authors}:` with the diff; `Since revision {since}, {authors} changed the page but not its content.`; `Nothing changed since revision {since}.` | Shared by `since_revision` reads and conflicts on an older revision. One stale-revision conflict named neither the change nor its author, and two passage edits whose text a peer had replaced got no help at all (F5, Sessions, 2026-10). Replaces `Changes since revision {expected}:`, which only content conflicts showed. |
+| `swarm_wiki` misses: `Where old_text differs from the page:`, `line {line}: the page has {page} where old_text has {copy}.` (and `..., in excerpts around the difference: ...`), `line {line}: the page has {page}, which old_text lacks.`, `old_text line {line} has {copy}, which the page lacks.`, `{count} more lines differ.` | Replaces `First difference, line {line}: ...`: one Agent retyped a passage three times, each error naming only the next differing line (F5, Sessions, 2026-10). Lines the copy dropped or added are named as such, so the Agent does not read a shifted pairing as a changed line. |
+| `swarm_wiki` misses: `Copy old_text exactly from the page, or read it with swarm_wiki {"action": "read", "page_id": ..., "offset": ..., "limit": ...}.` | The read call now carries the closest passage's `offset` and `limit`; with the bare page read, one Agent guessed offsets over many reads to find the passage (F6, Sessions, 2026-10). |
+| `swarm_wiki` calls in results and errors: `Continue with swarm_wiki {call}` and every other suggested call | One Agent sent a Wiki continuation to the file `read` Tool (F3, Sessions, 2026-10); the Tool name in front of the arguments says where the call goes. |
+| `swarm_wiki` read: `Characters {start} to {end} of {total}, around line {line}.` | Says why a read with `query` shows only part of the page and where; the continuation follows in `more` (F4). |
+| `swarm_wiki` notes and errors: `Read offset {value} as counting back from the end of the page.`; `{field} has no effect with since_revision and was ignored.`; `since_revision {since} comes after revision {revision}. To see the changes up to the current revision, omit revision.` | A negative offset was refused although its meaning was clear (one Agent sent `-6000`, F2, Sessions, 2026-10); the note reports the interpretation. The other two cover `since_revision` combined with fields it cannot use. |
 | `swarm_wiki` `limit`: `With read: characters to show (default and maximum 20000).` | Says that an omitted limit already reads as much as possible, so Agents do not raise it (F6). The default was 12000: 5 of 53 reads in one Run cut a page shorter than 20000 characters and cost a continuation (Sessions, 2026-10). |
 | Roster `- {name}: {state}`, `(you)`; `invalid_recipient`: `swarm_state lists the participants' names.` | Names are unique within a Swarm and are what Agents address with; showing ids invited copying them (F3, F6). |
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |

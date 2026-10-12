@@ -261,7 +261,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   copied lines and from distinctive copied lines (at most 3 occurrences) the file
   holds exactly; a window at least 2 such lines place is shown even below the
   0.60 similarity floor (`find_closest_candidates`). The line-by-line comparison
-  (`fuzzy_match.first_difference`, shared with Swarm Wiki edits) starts at the
+  (`fuzzy_match.first_difference`; Swarm Wiki edits name every differing line
+  with `line_differences`, which aligns the same way) starts at the
   first copied line with a word the file holds near the window, because a window starts wherever its best-matching lines
   put it, shifted by every line the copy added or dropped before them. Closing
   quotes and brackets occur too often to align by; when the file holds no other
