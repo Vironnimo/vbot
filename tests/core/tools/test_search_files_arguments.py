@@ -33,13 +33,14 @@ def project(tmp_path: Path) -> Path:
     [
         (
             {"pattern": "load"},
-            "docs/guide.md:1:Call load() first.\nsrc/app.py:2:def load():\n"
-            "src/view.ts:1:export const load = 1;",
+            "docs/guide.md\n1:Call load() first.\n\n"
+            "src/app.py\n2:def load():\n\n"
+            "src/view.ts\n1:export const load = 1;",
         ),
-        ({"pattern": "load", "path": "src", "glob": "*.py"}, "src/app.py:2:def load():"),
+        ({"pattern": "load", "path": "src", "glob": "*.py"}, "src/app.py\n2:def load():"),
         (
             {"pattern": "load", "path": ["docs", "src/view.ts"]},
-            "docs/guide.md:1:Call load() first.\nsrc/view.ts:1:export const load = 1;",
+            "docs/guide.md\n1:Call load() first.\n\nsrc/view.ts\n1:export const load = 1;",
         ),
         (
             {"pattern": "load", "glob": ["*.py", "*.md"], "output": "files"},
@@ -48,15 +49,15 @@ def project(tmp_path: Path) -> Path:
         ({"pattern": "o", "path": "src/app.py", "output": "count"}, "src/app.py:3"),
         (
             {"pattern": "def", "context": 1},
-            "src/app.py-1-import os\nsrc/app.py:2:def load():\nsrc/app.py-3-    return os.name",
+            "src/app.py\n1-import os\n2:def load():\n3-    return os.name",
         ),
         (
             {"pattern": "LOAD", "args": ["-i"], "glob": "*.ts"},
-            "src/view.ts:1:export const load = 1;",
+            "src/view.ts\n1:export const load = 1;",
         ),
         (
             {"pattern": ["import", "export"]},
-            "src/app.py:1:import os\nsrc/view.ts:1:export const load = 1;",
+            "src/app.py\n1:import os\n\nsrc/view.ts\n1:export const load = 1;",
         ),
     ],
 )
@@ -243,7 +244,7 @@ async def test_file_list_output_for_a_pattern_matching_every_line_lists_every_fi
     [
         ({"glob": "src"}, "src/app.py\nsrc/view.ts", True),
         ({"glob": ["src/", "!*.ts"]}, "src/app.py", True),
-        ({"glob": "./docs", "pattern": "load"}, "docs/guide.md:1:Call load() first.", True),
+        ({"glob": "./docs", "pattern": "load"}, "docs/guide.md\n1:Call load() first.", True),
         ({"glob": "src", "path": "src"}, "src/app.py\nsrc/view.ts", True),
         # A name that is no directory, an excluding glob and a directory listing stay as sent.
         ({"glob": "missing"}, "", False),
@@ -264,7 +265,7 @@ async def test_a_glob_naming_a_directory_matches_the_files_below_it(
 async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path) -> None:
     (project / "notes.txt").write_text("match *.py files\n")
     result = await dispatch(project, {"pattern": "*.py", "args": ["-F"]})
-    assert result["data"]["content"] == "notes.txt:1:match *.py files"
+    assert result["data"]["content"] == "notes.txt\n1:match *.py files"
     assert "note" not in result["data"]
 
 
@@ -275,7 +276,7 @@ async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path
         # Claude Code's Grep.
         (
             {"pattern": "LOAD", "-i": True, "-n": True, "glob": "*.py", "output_mode": "content"},
-            "src/app.py:2:def load():",
+            "src/app.py\n2:def load():",
         ),
         (
             {"pattern": "load", "output_mode": "files_with_matches", "head_limit": 1},
@@ -284,35 +285,35 @@ async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path
         ({"pattern": "os", "output_mode": "count", "path": "src"}, "src/app.py:2"),
         (
             {"pattern": "def", "-C": 1, "path": "src/app.py"},
-            "src/app.py-1-import os\nsrc/app.py:2:def load():\nsrc/app.py-3-    return os.name",
+            "src/app.py\n1-import os\n2:def load():\n3-    return os.name",
         ),
         (
             {"pattern": "def", "-A": 1, "type": "py"},
-            "src/app.py:2:def load():\nsrc/app.py-3-    return os.name",
+            "src/app.py\n2:def load():\n3-    return os.name",
         ),
         # Hermes and opencode.
         ({"pattern": "*.ts", "target": "files", "path": "src"}, "src/view.ts"),
         (
             {"pattern": "load", "target": "content", "file_glob": "*.md"},
-            "docs/guide.md:1:Call load() first.",
+            "docs/guide.md\n1:Call load() first.",
         ),
-        ({"pattern": "load", "include": "*.ts"}, "src/view.ts:1:export const load = 1;"),
+        ({"pattern": "load", "include": "*.ts"}, "src/view.ts\n1:export const load = 1;"),
         # Common spellings.
         (
             {"query": "load()", "literal": True, "directory": "docs"},
-            "docs/guide.md:1:Call load() first.",
+            "docs/guide.md\n1:Call load() first.",
         ),
         (
             {"regex": "LOAD", "ignoreCase": "true", "exclude": ["*.md", "*.ts"]},
-            "src/app.py:2:def load():",
+            "src/app.py\n2:def load():",
         ),
         (
             {"pattern": "load(", "regex": False, "path": "docs"},
-            "docs/guide.md:1:Call load() first.",
+            "docs/guide.md\n1:Call load() first.",
         ),
         (
             {"pattern": "Load", "case_sensitive": False, "file_type": "ts"},
-            "src/view.ts:1:export const load = 1;",
+            "src/view.ts\n1:export const load = 1;",
         ),
         ({"pattern": "o", "-c": True, "path": "src/app.py"}, "src/app.py:3"),
         ({"pattern": "load", "-l": True, "glob": "*.md"}, "docs/guide.md"),
@@ -320,7 +321,7 @@ async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path
         # Lists sent as JSON text.
         (
             {"pattern": "load", "path": '["docs", "src/view.ts"]'},
-            "docs/guide.md:1:Call load() first.\nsrc/view.ts:1:export const load = 1;",
+            "docs/guide.md\n1:Call load() first.\n\nsrc/view.ts\n1:export const load = 1;",
         ),
         (
             {"pattern": "load", "glob": '[ "*.py", "*.md" ]', "output": "files"},
@@ -341,18 +342,18 @@ async def test_other_search_interfaces_spellings_run_as_intended(
 @pytest.mark.parametrize(
     ("args", "content"),
     [
-        (["-rn", "def", "."], "src/app.py:2:def load():"),
+        (["-rn", "def", "."], "src/app.py\n2:def load():"),
         (
             ["-E", "import|export", "src"],
-            "src/app.py:1:import os\nsrc/view.ts:1:export const load = 1;",
+            "src/app.py\n1:import os\n\nsrc/view.ts\n1:export const load = 1;",
         ),
-        (["--include=*.md", "load"], "docs/guide.md:1:Call load() first."),
+        (["--include=*.md", "load"], "docs/guide.md\n1:Call load() first."),
         (
             ["--exclude", "*.py", "--exclude-dir=docs", "load"],
-            "src/view.ts:1:export const load = 1;",
+            "src/view.ts\n1:export const load = 1;",
         ),
-        (["-E", "utf-8", "def"], "src/app.py:2:def load():"),
-        (["-h", "def", "src"], "src/app.py:2:def load():"),
+        (["-E", "utf-8", "def"], "src/app.py\n2:def load():"),
+        (["-h", "def", "src"], "src/app.py\n2:def load():"),
     ],
 )
 async def test_grep_habits_in_args_keep_their_meaning(project: Path, args: list[str], content: str):
@@ -384,7 +385,7 @@ async def test_a_path_written_as_a_glob_or_list_searches_what_it_names(
         # Another field already selects names, so the path stays a missing path.
         assert result["error"]["code"] == "path_not_found"
         return
-    assert result["data"]["content"] == "src/app.py:2:def load():"
+    assert result["data"]["content"] == "src/app.py\n2:def load():"
     assert message in result["data"]["note"]
 
 
@@ -423,7 +424,7 @@ async def test_missing_path_suggests_similar_existing_paths(project: Path) -> No
     assert "(similar: src/utils)" in repeated["error"]["message"]
 
     partial = await dispatch(project, {"pattern": "load", "path": ["src/utils", "docs/guid.md"]})
-    assert partial["data"]["content"] == "src/utils/io.py:1:load"
+    assert partial["data"]["content"] == "src/utils/io.py\n1:load"
     assert "(similar: docs/guide.md)" in partial["data"]["warnings"][0]
 
 
@@ -431,7 +432,7 @@ async def test_missing_path_suggests_similar_existing_paths(project: Path) -> No
 @pytest.mark.parametrize("args", ["-F load() docs", '-F "Call load" docs', "  -F  load(  docs "])
 async def test_a_command_line_string_in_args_splits_into_arguments(project: Path, args: str):
     result = await dispatch(project, {"args": args})
-    assert result["data"]["content"] == "docs/guide.md:1:Call load() first."
+    assert result["data"]["content"] == "docs/guide.md\n1:Call load() first."
 
 
 @pytest.mark.asyncio
@@ -441,9 +442,9 @@ async def test_a_command_line_string_in_args_splits_into_arguments(project: Path
         ({"args": '--files"]', "pattern": "."}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
         ({"args": "['--files']", "path": "src"}, "src/app.py\nsrc/view.ts"),
         ({"args": "[--dirs]", "pattern": "do"}, "docs/"),
-        ({"args": '["-i", "-t", "ts"', "pattern": "LOAD"}, "src/view.ts:1:export const load = 1;"),
+        ({"args": '["-i", "-t", "ts"', "pattern": "LOAD"}, "src/view.ts\n1:export const load = 1;"),
         # Text that is not only flags stays what it was: here a regex class, the pattern.
-        ({"args": "[u]", "path": "src"}, "src/app.py:3:    return os.name"),
+        ({"args": "[u]", "path": "src"}, "src/app.py\n3:    return os.name"),
     ],
 )
 async def test_flags_wrapped_in_stray_list_syntax_are_those_flags(
@@ -481,7 +482,7 @@ async def test_missing_explicit_roots_preserve_results_and_name_the_missing_path
         f"Path not found: missing (relative to the working directory {tmp_path.as_posix()})."
     )
     assert data["searched_paths"] == ["src"]
-    assert data["content"] == ("src/a.py" if mode else "src/a.py:1:needle")
+    assert data["content"] == ("src/a.py" if mode else "src/a.py\n1:needle")
 
 
 @pytest.mark.asyncio
@@ -489,7 +490,7 @@ async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src/code").write_text("Alpha\nBeta\ncall(\n")
     partial = await dispatch(tmp_path, {"args": ["Alpha", "Beta", "Gamma", "lib/a.py", "src"]})
-    assert partial["data"]["content"] == "src/code:1:Alpha"
+    assert partial["data"]["content"] == "src/code\n1:Alpha"
     assert any('pattern "Alpha|Beta|Gamma".' in warning for warning in partial["data"]["warnings"])
     missing = await dispatch(tmp_path, {"args": ["Alpha", "Beta"]})
     assert missing["error"]["code"] == "path_not_found"
@@ -500,10 +501,10 @@ async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
         {"pattern": "Alpha|Beta", "path": "src"},
     ):
         corrected = await dispatch(tmp_path, corrected_call)
-        assert corrected["data"]["content"] == "src/code:1:Alpha\nsrc/code:2:Beta"
+        assert corrected["data"]["content"] == "src/code\n1:Alpha\n2:Beta"
         assert "warnings" not in corrected["data"]
     literal = await dispatch(tmp_path, {"args": ["-F", "call(", "src"]})
-    assert literal["data"]["content"] == "src/code:3:call("
+    assert literal["data"]["content"] == "src/code\n3:call("
 
 
 @pytest.mark.asyncio
@@ -514,13 +515,13 @@ async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
             (options, pattern, searched, content)
             for options in ([], ["-P"])
             for pattern, searched, content in (
-                ("call(", r"call\(", "src/code:3:call("),
-                ("Beta|call(", r"Beta|call\(", "src/code:2:Beta\nsrc/code:3:call("),
-                ("x)|Alpha", r"x\)|Alpha", "src/code:1:Alpha"),
+                ("call(", r"call\(", "src/code\n3:call("),
+                ("Beta|call(", r"Beta|call\(", "src/code\n2:Beta\n3:call("),
+                ("x)|Alpha", r"x\)|Alpha", "src/code\n1:Alpha"),
             )
         ],
         # PCRE2 already reads a leading brace literally; the default engine rejects it.
-        ([], "{Alpha|Beta", r"\{Alpha|Beta", "src/code:2:Beta"),
+        ([], "{Alpha|Beta", r"\{Alpha|Beta", "src/code\n2:Beta"),
         ([], "Beta{2", r"Beta\{2", ""),
     ],
 )
@@ -574,7 +575,7 @@ async def test_replace_shows_the_original_lines_and_names_the_offered_edit_tool(
     )
 
     assert result["ok"], result
-    assert result["data"]["content"] == "a.txt:1:old"
+    assert result["data"]["content"] == "a.txt\n1:old"
     assert result["data"]["note"] == (
         f"--replace was ignored: results show the original lines{advice}."
     )
@@ -586,7 +587,7 @@ async def test_look_around_runs_with_pcre2_and_says_so(tmp_path):
 
     result = await dispatch(tmp_path, {"args": ["price(?!_)"]})
 
-    assert result["data"]["content"] == "code.py:1:price = 1"
+    assert result["data"]["content"] == "code.py\n1:price = 1"
     assert "PCRE2" in result["data"]["note"]
 
 
@@ -594,10 +595,10 @@ async def test_look_around_runs_with_pcre2_and_says_so(tmp_path):
 @pytest.mark.parametrize(
     ("pattern", "expected"),
     [
-        (r"Alpha|16 \·", "code:1:Alpha\ncode:2:16 · cases"),
-        (r"[\·—]", "code:2:16 · cases\ncode:3:long—dash\ncode:4:call(·"),
-        (r"long\—dash|Beta", "code:3:long—dash"),
-        (r"Alpha|call(\·", "code:1:Alpha\ncode:4:call(·"),
+        (r"Alpha|16 \·", "code\n1:Alpha\n2:16 · cases"),
+        (r"[\·—]", "code\n2:16 · cases\n3:long—dash\n4:call(·"),
+        (r"long\—dash|Beta", "code\n3:long—dash"),
+        (r"Alpha|call(\·", "code\n1:Alpha\n4:call(·"),
     ],
 )
 async def test_escaped_unicode_punctuation_preserves_regex_meaning(tmp_path, pattern, expected):
@@ -620,7 +621,7 @@ async def test_literal_backslashes_before_unicode_punctuation_are_not_repaired(t
 
     result = await dispatch(tmp_path, {"args": [*args, pattern, "code"]})
 
-    assert result["data"]["content"] == "code:1:16 \\·"
+    assert result["data"]["content"] == "code\n1:16 \\·"
     assert "note" not in result["data"]
 
 
@@ -757,7 +758,7 @@ async def test_first_call_finds_only_intended_content(tmp_path, supplied):
     result = await dispatch(tmp_path, supplied)
     assert supplied == before
     assert result["ok"]
-    assert result["data"]["content"] == "src/code.py:1:def add_recipe():"
+    assert result["data"]["content"] == "src/code.py\n1:def add_recipe():"
 
 
 @pytest.mark.asyncio
@@ -925,7 +926,7 @@ async def test_paging_flags_select_same_exact_results_as_fields(tmp_path, argume
     result = await dispatch(tmp_path, arguments)
     assert arguments == before
     assert result["ok"], result
-    assert result["data"]["content"] == "a.py:2:needle second"
+    assert result["data"]["content"] == "a.py\n2:needle second"
     assert result["data"]["next_offset"] == 2
 
 
@@ -934,7 +935,7 @@ async def test_paging_option_spellings_remain_literal_payloads(tmp_path):
     (tmp_path / "--limit").write_text("--offset\n")
     result = await dispatch(tmp_path, {"args": ["--", "--offset", "--limit"]})
     assert result["ok"], result
-    assert result["data"]["content"] == "--limit:1:--offset"
+    assert result["data"]["content"] == "--limit\n1:--offset"
 
 
 @pytest.mark.asyncio
@@ -947,7 +948,7 @@ async def test_quotes_in_a_pattern_are_searched_literally_in_the_actual_cwd(tmp_
     result = await dispatch(workspace, {"args": ['"item:generated"']}, cwd=project)
     assert result["data"] == {"summary": "No matches in 1 searched file."}
     found = await dispatch(workspace, {"args": ["item:generated"]}, cwd=project)
-    assert found["data"]["content"] == "events.ts:1:type Event = 'item:generated';"
+    assert found["data"]["content"] == "events.ts\n1:type Event = 'item:generated';"
 
 
 @pytest.mark.asyncio
@@ -968,10 +969,10 @@ async def test_help_examples_execute_the_advertised_searches(tmp_path):
     results = [await dispatch(tmp_path, call) for call in calls]
     assert all(result["ok"] for result in results), results
     assert [result["data"]["content"] for result in results] == [
-        "src/a.py-1-x = 1\nsrc/a.py:2:def load_config():\nsrc/a.py-3-    connect(x)\n"
-        "src/a.py-4-# TODO\n--\ntests/b.py:1:def load_config():",
+        "src/a.py\n1-x = 1\n2:def load_config():\n3-    connect(x)\n4-# TODO\n\n"
+        "tests/b.py\n1:def load_config():",
         "src/a.py:1",
-        "src/a.py:3:    connect(x)",
+        "src/a.py\n3:    connect(x)",
         "errors.log",
         "src/db/migrations/",
     ]

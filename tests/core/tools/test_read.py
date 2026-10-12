@@ -326,7 +326,7 @@ async def test_line_numbers_break_only_at_lf_crlf_and_cr_like_search_files(
 
     assert whole == f"1| import os\n2| {separator}\n3| def foo():\n4|     pass\n5| x = 1\n"
     assert line.startswith("4|     pass\n")
-    assert found["data"]["content"] == "ff.py:4:    pass"
+    assert found["data"]["content"] == "ff.py\n4:    pass"
     assert read_module.render_text_file(raw) == whole
 
 

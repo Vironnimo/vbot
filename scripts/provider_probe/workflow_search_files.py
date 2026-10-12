@@ -19,17 +19,17 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "content_defaults",
             "arguments": {"args": ["-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "multiple_patterns_roots",
             "arguments": {"args": ["-e", "beta", "-e", "omega", "--", "src", "other.txt"]},
-            "content": "other.txt:1:omega\nsrc/a.py:2:beta",
+            "content": "other.txt\n1:omega\n\nsrc/a.py\n2:beta",
         },
         {
             "id": "file_root",
             "arguments": {"args": ["-e", "alpha", "--", "src/a.py"]},
-            "content": "src/a.py:1:alpha alpha",
+            "content": "src/a.py\n1:alpha alpha",
         },
         {
             "id": "paths_defaults",
@@ -55,13 +55,13 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "limit",
             "arguments": {"args": ["-e", "alpha"], "limit": 1},
-            "content": "src/a.py:1:alpha alpha",
+            "content": "src/a.py\n1:alpha alpha",
             "next_offset": 1,
         },
         {
             "id": "offset",
             "arguments": {"args": ["-e", "alpha"], "offset": 1},
-            "content": "tests/b.PY:1:alpha",
+            "content": "tests/b.PY\n1:alpha",
         },
         {
             "id": "beyond_end",
@@ -97,32 +97,32 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "only_matches",
             "arguments": {"args": ["-o", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha\nsrc/a.py:1:alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha\n1:alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "filters",
             "arguments": {"args": ["-g", "*.py", "-g", "!b.PY", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha",
+            "content": "src/a.py\n1:alpha alpha",
         },
         {
             "id": "case_sensitive_globs",
             "arguments": {"args": ["--no-glob-case-insensitive", "-g", "*.py", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha",
+            "content": "src/a.py\n1:alpha alpha",
         },
         {
             "id": "ignore_case_glob",
             "arguments": {"args": ["--no-glob-case-insensitive", "--iglob", "*.py", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "type",
             "arguments": {"args": ["-tpy", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "type_not",
             "arguments": {"args": ["--no-glob-case-insensitive", "-Tpy", "-e", "alpha"]},
-            "content": "tests/b.PY:1:alpha",
+            "content": "tests/b.PY\n1:alpha",
         },
         {
             "id": "type_add_clear",
@@ -140,12 +140,12 @@ def search_cases() -> list[dict[str, Any]]:
                     "alpha",
                 ]
             },
-            "content": "tests/b.PY:1:alpha",
+            "content": "tests/b.PY\n1:alpha",
         },
         {
             "id": "max_size",
             "arguments": {"args": ["--max-filesize", "10", "-e", "alpha"]},
-            "content": "tests/b.PY:1:alpha",
+            "content": "tests/b.PY\n1:alpha",
         },
         {
             "id": "depth",
@@ -155,47 +155,47 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "sort_reverse",
             "arguments": {"args": ["--sortr=path", "-e", "alpha"]},
-            "content": "tests/b.PY:1:alpha\nsrc/a.py:1:alpha alpha",
+            "content": "tests/b.PY\n1:alpha\n\nsrc/a.py\n1:alpha alpha",
         },
         {
             "id": "context",
             "arguments": {"args": ["-C1", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\nsrc/a.py-2-beta\n--\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n2-beta\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "asymmetric_context",
             "arguments": {"args": ["-B2", "-A1", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\nsrc/a.py-2-beta\n--\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n2-beta\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "flags_separate",
             "arguments": {"args": ["-n", "-H", "--no-heading", "--color=never", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "fixed",
             "arguments": {"args": ["-F", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "word",
             "arguments": {"args": ["-w", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "line",
             "arguments": {"args": ["-x", "-e", "alpha"]},
-            "content": "tests/b.PY:1:alpha",
+            "content": "tests/b.PY\n1:alpha",
         },
         {
             "id": "overrides",
             "arguments": {"args": ["-i", "-s", "-F", "--no-fixed-strings", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "unrestricted",
             "arguments": {"args": ["-uuu", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "ignore_controls",
@@ -213,42 +213,42 @@ def search_cases() -> list[dict[str, Any]]:
                     "alpha",
                 ]
             },
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "scope_controls",
             "arguments": {"args": ["--no-hidden", "--follow", "--one-file-system", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "unicode",
             "arguments": {"args": ["--no-unicode", "--unicode", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "encoding",
             "arguments": {"args": ["-Eutf-8", "--crlf", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "early_stop",
             "arguments": {"args": ["-m1", "--stop-on-nonmatch", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "diagnostics",
             "arguments": {"args": ["--stats", "--debug", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "ignore_case",
             "arguments": {"args": ["-i", "-e", "upper"]},
-            "content": "src/a.py:3:UPPER",
+            "content": "src/a.py\n3:UPPER",
         },
         {
             "id": "smart_case",
             "arguments": {"args": ["-S", "-e", "upper"]},
-            "content": "src/a.py:3:UPPER",
+            "content": "src/a.py\n3:UPPER",
         },
         {
             "id": "smart_case_upper",
@@ -258,27 +258,27 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "inversion",
             "arguments": {"args": ["-v", "-e", "alpha"]},
-            "content": "other.txt:1:omega\nsrc/a.py:2:beta\nsrc/a.py:3:UPPER",
+            "content": "other.txt\n1:omega\n\nsrc/a.py\n2:beta\n3:UPPER",
         },
         {
             "id": "multiline",
             "arguments": {"args": ["-U", "-e", "alpha alpha\\nbeta"]},
-            "content": "src/a.py:1:alpha alpha\nsrc/a.py:2:beta",
+            "content": "src/a.py\n1:alpha alpha\n2:beta",
         },
         {
             "id": "dotall",
             "arguments": {"args": ["-U", "--multiline-dotall", "-e", "alpha.*beta"]},
-            "content": "src/a.py:1:alpha alpha\nsrc/a.py:2:beta",
+            "content": "src/a.py\n1:alpha alpha\n2:beta",
         },
         {
             "id": "pcre",
             "arguments": {"args": ["-P", "-o", "-e", "alpha(?= alpha)"]},
-            "content": "src/a.py:1:alpha",
+            "content": "src/a.py\n1:alpha",
         },
         {
             "id": "auto_engine",
             "arguments": {"args": ["--engine=auto", "-o", "-e", "alpha(?= alpha)"]},
-            "content": "src/a.py:1:alpha",
+            "content": "src/a.py\n1:alpha",
         },
         {
             "id": "types_help",
@@ -299,12 +299,12 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "preserve_array_regex",
             "arguments": {"args": ["-e", "\\balpha\\s+alpha"]},
-            "content": "src/a.py:1:alpha alpha",
+            "content": "src/a.py\n1:alpha alpha",
         },
         {
             "id": "literal_call_text",
             "arguments": {"args": ["-F", "-e", "computeDamage("]},
-            "content": "calls.ts:2:computeDamage(actor, target);",
+            "content": "calls.ts\n2:computeDamage(actor, target);",
             "files": {"calls.ts": "// ordinary comment\ncomputeDamage(actor, target);\n"},
         },
         {
@@ -315,7 +315,7 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "missing_root",
             "arguments": {"args": ["-e", "alpha", "--", "missing", "src"]},
-            "content": "src/a.py:1:alpha alpha",
+            "content": "src/a.py\n1:alpha alpha",
             "contains": "Path not found: missing (relative to the working directory",
             "searched_paths": ["src"],
         },
@@ -334,7 +334,7 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "named_fields",
             "arguments": {"pattern": "alpha", "path": "tests"},
-            "content": "tests/b.PY:1:alpha",
+            "content": "tests/b.PY\n1:alpha",
         },
         {
             "id": "other_interface_spellings",
@@ -383,7 +383,7 @@ def search_cases() -> list[dict[str, Any]]:
                 "Find the whole word alpha in Python files under src and tests; "
                 "show matching lines."
             ),
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "natural_directories",
@@ -402,28 +402,28 @@ def search_cases() -> list[dict[str, Any]]:
             "id": "natural_literal_call",
             "task": "Find lines containing the literal text computeDamage( in this directory.",
             "files": {"calls.ts": "// ordinary comment\ncomputeDamage(actor, target);\n"},
-            "content": "calls.ts:2:computeDamage(actor, target);",
+            "content": "calls.ts\n2:computeDamage(actor, target);",
         },
         {
             "id": "positional",
             "arguments": {"args": ["alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "flags_after_operands",
             "arguments": {"args": ["alpha", "tests", "-n"]},
-            "content": "tests/b.PY:1:alpha",
+            "content": "tests/b.PY\n1:alpha",
         },
         {
             "id": "multiple_regexp",
             "arguments": {"args": ["-ealpha", "--regexp=omega"]},
-            "content": "other.txt:1:omega\nsrc/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "other.txt\n1:omega\n\nsrc/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "literal_program_name",
             "arguments": {"args": ["rg"]},
             "files": {"search.txt": "rg is a search program\n"},
-            "content": "search.txt:1:rg is a search program",
+            "content": "search.txt\n1:rg is a search program",
         },
         {
             "id": "name_ignore_case",
@@ -463,12 +463,12 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "repair_encoded_args",
             "arguments": {"args": '["-e", "alpha\\s+alpha"]'},
-            "content": "src/a.py:1:alpha alpha",
+            "content": "src/a.py\n1:alpha alpha",
         },
         {
             "id": "argv_alias",
             "arguments": {"argv": ["alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py\n1:alpha alpha\n\ntests/b.PY\n1:alpha",
         },
         {
             "id": "conflicting_alias",
@@ -486,7 +486,7 @@ def search_cases() -> list[dict[str, Any]]:
             "id": "natural_recipe_call",
             "task": "Find lines containing add_recipe( in Python files under src.",
             "files": {"src/recipes.py": "# recipes\ndef add_recipe(title):\n    pass\n"},
-            "content": "src/recipes.py:2:def add_recipe(title):",
+            "content": "src/recipes.py\n2:def add_recipe(title):",
         },
         {
             "id": "natural_name_only",

@@ -368,8 +368,17 @@ A successful result has these fields:
 
 Content lines:
 
-- Matching lines are `path:line:text` and context lines are `path-line-text`.
-  Gaps between non-adjacent lines are marked with `--` when context is shown.
+- Each file is named once, as in ripgrep's `--heading`: its path on a line of
+  its own, then its matching lines as `line:text` and context lines as
+  `line-text`; an empty line precedes the next file's path. `-o` matches use
+  the same layout. Gaps between non-adjacent lines of one file are marked with
+  `--` when context is shown. A page that starts inside a file names it again.
+  The former `path:line:text` on every line made path prefixes 28.6% of all
+  result characters in one Swarm Run, where 184 of 234 content results came
+  from one file (Sessions, 2026-10-12); re-rendering its 233 content results in
+  this layout shortened them by 27.5% (24.2% of all its search_files result
+  characters). `test_content_results_equal_ripgreps_across_pages` compares the
+  output with `rg --heading`.
 - Paths are relative to the cwd when possible and absolute otherwise.
   Directory entries end in `/`.
 - Names with control characters are JSON-quoted so they can be passed back.
@@ -507,6 +516,7 @@ blank placeholders, so no sentence has to warn about them.
 | args: `["--help"] lists all.` | Route to the full flag reference instead of guessing (F5). |
 | limit: `Results per page.` plus schema default 100 | Plannable number (F6). |
 | offset: `Pass next_offset to continue.` | Continuation uses the returned value, never a computed one (F4); Agents sent `offset: 0` in 213 of 217 calls that set it (Sessions, 2026-09). |
+| Help: `Output: content names each file on its own line, followed by line:text for its matching lines and line-text for context lines.` | States the heading layout (Results and Paging -> Content lines) for an Agent that asks how to read results (F4); it replaced `content shows path:line:text for matching lines and path-line-text for context lines` with the layout change (2026-10-12). |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
 covered by `test_search_files_arguments.py` (the help examples run against a

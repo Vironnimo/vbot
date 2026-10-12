@@ -1292,9 +1292,9 @@ glob that names files also selects files those rules exclude. __pycache__ is ski
 unless -u is given or a glob names __pycache__ or .pyc files. Globs and file types
 match names in any letter case unless --no-glob-case-insensitive is given.
 
-Output: content shows path:line:text for matching lines and path-line-text for context
-lines. Content results are ordered by path, file lists newest first. Every page says
-how many results exist; continue with next_offset.
+Output: content names each file on its own line, followed by line:text for its matching
+lines and line-text for context lines. Content results are ordered by path, file lists
+newest first. Every page says how many results exist; continue with next_offset.
 
 args items, one flag or value per item. Other ripgrep flags work as well:
   -i / -s / -S          ignore case / match case / ignore case unless the pattern has capitals
