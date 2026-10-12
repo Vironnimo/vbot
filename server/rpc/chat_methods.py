@@ -31,6 +31,7 @@ from core.sessions import (
     WorkingProjectChoice,
     new_session_id,
 )
+from core.subagents.links import descendants
 from core.tools.command_manager import (
     COMMAND_RECENT_LINES,
     CommandManager,
@@ -119,6 +120,10 @@ class _ChatHistoryRead:
     compaction_policy: JsonObject | None
     reflection_runs: list[JsonObject] | None
     context_window: int | None = None
+    # The Sessions of the Session's Sub-Agents at every depth, each with the id
+    # of the Session's own Sub-Agent above it; read for every page but a
+    # ``before`` one.
+    subagent_sessions: dict[SessionAddress, str] | None = None
 
 
 def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
@@ -178,8 +183,10 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     ``after`` read with nothing appended returns an empty page without
     ``session_usage``, ``context_usage`` or ``compaction_policy``: the
     caller's values stay current; its background fields report the live
-    commands only. A ``before`` page carries neither background field nor the
-    Compaction Policy.
+    commands only. Every read but a ``before`` one lists in
+    ``subagent_background_commands`` the background commands the Session's
+    Sub-Agents still run, at every depth (complete each time). A ``before``
+    page carries neither a background field nor the Compaction Policy.
     """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
     _reject_unsupported(params, supported_fields, "chat.history")
@@ -296,6 +303,9 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         )
         response["background_command_statuses"] = statuses
         response["background_commands_still_running"] = still_running
+        response["subagent_background_commands"] = _subagent_background_commands(
+            state, read.subagent_sessions or {}
+        )
     if reflection_runs is not None:
         response["reflection_runs"] = reflection_runs
     if read.compaction_policy is not None:
@@ -326,8 +336,9 @@ def _read_chat_history(
         background_note_marker=COMMAND_STATUS_NOTE_MARKER if before is None else None,
         skip_unchanged=True,
     )
+    subagent_sessions = _subagent_sessions(state, address) if before is None else None
     if history.unchanged:
-        return _ChatHistoryRead(history, None, None)
+        return _ChatHistoryRead(history, None, None, subagent_sessions=subagent_sessions)
     agent = _session_agent(state, address) if before is None else None
     return _ChatHistoryRead(
         history,
@@ -336,7 +347,20 @@ def _read_chat_history(
         _resolve_context_window(state, str(getattr(agent, "model", "") or ""))
         if agent is not None
         else None,
+        subagent_sessions,
     )
+
+
+def _subagent_sessions(state: Any, address: SessionAddress) -> dict[SessionAddress, str]:
+    """The Sessions of *address*'s Sub-Agents at every depth, each with the id of
+    *address*'s own Sub-Agent above it. Blocking: reads the Sub-Agent links."""
+    above: dict[SessionAddress, str] = {}
+    # Breadth first: a Parent's Session is known before its children's.
+    for link in descendants(state.runtime.chat_sessions, address):
+        direct = link.id if link.parent == address else above.get(link.parent)
+        if direct is not None:
+            above[link.session] = direct
+    return above
 
 
 def _session_agent(state: Any, address: SessionAddress) -> Any | None:
@@ -473,6 +497,30 @@ def _current_command_statuses(
     for report in live:
         current[report.command_id] = report.status
     return current, [report.command_id for report in live if report.still_running]
+
+
+def _subagent_background_commands(
+    state: Any, sessions: dict[SessionAddress, str]
+) -> list[JsonObject]:
+    """The background commands that still run in the Sessions of *sessions*.
+
+    Running ones, and ended ones whose processes still run: what the Session's
+    Stop all would stop below it. Each names the Session's own Sub-Agent
+    above the Session that runs it, so the caller can show it on that
+    Sub-Agent's row and follow its live status by its Session.
+    """
+    if not sessions:
+        return []
+    return [
+        {
+            "subagent_id": sessions[report.owner],
+            "session_id": report.owner.session_id,
+            "command_id": report.command_id,
+            "label": report.label,
+        }
+        for report in state.runtime.command_manager.commands(sessions.keys())
+        if not report.finished
+    ]
 
 
 def _project_chat_history(

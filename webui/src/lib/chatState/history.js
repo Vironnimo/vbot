@@ -120,7 +120,25 @@ export function loadHistory(sessionState, messages, options = {}) {
     incremental ? sessionState.backgroundCommandStatuses : {},
     options,
   );
+  // Complete in every response that carries it.
+  if (Array.isArray(options.subAgentBackgroundCommands)) {
+    sessionState.subAgentBackgroundCommands =
+      options.subAgentBackgroundCommands.flatMap(subAgentBackgroundCommand);
+  }
   return sessionState;
+}
+
+function subAgentBackgroundCommand(entry) {
+  const text = (value) => (typeof value === 'string' ? value.trim() : '');
+  const command = {
+    subAgentId: text(entry?.subagent_id),
+    sessionId: text(entry?.session_id),
+    commandId: text(entry?.command_id),
+    label: text(entry?.label),
+  };
+  return command.subAgentId && command.sessionId && command.commandId
+    ? [command]
+    : [];
 }
 
 // An incremental response reports the statuses of its appended records and

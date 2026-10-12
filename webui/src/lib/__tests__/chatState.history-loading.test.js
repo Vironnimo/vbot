@@ -70,7 +70,7 @@ describe('History reads', () => {
     });
   });
 
-  it('folds background status deltas, the newest still-running list and Run records across incremental pages', async () => {
+  it('folds background status deltas, the newest still-running lists and Run records across incremental pages', async () => {
     const loadChatHistory = vi
       .fn()
       .mockResolvedValueOnce({
@@ -84,6 +84,9 @@ describe('History reads', () => {
           cmd_two: 'running',
         },
         background_commands_still_running: [],
+        subagent_background_commands: [
+          subAgentCommand('cmd_child', 'session-child'),
+        ],
       })
       .mockResolvedValueOnce({
         messages: [],
@@ -94,6 +97,9 @@ describe('History reads', () => {
         context_usage: { used_tokens: 7 },
         background_command_statuses: { cmd_one: 'completed' },
         background_commands_still_running: ['cmd_one'],
+        subagent_background_commands: [
+          subAgentCommand('cmd_child', 'session-child'),
+        ],
         runs: [{ run_id: 'run-one', status: 'completed' }],
       })
       .mockResolvedValueOnce({
@@ -104,6 +110,10 @@ describe('History reads', () => {
         context_usage: null,
         background_command_statuses: { cmd_two: 'failed' },
         background_commands_still_running: [],
+        subagent_background_commands: [
+          subAgentCommand('cmd_grandchild', 'session-grandchild'),
+          { subagent_id: 'sub_child', command_id: 'cmd_without_session' },
+        ],
         runs: [{ run_id: 'run-two', status: 'failed' }],
       });
     const { chatState, controller } = setupController({
@@ -119,6 +129,15 @@ describe('History reads', () => {
       cmd_one: { status: 'completed', stillRunning: false },
       cmd_two: { status: 'failed', stillRunning: false },
     });
+    // What the Sub-Agents below still run is listed in full each time.
+    expect(source.subAgentBackgroundCommands).toEqual([
+      {
+        subAgentId: 'sub_child',
+        sessionId: 'session-grandchild',
+        commandId: 'cmd_grandchild',
+        label: 'npm run dev',
+      },
+    ]);
     expect(Object.keys(source.historyRuns).sort()).toEqual([
       'run-one',
       'run-two',
@@ -1125,3 +1144,14 @@ describe('Run recovery', () => {
     },
   );
 });
+
+// A command a Sub-Agent below the Session still runs, as `chat.history` lists
+// it under the Session's own Sub-Agent above it.
+function subAgentCommand(commandId, sessionId) {
+  return {
+    subagent_id: 'sub_child',
+    session_id: sessionId,
+    command_id: commandId,
+    label: 'npm run dev',
+  };
+}

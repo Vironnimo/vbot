@@ -83,6 +83,7 @@ function historyLoadOptions(history) {
     compactionPolicy: history?.compaction_policy,
     backgroundCommandStatuses: history?.background_command_statuses,
     backgroundCommandsStillRunning: history?.background_commands_still_running,
+    subAgentBackgroundCommands: history?.subagent_background_commands,
   };
 }
 
@@ -183,6 +184,7 @@ export function createChatController({
     loadSubAgentWork,
     reconcileSubAgentRows,
     stopCommand,
+    stopSubAgentWork,
   } = childTasks;
   const activity = createChatActivity({
     chatState,
@@ -377,6 +379,9 @@ export function createChatController({
           background_commands_still_running:
             page.background_commands_still_running ??
             result.background_commands_still_running,
+          subagent_background_commands:
+            page.subagent_background_commands ??
+            result.subagent_background_commands,
         };
       after = page.next_after;
     } while (result?.has_newer);
@@ -1184,6 +1189,7 @@ export function createChatController({
     sendToNewSession,
     stopAll,
     stopCommand,
+    stopSubAgentWork,
     syncAgentActivity,
     syncSessionQueue,
     undoReflection: reflections.undo,

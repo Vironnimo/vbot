@@ -30,6 +30,9 @@
     // last read; a row asks for it while the user looks at it.
     subAgentWork = {},
     onSubAgentWorkWanted = () => {},
+    // The background commands each Sub-Agent (or one below it) still runs
+    // after its Run, by Sub-Agent id (`runningSubAgentCommands`).
+    subAgentCommands = {},
     backgroundCommandStatuses = {},
     commandStatuses = {},
     reflectionTasks = [],
@@ -47,6 +50,8 @@
     onLoadReflectionChanges = () => {},
     onUndoReflection = async () => {},
     onCancelSubAgent = () => {},
+    // Stops everything a Sub-Agent whose Run ended still runs.
+    onStopSubAgentWork = () => {},
     onStopBackgroundCommand = () => {},
     // Reads a background command's newest output for its output view
     // (`(commandId) => Promise`, see CommandOutput.svelte); null offers no
@@ -69,6 +74,7 @@
       subAgentStatuses,
       backgroundCommandStatuses,
       commandStatuses,
+      subAgentCommands,
       nowMs,
     ),
   );
@@ -205,10 +211,10 @@
         : task.kind === 'subagent'
           ? subAgentStatusDetails(
               task.tool,
-              task.dotStatus,
+              task.runDotStatus,
               subAgentStatuses,
               Date.now(),
-              subAgentWork[task.subAgentId],
+              remainingWork(task),
             )
           : reflectionStatusDetails(task.row);
     // A Sub-Agent's title shows on one line; its card carries it in full.
@@ -216,7 +222,22 @@
       task.kind === 'subagent' && task.description
         ? task.description
         : details.text;
-    return { ...details, text, placement: 'left' };
+    const title = task.workRunning
+      ? t('chat.activity.status.commandsRunning')
+      : details.title;
+    return { ...details, title, text, placement: 'left' };
+  };
+
+  // What a Sub-Agent still runs besides its Run: the commands below it that
+  // still run, and what its last inspection found.
+  const remainingWork = (task) => {
+    const commandIds = new Set(task.runningCommands.map((work) => work.id));
+    return [
+      ...task.runningCommands,
+      ...(subAgentWork[task.subAgentId] ?? []).filter(
+        (work) => work.kind !== 'command' || !commandIds.has(work.id),
+      ),
+    ];
   };
 
   // The row's card; `_work` only marks which reading of the Sub-Agent's work
@@ -281,13 +302,18 @@
     }
     return t('chat.activity.taskAria', {
       agent: task.agentId,
-      status: statusLabel(task.dotStatus),
+      status: task.workRunning
+        ? t('chat.activity.status.commandsRunning')
+        : statusLabel(task.dotStatus),
     });
   };
 
   const cancelTaskLabel = (task) => {
     if (task.kind === 'command') {
       return t('chat.activity.cancelCommandAria', { command: task.command });
+    }
+    if (task.workRunning) {
+      return t('chat.activity.stopSubAgentWorkAria', { agent: task.agentId });
     }
     return t('chat.activity.cancelSubAgentAria', { agent: task.agentId });
   };
@@ -301,6 +327,8 @@
     try {
       if (task.kind === 'command') {
         await onStopBackgroundCommand({ commandId: task.commandId });
+      } else if (task.workRunning) {
+        await onStopSubAgentWork({ tool: task.tool });
       } else {
         await onCancelSubAgent({ tool: task.tool });
       }

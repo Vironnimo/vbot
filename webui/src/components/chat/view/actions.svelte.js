@@ -363,6 +363,14 @@ export function createChatViewActions(context) {
     });
   };
 
+  const handleStopSubAgentWork = async ({ tool } = {}) => {
+    await context.chatController.stopSubAgentWork({
+      tool,
+      sessionState: context.target.activeSessionState,
+      projectId: context.target.displayedSessionProjectId(),
+    });
+  };
+
   const handleSubAgentWorkWanted = ({ tool } = {}) => {
     void context.chatController.loadSubAgentWork({
       tool,
@@ -528,6 +536,9 @@ export function createChatViewActions(context) {
     },
     get handleCancelSubAgent() {
       return handleCancelSubAgent;
+    },
+    get handleStopSubAgentWork() {
+      return handleStopSubAgentWork;
     },
     get handleSubAgentWorkWanted() {
       return handleSubAgentWorkWanted;

@@ -29,6 +29,7 @@
   import {
     backgroundTasks,
     reflectionTaskRows,
+    runningSubAgentCommands,
   } from '../lib/chatTimelinePresentation.js';
   import { onMount, untrack } from 'svelte';
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
@@ -371,16 +372,27 @@
   let displayedCommandStatuses = $derived(
     chatState.commandStatuses[target.activeSessionState?.sessionId] ?? {},
   );
+  // The background commands the displayed Session's Sub-Agents (at every
+  // depth) still run, by the id of its own Sub-Agent above them; each follows
+  // the live state of the Session that runs it.
+  let displayedSubAgentCommands = $derived(
+    runningSubAgentCommands(
+      target.activeSessionState?.subAgentBackgroundCommands,
+      chatState.commandStatuses,
+    ),
+  );
   // Known work that outlives the Run: a running Sub-Agent or background
-  // command the loaded rows started, or processes such a command left
-  // running. It keeps Stop all offered once the Run ended.
+  // command the loaded rows started, processes such a command left running,
+  // or a command a Sub-Agent below still runs. It keeps Stop all offered once
+  // the Run ended.
   let backgroundWorkRunning = $derived(
-    backgroundTasks(
-      activeTimelineItems,
-      chatState.subAgentStatuses,
-      target.activeSessionState?.backgroundCommandStatuses,
-      displayedCommandStatuses,
-    ).some((task) => task.dotStatus === 'running'),
+    Object.keys(displayedSubAgentCommands).length > 0 ||
+      backgroundTasks(
+        activeTimelineItems,
+        chatState.subAgentStatuses,
+        target.activeSessionState?.backgroundCommandStatuses,
+        displayedCommandStatuses,
+      ).some((task) => task.dotStatus === 'running'),
   );
   // Every Agent the picker offers: Identity Agents, then each Project Team.
   let pickerAgentAddresses = $derived([
@@ -1173,6 +1185,7 @@
         subAgentStatuses={chatState.subAgentStatuses}
         subAgentWork={chatState.subAgentWork}
         onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
+        subAgentCommands={displayedSubAgentCommands}
         backgroundCommandStatuses={target.activeSessionState
           ?.backgroundCommandStatuses}
         commandStatuses={displayedCommandStatuses}
@@ -1192,6 +1205,7 @@
         onUndoReflection={(row) =>
           chatController.undoReflection(target.activeSessionState, row.runId)}
         onCancelSubAgent={actions.handleCancelSubAgent}
+        onStopSubAgentWork={actions.handleStopSubAgentWork}
         onStopBackgroundCommand={actions.handleStopBackgroundCommand}
         onLoadCommandOutput={actions.loadCommandOutput}
       />

@@ -260,6 +260,27 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
+  // Stops everything a Sub-Agent still runs once its Run ended: the
+  // background commands, terminals and Sub-Agents below it (Stop all of its
+  // Session). The stopped commands' ends arrive as live statuses.
+  async function stopSubAgentWork({ tool, sessionState, projectId = '' } = {}) {
+    const target = tool ? subAgentNavigationTarget(tool) : null;
+    if (!target || !sessionState) {
+      return false;
+    }
+    sessionState.actionError = '';
+    try {
+      await operations.stopAll(
+        qualifyAgentAddress(target.agentId, projectId),
+        target.sessionId,
+      );
+      return true;
+    } catch (error) {
+      sessionState.actionError = `${t('chat.stopAllError')} ${errorMessage(error)}`;
+      return false;
+    }
+  }
+
   function inspectedWork(inspection) {
     return (Array.isArray(inspection?.running) ? inspection.running : [])
       .filter(
@@ -484,6 +505,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     loadSubAgentWork,
     reconcileSubAgentRows,
     stopCommand,
+    stopSubAgentWork,
     dispose() {
       subAgentWorkInflightIds.clear();
       subAgentStatusInflightKeys.clear();

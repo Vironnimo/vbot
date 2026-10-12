@@ -248,6 +248,27 @@ describe('Sub-Agent work', () => {
     });
   });
 
+  it('stops everything a Sub-Agent still runs through Stop all of its Session', async () => {
+    const stopAll = vi.fn().mockResolvedValue({ ok: true, stopped: 2 });
+    const { chatState, controller } = setupController({
+      operationOverrides: { stopAll },
+    });
+    const parent = ensureSessionState(chatState, 'alpha', 'parent');
+    const stop = () =>
+      controller.stopSubAgentWork({
+        tool: reloadedRow('sub-work'),
+        sessionState: parent,
+        projectId: 'project-one',
+      });
+
+    await expect(stop()).resolves.toBe(true);
+    expect(stopAll).toHaveBeenCalledWith('worker@project-one', 'child-session');
+
+    stopAll.mockRejectedValueOnce(new ApiClientError('internal', 'Offline'));
+    await expect(stop()).resolves.toBe(false);
+    expect(parent.actionError).toContain('Offline');
+  });
+
   it('leaves a row without a Sub-Agent id uninspected', async () => {
     const inspectSubAgentWork = vi.fn();
     const { chatState, controller } = setupController({
