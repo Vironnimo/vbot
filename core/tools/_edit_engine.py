@@ -29,6 +29,7 @@ changed lines take the file's line endings, indentation and typography.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from itertools import pairwise
@@ -997,7 +998,11 @@ def _match(
         if not positions:
             return None
         if len(positions) > 1 and not first:
-            return AmbiguousFuzzyMatch(len(positions), [line for _, line in positions])
+            return AmbiguousFuzzyMatch(
+                len(positions),
+                [line for _, line in positions],
+                tuple((start, start) for start, _ in positions),
+            )
         start, line = positions[0]
         return FuzzyReplacement(
             content[:start] + new + content[start:],
@@ -1349,13 +1354,96 @@ def _line_list(numbers: list[int]) -> str:
 def _ambiguity(
     content: str, match: AmbiguousFuzzyMatch, offset: int = 0
 ) -> tuple[JsonObject, JsonObject]:
-    """Return excerpts around each occurrence, and the values an error message names."""
-    shift = len(_BREAK.findall(content[:offset]))
-    numbers = [number + shift for number in dict.fromkeys(match.line_numbers)]
+    """Return excerpts around each occurrence, and the values an error message names.
+
+    ``match`` was found in ``content[offset:]``. An occurrence on a line of at
+    most 240 characters shows that line and its neighbors; one on a longer line
+    shows a window of that line around it, numbered ``line:character``, so
+    occurrences far apart on one line each show their own text.
+    """
     lines = split_text_lines(content)
-    candidates = [
-        file_excerpt(lines, max(1, number - 1), min(len(lines), number + 1))
-        for number in numbers[:3]
-    ]
+    if match.spans:
+        starts = [0, *(found.end() for found in _BREAK.finditer(content))]
+        places = []
+        for start, _ in match.spans:
+            number = bisect_right(starts, offset + start)
+            places.append((number, offset + start - starts[number - 1] + 1))
+    else:
+        shift = len(_BREAK.findall(content[:offset]))
+        places = [(number + shift, 0) for number in match.line_numbers]
+    candidates: list[JsonObject] = []
+    # The parts of each line an excerpt shows, as [start, end) character offsets.
+    shown: dict[int, list[tuple[int, int]]] = {}
+    for number, character in places:
+        if len(candidates) == 3:
+            break
+        line = lines[number - 1] if number <= len(lines) else ""
+        whole = len(line) <= 240 or not character
+        covered = shown.get(number, [])
+        if (covered and whole) or any(start < character <= end for start, end in covered):
+            continue
+        if whole:
+            shown[number] = [(0, len(line))]
+            candidates.append(file_excerpt(lines, max(1, number - 1), min(len(lines), number + 1)))
+            continue
+        start, end = _window(line, character - 1, max((end for _, end in covered), default=0))
+        shown.setdefault(number, []).append((start, end))
+        candidates.append(
+            {
+                "line": number,
+                "character": start + 1,
+                "text": line[start:end],
+                "truncated": end < len(line),
+                "continuations": (
+                    [{"offset": f"{number}:{end + 1}", "limit": 1}] if end < len(line) else []
+                ),
+            }
+        )
+    long = {number for number, _ in places if number <= len(lines) and len(lines[number - 1]) > 240}
     details: JsonObject = {"occurrences": match.occurrences, "candidates": candidates}
-    return details, {"occurrences": match.occurrences, "lines": _line_list(numbers)}
+    return details, {"occurrences": match.occurrences, "lines": _place_list(places, long)}
+
+
+def _window(line: str, index: int, previous: int) -> tuple[int, int]:
+    """Return the 240-character part of ``line`` that shows the text at ``index``.
+
+    It starts 80 characters before ``index``, or at the line's start for an
+    index in its first 160 characters, but not before ``previous``, the end of
+    a part of this line shown already.
+    """
+    start = 0 if index < 160 else index - 80
+    start = max(start, previous)
+    end = min(len(line), start + 240)
+    return max(previous, end - 240), end
+
+
+def _place_list(places: list[tuple[int, int]], long: set[int]) -> str:
+    """Name the lines of ``places``, as (line, character) pairs, in a message.
+
+    A line holding several places, or longer than an excerpt shows, also names
+    the characters where they start, such as ``line 1, characters 57 and 3021``.
+    """
+    by_line: dict[int, list[int]] = {}
+    for number, character in places:
+        by_line.setdefault(number, []).append(character)
+    named = {
+        number
+        for number, characters in by_line.items()
+        if all(characters) and (len(characters) > 1 or number in long)
+    }
+    if not named:
+        return _line_list(list(by_line))
+    parts = []
+    for number, characters in list(by_line.items())[:6]:
+        if number not in named:
+            parts.append(f"line {number}")
+            continue
+        listed = [str(character) for character in characters[:6]]
+        if len(characters) > len(listed):
+            text = ", ".join(listed) + ", ..."
+        else:
+            text = " and ".join([", ".join(listed[:-1]), listed[-1]] if len(listed) > 1 else listed)
+        parts.append(f"line {number}, character{'s' if len(characters) > 1 else ''} {text}")
+    if len(by_line) > len(parts):
+        parts.append("...")
+    return "; ".join(parts)

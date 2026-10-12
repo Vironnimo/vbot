@@ -345,6 +345,17 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   whole line. Only a copy that starts with a line break, or a patch line,
   claims to start a line; an `old_string`'s first line can start inside one. Ambiguity reports the winning match's actual locations
   (including section offsets) under `Where it occurs:`, not guessed alternatives.
+  `AmbiguousFuzzyMatch.spans` carries each match's offsets. An occurrence on a
+  line of at most 240 characters shows that line and its neighbors; one on a
+  longer line shows a 240-character window of that line starting 80 characters
+  before it (at the line start within its first 160), numbered
+  `line:character|` as `read` continues a line, as its own excerpt; windows on
+  one line never overlap, and a continuation starts after the text they show
+  without a gap. A line holding several occurrences, or a long line, also names
+  their characters in the message (`line 1, characters 82 and 3021; line 4`,
+  `_place_list`). Evidence: 4 ambiguity reports in 3 `edit` calls named 2
+  places as `(line 1)` of a one-line JSON file and showed only its first 240
+  characters, neither place (Swarm run 2026-10-12). At most three excerpts show.
   These excerpts never authorize a write.
 - A patch line that occurs only inside longer file lines (a fragment copied as a
   line) is named before similarity candidates when it sits in at most 3 lines:

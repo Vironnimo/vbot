@@ -133,10 +133,15 @@ class FuzzyReplacement:
 
 @dataclass(frozen=True)
 class AmbiguousFuzzyMatch:
-    """The winning strategy matched more than once without ``replace_all``."""
+    """The winning strategy matched more than once without ``replace_all``.
+
+    ``line_numbers`` holds the 1-based line each match starts on and ``spans``
+    its (start, end) offsets in the searched text, both in text order.
+    """
 
     occurrences: int
     line_numbers: list[int]
+    spans: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -222,7 +227,9 @@ def replace_fuzzy(
         if len(matches) > 1 and not replace_all and not first:
             line_starts = _line_starts(content)
             return AmbiguousFuzzyMatch(
-                len(matches), [bisect_right(line_starts, start) for start, _ in matches]
+                len(matches),
+                [bisect_right(line_starts, start) for start, _ in matches],
+                tuple(matches),
             )
 
         selected = _leftmost_non_overlapping(matches) if replace_all else matches[:1]
@@ -254,7 +261,9 @@ def replace_fuzzy(
     if len(matches) > 1 and not replace_all:
         line_starts = _line_starts(content)
         return AmbiguousFuzzyMatch(
-            len(matches), [bisect_right(line_starts, start) for start, _ in matches]
+            len(matches),
+            [bisect_right(line_starts, start) for start, _ in matches],
+            tuple(matches),
         )
     if not matches:
         return None

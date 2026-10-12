@@ -1240,7 +1240,9 @@ def _result(
     if len(unique) > 1:
         unique.sort(key=lambda item: item.start)
         return AmbiguousFuzzyMatch(
-            len(unique), [bisect_right(file.starts, item.start) for item in unique]
+            len(unique),
+            [bisect_right(file.starts, item.start) for item in unique],
+            tuple((item.start, item.end) for item in unique),
         )
     item = unique[0]
     if item.text is None:

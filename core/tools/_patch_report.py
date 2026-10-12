@@ -61,7 +61,7 @@ class _FileReport:
     syntax_warning: str | None = None
 
 
-def _gutter(number: int, text: str) -> str:
+def _gutter(number: int | str, text: str) -> str:
     return f"{number}{LINE_NUMBER_GUTTER_SEPARATOR} {text}"
 
 
@@ -212,27 +212,44 @@ def _file_text(report: _FileReport, *, partial: bool) -> str:
 def _excerpts(candidates: list[JsonObject], path: str | None = None) -> list[str]:
     """Render file excerpts with line numbers; touching or overlapping ones merge.
 
+    A candidate with a ``character`` past 1 is a window inside one long line:
+    it stands alone, numbered ``line:character`` as ``read`` continues a line.
     Read continuations cover only text that no excerpt shows.
     """
-    groups: list[dict[int, str]] = []
+    # Each group: the character its first line starts at, and its lines.
+    groups: list[tuple[int, dict[int, str]]] = []
     complete: set[int] = set()
-    for candidate in sorted(candidates, key=lambda item: int(item["line"])):
+    ordered = sorted(
+        candidates, key=lambda item: (int(item["line"]), int(item.get("character", 1)))
+    )
+    for candidate in ordered:
         start = int(candidate["line"])
         lines = dict(enumerate(candidate["text"].split("\n"), start))
+        if int(candidate.get("character", 1)) > 1:
+            groups.append((int(candidate["character"]), lines))
+            continue
         cut = {line for line, character in _continuations(candidate) if character > 1}
         complete.update(set(lines) - cut)
-        if groups and start <= max(groups[-1]) + 1:
+        if groups and groups[-1][0] == 1 and start <= max(groups[-1][1]) + 1:
             # Every excerpt line starts at its line's start; the longest shows the most.
             for number, text in lines.items():
-                groups[-1][number] = max(groups[-1].get(number, ""), text, key=len)
+                groups[-1][1][number] = max(groups[-1][1].get(number, ""), text, key=len)
         else:
-            groups.append(lines)
+            groups.append((1, lines))
     rendered: list[str] = []
-    for index, group in enumerate(groups):
+    for index, (character, group) in enumerate(groups):
         if index:
             rendered.append("--")
-        rendered.extend(_gutter(number, group[number]) for number in sorted(group))
-    shown = {number: len(text) for group in groups for number, text in group.items()}
+        for number in sorted(group):
+            label = f"{number}:{character}" if character > 1 and number == min(group) else number
+            rendered.append(_gutter(label, group[number]))
+    # How much of each line the excerpts show from its start without a gap.
+    shown: dict[int, int] = {}
+    for character, group in sorted(groups, key=lambda item: item[0]):
+        for number, text in group.items():
+            first = character if number == min(group) else 1
+            if first <= shown.get(number, 0) + 1:
+                shown[number] = max(shown.get(number, 0), first - 1 + len(text))
     windows = []
     for candidate in candidates:
         for (line, character), item in zip(
