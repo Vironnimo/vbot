@@ -174,6 +174,37 @@ _BASH_SYNTAX = (
             ["such as -y or --yes, or pipe it into the program within the command."],
             id="prompt_library_closed",
         ),
+        # A Python failure is its last traceback's exception, not data printed before it.
+        pytest.param(
+            "python probe.py",
+            1,
+            "dir path -> [Errno 13] Permission denied: 'C:\\w\\d'\n"
+            "Traceback (most recent call last):\n"
+            '  File "probe.py", line 34, in <module>\n'
+            "    print('Permission denied')\n"
+            "TypeError: expected str, bytes or os.PathLike object, not State",
+            None,
+            id="data_before_the_traceback_is_not_the_failure",
+        ),
+        pytest.param(
+            "python write.py",
+            1,
+            "Traceback (most recent call last):\n"
+            '  File "write.py", line 3, in <module>\n'
+            "PermissionError: [Errno 13] Permission denied: 'out.db'",
+            ["Permission denied:"],
+            id="python_failure_is_its_exception",
+        ),
+        pytest.param(
+            "python prepare.py; git branch feature",
+            1,
+            "Traceback (most recent call last):\n"
+            '  File "prepare.py", line 1, in <module>\n'
+            "ValueError: no input\n"
+            "fatal: a branch named 'feature' already exists",
+            ["'feature' already exists"],
+            id="output_after_the_traceback_counts",
+        ),
         pytest.param(
             "Run the unit tests",
             127,

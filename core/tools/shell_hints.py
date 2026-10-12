@@ -15,6 +15,9 @@ Design rules (keep them when adding a pattern):
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
   scanned: hints key on error headers, which open the output or, after long
   progress output, end it.
+* A Python failure is judged from the last traceback's exception line on
+  (``_Failure.error``): what a program printed before it, such as a probe's
+  data, is not its failure.
 * The command is not shortened, so a pattern over it runs in linear time: one
   whose failed attempts each scan on to the end of the command is quadratic and
   can stall the Event Loop.
@@ -55,9 +58,37 @@ class _Failure:
     output: str
     workdir: Path | None
     offers: Callable[[str], bool]
+    # Where the output reports the failure: from the last Python traceback's
+    # exception line on, else all of it.
+    error_start: int = 0
+
+    @property
+    def error(self) -> str:
+        """The output from where it reports the failure on."""
+        return self.output[self.error_start :]
 
     def edit_tool(self) -> str | None:
         return next((name for name in _EDIT_TOOLS if self.offers(name)), None)
+
+
+# A Python traceback header at the start of a line, and the line that ends the
+# traceback: the first one after it that is not indented, the exception.
+_TRACEBACK_HEADER = re.compile(r"^Traceback \(most recent call last\):", re.M)
+_UNINDENTED_LINE = re.compile(r"^\S", re.M)
+
+
+def _error_start(output: str) -> int:
+    """Where *output* reports the failure: the last Python traceback's exception line.
+
+    A probe printed "[Errno 13] Permission denied" as data and then failed with a
+    TypeError; the permission hint answered the data. Without a complete
+    traceback, all of the output counts.
+    """
+    headers = [header.end() for header in _TRACEBACK_HEADER.finditer(output)]
+    if not headers:
+        return 0
+    exception = _UNINDENTED_LINE.search(output, headers[-1])
+    return exception.start() if exception is not None else 0
 
 
 # Exit-code-only hints for codes POSIX shells give a fixed meaning; on Windows
@@ -533,7 +564,7 @@ _TRACEBACK_FILE = re.compile(r'^[ \t]*File "([^"\n]*)"', re.M)
 
 
 def _hint_module_not_found(failure: _Failure) -> str | None:
-    match = _MISSING_MODULE.search(failure.output)
+    match = _MISSING_MODULE.search(failure.output, failure.error_start)
     if not match:
         return None
     name = match.group(1)
@@ -702,7 +733,7 @@ _END_OF_INPUT = re.compile(
 
 
 def _hint_end_of_input(failure: _Failure) -> str | None:
-    if not _END_OF_INPUT.search(failure.output):
+    if not _END_OF_INPUT.search(failure.error):
         return None
     hint = (
         "The program asked for input, and commands get none. Pass the answer as an option or "
@@ -714,7 +745,7 @@ def _hint_end_of_input(failure: _Failure) -> str | None:
 
 
 def _hint_already_exists(failure: _Failure) -> str | None:
-    match = re.search(r"(?:fatal|error):.*?'([^']+)' already exists", failure.output)
+    match = re.search(r"(?:fatal|error):.*?'([^']+)' already exists", failure.error)
     if not match:
         return None
     return (
@@ -734,7 +765,7 @@ _PORT_IN_USE = re.compile(
 
 
 def _hint_port_in_use(failure: _Failure) -> str | None:
-    match = _PORT_IN_USE.search(failure.output)
+    match = _PORT_IN_USE.search(failure.error)
     if not match:
         return None
     port = next((group for group in match.groups() if group), "")
@@ -751,7 +782,7 @@ _ACCESS_DENIED = re.compile(r"Access (?:to the path .*? )?is denied")
 
 
 def _hint_permission_denied(failure: _Failure) -> str | None:
-    output = failure.output
+    output = failure.error
     if (
         "Permission denied" not in output
         and "EACCES" not in output
@@ -772,7 +803,8 @@ def _hint_permission_denied(failure: _Failure) -> str | None:
 
 
 def _hint_rate_limit(failure: _Failure) -> str | None:
-    if "API rate limit" not in failure.output and "was submitted too quickly" not in failure.output:
+    error = failure.error
+    if "API rate limit" not in error and "was submitted too quickly" not in error:
         return None
     return (
         "The API rate limit is reached, so an immediate retry fails the same way. Continue "
@@ -839,7 +871,7 @@ def annotate_failure(
     if len(output) > 2 * _SCAN_CHARS:
         window = f"{output[:_SCAN_CHARS]}\n{output[-_SCAN_CHARS:]}"
     if window:
-        failure = _Failure(command or "", window, workdir, offers)
+        failure = _Failure(command or "", window, workdir, offers, _error_start(window))
         for hint_for in _OUTPUT_HINTS:
             try:
                 hint = hint_for(failure)
