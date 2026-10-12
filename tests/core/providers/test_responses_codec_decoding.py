@@ -407,6 +407,7 @@ _FINAL_MESSAGE = {
     "content": [{"type": "output_text", "text": "Done"}],
 }
 _READ_ITEM = _function_call("call", "read", "", id="item")
+_DOCS_SEARCH = _function_call("call_1", "search", '{"q":"docs"}', id="fc_1")
 _INCOMPLETE_WRITE = _function_call("call_incomplete", "write", '{"path":"partial')
 
 
@@ -563,6 +564,21 @@ def _arguments(delta: str, **fields: Any) -> str:
                 _FINISH_TOOL_CALLS,
             ],
             id="only-the-missing-argument-suffix-is-backfilled",
+        ),
+        pytest.param(
+            [
+                _added(_function_call("call_1", "search", '{"q"', id="fc_1"), output_index=0),
+                _arguments(':"docs"}', item_id="fc_1"),
+                sse_event("response.output_item.done", {"output_index": 0, "item": _DOCS_SEARCH}),
+                _completed({"output": [_DOCS_SEARCH]}),
+            ],
+            [
+                _tool_delta("call_1", name="search", arguments='{"q"'),
+                _tool_delta("call_1", arguments=':"docs"}'),
+                {"type": "reasoning_meta", "reasoning_meta": {"response_output": [_DOCS_SEARCH]}},
+                _FINISH_TOOL_CALLS,
+            ],
+            id="first-delta-continues-a-partial-item-snapshot",
         ),
         pytest.param(
             [_arguments('{"value":"ab', call_id="call_1"), _arguments('ab"}', call_id="call_1")],
@@ -767,22 +783,51 @@ def test_stream_tool_call_accumulates_into_a_valid_chat_tool_call() -> None:
 
 
 @pytest.mark.parametrize(
-    "fragments",
+    ("fragments", "respelled", "call_arguments"),
     [
-        pytest.param(['{"value":', '{"value":', "1}}"], id="repeated-fragment"),
-        pytest.param(['{"value":', '{"value":1}}'], id="prefix-overlapping-fragment"),
+        pytest.param(
+            ['{"value":', '{"value":', "1}}"],
+            '{"value": {"value": 1}}',
+            [{"value": {"value": 1}}],
+            id="repeated-fragment",
+        ),
+        pytest.param(
+            ['{"value":', '{"value":1}}'],
+            '{"value": {"value": 1}}',
+            [{"value": {"value": 1}}],
+            id="prefix-overlapping-fragment",
+        ),
+        # Two identical sibling values the Model streamed stay two calls; only
+        # a snapshot restating them must not add a third.
+        pytest.param(
+            ['{"value":"\\u2014"}', '{"value":"\\u2014"}'],
+            '{"value": "—"}\n{"value": "—"}',
+            [{"value": "—"}, {"value": "—"}],
+            id="sibling-values-in-one-item",
+        ),
     ],
 )
-@pytest.mark.parametrize("terminal_snapshot", [False, True], ids=["no-snapshot", "snapshot"])
-def test_argument_deltas_preserve_repeated_or_prefix_overlapping_fragments(
-    fragments: list[str], terminal_snapshot: bool
+@pytest.mark.parametrize("snapshot", ["none", "identical", "respelled"])
+def test_argument_deltas_are_kept_verbatim_and_snapshots_never_append(
+    fragments: list[str], respelled: str, call_arguments: list[Any], snapshot: str
 ) -> None:
     item = _function_call("call_1", "write", "", id="fc_1")
     arguments = "".join(fragments)
+    snapshot_arguments = {"none": arguments, "identical": arguments, "respelled": respelled}[
+        snapshot
+    ]
+    # A complete snapshot arrives twice: as the finished item and in the
+    # terminal output. Spelled differently from the deltas (whitespace,
+    # escaping), it restates the same arguments.
+    done_item = {**item, "arguments": snapshot_arguments}
+    snapshot_events = (
+        [] if snapshot == "none" else [sse_event("response.output_item.done", {"item": done_item})]
+    )
     lines = [
         _added(item, output_index=0),
         *(_arguments(part, item_id="fc_1") for part in fragments),
-        _completed({"output": [{**item, "arguments": arguments}] if terminal_snapshot else []}),
+        *snapshot_events,
+        _completed({"output": [] if snapshot == "none" else [done_item]}),
     ]
     state = ResponsesStreamState()
 
@@ -793,16 +838,18 @@ def test_argument_deltas_preserve_repeated_or_prefix_overlapping_fragments(
         == arguments
     )
     result = state.normalized_response()
-    assert result["tool_calls"] == [
-        {"id": "call_1", "name": "write", "arguments": {"value": {"value": 1}}}
-    ]
-    assert result["reasoning_meta"]["response_output"][0]["arguments"] == arguments
-    # Chat appends the true deltas verbatim, so the streamed Call matches the
-    # completed one even after a terminal snapshot.
+    assert result["reasoning_meta"]["response_output"][0]["arguments"] == snapshot_arguments
+    # Chat appends the true deltas verbatim, so the streamed Calls match the
+    # completed ones even after terminal snapshots.
     accumulator = StreamingAccumulator()
     for delta in deltas:
         accumulator.add_delta(delta)
-    assert accumulator.finalize_assistant_fields().tool_calls == result["tool_calls"]
+    streamed_calls = accumulator.finalize_assistant_fields().tool_calls or []
+    for calls in (result["tool_calls"], streamed_calls):
+        assert [(call["name"], call["arguments"]) for call in calls] == [
+            ("write", value) for value in call_arguments
+        ]
+        assert calls[0]["id"] == "call_1"
 
 
 # ---------------------------------------------------------------------------

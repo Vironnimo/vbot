@@ -8,8 +8,16 @@ import re
 import pytest
 
 from core.tools._patch_report import edit_outcome
+from core.tools.apply_patch import make_apply_patch_handler
 from core.tools.file_state import FileReadState
-from tests.core.tools.apply_patch_test_support import apply, call, registry, text, update
+from tests.core.tools.apply_patch_test_support import (
+    apply,
+    call,
+    context,
+    registry,
+    text,
+    update,
+)
 
 
 def test_long_line_preview_shows_the_change_and_surrounding_lines(tmp_path):
@@ -421,6 +429,7 @@ def test_patch_line_inside_longer_lines_names_those_lines(tmp_path, before, body
     assert ("is only part of" in text(result)) is ("Greeter" in before)
 
 
+WRAPPED_CALL = "def f(a, b):\n    result = compute(a,\n                     b)\n    return result\n"
 FIRST_DIFFERENCE_CASES = {
     # An unprefixed line between additions that the file lacks there names the prefix.
     "unprefixed": (
@@ -497,6 +506,37 @@ FIRST_DIFFERENCE_CASES = {
         "     rest = tokens[1:]\n     return head, rst",
         "The closest text in the file, lines 42-47:\n42| def parse(tokens):\n",
     ),
+    # An old_string that starts inside its first line, or ends inside its last, matches
+    # only with the file's whitespace at its line breaks: the line that lost its
+    # indentation differs, not the first line.
+    "starts-inside": (
+        WRAPPED_CALL,
+        {"old_string": "compute(a,\nb)\n    return result", "new_string": "x"},
+        "First difference, line 3: the file has '                     b)' where old_string has "
+        "'b)'; only the whitespace at the start of the line differs.\n",
+    ),
+    "ends-inside": (
+        WRAPPED_CALL,
+        {
+            "old_string": "    result = compute(a,\n                     b)\nretur",
+            "new_string": "x",
+        },
+        "First difference, line 4: the file has '    return result' where old_string has "
+        "'retur'; only the whitespace at the start of the line differs.\n",
+    ),
+    "starts-inside-and-differs": (
+        WRAPPED_CALL,
+        {"old_string": "compute(a,\n                     c)\n    return result", "new_string": "x"},
+        "First difference, line 3: the file has '                     b)' where old_string has "
+        "'                     c)'.\n",
+    ),
+    # Whole lines match with other indentation: the line that really differs is named.
+    "whole-lines": (
+        WRAPPED_CALL,
+        {"old_string": "    result = compute(a,\nb)\n    return total", "new_string": "x"},
+        "First difference, line 4: the file has '    return result' where old_string has "
+        "'    return total'.\n",
+    ),
 }
 
 
@@ -505,7 +545,12 @@ def test_first_difference_is_aligned_with_the_copied_lines(tmp_path, case):
     before, body, expected = FIRST_DIFFERENCE_CASES[case]
     path = tmp_path / "file.py"
     path.write_bytes(before.encode())
-    result = apply(tmp_path, update(body, "file.py"))
+    if isinstance(body, dict):
+        result = make_apply_patch_handler(FileReadState())(
+            context(tmp_path), {"path": "file.py", **body}
+        )
+    else:
+        result = apply(tmp_path, update(body, "file.py"))
     assert result["error"]["code"] == "text_not_found"
     # The error ends with the excerpt.
     assert expected in f"{text(result)}\n"

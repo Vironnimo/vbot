@@ -276,7 +276,16 @@ most of a one-line fragment) in `SwarmStoreError.details`, plus the passage's ch
 `span` and, against the closest passage, the first 5 lines where `old_text` differs and
 their total count (`differences`, `different_lines`; `fuzzy_match.line_differences`, which
 pairs lines by similarity, so a line the copy dropped or added is named as such and does
-not shift later pairs; `apply_patch` keeps `first_difference`). The error shows each page
+not shift later pairs; `apply_patch` keeps `first_difference`). An `old_text` of several
+lines may start inside its first page line and end inside its last: those lines differ
+only when the page line does not end, or start, with them. Such a copy matches only with
+the whitespace at its inner line breaks, so a line differing there alone, such as a
+continuation line that lost its indentation, is named with the side where the whitespace
+differs (`spacing`). Naming the mid-line first line instead made one Agent copy the line's
+start into its retry while the real difference, a lost two-space indentation, stayed
+(Sessions, 2026-10). Lost indentation stays a difference rather than a repair: in Markdown
+it can turn a list continuation, nested item or indented code into other blocks, and the
+precise strategies already accept other indentation for copies of whole lines. The error shows each page
 line once, dropping a closest passage that overlaps a better one (overlapping windows
 showed two nearly equal passages while the differing line lay beyond both excerpts,
 Sessions, 2026-09), names every differing line up to the bound, and ends with a read call
@@ -286,7 +295,8 @@ The passage holding the words that set `old_text` apart from the rest of the pag
 such as a table row's ID, comes first when it holds at least half of `old_text`'s
 weighted words and clearly beats every other passage (words weigh by how few page
 lines hold them, `_wiki_edit._distinctive_passage`); the differences then compare
-`old_text` with that passage alone. Ranked by characters, the shared cells of a
+`old_text` with that passage alone, by the same `line_differences` rules (spacing
+included), so the error names one passage and its differing lines. Ranked by characters, the shared cells of a
 neighbouring row came first, and the differences named the wrong row in 3 misses on
 one claims table (Swarm run 2026-10-12). A miss whose `old_text` a recent revision
 held carries that revision and who saved the next one (`details.origin`): when the
@@ -340,7 +350,9 @@ whose `old_text` no longer matches, add who saved the revisions since and the bo
 diff (60 lines, 3000 characters), or that only title or deletion state changed: one
 such conflict named neither, and two edits whose passage a peer had replaced had no
 other help (Sessions, 2026-10).
-Failed changes say "Nothing changed." in their first line. Every call a result or
+Failed changes open with "Nothing changed.", also when a field does not belong to
+the action, as every error says first what was applied (user decision 2026-10-12,
+the `vbot-agent-tools` Skill's Errors section). Every call a result or
 error suggests is written `swarm_wiki {...}`: one Agent sent a Wiki continuation to the
 file `read` Tool (Sessions, 2026-10).
 
@@ -1235,6 +1247,9 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_wiki` `since_revision`: `With read: show what changed since this revision, and who changed it, instead of the content.` | After a conflict or a peer's change, Agents reread whole pages to find what changed (F6). `instead of the content` keeps Agents from sending it when they need the page itself. |
 | `swarm_wiki` changes: `Changes since revision {since}, saved by {authors}:` with the diff; `Since revision {since}, {authors} changed the page but not its content.`; `Nothing changed since revision {since}.` | Shared by `since_revision` reads and conflicts on an older revision. One stale-revision conflict named neither the change nor its author, and two passage edits whose text a peer had replaced got no help at all (F5, Sessions, 2026-10). Replaces `Changes since revision {expected}:`, which only content conflicts showed. |
 | `swarm_wiki` misses: `Where old_text differs from the page:`, `line {line}: the page has {page} where old_text has {copy}.` (and `..., in excerpts around the difference: ...`), `line {line}: the page has {page}, which old_text lacks.`, `old_text line {line} has {copy}, which the page lacks.`, `{count} more lines differ.` | Replaces `First difference, line {line}: ...`: one Agent retyped a passage three times, each error naming only the next differing line (F5, Sessions, 2026-10). Lines the copy dropped or added are named as such, so the Agent does not read a shifted pairing as a changed line. |
+| `swarm_wiki` failed changes: `Nothing changed.` first, before the explanation (formerly at the end of the first line); added to `{field} is used by {users}, not by {action}.` and `swarm_wiki has no field {field}.` for create, update, delete and restore | Every error says first what was applied (user decision 2026-10-12, as for `edit` and `apply_patch`); at the end of a long first line, the Agent reads the outcome last. The field errors on a change said nothing about its effect. |
+| `swarm_wiki` update: `update received content together with {fields}. Send old_text with new_text to replace one passage, or content without them to replace the whole page.` (`{fields}`: what was sent, `old_text`, `new_text` or both) | Replaces `Send either old_text with new_text to change one passage, or content to replace the whole page, not both.`: one Agent sent content with new_text and no old_text, and the error named old_text as sent (F5, Sessions, 2026-10). The check now runs before the missing old_text or new_text checks, whose `send content instead` does not fit a call that already sent content, and names the fields sent. |
+| `swarm_wiki` misses: `line {line}: the page has {page} where old_text has {copy}; only the whitespace at the {side} of the line differs.` | The two quoted lines look alike when only leading spaces differ. One `old_text` started mid-line and its continuation line lacked the page's two-space indentation; the error named the mid-line first line, and the Agent copied that line's start into its retry (F5, Sessions, 2026-10). The clause says where to look. |
 | `swarm_wiki` misses: `Copy old_text exactly from the page, or read it with swarm_wiki {"action": "read", "page_id": ..., "offset": ..., "limit": ...}.` | The read call now carries the closest passage's `offset` and `limit`; with the bare page read, one Agent guessed offsets over many reads to find the passage (F6, Sessions, 2026-10). |
 | `swarm_wiki` calls in results and errors: `Continue with swarm_wiki {call}` and every other suggested call | One Agent sent a Wiki continuation to the file `read` Tool (F3, Sessions, 2026-10); the Tool name in front of the arguments says where the call goes. |
 | `swarm_wiki` read: `Characters {start} to {end} of {total}, around line {line}.` | Says why a read with `query` shows only part of the page and where; the continuation follows in `more` (F4). |
@@ -1273,7 +1288,7 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_wiki` misses: `old_text matches revision {revision}, and revision {changed} by {author} changed it. Read what changed with {call}, then decide whether your change still applies; if it does, repeat the call with old_text as the page has it now.` | Same failure without a shown diff (no `expected_revision`, or a diff that does not remove `old_text`): replaces the copy advice when a recent revision held `old_text` (F3, F5, Swarm run 2026-10-12). The `since_revision` read shows the peer's change in one call. |
 | `swarm_wiki` `edits` (unadvertised): status `Applied {all 3 edits / both edits} in one revision:` or `Applied {edits 1 and 3} in one revision; the page already held {edit 2}:`, then per edit `edit {number}: replaced the passage at line {line}.` or `edit {number}: the page already held this change, at line {line}.`; all held: `Nothing changed: the page already holds these changes.` | Agents bring the file `edit` Tool's `edits` list to `swarm_wiki`: one Agent sent four row edits that way and was refused (F2, Swarm run 2026-10-12). Results follow the Skill's batch form: input order, each edit's number and its line in the saved revision, so the Agent need not reread to check (F4). |
 | `swarm_wiki` `edits` misses: `Nothing changed: {all 3 edits / both edits} are saved together or not at all, and {edits 2 and 3} could not be applied.`, then `Edit {number}: {explanation}` per failed edit (the single-edit miss text), then `Send {all 3 edits / both edits} again with {edits 2 and 3} corrected or left out.` | All or nothing keeps related changes (a claim and its count) from landing half-applied; the first sentence says so, so the Agent does not assume the matching edits were saved (F4). Each failed edit gets the full miss help, and the last sentence names the one call that finishes the change (F5). |
-| `swarm_wiki` `edits` refusals: `Each item of edits needs old_text, the passage to replace, and new_text, its replacement. Received for edit {number}: {received}.`; `Send edits without {fields}: put every passage to replace in edits as old_text and new_text, or send content alone to replace the whole page.`; `edits holds {count} edits; send at most {maximum} in one call.` (each followed by `Nothing changed.`) | Cover the call shapes the Store cannot apply, with what was received, before any change (F2, F5). Fields such as `replace_all` are refused rather than dropped, since dropping them could change which text is replaced. |
+| `swarm_wiki` `edits` refusals: `Each item of edits needs old_text, the passage to replace, and new_text, its replacement. Received for edit {number}: {received}.`; `update received edits together with {fields}. Put every passage to replace in edits as old_text and new_text, or send content without edits to replace the whole page.`; `edits holds {count} edits; send at most {maximum} in one call.` (each after `Nothing changed.`) | Cover the call shapes the Store cannot apply, with what was received, before any change (F2, F5); the second follows the `content` refusal's form, which names the fields sent together. Fields such as `replace_all` are refused rather than dropped, since dropping them could change which text is replaced. |
 | Read page, a short post the reader has seen: `[{count} characters you have seen before. Read the post with swarm_board {call}]` (a long one shows its Opening and the delivery's `[{count} more characters not shown. ...]` line) | Newest-page reads repeated posts the reader already had: at least 43% of the post characters of 160 such reads (F6, Sessions, 2026-10). The line keeps the post's place, author and length, and names the exact call, so an Agent that lost the text, for example after a Compaction, gets it in one call (F5). `seen before` also fits the reader's own posts. |
 | `Only {count} of {limit} posts fit the page's size limit; older posts exist. Continue with {call}` | 32 of 168 paged reads ended before `limit` without saying why (F4, Sessions, 2026-10); `size limit` says that a larger `limit` does not help, and the call continues where the page ended. |
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |

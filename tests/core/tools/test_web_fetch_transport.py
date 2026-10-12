@@ -11,7 +11,12 @@ from unittest.mock import AsyncMock, Mock
 import curl_cffi.requests
 import pytest
 from curl_cffi import CurlOpt
-from curl_cffi.requests.exceptions import CertificateVerifyError, ConnectTimeout, ReadTimeout
+from curl_cffi.requests.exceptions import (
+    CertificateVerifyError,
+    ConnectTimeout,
+    ReadTimeout,
+    SSLError,
+)
 from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 
 import core.tools._public_http as public_http
@@ -257,9 +262,16 @@ async def test_each_http_failure_is_named_with_its_next_step(
         assert "attempts_made" not in error
 
 
+def _curl_error(kind: type[Exception], code: int, reason: str) -> Exception:
+    return kind(
+        f"Failed to perform, curl: ({code}) {reason}. See "
+        "https://curl.se/libcurl/c/libcurl-errors.html first for more details."
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "code", "attempts", "retryable", "message"),
+    ("error", "code", "attempts", "retryable", "reason"),
     [
         (
             ConnectTimeout("Connection timed out after 5001 milliseconds"),
@@ -276,33 +288,55 @@ async def test_each_http_failure_is_named_with_its_next_step(
             None,
         ),
         (
-            CertificateVerifyError(
-                "Failed to perform, curl: (60) SSL certificate problem: certificate has "
-                "expired. See https://curl.se/libcurl/c/libcurl-errors.html first for more "
-                "details."
+            _curl_error(
+                CertificateVerifyError, 60, "SSL certificate problem: certificate has expired"
             ),
             "tls_error",
             1,
             False,
-            "The secure connection to example.com failed (SSL certificate problem: "
-            "certificate has expired). The site's certificate or TLS setup is broken, so "
-            "repeating the request will not help.",
+            "SSL certificate problem: certificate has expired",
         ),
         (
-            CurlConnectionError(
-                "Failed to perform, curl: (7) Failed to connect to example.com port 443: "
-                "Connection refused. See https://curl.se/libcurl/c/libcurl-errors.html first "
-                "for more details."
+            _curl_error(
+                SSLError,
+                35,
+                "TLS connect error: error:10000410:SSL routines:OPENSSL_internal:"
+                "SSLV3_ALERT_HANDSHAKE_FAILURE",
+            ),
+            "tls_error",
+            1,
+            False,
+            "SSLV3_ALERT_HANDSHAKE_FAILURE",
+        ),
+        # A peer that cuts the TLS handshake off is a connection failure, not
+        # broken TLS (Swarm run 2026-10-12: the same page loaded 17 s later).
+        (
+            _curl_error(SSLError, 35, "Recv failure: Connection was reset"),
+            "connection_failed",
+            MAX_RETRIES + 1,
+            True,
+            "Recv failure: Connection was reset",
+        ),
+        (
+            _curl_error(
+                CurlConnectionError,
+                7,
+                "Failed to connect to example.com port 443: Connection refused",
             ),
             "connection_failed",
             MAX_RETRIES + 1,
             True,
-            "The connection to example.com failed (Failed to connect to example.com port 443: "
-            "Connection refused). The site may be down or refusing connections; try again "
-            "later or use another source.",
+            "Failed to connect to example.com port 443: Connection refused",
         ),
     ],
-    ids=["connect-timeout", "read-timeout", "broken-tls", "connection-refused"],
+    ids=[
+        "connect-timeout",
+        "read-timeout",
+        "broken-certificate",
+        "refused-handshake",
+        "reset-handshake",
+        "connection-refused",
+    ],
 )
 async def test_transport_failures_are_retried_only_as_far_as_useful(
     tmp_path: Path,
@@ -313,7 +347,7 @@ async def test_transport_failures_are_retried_only_as_far_as_useful(
     code: str,
     attempts: int,
     retryable: bool,
-    message: str | None,
+    reason: str | None,
 ) -> None:
     calls = 0
 
@@ -328,8 +362,9 @@ async def test_transport_failures_are_retried_only_as_far_as_useful(
         result = await fetch(tmp_path, {"url": "https://example.com/slow"})
 
     failure = assert_failure_envelope(result, code)
-    if message is not None:
-        assert failure["message"] == message
+    if reason is not None:
+        # curl's own reason, without its boilerplate and documentation link.
+        assert reason in failure["message"] and "curl" not in failure["message"]
     else:
         # A connect timeout can end much earlier than the response limit.
         # Report the timeout without claiming a duration we did not measure.

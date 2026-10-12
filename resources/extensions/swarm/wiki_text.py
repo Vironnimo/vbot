@@ -209,8 +209,8 @@ WIKI_NEEDS = {
     ),
     "new_text": "old_text needs new_text: its replacement, or an empty string to remove it.",
     "one_change": (
-        "Send either old_text with new_text to change one passage, or content to replace the "
-        "whole page, not both."
+        "update received content together with {fields}. Send old_text with new_text to "
+        "replace one passage, or content without them to replace the whole page."
     ),
     "expected_revision": (
         "Replacing the whole content needs expected_revision: the revision your content is "
@@ -225,8 +225,8 @@ WIKI_NEEDS = {
         "replacement. Received for edit {number}: {received}."
     ),
     "edits_with": (
-        "Send edits without {fields}: put every passage to replace in edits as old_text and "
-        "new_text, or send content alone to replace the whole page."
+        "update received edits together with {fields}. Put every passage to replace in edits "
+        "as old_text and new_text, or send content without edits to replace the whole page."
     ),
     "edits_many": "edits holds {count} edits; send at most {maximum} in one call.",
 }
@@ -250,6 +250,10 @@ WIKI_DIFFERENCES = "Where old_text differs from the page:"
 WIKI_DIFFERENCE = "line {line}: the page has {page} where old_text has {copy}."
 WIKI_DIFFERENCE_CUT = (
     "line {line}, in excerpts around the difference: the page has {page} where old_text has {copy}."
+)
+WIKI_DIFFERENCE_SPACING = (
+    "line {line}: the page has {page} where old_text has {copy}; only the whitespace at the "
+    "{side} of the line differs."
 )
 WIKI_DIFFERENCE_PAGE_ONLY = "line {line}: the page has {page}, which old_text lacks."
 WIKI_DIFFERENCE_COPY_ONLY = "old_text line {line} has {copy}, which the page lacks."

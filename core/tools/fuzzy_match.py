@@ -29,6 +29,12 @@ All non-exact strategies search a normalized copy of the content and map the
 match back to the original characters through a per-character span map, so CRLF line
 endings and the exact original characters are always preserved. Old text copied
 with other errors is ``copy_match``'s concern.
+
+Searching text a reader sees (``fold_for_search``, used by web_fetch ``find``) is
+looser than locating an edit, because a wrong guess only shows another passage:
+every run of whitespace reads as one space, invisible characters as nothing, and
+quote, dash and ligature glyphs as their plain forms (every dash as one hyphen).
+The caller names further presentation to drop, such as Markdown syntax.
 """
 
 from __future__ import annotations
@@ -157,7 +163,8 @@ class LineDifferences:
     ``count`` all of them. Each names the file ``line`` and the ``copy_line``
     with at most 240-character windows of both (``file``, ``copy``); a line
     only the file holds has no copy side, a line only the copy holds no file
-    side (``None``).
+    side (``None``). ``spacing`` is ``"start"`` or ``"end"`` for a line that
+    differs only in the whitespace at that side, else ``None``.
     """
 
     first_line: int
@@ -487,17 +494,61 @@ def first_difference(
     the file from the aligned position on. ``whole_lines`` says the copy's
     first line is a whole line; otherwise only a copy that starts with a line
     break claims to start one.
+
+    Without ``whole_lines``, a copy of several lines can start inside its first
+    file line and end inside its last; those lines differ only when the file
+    line does not end, or start, with them. Such a copy matches only with the
+    whitespace at its inner line breaks, so a line that differs there alone,
+    such as a continuation line without its indentation, is the difference, and
+    ``spacing`` names its side (``line_differences`` compares the same way).
     """
     file_lines = split_text_lines(content)
     wanted_lines = split_text_lines(copy)
     first = next((index for index, line in enumerate(wanted_lines) if line.strip()), 0)
     aligned = start if placed else _aligned_start(file_lines, start, wanted_lines, first)
+    last = len(wanted_lines) - 1
+    # Whether the copy can start inside its first file line, or end inside its last.
+    starts_inside = not whole_lines and first == 0 and last > first
+    ends_inside = not whole_lines and not copy.endswith(("\n", "\r")) and last > first
+    spaced = _copied_inside(
+        file_lines,
+        wanted_lines,
+        [
+            (aligned, first, starts_inside, False),
+            (aligned + last - first, last, False, ends_inside),
+        ],
+    )
     for position, wanted in enumerate(wanted_lines[first:], first):
         number = aligned + position - first
         if number > len(file_lines):
             return None
         actual = file_lines[number - 1]
-        if _loose(actual) != _loose(wanted):
+        differs, spacing = _paired_difference(
+            actual,
+            wanted,
+            start=position == first and starts_inside,
+            end=position == last and ends_inside,
+            spaced=spaced,
+        )
+        if differs and spacing is not None:
+            file_position, copy_position = (
+                (0, 0) if spacing == "start" else (len(actual), len(wanted))
+            )
+            file_start, file_text = _difference_window(actual, file_position)
+            copy_start, copy_text = _difference_window(wanted, copy_position)
+            return {
+                "line": number,
+                "character": file_position + 1,
+                "copy_line": position + 1,
+                "copy_character": copy_position + 1,
+                "file_start": file_start,
+                "copy_start": copy_start,
+                "file": file_text,
+                "copy": copy_text,
+                "truncated": len(file_text) < len(actual) or len(copy_text) < len(wanted),
+                "spacing": spacing,
+            }
+        if differs:
             file_position, copy_position = _difference_positions(actual, wanted)
             file_start, file_text = _difference_window(actual, file_position)
             copy_start, copy_text = _difference_window(wanted, copy_position)
@@ -534,7 +585,11 @@ def line_differences(content: str, copy: str, start: int, *, limit: int) -> Line
     with runs of whitespace collapsed, and lines the copy added or dropped are
     told apart from changed ones, so one missing line does not make every later
     line differ. File lines before the copy's first line and after its last are
-    not part of the passage. ``None`` when the copy holds no text or the file no
+    not part of the passage. A copy of several lines can start inside its first
+    file line and end inside its last one; such a copy matches only with the
+    whitespace at its inner line breaks, so a line that differs there alone,
+    such as a continuation line without its indentation, differs too and names
+    the ``spacing`` side. ``None`` when the copy holds no text or the file no
     line at the aligned place.
     """
     file_lines = split_text_lines(content)
@@ -559,6 +614,7 @@ def line_differences(content: str, copy: str, start: int, *, limit: int) -> Line
             break  # Only file lines after the copy's last line remain.
         if tag == "equal":
             passage.extend(range(file_start, file_end))
+            pairs.extend(zip(range(file_start, file_end), range(copy_start, copy_end), strict=True))
             continue
         leading = not passage and copy_start == 0
         # The copy's first lines lead into the lines that follow, so they align from the end.
@@ -585,16 +641,91 @@ def line_differences(content: str, copy: str, start: int, *, limit: int) -> Line
     if not passage:
         return None
     passage.sort()
+    last = len(wanted) - 1
+    # A copy that starts or ends inside a file line cannot match line by line with
+    # its lines trimmed; it matches with the whitespace at each inner line break.
+    inside = last > 0 and any(
+        _loose(window[file_index]) != _loose(wanted[copy_index])
+        for file_index, copy_index in pairs
+        if file_index is not None and copy_index in (0, last)
+    )
+    differing: list[tuple[int | None, int | None, str | None]] = []
+    for file_index, copy_index in pairs:
+        if file_index is None or copy_index is None:
+            differing.append((file_index, copy_index, None))
+            continue
+        differs, spacing = _paired_difference(
+            window[file_index],
+            wanted[copy_index],
+            start=copy_index == 0,
+            end=copy_index == last,
+            spaced=inside,
+        )
+        if differs:
+            differing.append((file_index, copy_index, spacing))
     shown = [
         _line_difference(
             None if file_index is None else (begin + file_index + 1, window[file_index]),
             None if copy_index is None else (first + copy_index + 1, wanted[copy_index]),
+            spacing=spacing,
         )
-        for file_index, copy_index in pairs[:limit]
+        for file_index, copy_index, spacing in differing[:limit]
     ]
     return LineDifferences(
-        begin + passage[0] + 1, begin + passage[-1] + 1, tuple(shown), len(pairs)
+        begin + passage[0] + 1, begin + passage[-1] + 1, tuple(shown), len(differing)
     )
+
+
+def _paired_difference(
+    file_line: str, copy_line: str, *, start: bool, end: bool, spaced: bool
+) -> tuple[bool, str | None]:
+    """Tell whether a copied line differs from the file line it is paired with.
+
+    ``start`` and ``end`` mark the first and last line of a copy of several
+    lines: the first can be the end of its file line, the last its beginning.
+    ``spaced`` says the whitespace at the line's breaks must match as well.
+    The second value names the side, ``"start"`` or ``"end"``, of a line that
+    differs only in its whitespace there.
+    """
+    if not _fits(_loose(file_line), _loose(copy_line), start=start, end=end):
+        return True, None
+    if not spaced:
+        return False, None
+    held, copied = (_HORIZONTAL_WHITESPACE_RE.sub(" ", line) for line in (file_line, copy_line))
+    if _fits(held, copied, start=start, end=end):
+        return False, None
+    leading = held.startswith(" ") != copied.startswith(" ")
+    trailing = held.endswith(" ") != copied.endswith(" ")
+    # The first line's leading whitespace lies inside its file line.
+    return True, "start" if leading and not (start and trailing) else "end"
+
+
+def _copied_inside(
+    file_lines: list[str], copy_lines: list[str], edges: list[tuple[int, int, bool, bool]]
+) -> bool:
+    """Whether a copy starts inside its first file line or ends inside its last.
+
+    ``edges`` holds the 1-based file line, the copy line and whether it may
+    ``start`` or ``end`` inside that line, for the copy's first and last line.
+    A copy of whole lines matches with other indentation; one that starts or
+    ends inside a line matches only with the whitespace at its line breaks.
+    """
+    for number, index, start, end in edges:
+        if not (start or end) or not 0 < number <= len(file_lines):
+            continue
+        held, copied = _loose(file_lines[number - 1]), _loose(copy_lines[index])
+        if held != copied and _fits(held, copied, start=start, end=end):
+            return True
+    return False
+
+
+def _fits(held: str, copied: str, *, start: bool, end: bool) -> bool:
+    """Whether ``copied`` is the file line ``held``, its end (``start``) or its beginning."""
+    if start and not end:
+        return held.endswith(copied)
+    if end and not start:
+        return held.startswith(copied)
+    return held == copied
 
 
 def _aligned_block(
@@ -665,10 +796,20 @@ def _aligned_block(
 
 
 def _line_difference(
-    file_line: tuple[int, str] | None, copy_line: tuple[int, str] | None
+    file_line: tuple[int, str] | None,
+    copy_line: tuple[int, str] | None,
+    *,
+    spacing: str | None = None,
 ) -> dict[str, int | str | bool | None]:
-    """Describe one differing line: numbered windows of both sides that hold it."""
-    if file_line is not None and copy_line is not None:
+    """Describe one differing line: numbered windows of both sides that hold it.
+
+    ``spacing`` names the side of a line that differs only in its whitespace.
+    """
+    if spacing is not None and file_line is not None and copy_line is not None:
+        file_position, copy_position = (
+            (0, 0) if spacing == "start" else (len(file_line[1]), len(copy_line[1]))
+        )
+    elif file_line is not None and copy_line is not None:
         file_position, copy_position = _difference_positions(file_line[1], copy_line[1])
     else:
         file_position = copy_position = 0
@@ -677,6 +818,7 @@ def _line_difference(
         "copy_line": None,
         "file": None,
         "copy": None,
+        "spacing": spacing,
     }
     truncated = False
     for key, side, position in (
@@ -1511,6 +1653,114 @@ def _only(indent: str, character: str) -> bool:
     return not indent.strip(character)
 
 
+# Glyphs a reader takes for their plain form. Unlike the edit folds above, every
+# dash, the minus sign included, reads as one hyphen: on a page they are typography
+# for what a keyboard types as "-", and conflating them can only show one more
+# passage. Primes and guillemets read as the quotes typed for them.
+_SEARCH_GLYPHS = {
+    **dict.fromkeys("‘’‚‛′‹›", "'"),
+    **dict.fromkeys("“”„‟″«»", '"'),
+    **dict.fromkeys("‐‑‒–—―−﹘﹣－", "-"),
+    "…": "...",
+    "ﬀ": "ff",
+    "ﬁ": "fi",
+    "ﬂ": "fl",
+    "ﬃ": "ffi",
+    "ﬄ": "ffl",
+}
+# Characters that take no room: zero-width spaces and joiners, the byte order mark
+# and the soft hyphen.
+_SEARCH_INVISIBLE = "­​‌‍⁠﻿"
+_SEARCH_SPECIAL_RE = re.compile(
+    r"(?P<space>\s+)|(?P<glyph>["
+    + "".join(_SEARCH_GLYPHS)
+    + "])|(?P<invisible>["
+    + _SEARCH_INVISIBLE
+    + "]+)"
+)
+
+
+class SearchText:
+    """Text as a reader sees it (``fold_for_search``), mapped back to the original.
+
+    ``text`` is the folded text. Each of its pieces either copies an original run
+    character by character or stands for a whole original range: a whitespace
+    run, a glyph, or a replacement the caller named.
+    """
+
+    def __init__(self, original: str, replacements: Iterable[tuple[int, int, str]]) -> None:
+        self._parts: list[str] = []
+        self._starts: list[int] = []
+        self._origins: list[tuple[int, int, bool]] = []
+        self._length = 0
+        self._original_length = len(original)
+        cursor = 0
+        for start, end, replacement in replacements:
+            self._fold(original, cursor, start)
+            if replacement.isspace():
+                self._space(start, end)
+            elif replacement:
+                self._add(replacement, start, end, copied=False)
+            cursor = end
+        self._fold(original, cursor, len(original))
+        self.text = "".join(self._parts)
+
+    def _fold(self, original: str, start: int, end: int) -> None:
+        cursor = start
+        for found in _SEARCH_SPECIAL_RE.finditer(original, start, end):
+            if found.start() > cursor:
+                self._add(original[cursor : found.start()], cursor, found.start(), copied=True)
+            if found["space"]:
+                self._space(found.start(), found.end())
+            elif found["glyph"]:
+                self._add(_SEARCH_GLYPHS[found["glyph"]], found.start(), found.end(), copied=False)
+            cursor = found.end()
+        if end > cursor:
+            self._add(original[cursor:end], cursor, end, copied=True)
+
+    def _add(self, text: str, start: int, end: int, *, copied: bool) -> None:
+        self._parts.append(text)
+        self._starts.append(self._length)
+        self._origins.append((start, end, copied))
+        self._length += len(text)
+
+    def _space(self, start: int, end: int) -> None:
+        """Read whitespace as one space, also across dropped ranges between runs."""
+        if self._parts and self._parts[-1] == " ":
+            first, _, copied = self._origins[-1]
+            self._origins[-1] = (first, end, copied)
+        else:
+            self._add(" ", start, end, copied=False)
+
+    def _piece(self, index: int) -> tuple[int, int, int, bool]:
+        piece = bisect_right(self._starts, index) - 1
+        return (self._starts[piece], *self._origins[piece])
+
+    def original(self, start: int, end: int) -> tuple[int, int]:
+        """Return the original range that ``text[start:end]`` (not empty) was read from."""
+        offset, first, last, copied = self._piece(start)
+        begin = first + (start - offset) if copied else first
+        offset, first, last, copied = self._piece(end - 1)
+        return begin, first + (end - offset) if copied else last
+
+    def resume(self, end: int) -> int:
+        """Return the original offset where ``text[end:]`` starts, after dropped syntax."""
+        if end >= self._length:
+            return self._original_length
+        offset, first, _, copied = self._piece(end)
+        return first + (end - offset) if copied else first
+
+
+def fold_for_search(text: str, replacements: Iterable[tuple[int, int, str]] = ()) -> SearchText:
+    """Return ``text`` as a reader sees it, for literal case-insensitive search.
+
+    ``replacements`` are sorted, non-overlapping ``(start, end, text)`` ranges of
+    presentation the caller reads differently: ``""`` drops a range, ``" "`` reads
+    it as a space. Every other character must match as written.
+    """
+    return SearchText(text, replacements)
+
+
 # (name, matcher, reindent-replacement) in increasing tolerance.
 _STRATEGIES = (
     ("exact", _match_exact, False),
@@ -1525,7 +1775,9 @@ __all__ = [
     "ClosestFuzzyCandidate",
     "FuzzyReplacement",
     "LineDifferences",
+    "SearchText",
     "find_closest_candidates",
+    "fold_for_search",
     "line_differences",
     "replace_fuzzy",
     "preserve_typography",

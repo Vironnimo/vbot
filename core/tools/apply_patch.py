@@ -26,7 +26,7 @@ from core.tools._patch_requests import (
     normalize_patch_arguments,
     patch_operations,
 )
-from core.tools._patch_syntax import _HEADER, _Operation, _PatchError
+from core.tools._patch_syntax import _HEADER, _Operation, _PatchError, quoted
 from core.tools.arguments import split_text_lines
 from core.tools.contracts import ToolContractError
 from core.tools.file_state import FileReadState
@@ -88,7 +88,7 @@ def _locate_context(
             return []
         shown = absent if len(absent) <= 80 else absent[:77] + "..."
         return [
-            f"The patch line {shown!r} is not in {batch.shown(path)}. "
+            f"The patch line {quoted(shown)} is not in {batch.shown(path)}. "
             "That patch line has no + prefix, so it must already be in the file; if it is "
             "new, start it with +."
         ]
@@ -141,8 +141,10 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
         return _request_failure(context, batch, error)
     _label_hunks(operations)
     run_operations(context, state, batch, operations)
+    # Each hunk, Add, Delete and Move that took effect is one edit.
+    edits = sum(outcome["status"] == "applied" for outcome in batch.results)
     return patch_result(
-        context, file_reports(context, batch), batch.results, cancelled_paths(batch)
+        context, file_reports(context, batch, edits=edits), batch.results, cancelled_paths(batch)
     )
 
 

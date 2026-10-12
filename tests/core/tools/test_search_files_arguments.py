@@ -130,17 +130,12 @@ async def test_a_file_name_glob_in_pattern_lists_matching_files(project: Path, a
         # A bare file name, as DeepSeek sent it to find a file (agent-eval 2026-10-10).
         ({"pattern": "app.py", "output": "files"}, "src/app.py"),
         ({"pattern": "src/view"}, "src/view.ts"),
-        ({"pattern": r"load\.ts$", "output": "files"}, None),
     ],
 )
 async def test_a_content_search_without_matches_lists_files_whose_names_match(
-    project: Path, arguments: dict, listed: str | None
+    project: Path, arguments: dict, listed: str
 ):
     result = await dispatch(project, arguments)
-    if listed is None:
-        assert "content" not in result["data"]
-        assert "note" not in result["data"]
-        return
     assert result["data"]["content"] == listed
     assert result["data"]["note"] == (
         "No file contents match pattern, so the files whose names match it were listed."
@@ -149,6 +144,85 @@ async def test_a_content_search_without_matches_lists_files_whose_names_match(
     contents = await dispatch(project, {**arguments, "pattern": arguments["pattern"] + "|load"})
     assert "matching line" in contents["data"]["summary"]
     assert contents["data"].get("note") != result["data"]["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "glob"),
+    [
+        # Swarm run 2026-10-12: names of files that did not exist, searched again and again.
+        ({"pattern": r"load\.ts$", "output": "files"}, "*.ts"),
+        ({"pattern": r"src/load_(a|b)\.py"}, "src/load_*.py"),
+        ({"pattern": "load_a|load_b", "output": "files"}, "load_*"),
+        # Text to find: one identifier, alternatives in content output, an extension no
+        # searched file has, alternatives no file name starts like.
+        ({"pattern": "load_a"}, None),
+        ({"pattern": "load_a|load_b"}, None),
+        ({"pattern": r"load\.rs$", "output": "files"}, None),
+        ({"pattern": "save_a|save_b", "output": "files"}, None),
+    ],
+)
+async def test_a_file_name_pattern_without_matches_says_no_name_matches_either(
+    project: Path, arguments: dict, glob: str | None
+):
+    (project / "src/load_x.py").write_text("x = 1\n")
+    result = await dispatch(project, arguments)
+    assert "content" not in result["data"]
+    if glob is None:
+        assert "note" not in result["data"]
+        return
+    # The note's example glob lists the files with similar names.
+    assert json.dumps(glob) in result["data"]["note"]
+    listing = await dispatch(project, {"glob": glob})
+    assert listing["data"]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "noted"),
+    [
+        # Swarm run 2026-10-12: the "?" of a URL made the regex miss the URL.
+        ("page.pl?id=7", True),
+        ("load(x)", True),
+        # The literal text is absent as well.
+        ("page.pl?id=8", False),
+    ],
+)
+async def test_a_regex_without_matches_names_the_literal_search_when_its_text_occurs(
+    project: Path, pattern: str, noted: bool
+):
+    (project / "links.txt").write_text("see page.pl?id=7 and load(x)\n")
+    result = await dispatch(project, {"pattern": pattern})
+    assert "content" not in result["data"]
+    assert ("note" in result["data"]) is noted
+    literal = await dispatch(project, {"pattern": pattern, "args": ["-F"]})
+    assert ("links.txt" in literal["data"].get("content", "")) is noted
+    assert "note" not in literal["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "noted"),
+    [
+        # Swarm run 2026-10-12: one counted line held the text three times.
+        ({"pattern": "zz", "output": "count"}, True),
+        ({"pattern": "zz", "args": ["-c"]}, True),
+        # Each counted line holds one match, the call counts matches already, or the
+        # pattern matches a shape whose matches nobody counts.
+        ({"pattern": "yy", "output": "count"}, False),
+        ({"pattern": "zz", "output": "count", "args": ["--count-matches"]}, False),
+        ({"pattern": r"\w+", "output": "count", "glob": "counts.txt"}, False),
+    ],
+)
+async def test_a_line_count_says_how_many_matches_the_lines_hold(
+    project: Path, arguments: dict, noted: bool
+):
+    (project / "counts.txt").write_text("zz zz zz\nzz\nyy\n")
+    result = await dispatch(project, arguments)
+    assert result["data"]["content"].startswith("counts.txt:")
+    assert ("note" in result["data"]) is noted
+    if noted:
+        assert "4" in result["data"]["note"]
 
 
 @pytest.mark.asyncio
@@ -505,6 +579,18 @@ async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
         assert "warnings" not in corrected["data"]
     literal = await dispatch(tmp_path, {"args": ["-F", "call(", "src"]})
     assert literal["data"]["content"] == "src/code\n3:call("
+    # With pattern set, every args item without a leading - is a path: the error
+    # names the -e form, which runs as suggested and keeps the other items.
+    words = await dispatch(tmp_path, {"pattern": "Alpha", "args": ["beta", "-i"]})
+    message = words["error"]["message"]
+    assert words["error"]["code"] == "path_not_found"
+    assert "Correct path, or omit it" not in message
+    suggested = json.loads(message.split("args ")[-1].split("]")[0] + "]")
+    corrected = await dispatch(tmp_path, {"pattern": "Alpha", "args": suggested})
+    assert corrected["data"]["content"] == "src/code\n1:Alpha\n2:Beta"
+    # A path with a similar existing one was most likely mistyped.
+    mistyped = await dispatch(tmp_path, {"pattern": "Alpha", "args": ["scr"]})
+    assert '"-e"' not in mistyped["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -869,6 +955,33 @@ async def test_ambiguous_or_unsupported_requests_reject_without_substitution(
         assert result["error"]["code"] == code
         assert message in result["error"]["message"]
     assert arguments == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "field", "content"),
+    [
+        # Swarm run 2026-10-12: a bare --glob beside the glob that gives its value.
+        ({"args": ["--glob"], "glob": "*.py", "output": "files"}, "glob", "src/app.py"),
+        (
+            {"args": ["-i", "-e"], "pattern": "LOAD", "glob": "*.ts"},
+            "pattern",
+            "src/view.ts\n1:export const load = 1;",
+        ),
+    ],
+)
+async def test_a_flag_without_its_value_beside_the_field_that_gives_it_is_ignored(
+    project: Path, arguments: dict, field: str, content: str
+):
+    result = await dispatch(project, arguments)
+
+    assert result["data"]["content"] == content
+    assert result["data"]["note"]
+    # Without that field the flag still needs its value.
+    alone = await dispatch(
+        project, {key: value for key, value in arguments.items() if key != field}
+    )
+    assert alone["error"]["code"] == "invalid_arguments"
 
 
 @pytest.mark.asyncio

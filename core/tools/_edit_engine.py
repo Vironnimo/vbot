@@ -36,7 +36,7 @@ from os.path import commonprefix
 from typing import Literal
 
 from core.tools._decorated_insert import place_before_decorators
-from core.tools._patch_syntax import _amid_additions, _Hunk, _PatchError
+from core.tools._patch_syntax import _amid_additions, _Hunk, _PatchError, quoted
 from core.tools.arguments import (
     TEXT_LINE_BREAK,
     line_number_gutter_candidates,
@@ -73,11 +73,11 @@ def _deviations(notes: list[str]) -> list[str]:
 
 _GUTTER_WARNING = "Removed read-output line-number prefixes before applying the change."
 _GUTTER_KEPT_NOTE = (
-    "{count} added lines start with a number and | like read output, such as {example!r}; "
+    "{count} added lines start with a number and | like read output, such as {example}; "
     "they were written as sent. If they are copied line numbers, remove them in another call."
 )
 _FIRST_AFTER_HINT_NOTE = (
-    "The lines to replace occur {occurrences} times after {hint!r}; the first, at line "
+    "The lines to replace occur {occurrences} times after {hint}; the first, at line "
     "{line}, was changed."
 )
 _FIRST_AFTER_PREVIOUS_NOTE = (
@@ -85,12 +85,12 @@ _FIRST_AFTER_PREVIOUS_NOTE = (
     "in this file, at line {line}, was changed."
 )
 _UNMARKED_NOTE = (
-    "The line {example!r} between + lines has no + prefix and is not in the file; it was "
+    "The line {example} between + lines has no + prefix and is not in the file; it was "
     "added as a new line."
 )
 _UNMARKED_LINES_NOTE = (
     "{count} lines between + lines have no + prefix and are not in the file, such as "
-    "{example!r}; they were added as new lines."
+    "{example}; they were added as new lines."
 )
 _UNMARKED_BLANK_NOTE = (
     "The empty line between + lines has no prefix and, read as unchanged, does not match the "
@@ -268,7 +268,7 @@ def clean_additions(hunk: _Hunk, path: object) -> tuple[_Hunk, list[str]]:
             lines[start:end] = [("+", text) for text in candidates[0].split("\n")]
             warnings.append(_GUTTER_WARNING)
         elif len(shaped) >= 2:
-            warnings.append(_GUTTER_KEPT_NOTE.format(count=len(shaped), example=shaped[0]))
+            warnings.append(_GUTTER_KEPT_NOTE.format(count=len(shaped), example=quoted(shaped[0])))
         start = end
     return replace(hunk, lines=lines), warnings
 
@@ -286,7 +286,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         content, old, new, replace_all=replace_all, typographic=True, rewrapped=True
     )
     if isinstance(found, FuzzyReplacement) and found.strategy == "rewrapped":
-        return _rewrapped(content, found, path)
+        return _rewrapped(content, found, hunk, path)
     stripped = strip_line_number_gutters(old) if found is None else None
     if stripped is not None:
         # Text copied from read output: its gutters cover whole lines.
@@ -313,8 +313,9 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         )
     if found is not None:
         _refuse_join(content, found, hunk, path)
+        found, kept = _keep_final_break(content, found, hunk)
         edited, placed = _keep_decorated(content, found, path)
-        return edited, notes + _joined_lines(content, found) + placed
+        return edited, notes + kept + _joined_lines(content, found) + placed
     details = _not_found(content, old, source="old_string")
     present = None
     if new.strip() and new != old:
@@ -336,9 +337,11 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             )
         if copied is not None:
             _refuse_join(content, copied, hunk, path)
+            copied, kept = _keep_final_break(content, copied, hunk)
             edited, placed = _keep_decorated(content, copied, path)
             return edited, [
                 *_deviations(copy_warnings(copied)),
+                *kept,
                 *_joined_lines(content, copied),
                 *placed,
             ]
@@ -358,7 +361,9 @@ def _keep_decorated(content: str, found: FuzzyReplacement, path: object) -> tupl
     return edited, _deviations(notes)
 
 
-def _rewrapped(content: str, found: FuzzyReplacement, path: object) -> tuple[str, list[str]]:
+def _rewrapped(
+    content: str, found: FuzzyReplacement, hunk: _Hunk, path: object
+) -> tuple[str, list[str]]:
     """Write a replacement whose old text breaks its lines in other places than the file.
 
     The note names the lines that held the old text: the written text follows
@@ -372,9 +377,10 @@ def _rewrapped(content: str, found: FuzzyReplacement, path: object) -> tuple[str
         places.append(str(first) if first == last else f"{first}-{last}")
     single = len(places) == 1 and "-" not in places[0]
     lines = ("line " if single else "lines ") + ", ".join(places)
+    found, kept = _keep_final_break(content, found, hunk)
     edited, placed = _keep_decorated(content, found, path)
     note = DeviationNote(_REWRAPPED_NOTE.format(lines=lines))
-    return edited, [note, *_joined_lines(content, found), *placed]
+    return edited, [note, *kept, *_joined_lines(content, found), *placed]
 
 
 _REWRAPPED_NOTE = (
@@ -424,9 +430,68 @@ def _refuse_join(content: str, found: FuzzyReplacement, hunk: _Hunk, path: objec
         path=path,
         label=hunk.label,
         details=details,
-        line=repr(line),
-        next=repr(following),
+        line=quoted(line),
+        next=quoted(following),
     )
+
+
+def _keep_final_break(
+    content: str, found: FuzzyReplacement, hunk: _Hunk
+) -> tuple[FuzzyReplacement, list[str]]:
+    """Keep the line break a replacement dropped before more lines of the file.
+
+    ``new_string`` lacks the line break that ends ``old_string``, and at one of
+    the places its last line, holding text, would continue with the file's next
+    line: a line of text joins it, a blank line disappears into it. Neither was
+    meant in the recorded edits (2026-10): such a ``new_string`` ends where the
+    line it replaces ends, the break was lost in the copy. It gets the file's
+    line break then, at every place where the replaced text ended with one, and
+    a note says so. At the end of the file nothing follows: it stays as sent.
+    """
+    replacement = hunk.replacement
+    assert replacement is not None
+    old, new = replacement.old, replacement.new
+    if not old.endswith(("\n", "\r")) or not new or new.endswith(("\n", "\r")):
+        return found, []
+    text = found.new_content
+    # Places whose replaced text ended a line while the written text does not.
+    open_ends = [
+        (old_end, end)
+        for (_, old_end), (start, end) in zip(found.before_spans, found.after_spans, strict=True)
+        if end > start
+        and content[old_end - 1 : old_end] in ("\n", "\r")
+        and text[end - 1] not in "\r\n"
+    ]
+
+    def joins_next_line(end: int) -> bool:
+        first = max(text.rfind("\n", 0, end), text.rfind("\r", 0, end)) + 1
+        return bool(text[first:end].strip()) and end < len(text)
+
+    if not any(joins_next_line(end) for _, end in open_ends):
+        return found, []
+    pieces: list[str] = []
+    spans: list[tuple[int, int]] = []
+    shift = done = 0
+    breaks = dict(open_ends)
+    for (_, old_end), (start, end) in zip(found.before_spans, found.after_spans, strict=True):
+        pieces.append(text[done:end])
+        moved = start + shift
+        if breaks.get(old_end) == end:
+            ending = "\r\n" if content[old_end - 2 : old_end] == "\r\n" else content[old_end - 1]
+            pieces.append(ending)
+            shift += len(ending)
+        spans.append((moved, end + shift))
+        done = end
+    pieces.append(text[done:])
+    kept = replace(found, new_content="".join(pieces), after_spans=tuple(spans))
+    return kept, [DeviationNote(_KEPT_BREAK_NOTE)]
+
+
+_KEPT_BREAK_NOTE = (
+    "new_string does not end with a line break as old_string does; it was written with one, "
+    "so the next line stays a line of its own. To join or remove the next line, include it "
+    "in old_string."
+)
 
 
 def _joined_lines(content: str, found: FuzzyReplacement) -> list[str]:
@@ -745,9 +810,9 @@ def _unmarked_additions(
     example = lines[unmarked[0]][1].strip()
     example = example if len(example) <= 80 else example[:77] + "..."
     if len(unmarked) == 1:
-        note = _UNMARKED_NOTE.format(example=example)
+        note = _UNMARKED_NOTE.format(example=quoted(example))
     else:
-        note = _UNMARKED_LINES_NOTE.format(count=len(unmarked), example=example)
+        note = _UNMARKED_LINES_NOTE.format(count=len(unmarked), example=quoted(example))
     return reread, found, DeviationNote(note)
 
 
@@ -797,7 +862,7 @@ def _ordering_note(
     line = found.first_changed_line + len(_BREAK.findall(content, 0, start))
     if hunk.hints:
         hint = _hint_text(hunk.hints[-1]).strip()
-        return _FIRST_AFTER_HINT_NOTE.format(occurrences=occurrences, hint=hint, line=line)
+        return _FIRST_AFTER_HINT_NOTE.format(occurrences=occurrences, hint=quoted(hint), line=line)
     return _FIRST_AFTER_PREVIOUS_NOTE.format(occurrences=occurrences, line=line)
 
 

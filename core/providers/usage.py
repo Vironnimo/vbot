@@ -236,14 +236,19 @@ class ProviderUsageService:
         self.stop()
         self._close_history()
 
-    async def aclose(self) -> None:
-        """Cancel and await the automatic sampler, then close an owned history database."""
+    async def astop(self) -> None:
+        """Cancel and await the automatic sampler; the history database stays open."""
 
         task = self._history_task
         self.stop()
         if task is not None:
             with suppress(asyncio.CancelledError):
                 await task
+
+    async def aclose(self) -> None:
+        """Cancel and await the automatic sampler, then close an owned history database."""
+
+        await self.astop()
         self._close_history()
 
     @property
