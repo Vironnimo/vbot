@@ -154,9 +154,15 @@ class PipeCommandProcess:
         writer, self._writer = self._writer, None
         if writer is None:
             raise RuntimeError("This process takes no request")
-        threading.Thread(
-            target=_write_and_close, args=(writer, request), name="command-request", daemon=True
-        ).start()
+        try:
+            threading.Thread(
+                target=_write_and_close, args=(writer, request), name="command-request", daemon=True
+            ).start()
+        except BaseException:
+            # Nothing would write the request: end the shell and release its pipe and Job.
+            self._writer = writer
+            self.kill()
+            raise
 
     def kill(self) -> None:
         """End the process tree now and release it: a shell no command claimed."""
@@ -199,11 +205,13 @@ async def launch_pipe_process(
 ) -> PipeCommandProcess:
     """Start *argv* in *cwd* with exactly *env*, on pipes, tracked by *tracker* from creation.
 
-    With *request_pipe*, stdin is a pipe whose writing end the process keeps
-    for ``send``; otherwise stdin is empty. Raises OSError (or the tracker's
-    error) when the process cannot be started or tracked; nothing then keeps
-    running.
+    With *request_pipe* (Windows only), stdin is a pipe whose writing end the
+    process keeps for ``send``; otherwise stdin is empty. Raises OSError (or the
+    tracker's error) when the process cannot be started or tracked; nothing then
+    keeps running.
     """
+    if request_pipe and sys.platform != "win32":
+        raise ValueError("A request pipe exists only on Windows")
     trees: list[ProcessTree] = []
 
     def created(pid: int) -> None:
@@ -220,7 +228,7 @@ async def launch_pipe_process(
 
     writer: int | None = None
     try:
-        if sys.platform == "win32" or request_pipe:
+        if sys.platform == "win32":
             stdin, writer = os.pipe()
             if not request_pipe:
                 os.close(writer)
