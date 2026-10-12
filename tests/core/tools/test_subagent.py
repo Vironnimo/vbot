@@ -370,8 +370,13 @@ async def test_calls_that_list_check_or_stop_run_as_background_tasks(
 
 @pytest.mark.parametrize(
     "arguments",
-    [{"action": "list"}, {}, {"id": "sub_abcdefghijkl"}],
-    ids=["list", "missing-task", "id-without-action"],
+    [
+        {"action": "list"},
+        {},
+        {"id": "sub_abcdefghijkl"},
+        {"action": "kill", "id": "cmd_abcdefghijkl"},
+    ],
+    ids=["list", "missing-task", "id-without-action", "command-id"],
 )
 async def test_refusals_name_background_tasks_only_while_it_is_callable(
     harness: SubAgentHarness, arguments: JsonObject
@@ -387,6 +392,15 @@ async def test_refusals_name_background_tasks_only_while_it_is_callable(
         assert without["error"]["message"] == (
             'subagent was not run: "action" must be one of "run", "send"; received "list".'
         )
+    elif arguments.get("action") == "kill":
+        # A command is never run through subagent, so Extension hooks on
+        # background_tasks see every call that stops one.
+        assert with_tasks["error"] == {
+            "code": "not_a_subagent",
+            "message": "subagent was not run: cmd_abcdefghijkl is a background command, not a "
+            'Sub-Agent. Call background_tasks {"action": "stop", "id": "cmd_abcdefghijkl"} '
+            "instead.",
+        }
     else:
         assert "background_tasks" in with_tasks["error"]["message"]
     assert without["error"]["code"] == "invalid_arguments"
