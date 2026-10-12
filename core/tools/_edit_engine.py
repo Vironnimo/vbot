@@ -87,36 +87,44 @@ _GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
 
 
 def apply_hunks(
-    content: str, hunks: list[_Hunk], path: object, previous: int | None = None
+    content: str,
+    hunks: list[_Hunk],
+    path: object,
+    previous: int | None = None,
+    *,
+    failures: list[_PatchError] | None = None,
 ) -> tuple[str, list[str], int | None]:
     """Apply one file's hunks in order and return the text, the notes and the change end.
 
     Each hunk sees the text the hunks before it produced. ``previous``, and the
     returned change end, is where the line holding the file's last change starts;
-    it orders the occurrences of lines a later hunk matches. A hunk that fails
-    after others applied carries ``written`` in its error details: the lines of
-    the text it saw that each earlier hunk wrote, as ``{label, first, last}``,
-    and ``replaced_by``, the label of the earlier hunk that replaced its old text.
+    it orders the occurrences of lines a later hunk matches.
+
+    A hunk that fails raises its error. With ``failures``, it is skipped instead
+    and its error appended there; a hunk that would write a NUL character fails
+    too. Once a hunk failed, the later ones match precisely only (no copy with
+    errors): the text they expect can be text the failed one would have written.
+    A hunk that fails after others applied carries ``written`` in its error
+    details: the lines of the text it saw that each earlier hunk wrote, as
+    ``{label, first, last}``, and ``replaced_by``, the label of the earlier hunk
+    that replaced its old text.
     """
     notes: list[str] = []
     written: list[tuple[str, int, int]] = []
     # The text each hunk that changed it saw, in order.
     seen: list[tuple[str, str]] = []
-    # Edits that would only join lines are refused together: the first carries the others.
-    joins: list[_PatchError] = []
     for hunk in hunks:
+        if failures:
+            hunk = replace(hunk, precise_only=True)
         try:
             if hunk.replacement is not None:
                 edited, placed = _apply_replacement(content, hunk, path)
             else:
                 edited, placed = _apply_line_hunk(content, hunk, path, previous)
+            if failures is not None and "\x00" in edited:
+                # Only binary files hold it; the call's other changes still apply.
+                raise _PatchError("binary_file", template="nul_text", path=path, label=hunk.label)
         except _PatchError as error:
-            if error.code == "line_join":
-                joins.append(error)
-                continue
-            if joins:
-                # A later failure can follow from the refused edits; they come first.
-                break
             if written:
                 error.details["written"] = [
                     {"label": label, "first": first, "last": last} for label, first, last in written
@@ -124,20 +132,16 @@ def apply_hunks(
             replaced_by = _replaced_by(seen, hunk) if error.code == "text_not_found" else None
             if replaced_by is not None:
                 error.details["replaced_by"] = replaced_by
-            raise
+            if failures is None:
+                raise
+            failures.append(error)
+            continue
         if edited != content:
             seen.append((hunk.label, content))
             previous = _change_end_line(content, edited)
             written = _track_written(written, content, edited, hunk.label)
         content = edited
         notes.extend(placed)
-    if joins:
-        first, *others = joins
-        if others:
-            first.details["also"] = [
-                {"label": other.values.get("label", ""), **other.details} for other in others
-            ]
-        raise first
     return content, notes, previous
 
 

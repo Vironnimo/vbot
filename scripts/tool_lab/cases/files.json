@@ -1079,7 +1079,7 @@
    }
   },
   {
-   "name": "edit: a failed second edit writes nothing",
+   "name": "edit: a failed second edit leaves the first one written",
    "tool": "edit",
    "arguments": {
     "path": "src/app.py",
@@ -1095,15 +1095,13 @@
     ]
    },
    "expect": {
-    "ok": false,
-    "error_code": "text_not_found",
+    "ok": true,
     "contains": [
-     "edit 2 of 2",
-     "Neither edit was applied",
-     "with edit 2 corrected"
+     "Edit 1 was applied; edit 2 was not.",
+     "Failed: src/app.py, edit 2 of 2"
     ],
     "files": {
-     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
     }
    }
   },
