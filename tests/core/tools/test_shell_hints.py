@@ -712,6 +712,29 @@ def test_an_escaped_quote_that_ended_a_powershell_string_is_named(
     assert hint is None or not hint.startswith(_ESCAPED_QUOTE)
 
 
+@pytest.mark.parametrize(
+    ("command", "piped"),
+    [
+        ("for ($z in 12,31) { python harvest.py $z }", False),
+        ("for ($z in 12,31) { python harvest.py $z } 2>&1 | Select-Object -First 30", True),
+    ],
+)
+def test_a_for_loop_over_values_names_foreach(
+    monkeypatch: pytest.MonkeyPatch, command: str, piped: bool
+) -> None:
+    output = (
+        "ParserError:\nLine |\n   1 |  for ($z in 12,31) { python harvest.py $z }\n"
+        "     |          ~~\n     | Unexpected token 'in' in expression or statement."
+    )
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, 1, output)
+
+    assert hint is not None and "foreach ($z in 12,31) {" in hint
+    # A foreach statement cannot be piped; $( ) around it can.
+    assert ("$(foreach ($z in 12,31) { ... }) 2>&1 | Select-Object -First 30" in hint) is piped
+
+
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize(
     ("command", "doubled"),

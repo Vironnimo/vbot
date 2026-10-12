@@ -462,6 +462,10 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
                 "PowerShell has no < input redirection. Pipe the file into the program "
                 "instead, as in `Get-Content input.txt | python script.py`."
             )
+        if re.search(rf"[{_QUOTES}]in[{_QUOTES}]", output):
+            loop = _for_in_hint(command)
+            if loop is not None:
+                return loop
         if _BASH_SYNTAX.search(outside):
             return _BASH_SYNTAX_HINT
         if _has_bash_quote_idiom(outside):
@@ -491,6 +495,63 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
 
 def _has_bash_quote_idiom(text: str) -> bool:
     return any(idiom in text for idiom in _BASH_QUOTE_IDIOMS)
+
+
+# A for loop over values, as other languages write it: `for ($z in 12,31) { ... }`.
+_FOR_IN = re.compile(r"(?:^|[;{}])[ \t]*+for[ \t]*+(\([ \t]*+\$\w++[ \t]++in[ \t])", re.I | re.M)
+_LOOP_SHOWN_CHARS = 60
+
+
+def _for_in_hint(command: str) -> str | None:
+    """Name foreach for a for loop over values, and how to pipe the loop.
+
+    PowerShell's for takes (init; condition; step) and reports only "Unexpected
+    token 'in'". A foreach statement cannot be piped, so a loop followed by
+    ``2>&1 | Select-Object`` needs $( ) around it.
+    """
+    code = _powershell_code(command).text
+    loop = _FOR_IN.search(code)
+    if loop is None:
+        return None
+    header_end = _closing_bracket(code, loop.start(1))
+    if header_end is None:
+        return None
+    header = " ".join(command[loop.start(1) : header_end + 1].split())
+    if len(header) > _LOOP_SHOWN_CHARS:
+        header = "($item in $list)"
+    hint = (
+        "PowerShell's `for` takes `(init; condition; step)`: loop over values with "
+        f"`foreach {header} {{ ... }}`."
+    )
+    block = re.compile(r"[ \t]*+\{").match(code, header_end + 1)
+    block_end = None if block is None else _closing_bracket(code, block.end() - 1)
+    if block_end is None:
+        return hint
+    after = code[block_end + 1 :].split("\n", 1)[0]
+    rest = command[block_end + 1 : block_end + 1 + len(after)].split(";", 1)[0].strip()
+    if not re.match(r"(?:\d|\*)?>|\|", rest):
+        return hint
+    if len(rest) > _LOOP_SHOWN_CHARS:
+        rest = "| ..."
+    return (
+        f"{hint} A foreach statement cannot be piped or redirected: wrap it in $( ), as in "
+        f"`$(foreach {header} {{ ... }}) {rest}`."
+    )
+
+
+def _closing_bracket(code: str, opening: int) -> int | None:
+    """Where the bracket at *opening* closes in blanked *code*, or None."""
+    pairs = {"(": ")", "{": "}", "[": "]"}
+    depth = 0
+    open_char, close_char = code[opening], pairs[code[opening]]
+    for index in range(opening, len(code)):
+        if code[index] == open_char:
+            depth += 1
+        elif code[index] == close_char:
+            depth -= 1
+            if not depth:
+                return index
+    return None
 
 
 # PowerShell takes the typographic quotes for quotes of their kind, as it does ' and ".
