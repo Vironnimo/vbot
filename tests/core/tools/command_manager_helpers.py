@@ -16,6 +16,7 @@ from typing import Any
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.tools._interpreter_host import InterpreterHost
 from core.tools.command_manager import CommandManager, CommandReport, CommandReportFormatter
 from core.tools.process_tree import (
     ProcessTreeFacts,
@@ -275,7 +276,8 @@ async def command_harness(
 ) -> AsyncIterator[Harness]:
     """A started manager over fakes, with its log files under *tmp_path*; closed after.
 
-    Process queries and kills run inline unless *run_blocking* says otherwise.
+    Process queries and kills run inline unless *run_blocking* says otherwise;
+    output is cleaned inline.
     """
     clock = FakeClock()
     launcher = FakeLauncher()
@@ -288,6 +290,7 @@ async def command_harness(
         sleep=clock.sleep,
         run_blocking=run_blocking,
         max_live=max_live,
+        output_host=InterpreterHost.in_process(),
     )
     harness = Harness(manager, launcher, clock, sink, tmp_path)
     manager.add_changed_callback(harness.changes.append)

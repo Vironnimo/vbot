@@ -5,7 +5,7 @@ reader feeds the output pipe into ``CommandOutput``; the supervisor waits for
 the shell's exit and then for the processes it left running. A command has no
 time limit of its own: it runs until it ends or something stops it. Every
 decision runs on the Event Loop; process queries and kills run through the
-blocking runner.
+blocking runner, and output cleaning on the output host's worker.
 
 End of a command: the shell exited, output after the exit was read for at most
 ``COMMAND_DRAIN_SECONDS``, and either no process of the command runs, or the
@@ -370,19 +370,26 @@ class CommandRecord:
 
     async def _read(self) -> None:
         try:
-            while data := await self._process.read():
-                self._output.feed(data)
-                self._activity += 1
-                self._output_changed()
+            try:
+                # The next chunk is read once the previous one is cleaned: a
+                # command that prints faster waits for its pipe.
+                while data := await self._process.read():
+                    await self._output.feed(data)
+                    self._activity += 1
+                    self._output_changed()
+            except Exception:
+                _LOGGER.error(
+                    "Reading the output of command %s failed; it keeps running until it "
+                    "ends or is stopped",
+                    self.command_id,
+                    exc_info=True,
+                )
+            await self._output.end()
         except Exception:
             _LOGGER.error(
-                "Reading the output of command %s failed; it keeps running until it "
-                "ends or is stopped",
-                self.command_id,
-                exc_info=True,
+                "Completing the output of command %s failed", self.command_id, exc_info=True
             )
         finally:
-            self._output.end()
             self._eof.set()
             self._output_changed()
 
@@ -394,7 +401,7 @@ class CommandRecord:
 
     async def _flush_later(self) -> None:
         await self._services.sleep(COMMAND_LOG_REFRESH_SECONDS)
-        self._output.flush_log()
+        await self._output.flush_log()
 
     async def _publish_progress(self) -> None:
         callback = self._on_output
@@ -526,7 +533,7 @@ class CommandRecord:
         self._changed()
 
     def _release(self) -> None:
-        self._output.close_log()
+        self._output.close()
         if self._log_lease is not None:
             self._log_lease.finish()
             self._log_lease = None

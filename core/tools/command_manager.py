@@ -2,7 +2,8 @@
 
 ``CommandManager`` owns every command the shell Tool runs: its launch on pipes
 (no input, no terminal; ``_command_launch``), its clean output with a live log
-file (``_command_output``), the decision when it ended, its stop, the background
+file (``_command_output``, cleaned on subinterpreter workers off the Event
+Loop), the decision when it ended, its stop, the background
 registry with status events, the delivery of a background result, and the
 lifecycle scopes it belongs to (``_command_record``). Agent-facing wording
 belongs to the Tool, which formats ``CommandReport``.
@@ -59,7 +60,6 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import BinaryIO
 
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
@@ -68,7 +68,7 @@ from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
 from ._command_launch import launch_pipe_process
-from ._command_output import CommandOutput
+from ._command_output import CommandOutput, command_output_host
 from ._command_record import BlockingRunner, CommandRecord, CommandServices
 from ._command_types import (
     COMMAND_DRAIN_SECONDS,
@@ -106,6 +106,7 @@ from ._command_types import (
     OutputCallback,
     StopReason,
 )
+from ._interpreter_host import InterpreterHost
 from .process_tree import ProcessTreeTracker, track_process_tree
 
 _LOGGER = get_logger("tools.command_manager")
@@ -141,7 +142,10 @@ class CommandManager:
         max_live: int = COMMAND_MAX_LIVE,
         retention_seconds: float = COMMAND_RETENTION_SECONDS,
         sweep_interval_seconds: float = COMMAND_SWEEP_INTERVAL_SECONDS,
+        output_host: InterpreterHost | None = None,
     ) -> None:
+        """*output_host* cleans the commands' output; by default the manager
+        owns one with subinterpreter workers and closes it with itself."""
         if max_live < 1:
             raise ValueError("The command limit must be positive")
         if retention_seconds <= 0 or sweep_interval_seconds <= 0:
@@ -155,6 +159,8 @@ class CommandManager:
         self._max_live = max_live
         self._retention_seconds = retention_seconds
         self._sweep_interval_seconds = sweep_interval_seconds
+        self._owns_output_host = output_host is None
+        self._output_host = output_host or command_output_host()
         self._services = CommandServices(
             trigger_service=trigger_service,
             monotonic=monotonic,
@@ -224,7 +230,10 @@ class CommandManager:
         self._closed = True
         self._stop_sweeper()
         records = list(self._records.values())
-        _raise_unconfirmed([record for record in records if not record.kill_now()])
+        unconfirmed = [record for record in records if not record.kill_now()]
+        if self._owns_output_host:
+            self._output_host.close()
+        _raise_unconfirmed(unconfirmed)
 
     async def aclose(self) -> None:
         """Kill every command's processes, release them and await every task (Runtime stop).
@@ -252,6 +261,9 @@ class CommandManager:
             tasks.extend(record.pending_tasks())
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._owns_output_host:
+            # Waits for the output work already queued, such as closing log files.
+            await self._run_blocking(self._output_host.close)
         _raise_unconfirmed(
             [record for record, result in zip(records, killed, strict=True) if result is not True]
         )
@@ -562,21 +574,31 @@ class CommandManager:
         on_output: OutputCallback | None,
     ) -> CommandRecord:
         lease: TemporaryFileLease | None = None
-        log_file: BinaryIO | None = None
+        log_fd: int | None = None
+        output: CommandOutput | None = None
         process: CommandProcess | None = None
         try:
             if not await self._run_blocking(cwd.is_dir):
                 raise CommandLaunchError(f"The workdir is not a directory: {model_path(cwd)}")
             if self._temporary_files is not None:
-                lease, log_file = await self._run_blocking(_open_log, self._temporary_files)
+                lease, log_fd = await self._run_blocking(_open_log, self._temporary_files)
+            # Starts an output worker for this command when one more may run.
+            await self._run_blocking(self._output_host.prepare)
+            try:
+                output = CommandOutput.open(self._output_host, log_fd)
+            except RuntimeError as error:
+                raise CommandNotStartedError("vBot is shutting down") from error
+            log_fd = None
             try:
                 process = await self._launcher(argv, cwd, env, self._process_tracker)
             except Exception as error:
                 raise CommandLaunchError(f"The command could not be started: {error}") from error
         except BaseException:
-            if log_file is not None:
+            if output is not None:
+                output.close()
+            if log_fd is not None:
                 with contextlib.suppress(OSError):
-                    log_file.close()
+                    os.close(log_fd)
             if lease is not None:
                 lease.finish()
             raise
@@ -592,7 +614,7 @@ class CommandManager:
             execution_owner=execution_owner,
             formatter=formatter,
             on_output=on_output,
-            output=CommandOutput(log_file),
+            output=output,
             log_path=lease.path if lease is not None else None,
             log_lease=lease,
             services=self._services,
@@ -685,13 +707,14 @@ class CommandManager:
                 )
 
 
-def _open_log(temporary_files: TemporaryFileManager) -> tuple[TemporaryFileLease, BinaryIO]:
-    """Create the command's private log file (blocking)."""
+def _open_log(temporary_files: TemporaryFileManager) -> tuple[TemporaryFileLease, int]:
+    """Create the command's private log file and open it for writing (blocking)."""
     lease = temporary_files.create(COMMAND_TEMPORARY_CATEGORY, ".log")
     try:
         if os.name != "nt":
             lease.path.chmod(0o600)
-        return lease, lease.path.open("wb")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+        return lease, os.open(lease.path, flags, 0o600)
     except BaseException:
         lease.finish()
         raise

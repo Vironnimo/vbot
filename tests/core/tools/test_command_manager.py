@@ -84,13 +84,23 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
             [b"progress 10%\rprogress 50%\r", b"progress 100%\n", b"done\r\n"],
             ["progress 100%", "done"],
         ),
+        # A CRLF split between reads ends the line like one.
+        ([b"kept\r", b"\nnext\r\n"], ["kept", "next"]),
         ([b"abd\x08c\n"], ["abc"]),
         (["ä".encode()[:1], "ä".encode()[1:] + b" \xff ok\n"], ["ä � ok"]),
         # PowerShell writes a bare ESC for `e in a double-quoted string.
         ([b"literal \x1bexpected\n"], ["literal \\x1bexpected"]),
         ([b"no line break"], ["no line break"]),
     ],
-    ids=["escapes", "redrawn-line", "backspace", "utf-8", "data-escape", "last-line"],
+    ids=[
+        "escapes",
+        "redrawn-line",
+        "split-line-break",
+        "backspace",
+        "utf-8",
+        "data-escape",
+        "last-line",
+    ],
 )
 async def test_output_is_clean_text(
     harness: Harness, chunks: list[bytes], lines: list[str]
