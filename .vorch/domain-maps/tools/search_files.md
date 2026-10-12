@@ -26,6 +26,10 @@ services:
   retry (`pattern_retry`).
 - `core/tools/_search_results.py`: ordering, pages and rendering (`entry_page`,
   `content_window`, `content_page`) and the `summary`.
+- `core/tools/_search_hints.py`: when a pattern looks like file names
+  (`file_name_extensions`), literal text or fixed text to count, and the notes
+  for results that miss what the pattern seems to ask for; `_search` runs the
+  passes behind them.
 
 Two shared modules help. `core/tools/search.py` provides `SearchBudget`,
 `MAX_OUTPUT_BYTES` and path display, plus the listings the Chat `@` file picker
@@ -124,6 +128,12 @@ Modes:
   leave out empty and binary files and count lines nobody asked for. Swarm
   Agents sent `pattern: "."` with `output: "files"` to list files (Sessions,
   2026-10).
+- In content output such a regex stays a content search without a note: it
+  returns what was asked for (every line, paged) and the summary gives its scale
+  (`Showing matching lines 1-100 of 1452 matching lines in 13 files.`). Content
+  calls with `.`, `^` or `.*` in the Session database (11 by 2026-10-12) served
+  mixed purposes, such as reading one file named in `path` or dumping a tree,
+  so no single reinterpretation fits them.
 - Any other pattern stays a content search, because lines can contain a file
   name too (an import of `app.py`). When a content, files or count search finds
   no match, the handler lists the searched files (same paths, globs and flags)
@@ -138,11 +148,38 @@ Modes:
   and got only `No matches`; a note naming the matching files did not change
   its next call either (agent-eval 2026-10-10). Coverage:
   `test_search_files_arguments.py::test_a_content_search_without_matches_lists_files_whose_names_match`.
+- When no name matches either, a single pattern (without `-v`) gets one of two
+  notes (`_note_no_match`):
+  - **Literal text.** A regex holding an operator with which it can miss its own
+    text (`?+()[]{}^$\`; `.`, `*` and `|` cannot) is counted once more with
+    `--fixed-strings`. When the literal text occurs, the `note` says so and names
+    `-F`: `As a regular expression, pattern matches nothing ("?" is an operator);
+    as literal text it occurs in 1 file. Add -F to args to search for it
+    literally.` The call keeps its empty result. A pattern already under `-F`,
+    or one `pattern_retry` repaired, gets no note. A Swarm Agent searched a URL
+    with `?ele=` in it, got `No matches` and went on as if the URL were absent
+    (Swarm run 2026-10-12, one call).
+  - **File names.** Otherwise, in content or files output, a pattern shaped like
+    file names (`file_name_extensions` in `_search_hints.py`) whose names the
+    complete listing did not match gets `No file name matches pattern either. To
+    list similar file names, pass glob "harvest_*.txt" without pattern.` It
+    applies when an extension in the pattern is one a searched file has, or, for
+    files output with alternatives, when some searched file's name starts as
+    the pattern does (its fixed start up to the last `_`, `-` or `/`). The
+    example glob is that start plus `*` and the extension, or `*.<extension>`
+    when no file starts so. An identifier (`load_config`), alternatives in content
+    output, or alternatives no file name starts like (`save_a|save_b`) get no
+    note. A Swarm Agent searched for files that did not exist with
+    `output: "files"` three times in a row (names with extensions, with a
+    directory prefix, without extensions), each answered only `No matches in 812
+    searched files.` (Swarm run 2026-10-12). Coverage:
+    `test_a_regex_without_matches_names_the_literal_search_when_its_text_occurs`,
+    `test_a_file_name_pattern_without_matches_says_no_name_matches_either`.
 - A files search (`output: "files"`) that does find contents, with one pattern
-  shaped like file names (`_file_name_alternatives`: alternatives of words, `-`,
-  `/` and dots, optionally in one group with anchors, and either an extension or
-  at least two alternatives, so `verify.py`, `tools/corpus\.py`,
-  `(verify|corpus|fuzz)`), also matches the searched files' names on its first
+  shaped like file names (`file_name_extensions`: words, `-`, `/`, dots, `\.`,
+  `\b`, anchors, groups and alternation only, with either an extension or a `|`,
+  so `verify.py`, `tools/corpus\.py`, `(verify|corpus|fuzz)`,
+  `harvest_(3|22)\.txt`), also matches the searched files' names on its first
   page (`_note_named_files`). Named files give the `note` `The listed files
   contain text matching pattern; files whose names match it: <up to 5 labels>[,
   and N more (add --files to args to list them)].` Without any, the `note` `The
@@ -153,6 +190,17 @@ Modes:
   files that did not exist yet and read the files mentioning them as an answer
   (Sessions, 2026-10). Coverage:
   `test_a_file_list_search_for_file_names_names_the_files_with_those_names`.
+- Count output counts matching lines, as ripgrep's `-c` does. When the first
+  page of a complete count of fixed text (`finds_fixed_text`: no operator
+  besides `.` and `|`, escaped punctuation and `\b` allowed, a word character in each
+  alternative; or any pattern under `-F`) finds more matches than lines, the
+  `note` gives the total (`_note_match_count`, one more counting pass with
+  `--count-matches`): `The counts are matching lines, which hold 3 matches in
+  all. Add --count-matches to args to count matches per file.` A shape such as
+  `.` or `\w+`, `--count-matches`, `-U` (which counts matches already) and `-v`
+  get no note. A Swarm Agent counted an id that occurred three times on one JSON
+  line, got `1` and needed a second call with `--count-matches` (Swarm run
+  2026-10-12). Coverage: `test_a_line_count_says_how_many_matches_the_lines_hold`.
 
 The owner normalizer repairs common encodings and wrappers. It also accepts field
 names from other search Tools and command-line habits when their meaning is exact
@@ -536,6 +584,9 @@ blank placeholders, so no sentence has to warn about them.
 | Help: `Output: content names each file on its own line, followed by line:text for its matching lines and line-text for context lines.` | States the heading layout (Results and Paging -> Content lines) for an Agent that asks how to read results (F4); it replaced `content shows path:line:text for matching lines and path-line-text for context lines` with the layout change (2026-10-12). |
 | `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
 | Bare flag beside its field: `--glob in args had no value and was ignored; glob gives "tools/*.py".` | The call runs as the named field says; the note tells the Agent the flag had no effect, so it does not repeat it (Swarm run 2026-10-12: one call failed with `needs a value as the next item` although `glob` gave the value). |
+| Literal text: `As a regular expression, pattern matches nothing ("?" is an operator); as literal text it occurs in 1 file. Add -F to args to search for it literally.` | An empty result for a URL with `?` read as "the URL is absent" (Swarm run 2026-10-12). Names the operator so the Agent sees why, and the flag that searches the text. |
+| File names: `No file name matches pattern either. To list similar file names, pass glob "harvest_*.txt" without pattern.` | `No matches` alone did not tell the Agent that names were checked too; it searched the same missing files three times (Swarm run 2026-10-12). "without pattern" keeps the suggested call a listing, since `glob` beside `pattern` still searches contents. |
+| Count: `The counts are matching lines, which hold 3 matches in all. Add --count-matches to args to count matches per file.` | The Agent wanted occurrences and needed a second call (Swarm run 2026-10-12); the total answers most such calls without one. |
 | Unclear flag value: `search_files was not run: "ignore_case" must be true or false; received "maybe".` (lists: `must be a value or a list of values`) | A flag field the call cannot read used to stay an unknown field; unknown fields can now run without effect (`tools.md` -> Unknown fields), which would search without the flag the Agent asked for (F3). |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
@@ -560,8 +611,9 @@ Tests live in `tests/core/tools/test_search_files*.py`:
     engine, and the display.
 - **`test_search_files_arguments.py`** checks interpretation and tolerance:
   named fields, aliases, grep habits, command-line strings, path globs and lists,
-  missing paths and their hints, flags owned by vBot, conflicts, regex repair, and
-  the help examples.
+  missing paths and their hints, flags owned by vBot, conflicts, regex repair, the
+  notes for results that miss what the pattern seems to ask for, and the help
+  examples.
 - **`test_search_files_lifecycle.py`** checks native child lifecycle, memory
   polling and cancellation with real subprocesses. The already-finished child
   case uses in-memory pipes and a fixed exit code, independent of process startup.

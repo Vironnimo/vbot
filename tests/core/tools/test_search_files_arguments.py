@@ -130,17 +130,12 @@ async def test_a_file_name_glob_in_pattern_lists_matching_files(project: Path, a
         # A bare file name, as DeepSeek sent it to find a file (agent-eval 2026-10-10).
         ({"pattern": "app.py", "output": "files"}, "src/app.py"),
         ({"pattern": "src/view"}, "src/view.ts"),
-        ({"pattern": r"load\.ts$", "output": "files"}, None),
     ],
 )
 async def test_a_content_search_without_matches_lists_files_whose_names_match(
-    project: Path, arguments: dict, listed: str | None
+    project: Path, arguments: dict, listed: str
 ):
     result = await dispatch(project, arguments)
-    if listed is None:
-        assert "content" not in result["data"]
-        assert "note" not in result["data"]
-        return
     assert result["data"]["content"] == listed
     assert result["data"]["note"] == (
         "No file contents match pattern, so the files whose names match it were listed."
@@ -149,6 +144,85 @@ async def test_a_content_search_without_matches_lists_files_whose_names_match(
     contents = await dispatch(project, {**arguments, "pattern": arguments["pattern"] + "|load"})
     assert "matching line" in contents["data"]["summary"]
     assert contents["data"].get("note") != result["data"]["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "glob"),
+    [
+        # Swarm run 2026-10-12: names of files that did not exist, searched again and again.
+        ({"pattern": r"load\.ts$", "output": "files"}, "*.ts"),
+        ({"pattern": r"src/load_(a|b)\.py"}, "src/load_*.py"),
+        ({"pattern": "load_a|load_b", "output": "files"}, "load_*"),
+        # Text to find: one identifier, alternatives in content output, an extension no
+        # searched file has, alternatives no file name starts like.
+        ({"pattern": "load_a"}, None),
+        ({"pattern": "load_a|load_b"}, None),
+        ({"pattern": r"load\.rs$", "output": "files"}, None),
+        ({"pattern": "save_a|save_b", "output": "files"}, None),
+    ],
+)
+async def test_a_file_name_pattern_without_matches_says_no_name_matches_either(
+    project: Path, arguments: dict, glob: str | None
+):
+    (project / "src/load_x.py").write_text("x = 1\n")
+    result = await dispatch(project, arguments)
+    assert "content" not in result["data"]
+    if glob is None:
+        assert "note" not in result["data"]
+        return
+    # The note's example glob lists the files with similar names.
+    assert json.dumps(glob) in result["data"]["note"]
+    listing = await dispatch(project, {"glob": glob})
+    assert listing["data"]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "noted"),
+    [
+        # Swarm run 2026-10-12: the "?" of a URL made the regex miss the URL.
+        ("page.pl?id=7", True),
+        ("load(x)", True),
+        # The literal text is absent as well.
+        ("page.pl?id=8", False),
+    ],
+)
+async def test_a_regex_without_matches_names_the_literal_search_when_its_text_occurs(
+    project: Path, pattern: str, noted: bool
+):
+    (project / "links.txt").write_text("see page.pl?id=7 and load(x)\n")
+    result = await dispatch(project, {"pattern": pattern})
+    assert "content" not in result["data"]
+    assert ("note" in result["data"]) is noted
+    literal = await dispatch(project, {"pattern": pattern, "args": ["-F"]})
+    assert ("links.txt" in literal["data"].get("content", "")) is noted
+    assert "note" not in literal["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "noted"),
+    [
+        # Swarm run 2026-10-12: one counted line held the text three times.
+        ({"pattern": "zz", "output": "count"}, True),
+        ({"pattern": "zz", "args": ["-c"]}, True),
+        # Each counted line holds one match, the call counts matches already, or the
+        # pattern matches a shape whose matches nobody counts.
+        ({"pattern": "yy", "output": "count"}, False),
+        ({"pattern": "zz", "output": "count", "args": ["--count-matches"]}, False),
+        ({"pattern": r"\w+", "output": "count", "glob": "counts.txt"}, False),
+    ],
+)
+async def test_a_line_count_says_how_many_matches_the_lines_hold(
+    project: Path, arguments: dict, noted: bool
+):
+    (project / "counts.txt").write_text("zz zz zz\nzz\nyy\n")
+    result = await dispatch(project, arguments)
+    assert result["data"]["content"].startswith("counts.txt:")
+    assert ("note" in result["data"]) is noted
+    if noted:
+        assert "4" in result["data"]["note"]
 
 
 @pytest.mark.asyncio
