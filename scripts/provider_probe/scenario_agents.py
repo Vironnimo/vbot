@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from core.channels import ChannelConfig
 from core.tools import model_tool_name
 from core.tools.background_tasks import (
     BACKGROUND_TASKS_TOOL_DESCRIPTION,
@@ -197,16 +196,7 @@ def _channel_send_scenario(case_name: str) -> ProbeScenario:
         if case_name.startswith("mixed_")
         else (("discord",) if case_name.startswith("discord_") else ("telegram",))
     )
-    configs = [
-        ChannelConfig(
-            id=f"{platform}-probe",
-            platform=platform,
-            agent_id="probe-agent",
-            token_env_var=f"PROBE_{platform.upper()}_TOKEN",
-        )
-        for platform in platforms
-    ]
-    profile = _channel_send_definition_profile(configs)
+    profile = _channel_send_definition_profile(sorted(platforms))
     rendered_arguments = json.dumps(expected_arguments, ensure_ascii=False, separators=(",", ":"))
     instruction = (
         f"Call {CHANNEL_SEND_TOOL_NAME} exactly once with exactly this JSON object as its "
