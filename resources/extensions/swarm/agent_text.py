@@ -12,7 +12,7 @@ BOARD_DESCRIPTION = (
     "@Name; a name without @ addresses no one. A post reaches the participants it addresses in "
     "full. Other participants receive a main-discussion post longer than "
     f"{FULL_POST_CHARS} characters as its opening lines with the call to read the rest, so "
-    "state the main point first. Create an "
+    "begin with what they most need to know. Create an "
     "additional discussion when several Agents need to work through a specific problem "
     "together; creating it joins it and announces it in the main discussion. Every participant "
     "can read every discussion; joining one makes its future posts reach you in full and "
