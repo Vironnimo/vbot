@@ -128,7 +128,15 @@ _MESSAGES = {
         "only delete the blank line after the line {line}. Leave this edit out; to delete "
         "that blank line, end old_string with two line breaks and new_string with one."
     ),
-    "eof_not_found": "{where}: the file does not end with the lines before *** End of File.",
+    "eof_not_found": (
+        "{where}: the file does not end with the lines before *** End of File. That marker "
+        "changes only the end of the file; to change these lines where they are, leave it out."
+    ),
+    "eof_after_hint": (
+        '{where}: *** End of File adds the lines at the end of the file, but the @@ line "{hint}" '
+        "is not the last line. To add them after that line, leave out *** End of File; to add "
+        "them at the end of the file, leave out the @@ line."
+    ),
     "not_after_hint": (
         '{where}: the lines to replace are not after the @@ line "{hint}"; they are at '
         "{lines}, above it. After @@, put a line above them, such as the first line of the "
@@ -143,7 +151,7 @@ _MESSAGES = {
         "the file, such as the first line of the enclosing function, or leave @@ empty."
     ),
     "context_block_not_found": (
-        "{where}: the lines of the @@ block above the lines to replace were not found "
+        '{where}: the lines of the @@ block "{hint}" above the lines to replace were not found '
         "together. That block has no - or + line, so it only locates the lines to replace. "
         "Copy its lines exactly from the file, or leave that block out."
     ),

@@ -277,12 +277,19 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - Lines a hunk names that the file holds exactly, but not where its markers put
   them, fail with that reason instead of closest text equal to the patch: not at
   the end of the file under `*** End of File`, `eof_not_found` (`the file does
-  not end with the lines before *** End of File.`); above its `@@` lines,
+  not end with the lines before *** End of File. That marker changes only the
+  end of the file; to change these lines where they are, leave it out.`); above its `@@` lines,
   `not_after_hint` (`the lines to replace are not after the @@ line "..."; they
   are at line N, above it. After @@, put a line above them, such as the first
   line of the enclosing function, or leave @@ empty.`). Both still show the
   candidate excerpt. In the 2026-10 replay, these reports replaced 5 and 2
-  results that the dropped retries had applied.
+  results that the dropped retries had applied. An addition-only hunk whose last
+  `@@` line is not the file's last line fails `eof_after_hint` (`*** End of File
+  adds the lines at the end of the file, but the @@ line "..." is not the last
+  line. To add them after that line, leave out *** End of File; to add them at
+  the end of the file, leave out the @@ line.`) with that line's excerpt; it said
+  `No similar text is in the file` before, because it searched for the added
+  lines.
 - Match errors show bounded candidate excerpts with `read`-style gutters
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
@@ -554,8 +561,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - Context-only blocks before another `@@` become ordered precise locator hints
   for that next hunk, including multiline context. A missing anchor fails like a
   missing hint, and repeated anchors follow the hint rule above (step 2). A multiline block that is not found fails `context_not_found`
-  with the `context_block_not_found` wording (`the lines of the @@ block above
-  the lines to replace were not found together`), the closest text and its first
+  with the `context_block_not_found` wording (`the lines of the @@ block "..."
+  above the lines to replace were not found together`, naming the block by its
+  first line), the closest text and its first
   difference. The former report named the block's first line as not found,
   although the file had it (1 failure, Sessions, 2026-09). Duplicate matches after
   the anchor resolve to the first (step 9 above). Anchors do
@@ -660,6 +668,9 @@ replacements still went through Delete File plus Add File (agent-eval
 | Step 8 notes: `The line '...' between + lines has no + prefix and is not in the file; it was added as a new line.` / `N lines between + lines have no + prefix and are not in the file, such as '...'; they were added as new lines.` | The call was read differently from its prefixes, so the result says how (Tolerance: report every interpretation). It names a line, so the Agent can check it in the excerpt and need not reread the file. In the Agents' next calls, 42 of 126 such lines were written without `+` again (replay 2026-10); the note names the cause. |
 | `The empty line between + lines has no prefix and, read as unchanged, does not match the file; it was added as a new line.` (and the plural) | Same reading for empty lines only; it names why the line counts as added, since an empty line is in the file elsewhere. |
 | `The patch ends with *** End of File and has no *** End Patch, so that line was read as the end of the patch, not of the file: the change was made at line N.` | The marker asked for the end of the file and the change landed elsewhere; the line number lets the Agent see where without a read. Shown only when text follows the change. |
+| `eof_not_found` next step: `That marker changes only the end of the file; to change these lines where they are, leave it out.` | The error named the mismatch but no next step (Errors: three parts); the lines are in the file, so leaving out the marker is the call that applies the change where the excerpt shows them. |
+| `eof_after_hint`: `*** End of File adds the lines at the end of the file, but the @@ line "..." is not the last line. To add them after that line, leave out *** End of File; to add them at the end of the file, leave out the @@ line.` | Replaces `the file does not end with the lines before *** End of File` plus `No similar text is in the file`, a misleading cause for added lines, which are never in the file. Both next steps are safe as written. |
+| `context_block_not_found`: `the lines of the @@ block "..." above the lines to replace were not found together.` | Names the block by its first line: a patch can hold several `@@` blocks, and without candidates nothing else in the error said which one failed. |
 
 ## Verification
 

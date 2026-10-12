@@ -565,9 +565,8 @@ def test_end_of_file_anchors_are_never_ignored(tmp_path, body, code):
     result = apply(tmp_path, update(body))
     assert result["error"]["code"] == code
     if code == "text_not_found":
-        assert text(result).startswith(
-            "file.txt: the file does not end with the lines before *** End of File."
-        )
+        # The refusal names the marker that placed the change.
+        assert "*** End of File" in text(result).splitlines()[0]
     assert path.read_bytes() == b"section\ntail\n"
     if code == "text_not_found":
         # Without *** End Patch, a final *** End of File anchors the hunk at the end
@@ -742,7 +741,8 @@ def test_repeated_context_line_places_lines_that_occur_once_after_it(tmp_path):
         (
             "@@\n first\n secnd\n@@\n-value=1\n+value=2",
             "context_not_found",
-            "file.txt: the lines of the @@ block above the lines to replace were not found",
+            'file.txt: the lines of the @@ block "first ..." above the lines to replace were '
+            "not found",
         ),
     ],
 )

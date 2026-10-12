@@ -347,8 +347,8 @@ def test_context_block_that_is_not_found_shows_its_first_difference(tmp_path):
     result = apply(tmp_path, update("@@\n second\n markr\n@@\n-value=1\n+value=2"))
     assert result["error"]["code"] == "context_not_found"
     assert text(result) == (
-        "file.txt: the lines of the @@ block above the lines to replace were not found "
-        "together. That block has no - or + line, so it only locates the lines to replace. "
+        'file.txt: the lines of the @@ block "second ..." above the lines to replace were not '
+        "found together. That block has no - or + line, so it only locates the lines to replace. "
         "Copy its lines exactly from the file, or leave that block out.\n"
         "The closest text in the file, lines 4-5:\n4| second\n5| marker\n"
         "First difference, line 5: the file has 'marker' where the patch has 'markr'.\n"

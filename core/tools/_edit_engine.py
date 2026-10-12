@@ -587,12 +587,14 @@ def _insert(content: str, hunk: _Hunk, position: int, path: object) -> str:
         )
     new = _hunk_text(hunk, " +")
     if hunk.eof and position != len(content):
+        # Only an @@ line places added lines before the end.
         raise _PatchError(
             "text_not_found",
-            template="eof_not_found",
+            template="eof_after_hint",
             path=path,
             label=hunk.label,
-            details=_candidates(content, new),
+            hint=_hint_text(hunk.hints[-1]),
+            details=_candidates(content, hunk.hints[-1]),
         )
     ending = line_ending(content)
     inserted = new.replace("\n", ending) + ("" if hunk.no_newline else ending)
