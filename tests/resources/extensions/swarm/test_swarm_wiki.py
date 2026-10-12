@@ -12,6 +12,7 @@ from resources.extensions.swarm.wiki_text import (
     WIKI_CONFLICT_CONTENT,
     WIKI_CONFLICT_RETRY,
     WIKI_DIFFERENCE,
+    WIKI_DIFFERENCE_SPACING,
     WIKI_DIFFERENCES_MORE,
     WIKI_LIST_MATCHES,
     WIKI_LIST_NO_MATCH,
@@ -405,9 +406,11 @@ async def test_wiki_scope_management_recovery_and_targeted_edits(board):
         "new_text": "",
     }
     assert (await invoke(board, edit))["error"]["code"] == "wiki_edit_conflict"
-    assert (await invoke(board, {**edit, "content": "lost"}))["error"][
-        "code"
-    ] == "invalid_arguments"
+    for passage in (edit, {key: value for key, value in edit.items() if key != "old_text"}):
+        assert (await invoke(board, {**passage, "content": "lost"}))["error"][
+            "code"
+        ] == "invalid_arguments"
+    assert (await stored(board, page_id))["content"] == "same same"
     assert not (await invoke(board, {"action": "read", "page_id": page_id, "swarm_id": "foreign"}))[
         "ok"
     ]
@@ -613,9 +616,9 @@ async def test_wiki_expected_revision_is_needed_only_to_replace_a_peers_revision
     current = await stored(board, page_id)
     replace_all = await invoke(board, {"action": "update", "page_id": page_id, "content": "new"})
     assert visible(replace_all) == (
-        "Error (invalid_arguments): Replacing the whole content needs expected_revision: the "
-        "revision your content is based on. The current revision is 5; read it first if you "
-        "have not, so no newer change is lost. Nothing changed."
+        "Error (invalid_arguments): Nothing changed. Replacing the whole content needs "
+        "expected_revision: the revision your content is based on. The current revision is 5; "
+        "read it first if you have not, so no newer change is lost."
     )
     assert await stored(board, page_id) == current
     assert (await invoke(board, {"action": "delete", "page_id": page_id}))["ok"]
@@ -641,7 +644,7 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
         """Return the error's lines and what the read call it suggests shows."""
         message = (await edit(old, page, **extra))["error"]["message"]
         lines = message.splitlines()
-        assert lines[0].endswith("Nothing changed."), message
+        assert lines[0].startswith("Nothing changed."), message
         # The suggested call names the Tool, so it is not sent to the file read Tool.
         assert " swarm_wiki {" in lines[-1]
         shown = await invoke(board, continuation(lines[-1]))
@@ -667,13 +670,40 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
     # A fragment of a longer line points at that line.
     lines, passage = await miss("three replicas behind the proxy")
     assert passage == "The deployment uses three replicas behind the load balancer today."
+    # old_text may start inside its first line and end inside its last; the line named
+    # is the one that really differs, here a continuation line without its indentation.
+    listed = await create(
+        board,
+        "# Fields\n- item (`date` free text,\n  runtime-parsed); `era` canonical band\n"
+        "  stored exactly as rendered\n- other item",
+        "Fields",
+    )
+    for old in (
+        "`era` canonical band\nstored exactly as rendered",
+        "runtime-parsed); `era` canonical band\nstored exactly",
+    ):
+        lines, passage = await miss(old, listed)
+        assert _differing_lines(lines) == ["4"], lines
+        assert (
+            WIKI_DIFFERENCE_SPACING.format(
+                line=4,
+                page="'  stored exactly as rendered'",
+                copy=repr(old.splitlines()[1]),
+                side="start",
+            )
+            in lines
+        )
+        assert "  stored exactly as rendered" in passage
+    # A first line that differs in its text is still named.
+    lines, _ = await miss("`era` canonical bend\n  stored exactly as rendered", listed)
+    assert _differing_lines(lines) == ["3"]
     assert visible(await edit("same")) == (
-        "Error (wiki_edit_conflict): old_text occurs 2 times, all in line 5. Include "
-        "neighboring text so it occurs only once. Nothing changed.\nline 5:\nsame same\nEnd"
+        "Error (wiki_edit_conflict): Nothing changed. old_text occurs 2 times, all in line 5. "
+        "Include neighboring text so it occurs only once.\nline 5:\nsame same\nEnd"
     )
     assert visible(await edit("value")) == (
-        "Error (wiki_edit_conflict): old_text occurs 2 times, at lines 3 and 4. Include "
-        "neighboring text so it occurs only once. Nothing changed.\nline 3:\nRow 1: value\n"
+        "Error (wiki_edit_conflict): Nothing changed. old_text occurs 2 times, at lines 3 "
+        "and 4. Include neighboring text so it occurs only once.\nline 3:\nRow 1: value\n"
         "Row 2: value\nline 4:\nRow 2: value\nsame same"
     )
     # A retyped passage names every differing line at once, up to a bound, and tells a
@@ -704,7 +734,7 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
         1,
     )
     lines, passage = await miss("Row 1: value", expected_revision=1)
-    assert lines[0].startswith("The page changed since revision 1 (now 2)")
+    assert lines[0].startswith("Nothing changed. The page changed since revision 1 (now 2)")
     assert board.swarm["participants"][1]["display_name"] in lines[1]
     assert lines[2:6] == [
         "@@ -2,3 +2,3 @@",
@@ -745,14 +775,14 @@ async def test_wiki_conflicts_show_what_changed_and_the_retry(board):
     ):
         message = (await invoke(board, {**stale, **change}))["error"]["message"]
         first, header, *diff, last = message.splitlines()
-        assert first.endswith("Nothing changed.")
+        assert first.startswith("Nothing changed.")
         assert peer in header
         assert diff == ["@@ -1,3 +1,3 @@", " Intro", "-Status: pending", "+Status: done", " End"]
         assert last == next_step.format(current=2)
     future = await invoke(board, {**stale, "expected_revision": 7, "title": "Renamed"})
     assert visible(future) == (
-        "Error (wiki_revision_conflict): Revision 7 does not exist yet; the current revision "
-        "is 2. Repeat the call with expected_revision 2 if it still applies. Nothing changed."
+        "Error (wiki_revision_conflict): Nothing changed. Revision 7 does not exist yet; the "
+        "current revision is 2. Repeat the call with expected_revision 2 if it still applies."
     )
     current = await stored(board, page_id)
     assert (current["revision"], current["title"]) == (2, "Notes")
@@ -812,9 +842,9 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
     # A change never lands on a guessed page.
     guessed = await invoke(board, {"action": "delete", "page_id": "Release plan"})
     assert visible(guessed) == (
-        "Error (wiki_page_not_found): No page Release plan exists in your group's Wiki. The "
-        'closest page is "Release plan" (w1). Repeat the call with page_id "w1" if you meant '
-        "it. Nothing changed."
+        "Error (wiki_page_not_found): Nothing changed. No page Release plan exists in your "
+        'group\'s Wiki. The closest page is "Release plan" (w1). Repeat the call with page_id '
+        '"w1" if you meant it.'
     )
     # Without page_id, an update runs on the one live page that holds its exact old_text.
     changed = {"action": "update", "page_id": "w2", "old_text": "x", "new_text": "no"}
@@ -837,7 +867,7 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
     ):
         unnamed = await invoke(board, {"action": "update", "old_text": old_text, "new_text": "y"})
         assert visible(unnamed) == (
-            f"Error (invalid_arguments): update needs page_id. {named} Nothing changed."
+            f"Error (invalid_arguments): Nothing changed. update needs page_id. {named}"
         )
     assert [(await stored(board, page))["content"] for page in ("w1", "w2")] == ["Body text", "no"]
     for unknown in ("w9", "wpg_unrelated"):
@@ -866,9 +896,9 @@ async def test_wiki_create_decides_about_a_page_id_and_a_missing_title(board):
         board, {"action": "create", "page_id": page_id, "title": "Other", "content": "x"}
     )
     assert visible(existing) == (
-        f"Error (invalid_arguments): create makes a new page, but page_id names the existing page "
-        f'"Notes" ({page_id}). To change that page, use update; to add a separate page, omit '
-        "page_id. Nothing changed."
+        "Error (invalid_arguments): Nothing changed. create makes a new page, but page_id names "
+        f'the existing page "Notes" ({page_id}). To change that page, use update; to add a '
+        "separate page, omit page_id."
     )
     fresh = await invoke(
         board, {"action": "create", "page_id": "wpg_mine", "title": "Other", "content": "x"}
@@ -876,14 +906,14 @@ async def test_wiki_create_decides_about_a_page_id_and_a_missing_title(board):
     assert fresh["data"]["note"] == "create makes a new page, so page_id wpg_mine was ignored."
     untitled = await invoke(board, {"action": "create", "content": "no heading"})
     assert visible(untitled) == (
-        "Error (invalid_arguments): create needs a title. Nothing changed."
+        "Error (invalid_arguments): Nothing changed. create needs a title."
     )
     wrong_field = await invoke(
         board, {"action": "create", "title": "T", "content": "x", "old_text": "a"}
     )
     assert visible(wrong_field) == (
-        "Error (invalid_arguments): old_text is used by update, not by create. Repeat the call "
-        "without it."
+        "Error (invalid_arguments): Nothing changed. old_text is used by update, not by "
+        "create. Repeat the call without it."
     )
     assert sorted(page["title"] for page in await pages(board)) == ["Notes", "Other"]
 
