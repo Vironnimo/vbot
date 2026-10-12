@@ -162,10 +162,10 @@ def _read_posts(
             ).fetchone()
             if anchor is None:
                 raise SwarmStoreError("message_not_found", field="before")
-            if discussion_id is not None and discussion_id != anchor["discussion_id"]:
-                _discussion(connection, swarm_id, discussion_id)
-                raise SwarmStoreError("before_discussion_mismatch", field="before")
-            discussion_id, before_sequence = anchor["discussion_id"], int(anchor["sequence"])
+            # Post numbers count across the Board, so a post of another discussion
+            # also ends a page of the named one.
+            discussion_id = discussion_id or anchor["discussion_id"]
+            before_sequence = int(anchor["sequence"])
         discussion_id = discussion_id or _main(connection, swarm_id)
         _discussion(connection, swarm_id, discussion_id)
         return _post_page(

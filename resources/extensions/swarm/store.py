@@ -499,7 +499,8 @@ class SwarmStore:
     ) -> Page:
         """Read one post, or a page of a discussion's posts ending at its newest post.
 
-        ``before`` ends the page just below that post and ``cursor`` continues a
+        ``before`` ends the page just below that post's number, in ``discussion_id``
+        when given and otherwise in the post's own discussion; ``cursor`` continues a
         previous page; ``offset`` then skips that many more of the newest posts.
         """
         if message_id is not None and (

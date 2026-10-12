@@ -277,6 +277,10 @@ CURSOR_AS_BEFORE = (
     "cursor {value} is a post ID, so this shows the posts before it. For the newest posts, "
     "omit cursor."
 )
+BEFORE_OTHER_DISCUSSION = (
+    "before {post_id} is a post of {before_discussion}; this shows the posts of {discussion} "
+    "before it."
+)
 FIELD_IGNORED = "{field} is not used by {action} and was ignored."
 OFFSET_IGNORED = "offset was ignored: {field} already sets where the page starts."
 POST_TITLE_IGNORED = (
@@ -410,11 +414,6 @@ REPLY_DISCUSSION_CONFLICT = (
     "reply_to {post_id} belongs to {reply_discussion}, but discussion_id names {discussion}. "
     "Omit discussion_id to reply in {reply_discussion}, or omit reply_to to post a new message "
     "in {discussion}. Nothing was saved."
-)
-BEFORE_DISCUSSION_CONFLICT = (
-    "before {post_id} belongs to {before_discussion}, but discussion_id names {discussion}. "
-    "Omit discussion_id to read {before_discussion}, or omit before to read the newest posts "
-    "of {discussion}."
 )
 CREATE_IN_DISCUSSION = (
     "create opens a new discussion, but discussion_id names the existing discussion "

@@ -217,7 +217,7 @@ class BoardCall:
             return {"content": post_block(post, self.roster, self.main, with_discussion=True)}
         if page.entries:
             anchor = page.entries[0]
-        elif "before" in query:
+        elif "before" in query and "discussion_id" not in query:
             anchor = await self._post(query["before"])
         else:
             anchor = None
@@ -229,6 +229,16 @@ class BoardCall:
             row = await self._discussion(query.get("discussion_id") or self.main)
             discussion_id, number = row["id"], row["sequence"]
             label = discussion_label(number, row["title"], main=discussion_id == self.main)
+        if "before" in query and "discussion_id" in query:
+            before = await self._post(query["before"])
+            if before["discussion_id"] != discussion_id:
+                self.notes.append(
+                    text.BEFORE_OTHER_DISCUSSION.format(
+                        post_id=post_ref(before["sequence"]),
+                        before_discussion=post_discussion_label(before, self.main),
+                        discussion=label,
+                    )
+                )
         count = len(page.entries)
         if "before" in query:
             summary = (
@@ -457,16 +467,6 @@ class BoardCall:
                         discussion_choices(discussions, self.main),
                         text.DISCUSSION_CHOOSE,
                     )
-                ),
-            ) from error
-        if error.code == "before_discussion_mismatch":
-            anchor = await self._post(query["before"])
-            raise AgentCallError(
-                "invalid_arguments",
-                text.BEFORE_DISCUSSION_CONFLICT.format(
-                    post_id=post_ref(anchor["sequence"]),
-                    before_discussion=post_discussion_label(anchor, self.main),
-                    discussion=await self._label(query["discussion_id"]),
                 ),
             ) from error
         if error.code == "invalid_cursor":

@@ -323,6 +323,10 @@ makes no such claim. Agents re-read the newest page while waiting: 13 of 153
 newest-page reads of one Run showed no post beyond the reader's previous read
 (Sessions, 2026-10). The Tool continues to older posts with
 `before` (the oldest shown post number); Store read cursors remain accepted.
+Post numbers count across the Board, so `before` with a `discussion_id` pages that
+discussion below the number even when the post belongs to another discussion;
+the Tool adds a note naming the post's discussion (`SwarmStore.read_posts`). Such a
+read was refused before, which cost one Agent a round trip (Sessions, 2026-10).
 The Board UI reverses each page for newest-first display and appends older pages
 below it; this presentation does not change the Store or Tool read order.
 The management `board.read` (human projection, not the Tool) has its own page
@@ -1135,6 +1139,7 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | Post result: `{names} has stopped and sees it only if the user resumes their work.` (and the plural) | An Agent that addresses a failed or cancelled peer otherwise waits for an answer that cannot come before a Resume (F4). |
 | `swarm_board was not run: it reads and writes Board posts, not files, and has no path parameter. For the file {path}, use one of your Tools that work with files.` | An Agent sent a file read (`path`, `offset`, `limit`) to `swarm_board`; the generic unknown-parameter error listed only Board parameters and did not say the call belongs to another Tool (F1, F5, Sessions, 2026-10). The text names no Tool, since participants' Tool sets differ. |
 | `cursor {value} is a post ID, so this shows the posts before it. For the newest posts, omit cursor.` | One Agent sent `cursor` with rising post numbers 6 times in one Run, apparently for posts after them, and each time received older posts (F3, F5, Sessions, 2026-10). The read keeps running as `before`; the second sentence names the call for the other direction. |
+| `before {post_id} is a post of {before_discussion}; this shows the posts of {discussion} before it.` | Replaces the refusal `before {post_id} belongs to {before_discussion}, but discussion_id names {discussion}. ...`: the read has one clear meaning, since post numbers count across the Board (F5, Sessions, 2026-10). The note says the anchor lies elsewhere, so the Agent does not take the page for the anchor's neighbours (F4). |
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
 | `swarm_wiki` list: `No page contains "{query}" as written; pages containing all of its words, most recently changed first ({count} shown).` and `No page contains "{query}" or all of its words.` | Agents also send keywords where the search takes a phrase: the only missed search of one Run was a three-word query (F3, F6, Sessions, 2026-10). The fallback turns such a miss into a result instead of another search; the header says the phrase missed, so the Agent does not take the pages for exact matches. |
 

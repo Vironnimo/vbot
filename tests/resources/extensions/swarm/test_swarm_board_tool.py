@@ -7,6 +7,7 @@ import pytest
 
 from core.chat import ChatMessage
 from resources.extensions.swarm.agent_text import (
+    BEFORE_OTHER_DISCUSSION,
     BOARD_ADDRESSED_STOPPED,
     BOARD_NEW,
     BOARD_NOTHING_NEW,
@@ -587,10 +588,14 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     older, _ = await dispatch(board, {"action": "read", "cursor": first})
     assert older["data"]["note"] == CURSOR_AS_BEFORE.format(value=first)
     assert older["data"]["page"].startswith("Posts before #3 in the main discussion (d1)")
-    conflict, _ = await dispatch(board, {"action": "read", "discussion_id": topic, "before": first})
-    assert conflict["error"]["message"].startswith(
-        'before #3 belongs to the main discussion (d1), but discussion_id names discussion "Topic" '
-        "(d2)."
+    # Post numbers count across the Board, so a post of another discussion ends the page too.
+    crossed, _ = await dispatch(board, {"action": "read", "discussion_id": topic, "before": first})
+    assert crossed["data"]["page"].startswith('Posts before #3 in discussion "Topic" (d2)')
+    assert crossed["data"]["content"].endswith(":\nopening")
+    assert crossed["data"]["note"] == BEFORE_OTHER_DISCUSSION.format(
+        post_id=first,
+        before_discussion="the main discussion (d1)",
+        discussion='discussion "Topic" (d2)',
     )
     texts = [post["text"] for post in await board_posts(board)]
     assert "misreplied" not in texts
