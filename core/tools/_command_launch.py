@@ -429,14 +429,15 @@ class PipeLauncher:
             self._end(warm)
 
     def _end(self, warm: _WarmShell) -> None:
-        # Without a running Event Loop the tasks have nothing left to cancel.
-        with contextlib.suppress(RuntimeError):
-            if warm.expiry is not None:
+        # A closed Event Loop refuses the cancellations; its tasks never run again.
+        if warm.expiry is not None:
+            with contextlib.suppress(RuntimeError):
                 warm.expiry.cancel()
-            if not warm.task.done():
-                # A cancelled start ends the process it created.
+        if not warm.task.done():
+            # A cancelled start ends the process it created.
+            with contextlib.suppress(RuntimeError):
                 warm.task.cancel()
-                return
+            return
         if not warm.task.cancelled() and warm.task.exception() is None:
             warm.task.result().kill()
 

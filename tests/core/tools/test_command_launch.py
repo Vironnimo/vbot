@@ -8,6 +8,7 @@ command's workdir and environment, and nothing the command starts gets input.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import shutil
 import sys
@@ -241,34 +242,55 @@ async def test_a_warm_shell_nobody_claims_ends_after_the_idle_time(tmp_path: Pat
     await launcher.aclose()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("closing", ["aclose", "close"])
+@pytest.mark.parametrize("closing", ["aclose", "close", "close-after-the-event-loop"])
 @pytest.mark.parametrize("state", ["ready", "starting"])
-async def test_closing_ends_the_warm_shell_at_once_and_starts_no_other(
+def test_closing_ends_the_warm_shell_at_once_and_starts_no_other(
     tmp_path: Path, closing: str, state: str
 ) -> None:
     starts = Starts()
     launcher = _launcher(starts, FakeClock())
-    # The fake start of the first shell returns without yielding to the Event Loop.
-    await launcher.launch(ARGV, tmp_path, BASE, _tracker, b"first")
-    if state == "starting":
-        # The warm shell's start waits until after the close.
-        starts.gate = asyncio.Event()
-    await turns()
 
-    if closing == "aclose":
-        await launcher.aclose()
-    else:
-        launcher.close()
-    await turns()
-    if starts.gate is not None:
-        starts.gate.set()
+    async def open_warm_shell() -> None:
+        # The fake start of the first shell returns without yielding to the Event Loop.
+        await launcher.launch(ARGV, tmp_path, BASE, _tracker, b"first")
+        if state == "starting":
+            # The warm shell's start waits until after the close.
+            starts.gate = asyncio.Event()
         await turns()
+
+    async def close() -> None:
+        if closing == "aclose":
+            await launcher.aclose()
+        else:
+            launcher.close()
+        await turns()
+        if starts.gate is not None:
+            starts.gate.set()
+            await turns()
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(open_warm_shell())
+        if closing == "close-after-the-event-loop":
+            # The tasks of a closed Event Loop never run again; a start in progress
+            # creates no shell.
+            loop.close()
+            launcher.close()
+            starts.gate = None
+        else:
+            loop.run_until_complete(close())
+    finally:
+        loop.close()
 
     # A ready shell is killed; a start in progress is cancelled before it creates one.
     assert [shell.killed for shell in starts.shells[1:]] == ([True] if state == "ready" else [])
-    shell = await _launch(launcher, tmp_path, b"after")
+    shell = asyncio.run(_launch(launcher, tmp_path, b"after"))
     assert shell.requests == [b"after"] and len(starts.cwds) == 3
+    if closing == "close-after-the-event-loop":
+        # The closed Event Loop's pending tasks, which the launcher's clock still
+        # holds, are destroyed within the test; asyncio logs that they were pending.
+        del launcher
+        gc.collect()
 
 
 @pytest.mark.asyncio
