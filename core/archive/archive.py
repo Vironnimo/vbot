@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from core.projects import AgentResolver, ProjectStore
     from core.runs import ChatRunManager
     from core.sessions import ChatSessionManager
+    from core.tools.command_manager import CommandManager
     from core.tools.terminal_manager import TerminalManager
 
 _LOGGER = get_logger("archive")
@@ -101,6 +102,7 @@ class ArchiveServices:
     runs: ChatRunManager
     automation: AutomationReferences
     terminals: TerminalManager
+    commands: CommandManager
     snapshot_barrier: SnapshotBarrier
     agent_references: Callable[[str], Awaitable[Sequence[str]]]
     import_usage: Callable[[], None]
@@ -163,6 +165,7 @@ class ArchiveService:
             if references:
                 raise ArchiveSubjectInUseError(ARCHIVE_KIND_AGENT, agent_id, references)
             await services.terminals.close_agent_scope(agent_id, None)
+            await services.commands.close_agent_scope(agent_id, None)
             outcome = await services.sessions.run_async(
                 _operations.archive_agent, services, agent_id
             )
@@ -209,6 +212,7 @@ class ArchiveService:
                     [reference.to_dict() for reference in references],
                 )
             await services.terminals.close_project_scope(project_id)
+            await services.commands.close_project_scope(project_id)
             outcome = await services.sessions.run_async(
                 lambda: _operations.archive_project(
                     services, project_id, copy_identity_files=copy_identity_files
@@ -275,6 +279,7 @@ class ArchiveService:
                 await services.terminals.close_scope(
                     TerminalOwner(member.project_id, member.agent_id, member.session_id)
                 )
+                await services.commands.close_scope(member)
             # Archiving the rows and moving the current pointer is one unit for data snapshots.
             async with services.snapshot_barrier.compound_mutation_async():
                 ref = await sessions.archive(address)

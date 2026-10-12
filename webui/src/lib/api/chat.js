@@ -367,6 +367,52 @@ export function stopAll(agentId, sessionId, options = {}) {
   );
 }
 
+// Stops one background command of a Session for the user, or the processes
+// it left running after its shell exited; a stopped command's Agent then
+// receives the stopped result. Resolves to `{ stopped, status }`: `stopped`
+// is false when nothing of the command ran any longer, `status` is its
+// status afterwards.
+export function stopCommand(sessionId, commandId, options = {}) {
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'chat.stop_command',
+  );
+  requireNonEmptyString(
+    commandId,
+    'Command id must be a non-empty string',
+    'chat.stop_command',
+  );
+
+  return rpc(
+    'chat.stop_command',
+    { session_id: sessionId, command_id: commandId },
+    options,
+  );
+}
+
+// Reads a background command's status and its newest output lines as plain
+// text: `{ status, still_running, output }`; `still_running` is true while
+// processes it started still run after its shell exited.
+export function loadCommandOutput(sessionId, commandId, options = {}) {
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'chat.command_output',
+  );
+  requireNonEmptyString(
+    commandId,
+    'Command id must be a non-empty string',
+    'chat.command_output',
+  );
+
+  return rpc(
+    'chat.command_output',
+    { session_id: sessionId, command_id: commandId },
+    options,
+  );
+}
+
 export function controlRun(
   { agentId, sessionId, runId, action, toolCallId } = {},
   options = {},

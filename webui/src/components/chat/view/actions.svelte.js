@@ -363,6 +363,14 @@ export function createChatViewActions(context) {
     });
   };
 
+  const handleStopSubAgentWork = async ({ tool } = {}) => {
+    await context.chatController.stopSubAgentWork({
+      tool,
+      sessionState: context.target.activeSessionState,
+      projectId: context.target.displayedSessionProjectId(),
+    });
+  };
+
   const handleSubAgentWorkWanted = ({ tool } = {}) => {
     void context.chatController.loadSubAgentWork({
       tool,
@@ -370,12 +378,19 @@ export function createChatViewActions(context) {
     });
   };
 
-  const handleCancelBackgroundCommand = async ({ terminalId } = {}) => {
-    await context.chatController.cancelCommand({
+  const handleStopBackgroundCommand = async ({ commandId } = {}) => {
+    await context.chatController.stopCommand({
       sessionState: context.target.activeSessionState,
-      terminalId,
+      commandId,
     });
   };
+
+  // The Activity panel's output view reads the displayed Session's command.
+  const loadCommandOutput = (commandId) =>
+    context.chatController.loadCommandOutput({
+      sessionState: context.target.activeSessionState,
+      commandId,
+    });
 
   const handleSteerQueuedMessage = async (queuedMessageId) => {
     const sessionState = context.target.activeSessionState;
@@ -522,11 +537,17 @@ export function createChatViewActions(context) {
     get handleCancelSubAgent() {
       return handleCancelSubAgent;
     },
+    get handleStopSubAgentWork() {
+      return handleStopSubAgentWork;
+    },
     get handleSubAgentWorkWanted() {
       return handleSubAgentWorkWanted;
     },
-    get handleCancelBackgroundCommand() {
-      return handleCancelBackgroundCommand;
+    get handleStopBackgroundCommand() {
+      return handleStopBackgroundCommand;
+    },
+    get loadCommandOutput() {
+      return loadCommandOutput;
     },
     get handleSteerQueuedMessage() {
       return handleSteerQueuedMessage;

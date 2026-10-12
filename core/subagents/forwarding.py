@@ -258,10 +258,16 @@ class SubAgentForwarding:
 async def running_entries(runtime: RuntimeServices, address: SessionAddress) -> list[RunningEntry]:
     """Return what of the Sub-Agent at *address* is still running, as of now.
 
-    Attached terminals and background commands, and its own Sub-Agents that
-    are working (a Run or queued input) and not taken over by the user.
+    Its unfinished background commands, attached terminals, and its own
+    Sub-Agents that are working (a Run or queued input) and not taken over by
+    the user.
     """
     entries: list[RunningEntry] = []
+    command_manager = runtime.command_manager
+    if command_manager is not None:
+        for report in command_manager.commands([address]):
+            if not report.finished:
+                entries.append(RunningEntry("background command", report.command_id, report.label))
     owner = TerminalOwner(
         project_id=address.project_id, agent_id=address.agent_id, session_id=address.session_id
     )
@@ -270,9 +276,8 @@ async def running_entries(runtime: RuntimeServices, address: SessionAddress) -> 
         for info in terminal_manager.list_terminals():
             if info.attachment != owner or info.finished_at is not None:
                 continue
-            kind = "background command" if info.kind == "command" else "terminal"
             label = info.name or " ".join((info.command, *info.arguments)).strip()
-            entries.append(RunningEntry(kind, info.terminal_id, _single_line(label)))
+            entries.append(RunningEntry("terminal", info.terminal_id, _single_line(label)))
     sessions = runtime.chat_sessions
     for link in await sessions.run_async(children, sessions, address):
         if link.taken_over_at is None and is_working(runtime, link.session):

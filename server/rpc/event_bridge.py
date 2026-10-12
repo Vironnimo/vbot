@@ -155,15 +155,27 @@ def _publish_provider_auth_completed_event(
     )
 
 
-def publish_command_status_changed(state: Any, terminal_id: str, status: str) -> None:
-    """Forward the new status of a handed-off shell command to accessors.
+def publish_command_status_changed(
+    state: Any, command_id: str, *, session_id: str, status: str, still_running: bool
+) -> None:
+    """Forward the new state of a background shell command to accessors.
 
-    ``status`` is ``running``, ``completed``, ``failed`` or ``stopped``, as in
-    the ``background_command_statuses`` of ``chat.history``.
+    ``session_id`` names the Session the command belongs to; accessors show
+    the status only there, since a fork shares its source's History but not
+    its commands. ``status`` is ``running``, ``completed``, ``failed`` or
+    ``stopped``, as in the ``background_command_statuses`` of ``chat.history``.
+    ``still_running`` is true while processes the command started still run
+    after its shell exited (``background_commands_still_running`` there); the
+    user can stop them with ``chat.stop_command``.
     """
     state.event_bus.publish(
         COMMAND_STATUS_CHANGED_EVENT,
-        {"terminal_id": terminal_id, "status": status},
+        {
+            "command_id": command_id,
+            "session_id": session_id,
+            "status": status,
+            "still_running": still_running,
+        },
     )
 
 

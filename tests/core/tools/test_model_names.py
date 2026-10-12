@@ -20,6 +20,7 @@ OFFERED = (
     "analyze_image",
     "generate_speech",
     "skill",
+    "background_tasks",
 )
 
 
@@ -54,6 +55,9 @@ def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
         ("vision_analyze", "analyze_image"),
         ("tts", "generate_speech"),
         ("skills_list", "skill"),
+        ("KillShell", "background_tasks"),
+        ("BashOutput", "background_tasks"),
+        ("TaskStop", "background_tasks"),
         # One inserted, removed, replaced or swapped character.
         pytest.param(
             "powerhell",

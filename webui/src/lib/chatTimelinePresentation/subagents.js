@@ -18,10 +18,19 @@ import { qualifyAgentAddress } from '$lib/agentAddress.js';
 const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
 
 // The `subagent` Tool's actions: `run` starts a new Sub-Agent in the
-// background, `send` gives an existing one another message, `list` shows them,
-// `cancel` stops one. Persisted calls may still say `status`, the former name
-// of `list`.
+// background, `send` gives an existing one another message. Persisted calls
+// may still say `list` (or `status`, its former name) and `cancel`, which the
+// Tool had before `background_tasks` took them over.
 const SUBAGENT_ACTIONS = new Set(['run', 'send', 'list', 'cancel']);
+
+// A `subagent` call that lists, checks or stops Sub-Agents runs as
+// `background_tasks` and carries that Tool's result: listed tasks, or one
+// Sub-Agent or background command. Its statuses (`queued`, a command's
+// `running`) are no run or send.
+const isBackgroundTasksResult = (data) =>
+  Array.isArray(data.tasks) ||
+  ['subagent', 'command'].includes(trimmedString(data.type)) ||
+  Boolean(trimmedString(data.command_id));
 
 // Result statuses of a message delivered to an existing Sub-Agent: steered
 // into its active Run, starting a new Run, or queued for its next one.
@@ -58,9 +67,10 @@ const subAgentDescriptionText = (args) =>
   ) ?? '';
 
 /**
- * The action a `subagent` Tool row performed: 'run', 'send', 'list',
- * 'cancel', or '' when it cannot be told (another Tool, or a call the server
- * refused before it knew what it meant).
+ * The action a `subagent` Tool row performed: 'run', 'send', a persisted
+ * 'list' or 'cancel', or '' when it is none of these (another Tool, a call
+ * that ran as `background_tasks`, or a call the server refused before it knew
+ * what it meant).
  *
  * The call's own action decides, with two exceptions the server resolves
  * itself: a `run` naming an existing Sub-Agent delivers a message (its result
@@ -108,6 +118,9 @@ export const subAgentAction = (tool) => {
   if (SUBAGENT_ACTIONS.has(action)) {
     return action;
   }
+  if (isBackgroundTasksResult(data)) {
+    return '';
+  }
   if (Array.isArray(data.subagents)) {
     return 'list';
   }
@@ -130,8 +143,9 @@ export const isSubAgentSpawnTool = (tool) => subAgentAction(tool) === 'run';
 // A row that gave an existing Sub-Agent another message.
 export const isSubAgentSendTool = (tool) => subAgentAction(tool) === 'send';
 
-// Rows that address one Sub-Agent and link to its Session. `list` and
-// `cancel` render as ordinary Tool rows.
+// Rows that address one Sub-Agent and link to its Session. Persisted `list`
+// and `cancel` calls and calls that ran as `background_tasks` render as
+// ordinary Tool rows.
 export const isSubAgentTargetTool = (tool) => {
   const action = subAgentAction(tool);
   return action === 'run' || action === 'send';

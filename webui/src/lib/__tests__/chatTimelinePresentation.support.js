@@ -82,7 +82,7 @@ function sendSubAgentTool(overrides = {}) {
   };
 }
 
-// A `bash` call whose command went on running in terminal `term_one`.
+// A `bash` call whose command `cmd_one` went on running in the background.
 function backgroundCommandTool(overrides = {}) {
   return {
     type: 'tool_call',
@@ -95,7 +95,7 @@ function backgroundCommandTool(overrides = {}) {
       ok: true,
       data: {
         status: 'running',
-        terminal_id: 'term_one',
+        command_id: 'cmd_one',
         output: 'listening',
         next: 'The result arrives as a new message.',
       },

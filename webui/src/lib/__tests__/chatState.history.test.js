@@ -205,15 +205,18 @@ describe('History projection', () => {
       ],
       {
         backgroundCommandStatuses: {
-          term_running: 'running',
-          term_finished: 'completed',
+          cmd_running: 'running',
+          cmd_finished: 'completed',
+          cmd_lingering: 'completed',
         },
+        backgroundCommandsStillRunning: ['cmd_lingering'],
       },
     );
 
     expect(sessionState.backgroundCommandStatuses).toEqual({
-      term_running: 'running',
-      term_finished: 'completed',
+      cmd_running: { status: 'running', stillRunning: false },
+      cmd_finished: { status: 'completed', stillRunning: false },
+      cmd_lingering: { status: 'completed', stillRunning: true },
     });
     expect(sessionState.messages).toHaveLength(2);
   });

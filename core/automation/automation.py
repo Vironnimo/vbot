@@ -68,6 +68,9 @@ class _CompletionNotice:
     # until then a waking notice stays pending, so a Run that ends first
     # still wakes the Session.
     read_after: int | None = None
+    # Set while a delivery builds and hands over a message carrying the
+    # notice: it is being delivered and can no longer be withdrawn.
+    claimed: bool = False
 
     @property
     def read(self) -> bool:
@@ -170,13 +173,17 @@ class _CompletionDeliveryCoordinator:
         project_id: str | None,
         notice_id: str,
     ) -> bool:
-        """Withdraw one result before its automatic note is persisted."""
+        """Withdraw one result before a delivery claimed it.
+
+        Returns False when the result is gone, or a delivery claimed it: a
+        message carrying it is being handed over or is in the Session already.
+        """
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         bucket = self._buckets.get(address)
         if bucket is None:
             return False
         notice = bucket.notices.get(notice_id)
-        if notice is None or notice.read_after is not None:
+        if notice is None or notice.claimed or notice.read_after is not None:
             return False
         bucket.notices.pop(notice_id, None)
         if not notice.delivered.done():
@@ -284,16 +291,20 @@ class _CompletionDeliveryCoordinator:
                     _join_run(pending, active_run)
                     continue
 
-                message = _completion_message(pending)
                 reply_surface = (
                     await self._latest_reply_surface(address)
                     if self._run_relay is not None
                     else None
                 )
+                # Results withdrawn meanwhile stay out of the message.
+                pending = self._still_pending(bucket, pending)
+                if not pending:
+                    continue
+                owner = pending[0].execution_owner
+                pending = [notice for notice in pending if notice.execution_owner == owner]
+                _claim(pending, True)
+                message = _completion_message(pending)
                 try:
-                    owner = pending[0].execution_owner
-                    pending = [notice for notice in pending if notice.execution_owner == owner]
-                    message = _completion_message(pending)
                     if owner is not None:
                         # Each origin keeps its exact lifetime owner even if a target
                         # Session is later reused by unrelated work.
@@ -320,6 +331,7 @@ class _CompletionDeliveryCoordinator:
                             run_kind=RunKind.SYSTEM,
                         )
                 except RunAdmissionBlockedError as error:
+                    _claim(pending, False)
                     if owner is not None:
                         # A stale owner (closed group, retired Extension) never
                         # becomes admissible again: fail its results terminally,
@@ -351,6 +363,7 @@ class _CompletionDeliveryCoordinator:
                     )
                     continue
                 except ActiveRunError:
+                    _claim(pending, False)
                     # Another ingress won the idle-session race. Keep the exact
                     # notices pending and collect everything that finishes while
                     # that Run is active.
@@ -361,6 +374,7 @@ class _CompletionDeliveryCoordinator:
                         await asyncio.sleep(0)
                     continue
                 except Exception as error:
+                    _claim(pending, False)
                     if owner is not None:
                         # An owned delivery must never bypass closed admission by
                         # falling back to an arbitrary Session write.
@@ -411,6 +425,8 @@ class _CompletionDeliveryCoordinator:
                     address, bucket, [notice for notice in pending if notice.read_after is not None]
                 )
                 undelivered = [notice for notice in pending if not notice.delivered.done()]
+                # The Run ended before its message reached the Session.
+                _claim(undelivered, False)
                 if undelivered:
                     for notice in undelivered:
                         notice.suppress_run = True
@@ -572,6 +588,11 @@ class _CompletionDeliveryCoordinator:
                 # failure lets producers release their process-local state.
                 self._fail(bucket, pending, error)
                 return None
+            # Results withdrawn meanwhile stay out of the note.
+            pending = self._still_pending(bucket, pending)
+            if not pending:
+                return None
+            _claim(pending, True)
             append = asyncio.ensure_future(session.add_note_async(_completion_message(pending)))
             try:
                 await asyncio.shield(append)
@@ -582,8 +603,11 @@ class _CompletionDeliveryCoordinator:
                 await asyncio.wait((append,))
                 if not append.cancelled() and append.exception() is None:
                     self._acknowledge(address, bucket, pending)
+                else:
+                    _claim(pending, False)
                 raise
             except Exception as error:
+                _claim(pending, False)
                 return error
             self._acknowledge(address, bucket, pending)
             return None
@@ -737,6 +761,13 @@ async def _wait_for_terminal_run(run: Run) -> None:
         return
 
 
+def _claim(notices: list[_CompletionNotice], claimed: bool) -> None:
+    """Claim *notices* for the message about to carry them, or release the
+    claim when that message did not reach the Session."""
+    for notice in notices:
+        notice.claimed = claimed
+
+
 def _join_run(notices: list[_CompletionNotice], run: Run) -> None:
     """Hand *notices* to the active *run*'s next request boundary.
 
@@ -876,7 +907,11 @@ class TriggerService:
         notice_id: str,
         project_id: str | None = None,
     ) -> bool:
-        """Withdraw one pending automatic result after another durable delivery."""
+        """Withdraw one pending automatic result after another durable delivery.
+
+        Returns False when it is no longer pending, or its delivery already
+        claimed it: it is then delivered once, as submitted.
+        """
         return self._completion_delivery.cancel(
             agent_id=agent_id,
             session_id=session_id,

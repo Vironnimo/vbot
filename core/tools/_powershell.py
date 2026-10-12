@@ -1,13 +1,21 @@
 """PowerShell command text for ``pwsh -Command``: English output and a faithful exit status.
 
-The shell Tool runs every Windows command as ``pwsh -NoProfile -Command <text>``
-in a ConPTY terminal; this module builds ``<text>`` around the Agent's command.
+The shell Tool runs every Windows command as ``pwsh -NoProfile -NonInteractive
+-Command <text>`` on pipes, without input and without a terminal: ``Read-Host``,
+``Get-Credential`` and confirmation prompts fail at once instead of waiting. This
+module builds ``<text>`` around the Agent's command.
 
 Console encodings. Native programs write and read bytes in the console's code
 pages, which default to a legacy OEM page that cannot represent most non-ASCII
 text, and PowerShell decodes the output it captures from native programs with
-the same page. Both pages are set to UTF-8 before the command runs; the terminal
-decodes UTF-8.
+the same page. Both pages are set to UTF-8 before the command runs; vBot decodes
+the output as UTF-8.
+
+Plain output. PowerShell colors its formatting and errors with ANSI escape
+sequences even on a pipe; the setup renders them as plain text. On a pipe it
+also formats tables and lists for a 120-column host and cuts longer rows with
+an ellipsis; the setup widens the host buffer to 200 columns, so a formatted row
+keeps up to 199 characters.
 
 English output. PowerShell's own messages follow the Windows display language,
 and the numbers and dates it formats and parses follow the user's regional format.
@@ -61,7 +69,7 @@ results or Get-Location, are held by the table formatter until its pipeline
 ends, and an ``exit`` before that discards them: ``Get-ChildItem | Select-Object
 Name; exit 0`` prints nothing. The command's output is therefore piped through
 Out-Default, and the wrapper exits with the recorded code only after that
-pipeline has ended. Native programs keep the terminal as their output.
+pipeline has ended.
 
 Recorded errors. If the last statement succeeded after PowerShell recorded an
 error, the exit status stays 0 but a bounded note is printed to the error
@@ -71,10 +79,6 @@ already be full. An error the command's own text silenced does not count: its
 command passes ``-ErrorAction SilentlyContinue`` or ``Ignore``, it or an
 enclosing command redirects the error stream (``2>$null``, ``2>&1``,
 ``*>...``), or ``$ErrorActionPreference`` is SilentlyContinue at the end.
-
-Input. The command runs in a terminal, so ``Read-Host`` and native prompts read
-what the Agent types with ``terminal input``; ``-NonInteractive`` is therefore
-not passed.
 """
 
 from __future__ import annotations
@@ -97,6 +101,16 @@ CULTURE_STATEMENT = (
     "$numbers.PercentGroupSeparator = ''; "
     "[cultureinfo]::CurrentCulture = [cultureinfo]::DefaultThreadCurrentCulture = $culture; "
     "[cultureinfo]::CurrentUICulture = [cultureinfo]::DefaultThreadCurrentUICulture = 'en-US' }"
+)
+# PowerShell's formatting and errors without ANSI escape sequences (PowerShell 7.2+).
+PLAIN_TEXT_STATEMENT = "if ($PSStyle) { $PSStyle.OutputRendering = 'PlainText' }"
+# Formatted rows keep up to this many characters less one. A host whose buffer
+# cannot be resized keeps its width; the setup's errors precede the error baseline.
+OUTPUT_COLUMNS = 200
+OUTPUT_WIDTH_STATEMENT = (
+    f"& {{ try {{ $ui = $Host.UI.RawUI; if ($ui.BufferSize.Width -lt {OUTPUT_COLUMNS}) {{ "
+    "$ui.BufferSize = [System.Management.Automation.Host.Size]::new("
+    f"{OUTPUT_COLUMNS}, $ui.BufferSize.Height) }} }} catch {{}} }}"
 )
 ERROR_RECORD_BASELINE_STATEMENT = "$__vbotInitialError = $Error | Select-Object -First 1"
 POWERSHELL_ERROR_NOTE = (
@@ -163,6 +177,8 @@ SETUP_STATEMENT = "; ".join(
     (
         UTF8_CONSOLE_STATEMENT,
         CULTURE_STATEMENT,
+        PLAIN_TEXT_STATEMENT,
+        OUTPUT_WIDTH_STATEMENT,
         UNIX_LINE_FILTERS_STATEMENT,
         ERROR_RECORD_BASELINE_STATEMENT,
     )
@@ -351,6 +367,9 @@ def _escaped(text: str) -> str:
 __all__ = [
     "EXIT_STATUS_STATEMENT",
     "NULL_DEVICE_STATEMENTS",
+    "OUTPUT_COLUMNS",
+    "OUTPUT_WIDTH_STATEMENT",
+    "PLAIN_TEXT_STATEMENT",
     "POWERSHELL_ERROR_NOTE",
     "SETUP_STATEMENT",
     "UNIX_LINE_FILTERS_STATEMENT",

@@ -79,8 +79,10 @@ export function createChatState() {
     // Sub-Agents, background commands and terminals), by public Sub-Agent id,
     // as last inspected (bounded, newest last).
     subAgentWork: {},
-    // Live status of each handed-off shell command, by terminal id, from
-    // `command_status_changed` (bounded, newest last).
+    // Live state of each background shell command, by Session id and then
+    // command id (`{ status, stillRunning }`): App's `command_status_changed`
+    // map joined with what this Chat's stop and output reads learned. A
+    // command shows only in the Session that started it, never in a fork.
     commandStatuses: {},
   };
 }
@@ -218,9 +220,19 @@ export function ensureSessionState(state, agentId, sessionId) {
       // The Session's effective Compaction Policy from `chat.history`; null
       // until History reports it.
       compactionPolicy: null,
-      // Durable status of each handed-off shell command, by terminal id, from
-      // `chat.history`'s `background_command_statuses`.
+      // Durable state of each background shell command, by command id
+      // (`{ status, stillRunning }`), from `chat.history`'s
+      // `background_command_statuses` and
+      // `background_commands_still_running`. A command the server no longer
+      // knows has ended: it has no entry after a full read, and `ended` after
+      // an incremental read that leaves out a `running` it held.
       backgroundCommandStatuses: {},
+      // The background commands the Session's Sub-Agents (at every depth)
+      // still ran at the last History read, from `chat.history`'s
+      // `subagent_background_commands`: `{ subAgentId, sessionId, commandId,
+      // label }`, `subAgentId` naming the Session's own Sub-Agent above the
+      // Session that runs it. Live statuses settle the ones that ended since.
+      subAgentBackgroundCommands: [],
       reflectionTasks: {},
       // Per review Run id: its loaded change list and undo state.
       reflectionDetails: {},

@@ -20,6 +20,7 @@ from core.recall import (
     SemanticIndexer,
 )
 from core.skills import SkillRegistry
+from core.tools.command_manager import CommandManager
 from core.tools.contracts import ToolContractError
 from core.tools.session_search import (
     _normalize_search_arguments,
@@ -28,7 +29,6 @@ from core.tools.session_search import (
 )
 from core.tools.shell import register_shell_tool
 from core.tools.skill import register_skill_tool
-from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure
 from scripts.provider_probe.common import PROJECT_ROOT
 from scripts.provider_probe.recall_cases import (
@@ -46,7 +46,7 @@ async def _evaluate_case(
         root = Path(temporary)
         data_root = root / "data"
         sessions = await seed_sessions(data_root)
-        manager = TerminalManager()
+        manager = CommandManager()
         registry = ToolRegistry()
         skills = SkillRegistry.load(PROJECT_ROOT / "resources/skills")
         embeddings = FixtureEmbeddings() if case.get("embeddings") else None

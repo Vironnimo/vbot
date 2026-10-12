@@ -99,33 +99,51 @@ async def test_provider_requests_use_model_tool_names_while_the_session_keeps_re
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_loading",
+    [None, {"on_demand": True, "always_loaded": []}],
+    ids=["listed", "on-demand"],
+)
 async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_name(
-    tmp_path: Path,
+    tmp_path: Path, tool_loading: dict[str, Any] | None
 ) -> None:
     # "fetch" is registered but not offered: it keeps its own name and is refused rather
-    # than remapped to the offered web_fetch.
-    tools, dispatched = _name_recording_tools("web_fetch", "fetch")
+    # than remapped to the offered web_fetch. An On-demand Tool resolves before it is loaded.
+    tools, dispatched = _name_recording_tools("web_fetch", "fetch", "background_tasks")
+    register_load_tools_tool(tools)
     runtime = tool_runtime(
         tmp_path,
         tools,
         [
-            tool_turn(("first", "functions.WebFetch"), ("second", "TodoWrite"), ("third", "fetch")),
+            tool_turn(
+                ("first", "functions.WebFetch"),
+                ("second", "TodoWrite"),
+                ("third", "fetch"),
+                ("fourth", "KillShell"),
+            ),
             final("done"),
         ],
-        allowed_tools=["web_fetch"],
+        allowed_tools=["web_fetch", "background_tasks"],
+        tool_loading=tool_loading,
     )
 
     await build_chat_loop(runtime).send("coder", "fetch", session_id="session-one")
 
     messages = history(runtime)
-    assert dispatched == ["web_fetch"]
-    assert _call_names(messages) == ["web_fetch", "TodoWrite", "fetch"]
+    assert ("background_tasks" in _offered(runtime.adapter.requests[0])) is (tool_loading is None)
+    assert dispatched == ["web_fetch", "background_tasks"]
+    assert _call_names(messages) == ["web_fetch", "TodoWrite", "fetch", "background_tasks"]
     unknown = next(m for m in messages if m.role == "tool" and m.name == "TodoWrite")
-    assert "Unknown Tool: TodoWrite. Call one of the available Tools instead: web_fetch." in str(
+    assert "Unknown Tool: TodoWrite. Call one of the available Tools instead: " in str(
         unknown.content
     )
     assert tool_results(messages)[2]["error"]["code"] == "tool_not_allowed"
-    assert _wire_call_names(runtime.adapter.requests[1]) == ["web_fetch", "TodoWrite", "fetch"]
+    assert _wire_call_names(runtime.adapter.requests[1]) == [
+        "web_fetch",
+        "TodoWrite",
+        "fetch",
+        "background_tasks",
+    ]
 
 
 @pytest.mark.asyncio
@@ -159,7 +177,7 @@ async def test_shell_definition_carries_the_host_shell_name(tmp_path: Path) -> N
     # The Provider request carries the name the Model knows on this host.
     assert shell["name"] == model_tool_name(SHELL_TOOL_NAME)
     assert shell["description"] == SHELL_TOOL_DESCRIPTION
-    assert shell["parameters"]["properties"]["mode"]["enum"] == ["foreground", "background"]
+    assert shell["parameters"]["properties"]["run_in_background"]["type"] == "boolean"
 
 
 def _tools_sent(runtime: Any) -> list[list[JsonObject]]:

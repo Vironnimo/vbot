@@ -160,7 +160,15 @@ describe('ChatView Runs', () => {
   describe('run stream', () => {
     it('applies a live command status without a reactive update loop', async () => {
       rpcMock.mockImplementation(createChatRpcMock());
-      await chat.mountChat({ commandStatuses: { term_test: 'completed' } });
+      await chat.mountChat({
+        commandStatuses: {
+          cmd_test: {
+            status: 'completed',
+            stillRunning: false,
+            sessionId: 'session-one',
+          },
+        },
+      });
 
       const input = document.querySelector('textarea');
       setInputValue(input, 'Continue after completion');
@@ -659,24 +667,41 @@ describe('ChatView Runs', () => {
       },
     );
 
-    it.each([
-      ['offers', subSessionHistory({ active_run: runningRun('child-run') })],
-      [
-        'does not offer',
-        subSessionHistory({
-          messages: [
-            {
-              id: 'sub-run-summary',
-              role: 'run_summary',
-              run_id: 'child-run',
-              status: 'completed',
-            },
-          ],
-        }),
+    const finishedChild = subSessionHistory({
+      messages: [
+        {
+          id: 'sub-run-summary',
+          role: 'run_summary',
+          run_id: 'child-run',
+          status: 'completed',
+        },
       ],
+    });
+    it.each([
+      [
+        'offers',
+        'running',
+        subSessionHistory({ active_run: runningRun('child-run') }),
+        [],
+      ],
+      // A command the finished Sub-Agent started still runs.
+      [
+        'offers',
+        'done',
+        finishedChild,
+        [
+          {
+            subagent_id: 'sub-worker',
+            session_id: 'sub-session-1',
+            command_id: 'cmd_dev',
+            label: 'npm run dev',
+          },
+        ],
+      ],
+      ['does not offer', 'done', finishedChild, []],
     ])(
-      '%s Stop all without a Run by whether a Sub-Agent of the Session runs',
-      async (offers, childHistory) => {
+      '%s Stop all without a Run by whether work of a Sub-Agent of the Session runs (Run dot %s)',
+      async (offers, dot, childHistory, subAgentCommands) => {
         const fallback = createChatRpcMock({
           sessionMessages: {
             'session-1': [
@@ -716,22 +741,24 @@ describe('ChatView Runs', () => {
             ],
           },
         });
-        rpcMock.mockImplementation(async (method, params) =>
-          method === 'chat.history' && params?.session_id === 'sub-session-1'
-            ? childHistory
-            : fallback(method, params),
-        );
+        rpcMock.mockImplementation(async (method, params) => {
+          if (method !== 'chat.history') return fallback(method, params);
+          if (params?.session_id === 'sub-session-1') return childHistory;
+          return {
+            ...(await fallback(method, params)),
+            subagent_background_commands: subAgentCommands,
+          };
+        });
         await chat.mountChat(alphaProps());
         await waitForCondition(() => statusChecks() === 1);
         await settle();
 
         expect(findCancelRunButton()).toBeUndefined();
+        expect(subAgentDot(dot)).not.toBeNull();
         if (offers === 'offers') {
-          expect(subAgentDot('running')).not.toBeNull();
           labelledButton(t('chat.stopAll')).click();
           await waitForCondition(() => rpcCalls('chat.stop_all').length === 1);
         } else {
-          expect(subAgentDot('done')).not.toBeNull();
           expect(labelledButton(t('chat.stopAll'))).toBeNull();
         }
       },

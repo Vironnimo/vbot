@@ -37,11 +37,13 @@ if TYPE_CHECKING:
     from core.projects import AgentResolver, ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
     from core.sessions import ChatSessionManager
+    from core.tools.command_manager import CommandManager
 else:
     AgentResolver = Any
     AgentStore = Any
     AutomationReferences = Any
     ChatSessionManager = Any
+    CommandManager = Any
     ModelRegistry = Any
     ProjectStore = Any
     ProviderRegistry = Any
@@ -455,6 +457,7 @@ class CommandDispatcher:
         reflection_service: Any | None = None,
         storage: Any | None = None,
         terminal_manager: TerminalManager | None = None,
+        command_manager: CommandManager | None = None,
         reasoning_render_describer: ReasoningRenderDescriber | None = None,
         wire_profile_describer: WireProfileDescriber | None = None,
         automation_references: AutomationReferences | None = None,
@@ -481,6 +484,7 @@ class CommandDispatcher:
                     snapshot_barrier if snapshot_barrier is not None else SnapshotBarrier()
                 ),
                 terminal_manager=terminal_manager,
+                command_manager=command_manager,
                 trigger_service=trigger_service,
             ),
             "compact": partial(_command_builtin._execute_compact, trigger_service=trigger_service),

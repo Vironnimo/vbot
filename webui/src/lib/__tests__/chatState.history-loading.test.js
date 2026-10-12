@@ -25,7 +25,8 @@ describe('History reads', () => {
         session_usage: { input_tokens: 10 },
         context_usage: { used_tokens: 5 },
         compaction_policy: policy,
-        background_command_statuses: { term_one: 'running' },
+        background_command_statuses: { cmd_one: 'completed' },
+        background_commands_still_running: ['cmd_one'],
         reflection_runs: [],
       })
       .mockResolvedValueOnce({
@@ -65,11 +66,11 @@ describe('History reads', () => {
     expect(source.contextUsage).toEqual({ used_tokens: 5 });
     expect(source.compactionPolicy).toBe(policy);
     expect(source.backgroundCommandStatuses).toEqual({
-      term_one: 'running',
+      cmd_one: { status: 'completed', stillRunning: true },
     });
   });
 
-  it('folds background status deltas and Run records across incremental pages', async () => {
+  it('folds background status deltas, the newest still-running lists and Run records across incremental pages', async () => {
     const loadChatHistory = vi
       .fn()
       .mockResolvedValueOnce({
@@ -79,9 +80,13 @@ describe('History reads', () => {
         incremental: false,
         context_usage: { used_tokens: 5 },
         background_command_statuses: {
-          term_one: 'running',
-          term_two: 'running',
+          cmd_one: 'running',
+          cmd_two: 'running',
         },
+        background_commands_still_running: [],
+        subagent_background_commands: [
+          subAgentCommand('cmd_child', 'session-child'),
+        ],
       })
       .mockResolvedValueOnce({
         messages: [],
@@ -90,7 +95,11 @@ describe('History reads', () => {
         incremental: true,
         has_newer: true,
         context_usage: { used_tokens: 7 },
-        background_command_statuses: { term_one: 'completed' },
+        background_command_statuses: { cmd_one: 'completed' },
+        background_commands_still_running: ['cmd_one'],
+        subagent_background_commands: [
+          subAgentCommand('cmd_child', 'session-child'),
+        ],
         runs: [{ run_id: 'run-one', status: 'completed' }],
       })
       .mockResolvedValueOnce({
@@ -99,7 +108,12 @@ describe('History reads', () => {
         next_after: 'cursor-3',
         incremental: true,
         context_usage: null,
-        background_command_statuses: { term_two: 'failed' },
+        background_command_statuses: { cmd_two: 'failed' },
+        background_commands_still_running: [],
+        subagent_background_commands: [
+          subAgentCommand('cmd_grandchild', 'session-grandchild'),
+          { subagent_id: 'sub_child', command_id: 'cmd_without_session' },
+        ],
         runs: [{ run_id: 'run-two', status: 'failed' }],
       });
     const { chatState, controller } = setupController({
@@ -112,9 +126,18 @@ describe('History reads', () => {
     expect(loadChatHistory).toHaveBeenCalledTimes(3);
     expect(source.historyAfter).toBe('cursor-3');
     expect(source.backgroundCommandStatuses).toEqual({
-      term_one: 'completed',
-      term_two: 'failed',
+      cmd_one: { status: 'completed', stillRunning: false },
+      cmd_two: { status: 'failed', stillRunning: false },
     });
+    // What the Sub-Agents below still run is listed in full each time.
+    expect(source.subAgentBackgroundCommands).toEqual([
+      {
+        subAgentId: 'sub_child',
+        sessionId: 'session-grandchild',
+        commandId: 'cmd_grandchild',
+        label: 'npm run dev',
+      },
+    ]);
     expect(Object.keys(source.historyRuns).sort()).toEqual([
       'run-one',
       'run-two',
@@ -122,6 +145,87 @@ describe('History reads', () => {
     // A page that read the context and found none clears it.
     expect(source.contextUsage).toBeNull();
   });
+
+  it.each([
+    ['gap', true],
+    ['epoch_changed', true],
+    ['resumed', false],
+  ])(
+    'after a %s reconnect, reads the shown History on only when it may have missed an end',
+    async (replayStatus, readOn) => {
+      const loadChatHistory = vi
+        .fn()
+        .mockResolvedValueOnce({
+          messages: [{ id: 'reply', role: 'assistant', content: 'Hello' }],
+          history_generation: 'g1',
+          next_after: 'cursor-1',
+          next_before: 'before-1',
+          has_more: true,
+          incremental: false,
+          background_command_statuses: {
+            cmd_one: 'running',
+            cmd_two: 'running',
+            cmd_three: 'completed',
+          },
+          background_commands_still_running: [],
+        })
+        .mockResolvedValueOnce({
+          messages: [{ id: 'older', role: 'user', content: 'Hi' }],
+          has_more: false,
+        })
+        // vBot restarted while cmd_one ran; it reports every live command.
+        .mockResolvedValueOnce({
+          messages: [],
+          history_generation: 'g1',
+          next_after: 'cursor-1',
+          incremental: true,
+          history_reset: false,
+          runs: [],
+          background_command_statuses: { cmd_two: 'running' },
+          background_commands_still_running: [],
+        });
+      const loadReflectionRuns = vi
+        .fn()
+        .mockResolvedValue({ reflection_runs: [] });
+      const { chatState, controller } = setupController({
+        operationOverrides: { loadChatHistory, loadReflectionRuns },
+        isDisplayedSession: () => true,
+      });
+      await controller.loadHistoryForSession('alpha', 'shown');
+      const shown = chatState.sessions['alpha::shown'];
+      await controller.loadOlderHistory(shown);
+
+      controller.applyConnectionSnapshot({
+        replay_status: replayStatus,
+        active_runs: [],
+      });
+      // A read on carries no reflections; they are read on their own.
+      await vi.waitFor(() => expect(loadReflectionRuns).toHaveBeenCalled());
+      if (readOn) {
+        await vi.waitFor(() =>
+          expect(shown.backgroundCommandStatuses.cmd_one.status).toBe('ended'),
+        );
+        expect(loadChatHistory).toHaveBeenLastCalledWith({
+          agent_id: 'alpha',
+          session_id: 'shown',
+          limit: 500,
+          after: 'cursor-1',
+        });
+      } else {
+        expect(loadChatHistory).toHaveBeenCalledTimes(2);
+      }
+      expect(shown.backgroundCommandStatuses).toEqual({
+        cmd_one: { status: readOn ? 'ended' : 'running', stillRunning: false },
+        cmd_two: { status: 'running', stillRunning: false },
+        cmd_three: { status: 'completed', stillRunning: false },
+      });
+      // The older pages the user loaded stay.
+      expect(shown.messages.map((message) => message.id)).toEqual([
+        'older',
+        'reply',
+      ]);
+    },
+  );
 
   it('syncs from the cursor without discarding previously loaded older pages', async () => {
     const loadChatHistory = vi
@@ -458,7 +562,6 @@ describe('older History pages', () => {
         older.resolve({
           messages: [message('oldest')],
           has_more: false,
-          background_command_statuses: { term_old: 'running' },
         });
       }
 
@@ -471,7 +574,6 @@ describe('older History pages', () => {
       expect(sessionState.hasOlderHistory).toBe(true);
       expect(sessionState.loadingOlderHistory).toBe(false);
       expect(sessionState.actionError).toBe('newer-action-error');
-      expect(sessionState.backgroundCommandStatuses).toEqual({});
 
       expect(await controller.loadOlderHistory(sessionState)).toBe(true);
       expect(loadChatHistory).toHaveBeenLastCalledWith({
@@ -1042,3 +1144,14 @@ describe('Run recovery', () => {
     },
   );
 });
+
+// A command a Sub-Agent below the Session still runs, as `chat.history` lists
+// it under the Session's own Sub-Agent above it.
+function subAgentCommand(commandId, sessionId) {
+  return {
+    subagent_id: 'sub_child',
+    session_id: sessionId,
+    command_id: commandId,
+    label: 'npm run dev',
+  };
+}

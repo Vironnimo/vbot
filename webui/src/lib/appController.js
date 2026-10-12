@@ -31,7 +31,7 @@ import {
 import { createRunEventFeed } from './runEventFeed.svelte.js';
 import { appendSessionInvalidation } from './sessionInvalidation.js';
 
-// The live statuses of handed-off shell commands, oldest evicted first.
+// The live statuses of background shell commands, oldest evicted first.
 // ChatView re-applies the whole map, so no per-event bookkeeping is needed.
 const MAX_COMMAND_STATUSES = 200;
 const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
@@ -90,8 +90,11 @@ export function createAppControllerState() {
     // The server's background activity list: loaded on every connection,
     // then replaced by each `activity_status` push.
     backgroundActivity: [],
-    // Handed-off shell command status by terminal id, from
-    // `command_status_changed` (bounded, newest last).
+    // Background shell commands by command id, from `command_status_changed`
+    // (bounded, newest last): `{ status, stillRunning, sessionId }`, where
+    // `stillRunning` marks processes the command started that still run after
+    // its shell exited. A replay gap or a server restart may have lost an
+    // end, so the map starts over then.
     commandStatuses: {},
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
@@ -211,6 +214,7 @@ export function createAppController({
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
         event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
       ) {
+        state.commandStatuses = {};
         state.modelsRefreshToken += 1;
         state.memoriesRefreshToken += 1;
         state.projectsRefreshToken += 1;
@@ -238,17 +242,26 @@ export function createAppController({
       return;
     }
     if (event.type === 'command_status_changed') {
-      const terminalId = event.payload?.terminal_id;
+      const commandId = event.payload?.command_id;
       const status = event.payload?.status;
+      const sessionId = event.payload?.session_id;
       if (
-        typeof terminalId === 'string' &&
-        terminalId &&
+        typeof commandId === 'string' &&
+        commandId &&
         typeof status === 'string' &&
-        status
+        status &&
+        typeof sessionId === 'string' &&
+        sessionId
       ) {
         state.commandStatuses = mergeBoundedEntries(
           state.commandStatuses,
-          { [terminalId]: status },
+          {
+            [commandId]: {
+              status,
+              stillRunning: event.payload.still_running === true,
+              sessionId,
+            },
+          },
           MAX_COMMAND_STATUSES,
         ).entries;
       }

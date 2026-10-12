@@ -12,12 +12,12 @@ from core.projects import ProjectStore
 from core.prompts.blocks import BlockDefinition, LayoutEntry
 from core.subagents import SubAgentPromptTarget
 from core.tools import ToolAccess, ToolRegistry, model_names, tool_success
+from core.tools.command_manager import CommandManager
 from core.tools.file_state import FileReadState
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.project import register_project_tool
 from core.tools.shell import register_shell_tool
 from core.tools.subagent import register_subagent_tools
-from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry
 from core.utils.paths import model_path
 from tests.core.prompts.prompts_test_support import (
@@ -70,7 +70,7 @@ def test_shell_env_block_renders_only_for_permanent_agent_grants(
 ) -> None:
     tools = ToolRegistry()
     prompt_blocks = ToolPromptBlockRegistry()
-    register_shell_tool(tools, TerminalManager(), prompt_blocks=prompt_blocks)
+    register_shell_tool(tools, CommandManager(), prompt_blocks=prompt_blocks)
     manager = _manager(
         tmp_path,
         tools=tools,

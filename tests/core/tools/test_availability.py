@@ -143,19 +143,31 @@ def test_live_call_tools_resolve_only_for_a_live_call_policy() -> None:
     assert "live_call" not in ToolAccess(live_call=True).to_dict()
 
 
-def test_followed_tool_requires_its_source_and_can_be_denied_independently() -> None:
+@pytest.mark.parametrize("fixed", [False, True], ids=["open", "fixed"])
+def test_followed_tool_requires_one_of_its_sources_and_can_be_denied_independently(
+    fixed: bool,
+) -> None:
     tools = _catalog(
         ("session_search", {}),
         ("session_read", {"activation": "follows", "activation_source": "session_search"}),
+        ("bash", {}),
+        ("subagent", {}),
+        ("background_tasks", {"activation": "follows", "activation_source": ("bash", "subagent")}),
     )
 
-    def resolve(*denied: str) -> tuple[str, ...]:
-        policy = ToolAccess(mode="selected", allowed=("session_search",), denied=denied)
+    def resolve(*allowed: str, denied: tuple[str, ...] = ()) -> tuple[str, ...]:
+        policy = ToolAccess(mode="selected", allowed=allowed, denied=denied, fixed=fixed)
         return resolve_tool_access(policy, tools, "off").allowed_tools
 
-    assert resolve() == ("session_read", "session_search")
-    assert resolve("session_read") == ("session_search",)
-    assert resolve("session_search") == ()
+    assert resolve("session_search") == ("session_read", "session_search")
+    assert resolve("session_search", denied=("session_read",)) == ("session_search",)
+    assert resolve("session_search", denied=("session_search",)) == ()
+    # A Tool following several sources is active while any of them is.
+    assert resolve("bash") == ("background_tasks", "bash")
+    assert resolve("subagent") == ("background_tasks", "subagent")
+    assert resolve("bash", "subagent", denied=("bash",)) == ("background_tasks", "subagent")
+    assert resolve("bash", "subagent", denied=("background_tasks",)) == ("bash", "subagent")
+    assert resolve("bash", "subagent", denied=("bash", "subagent")) == ()
 
 
 def test_denials_win_over_memory_activation_and_session_grants() -> None:
@@ -176,8 +188,8 @@ def test_denials_win_over_memory_activation_and_session_grants() -> None:
     assert resolution.session_tool_grants == ()
 
 
-def test_a_fixed_selection_is_the_whole_tool_set() -> None:
-    # A built-in Agent's Tools: nothing activates by memory mode, Session grant or follow.
+def test_a_fixed_selection_activates_nothing_by_memory_mode_or_session_grant() -> None:
+    # A built-in Agent's Tools: only the listed Tools and the Tools following them.
     tools = _catalog(
         ("skill", {}),
         ("skill_manage", {**_IDENTITY}),
@@ -197,12 +209,12 @@ def test_a_fixed_selection_is_the_whole_tool_set() -> None:
         )
         return resolution.allowed_tools, resolution.session_tool_grants
 
-    assert resolve(fixed=True) == (allowed, ())
+    assert resolve(fixed=True) == (("skill", "skill_audit", "skill_manage"), ())
     assert resolve(fixed=False) == (
         ("inbox", "memory", "skill", "skill_audit", "skill_manage"),
         ("inbox",),
     )
-    explicit = ToolAccess(mode="selected", allowed=("skill", "skill_audit", "inbox"), fixed=True)
+    explicit = ToolAccess(mode="selected", allowed=("skill", "inbox"), fixed=True)
     assert resolve_tool_access(explicit, tools, "off").allowed_tools == ("skill", "skill_audit")
     granted = resolve_tool_access(explicit, tools, "off", session_tool_grants=("inbox",))
     assert granted.allowed_tools == ("inbox", "skill", "skill_audit")

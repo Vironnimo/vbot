@@ -61,26 +61,47 @@ def children(sessions: ChatSessionManager, parent: SessionAddress) -> list[SubAg
 
 
 def descendants(
-    sessions: ChatSessionManager, root: SessionAddress, *, limit: int | None = None
+    sessions: ChatSessionManager, root: SessionAddress, *, stop_at_takeover: bool = False
 ) -> list[SubAgentLink]:
-    """Walk the complete subtree breadth first, optionally limiting a display projection.
+    """Walk the complete subtree breadth first.
 
     Control operations need every descendant regardless of historical tree size.
     A visited set prevents corrupt cycles and duplicate links from repeating work.
+    With *stop_at_takeover* the walk leaves out every Sub-Agent the user took over
+    and everything below it: the part of the tree that *root*'s stops reach.
     """
     found: list[SubAgentLink] = []
     seen = {root}
     pending = deque([root])
-    while pending and (limit is None or len(found) < limit):
+    while pending:
         for link in children(sessions, pending.popleft()):
             if link.session in seen:
                 continue
             seen.add(link.session)
+            if stop_at_takeover and link.taken_over_at is not None:
+                continue
             found.append(link)
-            if limit is not None and len(found) >= limit:
-                return found
             pending.append(link.session)
     return found
+
+
+def taken_over_below(
+    sessions: ChatSessionManager, ancestor: SessionAddress, address: SessionAddress
+) -> bool:
+    """Whether the user took over the Sub-Agent at *address* or one between *ancestor* and it.
+
+    *ancestor* is a Session above *address*; its own takeover does not count.
+    """
+    seen = {address}
+    link = read_link(sessions, address)
+    while link is not None and len(seen) <= _MAX_CHAIN_LENGTH:
+        if link.taken_over_at is not None:
+            return True
+        if link.parent == ancestor or link.parent in seen:
+            return False
+        seen.add(link.parent)
+        link = read_link(sessions, link.parent)
+    return False
 
 
 def ancestors(sessions: ChatSessionManager, address: SessionAddress) -> list[SessionAddress]:
@@ -160,4 +181,5 @@ __all__ = [
     "find_link",
     "link_session",
     "read_link",
+    "taken_over_below",
 ]

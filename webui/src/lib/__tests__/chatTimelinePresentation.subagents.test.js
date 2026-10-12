@@ -4,6 +4,7 @@ import {
   isSubAgentSendTool,
   isSubAgentSpawnTool,
   resolveSubAgentCancelPlan,
+  runningSubAgentCommands,
   subAgentAction,
   subAgentAgentId,
   subAgentDescription,
@@ -152,6 +153,36 @@ describe('Sub-Agent actions', () => {
       'cancel',
     ],
     [
+      'a check that ran as background_tasks, by its queued Sub-Agent',
+      () => ({
+        name: 'subagent',
+        status: 'success',
+        arguments: { action: 'check', id: 'sub_child' },
+        result: {
+          ok: true,
+          error: null,
+          data: { id: 'sub_child', type: 'subagent', status: 'queued' },
+          artifacts: [],
+        },
+      }),
+      '',
+    ],
+    [
+      'a check that ran as background_tasks, by its running command',
+      () => ({
+        name: 'subagent',
+        status: 'success',
+        arguments: { action: 'poll', id: 'cmd_a' },
+        result: {
+          ok: true,
+          error: null,
+          data: { status: 'running', command_id: 'cmd_a' },
+          artifacts: [],
+        },
+      }),
+      '',
+    ],
+    [
       'another Tool',
       () => ({ name: 'bash', arguments: { command: 'ls' } }),
       '',
@@ -264,7 +295,7 @@ describe('Sub-Agent rows', () => {
         },
       ],
       { 'run:run-reviewer': 'completed' },
-      { term_one: 'failed' },
+      { cmd_one: { status: 'failed', stillRunning: false } },
     );
 
     expect(tasks.map((task) => [task.tool.id, task.dotStatus])).toEqual([
@@ -276,7 +307,7 @@ describe('Sub-Agent rows', () => {
       expect.objectContaining({
         kind: 'command',
         command: 'npm run dev',
-        terminalId: 'term_one',
+        commandId: 'cmd_one',
         target: null,
       }),
     );
@@ -287,6 +318,75 @@ describe('Sub-Agent rows', () => {
         description: 'Review pass',
         target: { agentId: 'reviewer', sessionId: 'session-reviewer' },
       }),
+    );
+  });
+
+  it('keeps a Sub-Agent whose Run ended running while commands below it run, until their own Session reports them ended', () => {
+    const listed = [
+      ['session-child', 'cmd_dev', 'npm run dev'],
+      ['session-grandchild', 'cmd_serve', 'npm run serve &'],
+      ['session-child', 'cmd_test', 'npm test'],
+    ].map(([sessionId, commandId, label]) => ({
+      subAgentId: 'sub_child',
+      sessionId,
+      commandId,
+      label,
+    }));
+    const live = (states) =>
+      runningSubAgentCommands(listed, {
+        // Another Session's state of the same command does not count.
+        'session-fork': { cmd_dev: { status: 'ended', stillRunning: false } },
+        ...states,
+      });
+    const task = (subAgentCommands) =>
+      backgroundTasks(
+        [
+          {
+            id: 'run',
+            type: 'assistant_run',
+            items: [runningSubAgentTool({ type: 'tool_call' })],
+          },
+        ],
+        { 'run:run-child': 'completed' },
+        {},
+        {},
+        subAgentCommands,
+      )[0];
+
+    // Processes a command left running keep it listed; an end settles one.
+    const running = live({
+      'session-child': {
+        cmd_test: { status: 'completed', stillRunning: false },
+      },
+      'session-grandchild': {
+        cmd_serve: { status: 'completed', stillRunning: true },
+      },
+    });
+    expect(running).toEqual({
+      sub_child: [
+        { kind: 'command', id: 'cmd_dev', label: 'npm run dev' },
+        { kind: 'command', id: 'cmd_serve', label: 'npm run serve &' },
+      ],
+    });
+    expect(task(running)).toEqual(
+      expect.objectContaining({
+        dotStatus: 'running',
+        runDotStatus: 'success',
+        workRunning: true,
+        runningCommands: running.sub_child,
+        lastToolName: '',
+        timeLabel: t('chat.subAgentCommandsRunning'),
+      }),
+    );
+
+    const ended = { status: 'stopped', stillRunning: false };
+    const settled = live({
+      'session-child': { cmd_dev: ended, cmd_test: ended },
+      'session-grandchild': { cmd_serve: ended },
+    });
+    expect(settled).toEqual({});
+    expect(task(settled)).toEqual(
+      expect.objectContaining({ dotStatus: 'success', workRunning: false }),
     );
   });
 
@@ -609,7 +709,7 @@ describe('Sub-Agent timing and last Tool', () => {
         nowMs,
         [
           { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
-          { kind: 'command', id: 'term_1', label: 'npm run dev' },
+          { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
           { kind: 'terminal', id: 'term_2', label: '' },
         ],
       ),
@@ -643,7 +743,7 @@ describe('Sub-Agent timing and last Tool', () => {
           'runTool:run-child': 'bash',
         },
         nowMs,
-        [{ kind: 'command', id: 'term_1', label: 'npm run dev' }],
+        [{ kind: 'command', id: 'cmd_1', label: 'npm run dev' }],
       ),
     ).toEqual({
       title: t('chat.toolState.success'),

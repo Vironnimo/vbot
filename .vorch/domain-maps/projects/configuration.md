@@ -17,7 +17,8 @@ Read this reference when changing the persisted Project shape, Project Anchor li
 
 The default Tool ceiling uses `apply_patch` as the file edit capability (its
 followers `edit` and `write` are not configurable, `tools/edit.md`), and
-`search_files` as its search capability. The application never rewrites explicit
+`search_files` as its search capability. `background_tasks` follows `bash` and
+`subagent` the same way and needs no entry (`tools/shell.md`). The application never rewrites explicit
 persisted ceilings; an unavailable retired entry remains removable and grants
 nothing.
 

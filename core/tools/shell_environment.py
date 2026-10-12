@@ -11,9 +11,12 @@ One owner builds it from explicit layers, each applied over the previous one:
    ``VBOT_INSTALL_ROOT`` exactly when the server itself has them, so a ``vbot``
    command reaches the instance it runs under, and a worktree's own marker still
    decides otherwise.
-3. **Terminal.** ``TERM``: every shell runs in a real terminal.
+3. **Output.** ``TERM``: a Terminal Session runs in a real terminal
+   (``xterm-256color``); a command writes to a pipe that no one answers or
+   renders (``dumb``).
 4. **Unattended defaults** (commands only). No editor, pager or credential
-   prompt can be answered, so each fails or passes through at once.
+   prompt can be answered, so each fails or passes through at once. Programs
+   write plain text without colors, and Python writes each line as it prints it.
 5. **Agent variables and granted credentials** (commands only).
 6. **Run identity** (commands only): who runs the command, and the one-time
    update handoff. Applied last, so nothing above replaces it.
@@ -56,7 +59,7 @@ _PROCESS_VARIABLES = frozenset({"PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "__PY
 _MESSAGE_EDITOR = (
     '_vbot_editor() { while IFS= read -r line || [ -n "$line" ]; do case $line in '
     "'# '*'>8'*) break ;; '#'*) ;; *[![:space:]]*) return 0 ;; esac; done < \"$1\"; "
-    "echo 'No editor is available in this terminal: pass the message as an argument, "
+    "echo 'No editor is available for this command: pass the message as an argument, "
     'for example git commit -m "Fix the parser".\' >&2; return 1; }; _vbot_editor'
 )
 # The todo list of git rebase -i is never accepted unchanged: the Agent asked to
@@ -65,7 +68,7 @@ _SEQUENCE_ASSIGNMENT = (
     '$env:GIT_SEQUENCE_EDITOR = ":"' if sys.platform == "win32" else "GIT_SEQUENCE_EDITOR=:"
 )
 _SEQUENCE_EDITOR = (
-    "echo 'No editor is available in this terminal for the git rebase -i todo list. To run "
+    "echo 'No editor is available for the git rebase -i todo list. To run "
     f"the list as git prepared it, for example with --autosquash, set {_SEQUENCE_ASSIGNMENT} "
     "for the git command.' >&2; false"
 )
@@ -76,12 +79,18 @@ _UNATTENDED_DEFAULTS: dict[str, str] = {
     "GIT_TERMINAL_PROMPT": "0",
     "GCM_INTERACTIVE": "never",
     "GIT_PAGER": "cat",
+    "GH_PAGER": "cat",
     "PAGER": "cat",
+    "NO_COLOR": "1",
     # Python writes UTF-8 when its output is piped or captured, which is how the
     # shell decodes it; otherwise non-ASCII text arrives garbled.
     "PYTHONIOENCODING": "utf-8",
+    # On a pipe Python would hold its output until the buffer fills or it exits;
+    # line by line, the live log and the progress view stay current.
+    "PYTHONUNBUFFERED": "1",
 }
-_TERM = "xterm-256color"
+_TERMINAL_TERM = "xterm-256color"
+_COMMAND_TERM = "dumb"
 
 
 @dataclass(frozen=True)
@@ -96,9 +105,8 @@ class RunIdentity:
 
 def terminal_environment(overlay: Mapping[str, str] | None = None) -> dict[str, str]:
     """Environment of an interactive Terminal Session, with *overlay* applied last."""
-    environment = _login_environment()
-    _apply(environment, _instance_variables())
-    _apply(environment, {"TERM": _TERM})
+    environment = _instance_environment()
+    _apply(environment, {"TERM": _TERMINAL_TERM})
     _apply(environment, overlay or {})
     return environment
 
@@ -110,7 +118,8 @@ def command_environment(
     credentials: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Environment of one shell command run by an Agent."""
-    environment = terminal_environment()
+    environment = _instance_environment()
+    _apply(environment, {"TERM": _COMMAND_TERM})
     _apply(environment, _UNATTENDED_DEFAULTS)
     _apply(environment, variables or {})
     _apply(environment, credentials or {})
@@ -121,6 +130,13 @@ def command_environment(
     if run.update_handoff is not None:
         run_variables[UPDATE_HANDOFF_ENV] = run.update_handoff
     _apply(environment, run_variables)
+    return environment
+
+
+def _instance_environment() -> dict[str, str]:
+    """The login base with this vBot instance's variables (layers 1 and 2)."""
+    environment = _login_environment()
+    _apply(environment, _instance_variables())
     return environment
 
 

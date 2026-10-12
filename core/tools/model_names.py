@@ -20,6 +20,7 @@ import re
 from collections.abc import Collection, Container
 
 BASH_TOOL_NAME = "bash"
+SUBAGENT_TOOL_NAME = "subagent"
 SHELL_MODEL_NAME = "powershell" if os.name == "nt" else BASH_TOOL_NAME
 
 _MODEL_NAMES = {BASH_TOOL_NAME: SHELL_MODEL_NAME} if SHELL_MODEL_NAME != BASH_TOOL_NAME else {}
@@ -86,6 +87,22 @@ _HARNESS_NAMES: dict[str, tuple[str, ...]] = {
         ("write", "apply_patch"),
     ),
     **dict.fromkeys(("patch", "applydiff"), ("apply_patch",)),
+    # Claude Code's shell companions (BashOutput, KillShell, TaskOutput, TaskStop),
+    # OpenClaw's process, and the companion's own spellings.
+    **dict.fromkeys(
+        (
+            "bashoutput",
+            "killshell",
+            "killbash",
+            "taskoutput",
+            "taskstop",
+            "process",
+            "shelljobs",
+            "backgroundcommands",
+            "backgroundtasks",
+        ),
+        ("background_tasks",),
+    ),
     **dict.fromkeys(
         (
             "grep",

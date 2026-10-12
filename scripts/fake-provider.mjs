@@ -301,7 +301,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall(shellToolName(offeredTools), {
-            mode: "foreground",
             command:
               "node -e \"console.log('e2e-tool-started'); setTimeout(() => console.log('e2e-tool-ended'), 15000)\"",
           }),
@@ -319,7 +318,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall(shellToolName(offeredTools), {
-            mode: "foreground",
             command: "echo e2e-shell-output",
           }),
         ],

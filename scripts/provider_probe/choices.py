@@ -84,6 +84,7 @@ PROBE_SCENARIOS = (
     "unknown_property_pressure",
     "large_arguments",
     "analyze_image",
+    "background_tasks",
     "bash",
     "calendar",
     "channel_send",
@@ -291,10 +292,11 @@ SUBAGENT_CASES = (
     "thinking_xhigh",
     "thinking_max",
     "thinking_none",
-    "list_all",
-    "list",
-    "cancel",
 )
+
+
+# Sub-Agents are listed, checked and stopped with background_tasks.
+BACKGROUND_TASKS_CASES = ("list", "status", "stop")
 
 
 TEXT_TO_SPEECH_CASES = ("plain", "unicode_multiline")

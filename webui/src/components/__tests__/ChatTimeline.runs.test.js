@@ -706,7 +706,7 @@ describe('ChatTimeline Runs', () => {
     },
   );
 
-  it('shows the live output screen in place of an Output detail block', () => {
+  it('shows the live output in place of an Output detail block', () => {
     const sessionState = timelineSession();
     const display = {
       version: 1,
@@ -728,8 +728,8 @@ describe('ChatTimeline Runs', () => {
         type: 'tool_call_output',
         payload: {
           tool_call_id: 'call-one',
-          terminal_id: 'term_one',
-          screen: '$ printf hello\nhello',
+          command_id: 'cmd_one',
+          output: '$ printf hello\nhello',
         },
       },
       toolResult(
@@ -773,8 +773,8 @@ describe('ChatTimeline Runs', () => {
         type: 'tool_call_output',
         payload: {
           tool_call_id: 'call-one',
-          terminal_id: 'term_one',
-          screen: 'hello\nwarn',
+          command_id: 'cmd_one',
+          output: 'hello\nwarn',
         },
       },
       toolResult('call-one', 'bash', {

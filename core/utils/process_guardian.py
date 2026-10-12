@@ -66,13 +66,12 @@ def run_guardian(
             if hasattr(signal, name):
                 signal.signal(getattr(signal, name), signal.SIG_DFL)
         os.execvp(argv[0], list(argv))
-    if controlling_terminal:
-        # Ctrl-C and Ctrl-\ signal the terminal's foreground process group, this
-        # guardian included, but they are meant for the child. A handler rather
-        # than SIG_IGN, because exec resets handlers and the child must start
-        # with the default action.
-        for terminal_signal in (signal.SIGINT, signal.SIGQUIT):
-            signal.signal(terminal_signal, _leave_to_child)
+    # Ctrl-C and Ctrl-\ in a terminal, and a command's stop, signal the whole
+    # process group, this guardian included, but they are meant for the child. A
+    # handler rather than SIG_IGN, because exec resets handlers and the child
+    # must start with the default action.
+    for terminal_signal in (signal.SIGINT, signal.SIGQUIT):
+        signal.signal(terminal_signal, _leave_to_child)
     child_pid = _spawn(argv, lifetime_fd)
     exit_fd = _child_exit_descriptor(child_pid)
     try:

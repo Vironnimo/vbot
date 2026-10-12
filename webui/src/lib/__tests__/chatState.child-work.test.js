@@ -216,7 +216,7 @@ describe('Sub-Agent work', () => {
       status: 'completed',
       running: [
         { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
-        { kind: 'command', id: 'term_1', label: 'npm run dev' },
+        { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
         { kind: 'unknown', id: 'x', label: 'dropped' },
       ],
     });
@@ -239,13 +239,34 @@ describe('Sub-Agent work', () => {
     expect(chatState.subAgentWork).toEqual({
       'sub-work': [
         { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
-        { kind: 'command', id: 'term_1', label: 'npm run dev' },
+        { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
       ],
     });
     expect(chatState.subAgentStatuses).toMatchObject({
       'run:child-run': 'completed',
       'workRun:sub-work': 'child-run',
     });
+  });
+
+  it('stops everything a Sub-Agent still runs through Stop all of its Session', async () => {
+    const stopAll = vi.fn().mockResolvedValue({ ok: true, stopped: 2 });
+    const { chatState, controller } = setupController({
+      operationOverrides: { stopAll },
+    });
+    const parent = ensureSessionState(chatState, 'alpha', 'parent');
+    const stop = () =>
+      controller.stopSubAgentWork({
+        tool: reloadedRow('sub-work'),
+        sessionState: parent,
+        projectId: 'project-one',
+      });
+
+    await expect(stop()).resolves.toBe(true);
+    expect(stopAll).toHaveBeenCalledWith('worker@project-one', 'child-session');
+
+    stopAll.mockRejectedValueOnce(new ApiClientError('internal', 'Offline'));
+    await expect(stop()).resolves.toBe(false);
+    expect(parent.actionError).toContain('Offline');
   });
 
   it('leaves a row without a Sub-Agent id uninspected', async () => {
@@ -535,27 +556,78 @@ describe('Review changes', () => {
 });
 
 describe('handed-off command statuses', () => {
-  it('applies live command statuses without letting a stale running undo an end', () => {
-    const { chatState, controller } = setupController();
+  const live = (status, { sessionId = 'session-one', stillRunning } = {}) => ({
+    status,
+    stillRunning: stillRunning === true,
+    sessionId,
+  });
+  const state = (status, stillRunning = false) => ({ status, stillRunning });
 
-    controller.applyCommandStatuses({ term_one: 'running' });
-    controller.applyCommandStatuses({
-      term_one: 'running',
-      term_two: 'running',
+  it('joins live command states by Session, the further state winning, until a reconnect may have missed an end', async () => {
+    const stopCommand = vi
+      .fn()
+      .mockResolvedValue({ stopped: true, status: 'stopped' });
+    // A fork holds its source's command ids; the server knows the command
+    // only in the Session that started it.
+    const loadCommandOutput = vi.fn((sessionId) =>
+      sessionId === 'session-fork'
+        ? Promise.reject(
+            new ApiClientError('command_not_found', 'Unknown command'),
+          )
+        : Promise.resolve({ status: 'running', still_running: false }),
+    );
+    const { chatState, controller } = setupController({
+      operationOverrides: { stopCommand, loadCommandOutput },
     });
-    controller.applyCommandStatuses({
-      term_one: 'completed',
-      term_two: 'running',
-    });
-    // A map that still holds an older `running` changes nothing known to end.
-    controller.applyCommandStatuses({
-      term_one: 'running',
-      term_two: 'failed',
-    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    const forwarded = {
+      cmd_one: live('running'),
+      cmd_two: live('completed', { stillRunning: true }),
+      cmd_source: live('running', { sessionId: 'session-source' }),
+    };
 
+    controller.applyCommandStatuses(forwarded);
+    await controller.stopCommand({ sessionState, commandId: 'cmd_one' });
+    // App's map still holds the `running` from before the stop's own event.
+    controller.applyCommandStatuses({ ...forwarded });
     expect(chatState.commandStatuses).toEqual({
-      term_one: 'completed',
-      term_two: 'failed',
+      'session-one': {
+        cmd_one: state('stopped'),
+        cmd_two: state('completed', true),
+      },
+      'session-source': { cmd_source: state('running') },
     });
+
+    // Processes left running never start again.
+    controller.applyCommandStatuses({
+      ...forwarded,
+      cmd_two: live('completed'),
+    });
+    expect(chatState.commandStatuses['session-one'].cmd_two).toEqual(
+      state('completed'),
+    );
+
+    // What the fork learned stays the fork's.
+    for (const sessionId of ['session-fork', 'session-source']) {
+      await controller.loadCommandOutput({
+        sessionState: ensureSessionState(chatState, 'alpha', sessionId),
+        commandId: 'cmd_source',
+      });
+    }
+    expect(chatState.commandStatuses['session-fork']).toEqual({
+      cmd_source: state('ended'),
+    });
+    expect(chatState.commandStatuses['session-source']).toEqual({
+      cmd_source: state('running'),
+    });
+
+    // App starts its map over after a replay gap; what the stop learned
+    // goes too.
+    controller.applyConnectionSnapshot({
+      replay_status: 'gap',
+      active_runs: [],
+    });
+    controller.applyCommandStatuses({});
+    expect(chatState.commandStatuses).toEqual({});
   });
 });

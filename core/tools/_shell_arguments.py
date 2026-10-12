@@ -2,11 +2,13 @@
 
 Agents trained on other harnesses call the shell Tool with their own shapes:
 Codex argv arrays and ``timeout_ms``, OpenAI ``local_shell`` action objects,
-Claude Code ``run_in_background``, Gemini ``directory``, Cursor
-``is_background``, Hermes and OpenClaw ``background``/``env``/``pty``. The
-normalizer maps every shape whose intent is exact onto the advertised fields
-and fails, before anything runs, when the call asks for an effect the Tool
-cannot provide.
+vBot's earlier ``mode``, Gemini ``directory``, Cursor ``is_background``, Hermes
+and OpenClaw ``background``/``env``/``pty``. The normalizer maps every shape
+whose intent is exact onto the advertised fields and fails, before anything
+runs, when the call asks for an effect the Tool cannot provide. Requests for a
+terminal, for input or for a yield time cannot be met either, since a command
+gets no input and has no terminal; the command runs, and the result notes that
+the field had no effect (``NO_EFFECT_FIELDS``, ``no_effect_notes``).
 """
 
 from __future__ import annotations
@@ -28,10 +30,20 @@ from core.tools.tools import JsonObject, ToolDisplayPart
 
 TIMEOUT_MS_PARAMETER: JsonObject = {"type": "number", "minimum": 0}
 ENV_PARAMETER: JsonObject = {"type": "object"}
+# The fields of the call that cannot have an effect, by the key the call used:
+# ``terminal`` (a terminal asked for), ``input`` (input text), ``wait`` (a yield
+# time). Set by the normalizer only; the result notes each one.
+NO_EFFECT_FIELDS = "no_effect_fields"
+_NO_EFFECT_KINDS = ("terminal", "input", "wait")
 # Accepted and validated, never advertised: other harnesses' spellings.
 SHELL_UNADVERTISED_PARAMETERS: JsonObject = {
     "timeout_ms": TIMEOUT_MS_PARAMETER,
     "env": ENV_PARAMETER,
+    "mode": {"type": "string"},
+    NO_EFFECT_FIELDS: {
+        "type": "object",
+        "additionalProperties": {"type": "string", "enum": list(_NO_EFFECT_KINDS)},
+    },
 }
 # Values at or above this size that are whole thousands are milliseconds.
 MILLISECOND_TIMEOUT_THRESHOLD = 10_000
@@ -51,14 +63,16 @@ _MODE_VALUES = {
     ),
     **dict.fromkeys(("background", "bg", "back", "async", "detach", "detached"), "background"),
 }
-_BACKGROUND_FLAGS = frozenset({"background", "runinbackground", "isbackground"})
+_BACKGROUND_FLAGS = frozenset({"background", "isbackground"})
 # Seconds or milliseconds before a running command returns; zero asks for background now.
 _YIELD_FIELDS = frozenset({"yieldms", "yieldtimems", "yieldafter", "backgroundafterseconds"})
+# A terminal for the command, and input text for it: commands have neither.
+_TERMINAL_FIELDS = frozenset({"pty", "tty", "interactive"})
+_INPUT_FIELDS = frozenset({"stdin", "input"})
 _DESCRIPTION_FIELDS = frozenset({"explanation", "justification", "title", "label", "summary"})
 # Requests vBot always satisfies or that only shape output: nothing to do.
-# Every command runs in a terminal, so pty and tty are satisfied too.
 _SATISFIED_FIELDS = frozenset(
-    {"notifyoncomplete", "login", "maxoutputtokens", "dangerouslydisablesandbox", "pty", "tty"}
+    {"notifyoncomplete", "login", "maxoutputtokens", "dangerouslydisablesandbox"}
 )
 _ELEVATION_FIELDS = frozenset({"elevated", "withescalatedpermissions"})
 _POWERSHELL_WRAPPER_OPTIONS = frozenset(
@@ -102,7 +116,10 @@ def _repair_contract() -> ToolContract:
 
 
 def normalize_shell_arguments(arguments: Any) -> Any:
-    """Map one shell call onto command, workdir, timeout, mode, env_keys, and env."""
+    """Map one shell call onto command, workdir, timeout, run_in_background, env_keys, and env.
+
+    Fields that cannot have an effect are collected under ``NO_EFFECT_FIELDS``.
+    """
     if isinstance(arguments, dict):
         arguments = _lift_command_list(arguments)
     normalized = normalize_call_arguments(
@@ -110,7 +127,7 @@ def normalize_shell_arguments(arguments: Any) -> Any:
         arguments,
         field_aliases=_FIELD_ALIASES,
         field_normalizers={"command": _command_text, "mode": _mode_value},
-        empty_as_omitted=("command", "workdir", "description", "mode"),
+        empty_as_omitted=("command", "workdir", "description", "mode", "run_in_background"),
     )
     if not isinstance(normalized, dict):
         return normalized
@@ -210,14 +227,29 @@ def _flag(key: str, value: Any) -> bool:
 
 
 def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
+    # Each field that asks for the background (True) or the foreground, as sent.
+    requests: list[tuple[str, bool]] = []
+    no_effect: dict[str, str] = dict(arguments.pop(NO_EFFECT_FIELDS, None) or {})
     for key in list(arguments):
         word = spelling(key)
-        if word in _BACKGROUND_FLAGS:
-            wanted = "background" if _flag(key, arguments.pop(key)) else "foreground"
-            _set_mode(arguments, wanted, key)
+        if key == "run_in_background":
+            requests.append((key, _flag(key, arguments[key])))
+        elif key == "mode":
+            requests.append((key, _mode_request(arguments.pop(key))))
+        elif word in _BACKGROUND_FLAGS:
+            requests.append((key, _flag(key, arguments.pop(key))))
         elif word in _YIELD_FIELDS:
-            if arguments.pop(key) == 0:
-                _set_mode(arguments, "background", key)
+            value = arguments.pop(key)
+            if _number(value) == 0:
+                requests.append((key, True))
+            elif value not in (None, "", False):
+                no_effect[key] = "wait"
+        elif word in _TERMINAL_FIELDS:
+            if _flag(key, arguments.pop(key)):
+                no_effect[key] = "terminal"
+        elif word in _INPUT_FIELDS:
+            if arguments.pop(key) not in (None, "", False, [], {}):
+                no_effect[key] = "input"
         elif word in _DESCRIPTION_FIELDS:
             text = arguments.pop(key)
             if isinstance(text, str) and text.strip() and not arguments.get("description"):
@@ -245,20 +277,95 @@ def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
                         "first, then call again without require_user_approval."
                     )
                 )
-        elif word == "user":
-            if arguments.pop(key) not in (None, ""):
-                raise ValueError(
-                    _not_run(f"commands run as the vBot user; call again without {key}.")
-                )
+        elif word == "user" and arguments.pop(key) not in (None, ""):
+            raise ValueError(_not_run(f"commands run as the vBot user; call again without {key}."))
+
+    if requests:
+        arguments["run_in_background"] = _background_request(requests)
+    if no_effect:
+        arguments[NO_EFFECT_FIELDS] = no_effect
 
 
-def _set_mode(arguments: dict[str, Any], wanted: str, source: str) -> None:
-    current = arguments.get("mode")
-    if current not in (None, wanted):
+def _mode_request(mode: Any) -> bool:
+    """Whether ``mode`` asks for the background; any other value is refused."""
+    if mode not in ("foreground", "background"):
         raise ValueError(
-            _not_run(f'mode is "{current}" but {source} asks for {wanted}; send one of them.')
+            _not_run(
+                f"mode {mode!r} is not a mode. Pass run_in_background: true to run the command "
+                "in the background, or omit both to wait for it."
+            )
         )
-    arguments["mode"] = wanted
+    return bool(mode == "background")
+
+
+def _background_request(requests: list[tuple[str, bool]]) -> bool:
+    """The one answer of every field that asks for the background or the foreground.
+
+    ``run_in_background`` is the reference when it was sent, else the first
+    such field; a field that asks for the other is refused.
+    """
+    reference = next(
+        (request for request in requests if request[0] == "run_in_background"), requests[0]
+    )
+    for key, background in requests:
+        if background == reference[1]:
+            continue
+        wanted = "background" if background else "foreground"
+        if reference[0] == "run_in_background":
+            sent = json.dumps(reference[1])
+            raise ValueError(
+                _not_run(
+                    f"run_in_background is {sent} but {key} asks for {wanted}; send one of them."
+                )
+            )
+        first = "background" if reference[1] else "foreground"
+        raise ValueError(
+            _not_run(
+                f"{reference[0]} asks for {first} but {key} asks for {wanted}; send one of them."
+            )
+        )
+    return reference[1]
+
+
+def _number(value: Any) -> float | None:
+    """*value* as a number: a JSON number or a numeric text; None otherwise."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def no_effect_notes(fields: Mapping[str, str], *, terminal: bool) -> list[str]:
+    """The notes for the fields of a call that cannot have an effect, in call order.
+
+    *fields* maps each key as the call sent it to its kind (``NO_EFFECT_FIELDS``);
+    *terminal* tells whether the Agent can call the terminal Tool.
+    """
+    notes: list[str] = []
+    for key, kind in fields.items():
+        if kind == "terminal":
+            note = f"{key} has no effect: commands run without a terminal and get no input."
+            if terminal:
+                note += " Run a program that needs a terminal or input with terminal."
+        elif kind == "input":
+            example = "'y' | program" if sys.platform == "win32" else "printf 'y\\n' | program"
+            note = (
+                f"{key} has no effect: commands get no input. Pipe the text into the program "
+                f"inside the command instead, such as {example}."
+            )
+        else:
+            note = (
+                f"{key} has no effect: set how long the call waits with timeout, or return at "
+                "once with run_in_background."
+            )
+        notes.append(note)
+    return notes
 
 
 def resolve_timeout(

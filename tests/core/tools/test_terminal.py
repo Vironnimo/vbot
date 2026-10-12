@@ -15,7 +15,9 @@ import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.providers.tool_schema import render_tool_definitions
+from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.subagents import SubAgentState, SubAgentStopOutcome
 from core.tools import terminal as terminal_module
 from core.tools import terminal_manager as manager_module
 from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
@@ -29,10 +31,10 @@ from core.tools.terminal import (
     register_terminal_tool,
 )
 from core.tools.terminal_manager import TerminalManager, TerminalOwner, TerminalRenderHost
-from core.tools.tools import JsonObject, ToolRegistry, tool_failure
+from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
 from core.utils.paths import model_path
 from core.utils.tokens import estimate_json_tokens
-from tests.core.tools.terminal_helpers import call, make_context
+from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
@@ -164,18 +166,10 @@ def test_definition_fits_the_offered_tools(shell_offered: bool, expected: str) -
 
     terminal = projected[0]
     assert terminal["description"] == expected.format(shell=SHELL)
-    # The shell's results hand out terminal ids only where the shell is offered.
-    assert terminal["parameters"]["properties"]["terminal_id"]["description"] == (
-        f"The terminal's id from start, list, or a {SHELL} result. Required except for start "
-        "and list."
-        if shell_offered
-        else "The terminal's id from start or list. Required except for start and list."
-    )
+    assert terminal["parameters"] == TERMINAL_TOOL_PARAMETERS
     assert projected[1:] == definitions[1:]
     # The registered definition stays as it was.
-    assert TERMINAL_TOOL_PARAMETERS["properties"]["terminal_id"]["description"].endswith(
-        f"or a {SHELL} result. Required except for start and list."
-    )
+    assert definitions[0]["description"] == TERMINAL_TOOL_DESCRIPTION
     without_terminal = definitions[1:]
     assert project_terminal_tool_definitions(without_terminal) == without_terminal
 
@@ -593,6 +587,156 @@ async def test_start_rejects_unresolvable_workdirs_before_spawn(
     assert terminal_manager.list_groups_for_operator() == groups_before
 
 
+class _SubAgents:
+    """The caller's Sub-Agent Sessions at every depth, as the coordinator reports them.
+
+    The Sub-Agents in *taken_over* are ones whose Session the user took over.
+    """
+
+    def __init__(
+        self, sessions: Mapping[SessionAddress, str], taken_over: Sequence[str] = ()
+    ) -> None:
+        self.sessions = dict(sessions)
+        self.taken_over = set(taken_over)
+        self.callers: list[SessionAddress] = []
+
+    async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
+        self.callers.append(caller)
+        return [
+            SubAgentState(
+                id=subagent_id,
+                title="Helper",
+                agent_id=session.agent_id,
+                session=session,
+                parent_id=None,
+                status="taken over by the user" if subagent_id in self.taken_over else "working",
+                last_tool=None,
+                activity_file=None,
+                within_takeover=subagent_id if subagent_id in self.taken_over else None,
+            )
+            for session, subagent_id in self.sessions.items()
+        ]
+
+    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
+        raise AssertionError("terminal asks only which Sessions are Sub-Agents'")
+
+    async def stop_subagent(
+        self, context: ToolContext, subagent: SubAgentState
+    ) -> SubAgentStopOutcome:
+        raise AssertionError("terminal never stops a Sub-Agent")
+
+
+@pytest.mark.asyncio
+async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A terminal attached to a Sub-Agent's Session (any depth) names that Sub-Agent in
+    list and status; one attached to any other Session, or to a Session the user took
+    over, stays ``other``."""
+    monkeypatch.setattr(manager_module, "default_terminal_argv", lambda env: ["host-shell"])
+    terminal_manager, _factory = manager
+    grandchild = TerminalOwner("project-a", "helper", "session-grandchild")
+    stranger = TerminalOwner("project-a", "agent-a", "session-b")
+    taken = TerminalOwner("project-a", "helper", "session-taken")
+    terminal_ids: list[str] = []
+    for holder in (grandchild, stranger, taken, None):
+        started = await terminal_manager.spawn_for_operator(
+            command=None, arguments=[], cwd=tmp_path
+        )
+        if holder is not None:
+            terminal_manager.attach(started["terminal_id"], holder, origin_run_id="run-b")
+        terminal_ids.append(started["terminal_id"])
+    subagents = _SubAgents(
+        {
+            SessionAddress("project-a", "helper", "session-grandchild"): "sub_grandchild",
+            SessionAddress("project-a", "helper", "session-taken"): "sub_taken",
+        },
+        taken_over=["sub_taken"],
+    )
+    arguments: JsonObject = {"action": "list"}
+
+    listed = await call(terminal_manager, make_context(tmp_path), arguments, subagents=subagents)
+
+    rows = {row["terminal_id"]: row for row in cast(dict[str, Any], listed["data"])["terminals"]}
+    assert [(rows[id_]["attached"], rows[id_].get("subagent")) for id_ in terminal_ids] == [
+        ("subagent", "sub_grandchild"),
+        ("other", None),
+        ("other", None),
+        ("no", None),
+    ]
+    assert subagents.callers == [SessionAddress("project-a", "agent-a", "session-a")]
+    shown = details(terminal_manager, tmp_path, arguments, listed)[-1]["items"]
+    assert shown[0]["meta"].endswith("attached to Sub-Agent sub_grandchild")
+
+    statuses = [
+        cast(
+            dict[str, Any],
+            await call(
+                terminal_manager,
+                make_context(tmp_path),
+                {"action": "status", "terminal_id": terminal_id},
+                subagents=subagents,
+            ),
+        )["data"]
+        for terminal_id in terminal_ids
+    ]
+    # One layout: status shows who holds the terminal as list does.
+    assert [(item["attached"], item.get("subagent")) for item in statuses] == [
+        ("subagent", "sub_grandchild"),
+        ("other", None),
+        ("other", None),
+        ("no", None),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_id", "offered"),
+    [("cmd_build", ("background_tasks",)), ("sub_child", ())],
+)
+async def test_ids_of_background_tasks_are_refused_before_anything_runs(
+    manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    task_id: str,
+    offered: tuple[str, ...],
+) -> None:
+    """A background command or Sub-Agent is never a terminal: every action refuses its id,
+    and names the background_tasks call (stop for kill) only when the Agent can make it."""
+    terminal_manager, factory = manager
+    context = make_context(tmp_path, offered_tools=offered)
+    calls: list[tuple[JsonObject, str]] = [
+        (
+            {"action": action, "terminal_id": task_id, "text": "y"}
+            if action in {"start", "input"}
+            else {"action": action, "terminal_id": task_id},
+            "stop" if action == "kill" else "status",
+        )
+        for action in ("start", "status", "wait", "input", "kill", "attach", "detach")
+    ]
+    # Other harnesses' fields and stop action for a background shell reach the same refusal.
+    calls += [
+        ({"action": "kill", "process_id": task_id}, "stop"),
+        ({"action": "KillShell", "shell_id": task_id}, "stop"),
+        ({"action": "status", "bash_id": task_id}, "status"),
+    ]
+
+    for arguments, verb in calls:
+        result = await call(terminal_manager, context, arguments)
+        assert result["ok"] is False
+        assert result["error"]["code"] == "not_a_terminal", arguments
+        message = str(result["error"]["message"])
+        assert task_id in message
+        mentioned = [
+            json.loads(found) for found in re.findall(r"background_tasks (\{.*?\})", message)
+        ]
+        assert mentioned == ([{"action": verb, "id": task_id}] if offered else [])
+        assert ("background_tasks" in message) is bool(offered)
+    # A terminal's own id under such a field names no terminal.
+    other = await call(terminal_manager, context, {"action": "kill", "process_id": "term_x"})
+    assert other["error"]["code"] == "invalid_arguments"
+    assert terminal_manager.list_terminals() == [] and factory.calls == []
+
+
 @pytest.mark.asyncio
 async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -694,6 +838,6 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     assert closed["error"]["code"] == "terminal_closed"
     assert closed["error"]["message"] == (
         f"The program in {terminal_id} has ended (stopped, exit code -1), so the input was not "
-        f"sent. To read its last screen or output, call terminal {call_text('status')}. To run "
-        'the program again, call terminal with action "start".'
+        f"sent. To read its last screen, call terminal {call_text('status')}. To run the "
+        'program again, call terminal with action "start".'
     )

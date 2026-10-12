@@ -325,7 +325,7 @@
    }
   },
   {
-   "name": "subagent: status lists tracked work",
+   "name": "subagent: status runs as background_tasks list",
    "tool": "subagent",
    "arguments": {
     "action": "status"
@@ -333,25 +333,27 @@
    "expect": {
     "ok": true,
     "contains": [
-     "subagents: []"
+     "This call ran as background_tasks",
+     "tasks: []"
     ]
    }
   },
   {
-   "name": "subagent: action list",
-   "tool": "subagent",
+   "name": "background_tasks: list without Sub-Agents or commands",
+   "tool": "background_tasks",
    "arguments": {
     "action": "list"
    },
    "expect": {
     "ok": true,
     "contains": [
-     "subagents: []"
+     "tasks: []",
+     "You have no Sub-Agents"
     ]
    }
   },
   {
-   "name": "subagent: status with every field echoed",
+   "name": "subagent: status with every field echoed runs as background_tasks status",
    "tool": "subagent",
    "arguments": {
     "action": "status",
@@ -365,9 +367,9 @@
    },
    "expect": {
     "ok": false,
-    "error_code": "subagent_not_found",
+    "error_code": "task_not_found",
     "contains": [
-     "sub_aaaaaaaaaaaa"
+     "This call ran as background_tasks {\"action\": \"status\", \"id\": \"sub_aaaaaaaaaaaa\"}"
     ],
     "absent": [
      "Unknown argument",
@@ -376,7 +378,7 @@
    }
   },
   {
-   "name": "subagent: status with placeholder id lists work",
+   "name": "subagent: status with placeholder id runs as background_tasks list",
    "tool": "subagent",
    "arguments": {
     "action": "status",
@@ -386,12 +388,13 @@
    "expect": {
     "ok": true,
     "contains": [
-     "subagents: []"
+     "This call ran as background_tasks",
+     "tasks: []"
     ]
    }
   },
   {
-   "name": "subagent: cancel with every field echoed",
+   "name": "subagent: cancel with every field echoed runs as background_tasks stop",
    "tool": "subagent",
    "arguments": {
     "action": "cancel",
@@ -403,7 +406,11 @@
    },
    "expect": {
     "ok": false,
-    "error_code": "subagent_not_found",
+    "error_code": "task_not_found",
+    "contains": [
+     "This call ran as background_tasks {\"action\": \"stop\", \"id\": \"sub_aaaaaaaaaaaa\"}.",
+     "Nothing was stopped"
+    ],
     "absent": [
      "Unknown argument",
      "not run"
@@ -411,29 +418,34 @@
    }
   },
   {
-   "name": "subagent: action stop",
-   "tool": "subagent",
+   "name": "background_tasks: stop of an unknown Sub-Agent",
+   "tool": "background_tasks",
    "arguments": {
     "action": "stop",
     "id": "sub_aaaaaaaaaaaa"
    },
    "expect": {
     "ok": false,
-    "error_code": "subagent_not_found"
+    "error_code": "task_not_found",
+    "contains": [
+     "sub_aaaaaaaaaaaa",
+     "Nothing was stopped",
+     "Nothing of yours is running now"
+    ]
    }
   },
   {
-   "name": "subagent: unknown id lists your Sub-Agents",
-   "tool": "subagent",
+   "name": "background_tasks: unknown id names what of yours runs",
+   "tool": "background_tasks",
    "arguments": {
     "action": "status",
     "id": "last"
    },
    "expect": {
     "ok": false,
-    "error_code": "subagent_not_found",
+    "error_code": "task_not_found",
     "contains": [
-     "You have no Sub-Agents"
+     "Nothing of yours is running now"
     ]
    }
   },
@@ -448,7 +460,7 @@
     "error_code": "invalid_arguments",
     "contains": [
      "\"action\": \"send\"",
-     "\"action\": \"cancel\""
+     "background_tasks {\"action\": \"stop\", \"id\": \"sub_aaaaaaaaaaaa\"}"
     ]
    }
   },
@@ -532,7 +544,7 @@
    }
   },
   {
-   "name": "subagent: cancel without id",
+   "name": "subagent: cancel without id is the background_tasks stop refusal",
    "tool": "subagent",
    "arguments": {
     "action": "cancel"
@@ -541,8 +553,11 @@
     "ok": false,
     "error_code": "invalid_arguments",
     "contains": [
-     "cancel needs \"id\"",
-     "nothing"
+     "stop needs id",
+     "nothing was stopped"
+    ],
+    "absent": [
+     "This call ran as background_tasks"
     ]
    }
   },
@@ -588,7 +603,7 @@
    }
   },
   {
-   "name": "status: Sub-Agent id points to subagent",
+   "name": "status: Sub-Agent id points to background_tasks",
    "tool": "status",
    "arguments": {
     "id": "sub_aaaaaaaaaaaa"
@@ -596,9 +611,7 @@
    "expect": {
     "ok": false,
     "contains": [
-     "subagent",
-     "\"action\": \"list\"",
-     "sub_aaaaaaaaaaaa"
+     "background_tasks {\"action\": \"status\", \"id\": \"sub_aaaaaaaaaaaa\"}"
     ],
     "absent": [
      "Unknown argument"

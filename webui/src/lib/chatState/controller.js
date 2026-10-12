@@ -6,7 +6,6 @@ import {
   getSession as requestGetSession,
   getSessionChangeStats as requestGetSessionChangeStats,
   inspectSubAgentWork as requestInspectSubAgentWork,
-  killTerminal as requestKillTerminal,
   listAgents as requestListAgents,
   listChatCommands as requestListChatCommands,
   listFiles as requestListFiles,
@@ -14,6 +13,7 @@ import {
   listSessionActivity as requestListSessionActivity,
   listSessions as requestListSessions,
   loadChatHistory as requestLoadChatHistory,
+  loadCommandOutput as requestLoadCommandOutput,
   loadLearningChanges as requestLoadLearningChanges,
   loadReflectionRuns as requestLoadReflectionRuns,
   markSessionRead as requestMarkSessionRead,
@@ -24,6 +24,7 @@ import {
   updateQueueItem as requestUpdateQueueItem,
   steerQueueItem as requestSteerQueueItem,
   stopAll as requestStopAll,
+  stopCommand as requestStopCommand,
   undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 import { t } from '../i18n.js';
@@ -81,6 +82,8 @@ function historyLoadOptions(history) {
       : {}),
     compactionPolicy: history?.compaction_policy,
     backgroundCommandStatuses: history?.background_command_statuses,
+    backgroundCommandsStillRunning: history?.background_commands_still_running,
+    subAgentBackgroundCommands: history?.subagent_background_commands,
   };
 }
 
@@ -108,7 +111,6 @@ function defaultChatOperations() {
     controlRun: (...args) => requestControlRun(...args),
     editChatMessage: (...args) => requestEditChatMessage(...args),
     inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
-    killTerminal: (...args) => requestKillTerminal(...args),
     listAgents: (...args) => requestListAgents(...args),
     listChatCommands: (...args) => requestListChatCommands(...args),
     listFiles: (...args) => requestListFiles(...args),
@@ -118,6 +120,7 @@ function defaultChatOperations() {
     getSession: (...args) => requestGetSession(...args),
     getSessionChangeStats: (...args) => requestGetSessionChangeStats(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
+    loadCommandOutput: (...args) => requestLoadCommandOutput(...args),
     loadLearningChanges: (...args) => requestLoadLearningChanges(...args),
     loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
     markSessionRead: (...args) => requestMarkSessionRead(...args),
@@ -129,6 +132,7 @@ function defaultChatOperations() {
     updateQueueItem: (...args) => requestUpdateQueueItem(...args),
     steerQueueItem: (...args) => requestSteerQueueItem(...args),
     stopAll: (...args) => requestStopAll(...args),
+    stopCommand: (...args) => requestStopCommand(...args),
     undoLearningChanges: (...args) => requestUndoLearningChanges(...args),
   };
 }
@@ -175,10 +179,12 @@ export function createChatController({
   const {
     applyCommandStatuses,
     applySubAgentStatusUpdates,
-    cancelCommand,
     cancelSubAgent,
+    loadCommandOutput,
     loadSubAgentWork,
     reconcileSubAgentRows,
+    stopCommand,
+    stopSubAgentWork,
   } = childTasks;
   const activity = createChatActivity({
     chatState,
@@ -369,6 +375,13 @@ export function createChatController({
             result.background_command_statuses,
             page.background_command_statuses,
           ),
+          // Each list is complete; the newest one wins.
+          background_commands_still_running:
+            page.background_commands_still_running ??
+            result.background_commands_still_running,
+          subagent_background_commands:
+            page.subagent_background_commands ??
+            result.subagent_background_commands,
         };
       after = page.next_after;
     } while (result?.has_newer);
@@ -557,7 +570,6 @@ export function createChatController({
       prependHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         nextBefore: history?.next_before,
-        backgroundCommandStatuses: history?.background_command_statuses,
       });
       return true;
     } catch (error) {
@@ -975,11 +987,34 @@ export function createChatController({
         onRestartQueueDiscarded(discardedCount);
       }
     }
+    // A replay gap or a server restart may have lost the end of a background
+    // command. Its live state starts over (App's map with it), and the
+    // displayed Session reads its History on: the read reports every live
+    // command, so a durable `running` it leaves out has ended. The other
+    // Sessions read on when shown.
+    const commandEndsMissed =
+      snapshot.replay_status === 'gap' ||
+      snapshot.replay_status === 'epoch_changed';
+    if (commandEndsMissed) {
+      childTasks.forgetLearnedCommandStatuses();
+    }
     runStream.applyConnectionSnapshot(snapshot);
     for (const sessionState of Object.values(chatState.sessions)) {
-      if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
-        void reflections.refresh(sessionState);
+      if (!isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+        continue;
       }
+      if (commandEndsMissed && sessionState.historyLoaded) {
+        // Only a read without a cursor (in full) also reads the reflections.
+        const readsInFull = !sessionState.historyAfter;
+        void loadHistoryForSession(
+          sessionState.agentId,
+          sessionState.sessionId,
+        );
+        if (readsInFull) {
+          continue;
+        }
+      }
+      void reflections.refresh(sessionState);
     }
     return true;
   }
@@ -1116,7 +1151,6 @@ export function createChatController({
     applySessionInvalidations,
     applySubAgentStatusUpdates,
     cancelActiveRun,
-    cancelCommand,
     cancelSubAgent,
     cancelTool,
     controlRun,
@@ -1132,6 +1166,7 @@ export function createChatController({
     listSessions: (...args) => operations.listSessions(...args),
     loadAdoptedSelectionHistory,
     loadAgents,
+    loadCommandOutput,
     loadCommands,
     loadCurrentHistory,
     loadHistoryForSession,
@@ -1153,6 +1188,8 @@ export function createChatController({
       operations.setSessionAgentOverrides(...args),
     sendToNewSession,
     stopAll,
+    stopCommand,
+    stopSubAgentWork,
     syncAgentActivity,
     syncSessionQueue,
     undoReflection: reflections.undo,

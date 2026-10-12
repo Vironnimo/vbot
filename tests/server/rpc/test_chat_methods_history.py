@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import get_ident
@@ -20,9 +20,10 @@ from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
 from core.runs import ChatRunManager, RunAdmission, RunKind
-from core.sessions import ChatSession
+from core.sessions import SUBAGENT_TAKEN_OVER_AT_META_KEY, ChatSession, SessionAddress
 from core.settings.normalizers import normalize_compaction_settings
 from core.skills import SkillAuthoringService
+from core.subagents.links import link_session
 from core.tools.tools import tool_success
 from server.file_delivery import FileDelivery
 from server.rpc import chat_methods
@@ -53,14 +54,32 @@ class _HistoryAgents:
         return SimpleNamespace(compaction_policy=self.compaction_policy, model=self.model)
 
 
-class _Terminals:
-    """The commands the TerminalManager still knows, by terminal id."""
+class _Commands:
+    """The background commands the CommandManager still knows."""
 
     def __init__(self) -> None:
-        self.statuses: dict[str, str] = {}
+        self.reports: dict[str, SimpleNamespace] = {}
 
-    def command_status(self, terminal_id: str) -> str | None:
-        return self.statuses.get(terminal_id)
+    def add(
+        self, command_id: str, status: str, *still_running: str, session_id: str = "session-one"
+    ) -> None:
+        owner = SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
+        self.reports[command_id] = SimpleNamespace(
+            command_id=command_id,
+            owner=owner,
+            status=status,
+            still_running=still_running,
+            finished=status != "running" and not still_running,
+            label=f"label of {command_id}",
+        )
+
+    def commands(self, owners: Collection[SessionAddress]) -> list[SimpleNamespace]:
+        return [report for report in self.reports.values() if report.owner in owners]
+
+    def has_unfinished_background(self, *, besides: SessionAddress | None = None) -> bool:
+        return any(
+            not report.finished and report.owner != besides for report in self.reports.values()
+        )
 
 
 @dataclass
@@ -94,7 +113,7 @@ def history(tmp_path: Path) -> Iterator[_History]:
                 load_compaction_settings=lambda: normalize_compaction_settings(None)
             ),
             chat_sessions=sessions,
-            terminal_manager=_Terminals(),
+            command_manager=_Commands(),
             memory=memory,
             learning_changes=LearningChanges(
                 memory=memory,
@@ -125,23 +144,21 @@ def _summary(run_id: str, message_id: str) -> ChatMessage:
     )
 
 
-def _handed_off_command(session: ChatSession, call_id: str, terminal_id: str) -> None:
+def _handed_off_command(session: ChatSession, call_id: str, command_id: str) -> None:
     append_tool_fixture(
         session,
         ChatMessage.tool(
             tool_call_id=call_id,
             name="bash",
-            content=json.dumps(
-                tool_success({"status": "running", "terminal_id": terminal_id, "output": ""})
-            ),
+            content=json.dumps(tool_success({"status": "running", "command_id": command_id})),
         ),
     )
 
 
-def _delivery_note(terminal_id: str, exit_code: int) -> str:
+def _delivery_note(command_id: str, exit_code: int) -> str:
     return (
         "Background results\n\n"
-        f"The command in terminal {terminal_id} (make) exited with code {exit_code}.\n"
+        f"The background command {command_id} (make) exited with code {exit_code} after 4 s.\n"
         "Output: (none)"
     )
 
@@ -401,37 +418,121 @@ async def test_history_projects_the_active_edit_lineage_but_keeps_raw_usage(
 
 
 @pytest.mark.asyncio
-async def test_history_reports_background_command_statuses_of_the_records_it_returns(
-    history: _History,
+async def test_history_reports_the_current_statuses_of_the_sessions_background_commands(
+    history: _History, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = history.session()
-    _handed_off_command(session, "bash-one", "term_one")
-    _handed_off_command(session, "bash-two", "term_two")
-    _handed_off_command(session, "bash-three", "term_gone")
-    session.add_note(_delivery_note("term_two", 3))
-    session.add_note("Skill context: unrelated")
-    terminals = history.state.runtime.terminal_manager
-    # term_one exited, its result not yet delivered; vBot restarted since term_gone ran.
-    terminals.statuses = {"term_one": "completed", "term_two": "failed"}
+    walks: list[SessionAddress] = []
+    walk = chat_methods.descendants
 
-    # A replacement read carries the complete map: deliveries applied, running
-    # commands at their current status, commands no terminal runs dropped.
+    def recorded_walk(sessions: ChatSessionManager, root: SessionAddress, **kwargs: Any) -> Any:
+        walks.append(root)
+        return walk(sessions, root, **kwargs)
+
+    monkeypatch.setattr(chat_methods, "descendants", recorded_walk)
+    session = history.session()
+    _handed_off_command(session, "bash-one", "cmd_one")
+    _handed_off_command(session, "bash-two", "cmd_two")
+    _handed_off_command(session, "bash-three", "cmd_gone")
+    # A fork shares its source's History, not its commands.
+    _handed_off_command(session, "bash-four", "cmd_source")
+    session.add_note(_delivery_note("cmd_two", 3))
+    session.add_note("Skill context: unrelated")
+    commands = history.state.runtime.command_manager
+    # cmd_one exited, its result not yet delivered, and a server it started
+    # still runs; cmd_new was handed off in a Tool batch that still runs, so no
+    # record names it yet; vBot restarted since cmd_gone ran.
+    commands.add("cmd_one", "completed", "node (pid 7)")
+    commands.add("cmd_new", "running")
+    commands.add("cmd_source", "running", session_id="session-source")
+    # Its Sub-Agent and that one's own Sub-Agents run commands too; the user took
+    # over one of them, which with its own Sub-Agent now works for the user.
+    for subagent_id, child, parent in (
+        ("sub_child", "session-child", "session-one"),
+        ("sub_grandchild", "session-grandchild", "session-child"),
+        ("sub_taken", "session-taken", "session-child"),
+        ("sub_below_taken", "session-below-taken", "session-taken"),
+    ):
+        history.session(child)
+        link_session(
+            history.sessions,
+            SessionAddress(project_id=None, agent_id="coder", session_id=child),
+            subagent_id=subagent_id,
+            parent=SessionAddress(project_id=None, agent_id="coder", session_id=parent),
+            run_id="run-parent",
+            tool_call_id=None,
+            tool_call_index=None,
+        )
+    history.sessions.mutate_metadata(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-taken"),
+        lambda metadata: metadata.__setitem__(
+            SUBAGENT_TAKEN_OVER_AT_META_KEY, "2026-10-12T09:00:00+00:00"
+        ),
+    )
+    commands.add("cmd_child", "running", session_id="session-child")
+    commands.add("cmd_grandchild", "failed", "vite (pid 9)", session_id="session-grandchild")
+    commands.add("cmd_grandchild_done", "completed", session_id="session-grandchild")
+    commands.add("cmd_taken", "running", session_id="session-taken")
+    commands.add("cmd_below_taken", "running", session_id="session-below-taken")
+
+    # A replacement read carries the complete map: deliveries applied, the
+    # Session's own background commands at their current status, and none for
+    # a recorded running command that is not one of them.
     first = await history.read(limit=1)
     assert first["background_command_statuses"] == {
-        "term_one": "completed",
-        "term_two": "failed",
+        "cmd_one": "completed",
+        "cmd_two": "failed",
+        "cmd_new": "running",
     }
+    assert first["background_commands_still_running"] == ["cmd_one"]
     assert all(message["role"] != "note" for message in first["messages"])
+    assert walks
+    # The commands its Sub-Agents still run, at every depth, each under the
+    # Session's own Sub-Agent above it; none of the user's, which the
+    # Session's Stop all leaves running.
+    assert sorted(first["subagent_background_commands"], key=lambda entry: entry["command_id"]) == [
+        {
+            "subagent_id": "sub_child",
+            "session_id": "session-child",
+            "command_id": "cmd_child",
+            "label": "label of cmd_child",
+        },
+        {
+            "subagent_id": "sub_child",
+            "session_id": "session-grandchild",
+            "command_id": "cmd_grandchild",
+            "label": "label of cmd_grandchild",
+        },
+    ]
 
-    # An incremental read carries only the appended records' statuses.
-    session.add_note(_delivery_note("term_one", 0))
+    # An incremental read carries the appended records' statuses and those of
+    # the Session's live commands; the still-running list is always complete.
+    commands.add("cmd_one", "completed")
+    commands.add("cmd_new", "completed")
+    session.add_note(_delivery_note("cmd_new", 0))
     delta = await history.read(after=first["next_after"])
     assert delta["incremental"] is True
-    assert delta["background_command_statuses"] == {"term_one": "completed"}
+    assert delta["background_command_statuses"] == {"cmd_one": "completed", "cmd_new": "completed"}
+    assert delta["background_commands_still_running"] == []
 
-    # An older page carries none.
+    # A read that finds nothing appended still reports the live commands, so
+    # the caller learns that a command it holds as running ended in a restart.
+    # With no background command running outside the Session, it skips the
+    # Sub-Agent tree walk.
+    commands.reports.clear()
+    commands.add("cmd_next", "running")
+    walks.clear()
+    unchanged = await history.read(after=delta["next_after"])
+    assert unchanged["messages"] == []
+    assert unchanged["background_command_statuses"] == {"cmd_next": "running"}
+    assert unchanged["background_commands_still_running"] == []
+    assert unchanged["subagent_background_commands"] == []
+    assert walks == []
+
+    # An older page carries neither.
     older = await history.read(before=first["next_before"])
     assert "background_command_statuses" not in older
+    assert "background_commands_still_running" not in older
+    assert "subagent_background_commands" not in older
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +699,7 @@ async def test_history_increments_after_a_cursor_and_resets_after_an_edit(
 
 
 @pytest.mark.asyncio
-async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
+async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_worker_hop(
     history: _History, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = history.session()
@@ -649,6 +750,9 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
         "history_reset": False,
         "has_newer": False,
         "has_more": False,
+        "background_command_statuses": {},
+        "background_commands_still_running": [],
+        "subagent_background_commands": [],
     }
 
     monkeypatch.undo()
@@ -658,6 +762,7 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
     assert appended["incremental"] is True
     assert {"session_usage", "context_usage", "compaction_policy"} <= set(appended)
     assert appended["background_command_statuses"] == {}
+    assert appended["background_commands_still_running"] == []
     # Reflection Runs arrive with a full read; live events keep them current.
     assert "reflection_runs" not in appended
 

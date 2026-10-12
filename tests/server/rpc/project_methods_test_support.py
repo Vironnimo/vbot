@@ -20,6 +20,7 @@ from core.projects.resolver import (
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
+from core.tools.command_manager import CommandManager
 from server.events import ServerEventBus
 from tests.server.rpc_test_support_runtime import StubCalendarService, StubJobService
 
@@ -189,6 +190,7 @@ def _make_state(
         snapshot_barrier=barrier,
         agent_resolver=resolver,
         terminal_manager=_FakeTerminalManager(),
+        command_manager=CommandManager(),
         cron_service=cron_service,
         bootstrap_service=bootstrap_service,
         calendar_service=calendar_service,
@@ -222,6 +224,7 @@ def _make_state(
             runs=chat_runs,
             automation=runtime.automation_references,
             terminals=cast(Any, runtime.terminal_manager),
+            commands=runtime.command_manager,
             snapshot_barrier=barrier,
             agent_references=_no_agent_references,
             # A test makes the usage import fail by replacing ``runtime.import_usage``.

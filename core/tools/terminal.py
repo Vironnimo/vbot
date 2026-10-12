@@ -1,10 +1,9 @@
 """Agent-facing live terminals backed by PTY/ConPTY.
 
 The ``terminal`` Tool starts interactive programs that an Agent drives by
-typing, and operates the commands the shell Tool left running. For a command
-terminal, ``status``, ``wait`` and ``kill`` return the shell result
-(``command_terminal_result``), so following a command up reads like the
-shell call that started it.
+typing. No shell command runs in a terminal: the shell Tool runs commands
+without one, and ``background_tasks`` serves the ones it left running, so the
+``terminal`` Tool refuses their ids and those of Sub-Agents.
 """
 
 from __future__ import annotations
@@ -13,12 +12,18 @@ import asyncio
 import json
 import re
 import shutil
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.projects import ProjectStore
+from core.sessions import SessionAddress
+from core.tools._background_tasks_arguments import (
+    BACKGROUND_TASKS_TOOL_NAME,
+    COMMAND_ID_PREFIX,
+    SUBAGENT_ID_PREFIX,
+)
 from core.tools._shell_arguments import resolve_timeout
 from core.tools._terminal_arguments import (
     TERMINAL_KEY_SUMMARY,
@@ -54,7 +59,6 @@ from core.tools.terminal_manager import (
     TerminalCapacityError,
     TerminalClosedError,
     TerminalInfo,
-    TerminalIsCommandError,
     TerminalLaunchError,
     TerminalManager,
     TerminalManagerError,
@@ -78,6 +82,9 @@ from core.tools.tools import (
     tool_success,
 )
 from core.utils.paths import model_path
+
+if TYPE_CHECKING:
+    from core.subagents import SubAgentTree
 
 TERMINAL_TOOL_NAME = "terminal"
 TERMINAL_ACTIONS = (
@@ -120,11 +127,6 @@ def _terminal_description(*, shell: str | None) -> str:
     return " ".join(sentences)
 
 
-def _terminal_id_description(shell: str | None) -> str:
-    sources = f"start, list, or a {shell} result" if shell else "start or list"
-    return f"The terminal's id from {sources}. Required except for start and list."
-
-
 TERMINAL_TOOL_DESCRIPTION = _terminal_description(shell=_SHELL_NAME)
 
 TERMINAL_TOOL_PARAMETERS: JsonObject = {
@@ -135,17 +137,19 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "enum": list(TERMINAL_ACTIONS),
             "description": (
                 "start launches a program attached to this Session and returns its first "
-                "screen; list shows terminals; status shows a terminal's screen, or a "
-                "command's output; wait waits until the program exits, prints output "
-                "matching pattern, or the timeout passes; without pattern, it also ends when "
-                "an interactive program goes idle showing something new; input types text and "
-                "keys; kill stops the program and everything it started; attach takes over an "
-                "unattached terminal; detach releases it for another Session."
+                "screen; list shows terminals; status shows a terminal's screen; wait waits "
+                "until the program exits, prints output matching pattern, or the timeout "
+                "passes; without pattern, it also ends when the program goes idle showing "
+                "something new; input types text and keys; kill stops the program and "
+                "everything it started; attach takes over an unattached terminal; detach "
+                "releases it for another Session."
             ),
         },
         "terminal_id": {
             "type": "string",
-            "description": _terminal_id_description(_SHELL_NAME),
+            "description": (
+                "The terminal's id from start or list. Required except for start and list."
+            ),
         },
         "command": {
             "type": "string",
@@ -216,10 +220,9 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "For wait: a case-insensitive regular expression (Python syntax), matched line "
-                "by line; the wait ends when the output matches it, such as a server's ready "
-                "line. Output printed before the call counts, except output before your last "
-                "input and the echo of that input. Omit to wait for the exit, or for an "
-                "interactive program to go idle."
+                "by line; the wait ends when the output matches it, such as a prompt. Output "
+                "printed before the call counts, except output before your last input and the "
+                "echo of that input. Omit to wait for the exit, or for the program to go idle."
             ),
         },
         "timeout": {
@@ -269,18 +272,19 @@ def project_terminal_tool_definitions(definitions: list[JsonObject]) -> list[Jso
             continue
         fitted = deepcopy(definition)
         fitted["description"] = description
-        properties = fitted.get("parameters", {}).get("properties", {})
-        if "terminal_id" in properties:
-            properties["terminal_id"]["description"] = _terminal_id_description(None)
         projected.append(fitted)
     return projected
 
 
-def make_terminal_handler(terminal_manager: TerminalManager, projects: ProjectStore):
+def make_terminal_handler(
+    terminal_manager: TerminalManager,
+    projects: ProjectStore,
+    subagents: SubAgentTree | None = None,
+):
     """Create a terminal Tool handler bound to one Terminal Manager."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await _handle_terminal(terminal_manager, projects, context, arguments)
+        return await _handle_terminal(terminal_manager, projects, subagents, context, arguments)
 
     return handler
 
@@ -288,6 +292,7 @@ def make_terminal_handler(terminal_manager: TerminalManager, projects: ProjectSt
 async def _handle_terminal(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
+    subagents: SubAgentTree | None,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -303,18 +308,22 @@ async def _handle_terminal(
             f"{_terminals_text(terminal_manager, owner)}",
             retryable=False,
         )
+    if isinstance(terminal_id, str):
+        refusal = _background_task_refusal(context, terminal_id.strip(), action)
+        if refusal is not None:
+            return tool_failure("not_a_terminal", refusal, retryable=False)
 
     try:
         if action == "start":
             return await _handle_start(terminal_manager, projects, context, arguments)
         if action == "list":
-            return _handle_list(terminal_manager, context)
+            return await _handle_list(terminal_manager, subagents, context)
         if action == "attach":
             return _handle_attach(terminal_manager, context, arguments)
         if action == "detach":
             return _handle_detach(terminal_manager, context, arguments)
         if action == "status":
-            return await _handle_status(terminal_manager, context, arguments)
+            return await _handle_status(terminal_manager, subagents, context, arguments)
         if action == "wait":
             return await _handle_wait(terminal_manager, context, arguments)
         if action == "input":
@@ -323,14 +332,8 @@ async def _handle_terminal(
     except TerminalNotFoundError:
         return tool_failure(
             "terminal_not_found",
-            _not_found_message(terminal_manager, context, str(terminal_id)),
+            _not_found_message(terminal_manager, owner, str(terminal_id)),
             retryable=False,
-        )
-    except TerminalIsCommandError:
-        # Only detach reaches here: another Session's commands are not visible, and
-        # attaching one's own command changes nothing.
-        return tool_failure(
-            "command_terminal", _command_refusal(context, str(terminal_id)), retryable=False
         )
     except TerminalAlreadyAttachedError:
         return tool_failure(
@@ -356,7 +359,7 @@ async def _handle_terminal(
     except TerminalClosedError:
         return tool_failure(
             "terminal_closed",
-            _closed_message(terminal_manager, context, str(terminal_id), action),
+            _closed_message(terminal_manager, str(terminal_id), action),
             retryable=False,
         )
     except TerminalCapacityError as error:
@@ -530,22 +533,59 @@ async def _handle_start(
     return tool_success(data)
 
 
-def _handle_list(terminal_manager: TerminalManager, context: ToolContext) -> JsonObject:
+async def _handle_list(
+    terminal_manager: TerminalManager,
+    subagents: SubAgentTree | None,
+    context: ToolContext,
+) -> JsonObject:
     owner = _owner(context)
+    terminals = terminal_manager.list_terminals()
+    holders = await _subagent_holders(subagents, owner, terminals)
     rows: list[JsonObject] = []
-    for info in terminal_manager.list_terminals():
-        if not _visible(info, owner):
-            continue
+    for info in terminals:
         row: JsonObject = {
             "terminal_id": info.terminal_id,
             "program": _short_program(info.program),
             "name": info.name,
             "state": _agent_state(info),
             "exit_code": info.exit_code if info.finished else None,
-            "attached": _attachment(info, owner),
+            **_attachment_fields(info, owner, holders),
         }
         rows.append({key: value for key, value in row.items() if value not in (None, "")})
     return tool_success({"terminals": rows})
+
+
+async def _subagent_holders(
+    subagents: SubAgentTree | None, owner: TerminalOwner, terminals: Sequence[TerminalInfo]
+) -> Mapping[SessionAddress, str]:
+    """The Sessions of this Session's Sub-Agents (any depth) by Sub-Agent id, when one of
+    *terminals* is attached to another Session.
+
+    A Session the user took over, and every Session below it, works for the user, so
+    its terminals count as another Session's.
+    """
+    if subagents is None or all(info.attachment in (None, owner) for info in terminals):
+        return {}
+    return {
+        subagent.session: subagent.id
+        for subagent in await subagents.subagents(_address(owner))
+        if subagent.within_takeover is None
+    }
+
+
+def _attachment_fields(
+    info: TerminalInfo, owner: TerminalOwner, holders: Mapping[SessionAddress, str]
+) -> JsonObject:
+    """``attached``, and ``subagent`` for a terminal a Sub-Agent of this Session holds."""
+    attached = _attachment(info, owner)
+    subagent = (
+        holders.get(_address(info.attachment))
+        if attached == "other" and info.attachment is not None
+        else None
+    )
+    if subagent is None:
+        return {"attached": attached}
+    return {"attached": "subagent", "subagent": subagent}
 
 
 def _handle_attach(
@@ -555,7 +595,6 @@ def _handle_attach(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
-    _visible_terminal(terminal_manager, owner, terminal_id)
     info, changed = terminal_manager.attach(
         terminal_id,
         owner,
@@ -563,9 +602,7 @@ def _handle_attach(
         execution_owner=context.execution_owner,
     )
     data = _terminal_facts(info, owner)
-    if info.kind == "command":
-        data["note"] = "A command stays attached to the Session that ran it; nothing changed."
-    elif not changed:
+    if not changed:
         data["note"] = "The terminal was already attached to this Session; nothing changed."
     elif data["state"] == "running":
         data["next"] = _DELIVERIES_TEXT
@@ -579,13 +616,13 @@ def _handle_detach(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
-    _visible_terminal(terminal_manager, owner, terminal_id)
     info = terminal_manager.detach(terminal_id, owner)
     return tool_success(_terminal_facts(info, owner))
 
 
 async def _handle_status(
     terminal_manager: TerminalManager,
+    subagents: SubAgentTree | None,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -605,16 +642,7 @@ async def _handle_status(
         minimum=0,
     )
     owner = _owner(context)
-    info = _visible_terminal(terminal_manager, owner, terminal_id)
-    if info.kind == "command":
-        data = await _command_result(terminal_manager, context, terminal_id)
-        if start_line is not None or "lines" in arguments:
-            data["note"] = (
-                "lines and start_line page an interactive terminal's screen; a command's result "
-                "shows its output and names the file with its complete output when it shows "
-                "only part."
-            )
-        return tool_success(data)
+    info = _terminal_info(terminal_manager, terminal_id)
     snapshot = await terminal_manager.read(terminal_id, lines=lines, start_line=start_line)
     attached_here = info.attachment == owner
     if attached_here and start_line is None:
@@ -623,7 +651,8 @@ async def _handle_status(
         snapshot, view="status", page_lines=lines, include_screen=start_line is None
     )
     if not attached_here:
-        data["attached"] = _attachment(info, owner)
+        holders = await _subagent_holders(subagents, owner, [info])
+        data.update(_attachment_fields(info, owner, holders))
         data["next"] = _not_attached_text(info, terminal_id)
     return tool_success(data)
 
@@ -635,7 +664,6 @@ async def _handle_wait(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
-    info = _visible_terminal(terminal_manager, owner, terminal_id)
     seconds, notes, capped = _wait_seconds(
         arguments, default=TERMINAL_WAIT_DEFAULT_SECONDS, zero=TERMINAL_WAIT_MAX_SECONDS
     )
@@ -659,29 +687,23 @@ async def _handle_wait(
             on_match=matched.append,
         ),
     )
-    command = info.kind == "command"
     if ended == "user":
         notes.append("The user ended this wait; the program keeps running.")
     elif ended == "timeout" and pattern is not None:
         notes.append(f"No output matched pattern within {seconds:g} seconds.")
-    elif ended == "timeout" and command:
-        notes.append(f"The command did not exit within {seconds:g} seconds.")
     if capped and ended == "timeout":
-        notes.append(_capped_wait_note(command=command))
-    if command:
-        data = await _command_result(terminal_manager, context, terminal_id, wait_ended=ended)
-    else:
-        snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
-        _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-        data = _screen_result(snapshot, view="wait")
-        data["wait_ended"] = _wait_end(ended, data)
+        notes.append(_capped_wait_note())
+    snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
+    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
+    data = _screen_result(snapshot, view="wait")
+    data["wait_ended"] = _wait_end(ended, data)
     if matched:
         data["matched"] = _matched_line(matched[0])
     return tool_success(_with_notes(data, notes))
 
 
 def _wait_end(ended: str, data: JsonObject) -> str:
-    """How a wait on an interactive program ended, as its result's state tells it.
+    """How a wait ended, as its result's state tells it.
 
     A program that was stopped did not exit on its own: ``exited`` beside the
     state ``stopped`` contradicted it.
@@ -768,7 +790,6 @@ async def _handle_input(
         minimum=0,
     )
     owner = _owner(context)
-    _visible_terminal(terminal_manager, owner, terminal_id)
     info = terminal_manager.terminal(terminal_id, owner)
     prior_attention_revision = info.attention_revision if info.attention is not None else None
     revision_before_input = info.attention_revision
@@ -825,27 +846,15 @@ async def _handle_input(
             terminal_id, owner, seconds=seconds, after_quiet=int(sent["quiet_boundaries"])
         )
     if capped and ended == "timeout":
-        notes.append(_capped_wait_note(command=info.kind == "command"))
-    if info.kind == "command":
-        data = await _command_result(
-            terminal_manager,
-            context,
-            terminal_id,
-            wait_ended=ended if pattern is not None else None,
-            typed=pattern is None,
-        )
-        timeout_ended = sent.get("timeout_ended")
-        if isinstance(timeout_ended, int | float) and data.get("status") == "running":
-            notes.append(_timeout_ended_note(terminal_id, timeout_ended))
-    else:
-        snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
-        _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-        data = _screen_result(snapshot, view="input")
-        if pattern is not None:
-            data["wait_ended"] = _wait_end(ended, data)
-        elif snapshot.get("state") == "working":
-            # The reply paused or ran out of time while the program still works.
-            data["next"] = _reply_pending_text(terminal_id)
+        notes.append(_capped_wait_note())
+    snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
+    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
+    data = _screen_result(snapshot, view="input")
+    if pattern is not None:
+        data["wait_ended"] = _wait_end(ended, data)
+    elif snapshot.get("state") == "working":
+        # The reply paused or ran out of time while the program still works.
+        data["next"] = _reply_pending_text(terminal_id)
     if matched:
         data["matched"] = _matched_line(matched[0])
     result = _with_notes({**data, **typed}, notes)
@@ -862,23 +871,9 @@ async def _handle_kill(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
-    before = _visible_terminal(terminal_manager, owner, terminal_id)
-    report = terminal_manager.command_report(terminal_id) if before.kind == "command" else None
+    before = _terminal_info(terminal_manager, terminal_id)
     after = await terminal_manager.kill(terminal_id, owner)
     context.after_result_persisted(lambda: terminal_manager.acknowledge_exit(terminal_id, owner))
-    if after.kind == "command":
-        result = await _command_result(terminal_manager, context, terminal_id)
-        if report is not None and report.exited:
-            if report.still_running and not before.finished:
-                names = ", ".join(
-                    f"{process.name} (pid {process.pid})" for process in report.still_running
-                )
-                result["note"] = (
-                    f"the shell had already exited; stopped the processes it left running: {names}."
-                )
-            else:
-                result["note"] = "the command had already ended; nothing was stopped."
-        return tool_success(result)
     data: JsonObject = {"terminal_id": terminal_id, "state": _agent_state(after)}
     if after.exit_code is not None:
         data["exit_code"] = after.exit_code
@@ -887,44 +882,6 @@ async def _handle_kill(
         data["screen"] = snapshot.get("screen") or ""
         data["note"] = "The program had already ended; nothing was stopped."
     return tool_success(data)
-
-
-# Command terminals
-
-
-async def _command_result(
-    terminal_manager: TerminalManager,
-    context: ToolContext,
-    terminal_id: str,
-    *,
-    wait_ended: str | None = None,
-    typed: bool = False,
-) -> JsonObject:
-    """The shell result of a command terminal; a screen, idle or end it shows is not
-    delivered again. *typed* marks the reply to the Agent's input."""
-    # Imported here: the shell Tool owns the result of a command and imports the manager.
-    from core.tools.shell import command_terminal_result
-
-    owner = _owner(context)
-    try:
-        # Taken first, so the result shows this screen or a newer one.
-        shown = await terminal_manager.snapshot(terminal_id, owner, lines=1, include_name=False)
-    except TerminalNotOwnedError:
-        shown = None
-    data = await command_terminal_result(
-        terminal_manager,
-        context,
-        terminal_id,
-        wait_ended=wait_ended,
-        working=typed and shown is not None and shown.get("state") == "working",
-    )
-    if shown is not None:
-        _acknowledge_after_persistence(terminal_manager, context, owner, shown)
-    if data.get("status") in {"exited", "stopped"}:
-        context.after_result_persisted(
-            lambda: terminal_manager.acknowledge_exit(terminal_id, owner)
-        )
-    return data
 
 
 # What an attached interactive program sends on its own; Agents polled for it.
@@ -963,7 +920,6 @@ _HIDDEN_SNAPSHOT_FIELDS = frozenset(
         "rows",
         "alternate_screen",
         "stopped",
-        "kind",
         "command",
         "arguments",
         "initial_input_pending",
@@ -1064,6 +1020,7 @@ def _state_text(state: str, *, stopped: bool) -> str:
 
 
 def _attachment(info: TerminalInfo, owner: TerminalOwner) -> str:
+    """Who holds the terminal: ``here`` (this Session), ``other`` or ``no`` (nobody)."""
     if info.attachment == owner:
         return "here"
     return "no" if info.attachment is None else "other"
@@ -1096,24 +1053,12 @@ def _with_notes(data: JsonObject, notes: list[str]) -> JsonObject:
     return data
 
 
-def _timeout_ended_note(terminal_id: str, seconds: float) -> str:
-    """The Agent's input ended a command's timeout: it runs until stopped."""
-    # Agents open unknown consoles through the shell with a short timeout, which
-    # then stopped the console mid-work; without it, stopping is the Agent's job.
+def _capped_wait_note() -> str:
+    """A capped wait timed out."""
     return (
-        f"Your input removed the command's {seconds:g}-second timeout: it now runs until it "
-        f"exits or you stop it with terminal {_call('kill', terminal_id)} when you no longer "
-        "need it."
-    )
-
-
-def _capped_wait_note(*, command: bool) -> str:
-    """A capped wait timed out; a command's result arrives without another wait."""
-    note = (
         f"A wait lasts at most {TERMINAL_WAIT_MAX_SECONDS} seconds, so this one ended after "
-        f"{TERMINAL_WAIT_MAX_SECONDS}"
+        f"{TERMINAL_WAIT_MAX_SECONDS}; wait again to keep following the program."
     )
-    return f"{note}." if command else f"{note}; wait again to keep following the program."
 
 
 def _wait_seconds(
@@ -1190,11 +1135,7 @@ def _attached_terminals(
 ) -> list[TerminalInfo]:
     """The terminals attached to this Session, running ones first, newest first."""
     return sorted(
-        (
-            info
-            for info in reversed(terminal_manager.list_terminals())
-            if _visible(info, owner) and info.attachment == owner
-        ),
+        (info for info in reversed(terminal_manager.list_terminals()) if info.attachment == owner),
         key=lambda info: info.finished,
     )
 
@@ -1203,7 +1144,7 @@ def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> 
     """Name the terminals attached to this Session, running ones first, newest first."""
     attached = _attached_terminals(terminal_manager, owner)
     if not attached:
-        if any(_visible(info, owner) for info in terminal_manager.list_terminals()):
+        if terminal_manager.list_terminals():
             return (
                 "No terminal is attached to this Session; to see every terminal, call terminal "
                 '{"action": "list"}.'
@@ -1232,9 +1173,8 @@ def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> 
 
 
 def _not_found_message(
-    terminal_manager: TerminalManager, context: ToolContext, terminal_id: str
+    terminal_manager: TerminalManager, owner: TerminalOwner, terminal_id: str
 ) -> str:
-    owner = _owner(context)
     attached = _attached_terminals(terminal_manager, owner)
     named = (
         " Terminals attached to this Session: "
@@ -1247,18 +1187,14 @@ def _not_found_message(
         else ""
     )
     return (
-        f"No terminal with the id {terminal_id} is open for this Session: the id is wrong or "
-        f"belongs to another Session, or its program ended more than {_FINISHED_MINUTES} "
-        f"minutes ago and the terminal was removed, with its output.{named} To see all "
-        'terminals, call terminal {"action": "list"}.'
+        f"No terminal with the id {terminal_id} is open: the id is wrong, or its program "
+        f"ended more than {_FINISHED_MINUTES} minutes ago and the terminal was removed, with "
+        f'its output.{named} To see all terminals, call terminal {{"action": "list"}}.'
     )
 
 
 def _not_owned_message(terminal_manager: TerminalManager, terminal_id: str, action: str) -> str:
-    info = next(
-        (item for item in terminal_manager.list_terminals() if item.terminal_id == terminal_id),
-        None,
-    )
+    info = _find(terminal_manager, terminal_id)
     status = f"terminal {_call('status', terminal_id)}"
     if info is not None and info.attachment is not None:
         return (
@@ -1280,36 +1216,42 @@ def _not_attached_text(info: TerminalInfo, terminal_id: str) -> str:
     return "It is attached to another Session; only that Session can type into it or wait for it."
 
 
-def _closed_message(
-    terminal_manager: TerminalManager, context: ToolContext, terminal_id: str, action: str
-) -> str:
-    info = next(
-        (item for item in terminal_manager.list_terminals() if item.terminal_id == terminal_id),
-        None,
-    )
+def _closed_message(terminal_manager: TerminalManager, terminal_id: str, action: str) -> str:
+    info = _find(terminal_manager, terminal_id)
     ended = "has ended"
     if info is not None and info.exit_code is not None:
-        # A command's shell can end before processes it started, which keep its terminal live.
         state = _state_text("error" if info.state == "error" else "exited", stopped=info.stopped)
         ended = f"has ended ({state}, exit code {info.exit_code})"
     done = "the input was not sent" if action == "input" else f"{action} was not done"
     message = (
-        f"The program in {terminal_id} {ended}, so {done}. To read its last screen or output, "
-        f"call terminal {_call('status', terminal_id)}."
+        f"The program in {terminal_id} {ended}, so {done}. To read its last screen, call "
+        f"terminal {_call('status', terminal_id)}."
     )
-    if info is not None and info.kind == "command" and context.offers(BASH_TOOL_NAME):
-        message += f" To run the command again, use {_SHELL_NAME}."
-    elif info is not None and info.kind == "terminal":
+    if info is not None:
         message += ' To run the program again, call terminal with action "start".'
     return message
 
 
-def _command_refusal(context: ToolContext, terminal_id: str) -> str:
-    origin = f" that {_SHELL_NAME} left running" if context.offers(BASH_TOOL_NAME) else ""
+def _background_task_refusal(context: ToolContext, task_id: str, action: str) -> str | None:
+    """Refuse the id of a background command or Sub-Agent, which ``background_tasks`` serves.
+
+    A ``kill`` gets the call that stops the task; every other action the one that shows it.
+    """
+    if task_id.startswith(COMMAND_ID_PREFIX):
+        task = "a background command"
+    elif task_id.startswith(SUBAGENT_ID_PREFIX):
+        task = "a Sub-Agent"
+    else:
+        return None
+    refusal = f"{task_id} is {task}, not a terminal. Nothing was changed."
+    # Its exact call works without loading it first, so it is named whenever the
+    # Agent can call it, as the shell results name it (``named_tools``).
+    if not context.can_call(BACKGROUND_TASKS_TOOL_NAME):
+        return refusal
+    call = json.dumps({"action": "stop" if action == "kill" else "status", "id": task_id})
     return (
-        f"{terminal_id} runs a command{origin}, and a command stays attached to the Session "
-        "that ran it so its result arrives there. Nothing was changed. To stop it, call "
-        f"terminal {_call('kill', terminal_id)}."
+        f"{refusal} Use {BACKGROUND_TASKS_TOOL_NAME} for it, such as "
+        f"{BACKGROUND_TASKS_TOOL_NAME} {call}."
     )
 
 
@@ -1347,18 +1289,18 @@ def _not_found_program_message(error: FileNotFoundError, arguments: JsonObject) 
 # Access
 
 
-def _visible(info: TerminalInfo, owner: TerminalOwner) -> bool:
-    """Interactive terminals are shared; a command belongs to the Session that ran it."""
-    return info.kind != "command" or owner in (info.attachment, info.lifecycle_owner)
+def _find(terminal_manager: TerminalManager, terminal_id: str) -> TerminalInfo | None:
+    return next(
+        (info for info in terminal_manager.list_terminals() if info.terminal_id == terminal_id),
+        None,
+    )
 
 
-def _visible_terminal(
-    terminal_manager: TerminalManager, owner: TerminalOwner, terminal_id: str
-) -> TerminalInfo:
-    for info in terminal_manager.list_terminals():
-        if info.terminal_id == terminal_id and _visible(info, owner):
-            return info
-    raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
+def _terminal_info(terminal_manager: TerminalManager, terminal_id: str) -> TerminalInfo:
+    info = _find(terminal_manager, terminal_id)
+    if info is None:
+        raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
+    return info
 
 
 def _acknowledge_after_persistence(
@@ -1412,17 +1354,30 @@ def _owner(context: ToolContext) -> TerminalOwner:
     return TerminalOwner(context.project_id, context.agent_id, context.session_id)
 
 
+def _address(owner: TerminalOwner) -> SessionAddress:
+    return SessionAddress(
+        project_id=owner.project_id, agent_id=owner.agent_id, session_id=owner.session_id
+    )
+
+
 def register_terminal_tool(
     registry: ToolRegistry,
     terminal_manager: TerminalManager,
     projects: ProjectStore,
+    *,
+    subagents: SubAgentTree | None = None,
 ) -> None:
-    """Register the Agent-facing terminal Tool."""
+    """Register the Agent-facing terminal Tool.
+
+    *subagents* tells which Sessions descend from the caller, so ``list`` and
+    ``status`` name the Sub-Agent that holds a terminal; without it such a
+    terminal shows as attached to another Session.
+    """
     registry.register(
         TERMINAL_TOOL_NAME,
         TERMINAL_TOOL_DESCRIPTION,
         TERMINAL_TOOL_PARAMETERS,
-        make_terminal_handler(terminal_manager, projects),
+        make_terminal_handler(terminal_manager, projects, subagents),
         summary="Drive interactive programs such as REPLs and coding-agent CLIs.",
         family="execution",
         open_input_schema=True,
@@ -1444,6 +1399,14 @@ _ATTACHMENT_TEXT = {
     "other": "attached to another conversation",
     "no": "not attached",
 }
+
+
+def _attachment_text(item: Mapping[str, Any]) -> str:
+    """Who holds a listed terminal, as the user reads it."""
+    subagent = item.get("subagent")
+    if item.get("attached") == "subagent" and isinstance(subagent, str) and subagent:
+        return f"attached to Sub-Agent {subagent}"
+    return _ATTACHMENT_TEXT.get(str(item.get("attached")), "")
 
 
 def _visible_input(data: str) -> str:
@@ -1470,7 +1433,7 @@ def _typed_input(arguments: JsonObject) -> str:
 
 
 def _terminal_state_text(item: Mapping[str, Any]) -> str:
-    state = item.get("state") or item.get("status")
+    state = item.get("state")
     exit_code = item.get("exit_code")
     if state == "exited" and isinstance(exit_code, int) and not isinstance(exit_code, bool):
         return f"exited with code {exit_code}"
@@ -1504,12 +1467,7 @@ def _terminal_detail_blocks(arguments: JsonObject, result: JsonObject | None) ->
             {
                 "title": item.get("name") or item.get("program") or item.get("terminal_id"),
                 "meta": " · ".join(
-                    part
-                    for part in (
-                        _terminal_state_text(item),
-                        _ATTACHMENT_TEXT.get(str(item.get("attached")), ""),
-                    )
-                    if part
+                    part for part in (_terminal_state_text(item), _attachment_text(item)) if part
                 ),
             }
             for item in listed
@@ -1519,9 +1477,7 @@ def _terminal_detail_blocks(arguments: JsonObject, result: JsonObject | None) ->
         blocks.append(display_text("scrollback", source="result", path=("data", "history")))
     if "screen" in data:
         blocks.append(display_text("screen", source="result", path=("data", "screen")))
-    if "output" in data:
-        blocks.append(display_text("output", source="result", path=("data", "output")))
-    state = data.get("state") or data.get("status")
+    state = data.get("state")
     exit_code = data.get("exit_code")
     if state == "stopped":
         blocks.append(display_notice("info", "The program was stopped."))

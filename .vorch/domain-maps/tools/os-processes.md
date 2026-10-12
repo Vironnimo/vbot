@@ -1,6 +1,6 @@
 # OS Processes (`core/utils/processes.py`)
 
-Shared OS launch flags, server-lifetime containment, and verified process-tree termination. Terminal Sessions (and so the shell Tool), decision actions, local Model tasks (embeddings, speech, setup), search, the CLI, and server startup use this owner. Per-command process-tree facts (liveness, CPU, child exit codes) belong to the terminal domain (`_terminal_process_tree.py`, `tools/terminal.md`).
+Shared OS launch flags, server-lifetime containment, and verified process-tree termination. Shell commands (`CommandManager`, `_command_launch.py`), Terminal Sessions, decision actions, local Model tasks (embeddings, speech, setup), search, the CLI, and server startup use this owner. Per-command process-tree facts (liveness, CPU, child exit codes) belong to `core/tools/process_tree.py`, which `CommandManager` (`tools/shell.md`) and the Terminal Sessions (`tools/terminal.md`) share.
 
 ## Contracts
 

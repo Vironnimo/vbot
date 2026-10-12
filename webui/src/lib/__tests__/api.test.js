@@ -528,6 +528,16 @@ describe('RPC wrappers', () => {
       { agent_id: 'builder@vbot', session_id: 'session-1' },
     ],
     [
+      'chat.stop_command',
+      (o) => api.stopCommand('session-1', 'cmd_one', o),
+      { session_id: 'session-1', command_id: 'cmd_one' },
+    ],
+    [
+      'chat.command_output',
+      (o) => api.loadCommandOutput('session-1', 'cmd_one', o),
+      { session_id: 'session-1', command_id: 'cmd_one' },
+    ],
+    [
       'chat.cancel_tool_call',
       (o) =>
         api.cancelToolCall(

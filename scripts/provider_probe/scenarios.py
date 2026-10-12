@@ -14,6 +14,7 @@ from scripts.provider_probe.common import (
     _probe_messages,
 )
 from scripts.provider_probe.scenario_agents import (
+    _background_tasks_scenario,
     _bash_scenario,
     _channel_send_scenario,
     _project_scenario,
@@ -257,6 +258,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _status_scenario(str(args.status_case))
     if name == "subagent":
         return _subagent_scenario(str(args.subagent_case))
+    if name == "background_tasks":
+        return _background_tasks_scenario(str(args.background_tasks_case))
     if name == "generate_speech":
         return _generate_speech_scenario(str(args.speech_case))
     if name == "web_fetch":

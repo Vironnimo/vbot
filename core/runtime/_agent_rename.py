@@ -33,6 +33,7 @@ from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.channels import ChannelService
 from core.database import SnapshotBarrier
 from core.sessions import ChatSessionManager
+from core.tools.command_manager import CommandManager
 from core.tools.terminal_manager import TerminalManager
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
@@ -50,8 +51,10 @@ class AgentRenameServices:
     cron: CronService
     bootstrap: BootstrapService
     snapshot_barrier: SnapshotBarrier
-    # None while startup builds the owners; no Terminal Session survives a restart.
+    # None while startup builds the owners; no Terminal Session or command
+    # survives a restart.
     terminals: TerminalManager | None
+    commands: CommandManager | None
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,7 @@ class AgentRenameOutcome:
     policy_agent_ids: tuple[str, ...]
     session_link_count: int
     terminal_count: int
+    command_count: int
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,7 @@ class _References:
     cron_job_ids: tuple[str, ...]
     bootstrap_job_ids: tuple[str, ...]
     terminal_count: int = 0
+    command_count: int = 0
 
 
 async def rename_identity_agent(
@@ -189,10 +194,11 @@ async def _rename_and_retarget(
         policy_agent_ids=result.policy_agent_ids,
         session_link_count=result.session_link_count,
         terminal_count=references.terminal_count,
+        command_count=references.command_count,
     )
     _LOGGER.info(
         "Agent renamed (agent=%s new_agent=%s sessions=%s channels=%s cron=%s "
-        "bootstrap=%s policies=%s session_links=%s terminals=%s)",
+        "bootstrap=%s policies=%s session_links=%s terminals=%s commands=%s)",
         agent_id,
         new_agent_id,
         len(outcome.session_ids),
@@ -202,6 +208,7 @@ async def _rename_and_retarget(
         len(outcome.policy_agent_ids),
         outcome.session_link_count,
         outcome.terminal_count,
+        outcome.command_count,
     )
     return outcome
 
@@ -266,8 +273,9 @@ def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> 
 async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) -> _References:
     """:func:`_retarget_references` on the Event Loop, which owns the started owners' state.
 
-    The live Terminal Sessions of the Agent's Sessions move as well, so their
-    cleanup and their completion notices follow the Sessions to the new id.
+    The live Terminal Sessions and commands of the Agent's Sessions move as
+    well, so their cleanup and their completion notices follow the Sessions to
+    the new id.
     """
     source, target = rename.source_id, rename.target_id
     # A running Channel service rebuilds each adapter; a stopped one only
@@ -282,11 +290,14 @@ async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) 
         services.bootstrap.retarget_agent(job_id, target)
     terminals = services.terminals
     terminal_count = 0 if terminals is None else terminals.transfer_agent_scope(source, target)
+    commands = services.commands
+    command_count = 0 if commands is None else commands.transfer_agent_scope(source, target)
     return _References(
         channel_ids=channel_ids,
         cron_job_ids=cron_job_ids,
         bootstrap_job_ids=bootstrap_job_ids,
         terminal_count=terminal_count,
+        command_count=command_count,
     )
 
 

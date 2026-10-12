@@ -16,6 +16,7 @@ import {
   executionStateTitle,
 } from './toolFacts.js';
 import { trimmedString, parseJsonValue, truncateToolLabel } from './values.js';
+import { toolStatusDetails, toolStatusLabel } from './toolRows.js';
 import {
   subAgentRunStartedAt,
   isSubAgentSpawnTool,
@@ -218,8 +219,10 @@ export const liveClockCadenceMs = (
           commandStatuses,
         );
         if (commandRowState) {
+          // Processes left running show no ticking time.
           if (
             commandRowState.dotStatus === 'running' &&
+            !commandRowState.stillRunning &&
             timestampToMs(toolStartedTimestamp(tool)) !== null
           ) {
             starts.push(toolStartedTimestamp(tool));
@@ -265,11 +268,16 @@ export const isRowCancellable = (row) => {
   return false;
 };
 
+// A Sub-Agent's task stays running while background commands it or its own
+// Sub-Agents started still run after its Run (`subAgentCommands`, from
+// `runningSubAgentCommands`); `workRunning` marks that only those run, and
+// `runDotStatus` is the state of its Run alone.
 export const backgroundTasks = (
   timelineItems,
   subAgentStatuses = {},
   backgroundCommandStatuses = {},
   commandStatuses = {},
+  subAgentCommands = {},
   nowMs = Date.now(),
 ) => {
   const tasks = [];
@@ -284,8 +292,12 @@ export const backgroundTasks = (
       }
       // A refused `run` started no Sub-Agent; only started ones are work.
       if (isSubAgentSpawnTool(child) && subAgentNavigationTarget(child)) {
-        const dotStatus = subAgentDotStatus(child, subAgentStatuses);
+        const runDotStatus = subAgentDotStatus(child, subAgentStatuses);
         const subAgentId = trimmedString(subAgentResultData(child).id);
+        const runningCommands =
+          (subAgentId && subAgentCommands?.[subAgentId]) || [];
+        const workRunning =
+          runDotStatus !== 'running' && runningCommands.length > 0;
         tasks.push({
           subAgentId,
           id: subAgentId
@@ -293,20 +305,21 @@ export const backgroundTasks = (
             : `${item.id ?? itemIndex}:${child.id ?? child.toolCallId ?? childIndex}`,
           kind: 'subagent',
           tool: child,
-          dotStatus,
+          dotStatus: workRunning ? 'running' : runDotStatus,
+          runDotStatus,
+          workRunning,
+          runningCommands,
           label: subAgentAgentId(child),
           agentId: subAgentAgentId(child),
           description: subAgentDescription(child),
           target: subAgentNavigationTarget(child),
           lastToolName:
-            dotStatus === 'running'
+            runDotStatus === 'running'
               ? subAgentLastToolName(child, subAgentStatuses)
               : '',
-          timeLabel: subAgentToolStatusLabel(
-            child,
-            dotStatus,
-            subAgentStatuses,
-          ),
+          timeLabel: workRunning
+            ? t('chat.subAgentCommandsRunning')
+            : subAgentToolStatusLabel(child, runDotStatus, subAgentStatuses),
           order,
         });
         order += 1;
@@ -321,14 +334,14 @@ export const backgroundTasks = (
         continue;
       }
       tasks.push({
-        id: `command:${commandRowState.terminalId}`,
+        id: `command:${commandRowState.commandId}`,
         kind: 'command',
         tool: child,
         dotStatus: commandRowState.dotStatus,
         label: commandRowState.command,
         command: commandRowState.command,
         fullCommand: commandRowState.fullCommand,
-        terminalId: commandRowState.terminalId,
+        commandId: commandRowState.commandId,
         rowState: commandRowState,
         target: null,
         timeLabel: backgroundCommandToolStatusLabel(
@@ -387,52 +400,161 @@ export const activitySections = (tasks = [], reflectionRows = []) => {
   };
 };
 
-// Dot status of a handed-off command by its reported status.
+// How far a background command got: still running, ended in an unknown way
+// (`ended`, the WebUI's own state), or ended with a known status. A command
+// never runs again once it ended, and processes it left running never start
+// again, so of two reports of one command the further one is newer.
+const COMMAND_PROGRESS = {
+  running: 0,
+  ended: 1,
+  completed: 2,
+  failed: 2,
+  stopped: 2,
+};
+const COMMAND_ENDED_WITH_STATUS = 2;
+
+// Dot status of a background command by its status.
 const COMMAND_DOT_STATUSES = {
   running: 'running',
+  ended: 'ended',
   completed: 'success',
   failed: 'failed',
   stopped: 'cancelled',
 };
+// A background command without a reported status has ended: the server
+// reports every command it still runs or knows the end of, so one it no longer
+// knows (an old command, or one vBot forgot after its end) never runs again.
+// Only how it ended is unknown.
+const COMMAND_DOT_ENDED = 'ended';
+const COMMAND_STATE_ENDED = { status: 'ended', stillRunning: false };
+const COMMAND_STATE_RUNNING = { status: 'running', stillRunning: false };
 
-function knownCommandStatus(value) {
-  const status = trimmedString(value);
-  return Object.hasOwn(COMMAND_DOT_STATUSES, status) ? status : '';
+function commandState(value) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const status = trimmedString(value.status);
+  if (!Object.hasOwn(COMMAND_PROGRESS, status)) {
+    return null;
+  }
+  return {
+    status,
+    stillRunning:
+      COMMAND_PROGRESS[status] === COMMAND_ENDED_WITH_STATUS &&
+      value.stillRunning === true,
+  };
 }
 
-// A `bash` Tool row whose command went on running in the background after the
-// call returned represents that command, not the call. The row state resolves
-// its terminal id and its status (live from `command_status_changed`, else
-// durable from History) so the dot and the time label follow the command.
-// Returns null for every other Tool row, and for a handed-off command whose
-// status is unknown, such as one vBot no longer runs: that row stays a plain
-// Tool row.
+// The newer of two reports of one background command's state
+// (`{ status, stillRunning }`, where `stillRunning` marks processes it
+// started that still run after its shell exited), or null when neither is
+// one. Live events, the History's statuses and the replies of stop and
+// output reads arrive in no common order; the state that got further wins.
+export function laterCommandState(left, right) {
+  const leftState = commandState(left);
+  const rightState = commandState(right);
+  if (!leftState || !rightState) {
+    return leftState ?? rightState;
+  }
+  const progress =
+    COMMAND_PROGRESS[leftState.status] - COMMAND_PROGRESS[rightState.status];
+  if (progress !== 0) {
+    return progress > 0 ? leftState : rightState;
+  }
+  return {
+    status: leftState.status,
+    stillRunning: leftState.stillRunning && rightState.stillRunning,
+  };
+}
+
+// The background commands a Session's Sub-Agents (at every depth) still run,
+// by the id of the Session's own Sub-Agent above them, as `{ kind: 'command',
+// id, label }`: those its last History read listed (`{ subAgentId,
+// sessionId, commandId, label }`, all running or leaving processes running
+// then) that no live state of their own Session (`commandStatuses`, by
+// Session id) shows ended since.
+export const runningSubAgentCommands = (entries, commandStatuses = {}) => {
+  const bySubAgent = {};
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const state = laterCommandState(
+      COMMAND_STATE_RUNNING,
+      commandStatuses?.[entry?.sessionId]?.[entry?.commandId],
+    );
+    if (state.status === 'running' || state.stillRunning) {
+      (bySubAgent[entry.subAgentId] ??= []).push({
+        kind: 'command',
+        id: entry.commandId,
+        label: entry.label,
+      });
+    }
+  }
+  return bySubAgent;
+};
+
+// The end a `bash` result shows itself: a call that returned once its shell
+// exited names a command only when processes it started still ran.
+function callEndState(data) {
+  if (data.status === 'stopped') {
+    return { status: 'stopped', stillRunning: false };
+  }
+  if (data.status === 'exited') {
+    return {
+      status: data.exit_code === 0 ? 'completed' : 'failed',
+      stillRunning: false,
+    };
+  }
+  return null;
+}
+
+// A `bash` Tool row that names a background command represents that command,
+// not only the call: a command that went on running in the background after
+// the call returned, or one whose shell exited while processes it started
+// still ran. The row state resolves the command id and the command's state
+// from the live statuses (`command_status_changed` and the replies of stop
+// and output reads) and the durable ones from History, whichever got further,
+// so the dot and the time label follow the command. Processes still running
+// show as `dotStatus` `running` with `stillRunning`; a handed-off command
+// with no status has ended (`dotStatus` `ended`). Returns null for every
+// other Tool row, and in a view that follows no command statuses (both maps
+// null, such as the Swarm page's Activity): there the row stays a plain Tool
+// row. Both maps hold `{ status, stillRunning }` by command id.
 export const backgroundCommandRowState = (
   tool,
   backgroundCommandStatuses = {},
   commandStatuses = {},
 ) => {
-  if (toolNameForRunTool(tool) !== 'bash') {
+  if (
+    toolNameForRunTool(tool) !== 'bash' ||
+    (!isPlainObject(backgroundCommandStatuses) &&
+      !isPlainObject(commandStatuses))
+  ) {
     return null;
   }
   const envelope = parseJsonValue(tool.result);
   const data = isPlainObject(envelope?.data) ? envelope.data : {};
-  const terminalId = trimmedString(data.terminal_id);
-  if (data.status !== 'running' || !terminalId) {
+  const commandId = trimmedString(data.command_id);
+  const callEnd = callEndState(data);
+  if (!commandId || (data.status !== 'running' && !callEnd)) {
     return null;
   }
-  const status =
-    knownCommandStatus(commandStatuses?.[terminalId]) ||
-    knownCommandStatus(backgroundCommandStatuses?.[terminalId]);
-  if (!status) {
-    return null;
-  }
+  const known = laterCommandState(
+    commandStatuses?.[commandId],
+    backgroundCommandStatuses?.[commandId],
+  );
+  const state =
+    known && COMMAND_PROGRESS[known.status] === COMMAND_ENDED_WITH_STATUS
+      ? known
+      : (callEnd ?? known ?? COMMAND_STATE_ENDED);
   const fullCommand = bashCommand(tool);
   return {
-    terminalId,
+    commandId,
     command: commandPreview(fullCommand),
     fullCommand,
-    dotStatus: COMMAND_DOT_STATUSES[status],
+    dotStatus: state.stillRunning
+      ? 'running'
+      : COMMAND_DOT_STATUSES[state.status],
+    stillRunning: state.stillRunning,
+    callEnded: Boolean(callEnd),
   };
 };
 
@@ -450,8 +572,10 @@ function commandPreview(command) {
   );
 }
 
-// Tooltip details behind a handed-off command row's status: the command's
-// state in words, its start and runtime while it runs, and its terminal id.
+// Tooltip details behind a background command row's status: the command's
+// state in words, its start and runtime while it or processes it started
+// run, the call's own timing once a call that ran to its end has nothing left
+// running, and the command id.
 export const backgroundCommandStatusDetails = (
   tool,
   rowState,
@@ -469,26 +593,38 @@ export const backgroundCommandStatusDetails = (
         running,
         nowMs,
       })
-    : [];
+    : rowState.callEnded
+      ? [...(toolStatusDetails(tool, nowMs).rows ?? [])]
+      : [];
   rows.push({
-    label: t('chat.details.terminal'),
-    value: rowState.terminalId,
+    label: t('chat.details.commandId'),
+    value: rowState.commandId,
     mono: true,
   });
   return {
-    title: running
-      ? t('chat.toolState.background')
-      : executionStateTitle(rowState.dotStatus),
-    text: running ? t('chat.toolState.backgroundHint') : '',
+    title: rowState.stillRunning
+      ? t('chat.toolState.stillRunning')
+      : running
+        ? t('chat.toolState.background')
+        : executionStateTitle(rowState.dotStatus),
+    text: rowState.stillRunning
+      ? t('chat.toolState.stillRunningHint')
+      : running
+        ? t('chat.toolState.backgroundHint')
+        : rowState.dotStatus === COMMAND_DOT_ENDED
+          ? t('chat.toolState.endedHint')
+          : '',
     rows,
   };
 };
 
-// Status label for a handed-off command row. While the command runs the label
+// Status label for a background command row. While the command runs the label
 // ticks from the Tool call's own start timestamp (the command starts with the
-// call, and this internal timing never reaches the Model). A stopped command
-// reads as cancelled; otherwise the label stays empty, since the command's
-// runtime is unknown and the call's own duration would mislead.
+// call, and this internal timing never reaches the Model); processes left
+// running after the shell exited say so instead. A call that ran to its end
+// shows its own label once nothing of it runs. A handed-off command that was
+// stopped reads as cancelled; otherwise the label stays empty, since the
+// command's runtime is unknown and the call's own duration would mislead.
 export const backgroundCommandToolStatusLabel = (
   tool,
   rowState,
@@ -497,10 +633,16 @@ export const backgroundCommandToolStatusLabel = (
   if (!isPlainObject(rowState)) {
     return '';
   }
+  if (rowState.stillRunning) {
+    return t('chat.toolStillRunning');
+  }
   if (rowState.dotStatus === 'running') {
     return formatDurationMs(
       elapsedSinceTimestamp(toolStartedTimestamp(tool), nowMs),
     );
+  }
+  if (rowState.callEnded) {
+    return toolStatusLabel(tool, nowMs);
   }
   if (rowState.dotStatus === 'cancelled') {
     return t('chat.toolCancelled');

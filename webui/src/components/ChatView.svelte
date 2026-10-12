@@ -29,6 +29,7 @@
   import {
     backgroundTasks,
     reflectionTaskRows,
+    runningSubAgentCommands,
   } from '../lib/chatTimelinePresentation.js';
   import { onMount, untrack } from 'svelte';
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
@@ -112,8 +113,9 @@
     // in arrival order, read from this Chat's own position, and the Runs
     // active now.
     runEvents = null,
-    // App's bounded live map of handed-off shell command statuses by terminal
-    // id (`command_status_changed`); the controller re-applies the whole map.
+    // App's bounded live map of background shell commands by command id
+    // (`command_status_changed`: `{ status, stillRunning, sessionId }`); the
+    // controller re-applies the whole map.
     commandStatuses = {},
     connectionSnapshot = null,
     // Bumped by App when Session-list continuity is uncertain (replay gap or
@@ -365,16 +367,32 @@
   let activeTimelineItems = $derived(
     visibleTimelineItemsForRender(target.activeSessionState),
   );
-  // Known work that outlives the Run: a running Sub-Agent or handed-off
-  // command the loaded rows started. It keeps Stop all offered once the Run
-  // ended.
-  let backgroundWorkRunning = $derived(
-    backgroundTasks(
-      activeTimelineItems,
-      chatState.subAgentStatuses,
-      target.activeSessionState?.backgroundCommandStatuses,
+  // The live state of the displayed Session's own background commands; a
+  // fork's History names its source's commands, which never run for it.
+  let displayedCommandStatuses = $derived(
+    chatState.commandStatuses[target.activeSessionState?.sessionId] ?? {},
+  );
+  // The background commands the displayed Session's Sub-Agents (at every
+  // depth) still run, by the id of its own Sub-Agent above them; each follows
+  // the live state of the Session that runs it.
+  let displayedSubAgentCommands = $derived(
+    runningSubAgentCommands(
+      target.activeSessionState?.subAgentBackgroundCommands,
       chatState.commandStatuses,
-    ).some((task) => task.dotStatus === 'running'),
+    ),
+  );
+  // Known work that outlives the Run: a running Sub-Agent or background
+  // command the loaded rows started, processes such a command left running,
+  // or a command a Sub-Agent below still runs. It keeps Stop all offered once
+  // the Run ended.
+  let backgroundWorkRunning = $derived(
+    Object.keys(displayedSubAgentCommands).length > 0 ||
+      backgroundTasks(
+        activeTimelineItems,
+        chatState.subAgentStatuses,
+        target.activeSessionState?.backgroundCommandStatuses,
+        displayedCommandStatuses,
+      ).some((task) => task.dotStatus === 'running'),
   );
   // Every Agent the picker offers: Identity Agents, then each Project Team.
   let pickerAgentAddresses = $derived([
@@ -960,7 +978,7 @@
             subAgentStatuses={chatState.subAgentStatuses}
             backgroundCommandStatuses={target.activeSessionState
               ?.backgroundCommandStatuses}
-            commandStatuses={chatState.commandStatuses}
+            commandStatuses={displayedCommandStatuses}
             onLoadOlder={actions.loadOlderHistory}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             otherArea={subAgentOtherArea}
@@ -1167,9 +1185,10 @@
         subAgentStatuses={chatState.subAgentStatuses}
         subAgentWork={chatState.subAgentWork}
         onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
+        subAgentCommands={displayedSubAgentCommands}
         backgroundCommandStatuses={target.activeSessionState
           ?.backgroundCommandStatuses}
-        commandStatuses={chatState.commandStatuses}
+        commandStatuses={displayedCommandStatuses}
         reflectionTasks={reflectionTaskRows(target.activeSessionState)}
         sessionStats={sessionChanges.stats}
         onSessionStatsWanted={sessionChanges.setWanted}
@@ -1186,7 +1205,9 @@
         onUndoReflection={(row) =>
           chatController.undoReflection(target.activeSessionState, row.runId)}
         onCancelSubAgent={actions.handleCancelSubAgent}
-        onCancelBackgroundCommand={actions.handleCancelBackgroundCommand}
+        onStopSubAgentWork={actions.handleStopSubAgentWork}
+        onStopBackgroundCommand={actions.handleStopBackgroundCommand}
+        onLoadCommandOutput={actions.loadCommandOutput}
       />
     </div>
   {/if}

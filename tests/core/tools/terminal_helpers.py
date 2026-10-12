@@ -10,6 +10,7 @@ import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.storage.temp_files import TemporaryFileManager
+from core.subagents import SubAgentTree
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure_for_exception
@@ -66,17 +67,23 @@ async def call(
     context: ToolContext,
     arguments: JsonObject,
     projects: ProjectStore | None = None,
+    *,
+    subagents: SubAgentTree | None = None,
 ) -> JsonObject:
     """Run one Agent call the way the Tool executor does.
 
     The registered Tool normalizes other harnesses' spellings and validates the
     contract before the handler runs; the executor turns a refused call into the
     ``invalid_arguments`` result the Agent reads. The Run may call the Tools the
-    context offers besides terminal.
+    context offers besides terminal. *subagents* reports the caller's Sub-Agent
+    Sessions.
     """
     registry = ToolRegistry()
     register_terminal_tool(
-        registry, manager, projects if projects is not None else ProjectStore(context.data_root)
+        registry,
+        manager,
+        projects if projects is not None else ProjectStore(context.data_root),
+        subagents=subagents,
     )
     allowed = sorted({TERMINAL_TOOL_NAME, *(context.offered_tools or ())})
     try:

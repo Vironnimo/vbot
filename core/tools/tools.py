@@ -232,7 +232,7 @@ class ToolRegistry:
         catalog_visible: bool = True,
         family: str | None = None,
         activation: str = TOOL_ACTIVATION_CONFIGURABLE,
-        activation_source: str | None = None,
+        activation_source: str | Sequence[str] | None = None,
         requires_opt_in: bool = False,
         constraints: Sequence[str] = (),
         display: ToolDisplay | None = None,
@@ -296,7 +296,11 @@ class ToolRegistry:
             family=family,
             family_label=family_definition.label if family_definition is not None else None,
             activation=activation,
-            activation_source=activation_source,
+            activation_source=(
+                activation_source
+                if activation_source is None or isinstance(activation_source, str)
+                else tuple(activation_source)
+            ),
             requires_opt_in=requires_opt_in,
             constraints=tuple(dict.fromkeys(constraints)),
             display=display or ToolDisplay(),

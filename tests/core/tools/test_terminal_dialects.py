@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -427,7 +429,6 @@ async def test_codex_and_hermes_input_shapes_type_into_the_terminal(
         ("await", "wait"),
         ("launch", "start"),
         ("disconnect", "detach"),
-        ("KillShell", "kill"),
         ("cancel", "kill"),
         ("join", "wait"),
     ],
@@ -435,12 +436,6 @@ async def test_codex_and_hermes_input_shapes_type_into_the_terminal(
 def test_action_spellings_name_the_action(action: str, canonical: str) -> None:
     normalized = normalize_terminal_arguments({"action": action, "terminal_id": "term_a"})
     assert normalized["action"] == canonical
-
-
-@pytest.mark.parametrize("field", ["process_id", "bash_id", "shell_id", "task_id"])
-def test_background_command_id_spellings_name_the_terminal(field: str) -> None:
-    normalized = normalize_terminal_arguments({"action": "status", field: "term_a"})
-    assert normalized == {"action": "status", "terminal_id": "term_a"}
 
 
 @pytest.mark.asyncio
@@ -566,14 +561,17 @@ async def test_wait_reads_seconds_and_refuses_disagreeing_timeouts(terminal: Ter
     )
 
 
-@pytest.mark.parametrize("ending", ["matched", "idle", "exited", "stopped"])
+@pytest.mark.parametrize("ending", ["matched", "idle", "exited", "stopped", "user"])
 @pytest.mark.asyncio
 async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], ending: str
 ) -> None:
+    """A wait also ends when the user ends it, long before its timeout."""
     terminal_id = await terminal.start()
     adapter = manager[1].adapters[0]
     arguments: JsonObject = {"action": "wait", "terminal_id": terminal_id}
+    context = terminal.context
+    releases: list[Callable[[], bool]] = []
     if ending == "matched":
         # Output printed before the call counts, matched case-insensitively and line by line.
         adapter.emit("booting\r\nServer LISTENING on :8080\r\n")
@@ -587,11 +585,18 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
     elif ending == "exited":
         adapter.emit("bye\r\n")
         adapter.finish(4)
-    else:
+    elif ending == "stopped":
         # A program that was stopped did not exit on its own.
         await terminal({"action": "kill", "terminal_id": terminal_id})
+    else:
+        arguments["timeout"] = 300
+        context = dataclasses.replace(context, background_registration_hook=releases.append)
 
-    result = await terminal(arguments)
+    waiting = asyncio.ensure_future(terminal(arguments, context))
+    if ending == "user":
+        await eventually(lambda: bool(releases))
+        assert releases[-1]() is True
+    result = await asyncio.wait_for(waiting, 5)
 
     data = result["data"]
     assert data["wait_ended"] == ending
@@ -604,6 +609,11 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
         }
     elif ending == "stopped":
         assert data["state"] == "stopped"
+    elif ending == "user":
+        assert (data["state"], data["note"]) == (
+            "running",
+            "The user ended this wait; the program keeps running.",
+        )
     else:
         assert data["state"] == "running"
 
@@ -666,9 +676,8 @@ async def test_unknown_terminal_id_lists_attached_terminals(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     removed = (
-        "No terminal with the id term_missing is open for this Session: the id is wrong or "
-        "belongs to another Session, or its program ended more than 30 minutes ago and the "
-        "terminal was removed, with its output."
+        "No terminal with the id term_missing is open: the id is wrong, or its program ended "
+        "more than 30 minutes ago and the terminal was removed, with its output."
     )
     listing = 'To see all terminals, call terminal {"action": "list"}.'
     missing = await terminal({"action": "status", "terminal_id": "term_missing"})

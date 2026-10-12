@@ -41,7 +41,8 @@ _SCAN_CHARS = 4000
 _SEARCH_TOOL = "search_files"
 _READ_TOOL = "read"
 _EDIT_TOOLS = ("apply_patch", "edit")
-HINT_TOOL_NAMES = (_SEARCH_TOOL, _READ_TOOL, *_EDIT_TOOLS)
+_TERMINAL_TOOL = "terminal"
+HINT_TOOL_NAMES = (_SEARCH_TOOL, _READ_TOOL, *_EDIT_TOOLS, _TERMINAL_TOOL)
 
 
 def _offers_none(_name: str) -> bool:
@@ -590,6 +591,57 @@ def _hint_merge_conflict(failure: _Failure) -> str | None:
     )
 
 
+# A command gets no input and has no terminal: PowerShell runs -NonInteractive, so
+# Read-Host, Get-Credential and confirmation prompts fail at once (English and
+# German PowerShell).
+_POWERSHELL_PROMPT = re.compile(r"PowerShell is in NonInteractive mode|Nichtinteraktiv-Modus")
+
+
+def _hint_powershell_prompt(failure: _Failure) -> str | None:
+    if not _POWERSHELL_PROMPT.search(failure.output):
+        return None
+    return (
+        "PowerShell cannot prompt in a command: pass the value as a parameter instead of "
+        "Read-Host or Get-Credential, and add -Confirm:$false or -Force to a cmdlet that asks "
+        "for confirmation."
+    )
+
+
+def _hint_container_tty(failure: _Failure) -> str | None:
+    # docker and podman run -t (or -it) refuse an input that is no terminal.
+    if "the input device is not a tty" not in failure.output.casefold():
+        return None
+    hint = (
+        "Commands run without a terminal: run the container without -t, and without -i "
+        "unless you pipe input into it."
+    )
+    if failure.offers(_TERMINAL_TOOL):
+        return f"{hint} To work inside the container interactively, run it with {_TERMINAL_TOOL}."
+    return hint
+
+
+# A program that asked for input and read the end of its empty input: Python's
+# input() (EOFError), programs that check for a terminal first, prompt libraries
+# (inquirer: "User force closed the prompt"; click: "Aborted!" or its exception).
+_END_OF_INPUT = re.compile(
+    r"EOF when reading|stdin is not a terminal|not a tty|Inappropriate ioctl for device"
+    r"|User force closed the prompt|click\.exceptions\.Abort|^Aborted!$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _hint_end_of_input(failure: _Failure) -> str | None:
+    if not _END_OF_INPUT.search(failure.output):
+        return None
+    hint = (
+        "The program asked for input, and commands get none. Pass the answer as an option or "
+        "argument, such as -y or --yes, or pipe it into the program within the command."
+    )
+    if failure.offers(_TERMINAL_TOOL):
+        return f"{hint} To answer it yourself, run the program with {_TERMINAL_TOOL}."
+    return hint
+
+
 def _hint_already_exists(failure: _Failure) -> str | None:
     match = re.search(r"(?:fatal|error):.*?'([^']+)' already exists", failure.output)
     if not match:
@@ -671,6 +723,9 @@ def _hint_gh_unknown_json_field(failure: _Failure) -> str | None:
 _OUTPUT_HINTS: tuple[Callable[[_Failure], str | None], ...] = (
     _hint_gh_unknown_json_field,
     _hint_merge_conflict,
+    _hint_powershell_prompt,
+    _hint_container_tty,
+    _hint_end_of_input,
     _hint_command_not_found,
     _hint_powershell_command_not_found,
     _hint_store_python,

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
     from core.skills.skills import SkillMetadata, SkillRegistry
     from core.storage import StorageManager
+    from core.tools.command_manager import CommandManager
     from core.tools.file_state import FileReadState
     from core.tools.terminal_manager import TerminalManager
     from core.tools.tools import ToolRegistry
@@ -221,6 +222,11 @@ class RuntimeServices(Protocol):
     @property
     def terminal_manager(self) -> TerminalManager:
         """Shared Session-scoped interactive terminal lifecycle management."""
+        ...
+
+    @property
+    def command_manager(self) -> CommandManager:
+        """The shell's one-shot commands, in the foreground and in the background."""
         ...
 
     @property

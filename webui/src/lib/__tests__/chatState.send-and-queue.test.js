@@ -6,6 +6,7 @@ import {
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
+import { ApiClientError } from '../api/transport.js';
 import { t } from '../i18n.js';
 import {
   countTimelineTextOccurrences,
@@ -912,23 +913,113 @@ describe('Run controls and cancellation', () => {
     ]);
   });
 
-  it('stops a handed-off command by killing its terminal and shows it stopped', async () => {
-    const killTerminal = vi.fn().mockResolvedValue({});
+  const running = { status: 'running', stillRunning: false };
+  const lingering = { status: 'completed', stillRunning: true };
+  it.each([
+    [
+      'shows the status it reports at once',
+      running,
+      () => Promise.resolve({ stopped: true, status: 'stopped' }),
+      { status: 'stopped', stillRunning: false },
+      '',
+    ],
+    [
+      'shows that nothing of an ended command runs any longer',
+      lingering,
+      () => Promise.resolve({ stopped: true, status: 'completed' }),
+      { status: 'completed', stillRunning: false },
+      '',
+    ],
+    [
+      'shows a command the server no longer knows as ended',
+      running,
+      () =>
+        Promise.reject(
+          new ApiClientError('command_not_found', 'Unknown command'),
+        ),
+      { status: 'ended', stillRunning: false },
+      '',
+    ],
+    [
+      'reports a failed stop and keeps the known state',
+      lingering,
+      () => Promise.reject(new ApiClientError('network_error', 'Offline')),
+      lingering,
+      `${t('chat.cancelBackgroundTaskError')} Offline`,
+    ],
+  ])(
+    'stops a background command by its command id and %s',
+    async (_label, known, reply, shown, actionError) => {
+      const stopCommand = vi.fn(reply);
+      const { chatState, controller } = setupController({
+        operationOverrides: { stopCommand },
+      });
+      const sessionState = ensureSessionState(
+        chatState,
+        'builder@project-one',
+        'session-one',
+      );
+      controller.applyCommandStatuses({
+        cmd_one: { ...known, sessionId: 'session-one' },
+      });
+
+      await expect(
+        controller.stopCommand({ sessionState, commandId: 'cmd_one' }),
+      ).resolves.toBe(!actionError);
+
+      expect(stopCommand).toHaveBeenCalledWith('session-one', 'cmd_one');
+      expect(chatState.commandStatuses).toEqual({
+        'session-one': { cmd_one: shown },
+      });
+      expect(sessionState.actionError).toBe(actionError);
+    },
+  );
+
+  it("reads a command's output, follows its state and tells when the command is gone", async () => {
+    const loadCommandOutput = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 'completed',
+        still_running: true,
+        output: 'done',
+      })
+      .mockRejectedValueOnce(
+        new ApiClientError('command_not_found', 'Unknown command'),
+      )
+      .mockRejectedValueOnce(new ApiClientError('network_error', 'Offline'));
     const { chatState, controller } = setupController({
-      operationOverrides: { killTerminal },
+      operationOverrides: { loadCommandOutput },
     });
     const sessionState = ensureSessionState(
       chatState,
       'builder@project-one',
       'session-one',
     );
-    controller.applyCommandStatuses({ term_one: 'running' });
+    const read = (commandId) =>
+      controller.loadCommandOutput({ sessionState, commandId });
 
-    await expect(
-      controller.cancelCommand({ sessionState, terminalId: 'term_one' }),
-    ).resolves.toBe(true);
-
-    expect(killTerminal).toHaveBeenCalledWith('term_one');
-    expect(chatState.commandStatuses).toEqual({ term_one: 'stopped' });
+    await expect(read('cmd_one')).resolves.toEqual({
+      ok: true,
+      status: 'completed',
+      stillRunning: true,
+      output: 'done',
+    });
+    expect(loadCommandOutput).toHaveBeenCalledWith('session-one', 'cmd_one');
+    await expect(read('cmd_two')).resolves.toEqual({
+      ok: false,
+      error: 'Unknown command',
+      gone: true,
+    });
+    await expect(read('cmd_three')).resolves.toEqual({
+      ok: false,
+      error: 'Offline',
+      gone: false,
+    });
+    expect(chatState.commandStatuses).toEqual({
+      'session-one': {
+        cmd_one: { status: 'completed', stillRunning: true },
+        cmd_two: { status: 'ended', stillRunning: false },
+      },
+    });
   });
 });

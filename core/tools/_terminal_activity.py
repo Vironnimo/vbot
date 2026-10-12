@@ -36,10 +36,6 @@ Phases (``state`` shows ``repainting`` as ``ready``)::
                                             v
                                         repainting --quiet--> ready
 
-A command's output is its result, delivered when it ends: it has no cycles
-and no idle boundary, and its quiet boundary makes it ``ready``. Once the
-Agent types into it (``drive``), it follows the rules above, as an
-interactive program does; its result is still delivered when it ends.
 ``exited`` and ``error`` are final.
 """
 
@@ -50,8 +46,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
-from ._terminal_command import COMMAND_IDLE_CPU_SECONDS
 from ._terminal_state import TerminalState
+from .process_tree import IDLE_CPU_SECONDS
 
 _Phase = Literal["starting", "ready", "repainting", "working", "exited", "error"]
 _Origin = Literal["start", "input", "output"]
@@ -137,11 +133,8 @@ class TerminalActivity:
         repaint_window: float,
         quiet_seconds: float,
         idle_seconds: float,
-        command: bool = False,
     ) -> None:
         self._phase: _Phase = "starting" if awaiting_initial_input else "ready"
-        # A command the Agent has not typed into: its output is only its result.
-        self._result_only = command
         self._repaint_window = repaint_window
         self._quiet_seconds = quiet_seconds
         self._idle_seconds = idle_seconds
@@ -184,16 +177,6 @@ class TerminalActivity:
         """A cycle of work runs: its processes are worth sampling."""
         return self._cycle is not None and not self.finished
 
-    @property
-    def result_only(self) -> bool:
-        """A command's output is only its result: no cycle, no idle boundary."""
-        return self._result_only
-
-    def drive(self) -> None:
-        """The Agent types into a command: from now on its work comes in cycles
-        that end at idle boundaries, as an interactive program's does."""
-        self._result_only = False
-
     def output(
         self,
         now: float,
@@ -216,10 +199,6 @@ class TerminalActivity:
         self._repaint_deadline = None
         changed = self._phase != "working"
         self._phase = "working"
-        if self._result_only:
-            # Progress outlives cycles, so a cycle after ``drive`` knows it.
-            self._apply_signals(None, signals)
-            return OutputEffect(True, self._restart(notify=False, supersede=False), changed)
         cycle = self._cycle
         if cycle is None:
             cycle = self._open(self._next_origin, now)
@@ -244,8 +223,7 @@ class TerminalActivity:
         self._startup_silence = False
         changed = self._phase != "working"
         self._phase = "working"
-        if not self._result_only:
-            self._open("input", now).baseline = running
+        self._open("input", now).baseline = running
         return self._restart(notify=notify, supersede=delivery_pending), changed
 
     def resize(self, now: float) -> None:
@@ -298,8 +276,6 @@ class TerminalActivity:
                 # known content.
                 self._baseline = signature
             return "repaint"
-        if self._result_only:
-            self._phase = "ready"
         return "activity"
 
     def quiet(self, now: float) -> bool:
@@ -439,7 +415,7 @@ class TerminalActivity:
             return True
         first, last = window[0], window[-1]
         return (
-            abs(last.cpu_seconds - first.cpu_seconds) <= COMMAND_IDLE_CPU_SECONDS
+            abs(last.cpu_seconds - first.cpu_seconds) <= IDLE_CPU_SECONDS
             and last.started == first.started
         )
 

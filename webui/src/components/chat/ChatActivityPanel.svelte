@@ -20,6 +20,7 @@
   import ContextMenu from '../ui/ContextMenu.svelte';
   import { contextMenuAnchor, isContextMenuKey } from '../ui/contextMenu.js';
   import ChangeStats from './ChangeStats.svelte';
+  import CommandOutput from './CommandOutput.svelte';
   import CopyableValueCard from './CopyableValueCard.svelte';
 
   let {
@@ -29,6 +30,9 @@
     // last read; a row asks for it while the user looks at it.
     subAgentWork = {},
     onSubAgentWorkWanted = () => {},
+    // The background commands each Sub-Agent (or one below it) still runs
+    // after its Run, by Sub-Agent id (`runningSubAgentCommands`).
+    subAgentCommands = {},
     backgroundCommandStatuses = {},
     commandStatuses = {},
     reflectionTasks = [],
@@ -46,7 +50,13 @@
     onLoadReflectionChanges = () => {},
     onUndoReflection = async () => {},
     onCancelSubAgent = () => {},
-    onCancelBackgroundCommand = () => {},
+    // Stops everything a Sub-Agent whose Run ended still runs.
+    onStopSubAgentWork = () => {},
+    onStopBackgroundCommand = () => {},
+    // Reads a background command's newest output for its output view
+    // (`(commandId) => Promise`, see CommandOutput.svelte); null offers no
+    // output view.
+    onLoadCommandOutput = null,
   } = $props();
 
   let open = $state(false);
@@ -55,12 +65,16 @@
   // their undo; both are view state only.
   const expandedReviews = new SvelteSet();
   const confirmingUndo = new SvelteSet();
+  // Command rows whose output view is open, by task id: view state only. An
+  // open view reads the output while it shows (CommandOutput.svelte).
+  const expandedOutputs = new SvelteSet();
   let tasks = $derived(
     backgroundTasks(
       timelineItems,
       subAgentStatuses,
       backgroundCommandStatuses,
       commandStatuses,
+      subAgentCommands,
       nowMs,
     ),
   );
@@ -163,6 +177,9 @@
     if (status === 'interrupted') {
       return t('chat.activity.status.interrupted');
     }
+    if (status === 'ended') {
+      return t('chat.activity.status.ended');
+    }
     return t('chat.activity.status.unknown');
   };
 
@@ -186,7 +203,7 @@
   };
 
   // Details behind a status icon: the state in words, since when, how long,
-  // and for a command its terminal id.
+  // and for a command its command id.
   const statusDetails = (task) => {
     const details =
       task.kind === 'command'
@@ -194,10 +211,10 @@
         : task.kind === 'subagent'
           ? subAgentStatusDetails(
               task.tool,
-              task.dotStatus,
+              task.runDotStatus,
               subAgentStatuses,
               Date.now(),
-              subAgentWork[task.subAgentId],
+              remainingWork(task),
             )
           : reflectionStatusDetails(task.row);
     // A Sub-Agent's title shows on one line; its card carries it in full.
@@ -205,7 +222,22 @@
       task.kind === 'subagent' && task.description
         ? task.description
         : details.text;
-    return { ...details, text, placement: 'left' };
+    const title = task.workRunning
+      ? t('chat.activity.status.commandsRunning')
+      : details.title;
+    return { ...details, title, text, placement: 'left' };
+  };
+
+  // What a Sub-Agent still runs besides its Run: the commands below it that
+  // still run, and what its last inspection found.
+  const remainingWork = (task) => {
+    const commandIds = new Set(task.runningCommands.map((work) => work.id));
+    return [
+      ...task.runningCommands,
+      ...(subAgentWork[task.subAgentId] ?? []).filter(
+        (work) => work.kind !== 'command' || !commandIds.has(work.id),
+      ),
+    ];
   };
 
   // The row's card; `_work` only marks which reading of the Sub-Agent's work
@@ -263,18 +295,25 @@
     if (task.kind === 'command') {
       return t('chat.activity.commandTaskAria', {
         command: task.command,
-        status: statusLabel(task.dotStatus),
+        status: task.rowState?.stillRunning
+          ? t('chat.activity.status.stillRunning')
+          : statusLabel(task.dotStatus),
       });
     }
     return t('chat.activity.taskAria', {
       agent: task.agentId,
-      status: statusLabel(task.dotStatus),
+      status: task.workRunning
+        ? t('chat.activity.status.commandsRunning')
+        : statusLabel(task.dotStatus),
     });
   };
 
   const cancelTaskLabel = (task) => {
     if (task.kind === 'command') {
       return t('chat.activity.cancelCommandAria', { command: task.command });
+    }
+    if (task.workRunning) {
+      return t('chat.activity.stopSubAgentWorkAria', { agent: task.agentId });
     }
     return t('chat.activity.cancelSubAgentAria', { agent: task.agentId });
   };
@@ -287,14 +326,24 @@
     cancellingTaskIds.add(task.id);
     try {
       if (task.kind === 'command') {
-        await onCancelBackgroundCommand({
-          terminalId: task.terminalId,
-        });
+        await onStopBackgroundCommand({ commandId: task.commandId });
+      } else if (task.workRunning) {
+        await onStopSubAgentWork({ tool: task.tool });
       } else {
         await onCancelSubAgent({ tool: task.tool });
       }
     } finally {
       cancellingTaskIds.delete(task.id);
+    }
+  };
+
+  const outputId = (task) => `${panelId}-${task.id}-output`;
+
+  const toggleOutput = (task) => {
+    if (expandedOutputs.has(task.id)) {
+      expandedOutputs.delete(task.id);
+    } else {
+      expandedOutputs.add(task.id);
     }
   };
 
@@ -385,21 +434,40 @@
             placement="left"
           />
         </span>
-        <span
-          class="chat-activity__task-meta"
-          use:tooltip={() => statusDetails(task)}
-        >
-          {@render statusIcon(task)}
-          <span class="chat-activity__task-kind"
-            >{t('chat.activity.kind.command')}</span
+        <span class="chat-activity__task-meta">
+          <span
+            class="chat-activity__task-state"
+            use:tooltip={() => statusDetails(task)}
           >
-          {#if task.timeLabel}
-            <span class="chat-activity__task-time">· {task.timeLabel}</span>
+            {@render statusIcon(task)}
+            <span class="chat-activity__task-kind"
+              >{t('chat.activity.kind.command')}</span
+            >
+            {#if task.timeLabel}
+              <span class="chat-activity__task-time">· {task.timeLabel}</span>
+            {/if}
+          </span>
+          {#if onLoadCommandOutput}
+            <span class="chat-activity__task-separator" aria-hidden="true"
+              >·</span
+            >
+            {@render outputToggle(task)}
           {/if}
         </span>
       </span>
       {@render cancelButton(task)}
     </div>
+    {#if onLoadCommandOutput && expandedOutputs.has(task.id)}
+      <CommandOutput
+        id={outputId(task)}
+        commandId={task.commandId}
+        running={task.dotStatus === 'running'}
+        load={onLoadCommandOutput}
+        label={t('chat.activity.commandOutput.aria', {
+          command: task.command,
+        })}
+      />
+    {/if}
   {:else}
     <!-- The whole row shows the Sub-Agent's status details, not only its
          status symbol. -->
@@ -502,6 +570,28 @@
   {#if row.status !== 'running' && reflectionHasChanges(row.outcome) && expandedReviews.has(row.runId)}
     {@render reviewChanges(row)}
   {/if}
+{/snippet}
+
+<!-- Opens the command's newest output under its row. -->
+{#snippet outputToggle(task)}
+  {@const expanded = expandedOutputs.has(task.id)}
+  <Button
+    variant="tertiary"
+    class="chat-activity__outcome chat-activity__outcome-toggle"
+    ariaLabel={t('chat.activity.commandOutput.aria', { command: task.command })}
+    aria-expanded={expanded}
+    aria-controls={expanded ? outputId(task) : undefined}
+    onClick={() => toggleOutput(task)}
+  >
+    {t('chat.activity.commandOutput.title')}
+    <svg
+      class="chat-activity__disclosure"
+      viewBox="0 0 16 16"
+      width="10"
+      height="10"
+      aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
+    >
+  </Button>
 {/snippet}
 
 {#snippet outcomeToggle(row)}
@@ -1046,7 +1136,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .chat-activity__task-time {
+  .chat-activity__task-time,
+  .chat-activity__task-separator {
     flex: 0 0 auto;
   }
   :global(.chat-activity__cancel.btn-danger.btn-icon) {

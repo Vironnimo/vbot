@@ -125,8 +125,6 @@ class EmulatorUpdate(NamedTuple):
     alternate_screen: bool
     # The chunk left the alternate screen (the primary screen came back).
     alternate_exited: bool
-    # Transcript lines that became final in this chunk (transcript screens only).
-    transcript: tuple[str, ...] = ()
     # What the program declared about its work in this chunk, in order (see
     # ``SignalScanner``).
     signals: tuple[str, ...] = ()
@@ -352,8 +350,6 @@ class _EmulatorScreen(pyte.Screen):
         self.bracketed_paste_enabled = False
         # Times a program enabled focus reporting.
         self.focus_requests = 0
-        # Top rows of the primary screen already emitted to the transcript.
-        self.committed_rows = 0
         super().__init__(columns, lines)
 
     @property
@@ -422,10 +418,6 @@ class _EmulatorScreen(pyte.Screen):
                 line: Any = self.buffer.get(y)
                 if line is not None and getattr(line, "wrapped", False):
                     line.wrapped = False
-            if self._primary_state is None:
-                # Erased rows the transcript already holds are gone; what is
-                # drawn there next is new content.
-                self.committed_rows = min(self.committed_rows, self.cursor.y if how == 0 else 0)
         super().erase_in_display(how, *args, **kwargs)
         if how in (2, 3) and self._primary_state is None:
             self._on_clear()
@@ -608,17 +600,9 @@ class TerminalEmulator:
     at 0, so a number keeps naming the same line while new output arrives;
     the current screen starts right after the newest history line. Only the
     oldest lines beyond the retention bound disappear.
-
-    With *transcript*, the emulator also yields the complete rendered output
-    as logical lines: a line becomes final when it scrolls off the primary
-    screen, rows a long line was auto-wrapped into are joined again, and
-    ``commit_transcript`` emits the rows still on screen. Redraws (progress
-    bars, carriage returns, cursor movement) leave only their final text.
     """
 
-    def __init__(
-        self, columns: int, rows: int, *, scrollback_lines: int, transcript: bool = False
-    ) -> None:
+    def __init__(self, columns: int, rows: int, *, scrollback_lines: int) -> None:
         self.columns = columns
         self.rows = rows
         self._next_line = 0
@@ -631,10 +615,6 @@ class TerminalEmulator:
         self._held = ""
         self._responses: list[str] = []
         self._signals = SignalScanner()
-        self._transcript = transcript
-        self._transcript_lines: list[str] = []
-        # Row texts of a logical line whose last row has not become final yet.
-        self._transcript_partial: list[str] = []
 
     def feed(self, text: str) -> EmulatorUpdate:
         """Render program output and report what it changed.
@@ -663,69 +643,15 @@ class TerminalEmulator:
             self._responses.append(FOCUS_OUT_REPORT)
         responses = "".join(self._responses)
         self._responses.clear()
-        transcript = tuple(self._transcript_lines)
-        self._transcript_lines.clear()
         return EmulatorUpdate(
             responses=responses,
             title=self.title,
             bracketed_paste=self._screen.bracketed_paste_enabled,
             alternate_screen=self._screen.alternate_active,
             alternate_exited=self._screen.alternate_exit_revision != alternate_exits,
-            transcript=transcript,
             signals=signals,
             focus_reporting=_FOCUS_REPORTING_MODE in self._screen.private_modes,
         )
-
-    def commit_transcript(self) -> tuple[str, ...]:
-        """Emit the transcript through the last non-blank row of the primary screen.
-
-        Emitted rows are not emitted again when they later scroll off. On the
-        alternate screen nothing is emitted: a full-screen program's frames
-        are not output.
-        """
-        if not self._transcript:
-            return ()
-        screen = self._screen
-        if screen.alternate_active:
-            return ()
-        last = self._last_uncommitted_row()
-        for y in range(screen.committed_rows, last + 1):
-            self._transcribe_row(screen.buffer[y])
-        if self._transcript_partial:
-            self._transcript_lines.append("".join(self._transcript_partial).rstrip())
-            self._transcript_partial.clear()
-        screen.committed_rows = max(screen.committed_rows, last + 1)
-        lines = tuple(self._transcript_lines)
-        self._transcript_lines.clear()
-        return lines
-
-    def pending_transcript(self) -> tuple[str, ...]:
-        """The lines ``commit_transcript`` would emit now, without emitting them.
-
-        A program can still extend the rows on screen, so they stay pending.
-        """
-        if not self._transcript or self._screen.alternate_active:
-            return ()
-        screen = self._screen
-        lines: list[str] = []
-        partial = list(self._transcript_partial)
-        for y in range(screen.committed_rows, self._last_uncommitted_row() + 1):
-            line = screen.buffer[y]
-            partial.append("".join(line[column].data for column in range(screen.columns)))
-            if not getattr(line, "wrapped", False):
-                lines.append("".join(partial).rstrip())
-                partial = []
-        if partial:
-            lines.append("".join(partial).rstrip())
-        return tuple(lines)
-
-    def _last_uncommitted_row(self) -> int:
-        """The last non-blank row of the screen not yet emitted, or -1."""
-        screen = self._screen
-        for y in range(screen.lines - 1, screen.committed_rows - 1, -1):
-            if _render_buffer_line(screen.buffer[y], screen.columns):
-                return y
-        return -1
 
     def resize(self, columns: int, rows: int) -> None:
         self._screen.resize(lines=rows, columns=columns)
@@ -936,27 +862,12 @@ class TerminalEmulator:
             )
         )
         self._next_line += 1
-        if not self._transcript:
-            return
-        if self._screen.committed_rows:
-            self._screen.committed_rows -= 1
-            return
-        self._transcribe_row(line)
 
     def _cleared(self) -> None:
         # Everything drawn on a cleared screen is new: after input, the
         # pattern matches from the cleared screen on.
         if self._match_start is not None:
             self._match_start = (self._next_line, False)
-
-    def _transcribe_row(self, line: Any) -> None:
-        self._transcript_partial.append(
-            "".join(line[column].data for column in range(self._screen.columns))
-        )
-        if getattr(line, "wrapped", False):
-            return
-        self._transcript_lines.append("".join(self._transcript_partial).rstrip())
-        self._transcript_partial.clear()
 
     def _respond_to_query(
         self, prefix: str, parameters: str, intermediate: str, final: str
@@ -1086,24 +997,3 @@ def _ansi_color(value: Any, *, background: bool) -> list[int]:
         else:
             return [48 if background else 38, 2, red, green, blue]
     return [49 if background else 39]
-
-
-# Emulators hosted in a renderer subinterpreter, addressed by an integer key
-# the host assigns. The host calls these functions by reference.
-_HOSTED: dict[int, TerminalEmulator] = {}
-
-
-def hosted_create(
-    key: int, columns: int, rows: int, scrollback_lines: int, transcript: bool = False
-) -> None:
-    _HOSTED[key] = TerminalEmulator(
-        columns, rows, scrollback_lines=scrollback_lines, transcript=transcript
-    )
-
-
-def hosted_call(key: int, method: str, arguments: tuple[Any, ...], options: dict[str, Any]) -> Any:
-    return getattr(_HOSTED[key], method)(*arguments, **options)
-
-
-def hosted_drop(key: int) -> None:
-    _HOSTED.pop(key, None)

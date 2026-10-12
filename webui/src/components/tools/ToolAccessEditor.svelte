@@ -7,6 +7,7 @@
   import {
     TOOL_ACCESS_MODE_ALL,
     TOOL_ACCESS_MODE_NONE,
+    activationSources,
     groupToolCatalog,
     isFileEditTool,
     normalizeToolAccess,
@@ -25,7 +26,7 @@
     toolLoadingUsesDefaultSet,
   } from '$lib/toolAccess.js';
   import { tick } from 'svelte';
-  import { t } from '$lib/i18n.js';
+  import { activeLocaleTag, t } from '$lib/i18n.js';
 
   const noop = () => {};
 
@@ -169,7 +170,9 @@
     if (tool.activation === 'follows') {
       notes.push(
         t('toolAccess.activation.follows', {
-          source: tool.activation_source,
+          source: new Intl.ListFormat(activeLocaleTag(), {
+            type: 'disjunction',
+          }).format(activationSources(tool)),
         }),
       );
     } else if (tool.activation === 'memory_mode') {

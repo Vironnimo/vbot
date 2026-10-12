@@ -12,7 +12,7 @@ Run CLI commands through the shell Tool on the server host. Check `playwright-cl
 
 Choose a unique browser session name for the current task and pass `-s=<name>` on every browser command, including the examples below. Reuse that name across calls. Close only your named session when finished; detach from browsers you attached to. Use `close-all`, `kill-all`, or profile deletion only when the user's task explicitly covers those other sessions or data.
 
-Read linked reference files on demand with `skill(name="playwright-cli", file_path="references/...")`. CLI output may link to snapshots, logs, screenshots, or traces saved on the server: read the relevant files with the available file Tools. A printed file path alone does not show its contents. Keep the working directory consistent across calls. Use current snapshot refs or verified locators, inspect the resulting page before repeating an uncertain action, and verify the requested outcome.
+Read linked reference files on demand with `skill(name="playwright-cli", file_path="references/...")`. When the references run a command in the background, run it with run_in_background true and look for the line they wait for with background_tasks action status; stop the command with action stop. CLI output may link to snapshots, logs, screenshots, or traces saved on the server: read the relevant files with the available file Tools. A printed file path alone does not show its contents. Keep the working directory consistent across calls. Use current snapshot refs or verified locators, inspect the resulting page before repeating an uncertain action, and verify the requested outcome.
 
 ## Quick start
 

@@ -116,18 +116,60 @@ export function loadHistory(sessionState, messages, options = {}) {
   if (isRecord(options.compactionPolicy)) {
     sessionState.compactionPolicy = options.compactionPolicy;
   }
-  // An incremental response reports the statuses its appended records
-  // changed (none when absent); any other response reports them all.
-  const backgroundCommandStatuses = isRecord(options.backgroundCommandStatuses)
-    ? options.backgroundCommandStatuses
-    : {};
-  sessionState.backgroundCommandStatuses = incremental
-    ? {
-        ...sessionState.backgroundCommandStatuses,
-        ...backgroundCommandStatuses,
-      }
-    : { ...backgroundCommandStatuses };
+  sessionState.backgroundCommandStatuses = nextBackgroundCommandStatuses(
+    incremental ? sessionState.backgroundCommandStatuses : {},
+    options,
+  );
+  // Complete in every response that carries it.
+  if (Array.isArray(options.subAgentBackgroundCommands)) {
+    sessionState.subAgentBackgroundCommands =
+      options.subAgentBackgroundCommands.flatMap(subAgentBackgroundCommand);
+  }
   return sessionState;
+}
+
+function subAgentBackgroundCommand(entry) {
+  const text = (value) => (typeof value === 'string' ? value.trim() : '');
+  const command = {
+    subAgentId: text(entry?.subagent_id),
+    sessionId: text(entry?.session_id),
+    commandId: text(entry?.command_id),
+    label: text(entry?.label),
+  };
+  return command.subAgentId && command.sessionId && command.commandId
+    ? [command]
+    : [];
+}
+
+// An incremental response reports the statuses of its appended records and
+// of every live command of the Session (none when absent); any other
+// response reports them all. A `running` it does not report has therefore
+// ended, its end unknown, as after a server restart. The commands whose
+// processes still run after their shell exited are listed in full whenever
+// the response reports statuses.
+function nextBackgroundCommandStatuses(known, options) {
+  const entries = { ...known };
+  if (isRecord(options.backgroundCommandStatuses)) {
+    const statuses = options.backgroundCommandStatuses;
+    for (const [commandId, entry] of Object.entries(entries)) {
+      if (entry?.status === 'running' && !Object.hasOwn(statuses, commandId)) {
+        entries[commandId] = { status: 'ended', stillRunning: false };
+      }
+    }
+    for (const [commandId, status] of Object.entries(statuses)) {
+      entries[commandId] = { status, stillRunning: false };
+    }
+  }
+  if (Array.isArray(options.backgroundCommandsStillRunning)) {
+    const stillRunning = new Set(options.backgroundCommandsStillRunning);
+    for (const [commandId, entry] of Object.entries(entries)) {
+      entries[commandId] = {
+        ...entry,
+        stillRunning: stillRunning.has(commandId),
+      };
+    }
+  }
+  return entries;
 }
 
 function mergeHistoryRecords(existing, incoming) {
@@ -186,11 +228,6 @@ export function prependHistory(sessionState, messages, options = {}) {
     options.hasMore === true && typeof options.nextBefore === 'string'
       ? options.nextBefore
       : '';
-  if (isRecord(options.backgroundCommandStatuses)) {
-    sessionState.backgroundCommandStatuses = {
-      ...options.backgroundCommandStatuses,
-    };
-  }
   return sessionState;
 }
 

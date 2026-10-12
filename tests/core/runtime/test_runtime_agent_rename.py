@@ -186,18 +186,26 @@ async def test_a_live_rename_moves_every_reference_or_none(
             (runtime.bootstrap_service, ("list_jobs", "retarget_agent")),
         ):
             _record_threads(owner, names, automation_threads, monkeypatch)
-        # Live Terminal Sessions follow the Agent's Sessions, and back on a revert.
+        # Live Terminal Sessions and commands follow the Agent's Sessions, and
+        # back on a revert.
         terminal_moves: list[tuple[str, str]] = []
-        transfer = runtime.terminal_manager.transfer_agent_scope
+        command_moves: list[tuple[str, str]] = []
+        move_terminals = runtime.terminal_manager.transfer_agent_scope
+        move_commands = runtime.command_manager.transfer_agent_scope
 
         def record_terminal_move(agent_id: str, new_agent_id: str) -> int:
             terminal_moves.append((agent_id, new_agent_id))
+            return move_terminals(agent_id, new_agent_id)
+
+        def record_command_move(agent_id: str, new_agent_id: str) -> int:
+            command_moves.append((agent_id, new_agent_id))
             if fails and new_agent_id == "researcher":
                 # The last step fails after every reference moved.
-                raise OSError("terminal scope is read-only")
-            return transfer(agent_id, new_agent_id)
+                raise OSError("command scope is read-only")
+            return move_commands(agent_id, new_agent_id)
 
         monkeypatch.setattr(runtime.terminal_manager, "transfer_agent_scope", record_terminal_move)
+        monkeypatch.setattr(runtime.command_manager, "transfer_agent_scope", record_command_move)
         if fails:
             with pytest.raises(OSError, match="read-only"):
                 await runtime.rename_agent("coder", "researcher")
@@ -216,6 +224,7 @@ async def test_a_live_rename_moves_every_reference_or_none(
         assert automation_threads == {threading.get_ident()}
         forward = ("coder", "researcher")
         assert terminal_moves == ([forward, forward[::-1]] if fails else [forward])
+        assert command_moves == terminal_moves
     finally:
         await runtime.aclose()
 
@@ -280,10 +289,10 @@ def _kill_moving_bootstrap_jobs(runtime: Runtime, patch: pytest.MonkeyPatch) -> 
 def _kill_reverting_bootstrap_jobs(runtime: Runtime, patch: pytest.MonkeyPatch) -> None:
     # The last step fails after every reference moved, and the revert dies.
     _fail_when_retargeted_to(
-        runtime.terminal_manager,
+        runtime.command_manager,
         "transfer_agent_scope",
         "researcher",
-        OSError("terminal scope is read-only"),
+        OSError("command scope is read-only"),
         patch,
     )
     _fail_when_retargeted_to(runtime.bootstrap_service, "retarget_agent", "coder", _Killed(), patch)

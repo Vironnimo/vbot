@@ -123,6 +123,7 @@ from core.tools import (
     register_skill_manage_tool,
     register_skill_tool,
 )
+from core.tools.command_manager import CommandManager
 from core.tools.live import LiveToolHosts
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
@@ -217,6 +218,7 @@ class Runtime:
         self._file_state: FileReadState | None = None
         self._update_handoffs: UpdateHandoffs | None = None
         self._terminal_manager: TerminalManager | None = None
+        self._command_manager: CommandManager | None = None
         self._skills: SkillRegistry | None = None
         self._skill_authoring: SkillAuthoringService | None = None
         self._skill_policy: SkillPolicyService | None = None
@@ -304,8 +306,9 @@ class Runtime:
                 get_skills=lambda: self.skills,
                 skills_for=self.skills_for,
                 project_skill_names=self.project_skill_names,
-                resources=(self.terminal_manager, self.trigger_service),
+                resources=(self.terminal_manager, self.command_manager, self.trigger_service),
                 terminals=self.terminal_manager,
+                commands=self.command_manager,
                 get_change_publisher=lambda: self._extension_change_publisher,
                 get_title_service=lambda: self._session_title_service,
                 logger=self.logger,
@@ -943,6 +946,7 @@ class Runtime:
             bootstrap=bootstrap_jobs,
             snapshot_barrier=self._snapshot_barrier,
             terminals=self._terminal_manager,
+            commands=self._command_manager,
         )
 
     def reload_skills(self) -> None:
@@ -1150,6 +1154,10 @@ class Runtime:
 
     terminal_manager: _StartedService[TerminalManager] = _StartedService(
         lambda runtime: runtime._terminal_manager, "Terminal manager service not available"
+    )
+
+    command_manager: _StartedService[CommandManager] = _StartedService(
+        lambda runtime: runtime._command_manager, "Command manager service not available"
     )
 
     file_read_state: _StartedService[FileReadState] = _StartedService(

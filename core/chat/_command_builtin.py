@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from core.database import SnapshotBarrier
     from core.projects import AgentResolver, ProjectStore
     from core.sessions import ChatSessionManager
+    from core.tools.command_manager import CommandManager
 
 
 HANDOFF_FRAGMENT_NAME = "handoff.md"
@@ -360,6 +361,7 @@ async def _execute_agent(
     sessions: ChatSessionManager | None,
     snapshot_barrier: SnapshotBarrier,
     terminal_manager: TerminalManager | None,
+    command_manager: CommandManager | None,
     trigger_service: Any | None,
 ) -> CommandOutcome:
     if argument is None:
@@ -485,6 +487,8 @@ async def _execute_agent(
                             context.session_id,
                         ),
                     )
+                if command_manager is not None:
+                    command_manager.transfer_scope(source_address, target_address)
 
                 if context.project_id is None:
                     await _COMMAND_WORKERS.run(

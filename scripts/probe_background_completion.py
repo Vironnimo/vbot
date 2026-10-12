@@ -430,7 +430,7 @@ async def _run_case(
         get_local_context_windows=source_runtime.local_context_windows,
         image_understanding_available=image_understanding_available,
         deliver_background_completions=deliver_background_completions,
-        get_terminal_manager=lambda: None,
+        get_command_manager=lambda: None,
     )
     chat_loop = ChatLoop(dependencies)
     trigger_service = TriggerService(

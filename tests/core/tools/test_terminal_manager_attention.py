@@ -13,8 +13,8 @@ import core.tools._terminal_session as terminal_session
 import core.tools._terminal_state as terminal_state
 from core.runs import RunAdmissionBlockedError
 from core.tools._terminal_activity import PROCESS_SAMPLE_SECONDS
-from core.tools._terminal_process_tree import RunningProcess
 from core.tools._terminal_render_host import TerminalScreen
+from core.tools.process_tree import RunningProcess
 from core.tools.terminal_manager import (
     TerminalClosedError,
     TerminalInfo,

@@ -1,17 +1,20 @@
 """The ``subagent`` and ``message_parent`` Tools over the durable Sub-Agent tree.
 
 A Sub-Agent is a Session linked to the Parent Session that started it, with one
-public id for its whole life. ``run`` starts a new Sub-Agent in the background,
-``send`` gives one of the caller's Sub-Agents another message, ``list`` shows
-the caller's whole tree, and ``cancel`` stops any Sub-Agent below the caller.
-Answers reach the Parent through :mod:`core.subagents.forwarding`.
+public id for its whole life. ``run`` starts a new Sub-Agent in the background
+and ``send`` gives one of the caller's Sub-Agents another message. The
+``background_tasks`` Tool lists, checks and stops the caller's whole tree
+through :meth:`SubAgentCoordinator.subagents`, ``running_work`` and
+``stop_subagent``. Answers reach the Parent through
+:mod:`core.subagents.forwarding`.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.agents import is_builtin_agent
 from core.projects import (
@@ -48,18 +51,18 @@ from core.subagents._constants import (
     SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
     SUBAGENT_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_BACKGROUND_IGNORED_NOTE,
-    SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE,
-    SUBAGENT_CANCELLED_NOTE,
     SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE,
     SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE,
+    SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE,
     SUBAGENT_IGNORED_LABEL_NOTE_TEMPLATE,
-    SUBAGENT_LIST_NOTE,
+    SUBAGENT_LIMIT_STOP_TEXT,
     SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE,
+    SUBAGENT_MISSING_TASK_LIST_TEXT,
     SUBAGENT_MISSING_TASK_MESSAGE,
     SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE,
+    SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE,
     SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE,
-    SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_QUEUED_NOTE,
@@ -108,8 +111,10 @@ from core.subagents.links import (
     find_link,
     link_session,
     read_link,
+    taken_over_below,
 )
 from core.tools.availability import subagent_allowed_agents
+from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.contracts import ToolContractError
 from core.tools.terminal_manager import TerminalOwner
 from core.tools.tools import (
@@ -128,7 +133,6 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("subagents")
 _FOLLOW_UP_PLACEHOLDER = "<message>"
-_TREE_DISPLAY_LIMIT = 1_000
 
 
 def _subagent_count(count: int) -> str:
@@ -141,6 +145,71 @@ _INSPECTED_WORK_KINDS = {
     "background command": "command",
     "terminal": "terminal",
 }
+
+# ``working``: its turn runs; ``queued``: a message waits to start its next turn;
+# ``taken over by the user``: the user wrote in its Session, so it works for the
+# user whatever it does.
+SubAgentStatus = Literal["working", "queued", "idle", "taken over by the user"]
+
+# What a stop of a Sub-Agent did. ``stopped``: something ran and was stopped;
+# ``idle``: nothing ran; ``taken over by the user``: the user took it over, or a
+# Sub-Agent above it, so nothing was stopped.
+SubAgentStopOutcome = Literal["stopped", "idle", "taken over by the user"]
+
+
+@dataclass(frozen=True)
+class SubAgentState:
+    """One Sub-Agent below a caller, as it is now.
+
+    ``agent_id`` is the address ``subagent`` accepts for its Agent. ``parent_id``
+    names the caller's Sub-Agent it works for, ``None`` for a direct Sub-Agent of
+    the caller. ``last_tool`` is the Tool its working turn called last.
+    ``within_takeover`` names the topmost Sub-Agent below the caller whose Session
+    the user took over, when that is this one or one above it: what this
+    Sub-Agent's Session runs then works for the user, not for the caller.
+    """
+
+    id: str
+    title: str
+    agent_id: str
+    session: SessionAddress
+    parent_id: str | None
+    status: SubAgentStatus
+    last_tool: str | None
+    activity_file: str | None
+    within_takeover: str | None = None
+
+
+class SubAgentTree(Protocol):
+    """The Sub-Agents below a caller, what they run, and how to stop one.
+
+    ``background_tasks`` lists, checks and stops them and the background commands
+    of their Sessions; ``terminal`` names the Sub-Agent whose Session holds a
+    terminal. Both stop at a takeover: what runs within one
+    (``SubAgentState.within_takeover``) works for the user, and no stop of an
+    Agent above it reaches it. :class:`SubAgentCoordinator` implements it. The
+    Tools import it for annotations only, because this package imports the Tool
+    package.
+    """
+
+    async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
+        """*caller*'s Sub-Agents at every depth, breadth first, as they are now."""
+        ...
+
+    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
+        """What *subagent* still runs besides its own turn, each as ``kind id (label)``."""
+        ...
+
+    async def stop_subagent(
+        self, context: ToolContext, subagent: SubAgentState
+    ) -> SubAgentStopOutcome:
+        """Stop *subagent* with its queue, background work and own Sub-Agents.
+
+        The stop ends at every Sub-Agent below it the user took over, which keeps
+        running with everything below it. When the user took over *subagent*, or
+        a Sub-Agent between the caller and it, nothing is stopped.
+        """
+        ...
 
 
 class SubAgentCoordinator:
@@ -156,11 +225,17 @@ class SubAgentCoordinator:
         self._admission_lock = asyncio.Lock()
 
     async def _limit_refusal(
-        self, parent: SessionAddress, settings: dict[str, int], idle_id: str | None = None
+        self,
+        parent: SessionAddress,
+        settings: dict[str, int],
+        idle_id: str | None = None,
+        *,
+        can_stop: bool,
     ) -> JsonObject | None:
         """Refuse a start when *parent* or the whole app has its limit of working Sub-Agents.
 
         *idle_id* names the idle Sub-Agent a ``send`` would start; omitted for ``run``.
+        *can_stop*: the caller can call ``background_tasks``, so the refusal names its stop.
         Taken-over Sub-Agents count for neither limit. Call it under the admission lock.
         """
         runtime, sessions = self._runtime, self._runtime.chat_sessions
@@ -174,7 +249,11 @@ class SubAgentCoordinator:
             )
             return tool_failure(
                 "subagent_limit_exceeded",
-                template.format(count=_subagent_count(limit), id=idle_id),
+                template.format(
+                    count=_subagent_count(limit),
+                    id=idle_id,
+                    or_stop=SUBAGENT_LIMIT_STOP_TEXT if can_stop else "",
+                ),
             )
         manager = runtime.chat_run_manager
         busy = {
@@ -218,23 +297,21 @@ class SubAgentCoordinator:
         try:
             action = arguments.get("action")
             if action is None:
-                implied = _implied_action(arguments)
+                implied = _implied_action(
+                    arguments, can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME)
+                )
                 if not isinstance(implied, str):
                     return implied
                 action = implied
-            if action == "status":
-                action = "list"
             if action == "run":
                 return await self._run(context, arguments)
             if action == "send":
                 return await self._send_call(context, arguments)
-            if action == "list":
-                return await self._list(context, arguments)
-            if action == "cancel":
-                return await self._cancel(context, arguments)
         except (ToolContractError, InvalidAgentAddressError, SettingsValidationError) as error:
             return tool_failure("invalid_arguments", str(error))
-        return tool_failure("invalid_arguments", "action must be one of: run, send, list, cancel")
+        return tool_failure(
+            "invalid_arguments", "subagent was not run: action must be one of: run, send."
+        )
 
     async def message_parent(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         """Handle one ``message_parent`` call from a Sub-Agent."""
@@ -329,15 +406,109 @@ class SubAgentCoordinator:
         The user's "Stop all"; returns how many Runs, queued messages, commands and
         terminals were stopped. The Session keeps its own queued messages. Answers of
         the stopped Sub-Agents are not forwarded, so they do not wake the Sessions
-        above them that are stopped too.
+        above them that are stopped too. A Sub-Agent below the Session that the user
+        took over keeps running with everything below it: it belongs to the user,
+        whose Stop all in its own Session stops it.
         """
-        return await self._stop_subtree(
+        stopped = await self._stop_subtree(
             address,
             reason=USER_CANCEL_REASON,
             initiator="user_stop_all",
             silence_root=False,
             clear_root_queue=False,
         )
+        # Without stopped_by the Session the user works in is always stopped.
+        return stopped or 0
+
+    async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
+        """Return *caller*'s Sub-Agents at every depth, breadth first, as they are now.
+
+        ``background_tasks`` lists, checks and stops them, and shows the caller
+        the background commands of their Sessions.
+        """
+        runtime = self._runtime
+        sessions = runtime.chat_sessions
+        tree = await sessions.run_async(descendants, sessions, caller)
+        ids = {link.session: link.id for link in tree}
+        # Breadth first, a Parent's takeover is known before its children's.
+        takeovers: dict[SessionAddress, str] = {}
+        states: list[SubAgentState] = []
+        for link in tree:
+            address = link.session
+            takeover = takeovers.get(link.parent) or (
+                link.id if link.taken_over_at is not None else None
+            )
+            if takeover is not None:
+                takeovers[address] = takeover
+            run = runtime.chat_run_manager.active_run(
+                agent_id=address.agent_id,
+                session_id=address.session_id,
+                project_id=address.project_id,
+            )
+            last_tool: str | None = None
+            if link.taken_over_at is not None:
+                status: SubAgentStatus = "taken over by the user"
+            elif run is not None:
+                status, last_tool = "working", _latest_tool_name(run)
+            elif is_working(runtime, address):
+                status = "queued"
+            else:
+                status = "idle"
+            states.append(
+                SubAgentState(
+                    id=link.id,
+                    title=link.title,
+                    agent_id=subagent_address(link),
+                    session=address,
+                    parent_id=ids.get(link.parent) if link.parent != caller else None,
+                    status=status,
+                    last_tool=last_tool,
+                    activity_file=self._activities.path(address),
+                    within_takeover=takeover,
+                )
+            )
+        return states
+
+    async def running_work(self, subagent: SubAgentState) -> list[str]:
+        """Name what *subagent* still runs besides its own turn, as ``kind id (label)``.
+
+        Its background commands, its terminals and its own working Sub-Agents.
+        """
+        return [
+            entry.describe() for entry in await running_entries(self._runtime, subagent.session)
+        ]
+
+    async def stop_subagent(
+        self, context: ToolContext, subagent: SubAgentState
+    ) -> SubAgentStopOutcome:
+        """Stop *subagent*: its turn, its queue, its background work and its own Sub-Agents.
+
+        The caller learns the outcome from its Tool result, so a direct
+        Sub-Agent's stopped turn is not forwarded to it; a deeper one's is
+        forwarded to its own Parent, which did not stop it. The stop ends at every
+        takeover below *subagent*. The takeover is read again under the admission
+        lock, since *subagent* is the state the caller read before: when the user
+        took over *subagent* or a Sub-Agent between the caller and it, nothing is
+        stopped.
+        """
+        stopped = await self._stop_subtree(
+            subagent.session,
+            reason=PARENT_AGENT_CANCEL_REASON,
+            initiator=f"parent_run:{context.run_id}",
+            silence_root=subagent.parent_id is None,
+            clear_root_queue=True,
+            stopped_by=_caller(context),
+        )
+        if stopped is None:
+            return "taken over by the user"
+        if not stopped:
+            return "idle"
+        await _emit(
+            context,
+            SUBAGENT_STATUS_CHANGED_EVENT,
+            _event_data(subagent.id, subagent.session, status="cancelled"),
+        )
+        return "stopped"
 
     async def drain_activity(self) -> None:
         """Wait until the activity files' text so far is on disk."""
@@ -354,7 +525,10 @@ class SubAgentCoordinator:
 
     async def _run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         if not has_text(arguments, "content"):
-            return tool_failure("invalid_arguments", SUBAGENT_MISSING_TASK_MESSAGE)
+            message = SUBAGENT_MISSING_TASK_MESSAGE
+            if context.can_call(BACKGROUND_TASKS_TOOL_NAME):
+                message += SUBAGENT_MISSING_TASK_LIST_TEXT
+            return tool_failure("invalid_arguments", message)
         runtime, caller = self._runtime, _caller(context)
         sessions = runtime.chat_sessions
         notes: list[str] = []
@@ -439,7 +613,9 @@ class SubAgentCoordinator:
                 SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=settings["max_subagent_depth"]),
             )
         async with self._admission_lock:
-            refusal = await self._limit_refusal(caller, settings)
+            refusal = await self._limit_refusal(
+                caller, settings, can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME)
+            )
             if refusal is not None:
                 return refusal
             if context.is_cancelled():
@@ -580,10 +756,17 @@ class SubAgentCoordinator:
             return _not_found(subagent_id, own)
         if link.parent != caller:
             parent_link = await sessions.run_async(read_link, sessions, link.parent)
+            or_stop = (
+                SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE.format(id=link.id)
+                if context.can_call(BACKGROUND_TASKS_TOOL_NAME)
+                else ""
+            )
             return tool_failure(
                 "subagent_not_direct",
                 SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE.format(
-                    id=link.id, parent_id=parent_link.id if parent_link is not None else "?"
+                    id=link.id,
+                    parent_id=parent_link.id if parent_link is not None else "?",
+                    or_stop=or_stop,
                 ),
             )
         if link.taken_over_at is not None:
@@ -623,7 +806,10 @@ class SubAgentCoordinator:
         async with self._admission_lock:
             if not is_working(runtime, address):
                 refusal = await self._limit_refusal(
-                    caller, _load_subagent_settings(runtime), idle_id=link.id
+                    caller,
+                    _load_subagent_settings(runtime),
+                    idle_id=link.id,
+                    can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME),
                 )
                 if refusal is not None:
                     return refusal
@@ -708,114 +894,6 @@ class SubAgentCoordinator:
         result["note"] = note
         return tool_success(result)
 
-    # list
-
-    async def _list(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        runtime, caller = self._runtime, _caller(context)
-        sessions = runtime.chat_sessions
-        tree = await sessions.run_async(descendants, sessions, caller, limit=_TREE_DISPLAY_LIMIT)
-        subagent_id = optional_text(arguments, "id")
-        if subagent_id is not None:
-            selected = [link for link in tree if link.id == subagent_id]
-            if not selected:
-                own = [link for link in tree if link.parent == caller]
-                return _not_found(subagent_id, own)
-            tree = selected
-        ids = {link.session: link.id for link in tree}
-        entries: list[JsonObject] = []
-        working = False
-        for link in tree:
-            entry: JsonObject = {
-                "id": link.id,
-                "title": link.title,
-                "agent_id": subagent_address(link),
-                "session_id": link.session.session_id,
-            }
-            if link.parent != caller and link.parent in ids:
-                entry["parent_id"] = ids[link.parent]
-            address = link.session
-            run = runtime.chat_run_manager.active_run(
-                agent_id=address.agent_id,
-                session_id=address.session_id,
-                project_id=address.project_id,
-            )
-            if link.taken_over_at is not None:
-                entry["state"] = "taken over by the user"
-            elif run is not None:
-                entry["state"] = "working"
-                working = True
-                tool_name = _latest_tool_name(run)
-                if tool_name is not None:
-                    entry["last_tool"] = tool_name
-            elif is_working(runtime, address):
-                entry["state"] = "queued"
-                working = True
-            else:
-                entry["state"] = "idle"
-            running = [
-                item.describe()
-                for item in await running_entries(runtime, address)
-                if item.kind != "Sub-Agent"
-            ]
-            if running:
-                entry["running"] = running
-            activity_file = self._activities.path(address)
-            if activity_file is not None:
-                entry["activity_file"] = activity_file
-            entries.append(entry)
-        listing: JsonObject = {"subagents": entries}
-        if working:
-            listing["note"] = SUBAGENT_LIST_NOTE
-        return tool_success(listing)
-
-    # cancel
-
-    async def _cancel(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        runtime, caller = self._runtime, _caller(context)
-        sessions = runtime.chat_sessions
-        subagent_id = optional_text(arguments, "id")
-        if subagent_id is None:
-            tree = await sessions.run_async(
-                descendants, sessions, caller, limit=_TREE_DISPLAY_LIMIT
-            )
-            working = [link for link in tree if is_working(runtime, link.session)]
-            example = working[0].id if working else tree[0].id if tree else "<id>"
-            return tool_failure(
-                "invalid_arguments",
-                SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE.format(
-                    yours=yours_text(working or tree),
-                    call=call_text({"action": "cancel", "id": example}),
-                ),
-            )
-        link = await sessions.run_async(find_link, sessions, subagent_id)
-        if link is None or caller not in await sessions.run_async(
-            ancestors, sessions, link.session
-        ):
-            own = await sessions.run_async(children, sessions, caller)
-            return _not_found(subagent_id, own)
-        initiator = f"parent_run:{context.run_id}"
-        stopped = await self._stop_subtree(
-            link.session,
-            reason=PARENT_AGENT_CANCEL_REASON,
-            initiator=initiator,
-            silence_root=link.parent == caller,
-            clear_root_queue=True,
-        )
-        if not stopped:
-            return tool_failure(
-                "subagent_not_running",
-                SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE.format(id=link.id),
-            )
-        await _emit(
-            context,
-            SUBAGENT_STATUS_CHANGED_EVENT,
-            _event_data(link.id, link.session, status="cancelled"),
-        )
-        result = _public_identity(link.id, link.session)
-        result["status"] = "cancelled"
-        result["note"] = SUBAGENT_CANCELLED_NOTE
-        return tool_success(result)
-
     async def _stop_subtree(
         self,
         root: SessionAddress,
@@ -824,18 +902,31 @@ class SubAgentCoordinator:
         initiator: str,
         silence_root: bool,
         clear_root_queue: bool,
-    ) -> int:
-        """Cancel a complete admitted tree before awaiting any of its cleanup."""
+        stopped_by: SessionAddress | None = None,
+    ) -> int | None:
+        """Cancel a complete admitted tree before awaiting any of its cleanup.
+
+        The tree ends at every Sub-Agent below *root* the user took over: that one
+        and everything below it keep running for the user. *stopped_by* is the
+        Session of an Agent above *root* that stops it; when the user took over
+        *root* or a Sub-Agent between *stopped_by* and it, nothing is stopped and
+        the result is None. Otherwise it counts what was stopped.
+        """
         sessions = self._runtime.chat_sessions
         manager = self._runtime.chat_run_manager
         terminals = self._runtime.terminal_manager
+        commands = self._runtime.command_manager
         stopped = 0
         runs: list[Run] = []
         # A child start already in flight must finish before the tree is read.
         # Cancel every captured Run while admissions are still excluded, so a
         # descendant cannot create or resume work during another Run's cleanup.
         async with self._admission_lock:
-            below = await sessions.run_async(descendants, sessions, root)
+            if stopped_by is not None and await sessions.run_async(
+                taken_over_below, sessions, stopped_by, root
+            ):
+                return None
+            below = await sessions.run_async(descendants, sessions, root, stop_at_takeover=True)
             addresses = [root, *(link.session for link in below)]
             for address in addresses:
                 if address != root or clear_root_queue:
@@ -869,6 +960,11 @@ class SubAgentCoordinator:
                 if running:
                     stopped += len(running)
                     await terminals.close_scope(owner)
+            if commands is not None:
+                # Commands still inside their call end with the cancelled Run;
+                # only background ones count as work of their own.
+                stopped += sum(1 for report in commands.commands([address]) if not report.finished)
+                await commands.close_scope(address)
         if runs:
             await asyncio.gather(*(_run_end(run) for run in runs))
         return stopped
@@ -899,12 +995,22 @@ class SubAgentCoordinator:
         return cast(TemporarySessionBinding, binding)
 
 
-def _implied_action(arguments: JsonObject) -> str | JsonObject:
-    """Return the action a call without ``action`` clearly means, or its refusal."""
+def _implied_action(arguments: JsonObject, *, can_stop: bool) -> str | JsonObject:
+    """Return the action a call without ``action`` clearly means, or its refusal.
+
+    *can_stop*: the caller can call ``background_tasks``, so the refusal names its stop.
+    """
     subagent_id = arguments.get("id")
     if isinstance(subagent_id, str) and subagent_id.strip():
         if has_text(arguments, "content"):
             return "send"
+        stop = (
+            SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE.format(
+                stop_call=call_text({"action": "stop", "id": subagent_id})
+            )
+            if can_stop
+            else ""
+        )
         return tool_failure(
             "invalid_arguments",
             SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE.format(
@@ -912,7 +1018,7 @@ def _implied_action(arguments: JsonObject) -> str | JsonObject:
                 send_call=call_text(
                     {"action": "send", "id": subagent_id, "content": _FOLLOW_UP_PLACEHOLDER}
                 ),
-                cancel_call=call_text({"action": "cancel", "id": subagent_id}),
+                stop=stop,
             ),
         )
     return "run"
@@ -1267,4 +1373,4 @@ def _target_is_allowed(
     return address in allowed
 
 
-__all__ = ["SubAgentCoordinator"]
+__all__ = ["SubAgentCoordinator", "SubAgentState", "SubAgentStatus", "SubAgentStopOutcome"]

@@ -59,8 +59,11 @@ class ToolAccess:
     """One Agent's explicit Tool policy, independent of runtime availability.
 
     ``fixed`` makes a ``selected`` policy the whole Tool set: no Tool activates
-    through the memory mode, a Session grant or by following another Tool. The
-    Agent owner sets it for a built-in Agent or a translated repository Profile.
+    through the memory mode or a Session grant. Followed Tools still follow the
+    Tools of the set, because each belongs to its sources' capability (the file
+    edit dialects of ``apply_patch``, ``background_tasks`` beside the shell and
+    ``subagent``, the remote Tools of an MCP connection). The Agent owner sets it
+    for a built-in Agent or a translated repository Profile.
     It is absent from public policy JSON and retained in temporary bindings.
     ``live_call`` lets the policy activate the Tools constrained to a Live
     voice call; the Agent owner sets it only for the Agents of a Live call, and
@@ -145,6 +148,19 @@ def normalize_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolA
     return ToolAccess(mode=mode, allowed=allowed, denied=denied, granted=granted)
 
 
+def activation_sources(tool: Any) -> tuple[str, ...]:
+    """Return the Tools a followed Tool follows; it is active while any of them is.
+
+    A registration names one source as a string or several as a sequence.
+    """
+    source = getattr(tool, "activation_source", None)
+    if isinstance(source, str):
+        return (source,)
+    if isinstance(source, (tuple, list)):
+        return tuple(name for name in source if isinstance(name, str))
+    return ()
+
+
 def resolve_tool_access(
     tool_access: ToolAccess,
     tools: Sequence[Any],
@@ -171,11 +187,7 @@ def resolve_tool_access(
             name
             for name in tool_access.allowed
             if name in catalog
-            and (
-                _activation_kind(catalog[name]) == TOOL_ACTIVATION_CONFIGURABLE
-                or tool_access.fixed
-                and _activation_kind(catalog[name]) == TOOL_ACTIVATION_FOLLOWS
-            )
+            and _activation_kind(catalog[name]) == TOOL_ACTIVATION_CONFIGURABLE
             and _constraints_allow(catalog[name], tool_access, workspace=workspace)
         }
 
@@ -199,8 +211,7 @@ def resolve_tool_access(
         if memory_activated or session_granted:
             active.add(name)
 
-    if not tool_access.fixed:
-        _add_followed_tools(active, catalog, tool_access, workspace=workspace)
+    _add_followed_tools(active, catalog, tool_access, workspace=workspace)
     active.difference_update(tool_access.denied)
     _remove_orphaned_followers(active, catalog)
 
@@ -252,8 +263,9 @@ def _add_followed_tools(
         for name, tool in catalog.items():
             if name in active or _activation_kind(tool) != TOOL_ACTIVATION_FOLLOWS:
                 continue
-            source = getattr(tool, "activation_source", None)
-            if source in active and _constraints_allow(tool, tool_access, workspace=workspace):
+            if not active.isdisjoint(activation_sources(tool)) and _constraints_allow(
+                tool, tool_access, workspace=workspace
+            ):
                 active.add(name)
                 changed = True
 
@@ -266,7 +278,7 @@ def _remove_orphaned_followers(active: set[str], catalog: Mapping[str, Any]) -> 
             tool = catalog[name]
             if _activation_kind(tool) != TOOL_ACTIVATION_FOLLOWS:
                 continue
-            if getattr(tool, "activation_source", None) not in active:
+            if active.isdisjoint(activation_sources(tool)):
                 active.remove(name)
                 changed = True
 
@@ -397,6 +409,7 @@ __all__ = [
     "TOOL_CONSTRAINT_IMAGE_FALLBACK_ROUTE",
     "ToolAccess",
     "ToolAccessResolution",
+    "activation_sources",
     "agent_tool_settings",
     "apply_agent_target_tool_visibility",
     "bash_allowed_env_keys",

@@ -49,7 +49,7 @@
     onSendMessage,
     onCancelRun = () => {},
     // Known work of this Session that outlives its Run (a running Sub-Agent
-    // or handed-off command): Stop all stays offered after the Run ended.
+    // or background command): Stop all stays offered after the Run ended.
     backgroundWorkRunning = false,
     stoppingAll = false,
     onStopAll = () => {},

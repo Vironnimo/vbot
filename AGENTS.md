@@ -13,7 +13,7 @@ Before creating, editing, or auditing a domain map or supplementary file, read `
 
 ## Interpret documentation
 
-Distinguish explicit user requirements and engineering contracts from descriptions of current behavior, examples, and proposals. Follow applicable requirements and contracts; a documented implementation or past choice is not automatically a constraint on new work. Existing behavior and design may be revised within the user's requested scope without a documentation exception. When the user asks to rethink or rebuild a system, its documented design, invariants and earlier decisions about it are open for revision; say which ones you would keep and why.
+Distinguish explicit user requirements and engineering contracts from descriptions of current behavior, examples, and proposals. Follow applicable requirements and contracts; a documented implementation or past choice is not automatically a constraint on new work. Existing behavior and design may be revised within the user's requested scope without a documentation exception. When the user asks to rethink or rebuild a system, its documented design, invariants and earlier decisions about it are open for revision; say which ones you would keep and why. A recorded user requirement stays in force until the user agrees to drop it by name.
 
 Source code establishes what is implemented, not what ought to be implemented. Verify behavior claims against source and relevant tests. Correct stale descriptions; when code conflicts with an explicit requirement or contract, address the discrepancy rather than rewriting the requirement to match the code. Keep observations, requirements, and proposed changes identifiable in the docs.
 

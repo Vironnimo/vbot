@@ -6,6 +6,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from core.tools._background_tasks_arguments import normalize_background_tasks_arguments
 from core.tools.search_files import interpret_search_call
 
 BASE_FILES = {
@@ -381,22 +382,25 @@ def first_use_cases() -> list[dict[str, Any]]:
             "briefs": [["src/a.py", "REVIEW-A"], ["tests/b.PY", "REVIEW-B"]],
             "agents": ["reviewer", "reviewer"],
         },
+        # A dispatched Sub-Agent is checked and stopped with background_tasks.
         {
             "id": "delegate_status",
             "tool": "subagent",
+            "expected_tool": "background_tasks",
             "seed": True,
             "task": (
                 "What is the current state of the review you dispatched? Check once "
                 "and tell me; keep it running."
             ),
-            "operation": "list",
+            "operation": "status",
         },
         {
             "id": "delegate_cancel",
             "tool": "subagent",
+            "expected_tool": "background_tasks",
             "seed": True,
             "task": "Cancel the review you dispatched. Confirm when it has stopped.",
-            "operation": "cancel",
+            "operation": "stop",
         },
         {
             "id": "delegate_continue",
@@ -438,6 +442,15 @@ def _reported_as_excluded(value: str, final: str) -> bool:
         for index, line in enumerate(lines)
         if value in line
     )
+
+
+def _background_tasks_action(arguments: Any) -> str | None:
+    """The action a ``background_tasks`` call meant, read as the Tool reads it."""
+    try:
+        normalized = normalize_background_tasks_arguments(arguments)
+    except ValueError:
+        return None
+    return normalized.get("action") if isinstance(normalized, dict) else None
 
 
 def preferred_tools(case: dict) -> set[str]:
@@ -618,13 +631,20 @@ def assess(
         received = fixture.received[initial_received:]
         operation = case.get("operation")
         if operation:
+            # Listing counts as checking; a subagent call run as background_tasks does not.
+            actions = {"status": {"list", "status"}, "stop": {"stop"}}[operation]
             matching = [
                 c
                 for c in successful
-                if c["name"] == "subagent" and c["arguments"].get("action") == operation
+                if c["name"] == "background_tasks"
+                and _background_tasks_action(c["arguments"]) in actions
             ]
+            details["subagent_calls_run_as_background_tasks"] = sum(
+                c["name"] == "subagent" and "This call ran as background_tasks" in str(c["result"])
+                for c in successful
+            )
             outcome = bool(matching) and not received
-            if operation == "cancel":
+            if operation == "stop":
                 outcome = outcome and fixture.seed_run.status.value == "cancelled"
             else:
                 outcome = outcome and fixture.seed_run.status.value == "running"

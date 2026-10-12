@@ -31,6 +31,14 @@ from core.sessions import (
     WorkingProjectChoice,
     new_session_id,
 )
+from core.subagents.links import descendants
+from core.tools.command_manager import (
+    COMMAND_RECENT_LINES,
+    CommandManager,
+    CommandNotFoundError,
+    CommandReport,
+    CommandStopError,
+)
 from core.tools.shell import (
     COMMAND_STATUS_NOTE_MARKER,
     COMMAND_STATUS_TOOL_NAMES,
@@ -42,6 +50,7 @@ from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_QUEUE
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
+    RPC_ERROR_COMMAND_NOT_FOUND,
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_QUEUE_ITEM_NOT_FOUND,
     RPC_ERROR_QUEUE_ITEM_STEERING,
@@ -111,6 +120,10 @@ class _ChatHistoryRead:
     compaction_policy: JsonObject | None
     reflection_runs: list[JsonObject] | None
     context_window: int | None = None
+    # The Sessions of the Session's Sub-Agents at every depth, each with the id
+    # of the Session's own Sub-Agent above it; read for every page but a
+    # ``before`` one.
+    subagent_sessions: dict[SessionAddress, str] | None = None
 
 
 def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
@@ -163,12 +176,18 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     Identity Agent without one (a new conversation, no Session yet) returns an
     empty page with ``session_id: null``. An
     ``after`` read appends to the caller's page (``incremental``); its
-    ``background_command_statuses`` then cover only the appended records, for the
-    caller to merge. An ``after`` read with nothing appended returns an empty
-    page without ``session_usage``, ``context_usage``,
-    ``background_command_statuses`` or ``compaction_policy``: the caller's values
-    stay current. A ``before`` page carries neither background statuses nor
-    the Compaction Policy.
+    ``background_command_statuses`` then cover only the appended records and
+    every live background command of the Session, for the caller to merge (a
+    ``running`` it holds that the read leaves out has ended), while
+    ``background_commands_still_running`` is always the complete list. An
+    ``after`` read with nothing appended returns an empty page without
+    ``session_usage``, ``context_usage`` or ``compaction_policy``: the
+    caller's values stay current; its background fields report the live
+    commands only. Every read but a ``before`` one lists in
+    ``subagent_background_commands`` the background commands the Session's
+    Sub-Agents still run, at every depth down to a Sub-Agent the user took over,
+    which with everything below it is left out (complete each time). A ``before``
+    page carries neither a background field nor the Compaction Policy.
     """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
     _reject_unsupported(params, supported_fields, "chat.history")
@@ -205,6 +224,12 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 if before is None and after is None
                 else None
             )
+            # The Sub-Agent tree walk costs milliseconds for a large tree; skip it
+            # when no other Session has a background command it could find.
+            subagent_walk = (
+                before is None
+                and state.runtime.command_manager.has_unfinished_background(besides=address)
+            )
             read = await state.runtime.chat_sessions.run_async(
                 _read_chat_history,
                 state,
@@ -213,6 +238,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 before=before,
                 after=after,
                 active_reviews=active_reviews,
+                subagent_walk=subagent_walk,
             )
             latest_run = chat_runs.active_run(
                 agent_id=agent_id, session_id=session_id, project_id=project_id
@@ -277,10 +303,17 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         if context_usage is not None and "context_window" not in context_usage:
             context_usage = with_context_window(context_usage, read.context_window)
         response["context_usage"] = context_usage
-        if before is None:
-            response["background_command_statuses"] = _current_command_statuses(
-                state, projection.background_command_statuses
-            )
+    if before is None:
+        statuses, still_running = _current_command_statuses(
+            state,
+            address,
+            {} if projection is None else projection.background_command_statuses,
+        )
+        response["background_command_statuses"] = statuses
+        response["background_commands_still_running"] = still_running
+        response["subagent_background_commands"] = _subagent_background_commands(
+            state, read.subagent_sessions or {}
+        )
     if reflection_runs is not None:
         response["reflection_runs"] = reflection_runs
     if read.compaction_policy is not None:
@@ -298,8 +331,12 @@ def _read_chat_history(
     before: str | None,
     after: str | None,
     active_reviews: list[Run] | None,
+    subagent_walk: bool,
 ) -> _ChatHistoryRead:
-    """Read one History page and the Session facts it carries in one Session-pool hop."""
+    """Read one History page and the Session facts it carries in one Session-pool hop.
+
+    *subagent_walk* reads the Sessions of the Session's Sub-Agents too.
+    """
     session = state.runtime.chat_sessions.get(address)
     history = session.read_chat_history_snapshot(
         limit=limit,
@@ -311,8 +348,9 @@ def _read_chat_history(
         background_note_marker=COMMAND_STATUS_NOTE_MARKER if before is None else None,
         skip_unchanged=True,
     )
+    subagent_sessions = _subagent_sessions(state, address) if subagent_walk else None
     if history.unchanged:
-        return _ChatHistoryRead(history, None, None)
+        return _ChatHistoryRead(history, None, None, subagent_sessions=subagent_sessions)
     agent = _session_agent(state, address) if before is None else None
     return _ChatHistoryRead(
         history,
@@ -321,7 +359,24 @@ def _read_chat_history(
         _resolve_context_window(state, str(getattr(agent, "model", "") or ""))
         if agent is not None
         else None,
+        subagent_sessions,
     )
+
+
+def _subagent_sessions(state: Any, address: SessionAddress) -> dict[SessionAddress, str]:
+    """The Sessions of *address*'s Sub-Agents at every depth, each with the id of
+    *address*'s own Sub-Agent above it. Blocking: reads the Sub-Agent links.
+
+    The walk ends at every Sub-Agent the user took over: that Session and those
+    below it belong to the user, and the Session's Stop all leaves them running.
+    """
+    above: dict[SessionAddress, str] = {}
+    # Breadth first: a Parent's Session is known before its children's.
+    for link in descendants(state.runtime.chat_sessions, address, stop_at_takeover=True):
+        direct = link.id if link.parent == address else above.get(link.parent)
+        if direct is not None:
+            above[link.session] = direct
+    return above
 
 
 def _session_agent(state: Any, address: SessionAddress) -> Any | None:
@@ -438,21 +493,50 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
-def _current_command_statuses(state: Any, statuses: JsonObject) -> JsonObject:
-    """Replace each recorded ``running`` status by the command's current one.
+def _current_command_statuses(
+    state: Any, address: SessionAddress, statuses: JsonObject
+) -> tuple[JsonObject, list[str]]:
+    """The folded statuses made current, and the commands whose processes still run.
 
-    A command no terminal runs any longer ended without a delivered result
-    (vBot restarted), so it has no status to show.
+    Every background command of the Session that the command manager knows
+    reports its current status, also one whose hand-off result is not saved
+    yet (its Tool batch still runs). A recorded ``running`` that is not one of
+    them has no status: the command ended without a delivered result (vBot
+    restarted), or it belongs to another Session, as in a fork, which shares
+    its source's History but not its commands. The list names the Session's
+    commands whose shell exited while processes they started still run.
     """
-    terminals = state.runtime.terminal_manager
-    current: JsonObject = {}
-    for terminal_id, status in statuses.items():
-        if status == "running":
-            status = terminals.command_status(terminal_id)
-            if status is None:
-                continue
-        current[terminal_id] = status
-    return current
+    live = state.runtime.command_manager.commands([address])
+    current: JsonObject = {
+        command_id: status for command_id, status in statuses.items() if status != "running"
+    }
+    for report in live:
+        current[report.command_id] = report.status
+    return current, [report.command_id for report in live if report.still_running]
+
+
+def _subagent_background_commands(
+    state: Any, sessions: dict[SessionAddress, str]
+) -> list[JsonObject]:
+    """The background commands that still run in the Sessions of *sessions*.
+
+    Running ones, and ended ones whose processes still run: what the Session's
+    Stop all would stop below it. Each names the Session's own Sub-Agent
+    above the Session that runs it, so the caller can show it on that
+    Sub-Agent's row and follow its live status by its Session.
+    """
+    if not sessions:
+        return []
+    return [
+        {
+            "subagent_id": sessions[report.owner],
+            "session_id": report.owner.session_id,
+            "command_id": report.command_id,
+            "label": report.label,
+        }
+        for report in state.runtime.command_manager.commands(sessions.keys())
+        if not report.finished
+    ]
 
 
 def _project_chat_history(
@@ -1049,6 +1133,66 @@ async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True, "stopped": stopped}
 
 
+def _session_command(state: Any, params: JsonObject, method: str) -> CommandReport:
+    """The background command ``command_id`` of the Session ``session_id``.
+
+    Raises ``command_not_found`` for an unknown or forgotten id, a command of
+    another Session and a command still inside its shell call.
+    """
+    _reject_unsupported(params, {"session_id", "command_id"}, method)
+    session_id = _required_string(params, "session_id")
+    command_id = _required_string(params, "command_id")
+    commands: CommandManager = state.runtime.command_manager
+    try:
+        report = commands.report(command_id)
+    except CommandNotFoundError:
+        report = None
+    if report is None or not report.background or report.owner.session_id != session_id:
+        raise RpcError(
+            RPC_ERROR_COMMAND_NOT_FOUND,
+            f"No background command {command_id} runs or ran recently in this Session.",
+            routine=True,
+        )
+    return report
+
+
+async def _stop_command_chat(state: Any, params: JsonObject) -> JsonObject:
+    """Stop a background command and every process it started, for the user.
+
+    A running command's Agent receives the stopped result. A command whose
+    shell had exited while processes it started still ran loses those
+    processes and keeps the status it ended with; its result was delivered
+    at its end. ``stopped`` is true when this call stopped the command or such
+    processes, false when nothing of it ran any longer or another stop came
+    first. ``status`` is the command's status afterwards, when none of its
+    processes runs any longer.
+    """
+    report = _session_command(state, params, "chat.stop_command")
+    if report.finished:
+        return {"stopped": False, "status": report.status}
+    try:
+        final = await state.runtime.command_manager.stop(report.command_id, "user")
+    except CommandStopError as exc:
+        raise _map_expected_error(exc) from exc
+    stopped = final.stop_reason == "user" or (report.ended and bool(report.still_running))
+    return {"stopped": stopped, "status": final.status}
+
+
+def _command_output_chat(state: Any, params: JsonObject) -> JsonObject:
+    """A background command's status and its newest clean output lines.
+
+    ``still_running`` is true while processes it started still run after its
+    shell exited.
+    """
+    report = _session_command(state, params, "chat.command_output")
+    output = state.runtime.command_manager.latest_output(report.command_id, COMMAND_RECENT_LINES)
+    return {
+        "status": report.status,
+        "still_running": bool(report.still_running),
+        "output": output,
+    }
+
+
 async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "run_id", "tool_call_id"}, "chat.cancel_tool_call")
 
@@ -1264,6 +1408,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.cancel": _cancel_chat,
         "chat.stop_all": _stop_all_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
+        "chat.stop_command": _stop_command_chat,
+        "chat.command_output": _command_output_chat,
         "chat.control_run": _control_run_chat,
         "chat.queue_steer": _chat_queue_steer,
         "chat.queue_list": _chat_queue_list,

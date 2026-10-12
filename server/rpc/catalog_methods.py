@@ -17,6 +17,7 @@ from core.projects import (
 )
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
+from core.tools.availability import activation_sources
 from core.tools.on_demand import always_loaded_tools
 from core.utils.workers import BoundedWorkerPool
 from server.rpc.dispatcher import RpcMethodHandler
@@ -85,13 +86,13 @@ def _validate_tool_relationships(tools: list[Any]) -> None:
 
     names = {tool.name for tool in tools}
     for tool in tools:
-        if (
-            getattr(tool, "activation", "configurable") == "follows"
-            and getattr(tool, "activation_source", None) not in names
-        ):
+        if getattr(tool, "activation", "configurable") != "follows":
+            continue
+        sources = activation_sources(tool)
+        if not any(source in names for source in sources):
             raise ValueError(
                 f"Tool '{tool.name}' follows an unregistered Tool: "
-                f"{getattr(tool, 'activation_source', None)}"
+                f"{', '.join(sources) if sources else None}"
             )
 
 

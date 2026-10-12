@@ -188,6 +188,20 @@ describe('Tool Access Policy UI helpers', () => {
     ).toBe('automatic');
   });
 
+  it('shows a Tool following several sources as automatic with any of them', () => {
+    const follower = {
+      name: 'background_tasks',
+      activation: 'follows',
+      activation_source: ['read', 'write'],
+    };
+    const tools = [...catalog, follower];
+    const state = (allowed) =>
+      toolAccessState({ mode: 'selected', allowed }, follower, tools);
+    expect(state([])).toBe('inactive');
+    expect(state(['read'])).toBe('automatic');
+    expect(state(['write'])).toBe('automatic');
+  });
+
   it('shows memory as inactive when Memory Prompt Mode is off', () => {
     expect(
       toolAccessState({ mode: 'all' }, catalog[4], catalog, {

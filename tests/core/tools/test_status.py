@@ -202,9 +202,10 @@ def _dispatch(
     arguments: dict[str, object] | None = None,
     *,
     project_id: str | None = None,
+    allowed_tools: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     context = _context(tmp_path, project_id=project_id)
-    return asyncio.run(dispatch_as_executor(registry, context, arguments or {}))
+    return asyncio.run(dispatch_as_executor(registry, context, arguments or {}, allowed_tools))
 
 
 def test_schema_offers_only_the_optional_target() -> None:
@@ -465,6 +466,11 @@ def test_status_tool_rejects_agent_id_without_session_id(tmp_path: Path) -> None
             ("coder", "ses_abcdefghijkl"),
         ),
         ({"id": "ses_abcdefghijkl", "agent_id": "worker"}, ("worker", "ses_abcdefghijkl")),
+        # An Agent's name that starts like a task id is no task id.
+        (
+            {"agent_id": "sub_reviewer", "session_id": "ses_abcdefghijkl"},
+            ("sub_reviewer", "ses_abcdefghijkl"),
+        ),
     ],
 )
 def test_status_tool_reads_clear_targets_written_other_ways(
@@ -481,44 +487,92 @@ def test_status_tool_reads_clear_targets_written_other_ways(
 
 
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("arguments", "tasks_callable", "message"),
     [
         (
             {"id": "sub_abcdefghijkl"},
+            True,
             "status was not run: sub_abcdefghijkl is a Sub-Agent id. To see that Sub-Agent, "
-            'call subagent with {"action": "list", "id": "sub_abcdefghijkl"}. status reports '
-            "a chat Session and takes session_id, with agent_id for another Agent's Session.",
+            'call background_tasks {"action": "status", "id": "sub_abcdefghijkl"}. status '
+            "reports a chat Session and takes session_id, with agent_id for another Agent's "
+            "Session.",
         ),
         (
-            {"work_id": "sub_abcdefghijkl", "agent_id": "worker"},
+            {"work_id": "sub_abcdefghijkl", "agent_id": "worker", "id": "ses_abcdefghijkl"},
+            True,
             "status was not run: sub_abcdefghijkl is a Sub-Agent id. To see that Sub-Agent, "
-            'call subagent with {"action": "list", "id": "sub_abcdefghijkl"}. status reports '
-            "a chat Session and takes session_id, with agent_id for another Agent's Session.",
+            'call background_tasks {"action": "status", "id": "sub_abcdefghijkl"}. status '
+            "reports a chat Session and takes session_id, with agent_id for another Agent's "
+            "Session.",
+        ),
+        (
+            {"session_id": "cmd_abcdefghijkl"},
+            True,
+            "status was not run: cmd_abcdefghijkl is a background command id. To see that "
+            'command, call background_tasks {"action": "status", "id": "cmd_abcdefghijkl"}. '
+            "status reports a chat Session and takes session_id, with agent_id for another "
+            "Agent's Session.",
+        ),
+        (
+            {"agent_id": "cmd_abcdefghijkl"},
+            True,
+            "status was not run: cmd_abcdefghijkl is a background command id. To see that "
+            'command, call background_tasks {"action": "status", "id": "cmd_abcdefghijkl"}. '
+            "status reports a chat Session and takes session_id, with agent_id for another "
+            "Agent's Session.",
+        ),
+        # background_tasks is named only when the Agent can call it.
+        (
+            {"id": "sub_abcdefghijkl"},
+            False,
+            "status was not run: sub_abcdefghijkl is a Sub-Agent id. status reports a chat "
+            "Session and takes session_id, with agent_id for another Agent's Session.",
+        ),
+        (
+            {"id": "cmd_abcdefghijkl"},
+            False,
+            "status was not run: cmd_abcdefghijkl is a background command id. status reports a "
+            "chat Session and takes session_id, with agent_id for another Agent's Session.",
         ),
         (
             {"id": "worker"},
+            True,
             'status was not run: it has no "id" parameter, so "worker" is ambiguous. Pass a '
             'Session as "session_id", with "agent_id" for another Agent\'s Session, or omit '
             "both to check your current Session.",
         ),
         (
             {"id": "ses_abcdefghijkl", "session_id": "ses_zzzzzzzzzzzz"},
+            True,
             "Conflicting values for session_id; provide one intended value.",
         ),
         (
             {"session_id": "ses_abcdefghijkl", "session": "ses_zzzzzzzzzzzz"},
+            True,
             'Conflicting values for session_id: session_id is "ses_abcdefghijkl" and session '
             'is "ses_zzzzzzzzzzzz". Send only the intended one.',
         ),
     ],
+    ids=[
+        "subagent-id",
+        "work_id-first",
+        "command-id-as-session_id",
+        "command-id-as-agent_id",
+        "subagent-id-without-background_tasks",
+        "command-id-without-background_tasks",
+        "unknown-id",
+        "id-and-session_id-conflict",
+        "session-aliases-conflict",
+    ],
 )
 def test_status_tool_refuses_unclear_ids_before_lookup(
-    tmp_path: Path, arguments: dict[str, object], message: str
+    tmp_path: Path, arguments: dict[str, object], tasks_callable: bool, message: str
 ) -> None:
     sessions = _StubSessions([])
     registry = _registry(sessions=sessions)
+    tools = (STATUS_TOOL_NAME, "background_tasks") if tasks_callable else (STATUS_TOOL_NAME,)
 
-    result = _dispatch(registry, tmp_path, arguments)
+    result = _dispatch(registry, tmp_path, arguments, allowed_tools=tools)
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"

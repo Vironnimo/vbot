@@ -80,7 +80,7 @@ group ids that still have live participant Sessions, and `archive_group(group_id
 no-Run guard as one `owner_group` archive entry (`archive.md`; listed and purgeable,
 not restorable, purged by the retention sweep once the user's retention period
 ends), keeping history, bindings and usage attribution; `delete_group` still
-removes an archived group. Both close each live participant's Terminal Sessions first,
+removes an archived group. Both close each live participant's Terminal Sessions and shell commands first,
 like an ordinary Session removal (`release_temporary_group`). Once an Extension is removed from every root, nothing
 could manage its Sessions any more, so `ExtensionRuntime` archives the live ones of
 every owner name without a registry record (entry reason `extension_removed`) before

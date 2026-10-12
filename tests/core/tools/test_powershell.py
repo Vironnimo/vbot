@@ -1,33 +1,30 @@
-"""The shell Tool on Windows: the PowerShell wrapper's exit status, errors, filters and text.
+"""Windows commands: the PowerShell wrapper's exit status, errors, filters and text.
 
-Each real-PowerShell case starts a ``pwsh`` process in a ConPTY terminal (about
-half a second), so a case exists only for a distinct path through the wrapper;
-cases that share a path share a process.
+Each real-PowerShell case starts ``pwsh -NoProfile -NonInteractive -Command`` on
+pipes through ``CommandManager``, as the shell Tool does (about half a second),
+so a case exists only for a distinct path through the wrapper; cases that share
+a path share a process.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
-from datetime import timedelta
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-import core.tools.shell as shell_module
-from core.storage.temp_files import TemporaryFileManager
+from core.sessions import SessionAddress
 from core.tools._powershell import (
     NULL_DEVICE_STATEMENTS,
+    OUTPUT_COLUMNS,
     POWERSHELL_ERROR_NOTE,
     powershell_command,
 )
-from core.tools.shell import SHELL_TOOL_NAME, register_shell_tool
-from core.tools.terminal_manager import TerminalManager
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry
-from tests.core.tools.terminal_manager_helpers import PendingTriggerService
-from tests.core.tools.tools_test_support import dispatch_as_executor
+from core.tools.command_manager import CommandManager
+from core.tools.shell_environment import RunIdentity, command_environment
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32" or shutil.which("pwsh") is None, reason="Real PowerShell 7"
@@ -47,27 +44,44 @@ def test_command_travels_as_a_literal_parsed_after_the_setup() -> None:
 # --- Line filters PowerShell lacks -----------------------------------------
 
 
-def _pwsh_without_unix_tools(command: str, cwd: Path) -> tuple[int, str, str]:
-    """Run the wrapped command on a PATH without Git's Unix commands."""
+async def _run(
+    cwd: Path,
+    command: str,
+    *,
+    path: str | None = None,
+    wrap: Callable[[str], str] = powershell_command,
+) -> tuple[int | None, str]:
+    """Run the wrapped *command* as the shell Tool does; return its exit code and output.
+
+    *path* replaces PATH in the command environment.
+    """
+    environment = command_environment(RunIdentity("agent-a", "session-a", None))
+    if path is not None:
+        environment = {
+            **{name: value for name, value in environment.items() if name.upper() != "PATH"},
+            "PATH": path,
+        }
     pwsh = shutil.which("pwsh")
     assert pwsh is not None
-    path = os.pathsep.join(
-        entry
-        for entry in os.environ.get("PATH", "").split(os.pathsep)
-        if shutil.which("head", path=entry) is None and shutil.which("wc", path=entry) is None
-    )
-    completed = subprocess.run(
-        [pwsh, "-NoProfile", "-NonInteractive", "-Command", powershell_command(command)],
-        capture_output=True,
-        cwd=cwd,
-        env={**os.environ, "PATH": path, "NO_COLOR": "1"},
-        timeout=60,
-    )
-    stdout, stderr = (
-        stream.decode("utf-8", "replace").replace("\r\n", "\n")
-        for stream in (completed.stdout, completed.stderr)
-    )
-    return completed.returncode, stdout, stderr
+    manager = CommandManager()
+    try:
+        handle = await manager.launch(
+            SessionAddress(None, "agent-a", "session-a"),
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", wrap(command)],
+            command=command,
+            description=None,
+            cwd=cwd,
+            env=environment,
+            origin_run_id="run-a",
+            formatter=str,
+        )
+        assert await manager.wait(handle.command_id, seconds=60) == "ended"
+        report = manager.report(handle.command_id)
+    finally:
+        await manager.aclose()
+    transcript = report.transcript
+    assert transcript.omitted_lines == 0
+    return report.exit_code, "".join(f"{line}\n" for line in (*transcript.head, *transcript.tail))
 
 
 def _stops_with(command: str, message: str) -> tuple[str, str]:
@@ -107,53 +121,32 @@ _LINE_FILTERS = [
 ]
 
 
-def test_line_filters_run_where_powershell_has_none(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_line_filters_run_where_powershell_has_none(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("".join(f"line {n}\n" for n in range(1, 21)))
     (tmp_path / "b.txt").write_text("x\ny\n")
     # One PowerShell process runs every filter; a marker line separates them.
     script = "\n'--'\n".join(command for command, _output in _LINE_FILTERS)
-
-    exit_code, output, errors = _pwsh_without_unix_tools(script, tmp_path)
-
-    assert exit_code == 0, errors
-    assert output.split("--\n") == [expected for _command, expected in _LINE_FILTERS], errors
-
-
-# --- Exit status, errors and text through the shell Tool -------------------
-
-
-async def _run(tmp_path: Path, command: str) -> JsonObject:
-    """Run *command* through the shell Tool in a real terminal; returns the result data."""
-    trigger = PendingTriggerService()
-    manager = TerminalManager(
-        trigger,
-        temporary_files=TemporaryFileManager(
-            tmp_path / "temp", retention={"commands": timedelta(hours=1)}
-        ),
+    # A PATH without Git's Unix commands.
+    path = os.pathsep.join(
+        entry
+        for entry in os.environ.get("PATH", "").split(os.pathsep)
+        if shutil.which("head", path=entry) is None and shutil.which("wc", path=entry) is None
     )
-    registry = ToolRegistry()
-    register_shell_tool(registry, manager)
-    context = ToolContext(
-        agent_id="agent-a",
-        session_id="session-a",
-        run_id="run-a",
-        tool_call_id="call-a",
-        tool_name=SHELL_TOOL_NAME,
-        tool_call_index=0,
-        workspace=tmp_path,
-        vbot_root=tmp_path,
-        data_root=tmp_path,
-        cwd=tmp_path,
+
+    exit_code, output = await _run(tmp_path, script, path=path)
+
+    assert exit_code == 0, output
+    # The caught stops leave error records, which the wrapper notes on the error stream.
+    printed = "".join(
+        line
+        for line in output.splitlines(keepends=True)
+        if not line.startswith(POWERSHELL_ERROR_NOTE)
     )
-    try:
-        result = await dispatch_as_executor(registry, context, {"command": command, "timeout": 60})
-    finally:
-        trigger.release.set()
-        await manager.aclose()
-    assert result["ok"] is True, result
-    data: JsonObject = result["data"]
-    assert data["status"] == "exited", data
-    return data
+    assert printed.split("--\n") == [expected for _command, expected in _LINE_FILTERS], output
+
+
+# --- Exit status, errors and text --------------------------------------------
 
 
 _PRINTED_ERROR_TEXT = "; ".join(
@@ -256,14 +249,22 @@ _PRINTED_ERROR_TEXT = "; ".join(
             ("begin-sentinel\nend-sentinel",),
         ),
         ("begin { 'begin-sentinel' } process { cmd /c exit 3 }", 3, False, ("begin-sentinel",)),
-        # Objects the table formatter holds still print before the exit, and a native
-        # program keeps the terminal as its output.
+        # Objects the table formatter holds still print before the exit; a native
+        # program has no terminal, for input or output.
         (
             "Get-Location\n[pscustomobject]@{ Name = 'table-sentinel' } | Select-Object Name\n"
-            f"& '{sys.executable}' -c \"import sys; print('tty', sys.stdout.isatty())\"",
+            f"& '{sys.executable}' -c "
+            "\"import sys; print('tty', sys.stdin.isatty(), sys.stdout.isatty())\"",
             0,
             False,
-            ("table-sentinel", "tty True"),
+            ("table-sentinel", "tty False False"),
+        ),
+        # A formatted row keeps the commands' width instead of a pipe's 120 columns.
+        (
+            "[pscustomobject]@{ Name = 'wide-sentinel'; Value = 'v' * 300 } | Format-Table",
+            0,
+            False,
+            ("wide-sentinel " + "v" * (OUTPUT_COLUMNS - len("wide-sentinel ") - 2) + "\u2026",),
         ),
     ],
     ids=[
@@ -279,16 +280,16 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "printed-text-and-quotes",
         "named-blocks",
         "named-blocks-exit",
-        "formatted-objects-and-native-terminal",
+        "formatted-objects-and-native-program-without-tty",
+        "wide-table",
     ],
 )
 async def test_exit_status_and_error_records_follow_the_last_statement(
     tmp_path: Path, command: str, exit_code: int, error_record: bool, shows: tuple[str, ...]
 ) -> None:
-    data = await _run(tmp_path, command)
+    code, output = await _run(tmp_path, command)
 
-    assert data["exit_code"] == exit_code
-    output = data["output"]
+    assert code == exit_code, output
     assert output.count(POWERSHELL_ERROR_NOTE) == (1 if error_record else 0)
     for text in shows:
         assert text in output
@@ -331,14 +332,14 @@ async def test_bash_null_device_discards_and_reaches_native_programs_as_nul(
         ]
     )
 
-    data = await _run(tmp_path, command)
+    code, output = await _run(tmp_path, command)
 
-    assert data["exit_code"] == 0
-    lines = [line.strip() for line in data["output"].splitlines() if line.strip()]
+    assert code == 0
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
     assert sorted(lines) == sorted(
         ["['NUL', 'NUL', '--output=NUL', '--log=NUL', '-o:NUL']", "/dev/null", "/dev/null"]
     )
-    assert {path.name for path in tmp_path.iterdir()} - {"temp"} == {"dev", "msys"}
+    assert {path.name for path in tmp_path.iterdir()} == {"dev", "msys"}
     assert not any((tmp_path / "dev").iterdir())
     assert {path.name for path in msys.iterdir()} == {"msys-2.0.dll", "show.cmd"}
 
@@ -368,22 +369,22 @@ async def test_successful_write_after_method_error_reports_record_without_changi
     tmp_path: Path,
 ) -> None:
     (tmp_path / "input.txt").write_text("source text", encoding="utf-8")
-    data = await _run(
+    code, output = await _run(
         tmp_path,
         "$text = Get-Content -Raw input.txt; $piece = $text.Substring(4, -1); "
         "Set-Content -LiteralPath result.txt -Value ('written-after-error:' + $piece)",
     )
 
-    assert data["exit_code"] == 0
+    assert code == 0
     assert (tmp_path / "result.txt").read_text(encoding="utf-8") == "written-after-error:\n"
-    assert data["output"].count(POWERSHELL_ERROR_NOTE) == 1
-    assert "Substring" in data["output"]
+    assert output.count(POWERSHELL_ERROR_NOTE) == 1
+    assert "Substring" in output
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("new_error", [False, True])
 async def test_full_existing_error_collection_uses_identity_instead_of_count(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, new_error: bool
+    tmp_path: Path, new_error: bool
 ) -> None:
     def with_profile_errors(command: str) -> str:
         return (
@@ -392,25 +393,23 @@ async def test_full_existing_error_collection_uses_identity_instead_of_count(
             + powershell_command(command)
         )
 
-    monkeypatch.setattr(shell_module, "powershell_command", with_profile_errors)
     command = "try { throw 'new-sentinel' } catch {}; 'finished'" if new_error else "'finished'"
 
-    data = await _run(tmp_path, command)
+    code, output = await _run(tmp_path, command, wrap=with_profile_errors)
 
-    assert data["exit_code"] == 0
-    assert (POWERSHELL_ERROR_NOTE in data["output"]) is new_error
-    assert ("new-sentinel" in data["output"]) is new_error
+    assert code == 0
+    assert (POWERSHELL_ERROR_NOTE in output) is new_error
+    assert ("new-sentinel" in output) is new_error
 
 
 @pytest.mark.asyncio
 async def test_handled_error_record_has_bounded_completion_evidence(tmp_path: Path) -> None:
     # A caught throw names no command, so it counts although nothing showed it.
-    data = await _run(
+    code, output = await _run(
         tmp_path, "try { throw ('recorded-sentinel:' + ('x' * 10000)) } catch {}; 'finished'"
     )
 
-    assert data["exit_code"] == 0
-    output = data["output"]
+    assert code == 0
     assert output.count(POWERSHELL_ERROR_NOTE) == 1 and "recorded-sentinel:" in output
     assert "finished" in output
     assert len(output) < 1000
@@ -434,10 +433,10 @@ async def test_output_keeps_non_ascii_text(tmp_path: Path) -> None:
         ]
     )
 
-    data = await _run(tmp_path, command)
+    code, output = await _run(tmp_path, command)
 
-    assert data["exit_code"] == 0
-    lines = [line.strip() for line in data["output"].splitlines() if line.strip()]
+    assert code == 0
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
     # stderr can interleave with stdout, so only the set of lines is stable.
     assert sorted(lines) == sorted(
         ["ß", "Jürgen €", "Übersicht €.txt", "ä€", "ö", "piped ü", "fäil"]
