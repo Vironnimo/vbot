@@ -228,11 +228,36 @@ class CommandProcess(Protocol):
         """Release the process and its pipe once nothing of it runs any longer."""
 
 
-# Starts ``argv`` in ``cwd`` with exactly ``env``, tracking its tree with the tracker
-# from creation on; raises OSError when the process cannot be started or tracked.
-CommandLauncher = Callable[
-    [Sequence[str], Path, Mapping[str, str], ProcessTreeTracker], Awaitable[CommandProcess]
-]
+class CommandLauncher(Protocol):
+    """Starts command processes (``PipeLauncher``); ``CommandManager`` closes it with itself."""
+
+    async def launch(
+        self,
+        argv: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str],
+        tracker: ProcessTreeTracker,
+        request: bytes | None = None,
+        *,
+        warm: bool = True,
+    ) -> CommandProcess:
+        """Start *argv* in *cwd* with exactly *env*, tracking its tree with *tracker*
+        from creation on.
+
+        *request*, when given, is written to the process's stdin, which then
+        ends. Such a process can have been started earlier with the same
+        *argv*, *env* and *tracker* in another directory: the request carries
+        everything the call adds, the workdir included. With *warm* False, *env*
+        holds values of this call, so the process is started for this launch
+        alone. Raises OSError when the process cannot be started or tracked.
+        """
+        ...
+
+    async def aclose(self) -> None:
+        """End every process the launcher started ahead of a launch."""
+
+    def close(self) -> None:
+        """``aclose`` without an Event Loop."""
 
 
 class CommandManagerError(VBotError):

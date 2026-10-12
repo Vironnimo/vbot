@@ -1,7 +1,8 @@
 """The shell's commands: one-shot processes that can outlive the call that started them.
 
 ``CommandManager`` owns every command the shell Tool runs: its launch on pipes
-(no input, no terminal; ``_command_launch``), its clean output with a live log
+(no input, no terminal; ``_command_launch``, whose launcher keeps a warm shell
+ready on Windows), its clean output with a live log
 file (``_command_output``, cleaned on subinterpreter workers off the Event
 Loop), the decision when it ended, its stop, the background
 registry with status events, the delivery of a background result, and the
@@ -67,7 +68,7 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
-from ._command_launch import launch_pipe_process
+from ._command_launch import PipeLauncher
 from ._command_output import CommandOutput, command_output_host
 from ._command_record import BlockingRunner, CommandRecord, CommandServices
 from ._command_types import (
@@ -126,8 +127,9 @@ class CommandManager:
     *trigger_service* receives background results (``TriggerService``); without
     it nothing is delivered. *temporary_files* holds the live log files; without
     it commands have none. The other parameters are seams for tests: the process
-    *launcher* and *process_tracker*, the clock (*monotonic*, *sleep*) and
-    *run_blocking*, which runs process queries and kills off the Event Loop.
+    *launcher* (by default a ``PipeLauncher``; the manager closes it with itself)
+    and *process_tracker*, the clock (*monotonic*, *sleep*) and *run_blocking*,
+    which runs process queries and kills off the Event Loop.
     """
 
     def __init__(
@@ -136,7 +138,7 @@ class CommandManager:
         *,
         temporary_files: TemporaryFileManager | None = None,
         process_tracker: ProcessTreeTracker = track_process_tree,
-        launcher: CommandLauncher = launch_pipe_process,
+        launcher: CommandLauncher | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         run_blocking: BlockingRunner = asyncio.to_thread,
@@ -153,7 +155,7 @@ class CommandManager:
             raise ValueError("Command retention and sweep interval must be positive")
         self._temporary_files = temporary_files
         self._process_tracker = process_tracker
-        self._launcher = launcher
+        self._launcher = launcher if launcher is not None else PipeLauncher(sleep=sleep)
         self._monotonic = monotonic
         self._sleep = sleep
         self._run_blocking = run_blocking
@@ -216,6 +218,7 @@ class CommandManager:
         """
         self._closed = True
         await _settle(list(self._pending))
+        await self._close_launcher()
         await self._stop_records(
             [record for record in self._records.values() if not record.finished], "shutdown"
         )
@@ -230,6 +233,10 @@ class CommandManager:
         """
         self._closed = True
         self._stop_sweeper()
+        try:
+            self._launcher.close()
+        except Exception:
+            _LOGGER.error("Closing the command launcher failed", exc_info=True)
         records = list(self._records.values())
         unconfirmed = [record for record in records if not record.kill_now()]
         if self._owns_output_host:
@@ -250,6 +257,7 @@ class CommandManager:
         self._stop_sweeper()
         # Launches in progress start their commands first, so their kill is not missed.
         await _settle(list(self._pending))
+        await self._close_launcher()
         records = list(self._records.values())
         killed = await asyncio.gather(
             *(record.kill_and_release() for record in records), return_exceptions=True
@@ -270,6 +278,12 @@ class CommandManager:
         _raise_unconfirmed(
             [record for record, result in zip(records, killed, strict=True) if result is not True]
         )
+
+    async def _close_launcher(self) -> None:
+        try:
+            await self._launcher.aclose()
+        except Exception:
+            _LOGGER.error("Closing the command launcher failed", exc_info=True)
 
     def _stop_sweeper(self) -> None:
         if self._sweeper is not None:
@@ -292,11 +306,17 @@ class CommandManager:
         formatter: CommandReportFormatter,
         execution_owner: RunExecutionOwner | None = None,
         on_output: OutputCallback | None = None,
+        request: bytes | None = None,
+        warm: bool = True,
     ) -> CommandHandle:
         """Start one command in the foreground and return its handle.
 
         *argv* runs exactly, in *cwd*, with exactly *env* (the complete
         environment); *command* and *description* are what the Agent asked for.
+        *request*, when given, is what the shell reads from stdin before it runs
+        the command (``CommandLauncher.launch``): *env* is then its start
+        environment, and the request carries the rest. *warm* False marks an
+        *env* that holds values of this call: no shell started ahead serves it.
         *formatter* builds the body of the result delivery from the final
         report. *on_output* receives the newest
         ``COMMAND_PROGRESS_LINES`` clean lines at most every
@@ -326,6 +346,8 @@ class CommandManager:
                 formatter=formatter,
                 execution_owner=execution_owner,
                 on_output=on_output,
+                request=request,
+                warm=warm,
             )
         )
         self._pending[task] = _PendingLaunch(owner, origin_run_id, execution_owner)
@@ -595,6 +617,8 @@ class CommandManager:
         formatter: CommandReportFormatter,
         execution_owner: RunExecutionOwner | None,
         on_output: OutputCallback | None,
+        request: bytes | None,
+        warm: bool,
     ) -> CommandRecord:
         lease: TemporaryFileLease | None = None
         log_fd: int | None = None
@@ -613,7 +637,9 @@ class CommandManager:
                 raise CommandNotStartedError("vBot is shutting down") from error
             log_fd = None
             try:
-                process = await self._launcher(argv, cwd, env, self._process_tracker)
+                process = await self._launcher.launch(
+                    argv, cwd, env, self._process_tracker, request, warm=warm
+                )
             except Exception as error:
                 raise CommandLaunchError(f"The command could not be started: {error}") from error
         except BaseException:

@@ -413,6 +413,15 @@ def split_env_object(
             value = str(raw)
         else:
             raise ValueError(_not_run(f"env value for {name} must be a string."))
+        if "\x00" in value:
+            raise ValueError(
+                _not_run(
+                    f"env value for {name} contains a NUL character, which an environment "
+                    "variable cannot hold. Pass the value without NUL characters; for binary "
+                    "data, write it to a file in the command and pass the file's path in env "
+                    "instead."
+                )
+            )
         if _references(value, name):
             if name in granted:
                 credentials.append(name)

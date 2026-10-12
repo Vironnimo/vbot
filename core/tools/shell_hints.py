@@ -233,7 +233,7 @@ _BASH_SYNTAX_HINT = (
 )
 # PowerShell localizes its messages and their quotes; names appear in any of these.
 _QUOTES = "'\"‘’“”„"
-# English and German hosts: the wrapper switches messages to English, but a
+# English and German hosts: the bootstrap switches messages to English, but a
 # message written before that, or by another PowerShell, keeps the host's language.
 _POWERSHELL_NOT_RECOGNIZED = re.compile(
     rf"(?:The term|Der Begriff) [{_QUOTES}]([^{_QUOTES}]+)[{_QUOTES}] "
@@ -530,7 +530,7 @@ def _hint_native_glob(failure: _Failure) -> str | None:
 
 
 def _hint_dev_null(failure: _Failure) -> str | None:
-    # The wrapper runs redirections to /dev/null as $null and passes it to native
+    # The bootstrap runs redirections to /dev/null as $null and passes it to native
     # programs as NUL; a cmdlet that takes it as a path, such as Out-File /dev/null,
     # reports the missing C:\dev\null.
     if "\\dev\\null" not in failure.output:

@@ -1,9 +1,33 @@
-"""PowerShell command text for ``pwsh -Command``: English output and a faithful exit status.
+"""PowerShell's bootstrap for one command: English output and a faithful exit status.
 
-The shell Tool runs every Windows command as ``pwsh -NoProfile -NonInteractive
--Command <text>`` on pipes, without input and without a terminal: ``Read-Host``,
-``Get-Credential`` and confirmation prompts fail at once instead of waiting. This
-module builds ``<text>`` around the Agent's command.
+The shell Tool runs every Windows command in its own ``pwsh -NoProfile
+-NonInteractive -Command <bootstrap>`` on pipes, without a terminal:
+``Read-Host``, ``Get-Credential`` and confirmation prompts fail at once instead
+of waiting. The bootstrap is fixed text (``POWERSHELL_BOOTSTRAP``). It sets up
+the console, then reads one request from stdin until the input ends
+(``powershell_request``): the command, its workdir and the call's layer of the
+environment. It applies the request and runs the command; the command itself
+finds its input at its end. Because the request comes last, a shell can be
+started before its command is known and serve it at once (``_command_launch``);
+a shell serves one command and exits with it.
+
+Request. ASCII lines, each field Base64 of its UTF-8 text: the workdir, ``1``
+when the command can spell /dev/null (below) and ``0`` otherwise, the command,
+one line per environment change (the name, then a space and the value; the name
+alone removes the variable), and ``.`` as the last line, so a request that
+ended early is never taken for a complete one. PowerShell hands stdin to the
+command as ``$input`` lines, and its own reader holds the input: a direct read
+of the console input stream races with it, ``$input`` does not. A trailing
+empty line does not reach ``$input``, which the closing ``.`` makes harmless.
+
+Workdir. The bootstrap sets PowerShell's location and the process's current
+directory, which native programs and .NET methods use; a location it cannot
+enter ends the shell with exit code 1 and the reason before the command runs.
+A shell started in its workdir skips both. A shell started ahead of its command
+first undoes its move to where it waited, so the command finds the location
+history and drive locations of a shell started in its workdir: ``cd -`` returns
+to the location PowerShell opened at, and the drive where the shell waited is at
+its root.
 
 Console encodings. Native programs write and read bytes in the console's code
 pages, which default to a legacy OEM page that cannot represent most non-ASCII
@@ -28,13 +52,10 @@ German decimal string such as ``1,5`` then fails to parse instead of reading as
 under en-US, ``Get-Date '11.10.2026'`` read the user's date as November 10.
 Native programs keep the user's settings.
 
-Parsing after the setup. ``pwsh -Command`` parses its whole text before running
-any of it, so a syntax error in the Agent's command would be reported before the
-setup, in the display language, with the setup's text in the excerpt. The
-command therefore travels as a string literal and is parsed after the setup by
-PowerShell's own parser: ``using`` statements, ``#requires``, a ``param`` block
-and named blocks keep their meaning, and error positions are the command's own
-line numbers.
+Parsing after the setup. The command arrives as data and is parsed after the
+setup by PowerShell's own parser: ``using`` statements, ``#requires``, a
+``param`` block and named blocks keep their meaning, a syntax error is reported
+in English, and error positions are the command's own line numbers.
 
 Bash's null device. PowerShell resolves ``/dev/null`` as a path on the current
 drive: it writes the file ``C:\\dev\\null`` when ``C:\\dev`` exists, silently, and
@@ -68,8 +89,12 @@ Formatted output. Objects without a fixed-width view, such as Select-Object
 results or Get-Location, are held by the table formatter until its pipeline
 ends, and an ``exit`` before that discards them: ``Get-ChildItem | Select-Object
 Name; exit 0`` prints nothing. The command's output is therefore piped through
-Out-Default, and the wrapper exits with the recorded code only after that
+Out-Default, and the bootstrap exits with the recorded code only after that
 pipeline has ended.
+
+Hidden bookkeeping. The command sees none of the bootstrap's variables; it
+runs as a function's dot-sourced body, and the error report keeps what it needs
+in a closure. Only the bootstrap's ``__vbot`` functions remain visible.
 
 Recorded errors. If the last statement succeeded after PowerShell recorded an
 error, the exit status stays 0 but a bounded note is printed to the error
@@ -83,7 +108,9 @@ enclosing command redirects the error stream (``2>$null``, ``2>&1``,
 
 from __future__ import annotations
 
+import base64
 import re
+from collections.abc import Mapping
 
 # Without a byte order mark: a console encoding with one would write it first.
 UTF8_CONSOLE_STATEMENT = (
@@ -112,14 +139,14 @@ OUTPUT_WIDTH_STATEMENT = (
     "$ui.BufferSize = [System.Management.Automation.Host.Size]::new("
     f"{OUTPUT_COLUMNS}, $ui.BufferSize.Height) }} }} catch {{}} }}"
 )
-ERROR_RECORD_BASELINE_STATEMENT = "$__vbotInitialError = $Error | Select-Object -First 1"
+ERROR_RECORD_BASELINE_STATEMENT = "$__vbotInitialError = if ($Error.Count) { $Error[0] }"
 POWERSHELL_ERROR_NOTE = (
     "PowerShell recorded errors before exiting with code 0, which includes errors the "
     "command caught. Check the error output and verify any changed files before relying "
     "on this result."
 )
 # Read $? before any bookkeeping changes it or $LASTEXITCODE. The statement only
-# records the code; the wrapper exits after the command's output is formatted.
+# records the code; the bootstrap exits after the command's output is formatted.
 # Explicit exit statements bypass this epilogue, preserving the caller's control
 # flow. Clearing $Error suppresses the error note; no note is not proof of no errors.
 # Get-Variable reads LASTEXITCODE even when it was never set under Set-StrictMode.
@@ -180,7 +207,6 @@ SETUP_STATEMENT = "; ".join(
         PLAIN_TEXT_STATEMENT,
         OUTPUT_WIDTH_STATEMENT,
         UNIX_LINE_FILTERS_STATEMENT,
-        ERROR_RECORD_BASELINE_STATEMENT,
     )
 )
 # A redirection to /dev/null becomes one to $null and a native program's /dev/null
@@ -243,27 +269,29 @@ NULL_DEVICE_STATEMENTS = r"""$__vbotCommand = & {
 }
 """
 NULL_DEVICE_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", NULL_DEVICE_STATEMENTS)
-# Parse the command after the setup; a syntax error is thrown as PowerShell reports
-# its own. The /dev/null rewrite follows when the command can spell /dev/null. An
-# error record's position names the command that wrote it, so the command's syntax
-# tree shows whether that command silenced it; a record without such a command,
-# such as a caught throw, stays reportable. The exit status runs at the end of the
-# last block: the unnamed body, a named end block, or an end block added after
-# begin or process blocks.
-RUN_STATEMENTS = r"""
-$__vbotParseErrors = $null
-$__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
-    $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
-if ($__vbotParseErrors) {
-    throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
-}
-{null_device}$__vbotSilenced = {
-    param($record)
+REQUEST_UNREADABLE_NOTE = (
+    "The command did not run: vBot could not read it from the shell's input ({reason}). "
+    "Run the command again; if it fails the same way, tell the user."
+)
+# The reason is PowerShell's message, which names the workdir; the bootstrap writes
+# the workdir there with forward slashes, as vBot writes paths for Models.
+WORKDIR_UNAVAILABLE_NOTE = (
+    "The command did not run: vBot could not enter the workdir: {reason} If the command can "
+    "run in another directory, pass that directory as workdir; otherwise tell the user."
+)
+# How recorded errors are judged and reported, defined before the request arrives.
+# An error record's position names the command that wrote it, so the command's
+# syntax tree shows whether that command silenced it; a record without such a
+# command, such as a caught throw, stays reportable. __vbotReporter returns the
+# report for one command: a closure over its syntax tree and the error baseline,
+# so no variable the command could see or change holds them. Within the closure
+# $Error is its own module's; PowerShell records errors in $global:Error.
+REPORT_STATEMENTS = r"""function __vbotSilenced($record, $ast) {
     if ($ErrorActionPreference -in 'SilentlyContinue', 'Ignore') { return $true }
     if ($record -isnot [System.Management.Automation.ErrorRecord]) { return $false }
     $info = $record.InvocationInfo
     if (-not $info -or $info.ScriptName) { return $false }
-    $command = $__vbotAst.Find({
+    $command = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.CommandAst] -and
         $node.Extent.StartLineNumber -eq $info.ScriptLineNumber -and
@@ -295,17 +323,100 @@ if ($__vbotParseErrors) {
     }
     $false
 }
-$__vbotReportErrors = {
-    $shown = foreach ($record in @($Error)) {
-        if ([object]::ReferenceEquals($record, $__vbotInitialError)) { break }
-        if (-not (& $__vbotSilenced $record)) { $record; break }
-    }
-    if ($null -eq $shown) { return }
-    $summary = "$shown" -replace '\s+', ' '
-    if ($summary.Length -gt 500) { $summary = $summary.Substring(0, 500) + '...' }
-    [Console]::Error.WriteLine('{note} Latest error: ' + $summary)
+function __vbotReporter($ast, $initial) {
+    {
+        $shown = foreach ($record in @($global:Error)) {
+            if ([object]::ReferenceEquals($record, $initial)) { break }
+            if (-not (__vbotSilenced $record $ast)) { $record; break }
+        }
+        if ($null -eq $shown) { return }
+        $summary = "$shown" -replace '\s+', ' '
+        if ($summary.Length -gt 500) { $summary = $summary.Substring(0, 500) + '...' }
+        [Console]::Error.WriteLine('{note} Latest error: ' + $summary)
+    }.GetNewClosure()
 }
-$__vbotEnd = $__vbotAst.EndBlock
+"""
+REPORT_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REPORT_STATEMENTS)
+# A shell started ahead of its command waits in Windows' system directory
+# (``_command_launch``). While it waits it pays the first use of what follows:
+# type lookups, the parser, PowerShell's utility and file cmdlets, formatting,
+# the error report, an empty command through Out-Default, and moving back and
+# forth, which leaves the location history as the shell started. That takes about
+# 40 ms from each warm command; a shell started for its command skips it, since
+# the request is already there. None of it writes output; an error it records
+# precedes the baseline.
+WARM_UP_STATEMENTS = r"""$__vbotUtf8 = [System.Text.Encoding]::UTF8
+if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
+    try {
+        $null = [Convert]::FromBase64String('LA=='), [NullString]::Value
+        $null = [System.Management.Automation.Language.Parser]::ParseInput(
+            '"$a" | % { $_ }', [ref]$null, [ref]$null)
+        Import-Module -ErrorAction Stop -Name (
+            'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management')
+        $null = [pscustomobject]@{ Name = 1 } | Out-String
+        $null = __vbotReporter $null $null
+        ${function:__vbotBody} = [scriptblock]::Create('')
+        . __vbotInvoke | Out-Default
+        Remove-Variable -Name __vbotWarm* -Scope Global
+        Set-Location - -ErrorAction Stop
+        Set-Location -LiteralPath ([Environment]::CurrentDirectory) -ErrorAction Stop
+    } catch {}
+}
+"""
+WARM_UP_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", WARM_UP_STATEMENTS)
+# Wait for the request, then apply it: the environment layer, then the location of
+# PowerShell and of the process, unless the shell started there. [NullString]::Value
+# removes a variable, since PowerShell passes $null to a string parameter as ''.
+# A shell that waited elsewhere first undoes its move there, back to where
+# PowerShell opened, so the move to the workdir leaves the location history of a
+# shell started in it; the drive it waited on returns to its root.
+REQUEST_STATEMENTS = r"""$__vbotRequest = @($input)
+try {
+    if ($__vbotRequest.Count -lt 4 -or $__vbotRequest[-1] -ne '.') {
+        throw 'it ended early'
+    }
+    $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[0]))
+    $__vbotRewrite = $__vbotRequest[1] -eq '1'
+    $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[2]))
+    for ($__vbotIndex = 3; $__vbotIndex -lt $__vbotRequest.Count - 1; $__vbotIndex++) {
+        $__vbotPair = $__vbotRequest[$__vbotIndex].Split(' ')
+        $__vbotValue = if ($__vbotPair.Count -gt 1) {
+            $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotPair[1]))
+        } else { [NullString]::Value }
+        [Environment]::SetEnvironmentVariable(
+            $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotPair[0])), $__vbotValue)
+    }
+} catch {
+    [Console]::Error.WriteLine({unreadable})
+    exit 1
+}
+if ($PWD.ProviderPath -ne $__vbotWorkdir) {
+    try {
+        $__vbotDrive = $PWD.Drive
+        try { Set-Location - -ErrorAction Stop } catch {}
+        Set-Location -LiteralPath $__vbotWorkdir -ErrorAction Stop
+        [Environment]::CurrentDirectory = $__vbotWorkdir
+        if ($__vbotDrive -and $PWD.Drive -ne $__vbotDrive) { $__vbotDrive.CurrentLocation = '' }
+    } catch {
+        [Console]::Error.WriteLine({unavailable})
+        exit 1
+    }
+}
+"""
+REQUEST_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REQUEST_STATEMENTS)
+# Parse the command after the setup; a syntax error is thrown as PowerShell reports
+# its own. The /dev/null rewrite follows when the command can spell /dev/null. The
+# exit status runs at the end of the last block: the unnamed body, a named end
+# block, or an end block added after begin or process blocks. The command runs
+# without the bootstrap's variables; the exit status statement sets the only one,
+# and a command that returns before reaching it exits with 0.
+RUN_STATEMENTS = r"""$__vbotParseErrors = $null
+$__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
+    $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
+if ($__vbotParseErrors) {
+    throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
+}
+{null_device}$__vbotEnd = $__vbotAst.EndBlock
 $__vbotExitStatus = '{exit_status}'
 $__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
     $__vbotCommand.Insert($__vbotEnd.Extent.EndOffset - 1, "`n`n$__vbotExitStatus`n")
@@ -314,43 +425,25 @@ $__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
 } else {
     "$__vbotCommand`n`n$__vbotExitStatus"
 }
-$global:__vbotExitCode = 0
+${function:__vbotReport} = __vbotReporter $__vbotAst $__vbotInitialError
+${function:__vbotBody} = [scriptblock]::Create($__vbotCommand)
+Remove-Variable -Name __vbot* -Scope Global
 . __vbotInvoke | Out-Default
-if ($global:__vbotExitCode -eq 0) { & $__vbotReportErrors }
-exit $global:__vbotExitCode
+$__vbotExitCode = Get-Variable -Name __vbotExitCode -Scope Global -ValueOnly -ErrorAction Ignore
+if (-not $__vbotExitCode) { __vbotReport; exit 0 }
+exit $__vbotExitCode
 """
-# Indentation only serves readers of this file; the Windows command line is limited.
 RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS)
 # The command runs from the first line. Write-Error names its caller's position,
-# which PowerShell shows only beyond the first line, so no wrapper line appears in
-# the command's errors. Dot-sourcing the function keeps the command's own scope.
-INVOKE_STATEMENT = "function __vbotInvoke { . ([scriptblock]::Create($__vbotCommand)) }"
+# which PowerShell shows only beyond the first line, so no bootstrap line appears in
+# the command's errors. Dot-sourcing the function and its body keeps the command's
+# own scope; the body is the command's script block, not a function of its own,
+# whose name its errors would show.
+INVOKE_STATEMENT = "function __vbotInvoke { . ${function:__vbotBody} }"
 _QUOTE = re.compile("(['‘’‚‛])")
 # Printable ASCII and whitespace: text PowerShell compares letter by letter.
 _PLAIN_ASCII = re.compile(r"[\t\n\v\f\r -~]*")
-
-
-def powershell_command(command: str) -> str:
-    """Return the ``pwsh -Command`` text that sets up the console and runs *command*."""
-    null_device = NULL_DEVICE_STATEMENTS if _may_spell_null_device(command) else ""
-    run = (
-        RUN_STATEMENTS.replace("{null_device}", null_device)
-        .replace("{note}", _escaped(POWERSHELL_ERROR_NOTE))
-        .replace("{exit_status}", _escaped(EXIT_STATUS_STATEMENT))
-    )
-    literal = _escaped(command)
-    return f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n$__vbotCommand = '{literal}'{run}"
-
-
-def _may_spell_null_device(command: str) -> bool:
-    """Return whether a string in *command* can have the value /dev/null or \\dev\\null.
-
-    Without the letters themselves, a backtick escape (``nu`ll``, ``"`u{6c}"``)
-    spells them, and PowerShell's culture-aware comparison takes non-ASCII text
-    and ASCII control characters other than whitespace for ignorable characters
-    or other spellings: it reads ``nu<U+00AD>ll`` and ``nu<U+0001>ll`` as ``null``.
-    """
-    return "`" in command or not _PLAIN_ASCII.fullmatch(command) or "null" in command.lower()
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 
 def powershell_literal(text: str) -> str:
@@ -364,16 +457,81 @@ def _escaped(text: str) -> str:
     return _QUOTE.sub(r"\1\1", text)
 
 
+def _joined(template: str, **expressions: str) -> str:
+    """A PowerShell expression: *template*'s text with each ``{name}`` as its expression."""
+    parts = _PLACEHOLDER.split(template)
+    return " + ".join(
+        expressions[part] if index % 2 else f"'{_escaped(part)}'"
+        for index, part in enumerate(parts)
+        if part or index % 2
+    )
+
+
+# The setup and the invoking function share the first line. Everything before
+# the request runs before the command is known; the error baseline follows it.
+POWERSHELL_BOOTSTRAP = (
+    f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n"
+    + REPORT_STATEMENTS.replace("{note}", _escaped(POWERSHELL_ERROR_NOTE))
+    + WARM_UP_STATEMENTS
+    + REQUEST_STATEMENTS.replace(
+        "{unreadable}", _joined(REQUEST_UNREADABLE_NOTE, reason="$_.Exception.Message")
+    ).replace(
+        "{unavailable}",
+        _joined(
+            WORKDIR_UNAVAILABLE_NOTE,
+            reason=(
+                "$_.Exception.Message.Replace($__vbotWorkdir, $__vbotWorkdir.Replace('\\', '/'))"
+            ),
+        ),
+    )
+    + f"{ERROR_RECORD_BASELINE_STATEMENT}\n"
+    + RUN_STATEMENTS.replace(
+        "{null_device}", f"if ($__vbotRewrite) {{\n{NULL_DEVICE_STATEMENTS}}}\n"
+    ).replace("{exit_status}", _escaped(EXIT_STATUS_STATEMENT))
+)
+
+
+def powershell_request(command: str, workdir: str, changes: Mapping[str, str | None]) -> bytes:
+    """Return the request ``POWERSHELL_BOOTSTRAP`` reads: run *command* in *workdir*.
+
+    *changes* is the call's layer of the environment over the shell's start
+    environment: a value sets the variable, None removes it.
+    """
+    lines = [_base64(workdir), "1" if _may_spell_null_device(command) else "0", _base64(command)]
+    for name, value in changes.items():
+        lines.append(_base64(name) if value is None else f"{_base64(name)} {_base64(value)}")
+    lines.append(".")
+    return "\n".join(lines).encode("ascii") + b"\n"
+
+
+def _base64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8", "surrogatepass")).decode("ascii")
+
+
+def _may_spell_null_device(command: str) -> bool:
+    """Return whether a string in *command* can have the value /dev/null or \\dev\\null.
+
+    Without the letters themselves, a backtick escape (``nu`ll``, ``"`u{6c}"``)
+    spells them, and PowerShell's culture-aware comparison takes non-ASCII text
+    and ASCII control characters other than whitespace for ignorable characters
+    or other spellings: it reads ``nu<U+00AD>ll`` and ``nu<U+0001>ll`` as ``null``.
+    """
+    return "`" in command or not _PLAIN_ASCII.fullmatch(command) or "null" in command.lower()
+
+
 __all__ = [
     "EXIT_STATUS_STATEMENT",
     "NULL_DEVICE_STATEMENTS",
     "OUTPUT_COLUMNS",
     "OUTPUT_WIDTH_STATEMENT",
     "PLAIN_TEXT_STATEMENT",
+    "POWERSHELL_BOOTSTRAP",
     "POWERSHELL_ERROR_NOTE",
+    "REQUEST_UNREADABLE_NOTE",
     "SETUP_STATEMENT",
     "UNIX_LINE_FILTERS_STATEMENT",
     "UTF8_CONSOLE_STATEMENT",
-    "powershell_command",
+    "WORKDIR_UNAVAILABLE_NOTE",
     "powershell_literal",
+    "powershell_request",
 ]

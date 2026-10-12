@@ -1,9 +1,10 @@
-"""Windows commands: the PowerShell wrapper's exit status, errors, filters and text.
+"""Windows commands: the PowerShell bootstrap's exit status, errors, filters and text.
 
-Each real-PowerShell case starts ``pwsh -NoProfile -NonInteractive -Command`` on
-pipes through ``CommandManager``, as the shell Tool does (about half a second),
-so a case exists only for a distinct path through the wrapper; cases that share
-a path share a process.
+Each real-PowerShell case starts ``pwsh -NoProfile -NonInteractive -Command`` with
+the bootstrap on pipes through ``CommandManager`` and sends the command as its
+request, as the shell Tool does when no shell waits for a command (about a third
+of a second), so a case exists only for a distinct path through the bootstrap;
+cases that share a path share a process.
 """
 
 from __future__ import annotations
@@ -17,11 +18,12 @@ from pathlib import Path
 import pytest
 
 from core.sessions import SessionAddress
+from core.tools._command_launch import PipeLauncher
 from core.tools._powershell import (
-    NULL_DEVICE_STATEMENTS,
     OUTPUT_COLUMNS,
+    POWERSHELL_BOOTSTRAP,
     POWERSHELL_ERROR_NOTE,
-    powershell_command,
+    powershell_request,
 )
 from core.tools.command_manager import CommandManager
 from core.tools.shell_environment import RunIdentity, command_environment
@@ -29,16 +31,6 @@ from core.tools.shell_environment import RunIdentity, command_environment
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32" or shutil.which("pwsh") is None, reason="Real PowerShell 7"
 )
-
-
-def test_command_travels_as_a_literal_parsed_after_the_setup() -> None:
-    text = powershell_command("it's ‘x’")
-
-    assert text.startswith(
-        "[Console]::OutputEncoding = [Console]::InputEncoding = "
-        "[System.Text.UTF8Encoding]::new($false); "
-    )
-    assert "\n$__vbotCommand = 'it''s ‘‘x’’'\n" in text
 
 
 # --- Line filters PowerShell lacks -----------------------------------------
@@ -49,13 +41,18 @@ async def _run(
     command: str,
     *,
     path: str | None = None,
-    wrap: Callable[[str], str] = powershell_command,
+    prefix: str = "",
+    workdir: Path | None = None,
+    sent: Callable[[bytes], bytes] | None = None,
 ) -> tuple[int | None, str]:
-    """Run the wrapped *command* as the shell Tool does; return its exit code and output.
+    """Run *command* as the shell Tool does; return its exit code and output.
 
-    *path* replaces PATH in the command environment.
+    *path* replaces PATH in the shell's environment; *prefix* runs before the bootstrap.
+    *workdir* is the request's workdir instead of *cwd*, the shell's start directory;
+    *sent* turns the request into what reaches the shell.
     """
-    environment = command_environment(RunIdentity("agent-a", "session-a", None))
+    layers = command_environment(RunIdentity("agent-a", "session-a", None))
+    environment = layers.base
     if path is not None:
         environment = {
             **{name: value for name, value in environment.items() if name.upper() != "PATH"},
@@ -63,17 +60,19 @@ async def _run(
         }
     pwsh = shutil.which("pwsh")
     assert pwsh is not None
-    manager = CommandManager()
+    request = powershell_request(command, str(workdir or cwd), layers.changes)
+    manager = CommandManager(launcher=PipeLauncher(warm=False))
     try:
         handle = await manager.launch(
             SessionAddress(None, "agent-a", "session-a"),
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", wrap(command)],
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", prefix + POWERSHELL_BOOTSTRAP],
             command=command,
             description=None,
             cwd=cwd,
             env=environment,
             origin_run_id="run-a",
             formatter=str,
+            request=request if sent is None else sent(request),
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
         report = manager.report(handle.command_id)
@@ -137,7 +136,7 @@ async def test_line_filters_run_where_powershell_has_none(tmp_path: Path) -> Non
     exit_code, output = await _run(tmp_path, script, path=path)
 
     assert exit_code == 0, output
-    # The caught stops leave error records, which the wrapper notes on the error stream.
+    # The caught stops leave error records, which the bootstrap notes on the error stream.
     printed = "".join(
         line
         for line in output.splitlines(keepends=True)
@@ -171,11 +170,13 @@ _PRINTED_ERROR_TEXT = "; ".join(
             False,
             (),
         ),
+        # The command sees none of the bootstrap's variables.
         (
-            f"& '{sys.executable}' -c 'raise SystemExit(5)'; Write-Output after",
+            f"& '{sys.executable}' -c 'raise SystemExit(5)'\n"
+            "'after, variables: ' + @(Get-Variable __vbot*).Count",
             0,
             False,
-            ("after",),
+            ("after, variables: 0",),
         ),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, False, ("requires-sentinel",)),
@@ -294,8 +295,48 @@ async def test_exit_status_and_error_records_follow_the_last_statement(
     for text in shows:
         assert text in output
     assert "silenced-sentinel" not in output
-    # The wrapper's own statements never fail visibly.
+    # The bootstrap's own statements never fail visibly.
     assert "__vbot" not in output
+
+
+def _without_terminator(request: bytes) -> bytes:
+    return request[: request.rindex(b".\n")]
+
+
+def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:
+    def cut(request: bytes) -> bytes:
+        command = request.splitlines()[2]
+        return request[: request.index(command) + characters]
+
+    return cut
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sent", "workdir"),
+    [
+        (_without_terminator, None),
+        (_cut_in_command(6), None),
+        # Base64 that decodes, cut where a quantum ends.
+        (_cut_in_command(8), None),
+        (lambda _request: b"", None),
+        # A shell that waited elsewhere enters a workdir removed since the call was checked.
+        (None, "gone"),
+    ],
+    ids=["no-terminator", "cut-in-command", "cut-at-base64-boundary", "empty", "workdir-gone"],
+)
+async def test_a_request_the_shell_cannot_read_or_enter_runs_nothing(
+    tmp_path: Path, sent: Callable[[bytes], bytes] | None, workdir: str | None
+) -> None:
+    marker = tmp_path / "ran.txt"
+    command = f"New-Item -ItemType File -Path '{marker}'"
+
+    code, output = await _run(
+        tmp_path, command, workdir=tmp_path / workdir if workdir else None, sent=sent
+    )
+
+    assert code == 1, output
+    assert not marker.exists(), output
 
 
 @pytest.mark.asyncio
@@ -361,7 +402,9 @@ async def test_bash_null_device_discards_and_reaches_native_programs_as_nul(
 def test_only_commands_that_can_spell_the_null_device_carry_its_rewrite(
     command: str, rewritten: bool
 ) -> None:
-    assert (NULL_DEVICE_STATEMENTS in powershell_command(command)) is rewritten
+    # The request's second line switches the rewrite on.
+    switch = powershell_request(command, "C:/work", {}).splitlines()[1]
+    assert switch == (b"1" if rewritten else b"0")
 
 
 @pytest.mark.asyncio
@@ -386,16 +429,14 @@ async def test_successful_write_after_method_error_reports_record_without_changi
 async def test_full_existing_error_collection_uses_identity_instead_of_count(
     tmp_path: Path, new_error: bool
 ) -> None:
-    def with_profile_errors(command: str) -> str:
-        return (
-            "$Error.Clear(); 1..300 | ForEach-Object { "
-            "Write-Error 'profile-sentinel' -ErrorAction SilentlyContinue }; "
-            + powershell_command(command)
-        )
-
+    # Errors a profile left behind fill $Error to its capacity before the command.
+    profile_errors = (
+        "$Error.Clear(); 1..300 | ForEach-Object { "
+        "Write-Error 'profile-sentinel' -ErrorAction SilentlyContinue }; "
+    )
     command = "try { throw 'new-sentinel' } catch {}; 'finished'" if new_error else "'finished'"
 
-    code, output = await _run(tmp_path, command, wrap=with_profile_errors)
+    code, output = await _run(tmp_path, command, prefix=profile_errors)
 
     assert code == 0
     assert (POWERSHELL_ERROR_NOTE in output) is new_error
