@@ -315,37 +315,41 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   // this Chat's own stop and output reads learned (bounded). Both join into
   // `chatState.commandStatuses` by Session, the state that got further
   // winning, so a stop shown at once is not undone by a `running` the
-  // forwarded map still holds. A reconnect that may have missed an end
-  // forgets both: App starts its map over, and so does this Chat.
+  // forwarded map still holds. A Session learns only from its own replies:
+  // a fork holds its source's command ids, and the server answers a fork
+  // that the command is unknown while it still runs in the source. A
+  // reconnect that may have missed an end forgets both: App starts its map
+  // over, and so does this Chat.
   let forwardedCommandStatuses = {};
   let learnedCommandStatuses = {};
 
   function publishCommandStatuses() {
     const bySession = {};
-    for (const source of [forwardedCommandStatuses, learnedCommandStatuses]) {
-      for (const [commandId, entry] of Object.entries(source)) {
-        const sessionId = trimmedString(entry?.sessionId);
-        const state = laterCommandState(
-          bySession[sessionId]?.[commandId],
-          entry,
-        );
-        if (sessionId && state) {
-          bySession[sessionId] ??= {};
-          bySession[sessionId][commandId] = state;
-        }
+    const join = (sessionId, commandId, entry) => {
+      const state = laterCommandState(bySession[sessionId]?.[commandId], entry);
+      if (sessionId && commandId && state) {
+        bySession[sessionId] ??= {};
+        bySession[sessionId][commandId] = state;
       }
+    };
+    for (const [commandId, entry] of Object.entries(forwardedCommandStatuses)) {
+      join(trimmedString(entry?.sessionId), commandId, entry);
+    }
+    for (const entry of Object.values(learnedCommandStatuses)) {
+      join(entry.sessionId, entry.commandId, entry);
     }
     chatState.commandStatuses = bySession;
   }
 
   function learnCommandStatus(sessionId, commandId, report) {
-    const state = laterCommandState(learnedCommandStatuses[commandId], report);
+    const key = `${sessionId}\u0000${commandId}`;
+    const state = laterCommandState(learnedCommandStatuses[key], report);
     if (!state) {
       return;
     }
     learnedCommandStatuses = mergeBoundedEntries(
       learnedCommandStatuses,
-      { [commandId]: { ...state, sessionId } },
+      { [key]: { ...state, sessionId, commandId } },
       COMMAND_STATUS_CACHE_LIMIT,
     ).entries;
     publishCommandStatuses();

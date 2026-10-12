@@ -546,8 +546,17 @@ describe('handed-off command statuses', () => {
     const stopCommand = vi
       .fn()
       .mockResolvedValue({ stopped: true, status: 'stopped' });
+    // A fork holds its source's command ids; the server knows the command
+    // only in the Session that started it.
+    const loadCommandOutput = vi.fn((sessionId) =>
+      sessionId === 'session-fork'
+        ? Promise.reject(
+            new ApiClientError('command_not_found', 'Unknown command'),
+          )
+        : Promise.resolve({ status: 'running', still_running: false }),
+    );
     const { chatState, controller } = setupController({
-      operationOverrides: { stopCommand },
+      operationOverrides: { stopCommand, loadCommandOutput },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
     const forwarded = {
@@ -576,6 +585,20 @@ describe('handed-off command statuses', () => {
     expect(chatState.commandStatuses['session-one'].cmd_two).toEqual(
       state('completed'),
     );
+
+    // What the fork learned stays the fork's.
+    for (const sessionId of ['session-fork', 'session-source']) {
+      await controller.loadCommandOutput({
+        sessionState: ensureSessionState(chatState, 'alpha', sessionId),
+        commandId: 'cmd_source',
+      });
+    }
+    expect(chatState.commandStatuses['session-fork']).toEqual({
+      cmd_source: state('ended'),
+    });
+    expect(chatState.commandStatuses['session-source']).toEqual({
+      cmd_source: state('running'),
+    });
 
     // App starts its map over after a replay gap; what the stop learned
     // goes too.
