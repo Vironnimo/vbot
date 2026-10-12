@@ -171,12 +171,13 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     Identity Agent without one (a new conversation, no Session yet) returns an
     empty page with ``session_id: null``. An
     ``after`` read appends to the caller's page (``incremental``); its
-    ``background_command_statuses`` then cover only the appended records, for the
-    caller to merge. An ``after`` read with nothing appended returns an empty
-    page without ``session_usage``, ``context_usage``,
-    ``background_command_statuses`` or ``compaction_policy``: the caller's values
-    stay current. A ``before`` page carries neither background statuses nor
-    the Compaction Policy.
+    ``background_command_statuses`` then cover only the appended records and
+    the Session's live background commands, for the caller to merge, while
+    ``background_commands_still_running`` is always the complete list. An
+    ``after`` read with nothing appended returns an empty page without
+    ``session_usage``, ``context_usage``, either background field or
+    ``compaction_policy``: the caller's values stay current. A ``before`` page
+    carries neither background field nor the Compaction Policy.
     """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
     _reject_unsupported(params, supported_fields, "chat.history")
@@ -286,9 +287,11 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             context_usage = with_context_window(context_usage, read.context_window)
         response["context_usage"] = context_usage
         if before is None:
-            response["background_command_statuses"] = _current_command_statuses(
-                state, projection.background_command_statuses
+            statuses, still_running = _current_command_statuses(
+                state, address, projection.background_command_statuses
             )
+            response["background_command_statuses"] = statuses
+            response["background_commands_still_running"] = still_running
     if reflection_runs is not None:
         response["reflection_runs"] = reflection_runs
     if read.compaction_policy is not None:
@@ -446,21 +449,26 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
-def _current_command_statuses(state: Any, statuses: JsonObject) -> JsonObject:
-    """Replace each recorded ``running`` status by the command's current one.
+def _current_command_statuses(
+    state: Any, address: SessionAddress, statuses: JsonObject
+) -> tuple[JsonObject, list[str]]:
+    """The folded statuses made current, and the commands whose processes still run.
 
-    A command the command manager no longer knows ended without a delivered
-    result (vBot restarted), so it has no status to show.
+    Every background command of the Session that the command manager knows
+    reports its current status, also one whose hand-off result is not saved
+    yet (its Tool batch still runs). A recorded ``running`` that is not one of
+    them has no status: the command ended without a delivered result (vBot
+    restarted), or it belongs to another Session, as in a fork, which shares
+    its source's History but not its commands. The list names the Session's
+    commands whose shell exited while processes they started still run.
     """
-    commands = state.runtime.command_manager
-    current: JsonObject = {}
-    for command_id, status in statuses.items():
-        if status == "running":
-            status = commands.status(command_id)
-            if status is None:
-                continue
-        current[command_id] = status
-    return current
+    live = state.runtime.command_manager.commands([address])
+    current: JsonObject = {
+        command_id: status for command_id, status in statuses.items() if status != "running"
+    }
+    for report in live:
+        current[report.command_id] = report.status
+    return current, [report.command_id for report in live if report.still_running]
 
 
 def _project_chat_history(
@@ -1081,25 +1089,40 @@ def _session_command(state: Any, params: JsonObject, method: str) -> CommandRepo
 
 
 async def _stop_command_chat(state: Any, params: JsonObject) -> JsonObject:
-    """Stop a background command for the user; its Agent receives the stopped result.
+    """Stop a background command and every process it started, for the user.
 
-    ``stopped`` is false when the command had ended or another stop came first.
+    A running command's Agent receives the stopped result. A command whose
+    shell had exited while processes it started still ran loses those
+    processes and keeps the status it ended with; its result was delivered
+    at its end. ``stopped`` is true when this call stopped the command or such
+    processes, false when nothing of it ran any longer or another stop came
+    first. ``status`` is the command's status afterwards, when none of its
+    processes runs any longer.
     """
     report = _session_command(state, params, "chat.stop_command")
     if report.finished:
-        return {"stopped": False}
+        return {"stopped": False, "status": report.status}
     try:
-        stopped = await state.runtime.command_manager.stop(report.command_id, "user")
+        final = await state.runtime.command_manager.stop(report.command_id, "user")
     except CommandStopError as exc:
         raise _map_expected_error(exc) from exc
-    return {"stopped": stopped.stop_reason == "user"}
+    stopped = final.stop_reason == "user" or (report.ended and bool(report.still_running))
+    return {"stopped": stopped, "status": final.status}
 
 
 def _command_output_chat(state: Any, params: JsonObject) -> JsonObject:
-    """A background command's status and its newest clean output lines."""
+    """A background command's status and its newest clean output lines.
+
+    ``still_running`` is true while processes it started still run after its
+    shell exited.
+    """
     report = _session_command(state, params, "chat.command_output")
     output = state.runtime.command_manager.latest_output(report.command_id, COMMAND_RECENT_LINES)
-    return {"status": report.status, "output": output}
+    return {
+        "status": report.status,
+        "still_running": bool(report.still_running),
+        "output": output,
+    }
 
 
 async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:

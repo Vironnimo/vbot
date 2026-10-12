@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.automation.cron import CronService
 from core.recall import IndexStatus
 from core.sessions import SessionAddress
+from core.tools.command_manager import CommandNotFoundError
 from server.app import create_app
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 from tests.server.rpc_test_support_runtime import StubTerminalManager
@@ -32,29 +34,46 @@ class _RecordingTerminalManager(StubTerminalManager):
 
 
 class _RecordingCommandManager:
-    """The CommandManager's change callbacks and the statuses they report."""
+    """The CommandManager's change callbacks and the background commands they report."""
 
-    def __init__(self) -> None:
+    def __init__(self, owner: SessionAddress) -> None:
         self.changed_callbacks: list[Callable[[str], None]] = []
-        self.statuses: dict[str, str] = {}
+        self.owner = owner
+        self.reports: dict[str, SimpleNamespace] = {}
 
     def add_changed_callback(self, callback: Callable[[str], None]) -> Any:
         self.changed_callbacks.append(callback)
         return lambda: self.changed_callbacks.remove(callback)
 
-    def status(self, command_id: str) -> str | None:
-        return self.statuses.get(command_id)
+    def report(self, command_id: str) -> SimpleNamespace:
+        try:
+            return self.reports[command_id]
+        except KeyError:
+            raise CommandNotFoundError(command_id) from None
+
+    def change(self, command_id: str, status: str | None, *still_running: str) -> None:
+        """The command now has *status* (None: forgotten) and processes still running."""
+        if status is None:
+            self.reports.pop(command_id, None)
+        else:
+            self.reports[command_id] = SimpleNamespace(
+                owner=self.owner, background=True, status=status, still_running=still_running
+            )
+        for callback in list(self.changed_callbacks):
+            callback(command_id)
 
 
 def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     runtime = StubRuntime(tmp_path, StubAdapter())
     terminal_manager = _RecordingTerminalManager()
     runtime.terminal_manager = terminal_manager
-    command_manager = _RecordingCommandManager()
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    command_manager = _RecordingCommandManager(address)
     runtime.command_manager = command_manager  # type: ignore[assignment]
+    # The Runtime's shutdown stops the background commands.
+    runtime.stop = lambda: command_manager.change("cmd_two", "stopped")  # type: ignore[method-assign]
     cron_service = CronService(cast(Any, SimpleNamespace()), tmp_path)
     runtime.cron_service = cron_service  # type: ignore[attr-defined]
-    address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
     session_scope: JsonObject = {
         "project_id": None,
         "agent_id": "coder",
@@ -114,26 +133,20 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
 
         terminal_events = publishes(lambda: terminal_manager.changed_callbacks[0]("term_one"))
 
-        def command_changed(command_id: str, status: str | None) -> Callable[[], None]:
-            def change() -> None:
-                if status is None:
-                    command_manager.statuses.pop(command_id, None)
-                else:
-                    command_manager.statuses[command_id] = status
-                command_manager.changed_callbacks[0](command_id)
-
-            return change
-
-        # A background command's status is published once per change; a
-        # forgotten command publishes nothing.
+        # A background command's state is published once per change of its
+        # status or of whether processes it started still run; a forgotten
+        # command publishes nothing.
+        changes: list[tuple[str | None, tuple[str, ...]]] = [
+            ("running", ()),
+            ("running", ()),
+            ("completed", ("node (pid 7)",)),
+            ("completed", ("node (pid 7)",)),
+            ("completed", ()),
+            (None, ()),
+        ]
         command_events = [
-            publishes(command_changed(command_id, status))
-            for command_id, status in (
-                ("cmd_one", "running"),
-                ("cmd_one", "running"),
-                ("cmd_one", "completed"),
-                ("cmd_one", None),
-            )
+            publishes(partial(command_manager.change, "cmd_one", status, *still_running))
+            for status, still_running in changes
         ]
         # An Agent's Skill authoring Tool reports its package changes.
         skill_events = publishes(lambda: runtime.skill_changed_callbacks[0]())
@@ -164,10 +177,32 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         ("resource_changed", {"kind": "terminals", "scope": {"terminal_id": "term_one"}})
     ]
 
-    def status_changed(status: str) -> tuple[str, JsonObject]:
-        return ("command_status_changed", {"command_id": "cmd_one", "status": status})
+    def status_changed(
+        status: str, *, still_running: bool = False, command_id: str = "cmd_one"
+    ) -> tuple[str, JsonObject]:
+        return (
+            "command_status_changed",
+            {
+                "command_id": command_id,
+                "session_id": "session-one",
+                "status": status,
+                "still_running": still_running,
+            },
+        )
 
-    assert command_events == [[status_changed("running")], [], [status_changed("completed")], []]
+    assert command_events == [
+        [status_changed("running")],
+        [],
+        [status_changed("completed", still_running=True)],
+        [],
+        [status_changed("completed")],
+        [],
+    ]
+    # The bridge outlives the Runtime's shutdown, so the commands it stops
+    # still reach the accessors.
+    assert (bus.events[-1]["type"], bus.events[-1]["payload"]) == status_changed(
+        "stopped", command_id="cmd_two"
+    )
     assert skill_events == [("resource_changed", {"kind": "skills"})]
     assert model_events == [("resource_changed", {"kind": "models"})]
     assert index_events == [("recall_index_status", index_status.to_dict())]

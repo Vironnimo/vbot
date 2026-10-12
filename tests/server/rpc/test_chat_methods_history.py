@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import get_ident
@@ -20,7 +20,7 @@ from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
 from core.runs import ChatRunManager, RunAdmission, RunKind
-from core.sessions import ChatSession
+from core.sessions import ChatSession, SessionAddress
 from core.settings.normalizers import normalize_compaction_settings
 from core.skills import SkillAuthoringService
 from core.tools.tools import tool_success
@@ -54,13 +54,21 @@ class _HistoryAgents:
 
 
 class _Commands:
-    """The background commands the CommandManager still knows, by command id."""
+    """The background commands the CommandManager still knows."""
 
     def __init__(self) -> None:
-        self.statuses: dict[str, str] = {}
+        self.reports: dict[str, SimpleNamespace] = {}
 
-    def status(self, command_id: str) -> str | None:
-        return self.statuses.get(command_id)
+    def add(
+        self, command_id: str, status: str, *still_running: str, session_id: str = "session-one"
+    ) -> None:
+        owner = SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
+        self.reports[command_id] = SimpleNamespace(
+            command_id=command_id, owner=owner, status=status, still_running=still_running
+        )
+
+    def commands(self, owners: Collection[SessionAddress]) -> list[SimpleNamespace]:
+        return [report for report in self.reports.values() if report.owner in owners]
 
 
 @dataclass
@@ -399,37 +407,51 @@ async def test_history_projects_the_active_edit_lineage_but_keeps_raw_usage(
 
 
 @pytest.mark.asyncio
-async def test_history_reports_background_command_statuses_of_the_records_it_returns(
+async def test_history_reports_the_current_statuses_of_the_sessions_background_commands(
     history: _History,
 ) -> None:
     session = history.session()
     _handed_off_command(session, "bash-one", "cmd_one")
     _handed_off_command(session, "bash-two", "cmd_two")
     _handed_off_command(session, "bash-three", "cmd_gone")
+    # A fork shares its source's History, not its commands.
+    _handed_off_command(session, "bash-four", "cmd_source")
     session.add_note(_delivery_note("cmd_two", 3))
     session.add_note("Skill context: unrelated")
     commands = history.state.runtime.command_manager
-    # cmd_one exited, its result not yet delivered; vBot restarted since cmd_gone ran.
-    commands.statuses = {"cmd_one": "completed", "cmd_two": "failed"}
+    # cmd_one exited, its result not yet delivered, and a server it started
+    # still runs; cmd_new was handed off in a Tool batch that still runs, so no
+    # record names it yet; vBot restarted since cmd_gone ran.
+    commands.add("cmd_one", "completed", "node (pid 7)")
+    commands.add("cmd_new", "running")
+    commands.add("cmd_source", "running", session_id="session-source")
 
-    # A replacement read carries the complete map: deliveries applied, running
-    # commands at their current status, commands the manager does not know dropped.
+    # A replacement read carries the complete map: deliveries applied, the
+    # Session's own background commands at their current status, and none for
+    # a recorded running command that is not one of them.
     first = await history.read(limit=1)
     assert first["background_command_statuses"] == {
         "cmd_one": "completed",
         "cmd_two": "failed",
+        "cmd_new": "running",
     }
+    assert first["background_commands_still_running"] == ["cmd_one"]
     assert all(message["role"] != "note" for message in first["messages"])
 
-    # An incremental read carries only the appended records' statuses.
-    session.add_note(_delivery_note("cmd_one", 0))
+    # An incremental read carries the appended records' statuses and those of
+    # the Session's live commands; the still-running list is always complete.
+    commands.add("cmd_one", "completed")
+    commands.add("cmd_new", "completed")
+    session.add_note(_delivery_note("cmd_new", 0))
     delta = await history.read(after=first["next_after"])
     assert delta["incremental"] is True
-    assert delta["background_command_statuses"] == {"cmd_one": "completed"}
+    assert delta["background_command_statuses"] == {"cmd_one": "completed", "cmd_new": "completed"}
+    assert delta["background_commands_still_running"] == []
 
-    # An older page carries none.
+    # An older page carries neither.
     older = await history.read(before=first["next_before"])
     assert "background_command_statuses" not in older
+    assert "background_commands_still_running" not in older
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +678,7 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
     assert appended["incremental"] is True
     assert {"session_usage", "context_usage", "compaction_policy"} <= set(appended)
     assert appended["background_command_statuses"] == {}
+    assert appended["background_commands_still_running"] == []
     # Reflection Runs arrive with a full read; live events keep them current.
     assert "reflection_runs" not in appended
 
