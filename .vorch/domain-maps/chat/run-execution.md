@@ -69,7 +69,7 @@ The interruption notices (`wire_shaping.py::_INTERRUPTION_NOTICES` and its fallb
 | `Your previous turn stopped before it was complete because vBot shut down.` / `... vBot restarted.` | Separates a host stop from a user decision, so the Agent does not read it as the user rejecting the work. |
 | `... because the connection to the Model provider failed.` / `... the Model provider stopped responding.` / `... the Model provider returned an error.` | Names a transient outside cause, so the Agent neither blames its own work nor tells the user it finished. |
 | `... because of an internal error.` / `... because of an error.` | Fallbacks for an interrupted Run without a known cause and for a failed Run whose error the request does not carry; the Agent still learns the turn is unfinished. |
-| `Your previous turn was cancelled before it was complete.` | Fallback for a cancel reason without its own notice (for example a Sub-Agent its Parent Agent stopped with `cancel`). |
+| `Your previous turn was cancelled before it was complete.` | Fallback for a cancel reason without its own notice (for example a Sub-Agent its Parent Agent stopped with `background_tasks` `stop`, reason `parent_agent`). |
 | `The Tool call was interrupted before its result was recorded.` | The Agent otherwise assumes a missing Result means the call did not run. |
 | `Whether it took effect is unknown; check before you repeat it.` | Prevents blind repetition of a call that may already have changed files or state. |
 
