@@ -576,11 +576,7 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
                 f"package, so it has no submodules. Import '{leaf}' from the module "
                 "that defines it."
             )
-        return (
-            f"Python imported the package '{parent}', but it has no module '{leaf}'. "
-            f"List the files of '{parent}' to check the name, or create the module if "
-            "it is still missing."
-        )
+        return _missing_submodule(name, failure.workdir)
     workdir = failure.workdir
     if workdir is None or not _in_workdir(name, workdir):
         return (
@@ -612,6 +608,56 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
         f"its directory `{script.parent.as_posix()}` on the import path instead of the "
         f"working directory, where '{name}' is. Run it as a module from the working "
         f"directory instead: {run_as}."
+    )
+
+
+def _missing_submodule(name: str, workdir: Path | None) -> str:
+    """The hint for a package that has no module of the imported name.
+
+    "Create the module" fired when tests imported a teammate's module that had
+    not landed yet, inviting Agents to write someone else's file. When the
+    module is in the working directory, Python imported another package of the
+    same name: a ``tests`` folder without ``__init__.py`` lost to an installed
+    ``tests`` package.
+    """
+    parent, _, leaf = name.rpartition(".")
+    parts = name.split(".")
+    top = parts[0]
+    package = Path(*parts[:-1])
+    if workdir is not None:
+        module = next(
+            (
+                path
+                for path in (package / f"{leaf}.py", package / leaf)
+                if (workdir / path).is_file() or (path.name == leaf and (workdir / path).is_dir())
+            ),
+            None,
+        )
+        if module is not None:
+            shown = module.as_posix()
+            if not (workdir / top / "__init__.py").is_file():
+                return (
+                    f"{shown} exists in the working directory, but Python imported another "
+                    f"package named '{top}': the working directory's {top}/ has no __init__.py, "
+                    f"so a '{top}' package elsewhere on the import path shadows it. Add an empty "
+                    f"{top}/__init__.py."
+                )
+            return (
+                f"{shown} exists in the working directory, but Python imported another "
+                f"package named '{top}', which comes earlier on its import path and shadows "
+                "the working directory's. Start Python in the working directory with -m, which "
+                "puts the working directory first."
+            )
+        if (workdir / package).is_dir():
+            return (
+                f"Python imported the package '{parent}', but it has no module '{leaf}', and "
+                f"the working directory has no {package.as_posix()}/{leaf}.py. Check the name "
+                f"against the files in {package.as_posix()}/; if it is right, that module is "
+                "not written yet."
+            )
+    return (
+        f"Python imported the package '{parent}', but it has no module '{leaf}'. Check the "
+        f"name against the files of '{parent}'."
     )
 
 

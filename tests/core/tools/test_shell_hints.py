@@ -725,8 +725,8 @@ def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -
                 'python -c "import shop.api"',
                 output,
                 True,
-                "Python imported the package 'shop', but it has no module 'api'. List the files "
-                "of 'shop' to check the name, or create the module if it is still missing.",
+                "Python imported the package 'shop', but it has no module 'api', and the "
+                "working directory has no shop/api.py.",
             )
             for output in (
                 "ModuleNotFoundError: No module named 'shop.api'\n",
@@ -770,3 +770,39 @@ def test_import_failures_name_where_python_looked(
     hint = annotate_failure(command, 1, output, workdir=workdir)
 
     assert hint is not None and expected in hint
+
+
+@pytest.mark.parametrize(
+    ("files", "names", "omits"),
+    [
+        # tests/ without __init__.py loses to a regular `tests` package elsewhere.
+        (("tests/test_errors.py",), ("tests/test_errors.py", "tests/__init__.py"), ()),
+        (
+            ("tests/__init__.py", "tests/test_errors.py"),
+            ("tests/test_errors.py", "-m"),
+            ("__init__.py",),
+        ),
+        # A module that is not there: the hint informs and never asks to write it.
+        (("tests/support.py",), ("tests/test_errors.py",), ("create", "Add", "write")),
+    ],
+)
+def test_a_missing_submodule_names_what_the_working_directory_holds(
+    tmp_path: Path, files: tuple[str, ...], names: tuple[str, ...], omits: tuple[str, ...]
+) -> None:
+    for name in files:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).touch()
+    output = (
+        "Traceback (most recent call last):\n"
+        '  File "C:\\Python314\\Lib\\unittest\\loader.py", line 137, in loadTestsFromName\n'
+        "ModuleNotFoundError: No module named 'tests.test_errors'\n\n"
+        "FAILED (errors=1)"
+    )
+
+    hint = annotate_failure("python -m unittest tests.test_errors", 1, output, workdir=tmp_path)
+
+    assert hint is not None
+    for text in names:
+        assert text in hint
+    for text in omits:
+        assert text not in hint
