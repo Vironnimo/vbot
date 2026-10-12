@@ -332,7 +332,12 @@ what starts the next Run (`_board_view.news_text`, from the routes' `wake_idle`)
 A page holding a post outside the reader's audience, which it may never have seen,
 makes no such claim. Agents re-read the newest page while waiting: 13 of 153
 newest-page reads of one Run showed no post beyond the reader's previous read
-(Sessions, 2026-10). The Tool continues to older posts with
+(Sessions, 2026-10). The same wording (`agent_text.WAIT_FOR_OTHERS`) ends a
+`swarm_state` result with nothing pending while some route wakes, and a `list`
+that shows pending counts under automatic delivery adds a `pending` line saying
+they arrive without a read (`agent_text.BOARD_PENDING_AUTOMATIC`): 10 of 38
+`swarm_state` results with nothing pending and 13 of 22 `list` results with
+pending counts were followed by a Board read (Sessions, 2026-10). The Tool continues to older posts with
 `before` (the oldest shown post number); Store read cursors remain accepted.
 Post numbers count across the Board, so `before` with a `discussion_id` pages that
 discussion below the number even when the post belongs to another discussion;
@@ -554,8 +559,12 @@ reaches the reader), `delivery` and `wake` (the route policies as sentences),
 copyable continuation, and a roster listing "- Name: state" that marks the reader
 "(you)"; a cursor keeps its place under another page size
 (`test_swarm_state_tool.py`). When every route delivers while running, `pending`
-says so and replaces `delivery`. `wake` names the routes that start a Run of an idle
-participant: addressed posts at once, others within the longest Quiet period. The
+says so and replaces `delivery`. With nothing pending, `pending` ends with
+`To wait for others, end your reply.` while some route wakes (see the Board read
+paragraph). `wake` names the routes that start a Run of an idle
+participant: addressed posts at once, others within the longest Quiet period. It
+repeats on every call: leaving it out after the first call of a Session would hide
+it after a Compaction, which the Extension cannot see. The
 result once repeated the reader's always-`running` state, every route in both
 `delivery` and `wake`, the pacing rule and the totals the roster already shows; it
 averaged 1,069 characters over 61 calls of one Run (Sessions, 2026-10). Participant ids stay out of all Agent text,
@@ -1163,6 +1172,8 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_state` route `ping`: `posts that address or answer you` | "pings" named a mechanism the Agent no longer sees (F3); `address` is the Board description's word for `@Name`. |
 | `swarm_state` wake: `When you are idle, posts that address or answer you start a Run at once; {routes} start one within {minutes} minutes.` (`When you are idle, {routes} start a Run within {minutes} minutes.` without the addressed route) | Says that addressing a peer is how to reach it at once (F4) and bounds the wait for other posts, in one sentence. It replaced a route list plus the pacing rule (which reads count as acting), which repeated the routes and made the field the longest of the result (F6, Sessions, 2026-10); the Agent cannot act on the rule itself. |
 | `swarm_state` pending, every route automatic: `{count} messages for you; they reach you automatically, also while you are running, so you need not read them on the Board.` (and the singular and none forms); the `delivery` field is then omitted | A bare count read as a to-do: Agents fetched on the Board the posts that would reach them at their next request (F4, Sessions, 2026-10). With every route automatic the delivery sentence only repeated this. Other policies keep `{count} messages for you.` beside the `delivery` field, or name `swarm_inbox` where the Session offers it. |
+| `swarm_state` pending, nothing pending while some route wakes: `... To wait for others, end your reply.` (after `No pending messages.` or `No pending messages; new ones reach you automatically, also while you are running.`) | 10 of 38 such results were followed by a Board read, polling for posts that would reach the Agent by themselves (F4, F6, Sessions, 2026-10). The words are the Board read's wait sentence (`WAIT_FOR_OTHERS`), so both results teach one way to wait; the `wake` field right after says which posts start the next Run. Left out where no route wakes, since ending the reply then waits for nothing. |
+| `list` field `pending`, beside a discussion with `pending for you: {count}` when every route delivers while running: `Posts pending for you reach you automatically, also while you are running, so you need not read them on the Board.` | 13 of 22 lists that showed a pending count were followed by a Board read: the count read as a to-do (F4, F6, Sessions, 2026-10). Same wording as the `swarm_state` and delivery counts. Left out under other policies, where a read can be the way to receive a held route's posts. |
 | Read `new`: `{posts} are new to you.`, `All {count} posts shown are new to you.`; on the newest page with nothing new: `None of the posts shown is new to you. To wait for others, end your reply; a post that addresses or answers you starts your next Run at once.` | Agents re-read the newest page to check for news and spent a Run on it (F4, F6, Sessions, 2026-10); the marks spare comparing post numbers, and the second sentence names the way to wait. The wait sentence follows the routes that wake: without the addressed route it names the others and the Quiet bound, without any it says new messages start no Run. |
 | `swarm_state` fields `you` and `participants` (dropped, totals kept beside a partial roster) | `you` was always "running" for the caller and the roster marks "(you)"; totals repeat a complete roster (F6). |
 | Delivery reminder, every route automatic: `{count} more pending; they reach you automatically, so you need not read them on the Board.` (and `1 more pending; it reaches you ...`) | Same failure as the state count: `{count} more pending.` sent Agents to the Board for posts the next request delivers (F4, Sessions, 2026-10). Other policies keep the Inbox or bare form. |

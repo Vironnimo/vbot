@@ -19,6 +19,7 @@ from . import agent_text as text
 from ._board_view import (
     PAGE_LIMIT,
     Roster,
+    automatic_delivery,
     call_text,
     close_discussion,
     discussion_choices,
@@ -195,6 +196,11 @@ class BoardCall:
             data["more"] = text.BOARD_MORE_DISCUSSIONS.format(
                 call=call_text({**arguments, "cursor": page.cursor})
             )
+        # A pending count reads as a to-do; say when the posts arrive without a call.
+        if automatic_delivery(self.swarm["delivery"]) and any(
+            entry["pending_count"] for entry in page.entries
+        ):
+            data["pending"] = text.BOARD_PENDING_AUTOMATIC
         data["content"] = discussions_text(page.entries, self.main)
         return data
 

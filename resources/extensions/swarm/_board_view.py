@@ -498,6 +498,9 @@ def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
     else:
         key = f"{amount}_no_inbox"
     data: Json = {"pending": text.STATE_PENDING[key].format(count=count)}
+    if not count and status["wake_on_messages"]:
+        # Nothing to receive: the reader is polling, and ending the reply is how to wait.
+        data["pending"] += " " + text.STATE_WAIT
     if not automatic:
         data["delivery"] = " ".join(
             text.STATE_DELIVERY[

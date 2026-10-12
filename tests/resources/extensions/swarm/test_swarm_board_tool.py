@@ -13,6 +13,7 @@ from resources.extensions.swarm.agent_text import (
     BOARD_NOTHING_NEW,
     BOARD_OLDER_CUT,
     BOARD_PAGE_NEWEST,
+    BOARD_PENDING_AUTOMATIC,
     BOARD_WAIT,
     CURSOR_AS_BEFORE,
     MENTION_EVERYONE,
@@ -53,6 +54,11 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
     )
     assert replay["data"]["post_id"] == posted["data"]["post_id"]
     assert "nothing was duplicated" in replay["data"]["replayed"]
+    # A pending count beside automatic delivery says the posts need no read.
+    assert "pending" not in result["data"]
+    listed, _ = await call(board, {"action": "list"}, peer=1)
+    assert "pending for you: 1" in listed["data"]["content"]
+    assert listed["data"]["pending"] == BOARD_PENDING_AUTOMATIC
     read, context = await call(board, {"action": "read"}, peer=1)
     author = board.swarm["participants"][0]["display_name"]
     assert read["data"]["content"] == (
@@ -91,6 +97,16 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
     assert side["data"]["content"].endswith(":\naside") and "new" not in side["data"]
     assert board.tools.get("swarm_board").catalog_visible is False
     assert board.tools.get("swarm_board").session_scoped
+    # Where a route waits for a request, a read can be the way to receive its posts.
+    await board.store.apply_delivery_settings(
+        board.swarm["id"],
+        {**board.swarm["delivery"], "main": {"mode": "pull", "wake_idle": False}},
+        expected_revision=1,
+        request_id="pull-main",
+        actor="test",
+    )
+    pulled, _ = await call(board, {"action": "list"}, peer=1)
+    assert "pending for you: 1" in pulled["data"]["content"] and "pending" not in pulled["data"]
 
 
 @pytest.mark.asyncio

@@ -248,6 +248,9 @@ DELIVERY_SKIPPED = {
 }
 DELIVERY_SKIPPED_READ = "{call} for {discussion}"
 
+# How to wait for others, wherever a result shows that nothing is left to receive.
+WAIT_FOR_OTHERS = "To wait for others, end your reply"
+
 # swarm_state results.
 STATE_PENDING = {
     "none": "No pending messages.",
@@ -263,6 +266,9 @@ STATE_PENDING = {
     "many_automatic": "{count} messages for you; they reach you automatically, also while you "
     "are running, so you need not read them on the Board.",
 }
+# Follows a "none" pending line when a post can start the reader's next Run; the
+# wake field then says which posts do.
+STATE_WAIT = f"{WAIT_FOR_OTHERS}."
 STATE_ROUTES = {
     "main": "main-discussion posts",
     "discussion": "posts in discussions you joined",
@@ -343,10 +349,9 @@ BOARD_NEW = {
 }
 BOARD_NOTHING_NEW = "None of the posts shown is new to you."
 BOARD_WAIT = {
-    "addressed": "To wait for others, end your reply; a post that addresses or answers you "
-    "starts your next Run at once.",
-    "paced": "To wait for others, end your reply; {routes} start your next Run within "
-    "{minutes} minutes.",
+    "addressed": f"{WAIT_FOR_OTHERS}; a post that addresses or answers you starts your next Run "
+    "at once.",
+    "paced": f"{WAIT_FOR_OTHERS}; {{routes}} start your next Run within {{minutes}} minutes.",
 }
 BOARD_ONE_POST = "Post {post_id} in {discussion}."
 BOARD_OLDER = "Older posts exist. Continue with {call}"
@@ -385,6 +390,11 @@ BOARD_JOINED_DETAIL = "joined"
 BOARD_NOT_JOINED_DETAIL = "not joined"
 BOARD_MEMBERS_DETAIL = "members: {count}"
 BOARD_PENDING_DETAIL = "pending for you: {count}"
+# Beside a list that shows pending posts, when every route delivers while running.
+BOARD_PENDING_AUTOMATIC = (
+    "Posts pending for you reach you automatically, also while you are running, so you need "
+    "not read them on the Board."
+)
 POST_HEADER_REPLY = "reply to {post_id}"
 POST_HEADER_TO = "to {names}"
 POST_SHORTENED = "[{count} more characters not shown. Read the whole post with swarm_board {call}]"
