@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 from typing import Any
 
@@ -556,6 +557,78 @@ async def test_dispatch_normalizes_unambiguous_model_encodings_without_mutating_
         "optional": None,
     }
     assert call == original
+
+
+_NAMED_FIELDS: JsonObject = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "value": {"type": "string"}},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("schema", "arguments", "owner_sees"),
+    [
+        # Swarm run 2026-10-12: a shell command arrived as {"name": "command", "value": ...}.
+        pytest.param(_input_schema(), {"name": "count", "value": "2"}, {"count": "2"}, id="pair"),
+        pytest.param(
+            _input_schema(),
+            {"name": "label", "value": "x", "count": 2, "commentary": "analysis"},
+            {"label": "x", "count": 2, "commentary": "analysis"},
+            id="pair-beside-parameters",
+        ),
+        pytest.param(
+            _input_schema(),
+            {"name": "count", "value": 2, "count": 2},
+            {"count": 2},
+            id="pair-repeating-a-parameter",
+        ),
+        # Anything else stays as sent.
+        pytest.param(_input_schema(), {"name": "counter", "value": 2}, None, id="no-parameter"),
+        pytest.param(
+            _input_schema(), {"name": "count", "value": 2, "count": 3}, None, id="conflict"
+        ),
+        pytest.param(
+            _input_schema(), {"name": "count", "value": 2, "dryRun": True}, None, id="unknown-field"
+        ),
+        pytest.param(
+            _NAMED_FIELDS,
+            {"name": "value", "value": "x"},
+            {"name": "value", "value": "x"},
+            id="real-name-and-value-parameters",
+        ),
+    ],
+)
+async def test_a_call_sent_as_one_name_value_pair_runs_as_that_parameter(
+    schema: JsonObject, arguments: JsonObject, owner_sees: JsonObject | None
+) -> None:
+    owner_saw: list[JsonObject] = []
+    handled: list[JsonObject] = []
+
+    def owner(call: JsonObject) -> JsonObject:
+        owner_saw.append(copy.deepcopy(call))
+        return call
+
+    def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        handled.append(arguments)
+        return tool_success({"value": "ok"})
+
+    registry = ToolRegistry()
+    registry.register(
+        "sample", "Sample.", schema, handler, open_input_schema=True, argument_normalizer=owner
+    )
+
+    if owner_sees is None:
+        # The pair stays as sent, so the call is refused for its unknown fields.
+        with pytest.raises(ToolContractError, match='"name" is not a parameter'):
+            await registry.dispatch(make_context("sample"), arguments, ["sample"])
+        assert owner_saw == [arguments]
+        assert handled == []
+    else:
+        await registry.dispatch(make_context("sample"), arguments, ["sample"])
+        # The owner's repair reads the pair as the parameter it names.
+        assert owner_saw == [owner_sees]
+        assert len(handled) == 1
 
 
 @pytest.mark.asyncio

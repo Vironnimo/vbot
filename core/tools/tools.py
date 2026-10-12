@@ -193,6 +193,11 @@ def _checked_arguments(
     received = arguments
     ignored: tuple[str, ...] = ()
     try:
+        if tool.coerce_arguments:
+            # A call sent as one name/value pair reaches the owner as that field.
+            arguments = contract.read_name_value_pair(
+                arguments, unadvertised=tool.unadvertised_parameters or {}
+            )
         if tool.argument_normalizer is not None:
             arguments = tool.argument_normalizer(copy.deepcopy(arguments))
         normalized = contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
