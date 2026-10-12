@@ -752,12 +752,14 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(shell: 
 
 
 @pytest.mark.asyncio
-async def test_missing_workdir_and_ungranted_credentials_run_nothing(shell: Shell) -> None:
+async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     tmp_path = shell.commands.cwd
     missing = await shell.call({"command": "ls", "workdir": "nope"})
     (tmp_path / "notes.txt").write_text("", encoding="utf-8")
     a_file = await shell.call({"command": "ls", "workdir": "notes.txt"})
     secret = await shell.call({"command": "ls", "env_keys": ["UNKNOWN_SECRET_FOR_TEST"]})
+    # No environment variable can hold a NUL character.
+    nul = await shell.call({"command": "ls", "env": {"DATA": "a\x00b"}})
     gone = tmp_path / "gone"
     missing_cwd = await dispatch_as_executor(
         shell.registry,
@@ -782,6 +784,7 @@ async def test_missing_workdir_and_ungranted_credentials_run_nothing(shell: Shel
         "existing directory. Pass an existing directory as workdir."
     )
     assert "not granted to this Agent" in secret["error"]["message"]
+    assert nul["error"]["code"] == "invalid_arguments"
     assert shell.launcher.argv == []
 
 

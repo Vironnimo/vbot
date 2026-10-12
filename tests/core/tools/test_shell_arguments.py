@@ -274,12 +274,6 @@ def test_env_object_splits_into_variables_and_granted_credentials(
         ({"VBOT_RUN_AGENT_ID": "other"}, (), "env cannot set VBOT_RUN_AGENT_ID;"),
         ({"A=B": "1"}, (), "env has an invalid variable name: 'A=B'."),
         ({"DEBUG": {"level": 1}}, (), "env value for DEBUG must be a string."),
-        (
-            {"DEBUG": "a\x00b"},
-            (),
-            "env value for DEBUG contains a NUL character, which an environment variable "
-            "cannot hold.",
-        ),
     ],
 )
 def test_env_object_refuses_written_credentials_and_reserved_names(env, granted, message) -> None:

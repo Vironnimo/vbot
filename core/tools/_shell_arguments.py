@@ -417,7 +417,9 @@ def split_env_object(
             raise ValueError(
                 _not_run(
                     f"env value for {name} contains a NUL character, which an environment "
-                    "variable cannot hold."
+                    "variable cannot hold. Pass the value without NUL characters; for binary "
+                    "data, write it to a file in the command and pass the file's path in env "
+                    "instead."
                 )
             )
         if _references(value, name):
