@@ -146,8 +146,10 @@ class CommandRecord:
         self._progress_task: asyncio.Task[None] | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
-        # The Session the result was submitted to; a later transfer moves no submission.
+        # The Session the result was submitted to, and its body: a transfer
+        # submits a result not yet delivered again, to the new Session.
         self._delivered_to = owner
+        self._delivered_body: str | None = None
 
     # Facts
 
@@ -244,6 +246,15 @@ class CommandRecord:
         if self.owner != source:
             return False
         self.owner = target
+        sink = self._services.trigger_service
+        body = self._delivered_body
+        if (
+            sink is not None
+            and body is not None
+            and self._delivered_to != target
+            and self._withdraw_submitted()
+        ):
+            self._submit(sink, body)
         return True
 
     async def stop(self, reason: StopReason) -> None:
@@ -284,12 +295,7 @@ class CommandRecord:
         delivered once, as submitted.
         """
         self._deliver = False
-        task = self._delivery_task
-        if task is None or task.done() or not self._withdraw_submission():
-            return
-        # Without a running Event Loop (Runtime stop), nothing is left to cancel.
-        with contextlib.suppress(RuntimeError):
-            task.cancel()
+        self._withdraw_submitted()
 
     async def kill_and_release(self) -> bool:
         """Kill every process off the Event Loop, withdraw the delivery and release
@@ -578,9 +584,20 @@ class CommandRecord:
     # Delivery
 
     def _submit_result(self, sink: CompletionSink) -> None:
-        self._delivered_to = self.owner
         try:
             body = self._formatter(self.report())
+        except Exception:
+            _LOGGER.error(
+                "Could not deliver the result of command %s", self.command_id, exc_info=True
+            )
+            return
+        self._submit(sink, body)
+
+    def _submit(self, sink: CompletionSink, body: str) -> None:
+        """Submit the result *body* to the command's Session."""
+        self._delivered_to = self.owner
+        self._delivered_body = body
+        try:
             delivery = asyncio.ensure_future(
                 sink.submit_completion(
                     self.owner.agent_id,
@@ -599,6 +616,20 @@ class CommandRecord:
             )
             return
         self._delivery_task = self._task(self._await_delivery(delivery), "delivery")
+
+    def _withdraw_submitted(self) -> bool:
+        """Withdraw a submitted result not yet delivered; whether one was withdrawn.
+
+        A result whose delivery the sink already claimed stays: it is delivered
+        once, as submitted.
+        """
+        task = self._delivery_task
+        if task is None or task.done() or not self._withdraw_submission():
+            return False
+        # Without a running Event Loop (Runtime stop), nothing is left to cancel.
+        with contextlib.suppress(RuntimeError):
+            task.cancel()
+        return True
 
     def _withdraw_submission(self) -> bool:
         """Withdraw the submitted result from the sink; whether it was withdrawn."""

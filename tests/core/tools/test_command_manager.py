@@ -514,9 +514,14 @@ async def test_acknowledging_a_shown_end_withdraws_a_result_not_yet_handed_over(
 @pytest.mark.asyncio
 async def test_transferred_commands_deliver_to_their_new_session(harness: Harness) -> None:
     command_id, process = await harness.launch()
-    harness.manager.to_background(command_id, deliver=True)
+    submitted_id, submitted = await harness.launch()
+    for background_id in (command_id, submitted_id):
+        harness.manager.to_background(background_id, deliver=True)
+    # Its result went to the old Session and is not delivered yet.
+    submitted.exit(0)
+    await harness.finish(submitted_id)
 
-    assert harness.manager.transfer_scope(OWNER, OTHER) == 1
+    assert harness.manager.transfer_scope(OWNER, OTHER) == 2
     identity = SessionAddress(None, "agent-old", "session-i")
     identity_id, identity_process = await harness.launch(owner=identity)
     assert harness.manager.transfer_agent_scope("agent-old", "agent-new") == 1
@@ -525,9 +530,13 @@ async def test_transferred_commands_deliver_to_their_new_session(harness: Harnes
     await harness.finish(command_id)
     await harness.finish(identity_id)
 
-    assert [(s["agent_id"], s["session_id"]) for s in harness.sink.submissions] == [
-        ("agent-b", "session-b")
+    assert [(s["notice_id"], s["agent_id"], s["session_id"]) for s in harness.sink.submissions] == [
+        (f"command:{submitted_id}", "agent-a", "session-a"),
+        (f"command:{submitted_id}", "agent-b", "session-b"),
+        (f"command:{command_id}", "agent-b", "session-b"),
     ]
+    assert harness.sink.futures[0].cancelled()
+    assert harness.sink.submissions[0]["body"] == harness.sink.submissions[1]["body"]
     assert harness.manager.report(identity_id).owner == SessionAddress(
         None, "agent-new", "session-i"
     )

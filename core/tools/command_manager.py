@@ -468,12 +468,17 @@ class CommandManager:
     def transfer_scope(self, source: CommandOwner, target: CommandOwner) -> int:
         """Move commands to another Session after a Session move; returns how many moved.
 
-        A result not yet submitted goes to the new Session.
+        Results go to the new Session: one submitted to the old Session and not
+        yet delivered is withdrawn there and submitted again, unless its
+        delivery already claimed it.
         """
         return sum(record.transfer(source, target) for record in self._records.values())
 
     def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
-        """Move the commands of a renamed Identity Agent to its new id; returns how many."""
+        """Move the commands of a renamed Identity Agent to its new id; returns how many.
+
+        Results follow as in ``transfer_scope``.
+        """
         moved = 0
         for record in self._records.values():
             owner = record.owner
