@@ -515,12 +515,13 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
             assert stop_failure.value.kill_sent == kill_sent
 
         # Without a kill, the command runs on as if not stopped; with one, the
-        # stop's reason stays for the end the kill causes.
+        # stop's reason stays for the end the kill causes. Either way the
+        # Agent's call showed no end, so the end is delivered.
         running = harness.manager.report(command_id)
         assert (running.status, running.stop_reason, running.delivers_result) == (
             "running",
             "agent" if kill_sent else None,
-            not kill_sent,
+            True,
         )
         if then == "stop-again":
             # A lifecycle close goes on: the failure is logged and the command stays live.
@@ -545,13 +546,12 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
 
     if kill_sent:
         assert (report.status, report.stop_reason) == ("stopped", "agent")
-        # The kill ended the child; the Agent's stop result was the outcome.
+        # The kill ended the child.
         assert report.failed_programs == ()
-        assert harness.sink.submissions == []
     else:
         assert (report.status, report.exit_code, report.stop_reason) == ("failed", 1, None)
         assert report.failed_programs == ("node.exe exited with code 1",)
-        assert harness.sink.bodies == [format_report(report)]
+    assert harness.sink.bodies == [format_report(report)]
 
 
 # --- Background and delivery -------------------------------------------------

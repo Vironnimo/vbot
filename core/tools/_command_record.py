@@ -136,6 +136,9 @@ class CommandRecord:
         self._deliver = False
         self._exit_code: int | None = None
         self._stop_reason: StopReason | None = None
+        # An ``agent`` stop failed once its kill was sent: its call showed no
+        # end, so the end the kill causes is delivered.
+        self._stop_unreported = False
         # Failed children recorded before vBot stopped the command; later ones
         # ended because of the stop and are no failures of the command.
         self._exits_before_stop: int | None = None
@@ -194,8 +197,9 @@ class CommandRecord:
     @property
     def _delivering(self) -> bool:
         """Whether the end delivers the result: armed, and the Agent did not
-        stop the command, since its stop call shows the outcome."""
-        return self._deliver and self._stop_reason != "agent"
+        stop the command, since its stop call shows the outcome - unless that
+        call failed or was cancelled once its kill was sent."""
+        return self._deliver and (self._stop_reason != "agent" or self._stop_unreported)
 
     @property
     def notice_id(self) -> str:
@@ -321,8 +325,12 @@ class CommandRecord:
         delivered unless a ``scope`` stop withdrew the delivery. A stop whose
         kill was sent keeps its reason, also when the kill is not confirmed or
         the stop is cancelled once its kill began (the kill goes on): the end
-        the kill causes reads ``stopped``.
+        the kill causes reads ``stopped``. Such an ``agent`` stop showed no
+        end, so that end is delivered.
         """
+        if reason == "agent":
+            # This call shows the end, unless it fails as well.
+            self._stop_unreported = False
         claimed = self._request_stop(reason)
         if reason == "scope":
             self.withdraw_delivery()
@@ -355,6 +363,12 @@ class CommandRecord:
                     self._stop_reason = None
                 if froze:
                     self._exits_before_stop = None
+            elif kill_sent and self._stop_reason == "agent" and not self._stop_unreported:
+                self._stop_unreported = True
+                sink = self._services.trigger_service
+                # An end recorded meanwhile delivered nothing yet.
+                if self.ended and self._background and self._delivering and sink is not None:
+                    self._submit_result(sink)
             raise
         await self._finished.wait()
 
