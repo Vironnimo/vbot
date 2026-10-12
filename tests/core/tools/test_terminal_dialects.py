@@ -415,6 +415,11 @@ async def test_codex_and_hermes_input_shapes_type_into_the_terminal(
     assert submitted["ok"] is True
     await eventually(lambda: adapter.writes == ["ls\r", "pwd", "\r"])
 
+    # Input for a named terminal without an action types it (eval 2026-10-12).
+    implicit = await terminal({"terminal_id": terminal_id, "input": "x = 7", "key": "enter"})
+    assert implicit["ok"] is True
+    await eventually(lambda: adapter.writes[-2:] == ["x = 7", "\r"])
+
 
 @pytest.mark.parametrize(
     ("action", "canonical"),

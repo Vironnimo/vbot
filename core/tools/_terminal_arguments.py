@@ -238,9 +238,8 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         normalized["action"] = "input"
         press_enter = True
     _drop_placeholders(normalized)
-    if "action" not in normalized and "command" in normalized and "terminal_id" not in normalized:
-        # Only start takes a command, so a call that names a program starts it.
-        normalized["action"] = "start"
+    if "action" not in normalized:
+        _infer_action(normalized, press_enter)
     action = normalized.get("action")
     if action == _RESIZE:
         status = _call("status", normalized)
@@ -355,6 +354,22 @@ def _read_background_ids(arguments: dict[str, Any]) -> None:
 
 def _is_background_id(value: Any) -> bool:
     return isinstance(value, str) and value.strip().startswith(_BACKGROUND_ID_PREFIXES)
+
+
+def _infer_action(arguments: dict[str, Any], press_enter: bool) -> None:
+    """Name the only action a call without one can mean."""
+    if "terminal_id" not in arguments:
+        if "command" in arguments:
+            # Only start takes a command, so a call that names a program starts it.
+            arguments["action"] = "start"
+    elif (
+        "command" not in arguments
+        and "args" not in arguments
+        and (press_enter or any(key in arguments for key in ("text", "data", "key")))
+    ):
+        # Input into a named terminal: start refuses a live terminal's id with
+        # this input call, and no other action types.
+        arguments["action"] = "input"
 
 
 def _pop_enter_flags(arguments: dict[str, Any]) -> bool:
