@@ -115,9 +115,10 @@ async def _launch(
     *,
     argv: Sequence[str] = ARGV,
     env: Mapping[str, str] = BASE,
+    warm: bool = True,
 ) -> FakeShell:
     """Launch with *request*, then let the warm shell's start run."""
-    shell = await launcher.launch(argv, cwd, env, _tracker, request)
+    shell = await launcher.launch(argv, cwd, env, _tracker, request, warm=warm)
     assert isinstance(shell, FakeShell)
     await turns()
     return shell
@@ -135,12 +136,18 @@ async def test_a_launch_claims_the_warm_shell_of_its_start_and_the_next_one_star
     assert (first.requests, starts.cwd_of(first)) == ([b"first"], tmp_path)
     assert len(starts.shells) == 2 and starts.cwds[1] != tmp_path
 
+    # A launch whose environment holds values of its own call starts its own shell
+    # and leaves the warm shell waiting; no other warm shell starts for it.
+    own = await _launch(launcher, tmp_path, b"own", env={**BASE, "EMPTY": ""}, warm=False)
+    assert own is starts.shells[2] and starts.cwd_of(own) == tmp_path
+    assert len(starts.shells) == 3 and not starts.shells[1].killed
+
     # The next launch with the same program and environment gets the warm shell,
     # whatever its workdir; it serves only this request, and the next one starts.
     second = await _launch(launcher, tmp_path / "other", b"second")
     assert second is starts.shells[1]
     assert second.requests == [b"second"] and not second.killed
-    assert len(starts.shells) == 3 and starts.shells[2].requests == []
+    assert len(starts.shells) == 4 and starts.shells[3].requests == []
     await launcher.aclose()
 
 

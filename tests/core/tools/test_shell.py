@@ -298,6 +298,20 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
     assert shell.sink.submissions == []
 
 
+@pytest.mark.asyncio
+async def test_an_empty_env_value_reaches_the_command(shell: Shell) -> None:
+    call = shell.call({"command": "build", "env": {"EMPTY": "", "MODE": "ci"}})
+    (await shell.started()).exit(0)
+    await shell.returned(call)
+
+    command, env = launched(shell.launcher)
+    assert (command, env["EMPTY"], env["MODE"]) == ("build", "", "ci")
+    if sys.platform == "win32":
+        # PowerShell on .NET 8 removes a variable it sets to an empty value, so the
+        # call starts a shell of its own that starts with the value.
+        assert shell.launcher.envs[0]["EMPTY"] == "" and shell.launcher.warm == [False]
+
+
 @pytest.mark.parametrize("terminal", [True, False])
 @pytest.mark.asyncio
 async def test_leniently_read_arguments_run_with_a_note(shell: Shell, terminal: bool) -> None:

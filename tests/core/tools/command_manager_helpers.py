@@ -140,7 +140,8 @@ class FakeProcess:
 
 
 class FakeLauncher:
-    """Starts fake processes; records each launch's argv, directory, environment and request."""
+    """Starts fake processes; records each launch's argv, directory, environment, request
+    and whether a warm shell could serve it."""
 
     def __init__(self) -> None:
         self.processes: list[FakeProcess] = []
@@ -148,6 +149,7 @@ class FakeLauncher:
         self.cwds: list[Path] = []
         self.envs: list[dict[str, str]] = []
         self.requests: list[bytes | None] = []
+        self.warm: list[bool] = []
         # While set and not open, launches wait for it.
         self.gate: asyncio.Event | None = None
         # Raised by the next launches instead of starting a process.
@@ -161,11 +163,14 @@ class FakeLauncher:
         env: Mapping[str, str],
         tracker: ProcessTreeTracker,
         request: bytes | None = None,
+        *,
+        warm: bool = True,
     ) -> FakeProcess:
         self.argv.append(list(argv))
         self.cwds.append(cwd)
         self.envs.append(dict(env))
         self.requests.append(request)
+        self.warm.append(warm)
         if self.gate is not None:
             await self.gate.wait()
         if self.error is not None:

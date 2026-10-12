@@ -41,10 +41,12 @@ launch with a request the launcher starts the next warm shell for the same
 program and environment unless one exists, so the first call of a server starts
 cold, and a burst of parallel calls starts no more shells at once than it has
 calls. A warm shell nobody claims for ``WARM_SHELL_IDLE_SECONDS`` ends, and so
-does one whose launch no longer matches. One that exited or could not start is
-passed over: the launch starts its own shell, and a warning is logged once per
-kind of failure. The warm shell is never a command: no list, count or limit of
-commands includes it.
+does one whose launch no longer matches. A launch whose environment holds
+values of its own call (``warm=False``) starts its own shell and leaves the
+warm shell as it is. One that exited or could not start is passed over: the
+launch starts its own shell, and a warning is logged once per kind of failure.
+The warm shell is never a command: no list, count or limit of commands
+includes it.
 """
 
 from __future__ import annotations
@@ -342,23 +344,28 @@ class PipeLauncher:
         env: Mapping[str, str],
         tracker: ProcessTreeTracker,
         request: bytes | None = None,
+        *,
+        warm: bool = True,
     ) -> CommandProcess:
         """Start *argv* in *cwd* with exactly *env*, tracked by *tracker* from creation.
 
         *request*, when given, is written to the process's stdin, which then
         ends. The process can be the warm shell, started earlier with the same
         *argv*, *env* and *tracker* in another directory: the request carries
-        everything the call adds to the shell, the workdir included. Raises
-        OSError (or the tracker's error) when the process cannot be started or
-        tracked; nothing then keeps running.
+        everything the call adds to the shell, the workdir included. With
+        *warm* False, *env* holds values of this call: the launch starts its own
+        shell, and the warm shell neither serves it nor ends or starts for it.
+        Raises OSError (or the tracker's error) when the process cannot be
+        started or tracked; nothing then keeps running.
         """
         if request is None:
             return await self._start(argv, cwd, env, tracker)
-        shell = self._claim(argv, env, tracker) if self._warm_enabled else None
+        shared = warm and self._warm_enabled
+        shell = self._claim(argv, env, tracker) if shared else None
         if shell is None:
             shell = await self._start(argv, cwd, env, tracker, request_pipe=True)
         shell.send(request)
-        if self._warm_enabled:
+        if shared:
             self._prepare(argv, env, tracker)
         return shell
 

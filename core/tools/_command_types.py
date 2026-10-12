@@ -238,6 +238,8 @@ class CommandLauncher(Protocol):
         env: Mapping[str, str],
         tracker: ProcessTreeTracker,
         request: bytes | None = None,
+        *,
+        warm: bool = True,
     ) -> CommandProcess:
         """Start *argv* in *cwd* with exactly *env*, tracking its tree with *tracker*
         from creation on.
@@ -245,8 +247,9 @@ class CommandLauncher(Protocol):
         *request*, when given, is written to the process's stdin, which then
         ends. Such a process can have been started earlier with the same
         *argv*, *env* and *tracker* in another directory: the request carries
-        everything the call adds, the workdir included. Raises OSError when the
-        process cannot be started or tracked.
+        everything the call adds, the workdir included. With *warm* False, *env*
+        holds values of this call, so the process is started for this launch
+        alone. Raises OSError when the process cannot be started or tracked.
         """
         ...
 

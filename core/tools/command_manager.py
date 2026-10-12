@@ -307,6 +307,7 @@ class CommandManager:
         execution_owner: RunExecutionOwner | None = None,
         on_output: OutputCallback | None = None,
         request: bytes | None = None,
+        warm: bool = True,
     ) -> CommandHandle:
         """Start one command in the foreground and return its handle.
 
@@ -314,7 +315,8 @@ class CommandManager:
         environment); *command* and *description* are what the Agent asked for.
         *request*, when given, is what the shell reads from stdin before it runs
         the command (``CommandLauncher.launch``): *env* is then its start
-        environment, and the request carries the rest.
+        environment, and the request carries the rest. *warm* False marks an
+        *env* that holds values of this call: no shell started ahead serves it.
         *formatter* builds the body of the result delivery from the final
         report. *on_output* receives the newest
         ``COMMAND_PROGRESS_LINES`` clean lines at most every
@@ -345,6 +347,7 @@ class CommandManager:
                 execution_owner=execution_owner,
                 on_output=on_output,
                 request=request,
+                warm=warm,
             )
         )
         self._pending[task] = _PendingLaunch(owner, origin_run_id, execution_owner)
@@ -615,6 +618,7 @@ class CommandManager:
         execution_owner: RunExecutionOwner | None,
         on_output: OutputCallback | None,
         request: bytes | None,
+        warm: bool,
     ) -> CommandRecord:
         lease: TemporaryFileLease | None = None
         log_fd: int | None = None
@@ -634,7 +638,7 @@ class CommandManager:
             log_fd = None
             try:
                 process = await self._launcher.launch(
-                    argv, cwd, env, self._process_tracker, request
+                    argv, cwd, env, self._process_tracker, request, warm=warm
                 )
             except Exception as error:
                 raise CommandLaunchError(f"The command could not be started: {error}") from error

@@ -482,15 +482,28 @@ def _missing_workdir(workdir: Path, *, given: bool) -> str:
     return f"{message} Pass an existing directory, or omit workdir to use the working directory."
 
 
-def _shell_start(
-    call: _ShellCall, environment: CommandEnvironment
-) -> tuple[list[str], dict[str, str], bytes | None]:
-    """The host shell for *call*, without input or terminal: argv, start environment, request.
+@dataclass(frozen=True)
+class _ShellStart:
+    """How a call's host shell starts, without input or terminal."""
+
+    argv: list[str]
+    env: dict[str, str]
+    # What PowerShell reads from stdin before the command runs (Windows only).
+    request: bytes | None = None
+    # Whether a shell started before the call can serve it (``CommandManager.launch``).
+    warm: bool = True
+
+
+def _shell_start(call: _ShellCall, environment: CommandEnvironment) -> _ShellStart:
+    """The host shell for *call*, without input or terminal.
 
     PowerShell's argv and start environment are the same for every call, so a
     shell started before the call can serve it: the command, its workdir and
-    the call's layer of the environment travel as the request on stdin. Raises
-    ``_NotStartedError`` when this host cannot run it.
+    the call's layer of the environment travel as the request on stdin. The
+    request cannot carry an empty value, which ``SetEnvironmentVariable``
+    removes on .NET 8 (pwsh 7.4): a call that sets one starts a shell of its
+    own with its whole environment. Raises ``_NotStartedError`` when this host
+    cannot run it.
     """
     complete = environment.complete()
     search_path = next((value for name, value in complete.items() if name.upper() == "PATH"), None)
@@ -501,12 +514,15 @@ def _shell_start(
                 "PowerShell 7 (pwsh) is not installed on this host. Ask the user to install it."
             )
         argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_BOOTSTRAP]
+        if "" in environment.changes.values():
+            request = powershell_request(call.command, str(call.workdir), {})
+            return _ShellStart(argv, complete, request, warm=False)
         request = powershell_request(call.command, str(call.workdir), environment.changes)
-        return argv, environment.base, request
+        return _ShellStart(argv, environment.base, request)
     bash = shutil.which("bash", path=search_path)
     if bash is None:
         raise _cannot_start("bash is not installed on this host. Ask the user to install it.")
-    return [bash, "-c", call.command], complete, None
+    return _ShellStart([bash, "-c", call.command], complete)
 
 
 def _issue_update_handoff(
@@ -584,7 +600,7 @@ class ShellTool:
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
 
-        def prepare() -> tuple[list[str], dict[str, str], bytes | None]:
+        def prepare() -> _ShellStart:
             environment = command_environment(
                 RunIdentity(
                     context.agent_id,
@@ -598,7 +614,7 @@ class ShellTool:
             # PATH lookup probes the filesystem and uses this call's fresh environment.
             return _shell_start(call, environment)
 
-        argv, environment, request = await asyncio.to_thread(prepare)
+        start = await asyncio.to_thread(prepare)
         # Output can arrive before the launch returns the command's id.
         started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
@@ -612,17 +628,18 @@ class ShellTool:
         try:
             handle = await self._commands.launch(
                 CommandOwner(context.project_id, context.agent_id, context.session_id),
-                argv,
+                start.argv,
                 command=call.command,
                 description=call.description,
                 cwd=call.workdir,
-                env=environment,
+                env=start.env,
                 origin_run_id=context.run_id,
                 # The delivery names only Tools named now; it outlives this context.
                 formatter=partial(format_command_delivery, names=delivery_names(names)),
                 execution_owner=context.execution_owner,
                 on_output=progress,
-                request=request,
+                request=start.request,
+                warm=start.warm,
             )
         except (OSError, CommandManagerError) as error:
             started.cancel()
