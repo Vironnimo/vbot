@@ -174,6 +174,7 @@ def leftovers_stop(report: CommandReport, names: ToolNames) -> str:
 
 
 _STOP_TEXTS: dict[StopReason, str] = {
+    # Read by the Session that ran it; _STOP_TEXTS_ABOVE speaks to Agents above it.
     "agent": "you stopped it.",
     "parent": "your Parent Agent or an Agent above it stopped it.",
     "user": "the user stopped it.",
@@ -182,30 +183,50 @@ _STOP_TEXTS: dict[StopReason, str] = {
     # Read by the Session that ran it and by Agents above it.
     "scope": "it was stopped together with all other work of the Session that ran it.",
 }
+# Read by an Agent above the Sub-Agent whose Session ran the command. The record
+# keeps only "parent", not which of the Agents above that Sub-Agent stopped it.
+_STOP_TEXTS_ABOVE: dict[StopReason, str] = {
+    "agent": "Sub-Agent {subagent} stopped it.",
+    "parent": "an Agent above Sub-Agent {subagent} stopped it.",
+}
 
 
-def stopped_because(report: CommandReport, *, delivery: bool = False) -> str:
-    """Why vBot stopped the command; a result says when the user stopped it."""
+def stopped_because(
+    report: CommandReport, *, delivery: bool = False, subagent: str | None = None
+) -> str:
+    """Why vBot stopped the command; a result says when the user stopped it.
+
+    *subagent* is the Sub-Agent whose Session ran the command when an Agent above
+    it reads the text; without it, the text speaks to the Session that ran it.
+    """
     reason = report.stop_reason or "agent"
     if reason == "user" and not delivery:
         return f"the user stopped it after {duration(report.elapsed_seconds)}."
+    if subagent is not None and reason in _STOP_TEXTS_ABOVE:
+        return _STOP_TEXTS_ABOVE[reason].format(subagent=subagent)
     return _STOP_TEXTS[reason]
 
 
 # Results
 
 
-def ended_result(report: CommandReport, names: ToolNames) -> JsonObject:
+def ended_result(
+    report: CommandReport, names: ToolNames, *, subagent: str | None = None
+) -> JsonObject:
     """The result data of an ended command, fields in order and omitted when empty.
 
     ``status`` (``exited`` or ``stopped``), ``exit_code`` (of a command that
     exited by itself), ``stopped_because``, ``output``, ``failed_programs``,
     ``hint``, and for processes it left running ``command_id``,
-    ``still_running`` and ``next``.
+    ``still_running`` and ``next``. *subagent* is the Sub-Agent whose Session
+    ran the command when an Agent above it reads the result.
     """
     if report.stop_reason is not None:
         # The exit code of a stopped command is vBot's kill, not the program's.
-        data: JsonObject = {"status": "stopped", "stopped_because": stopped_because(report)}
+        data: JsonObject = {
+            "status": "stopped",
+            "stopped_because": stopped_because(report, subagent=subagent),
+        }
     else:
         data = {"status": "exited"}
         if report.exit_code is not None:

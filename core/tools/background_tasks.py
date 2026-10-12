@@ -128,6 +128,11 @@ class _Tree:
     def subagent(self, subagent_id: str) -> SubAgentState | None:
         return next((item for item in self.subagents if item.id == subagent_id), None)
 
+    def working_in(self, session_id: str) -> SubAgentState | None:
+        """The one Sub-Agent below the caller working in *session_id*, within a takeover too."""
+        matches = [item for item in self.everyone if item.session.session_id == session_id]
+        return matches[0] if len(matches) == 1 else None
+
 
 class BackgroundTasksTool:
     """Serves ``background_tasks`` calls from the ``CommandManager`` and the Sub-Agent tree.
@@ -141,25 +146,15 @@ class BackgroundTasksTool:
 
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         names = named_tools(context)
-        input_action = arguments.get(INPUT_ACTION)
-        if isinstance(input_action, str):
-            target = arguments.get("id")
-            if is_message_action(input_action) and isinstance(target, str):
-                content = arguments.get(MESSAGE_CONTENT)
-                return tool_failure(
-                    "invalid_arguments",
-                    _message_refusal(
-                        target,
-                        content if isinstance(content, str) else None,
-                        can_send=context.can_call(SUBAGENT_TOOL_NAME),
-                    ),
-                )
-            return tool_failure("invalid_arguments", _no_input(names))
         caller = SessionAddress(
             project_id=context.project_id,
             agent_id=context.agent_id,
             session_id=context.session_id,
         )
+        input_action = arguments.get(INPUT_ACTION)
+        if isinstance(input_action, str):
+            refusal = await self._input_refusal(context, caller, input_action, arguments, names)
+            return tool_failure("invalid_arguments", refusal)
         tree = await self._tree(caller)
         action = arguments["action"]
         no_effect = arguments.get(NO_EFFECT_FIELDS) or {}
@@ -177,10 +172,10 @@ class BackgroundTasksTool:
         notes: list[str] = []
         if task_id.startswith(SESSION_ID_PREFIX):
             # A Session id from a result names the Sub-Agent working in it.
-            matches = [item for item in tree.everyone if item.session.session_id == task_id]
-            if len(matches) == 1:
-                notes.append(f"session_id {task_id} was read as Sub-Agent {matches[0].id}.")
-                task_id = matches[0].id
+            working = tree.working_in(task_id)
+            if working is not None:
+                notes.append(f"session_id {task_id} was read as Sub-Agent {working.id}.")
+                task_id = working.id
         taken_over = self._taken_over(task_id, action, tree)
         if taken_over is not None:
             return tool_failure("subagent_taken_over", taken_over)
@@ -196,13 +191,39 @@ class BackgroundTasksTool:
             )
         if no_effect:
             if task_id.startswith(SUBAGENT_ID_PREFIX):
-                notes.extend(_no_effect_notes(no_effect, shown="subagent"))
+                subagent = tree.subagent(task_id)
+                activity = subagent.activity_file if subagent is not None else None
+                notes.extend(_no_effect_notes(no_effect, shown="subagent", log=activity))
             else:
                 log = self._log_file(task_id)
                 notes.extend(_no_effect_notes(no_effect, shown="output", log=log))
         if notes:
             data["notes"] = [*notes, *data.get("notes", [])]
         return tool_success(data)
+
+    async def _input_refusal(
+        self,
+        context: ToolContext,
+        caller: SessionAddress,
+        action: str,
+        arguments: JsonObject,
+        names: ToolNames,
+    ) -> str:
+        """The refusal of a call that asked to give a task input or a message."""
+        target = arguments.get("id")
+        if not is_message_action(action) or not isinstance(target, str):
+            return _no_input(names)
+        subagent_id: str | None = target
+        if target.startswith(SESSION_ID_PREFIX):
+            # A Session id names the Sub-Agent working in it, as for status and stop.
+            working = (await self._tree(caller)).working_in(target)
+            subagent_id = working.id if working is not None else None
+        content = arguments.get(MESSAGE_CONTENT)
+        return _message_refusal(
+            subagent_id,
+            content if isinstance(content, str) else None,
+            can_send=context.can_call(SUBAGENT_TOOL_NAME),
+        )
 
     async def _tree(self, caller: SessionAddress) -> _Tree:
         everyone = await self._subagents.subagents(caller) if self._subagents is not None else ()
@@ -242,8 +263,9 @@ class BackgroundTasksTool:
                 "Stopped: its current turn, its queued messages, its background commands and "
                 "terminals, and its own Sub-Agents. Its Session keeps the history"
             )
-            if subagent.status == _TAKEN_OVER:
-                # It works for the user, and subagent send refuses it.
+            if subagent.status == _TAKEN_OVER or not context.can_call(SUBAGENT_TOOL_NAME):
+                # A taken-over Sub-Agent works for the user, and subagent send refuses
+                # it; without subagent, the caller cannot reach it with a message.
                 note += "."
             else:
                 # Only the Sub-Agent's own Parent can message it.
@@ -414,18 +436,21 @@ class BackgroundTasksTool:
         return report
 
     def _taken_over(self, task_id: str, action: str, tree: _Tree) -> str | None:
-        """Why *task_id* is no longer the caller's, when it works within a takeover.
+        """The refusal of *task_id* when it works within a takeover, else None.
 
-        The taken-over Sub-Agent itself stays the caller's to check and stop.
+        The taken-over Sub-Agent itself stays the caller's to check and stop. The
+        refusal names the state and the user as the way on; one that reads as a
+        permission problem invites retries with other id spellings.
         """
         if task_id.startswith(SUBAGENT_ID_PREFIX):
             subagent = next((item for item in tree.everyone if item.id == task_id), None)
             if subagent is None or subagent.within_takeover in (None, task_id):
                 return None
-            problem = (
+            state = (
                 f"{task_id} works below Sub-Agent {subagent.within_takeover}, whose Session the "
-                "user took over"
+                "user took over and now works in."
             )
+            outcome = "answer"
         elif task_id.startswith(COMMAND_ID_PREFIX):
             try:
                 report = self._commands.report(task_id)
@@ -435,20 +460,22 @@ class BackgroundTasksTool:
             if not report.background or subagent is None or subagent.within_takeover is None:
                 return None
             if subagent.within_takeover == subagent.id:
-                problem = (
-                    f"{task_id} belongs to the Session of Sub-Agent {subagent.id}, which the user "
-                    "took over"
+                state = (
+                    f"{task_id} runs in the Session of Sub-Agent {subagent.id}, which the user "
+                    "took over and now works in."
                 )
             else:
-                problem = (
-                    f"{task_id} belongs to Sub-Agent {subagent.id} below "
-                    f"{subagent.within_takeover}, whose Session the user took over"
+                state = (
+                    f"{task_id} runs in the Session of Sub-Agent {subagent.id}, which works below "
+                    f"Sub-Agent {subagent.within_takeover}, whose Session the user took over and "
+                    "now works in."
                 )
+            outcome = "result"
         else:
             return None
-        verb = "stop" if action == "stop" else "check"
-        message = f"{problem}; it works for the user now and is no longer yours to {verb}."
-        return f"{message} Nothing was stopped." if action == "stop" else message
+        if action == "stop":
+            return f"Nothing was stopped: {state} If it needs to stop, tell the user."
+        return f"{state} Ask the user if you need its {outcome}."
 
     def _yours(self, tree: _Tree) -> str:
         """Name the caller's working Sub-Agents and running commands, for an error."""
@@ -587,8 +614,11 @@ def _command_row(report: CommandReport, subagent: str | None) -> JsonObject:
 
 
 def _ended(report: CommandReport, subagent: str | None, names: ToolNames) -> JsonObject:
-    """An ended command as the shell reports it, with its id and its complete output's file."""
-    shell = ended_result(report, names)
+    """An ended command as the shell reports it, with its id and its complete output's file.
+
+    For a Sub-Agent's command, ``stopped_because`` speaks to the caller above it.
+    """
+    shell = ended_result(report, names, subagent=subagent)
     data: JsonObject = {"status": shell.pop("status"), "command_id": report.command_id}
     if subagent is not None:
         data["subagent"] = subagent
@@ -612,10 +642,16 @@ def _no_input(names: ToolNames) -> str:
     )
 
 
-def _message_refusal(subagent_id: str, content: str | None, *, can_send: bool) -> str:
+def _message_refusal(subagent_id: str | None, content: str | None, *, can_send: bool) -> str:
+    """*subagent_id*: the Sub-Agent the message was for, None when no id names one."""
     refusal = f"{BACKGROUND_TASKS_TOOL_NAME} sends no messages; nothing was sent."
     if not can_send:
         return f"{refusal} Its actions are list, status and stop."
+    if subagent_id is None:
+        return (
+            f"{refusal} To message a Sub-Agent, call {SUBAGENT_TOOL_NAME} with action send, the "
+            "Sub-Agent's id and your message as content."
+        )
     refusal = f"{refusal} To message Sub-Agent {subagent_id}, call {SUBAGENT_TOOL_NAME}"
     if content is None:
         return f"{refusal} with action send, this id and your message as content."
@@ -632,7 +668,8 @@ def _no_effect_notes(
     """Notes for fields that asked to wait for a task or to filter its output.
 
     *fields* maps each key as the call sent it to its kind (``NO_EFFECT_FIELDS``);
-    *shown* is what the result shows, *log* the file with a command's complete output.
+    *shown* is what the result shows, *log* the file with a command's complete
+    output or a Sub-Agent's activity, which the Agent can search instead.
     """
     notes: list[str] = []
     waits = [key for key, kind in fields.items() if kind == NO_EFFECT_WAIT]
@@ -646,7 +683,8 @@ def _no_effect_notes(
         if shown == "list":
             notes.append(f"{key} has no effect: list shows every task.")
         elif shown == "subagent":
-            notes.append(f"{key} has no effect.")
+            where = f" The Sub-Agent's activity log is {log}." if log is not None else ""
+            notes.append(f"{key} has no effect.{where}")
         elif log is not None:
             notes.append(
                 f"{key} has no effect: the output is shown unfiltered. The complete output is "

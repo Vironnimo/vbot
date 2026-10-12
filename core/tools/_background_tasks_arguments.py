@@ -245,13 +245,14 @@ def _unknown_action(arguments: dict[str, Any], action: str) -> JsonObject:
     if word not in _MESSAGE_ACTIONS and word not in _INPUT_ACTIONS:
         raise ToolContractError(f'Unknown action "{action}". Use one of: {_CHOICES}.')
     # Only the refusal runs: the call's keys are dropped unread, except a message
-    # for a Sub-Agent, which the refusal's corrected call carries.
+    # for a Sub-Agent, which the refusal's corrected call carries. A Session id
+    # names a Sub-Agent here as everywhere in this Tool; the handler resolves it.
     refused: JsonObject = {"action": "list", INPUT_ACTION: action}
     task_id = arguments.get("id")
     if (
         word in _MESSAGE_ACTIONS
         and isinstance(task_id, str)
-        and task_id.startswith(SUBAGENT_ID_PREFIX)
+        and task_id.startswith((SUBAGENT_ID_PREFIX, SESSION_ID_PREFIX))
     ):
         refused["id"] = task_id
         content = next(

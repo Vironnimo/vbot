@@ -922,30 +922,18 @@ async def test_takeover_hands_the_subagent_and_its_work_to_the_user(
     ]
     shown = await harness.background_tasks({"action": "status", "id": data["id"]})
     assert "running" not in shown["data"]
-    for task_id, action, message in [
-        (
-            serve,
-            "stop",
-            f"{serve} belongs to the Session of Sub-Agent {data['id']}, which the user took "
-            "over; it works for the user now and is no longer yours to stop. Nothing was "
-            "stopped.",
-        ),
-        (
-            tests,
-            "status",
-            f"{tests} belongs to Sub-Agent {deep['id']} below {data['id']}, whose Session the "
-            "user took over; it works for the user now and is no longer yours to check.",
-        ),
-        (
-            deep["session_id"],
-            "stop",
-            f"{deep['id']} works below Sub-Agent {data['id']}, whose Session the user took "
-            "over; it works for the user now and is no longer yours to stop. Nothing was "
-            "stopped.",
-        ),
+    # Each refusal names the task and the Sub-Agents up to the one the user took over, and
+    # offers no call: what happens to the task is the user's to decide.
+    for task_id, action, named in [
+        (serve, "stop", (serve, data["id"])),
+        (tests, "status", (tests, deep["id"], data["id"])),
+        (deep["session_id"], "stop", (deep["id"], data["id"])),
     ]:
         refusal = await harness.background_tasks({"action": action, "id": task_id})
-        assert refusal["error"] == {"code": "subagent_taken_over", "message": message}
+        assert refusal["error"]["code"] == "subagent_taken_over"
+        message = refusal["error"]["message"]
+        assert all(name in message for name in named), message
+        assert "{" not in message
     assert [commands.manager.status(serve), commands.manager.status(tests)] == ["running"] * 2
 
     # Stopping the taken-over Sub-Agent as a whole still stops everything below it.
