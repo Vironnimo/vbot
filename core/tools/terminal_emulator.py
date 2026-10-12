@@ -997,20 +997,3 @@ def _ansi_color(value: Any, *, background: bool) -> list[int]:
         else:
             return [48 if background else 38, 2, red, green, blue]
     return [49 if background else 39]
-
-
-# Emulators hosted in a renderer subinterpreter, addressed by an integer key
-# the host assigns. The host calls these functions by reference.
-_HOSTED: dict[int, TerminalEmulator] = {}
-
-
-def hosted_create(key: int, columns: int, rows: int, scrollback_lines: int) -> None:
-    _HOSTED[key] = TerminalEmulator(columns, rows, scrollback_lines=scrollback_lines)
-
-
-def hosted_call(key: int, method: str, arguments: tuple[Any, ...], options: dict[str, Any]) -> Any:
-    return getattr(_HOSTED[key], method)(*arguments, **options)
-
-
-def hosted_drop(key: int) -> None:
-    _HOSTED.pop(key, None)
