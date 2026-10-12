@@ -1350,14 +1350,21 @@ def _reindent_replacement(
     intended. ``file_unit`` gives the file's indentation unit when a conversion
     needs it. Without ``lines_correspond``, as when the line breaks fall in other
     places, only the first lines pair up.
+
+    When one model indent pairs with several file indents, a pair whose lines
+    read alike (whitespace aside) decides: a copied line that differs, such as
+    ``{"quote": ...`` for the file's ``{`` and ``"quote": ...`` lines joined,
+    carries the indent of other text than its file line.
     """
     if not replacement_text:
         return replacement_text
 
-    old_indents = _meaningful_indents(old_string_lf)
-    file_indents = _meaningful_indents(file_region)
-    if not old_indents or not file_indents:
+    old_lines = [line for line in _LINE_BREAK_RE.split(old_string_lf) if line.strip()]
+    file_lines = [line for line in _LINE_BREAK_RE.split(file_region) if line.strip()]
+    if not old_lines or not file_lines:
         return replacement_text
+    old_indents = [_leading_whitespace(line) for line in old_lines]
+    file_indents = [_leading_whitespace(line) for line in file_lines]
     pairs = (
         list(zip(old_indents, file_indents, strict=True))
         if lines_correspond and len(old_indents) == len(file_indents)
@@ -1368,9 +1375,13 @@ def _reindent_replacement(
     indented = [(model, file) for model, file in pairs if model or file]
     if 2 * sum(model == file for model, file in indented) > len(indented):
         return replacement_text
+    alike = [old.split() == held.split() for old, held in zip(old_lines, file_lines, strict=False)]
     seen: dict[str, str] = {}
-    for model_indent, file_indent in pairs:
-        seen.setdefault(model_indent, file_indent)
+    # Pairs of lines that read alike first; the order is stable otherwise.
+    for index in sorted(range(len(pairs)), key=lambda index: not alike[index]):
+        seen.setdefault(*pairs[index])
+    # Pairs that the decided mappings contradict say nothing about the levels.
+    pairs = [(model, file) for model, file in pairs if seen[model] == file]
     if all(model_indent == file_indent for model_indent, file_indent in seen.items()):
         return replacement_text
 

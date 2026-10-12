@@ -543,7 +543,13 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   lines are typos, and mapping them re-indented new lines wrongly (Session: a
   `-` line one level too deep put the new block one level too shallow). One
   space is never a level unit; when no wider unit explains the indents, new
-  lines keep their offset instead of every space becoming a file level.
+  lines keep their offset instead of every space becoming a file level. Lines
+  that read alike decide an indent's mapping before lines that differ, and a
+  pair the decided mappings contradict is left out: a copy that joins a line to
+  the next one (`{"quote": ...` for `{` and `"quote": ...`) carries the indent
+  of other text (Swarm run 2026-10-12: such a copy wrote the closing brace and
+  the added lines one level too deep). Test:
+  `test_copy_match.py::test_line_endings_and_indentation_follow_the_file`.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.
