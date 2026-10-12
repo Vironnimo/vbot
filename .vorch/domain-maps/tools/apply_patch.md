@@ -395,7 +395,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - `fuzzy_match.replace_fuzzy` owns precise matching: exact, normalized (newline,
   Unicode, typography), line-trimmed, and whitespace-normalized, in that order.
   Patch-only options require whole-line matches and constrain EOF. The matcher
-  retains its default substring mode for direct callers. No strategy's span
+  retains its default substring mode for direct callers. Its
+  `fold_for_search` is a separate, looser read-side fold for web_fetch `find`
+  (`tools/web_fetch.md`) that edits never use. No strategy's span
   starts or ends between the CR and LF of one line break: an old text starting
   with a line break replaces the whole CRLF instead of leaving a lone CR. Precise matches win;
   ambiguity at a winning strategy never falls through to a looser strategy

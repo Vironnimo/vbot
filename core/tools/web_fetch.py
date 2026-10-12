@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.fetch_config import DEFAULT_WEB_FETCH_SETTINGS, WEB_FETCH_CREDENTIALS
@@ -38,6 +39,7 @@ from core.tools._web_fetch_pages import (
     page_matches_url,
     read_page,
     save_page,
+    similar_refs,
 )
 from core.tools._web_fetch_services import FetchServiceError, clean_service_text, fetch_service
 from core.tools.contracts import compile_tool_contract
@@ -523,6 +525,35 @@ def _parse_request(arguments: JsonObject) -> _Request:
     )
 
 
+def _call(arguments: JsonObject) -> str:
+    return json.dumps(arguments, ensure_ascii=False)
+
+
+def _page_address(url: str) -> tuple[str, set[tuple[str, str]]]:
+    """Return what names a page in ``url``: its path and its query parameters.
+
+    Scheme, host, a trailing slash or index file, letter case and percent-encoding
+    vary between addresses of one page, as do tracking parameters.
+    """
+    parsed = urlparse(url)
+    path = re.sub(r"/index\.(?:html?|php)$", "", unquote(parsed.path).rstrip("/")).lower()
+    query = {
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.startswith("utm_")
+    }
+    return path, query
+
+
+def _redirect_note(requested: str, final: str) -> str:
+    """Say so when a redirect led to another page than the requested one."""
+    requested_path, requested_query = _page_address(requested)
+    final_path, final_query = _page_address(final)
+    if requested_path == final_path and requested_query <= final_query:
+        return ""
+    return f"This is not the requested page: {requested} redirected here."
+
+
 def _with_notes(result: JsonObject, notes: list[str]) -> JsonObject:
     notes = [note for note in notes if note]
     if not result["ok"] or not notes:
@@ -695,7 +726,44 @@ def make_web_fetch_handler(
                 "Could not save the fetched page. Check available disk space and retry.",
                 retryable=False,
             )
-        return await run_tool_worker(read_page, snapshot, view)
+        result = await run_tool_worker(read_page, snapshot, view)
+        return _with_notes(result, [_redirect_note(url, snapshot["url"])])
+
+    async def unusable_ref(
+        context: ToolContext,
+        manager: TemporaryFileManager,
+        request: _Request,
+        error: SavedPageError,
+    ) -> JsonObject:
+        """Fetch the call's url instead of an unusable ref, or say what to call next."""
+        assert request.ref is not None
+        if request.urls:
+            view = {key: value for key, value in request.view.items() if key != "ref"}
+            result = await fetch_one(context, manager, request.urls[0], request.output, view)
+            unused = f"ref {request.ref} was not used because {error.reason}"
+            if not result["ok"]:
+                result["error"]["message"] += f" ({unused}.)"
+            return _with_notes(result, [f"{unused}; url was fetched instead."])
+        message = str(error)
+        find = {"find": request.view["find"]} if "find" in request.view else {}
+        if error.url is not None:
+            message = f"{error.situation} Fetch it again with {_call({'url': error.url, **find})}."
+        elif error.state in {"malformed", "unknown"}:
+            similar = await run_tool_worker(similar_refs, context, manager, request.ref)
+            suffix = request.ref[request.ref.find(".") :] if "." in request.ref else ""
+            if len(similar) == 1:
+                ((ref, url),) = similar
+                message = (
+                    f"No saved page has ref {request.ref}. Did you mean {ref}, the saved page "
+                    f"of {url}? To read it, call {_call({'ref': ref + suffix, **find})}."
+                )
+            elif similar:
+                listed = ", ".join(f"{ref} ({url})" for ref, url in similar)
+                message = (
+                    f"No saved page has ref {request.ref}. Saved pages of this conversation "
+                    f"with a similar ref: {listed}. Pass the one you meant as ref."
+                )
+        return tool_failure(error.code, message, retryable=False)
 
     async def read_saved(
         context: ToolContext, manager: TemporaryFileManager, request: _Request
@@ -704,7 +772,7 @@ def make_web_fetch_handler(
         try:
             snapshot = await run_tool_worker(load_page, context, manager, request.ref)
         except SavedPageError as error:
-            return tool_failure(error.code, str(error), retryable=False)
+            return await unusable_ref(context, manager, request, error)
         if request.urls and not page_matches_url(snapshot, request.urls[0]):
             return tool_failure(
                 "invalid_arguments",
@@ -713,7 +781,10 @@ def make_web_fetch_handler(
                 "fetch the other address.",
                 retryable=False,
             )
-        return await run_tool_worker(read_page, snapshot, request.view)
+        result = await run_tool_worker(read_page, snapshot, request.view)
+        if request.urls:
+            return _with_notes(result, [_redirect_note(request.urls[0], snapshot["url"])])
+        return result
 
     async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         try:

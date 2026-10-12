@@ -8,7 +8,9 @@ import time
 from typing import Any
 
 from core.storage.temp_files import TEMPORARY_FILE_RETENTION, TemporaryFileManager
+from core.tools._web_fetch_find import find_spans
 from core.tools.tools import ToolContext, tool_failure, tool_success
+from core.utils.edit_distance import edit_distance
 from core.utils.tokens import estimate_tokens
 
 DEFAULT_MAX_CHARS = 12_000
@@ -33,14 +35,37 @@ _CODE_PASSAGE = (300, 900)
 # Passages this close together are shown as one, so no text appears twice.
 _ADJACENT_CHARS = 120
 _MAX_PASSAGES = 12
+# Snapshot sources whose text is not a Markdown rendering: plain text and code
+# fetched as is, and text extracted from documents.
+_PLAIN_SOURCES = frozenset({"direct", "document"})
 
 
 class SavedPageError(ValueError):
-    """A ref cannot be read; ``code`` says whether it is malformed or gone."""
+    """A ref cannot be read.
 
-    def __init__(self, code: str, message: str) -> None:
+    ``state`` is what the store can tell: ``malformed``, ``unknown`` (no such saved
+    page), ``foreign`` (another conversation's page), ``expired`` or ``unreadable``.
+    The message is ``situation`` followed by ``next_step``, which a caller knowing
+    more of the call can replace. ``reason`` says the state in one clause for a
+    result that fetched the call's url instead; ``url`` is an expired page's address.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        state: str,
+        situation: str,
+        reason: str,
+        *,
+        next_step: str = "Fetch the page again with url.",
+        url: str | None = None,
+    ) -> None:
         self.code = code
-        super().__init__(message)
+        self.state = state
+        self.situation = situation
+        self.reason = reason
+        self.url = url
+        super().__init__(f"{situation} {next_step}")
 
 
 def _decode_ref(ref: str) -> tuple[str, str, int]:
@@ -48,19 +73,31 @@ def _decode_ref(ref: str) -> tuple[str, str, int]:
     if not match or int(match[3] or 0) > MAX_SAVED_CHARS:
         raise SavedPageError(
             "invalid_ref",
+            "malformed",
             f'"{ref}" is not a web_fetch ref. Refs come from earlier web_fetch results and '
-            "look like tmp_7k2m9x4q1b3c or tmp_7k2m9x4q1b3c.m.12000. To fetch a page, pass "
-            "its address as url.",
+            "look like tmp_7k2m9x4q1b3c or tmp_7k2m9x4q1b3c.m.12000.",
+            "it is not a web_fetch ref",
+            next_step="To fetch a page, pass its address as url.",
         )
     return match[1], "page" if match[2] == "p" else "main", int(match[3] or 0)
 
 
-def _expired(identifier: str) -> SavedPageError:
+def _unknown(identifier: str) -> SavedPageError:
     return SavedPageError(
-        "page_expired",
-        f"Saved page {identifier} is not available: saved pages expire after "
-        f"{_RETENTION_HOURS} hours and can only be read in the conversation that fetched "
-        "them. Fetch the page again with url.",
+        "invalid_ref",
+        "unknown",
+        f"No saved page has ref {identifier}: the ref is mistyped, or the page was saved more "
+        f"than {_RETENTION_HOURS} hours ago and has been removed.",
+        "no saved page has that ref",
+    )
+
+
+def _unreadable(identifier: str) -> SavedPageError:
+    return SavedPageError(
+        "storage_error",
+        "unreadable",
+        f"Saved page {identifier} could not be read.",
+        "the saved page could not be read",
     )
 
 
@@ -107,27 +144,82 @@ def save_page(
     return snapshot
 
 
-def load_page(context: ToolContext, manager: TemporaryFileManager, ref: str) -> dict[str, Any]:
-    """Resolve only this Agent's snapshots in this Session, including expiry."""
-    identifier, _, _ = _decode_ref(ref)
+def _snapshot(manager: TemporaryFileManager, identifier: str) -> dict[str, Any]:
+    """Read one saved page as stored, or say why it cannot be read."""
     path = manager.root / _CATEGORY / f"{identifier}.json"
     try:
         if path.is_symlink() or path.stat().st_size > MAX_SAVED_CHARS * 16:
             raise ValueError("Invalid saved page.")
         snapshot = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise _unknown(identifier) from error
     except (OSError, ValueError) as error:
-        raise _expired(identifier) from error
+        raise _unreadable(identifier) from error
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("fetched_at"), (int, float)):
-        raise _expired(identifier)
+        raise _unreadable(identifier)
     if not all(isinstance(snapshot.get(key), str) for key in ("content", "page", "ref", "url")):
-        raise _expired(identifier)
-    if (
-        snapshot.get("owner") != [context.session_id, context.agent_id]
-        or time.time() - snapshot.get("fetched_at", 0)
-        > TEMPORARY_FILE_RETENTION[_CATEGORY].total_seconds()
-    ):
-        raise _expired(identifier)
+        raise _unreadable(identifier)
     return snapshot
+
+
+def load_page(context: ToolContext, manager: TemporaryFileManager, ref: str) -> dict[str, Any]:
+    """Resolve only this Agent's snapshots in this Session, including expiry."""
+    identifier, _, _ = _decode_ref(ref)
+    snapshot = _snapshot(manager, identifier)
+    if snapshot.get("owner") != [context.session_id, context.agent_id]:
+        raise SavedPageError(
+            "invalid_ref",
+            "foreign",
+            f"Saved page {identifier} belongs to another conversation; a saved page can be "
+            "read only in the conversation that fetched it.",
+            "it belongs to another conversation",
+            next_step="Fetch the page with url.",
+        )
+    if time.time() - snapshot["fetched_at"] > TEMPORARY_FILE_RETENTION[_CATEGORY].total_seconds():
+        raise SavedPageError(
+            "page_expired",
+            "expired",
+            f"Saved page {identifier} of {snapshot['url']} expired: saved pages last "
+            f"{_RETENTION_HOURS} hours.",
+            "it expired",
+            next_step=f"Fetch it again with {_call({'url': snapshot['url']})}.",
+            url=snapshot["url"],
+        )
+    return snapshot
+
+
+# Edits that turn a mistyped ref into one of the conversation's refs: a copy slip
+# such as two swapped characters. Refs are random, so another conversation's ref
+# or an unrelated one of this conversation is never this close.
+_REF_TYPOS = 2
+_REF_SHAPE = re.compile(r"tmp_([0-9a-z]{10,14})(?:\.[mp]\.[0-9]{1,7})?")
+
+
+def similar_refs(
+    context: ToolContext, manager: TemporaryFileManager, ref: str
+) -> list[tuple[str, str]]:
+    """Return this conversation's readable saved pages whose ref differs from ``ref`` by a typo.
+
+    Each entry is the ref and the page's address. Only files whose name is that
+    close are read, so the lookup stays cheap however many pages are saved.
+    """
+    shape = _REF_SHAPE.fullmatch(ref.strip().lower())
+    if shape is None:
+        return []
+    try:
+        names = [path.stem for path in (manager.root / _CATEGORY).glob("tmp_*.json")]
+    except OSError:
+        return []
+    found = []
+    for name in sorted(names):
+        if name[4:] == shape[1] or edit_distance(shape[1], name[4:], _REF_TYPOS) > _REF_TYPOS:
+            continue
+        try:
+            snapshot = load_page(context, manager, name)
+        except SavedPageError:
+            continue
+        found.append((name, snapshot["url"]))
+    return found
 
 
 def page_matches_url(snapshot: dict[str, Any], url: str) -> bool:
@@ -215,9 +307,10 @@ def _find_text(
             parts.append(passage)
         return "\n\n".join(parts)
 
-    for match in re.finditer(re.escape(find), text[offset:], re.IGNORECASE):
-        position = offset + match.start()
-        first, last = _passage_window(text, offset, position, offset + match.end(), size)
+    # Plain text and code, and document text, carry no Markdown syntax to read past.
+    markdown = snapshot.get("source") not in _PLAIN_SOURCES
+    for position, match_end in find_spans(text, find, markdown=markdown, offset=offset):
+        first, last = _passage_window(text, offset, position, match_end, size)
         if spans and first <= spans[-1][1] + _ADJACENT_CHARS:
             if last <= spans[-1][1]:
                 continue
@@ -240,10 +333,15 @@ def _find_text(
             if scope == "page" and snapshot["page"] != snapshot["content"]
             else ""
         )
+        narrower = (
+            "To find differing wording, search for one distinctive word or number from it."
+            if len(find.split()) > 1
+            else "Try another word or spelling."
+        )
         return {
             "content": (
-                f"No matches for {_call(find)} {searched} ({len(text)} characters{sections}). "
-                "Try a shorter or different phrase."
+                f"No word-for-word match for {_call(find)} {searched} ({len(text)} "
+                f"characters{sections}); formatting is ignored. {narrower}"
             )
         }
     count = f"{len(spans)} passage{'s' if len(spans) != 1 else ''}"
