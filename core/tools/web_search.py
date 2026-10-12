@@ -413,6 +413,16 @@ def _engines_did_not_answer(
     )
 
 
+def _widened_note(widened: list[tuple[str, str]]) -> str:
+    """Say how ``site:`` operators with a path were read, or return ""."""
+    if not widened:
+        return ""
+    (operator, domain), *rest = widened
+    readings = [f"{operator} was read as site:{domain}"]
+    readings += [f"{operator} as site:{domain}" for operator, domain in rest]
+    return f"Site restrictions cover whole sites, so {', '.join(readings)}."
+
+
 def _model_view(
     payload: dict[str, Any],
     *,
@@ -461,8 +471,9 @@ async def web_search_handler(
     )
     if exclude_error is not None:
         return _invalid(exclude_error)
+    widened: list[tuple[str, str]] = []
     if not domains and not exclude:
-        query, domains, exclude = split_site_operators(query)
+        query, domains, exclude, widened = split_site_operators(query)
     both = [domain for domain in domains if domain in exclude]
     if both:
         return _invalid(
@@ -492,6 +503,7 @@ async def web_search_handler(
     recency, age_note, age_error = _result_age(arguments)
     if age_error is not None:
         return _invalid(age_error)
+    notes = [note for note in (_widened_note(widened), age_note) if note]
 
     provider = _PROVIDERS[settings["provider"]]
     api_key = ""
@@ -539,7 +551,7 @@ async def web_search_handler(
         domains=domains,
         exclude=exclude,
         page=page,
-        notes=[age_note] if age_note else [],
+        notes=notes,
     )
     _record_display(context, results, data)
     return tool_success(data)

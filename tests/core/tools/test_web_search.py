@@ -236,7 +236,7 @@ async def test_other_spellings_run_the_same_search(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "query", "data"),
+    ("arguments", "query", "data", "read_as"),
     [
         (
             # Claude Code WebSearch
@@ -247,32 +247,50 @@ async def test_other_spellings_run_the_same_search(
             },
             "asyncio site:docs.python.org -site:reddit.com",
             {"domains": "docs.python.org", "excluded_domains": "reddit.com"},
+            None,
         ),
         (
             {"query": "asyncio", "site": "https://docs.python.org/"},
             "asyncio site:docs.python.org",
             {"domains": "docs.python.org"},
+            None,
         ),
         (
             {"query": "asyncio", "include_domains": "docs.python.org, example.com"},
             "asyncio site:docs.python.org OR site:example.com",
             {"domains": "docs.python.org, example.com"},
+            None,
         ),
         (
             # OpenClaw-style deny entries
             {"query": "asyncio", "domain_filter": ["-reddit.com", "*.python.org"]},
             "asyncio site:python.org -site:reddit.com",
             {"domains": "python.org", "excluded_domains": "reddit.com"},
+            None,
         ),
         (
             {"query": "asyncio (site:docs.python.org OR site:example.com) -site:reddit.com"},
             "asyncio site:docs.python.org OR site:example.com -site:reddit.com",
             {"domains": "docs.python.org, example.com", "excluded_domains": "reddit.com"},
+            None,
+        ),
+        (
+            # A path narrows to its site, and the note says so: engines that ignore
+            # the operator returned other sites without any sign (Swarm run 2026-10-12).
+            {"query": "asyncio site:docs.python.org/3/library -site:reddit.com"},
+            "asyncio site:docs.python.org -site:reddit.com",
+            {"domains": "docs.python.org", "excluded_domains": "reddit.com"},
+            "site:docs.python.org/3/library",
         ),
     ],
 )
 async def test_site_restrictions_in_any_form_filter_the_results(
-    tmp_path: Path, brave: Any, arguments: dict[str, Any], query: str, data: dict[str, str]
+    tmp_path: Path,
+    brave: Any,
+    arguments: dict[str, Any],
+    query: str,
+    data: dict[str, str],
+    read_as: str | None,
 ) -> None:
     result = await search(tmp_path, arguments)
 
@@ -281,6 +299,10 @@ async def test_site_restrictions_in_any_form_filter_the_results(
     assert {key: shown[key] for key in data} == data
     assert "reddit.com" not in shown["content"]
     assert "https://docs.python.org/3/" in shown["content"]
+    if read_as is None:
+        assert "note" not in shown
+    else:
+        assert read_as in shown["note"]
 
 
 @pytest.mark.asyncio
