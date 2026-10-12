@@ -11,7 +11,7 @@ Design rules (keep them when adding a pattern):
 
 * Only non-zero exit codes get a hint, except for a command that did not run as
   written, which the command text shows: a typographic quote that ended a
-  PowerShell string.
+  PowerShell string, or a Select-Object -First stage that stopped a program.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
@@ -30,9 +30,10 @@ Design rules (keep them when adding a pattern):
 
 from __future__ import annotations
 
+import bisect
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -620,6 +621,92 @@ def _hint_typographic_quote(command: str) -> str | None:
     )
 
 
+# A stage that stops the commands before it in its pipeline once N lines have
+# passed: Select-Object -First N (any prefix down to -f) without -Wait. The
+# bootstrap's head reads its input to the end. The stage's text runs to the
+# next pipe or statement.
+_FIRST_STAGE = re.compile(
+    r"(?<!\|)\|(?!\|)[ \t]*+(?:Select-Object|select)(?=[ \t])(?P<arguments>[^|;\n]*+)",
+    re.IGNORECASE,
+)
+_FIRST_COUNT = re.compile(
+    r"(?:^|[ \t])-f(?:i(?:r(?:st?)?)?)?(?:[ \t]*+:[ \t]*+|[ \t]++)(\d+)", re.I
+)
+_WAIT = re.compile(r"(?:^|[ \t])-w(?:a(?:it?)?)?(?=[ \t:]|$)", re.I)
+# Where a pipeline starts: after a statement separator or an opening bracket.
+_PIPELINE_START = re.compile(r"[;\n{(]|&&|\|\|")
+# The program a pipeline starts with, after PowerShell's call operator.
+_PIPELINE_PROGRAM = re.compile(r"[ \t]*+(?:&[ \t]*+)?(\"[^\"]*+\"|'[^']*+'|[^\s|;&(){}]++)")
+# Programs that do work before or after printing, as opposed to queries such as
+# git log or rg, which lose nothing when they are stopped early.
+_WORKING_PROGRAMS = frozenset(
+    {
+        *("python", "python3", "py", "pythonw", "pytest", "uv", "uvx", "poetry", "pipenv"),
+        *("tox", "nox", "node", "npm", "npx", "pnpm", "yarn", "bun", "deno", "tsx"),
+        *("ruby", "perl", "php", "dotnet", "cargo", "go", "java", "gradle", "gradlew"),
+        *("mvn", "make", "cmake", "msbuild", "pwsh", "powershell"),
+    }
+)
+_SCRIPT_SUFFIXES = (".py", ".ps1", ".js", ".mjs", ".cmd", ".bat")
+
+
+def _working_program(word: str) -> str | None:
+    """The program *word* names, as written without its path, when it does work."""
+    name = re.split(r"[/\\]", word.strip("'\""))[-1]
+    if name.lower().endswith(_SCRIPT_SUFFIXES):
+        return name
+    stem = name[:-4] if name.lower().endswith(".exe") else name
+    return stem if re.sub(r"[\d.]+$", "", stem.lower()) in _WORKING_PROGRAMS else None
+
+
+def _hint_first_stage(
+    command: str, output_lines: int, failed_programs: Sequence[str]
+) -> str | None:
+    """Name a program a Select-Object -First stage stopped before it finished.
+
+    PowerShell stops the commands before Select-Object -First N once N lines
+    have passed it, native programs included: ``python build.py | Select-Object
+    -First 8`` printed 8 progress lines and never wrote the file it writes at
+    the end, and the result looked normal. Only a program that does work counts,
+    and only when the output reached N lines; a failed program of that name
+    confirms the stop.
+    """
+    if not _POWERSHELL or "|" not in command:
+        return None
+    code = _powershell_code(command).text
+    starts = [0, *(match.end() for match in _PIPELINE_START.finditer(code))]
+    for stage in _FIRST_STAGE.finditer(code):
+        arguments = stage["arguments"]
+        count = _FIRST_COUNT.search(arguments)
+        if count is None or _WAIT.search(arguments):
+            continue
+        lines = int(count[1])
+        if not 0 < lines <= output_lines:
+            continue
+        start = starts[bisect.bisect_right(starts, stage.start()) - 1]
+        first = _PIPELINE_PROGRAM.match(code, start, stage.start())
+        if first is None:
+            continue
+        program = _working_program(command[first.start(1) : first.end(1)])
+        if program is None:
+            continue
+        written = " ".join(command[stage.start() + 1 : stage.end()].split())
+        stem = program.lower().removesuffix(".exe")
+        confirmed = any(
+            entry.split(" exited ", 1)[0].lower().removesuffix(".exe") == stem
+            for entry in failed_programs
+        )
+        stopped = "was stopped" if confirmed else "was most likely stopped"
+        return (
+            f"`{written}` stops {program} once {lines} lines have passed it, and the output "
+            f"reached {lines} lines: {program} {stopped} before it finished, and what it does "
+            "after that, such as writing files, did not happen. To let it finish, run it "
+            "without that stage (long output keeps its first and last lines) or add -Wait to "
+            "Select-Object."
+        )
+    return None
+
+
 # A word of the command, between blanks, quotes, parentheses and separators.
 _COMMAND_WORD = re.compile(r"[^\s'\"(),;|&]++")
 # A program reports a wildcard word it was given; at most this many such words are checked.
@@ -1098,6 +1185,8 @@ def annotate_failure(
     *,
     workdir: Path | None = None,
     offers: Callable[[str], bool] = _offers_none,
+    failed_programs: Sequence[str] = (),
+    output_lines: int | None = None,
 ) -> str | None:
     """Return one short next action for a failed command, or None.
 
@@ -1105,10 +1194,14 @@ def annotate_failure(
     last ``_SCAN_CHARS`` characters are examined. *workdir* is the directory the
     command started in, when known. *offers* tells whether the Agent is offered
     the Tool of a registry name; a hint names only offered Tools.
+    *failed_programs* are the command's failed child programs
+    (``<name> exited with code <code>``) and *output_lines* the number of lines
+    it printed (the lines of *output* when omitted).
 
     A command that did not run as written gets a hint whatever its exit code: a
     typographic quote ended a string early (first, since every error follows
-    from it). Otherwise exit code 0 or None stays unannotated.
+    from it), or a Select-Object -First stage stopped a program before it
+    finished (last). Otherwise exit code 0 or None stays unannotated.
     """
     command = command or ""
     output = output or ""
@@ -1118,7 +1211,14 @@ def annotate_failure(
         quote = None
     if quote:
         return quote
-    return _failure_hint(command, exit_code, output, workdir, offers) if exit_code else None
+    hint = _failure_hint(command, exit_code, output, workdir, offers) if exit_code else None
+    if hint:
+        return hint
+    lines = len(output.splitlines()) if output_lines is None else output_lines
+    try:
+        return _hint_first_stage(command, lines, failed_programs)
+    except Exception:
+        return None
 
 
 def _failure_hint(

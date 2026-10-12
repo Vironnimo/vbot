@@ -671,6 +671,57 @@ def test_typographic_quotes_that_end_a_powershell_string_are_named(
     assert annotate_failure(command, 0, output) is None
 
 
+@pytest.mark.parametrize(
+    ("command", "printed", "failed", "program"),
+    [
+        ("python build.py 2>&1 | Select-Object -First 8", 8, (), "python"),
+        (
+            "python build.py | Select-Object -First 8",
+            8,
+            ("python.exe exited with code 1",),
+            "python",
+        ),
+        (
+            "& 'C:/venv/Scripts/python.exe' build.py | Select-String step | select -f 8; 'done'",
+            9,
+            (),
+            "python",
+        ),
+        ("Write-Output start; node build.js | Select-Object -First:8", 40, (), "node"),
+        # The program ended before 8 lines, -Wait lets it finish, a query loses
+        # nothing, and -Last and head read to the end.
+        ("python build.py 2>&1 | Select-Object -First 20", 8, (), None),
+        ("python build.py | Select-Object -First 8 -Wait", 8, (), None),
+        ("git log --oneline | Select-Object -First 8", 8, (), None),
+        ("python build.py | Select-Object -Last 8", 8, (), None),
+        ("python build.py | head -n 8", 8, (), None),
+        ("Write-Output '| Select-Object -First 1'; python build.py", 8, (), None),
+    ],
+)
+def test_a_select_first_stage_that_stopped_a_program_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    printed: int,
+    failed: tuple[str, ...],
+    program: str | None,
+) -> None:
+    # Long output keeps only its first and last lines.
+    output = "\n".join(f"step {n}" for n in range(min(printed, 4)))
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, 0, output, failed_programs=failed, output_lines=printed)
+
+    if program is None:
+        assert hint is None
+    else:
+        assert hint is not None and program in hint and "-Wait" in hint
+        # A failed program of that name confirms the stop.
+        assert ("most likely" in hint) is not failed
+    # Select-Object is PowerShell's.
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, 0, output, failed_programs=failed) is None
+
+
 def _project(tmp_path: Path) -> Path:
     """A working directory holding the package `shop` and a `tests` folder."""
     (tmp_path / "shop").mkdir()
