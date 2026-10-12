@@ -435,6 +435,17 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
     assert read["data"]["content"] == (
         f"[{first}] {_name(board, 0)} (in the main discussion d1):\ninferred post"
     )
+    # The Tool's own name as recipient or outer action only labels the wrapped call.
+    for labelled in (
+        {
+            "parameters": {"action": "read", "message_id": first},
+            "recipient_name": "functions.swarm_board",
+        },
+        {"action": "swarm_board", "parameters": {"action": "read", "message_id": first}},
+        {"action": "swarm_board", "message_id": first},
+    ):
+        result, _ = await dispatch(board, labelled, peer=2)
+        assert result["data"]["content"] == read["data"]["content"], result
     # A placeholder or a repeat beside the real text asks for nothing more.
     for message, text in [("placeholder", "kept"), ("same", "same")]:
         result, _ = await dispatch(board, {"action": "post", "message": message, "text": text})
@@ -458,10 +469,14 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
         ({"action": "check_inbox"}, 'Use {"action": "read"} to read the newest posts'),
         # A file path names the file the call meant for another Tool.
         ({"action": "read", "parameters": {"limit": 200, "path": "verify.py"}}, '"verify.py"'),
+        ({"recipient_name": "swarm_wiki", "text": "x"}, "recipient_name"),
     ]:
         result, _ = await dispatch(board, arguments)
         assert result["error"]["code"] == "invalid_arguments", result
         assert message in result["error"]["message"]
+    # A conflict names both values, so the caller can tell which one it meant.
+    conflict, _ = await dispatch(board, {"action": "post", "arguments": {"action": "read"}})
+    assert '"post"' in conflict["error"]["message"] and '"read"' in conflict["error"]["message"]
     assert len(await board_posts(board)) == len(posts)
 
 

@@ -10,7 +10,7 @@ resolve them against the group and explain any correction.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from core.tools import ToolContractError
@@ -36,6 +36,8 @@ Json = dict[str, Any]
 _WRAPPERS = frozenset({"request", "arguments", "parameters", "params", "input", "args", "payload"})
 # Idempotency keys are derived from the Tool Call; an echoed key requests nothing.
 _DERIVED = frozenset({"requestid", "idempotencykey"})
+# Fields some harnesses fill with the called Tool's own name; that value requests nothing.
+_TOOL_LABELS = frozenset({"recipientname", "action", "operation"})
 
 _BOARD_ALIASES: dict[str, tuple[str, ...]] = {
     "text": ("body", "content", "message_text", "msg"),
@@ -233,7 +235,7 @@ _STATE_ACTIONS = frozenset(
 def normalize_board(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_board call and infer an action that its fields imply."""
 
-    value = _prepare(arguments)
+    value = _prepare(arguments, contract.name)
     if not isinstance(value, dict):
         return value
     path = next(
@@ -281,7 +283,7 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
 def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_wiki call and infer an action that its fields imply."""
 
-    value = _prepare(arguments)
+    value = _prepare(arguments, contract.name)
     if not isinstance(value, dict):
         return value
     normalized = _normalize(
@@ -318,7 +320,7 @@ def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
 def normalize_inbox(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_inbox call; its only action is receive."""
 
-    value = _prepare(arguments)
+    value = _prepare(arguments, contract.name)
     if not isinstance(value, dict):
         return value
 
@@ -341,7 +343,7 @@ def normalize_inbox(contract: ToolContract, arguments: Any) -> Any:
 def normalize_state(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_state call; every reading of its action is status."""
 
-    value = _prepare(arguments)
+    value = _prepare(arguments, contract.name)
     if not isinstance(value, dict):
         return value
 
@@ -361,29 +363,52 @@ def normalize_state(contract: ToolContract, arguments: Any) -> Any:
     )
 
 
-def _prepare(arguments: Any) -> Any:
-    """Rename wrapper objects to the unwrapped spelling and drop derived keys."""
+def _prepare(arguments: Any, tool: str) -> Any:
+    """Unwrap wrapper objects and drop derived keys and labels naming ``tool``.
+
+    Some harnesses address the call with ``recipient_name`` or put the Tool's
+    own name in ``action`` beside the wrapped arguments; both only repeat which
+    Tool is called. Two different values for one field are refused, naming both.
+    """
 
     if not isinstance(arguments, dict):
         return arguments
     value: Json = {}
+    sent: dict[Any, str] = {}
+    for key, path, item in _entries(arguments, spelling(tool)):
+        if key in value and value[key] != item:
+            raise ToolContractError(
+                f"Conflicting values for {key}: {sent[key]} is {_shown(value[key])} and "
+                f"{path} is {_shown(item)}. Send only the intended one."
+            )
+        value[key] = item
+        sent.setdefault(key, path)
+    return value
+
+
+def _entries(arguments: Json, tool: str, prefix: str = "") -> Iterator[tuple[Any, str, Any]]:
+    """Yield (key, key path as sent, value) for each argument inside wrapper objects."""
+
     for key, item in arguments.items():
         name = spelling(key) if isinstance(key, str) else key
         if name in _DERIVED:
             continue
-        if name in _WRAPPERS and isinstance(item, dict):
-            nested = _prepare(item)
-            for inner, inner_value in nested.items():
-                if inner in value and value[inner] != inner_value:
-                    raise ToolContractError(
-                        f"Conflicting values for {inner}; provide one intended value."
-                    )
-                value[inner] = inner_value
+        if name in _TOOL_LABELS and isinstance(item, str) and _names_tool(item, tool):
             continue
-        if key in value and value[key] != item:
-            raise ToolContractError(f"Conflicting values for {key}; provide one intended value.")
-        value[key] = item
-    return value
+        path = f"{prefix}{key}"
+        if name in _WRAPPERS and isinstance(item, dict):
+            yield from _entries(item, tool, f"{path}.")
+            continue
+        yield key, path, item
+
+
+def _names_tool(value: str, tool: str) -> bool:
+    return spelling(value) in {tool, f"functions{tool}"}
+
+
+def _shown(value: Any) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= 40 else text[:37] + "..."
 
 
 def _normalize(

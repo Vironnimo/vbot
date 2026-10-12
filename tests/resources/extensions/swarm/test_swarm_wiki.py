@@ -425,6 +425,12 @@ async def test_wiki_scope_management_recovery_and_targeted_edits(board):
         board, {"request": {"operation": "READ", "page_id": page_id, "limti": "4"}}
     )
     assert repaired["data"]["content"] == "same"
+    # The Tool's own name as the outer action only labels the wrapped call.
+    labelled = await invoke(
+        board,
+        {"action": "swarm_wiki", "parameters": {"action": "read", "page_id": page_id, "limit": 4}},
+    )
+    assert labelled["data"]["content"] == "same"
     changed = await board.service.operation(
         "wiki",
         {
