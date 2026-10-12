@@ -47,6 +47,8 @@ and shows what the Model reads back.
 
 ## Agent-facing text
 
+Review labels such as "Review B12" name the reviews of 2026-10-12: `tools/shell/agent-facing-text.md`.
+
 | Text | Reason |
 |---|---|
 | `subagent`: `Delegate tasks to Sub-Agents and send them messages.` | Listing, checking and stopping moved to `background_tasks`, together with background commands. "send them messages" keeps the reason of the former first sentence: follow-ups go to `send`, not to a new `run`; the action text names both actions and the default. |

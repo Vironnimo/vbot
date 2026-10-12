@@ -83,6 +83,8 @@ The user's first own message in a Sub-Agent Session. It permanently ends forward
 
 ## Agent-facing text
 
+Review labels such as "Review B12" name the reviews of 2026-10-12: `tools/shell/agent-facing-text.md`.
+
 | Text | Reason |
 |---|---|
 | Role block: `You are a Sub-Agent: another Agent, your Parent Agent, delegated work to you ...` | Without it a Sub-Agent takes the brief as the user's request and addresses the user. |
