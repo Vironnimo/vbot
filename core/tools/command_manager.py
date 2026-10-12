@@ -73,6 +73,7 @@ from ._command_record import BlockingRunner, CommandRecord, CommandServices
 from ._command_types import (
     COMMAND_DRAIN_SECONDS,
     COMMAND_HEAD_LINES,
+    COMMAND_IDLE_WINDOW_SECONDS,
     COMMAND_LEFTOVER_QUIET_SECONDS,
     COMMAND_LOG_REFRESH_SECONDS,
     COMMAND_MAX_LIVE,
@@ -344,9 +345,13 @@ class CommandManager:
         return CommandHandle(record.command_id, record.pid)
 
     async def wait(self, command_id: str, *, seconds: float | None) -> CommandWaitOutcome:
-        """Wait until the command ended (``ended``) or *seconds* passed (``deadline``).
+        """Wait until the command ended (``ended``) or *seconds* passed.
 
-        None waits without a limit. Cancelling the wait changes nothing.
+        A wait that passed returns ``idle`` when the command's processes were
+        quiet over its last ``COMMAND_IDLE_WINDOW_SECONDS`` (no output, no new
+        process, at most ``IDLE_CPU_SECONDS`` of CPU time, as for processes left
+        running), else ``deadline``; a shorter wait is followed whole. None
+        waits without a limit. Cancelling the wait changes nothing.
         """
         return await self._get(command_id).wait(seconds)
 
@@ -745,6 +750,7 @@ def _group_key(owner: RunExecutionOwner) -> tuple[str, str, str]:
 __all__ = [
     "COMMAND_DRAIN_SECONDS",
     "COMMAND_HEAD_LINES",
+    "COMMAND_IDLE_WINDOW_SECONDS",
     "COMMAND_LEFTOVER_QUIET_SECONDS",
     "COMMAND_LOG_REFRESH_SECONDS",
     "COMMAND_MAX_LIVE",

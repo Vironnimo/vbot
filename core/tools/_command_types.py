@@ -50,12 +50,18 @@ COMMAND_DRAIN_SECONDS = 1.0
 # After the shell exited, processes it left running that print nothing, start
 # nothing and use no CPU this long end the command: they wait, like a server.
 COMMAND_LEFTOVER_QUIET_SECONDS = 2.0
+# A wait that passes tells whether the command's processes were quiet in the same
+# sense over its last this many seconds (``idle``). Long enough that work in
+# bursts, or a transfer that uses more than 1.5 % of a core (``IDLE_CPU_SECONDS``
+# in this window), is not idle; short enough to fit the default wait with room.
+COMMAND_IDLE_WINDOW_SECONDS = 10.0
 # POSIX: a stopped command gets SIGINT first; what still runs after this long is killed.
 COMMAND_STOP_GRACE_SECONDS = 3.0
 
 StopReason = Literal["agent", "parent", "user", "run_cancelled", "shutdown", "scope"]
 CommandStatus = Literal["running", "completed", "failed", "stopped"]
-CommandWaitOutcome = Literal["ended", "deadline"]
+# ``idle``: the wait passed while the command's processes were quiet over its end.
+CommandWaitOutcome = Literal["ended", "deadline", "idle"]
 # The label of a command in lists and deliveries is cut to this many characters.
 _LABEL_MAX_CHARS = 120
 
@@ -268,6 +274,7 @@ class CommandStopError(CommandManagerError):
 __all__ = [
     "COMMAND_DRAIN_SECONDS",
     "COMMAND_HEAD_LINES",
+    "COMMAND_IDLE_WINDOW_SECONDS",
     "COMMAND_LEFTOVER_QUIET_SECONDS",
     "COMMAND_LOG_REFRESH_SECONDS",
     "COMMAND_MAX_LIVE",
