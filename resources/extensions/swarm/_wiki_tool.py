@@ -820,6 +820,13 @@ def _difference(item: Json) -> str:
         )
     if item["copy"] is None:
         return text.WIKI_DIFFERENCE_PAGE_ONLY.format(line=item["line"], page=repr(item["file"]))
+    if item.get("spacing"):
+        return text.WIKI_DIFFERENCE_SPACING.format(
+            line=item["line"],
+            page=repr(item["file"]),
+            copy=repr(item["copy"]),
+            side=item["spacing"],
+        )
     template = text.WIKI_DIFFERENCE_CUT if item["truncated"] else text.WIKI_DIFFERENCE
     return template.format(line=item["line"], page=repr(item["file"]), copy=repr(item["copy"]))
 

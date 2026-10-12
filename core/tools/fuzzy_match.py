@@ -157,7 +157,8 @@ class LineDifferences:
     ``count`` all of them. Each names the file ``line`` and the ``copy_line``
     with at most 240-character windows of both (``file``, ``copy``); a line
     only the file holds has no copy side, a line only the copy holds no file
-    side (``None``).
+    side (``None``). ``spacing`` is ``"start"`` or ``"end"`` for a line that
+    differs only in the whitespace at that side, else ``None``.
     """
 
     first_line: int
@@ -534,7 +535,11 @@ def line_differences(content: str, copy: str, start: int, *, limit: int) -> Line
     with runs of whitespace collapsed, and lines the copy added or dropped are
     told apart from changed ones, so one missing line does not make every later
     line differ. File lines before the copy's first line and after its last are
-    not part of the passage. ``None`` when the copy holds no text or the file no
+    not part of the passage. A copy of several lines can start inside its first
+    file line and end inside its last one; such a copy matches only with the
+    whitespace at its inner line breaks, so a line that differs there alone,
+    such as a continuation line without its indentation, differs too and names
+    the ``spacing`` side. ``None`` when the copy holds no text or the file no
     line at the aligned place.
     """
     file_lines = split_text_lines(content)
@@ -559,6 +564,7 @@ def line_differences(content: str, copy: str, start: int, *, limit: int) -> Line
             break  # Only file lines after the copy's last line remain.
         if tag == "equal":
             passage.extend(range(file_start, file_end))
+            pairs.extend(zip(range(file_start, file_end), range(copy_start, copy_end), strict=True))
             continue
         leading = not passage and copy_start == 0
         # The copy's first lines lead into the lines that follow, so they align from the end.
@@ -585,16 +591,72 @@ def line_differences(content: str, copy: str, start: int, *, limit: int) -> Line
     if not passage:
         return None
     passage.sort()
+    last = len(wanted) - 1
+    # A copy that starts or ends inside a file line cannot match line by line with
+    # its lines trimmed; it matches with the whitespace at each inner line break.
+    inside = last > 0 and any(
+        _loose(window[file_index]) != _loose(wanted[copy_index])
+        for file_index, copy_index in pairs
+        if file_index is not None and copy_index in (0, last)
+    )
+    differing: list[tuple[int | None, int | None, str | None]] = []
+    for file_index, copy_index in pairs:
+        if file_index is None or copy_index is None:
+            differing.append((file_index, copy_index, None))
+            continue
+        differs, spacing = _paired_difference(
+            window[file_index],
+            wanted[copy_index],
+            start=copy_index == 0,
+            end=copy_index == last,
+            spaced=inside,
+        )
+        if differs:
+            differing.append((file_index, copy_index, spacing))
     shown = [
         _line_difference(
             None if file_index is None else (begin + file_index + 1, window[file_index]),
             None if copy_index is None else (first + copy_index + 1, wanted[copy_index]),
+            spacing=spacing,
         )
-        for file_index, copy_index in pairs[:limit]
+        for file_index, copy_index, spacing in differing[:limit]
     ]
     return LineDifferences(
-        begin + passage[0] + 1, begin + passage[-1] + 1, tuple(shown), len(pairs)
+        begin + passage[0] + 1, begin + passage[-1] + 1, tuple(shown), len(differing)
     )
+
+
+def _paired_difference(
+    file_line: str, copy_line: str, *, start: bool, end: bool, spaced: bool
+) -> tuple[bool, str | None]:
+    """Tell whether a copied line differs from the file line it is paired with.
+
+    ``start`` and ``end`` mark the first and last line of a copy of several
+    lines: the first can be the end of its file line, the last its beginning.
+    ``spaced`` says the whitespace at the line's breaks must match as well.
+    The second value names the side, ``"start"`` or ``"end"``, of a line that
+    differs only in its whitespace there.
+    """
+    if not _fits(_loose(file_line), _loose(copy_line), start=start, end=end):
+        return True, None
+    if not spaced:
+        return False, None
+    held, copied = (_HORIZONTAL_WHITESPACE_RE.sub(" ", line) for line in (file_line, copy_line))
+    if _fits(held, copied, start=start, end=end):
+        return False, None
+    leading = held.startswith(" ") != copied.startswith(" ")
+    trailing = held.endswith(" ") != copied.endswith(" ")
+    # The first line's leading whitespace lies inside its file line.
+    return True, "start" if leading and not (start and trailing) else "end"
+
+
+def _fits(held: str, copied: str, *, start: bool, end: bool) -> bool:
+    """Whether ``copied`` is the file line ``held``, its end (``start``) or its beginning."""
+    if start and not end:
+        return held.endswith(copied)
+    if end and not start:
+        return held.startswith(copied)
+    return held == copied
 
 
 def _aligned_block(
@@ -665,10 +727,20 @@ def _aligned_block(
 
 
 def _line_difference(
-    file_line: tuple[int, str] | None, copy_line: tuple[int, str] | None
+    file_line: tuple[int, str] | None,
+    copy_line: tuple[int, str] | None,
+    *,
+    spacing: str | None = None,
 ) -> dict[str, int | str | bool | None]:
-    """Describe one differing line: numbered windows of both sides that hold it."""
-    if file_line is not None and copy_line is not None:
+    """Describe one differing line: numbered windows of both sides that hold it.
+
+    ``spacing`` names the side of a line that differs only in its whitespace.
+    """
+    if spacing is not None and file_line is not None and copy_line is not None:
+        file_position, copy_position = (
+            (0, 0) if spacing == "start" else (len(file_line[1]), len(copy_line[1]))
+        )
+    elif file_line is not None and copy_line is not None:
         file_position, copy_position = _difference_positions(file_line[1], copy_line[1])
     else:
         file_position = copy_position = 0
@@ -677,6 +749,7 @@ def _line_difference(
         "copy_line": None,
         "file": None,
         "copy": None,
+        "spacing": spacing,
     }
     truncated = False
     for key, side, position in (

@@ -236,6 +236,10 @@ WIKI_DIFFERENCE = "line {line}: the page has {page} where old_text has {copy}."
 WIKI_DIFFERENCE_CUT = (
     "line {line}, in excerpts around the difference: the page has {page} where old_text has {copy}."
 )
+WIKI_DIFFERENCE_SPACING = (
+    "line {line}: the page has {page} where old_text has {copy}; only the whitespace at the "
+    "{side} of the line differs."
+)
 WIKI_DIFFERENCE_PAGE_ONLY = "line {line}: the page has {page}, which old_text lacks."
 WIKI_DIFFERENCE_COPY_ONLY = "old_text line {line} has {copy}, which the page lacks."
 WIKI_DIFFERENCES_MORE = "{count} more lines differ."

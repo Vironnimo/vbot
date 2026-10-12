@@ -12,6 +12,7 @@ from resources.extensions.swarm.wiki_text import (
     WIKI_CONFLICT_CONTENT,
     WIKI_CONFLICT_RETRY,
     WIKI_DIFFERENCE,
+    WIKI_DIFFERENCE_SPACING,
     WIKI_DIFFERENCES_MORE,
     WIKI_LIST_MATCHES,
     WIKI_LIST_NO_MATCH,
@@ -667,6 +668,33 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
     # A fragment of a longer line points at that line.
     lines, passage = await miss("three replicas behind the proxy")
     assert passage == "The deployment uses three replicas behind the load balancer today."
+    # old_text may start inside its first line and end inside its last; the line named
+    # is the one that really differs, here a continuation line without its indentation.
+    listed = await create(
+        board,
+        "# Fields\n- item (`date` free text,\n  runtime-parsed); `era` canonical band\n"
+        "  stored exactly as rendered\n- other item",
+        "Fields",
+    )
+    for old in (
+        "`era` canonical band\nstored exactly as rendered",
+        "runtime-parsed); `era` canonical band\nstored exactly",
+    ):
+        lines, passage = await miss(old, listed)
+        assert _differing_lines(lines) == ["4"], lines
+        assert (
+            WIKI_DIFFERENCE_SPACING.format(
+                line=4,
+                page="'  stored exactly as rendered'",
+                copy=repr(old.splitlines()[1]),
+                side="start",
+            )
+            in lines
+        )
+        assert "  stored exactly as rendered" in passage
+    # A first line that differs in its text is still named.
+    lines, _ = await miss("`era` canonical bend\n  stored exactly as rendered", listed)
+    assert _differing_lines(lines) == ["3"]
     assert visible(await edit("same")) == (
         "Error (wiki_edit_conflict): old_text occurs 2 times, all in line 5. Include "
         "neighboring text so it occurs only once. Nothing changed.\nline 5:\nsame same\nEnd"
