@@ -301,7 +301,12 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
   line N: the file has '...' where the patch has '...'` (`where old_string
-  has` for `old_string` edits). Candidate windows come from the three longest
+  has` for `old_string` edits). Quoted text in these reports, in the `line_join`
+  refusal and in notes holds the characters as the file or the call has them
+  (`_patch_syntax.quoted`, not `repr`): a backslash or quote stays single, and
+  only a character that shows nothing and is not whitespace is written as an
+  escape (`​`); text in `'` uses `"` when it holds `'` but not `"`
+  (`edit.md` -> Agent-facing text). Candidate windows come from the three longest
   copied lines and from distinctive copied lines (at most 3 occurrences) the file
   holds exactly; a window at least 2 such lines place is shown even below the
   0.60 similarity floor (`find_closest_candidates`). The line-by-line comparison

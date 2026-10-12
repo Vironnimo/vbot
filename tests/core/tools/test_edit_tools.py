@@ -289,6 +289,46 @@ async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("line", "edit", "shown"),
+    [
+        # The first difference quotes the file's line, its backslash single: an Agent
+        # copies the quote into its next old_string.
+        pytest.param(
+            "s = 'a\\u00b0b'",
+            ("s = 'a\\u00b0c'", "s = 'x'"),
+            ["s = 'a\\u00b0b'", "s = 'a\\u00b0c'"],
+            id="first-difference",
+        ),
+        # The refused line join quotes the line it names the same way.
+        pytest.param(
+            'path = "C:\\\\data"',
+            ('path = "C:\\\\data"\n', 'path = "C:\\\\data"'),
+            ['path = "C:\\\\data"'],
+            id="line-join",
+        ),
+        # A character that shows nothing is spelled out.
+        pytest.param("s = 'a\u200bb'", ("s = 'ab' + q", "s = 'x'"), ["\\u200b"], id="invisible"),
+    ],
+)
+async def test_reports_quote_text_as_the_file_has_it(tmp_path, line, edit, shown) -> None:
+    content = f"{line}\nnext = 1\n"
+    (tmp_path / "a.py").write_text(content, encoding="utf-8", newline="\n")
+
+    result = await call(
+        tmp_path,
+        {"path": "a.py", "edits": [{"old_string": edit[0], "new_string": edit[1]}]},
+        name="edit",
+    )
+
+    message = text(result)
+    assert not result["ok"]
+    assert all(part in message for part in shown)
+    # No backslash is doubled, as repr would.
+    assert "\\\\" not in message.replace(line, "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("content", "edit", "outcome"),
     [
         # Every word is the file's, only the line breaks fall elsewhere: new_string

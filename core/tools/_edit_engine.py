@@ -36,7 +36,7 @@ from os.path import commonprefix
 from typing import Literal
 
 from core.tools._decorated_insert import place_before_decorators
-from core.tools._patch_syntax import _amid_additions, _Hunk, _PatchError
+from core.tools._patch_syntax import _amid_additions, _Hunk, _PatchError, quoted
 from core.tools.arguments import (
     TEXT_LINE_BREAK,
     line_number_gutter_candidates,
@@ -73,11 +73,11 @@ def _deviations(notes: list[str]) -> list[str]:
 
 _GUTTER_WARNING = "Removed read-output line-number prefixes before applying the change."
 _GUTTER_KEPT_NOTE = (
-    "{count} added lines start with a number and | like read output, such as {example!r}; "
+    "{count} added lines start with a number and | like read output, such as {example}; "
     "they were written as sent. If they are copied line numbers, remove them in another call."
 )
 _FIRST_AFTER_HINT_NOTE = (
-    "The lines to replace occur {occurrences} times after {hint!r}; the first, at line "
+    "The lines to replace occur {occurrences} times after {hint}; the first, at line "
     "{line}, was changed."
 )
 _FIRST_AFTER_PREVIOUS_NOTE = (
@@ -85,12 +85,12 @@ _FIRST_AFTER_PREVIOUS_NOTE = (
     "in this file, at line {line}, was changed."
 )
 _UNMARKED_NOTE = (
-    "The line {example!r} between + lines has no + prefix and is not in the file; it was "
+    "The line {example} between + lines has no + prefix and is not in the file; it was "
     "added as a new line."
 )
 _UNMARKED_LINES_NOTE = (
     "{count} lines between + lines have no + prefix and are not in the file, such as "
-    "{example!r}; they were added as new lines."
+    "{example}; they were added as new lines."
 )
 _UNMARKED_BLANK_NOTE = (
     "The empty line between + lines has no prefix and, read as unchanged, does not match the "
@@ -268,7 +268,7 @@ def clean_additions(hunk: _Hunk, path: object) -> tuple[_Hunk, list[str]]:
             lines[start:end] = [("+", text) for text in candidates[0].split("\n")]
             warnings.append(_GUTTER_WARNING)
         elif len(shaped) >= 2:
-            warnings.append(_GUTTER_KEPT_NOTE.format(count=len(shaped), example=shaped[0]))
+            warnings.append(_GUTTER_KEPT_NOTE.format(count=len(shaped), example=quoted(shaped[0])))
         start = end
     return replace(hunk, lines=lines), warnings
 
@@ -424,8 +424,8 @@ def _refuse_join(content: str, found: FuzzyReplacement, hunk: _Hunk, path: objec
         path=path,
         label=hunk.label,
         details=details,
-        line=repr(line),
-        next=repr(following),
+        line=quoted(line),
+        next=quoted(following),
     )
 
 
@@ -745,9 +745,9 @@ def _unmarked_additions(
     example = lines[unmarked[0]][1].strip()
     example = example if len(example) <= 80 else example[:77] + "..."
     if len(unmarked) == 1:
-        note = _UNMARKED_NOTE.format(example=example)
+        note = _UNMARKED_NOTE.format(example=quoted(example))
     else:
-        note = _UNMARKED_LINES_NOTE.format(count=len(unmarked), example=example)
+        note = _UNMARKED_LINES_NOTE.format(count=len(unmarked), example=quoted(example))
     return reread, found, DeviationNote(note)
 
 
@@ -797,7 +797,7 @@ def _ordering_note(
     line = found.first_changed_line + len(_BREAK.findall(content, 0, start))
     if hunk.hints:
         hint = _hint_text(hunk.hints[-1]).strip()
-        return _FIRST_AFTER_HINT_NOTE.format(occurrences=occurrences, hint=hint, line=line)
+        return _FIRST_AFTER_HINT_NOTE.format(occurrences=occurrences, hint=quoted(hint), line=line)
     return _FIRST_AFTER_PREVIOUS_NOTE.format(occurrences=occurrences, line=line)
 
 
