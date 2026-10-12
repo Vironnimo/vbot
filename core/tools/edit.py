@@ -21,7 +21,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Collection, Sequence
-from functools import cache
+from functools import cache, partial
 from typing import Any, Literal
 
 from core.tools._file_changes import cancelled_paths, change_batch, file_reports, run_operations
@@ -236,11 +236,17 @@ def normalize_edit_arguments(arguments: Any) -> Any:
     the call's one file; a shape that leaves the change open, or changes another
     file, fails with the call to send instead.
     """
+    # Old or new text sent beside edits text that breaks: the call came apart.
+    beside = [
+        field
+        for field in ("old_string", "new_string")
+        if isinstance(arguments, dict) and any(_edit_field(key) == field for key in arguments)
+    ]
     normalized = normalize_call_arguments(
         _edit_repair_contract(),
         arguments,
         field_aliases=_EDIT_ALIASES,
-        field_normalizers={"edits": _edits_value},
+        field_normalizers={"edits": partial(_edits_value, beside=beside)},
         empty_as_omitted=("path", "replace_all"),
     )
     if not isinstance(normalized, dict):
@@ -289,11 +295,13 @@ def _edits_text_schemas() -> tuple[JsonObject, JsonObject]:
     return {"type": "array", "items": item}, item
 
 
-def _edits_value(value: Any) -> Any:
+def _edits_value(value: Any, *, beside: Sequence[str] = ()) -> Any:
     """Return ``edits`` sent as JSON text as the array or object it encodes.
 
-    Text that is JSON except for unescaped quotes inside old_string or
-    new_string is read with those quotes escaped (``decode_json_argument``).
+    Text that is JSON except for unescaped quotes or raw line breaks inside
+    old_string or new_string is read with those escaped
+    (``decode_json_argument``). ``beside`` names the call's other fields that
+    belong in an edit, for the refusal of text that is not JSON.
     """
     if not isinstance(value, str):
         return value
@@ -305,7 +313,7 @@ def _edits_value(value: Any) -> Any:
         if encoded not in ("[", "{"):
             decoded = None
         else:
-            raise ValueError(_broken_edits_text(value, error)) from None
+            raise ValueError(_broken_edits_text(value, error, beside)) from None
     except ToolContractError:
         raise
     except ValueError, RecursionError:
@@ -318,11 +326,25 @@ def _edits_value(value: Any) -> Any:
     )
 
 
-def _broken_edits_text(text: str, error: json.JSONDecodeError) -> str:
-    """Say where ``edits`` stops being JSON and how to send it."""
+def _broken_edits_text(text: str, error: json.JSONDecodeError, beside: Sequence[str]) -> str:
+    """Say where ``edits`` stops being JSON and how to send it.
+
+    Text that ends early, or that has edit fields beside it, lost part of the
+    call: no reading restores it, so the call is sent again.
+    """
     found, explanation = explain_json_break(text, error, label=_edits_field)
     lines = [f"edits is not valid JSON. {explanation}"]
-    if found.concerns_text:
+    if beside:
+        lines.append(
+            f"{' and '.join(beside)} arrived beside edits instead of inside an edits item. "
+            "Send the complete call again, with each old_string and new_string inside its "
+            "edits item."
+        )
+    elif found.kind == "incomplete":
+        lines.append(
+            "Send the complete call again; if it is cut off again, send one edit per call."
+        )
+    elif found.concerns_text:
         write = model_tool_name(WRITE_TOOL_NAME)
         lines.append(
             "If this text fails again, send one edit per call, or call "

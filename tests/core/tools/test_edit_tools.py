@@ -341,39 +341,84 @@ async def test_other_edit_spellings_make_the_same_change(tmp_path, arguments) ->
     assert result["data"] == {"content": "Updated a.py (line 1)."}
 
 
+_CUT_EDITS = '[{"old_string": "x = 1", "new_string": "x = 2\ny'
+_PART_EDITS = '[{"old_string": "x = 1", '
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("edits", "content"),
+    ("arguments", "outcome"),
     [
         pytest.param(
-            '[{"old_string": "x = 1", "new_string": "x = f("a")"}]', b'x = f("a")\n', id="array"
-        ),
-        pytest.param('{"old_string": "x = 1", "new_string": "x = "a""}', b'x = "a"\n', id="one"),
-        # Both have another reading than quotes inside new_string: nothing runs.
-        pytest.param(
-            '[{"old_string": "x = 1", "new_string": "x = f("a", "b")"}]', None, id="comma-quote"
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = f("a")"}]'},
+            b'x = f("a")\n',
+            id="array",
         ),
         pytest.param(
-            '[{"old_string": "x = 1", "new_string": "x = "a"", "line": 2}]',
-            None,
+            {"edits": '{"old_string": "x = 1", "new_string": "x = "a""}'}, b'x = "a"\n', id="one"
+        ),
+        # A raw line break inside a text stands for itself.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = 2\ny = 3"}]'},
+            b"x = 2\ny = 3\n",
+            id="raw-line-break",
+        ),
+        # A quote before ":" ends the text only where a value follows the colon.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "got "x": not a number"}]'},
+            b'got "x": not a number\n',
+            id="quote-colon-text",
+        ),
+        # These have another reading than slips inside new_string: nothing runs,
+        # and the error names the field the JSON breaks in.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = 2\\ny = 3\nz = 4"}]'},
+            "new_string",
+            id="mixed-line-breaks",
+        ),
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = {"a": 2}"}]'},
+            "new_string",
+            id="quote-colon-value",
+        ),
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = f("a", "b")"}]'},
+            "new_string",
+            id="comma-quote",
+        ),
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = "a"", "line": 2}]'},
+            "new_string",
             id="undeclared-field",
         ),
-        pytest.param('[{"old_string": "x = 1", "new_string": "x = \\_"}]', None, id="other"),
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = \\_"}]'},
+            "new_string",
+            id="other",
+        ),
+        # Text that ends early lost part of the call, also when the rest arrived
+        # beside it: nothing runs, and the error says where the text ends.
+        pytest.param({"edits": _CUT_EDITS}, f"character {len(_CUT_EDITS)}", id="cut-off"),
+        pytest.param(
+            {"edits": _PART_EDITS, "new_string": 'x = 3"}]'},
+            f"character {len(_PART_EDITS)}",
+            id="field-beside",
+        ),
     ],
 )
-async def test_edits_text_with_unescaped_quotes_runs_only_when_it_has_one_reading(
-    tmp_path, edits, content
+async def test_edits_json_text_runs_only_when_it_has_one_reading(
+    tmp_path, arguments, outcome
 ) -> None:
     (tmp_path / "a.py").write_bytes(b"x = 1\n")
 
-    result = await call(tmp_path, {"path": "a.py", "edits": edits}, name="edit")
+    result = await call(tmp_path, {"path": "a.py", **arguments}, name="edit")
 
-    if content is not None:
+    if isinstance(outcome, bytes):
         assert result["ok"]
-        assert (tmp_path / "a.py").read_bytes() == content
+        assert (tmp_path / "a.py").read_bytes() == outcome
         return
     assert result["error"]["code"] == "invalid_arguments"
-    assert "new_string" in text(result)  # The error names the field the JSON breaks in.
+    assert outcome in text(result)
     assert (tmp_path / "a.py").read_bytes() == b"x = 1\n"
 
 

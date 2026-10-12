@@ -46,17 +46,26 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   refusal is `invalid_arguments` ending `No file was changed.`): `file_path`/
   `filename` -> `path`, `old_str`/`old_text`/`oldText` and the `new_*` twins,
   any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
-  or one of its items sent as JSON text, also with unescaped `"` inside
-  `old_string`/`new_string` (`decode_json_argument`, the shared quote repair in
-  `tools.md` -> Shared argument repair, against the schema of an edit; 5 of 12
-  real stringified `edits` decoded this way, all as the reviewed reading). Text
-  that is not JSON at all is refused with `edits arrived as text, not as an
-  array. ...`; broken JSON text is refused with where it breaks (character,
-  item and field, the text around it, how to write it) and, for a break inside
-  a text, `If this text fails again, send one edit per call, or call write with
-  the whole file.` A flat `old_string`/`new_string` call is one edit; an item's
-  own `path` is accepted when it names the call's file (or supplies the missing
-  root path) and refused when it names another file. Refused before any effect,
+  or one of its items sent as JSON text, also with unescaped `"` or raw line
+  breaks inside `old_string`/`new_string` (`decode_json_argument`, the shared
+  quote repair in `tools.md` -> Shared argument repair, against the schema of an
+  edit; 5 of 12 real stringified `edits` decoded this way, all as the reviewed
+  reading; of the 6 `edits` texts that failed in the Swarm of 2026-10-12, 1
+  more decodes with raw line breaks read). Text that is not JSON at all is
+  refused with `edits arrived as text, not as an array. ...`; broken JSON text
+  is refused with where it breaks (character, item and field, the text around
+  it, how to write it) and one closing sentence. When the call also has a root
+  `old_string` or `new_string` (the text closed early and the rest arrived
+  beside it), that sentence names the field and asks for the complete call again
+  with each `old_string` and `new_string` inside its item: the parts are never
+  joined, since which text belongs to which item is a guess. Text that ends
+  before its JSON is complete asks for the complete call again, and for one edit
+  per call if it is cut off again. A break inside a text (a quote, an escape, a
+  line break) gets `If this text fails again, send one edit per call, or call
+  write with the whole file.` A flat `old_string`/`new_string` call is one
+  edit; an item's own `path` is accepted when it names the call's file (or
+  supplies the missing root path) and refused when it names another file.
+  Refused before any effect,
   each naming the call to send: `edits` beside flat fields, a root `replace_all`
   beside `edits`, `content` (points to `write`), no path, no change, a half pair,
   an item that is not an object, an unknown item field with a value, a field
@@ -68,7 +77,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   text, which shows that the file has text (the normalizer cannot see the file).
   Coverage:
   `test_other_edit_spellings_make_the_same_change`,
-  `test_edits_text_with_unescaped_quotes_runs_only_when_it_has_one_reading`,
+  `test_edits_json_text_runs_only_when_it_has_one_reading`,
   `test_open_or_misdirected_calls_say_which_call_to_send`.
 - **Semantics:** the call is one step of the shared pipeline run with `atomic=True`:
   every edit is planned in memory, in order, each against the text the edits before
@@ -196,7 +205,9 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `edits item K has no old_string, the current text to replace. To insert text, put the line above it in old_string, and that line followed by the new text in new_string.` (`...; old_string "" creates a file.` unless another item has old text; flat: `new_string needs old_string, the current text it replaces. ...`) | Both such refusals in the live Sessions (Swarm, 2026-10-12) were inserts into a file other items of the call edited; the former `Send old_string and new_string (old_string "" creates a file)` named only file creation. Repeating the line in `new_string` keeps it, which Models miss when told only to use it as `old_string`. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 | Broken `edits` JSON text: `edits is not valid JSON. At character N, <what breaks in which field>:` + the text around it + how to write it | The former `edits arrived as text, not as an array.` named no break, so the Model could not tell what to fix; 12 `edits` texts in the live Sessions failed this way, 7 of them still after the quote repair (tool review 2026-10-11). |
-| `If this text fails again, send one edit per call, or call write with the whole file.` | Only for a break inside a text (a quote, an escape, a line break): long code with quotes is what Models fail to escape; a smaller call or `write` avoids the nested JSON. Dispatch does not know whether the call repeats, so the sentence is conditional. |
+| `If this text fails again, send one edit per call, or call write with the whole file.` | Only for a break inside a text (a quote, an escape, a line break) with no edit field beside `edits`: long code with quotes is what Models fail to escape; a smaller call or `write` avoids the nested JSON. Dispatch does not know whether the call repeats, so the sentence is conditional. |
+| `old_string arrived beside edits instead of inside an edits item. Send the complete call again, with each old_string and new_string inside its edits item.` (`new_string` or `old_string and new_string` when those arrived) | In the Swarm of 2026-10-12 one `edits` text ended after part of its item while its `old_string` arrived as a root field, and another had an unquoted `new_string` with `old_string` beside it. The former result named only the break, which reads as a typo to fix in place; the call came apart, and joining the parts would guess which text belongs to which item. |
+| `Send the complete call again; if it is cut off again, send one edit per call.` | For text that ends before its JSON is complete and has nothing beside it. `the JSON ends before it is complete` alone does not say that the rest of the call was lost, and fixing the shown end cannot restore it. A cut that repeats is usually a length limit, which smaller calls avoid. |
 
 ## Verification
 
