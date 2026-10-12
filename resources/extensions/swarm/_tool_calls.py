@@ -10,7 +10,7 @@ resolve them against the group and explain any correction.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from core.tools import ToolContractError
@@ -36,6 +36,8 @@ Json = dict[str, Any]
 _WRAPPERS = frozenset({"request", "arguments", "parameters", "params", "input", "args", "payload"})
 # Idempotency keys are derived from the Tool Call; an echoed key requests nothing.
 _DERIVED = frozenset({"requestid", "idempotencykey"})
+# Fields some harnesses fill with the called Tool's own name; that value requests nothing.
+_TOOL_LABELS = frozenset({"recipientname", "action", "operation"})
 
 _BOARD_ALIASES: dict[str, tuple[str, ...]] = {
     "text": ("body", "content", "message_text", "msg"),
@@ -147,6 +149,8 @@ _WIKI_FIELDS = SpellingAliases(
         "include_deleted": ("show_deleted", "with_deleted", "deleted"),
     }
 )
+# The fields of one item of a swarm_wiki update's edits, by spelling.
+_WIKI_EDIT_FIELDS = {"oldtext": "old_text", "newtext": "new_text"}
 _WIKI_ACTIONS = SpellingAliases(
     {
         "list": (
@@ -233,7 +237,7 @@ _STATE_ACTIONS = frozenset(
 def normalize_board(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_board call and infer an action that its fields imply."""
 
-    value = _prepare(arguments)
+    value = _prepare(arguments, contract.name)
     if not isinstance(value, dict):
         return value
     path = next(
@@ -281,7 +285,7 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
 def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_wiki call and infer an action that its fields imply."""
 
-    value = _prepare(arguments)
+    value = _prepare(arguments, contract.name)
     if not isinstance(value, dict):
         return value
     normalized = _normalize(
@@ -308,6 +312,17 @@ def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
         normalized.pop("expected_revision", None)
     if normalized.get("query") in (None, ""):
         normalized.pop("query", None)
+    edits = normalized.get("edits")
+    if isinstance(edits, list):
+        normalized["edits"] = edits = [_wiki_edit(item) for item in edits]
+        # A list of one edit is the call's own old_text and new_text.
+        if (
+            len(edits) == 1
+            and isinstance(edits[0], dict)
+            and edits[0].keys() == {"old_text", "new_text"}
+            and not {"old_text", "new_text"} & normalized.keys()
+        ):
+            normalized.update(normalized.pop("edits")[0])
     if "action" not in normalized:
         implied = _implied_wiki_action(normalized)
         if implied is not None:
@@ -318,7 +333,7 @@ def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
 def normalize_inbox(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_inbox call; its only action is receive."""
 
-    value = _prepare(arguments)
+    value = _prepare(arguments, contract.name)
     if not isinstance(value, dict):
         return value
 
@@ -341,7 +356,7 @@ def normalize_inbox(contract: ToolContract, arguments: Any) -> Any:
 def normalize_state(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_state call; every reading of its action is status."""
 
-    value = _prepare(arguments)
+    value = _prepare(arguments, contract.name)
     if not isinstance(value, dict):
         return value
 
@@ -361,29 +376,52 @@ def normalize_state(contract: ToolContract, arguments: Any) -> Any:
     )
 
 
-def _prepare(arguments: Any) -> Any:
-    """Rename wrapper objects to the unwrapped spelling and drop derived keys."""
+def _prepare(arguments: Any, tool: str) -> Any:
+    """Unwrap wrapper objects and drop derived keys and labels naming ``tool``.
+
+    Some harnesses address the call with ``recipient_name`` or put the Tool's
+    own name in ``action`` beside the wrapped arguments; both only repeat which
+    Tool is called. Two different values for one field are refused, naming both.
+    """
 
     if not isinstance(arguments, dict):
         return arguments
     value: Json = {}
+    sent: dict[Any, str] = {}
+    for key, path, item in _entries(arguments, spelling(tool)):
+        if key in value and value[key] != item:
+            raise ToolContractError(
+                f"Conflicting values for {key}: {sent[key]} is {_shown(value[key])} and "
+                f"{path} is {_shown(item)}. Send only the intended one."
+            )
+        value[key] = item
+        sent.setdefault(key, path)
+    return value
+
+
+def _entries(arguments: Json, tool: str, prefix: str = "") -> Iterator[tuple[Any, str, Any]]:
+    """Yield (key, key path as sent, value) for each argument inside wrapper objects."""
+
     for key, item in arguments.items():
         name = spelling(key) if isinstance(key, str) else key
         if name in _DERIVED:
             continue
-        if name in _WRAPPERS and isinstance(item, dict):
-            nested = _prepare(item)
-            for inner, inner_value in nested.items():
-                if inner in value and value[inner] != inner_value:
-                    raise ToolContractError(
-                        f"Conflicting values for {inner}; provide one intended value."
-                    )
-                value[inner] = inner_value
+        if name in _TOOL_LABELS and isinstance(item, str) and _names_tool(item, tool):
             continue
-        if key in value and value[key] != item:
-            raise ToolContractError(f"Conflicting values for {key}; provide one intended value.")
-        value[key] = item
-    return value
+        path = f"{prefix}{key}"
+        if name in _WRAPPERS and isinstance(item, dict):
+            yield from _entries(item, tool, f"{path}.")
+            continue
+        yield key, path, item
+
+
+def _names_tool(value: str, tool: str) -> bool:
+    return spelling(value) in {tool, f"functions{tool}"}
+
+
+def _shown(value: Any) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= 40 else text[:37] + "..."
 
 
 def _normalize(
@@ -431,6 +469,21 @@ def _action_normalizer(
     return normalize
 
 
+def _wiki_edit(item: Any) -> Any:
+    """Name the fields of one of an update's edits as swarm_wiki does."""
+
+    if not isinstance(item, dict):
+        return item
+    named: Json = {}
+    for key, value in item.items():
+        canonical = _WIKI_FIELDS.get(key) or _WIKI_EDIT_FIELDS.get(spelling(key), "")
+        field = canonical if canonical in _WIKI_EDIT_FIELDS.values() else str(key)
+        if field in named:
+            return item  # Two spellings of one field; the handler names both.
+        named[field] = value
+    return named
+
+
 def _recipient_list(value: Any) -> Any:
     """Return recipients as a list of meaningful strings, splitting listed strings.
 
@@ -462,7 +515,7 @@ def _implied_board_action(arguments: Json) -> str | None:
 
 
 def _implied_wiki_action(arguments: Json) -> str | None:
-    if "old_text" in arguments or "new_text" in arguments:
+    if {"old_text", "new_text", "edits"} & arguments.keys():
         return "update"
     if "page_id" in arguments and ("content" in arguments or "title" in arguments):
         return "update"

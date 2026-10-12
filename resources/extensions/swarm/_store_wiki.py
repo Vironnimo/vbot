@@ -29,9 +29,14 @@ from ._store_values import (
     wiki_number,
     wiki_ref,
 )
-from ._wiki_edit import EditMiss, apply_text_edit
+from ._wiki_edit import TextEdit, apply_text_edit, held_in_place, holds_passage
 
 MUTATIONS = {"create", "update", "delete", "restore"}
+# A passage edit that finds nothing looks this many revisions back for one that held old_text.
+_ORIGIN_REVISIONS = 20
+# Passage edits one update applies together, each as old_text and new_text.
+_MAX_EDITS = 100
+_TEXT_CHARS = 200000
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
 # Punctuation around a search word, as in a quoted phrase or a list of terms.
 _WORD_EDGE = "\"'.,;:!?()[]{}<>“”„‘’«»"
@@ -46,6 +51,7 @@ _FIELDS = {
         "content",
         "old_text",
         "new_text",
+        "edits",
         "expected_revision",
         "request_id",
     },
@@ -84,13 +90,20 @@ def _validate(arguments: Json) -> str:
         elif field == "include_deleted":
             if type(value) is not bool:
                 raise SwarmStoreError("invalid_arguments", field=field)
+        elif field == "edits":
+            if (
+                not isinstance(value, list)
+                or not 1 <= len(value) <= _MAX_EDITS
+                or not all(map(_valid_edit, value))
+            ):
+                raise SwarmStoreError("invalid_arguments", field=field)
         elif (
             not isinstance(value, str)
             or (field not in {"content", "old_text", "new_text"} and not value.strip())
             or (field == "old_text" and not value)
             or len(value)
             > (
-                200000
+                _TEXT_CHARS
                 if field in {"content", "old_text", "new_text"}
                 else 240
                 if field == "title"
@@ -101,13 +114,26 @@ def _validate(arguments: Json) -> str:
     if action in MUTATIONS:
         _request_id(arguments["request_id"])
     if action == "update":
-        if not {"title", "content", "old_text"}.intersection(arguments):
+        if not {"title", "content", "old_text", "edits"}.intersection(arguments):
             raise SwarmStoreError("invalid_arguments", field="content")
         if ("old_text" in arguments) != ("new_text" in arguments) or (
             "old_text" in arguments and "content" in arguments
         ):
             raise SwarmStoreError("invalid_arguments", field="old_text")
+        if "edits" in arguments and {"old_text", "new_text", "content"} & arguments.keys():
+            raise SwarmStoreError("invalid_arguments", field="edits")
     return action
+
+
+def _valid_edit(item: object) -> bool:
+    """Whether one of an update's ``edits`` is an old_text with its new_text."""
+
+    return (
+        isinstance(item, dict)
+        and item.keys() == {"old_text", "new_text"}
+        and all(isinstance(value, str) and len(value) <= _TEXT_CHARS for value in item.values())
+        and bool(item["old_text"])
+    )
 
 
 def _page_numbers(connection: sqlite3.Connection, swarm_id: str) -> dict[str, int]:
@@ -417,7 +443,7 @@ def _mutate(
 
     def finish(result: Json, *, changed_offset: int | None = None) -> Json:
         if not result["deleted"] and (
-            action in {"create", "restore"} or {"old_text", "content"} & arguments.keys()
+            action in {"create", "restore"} or {"old_text", "edits", "content"} & arguments.keys()
         ):
             saved = _page(connection, swarm_id, result["page_id"], result["revision"])
             result["content_excerpt"] = _content_excerpt(
@@ -433,6 +459,7 @@ def _mutate(
     line = None
     previous_content = ""
     notes: list[str] = []
+    outcomes: list[Json] = []
     if action == "create":
         title, content, deleted = arguments["title"], arguments["content"], 0
         duplicate = connection.execute(
@@ -463,10 +490,11 @@ def _mutate(
         current = _page(connection, swarm_id, page_id)
         previous_content = current["content"]
         expected = arguments.get("expected_revision")
+        edits = _passage_edits(arguments)
         # A passage edit from an older revision applies while its passage still matches.
         rebase = (
             action == "update"
-            and "old_text" in arguments
+            and bool(edits)
             and "title" not in arguments
             and expected is not None
             and expected < current["revision"]
@@ -480,7 +508,7 @@ def _mutate(
         content = arguments.get("content", source["content"])
         deleted = int(action == "delete")
         state = {"current_revision": current["revision"]}
-        if "old_text" not in arguments and (title, content, deleted) == (
+        if not edits and (title, content, deleted) == (
             current["title"],
             current["content"],
             current["deleted"],
@@ -500,30 +528,27 @@ def _mutate(
             and (actor is None or current["author_id"] != actor["id"])
         ):
             raise SwarmStoreError("invalid_arguments", field="expected_revision", details=state)
-        if "old_text" in arguments:
-            edit = apply_text_edit(content, arguments["old_text"], arguments["new_text"])
-            if isinstance(edit, EditMiss):
+        if edits:
+            content, outcomes, notes, misses = _apply_edits(
+                connection, page_id, current["revision"], content, edits
+            )
+            if misses:
+                base = {**state, "expected_revision": expected}
                 raise SwarmStoreError(
                     "wiki_revision_conflict" if rebase else "wiki_edit_conflict",
+                    # Each miss of several edits names its edit's number.
                     details={
-                        **state,
-                        "expected_revision": expected,
-                        "occurrences": edit.occurrences,
-                        "similar": edit.similar,
-                        "lines": list(edit.lines),
-                        "passages": [
-                            {"line": item.line, "text": item.text, "truncated": item.truncated}
-                            for item in edit.passages
-                        ],
-                        "differences": list(edit.differences),
-                        "different_lines": edit.different_lines,
-                        "span": list(edit.span) if edit.span else None,
-                    },
+                        **base,
+                        "edits": [{"edit": number, **miss} for number, miss in misses],
+                        "total": len(edits),
+                    }
+                    if "edits" in arguments
+                    else {**base, **misses[0][1]},
                 )
-            content, line, notes = edit.content, edit.line, list(edit.notes)
+            line = outcomes[0]["line"]
             if content == current["content"] and title == current["title"]:
                 return finish({**metadata(current), "unchanged": True, "line": line})
-        if len(content) > 200000:
+        if len(content) > _TEXT_CHARS:
             raise SwarmStoreError("invalid_arguments", field="content")
         revision = current["revision"] + 1
         connection.execute("UPDATE wiki_pages SET revision=? WHERE id=?", (revision, page_id))
@@ -549,6 +574,8 @@ def _mutate(
         result["line"] = line
     if notes:
         result["notes"] = notes
+    if "edits" in arguments:
+        result["edits"] = outcomes
     changed_offset = next(
         (
             index
@@ -558,6 +585,104 @@ def _mutate(
         min(len(previous_content), len(content)),
     )
     return finish(result, changed_offset=changed_offset)
+
+
+def _passage_edits(arguments: Json) -> list[Json]:
+    """Return an update's passage edits: its ``edits``, or its one old_text."""
+
+    if "edits" in arguments:
+        return list(arguments["edits"])
+    if "old_text" in arguments:
+        return [{"old_text": arguments["old_text"], "new_text": arguments["new_text"]}]
+    return []
+
+
+def _apply_edits(
+    connection: sqlite3.Connection, page_id: str, current: int, content: str, edits: list[Json]
+) -> tuple[str, list[Json], list[str], list[tuple[int, Json]]]:
+    """Apply passage edits in order, each to the content the earlier ones left.
+
+    Return that content; for each edit that applied, its number, its line in
+    that content and whether it changed the page; the notes on its passages;
+    and each miss with its edit's number.
+    """
+
+    outcomes: list[Json] = []
+    notes: list[str] = []
+    misses: list[tuple[int, Json]] = []
+    for number, item in enumerate(edits, 1):
+        edit = _edit(connection, page_id, current, content, item["old_text"], item["new_text"])
+        if not isinstance(edit, TextEdit):
+            misses.append((number, edit))
+            continue
+        # An edit that adds or removes lines moves the lines after it.
+        shift = len(_LINE_BREAK.findall(edit.content)) - len(_LINE_BREAK.findall(content))
+        for outcome in outcomes:
+            if outcome["line"] > edit.line:
+                outcome["line"] += shift
+        outcomes.append({"edit": number, "line": edit.line, "applied": edit.applied})
+        content = edit.content
+        notes.extend(edit.notes)
+    return content, outcomes, notes, misses
+
+
+def _edit(
+    connection: sqlite3.Connection, page_id: str, current: int, content: str, old: str, new: str
+) -> TextEdit | Json:
+    """Apply one passage edit to ``content``, or return why it found no single passage.
+
+    When old_text occurs nowhere, the newest of the last revisions that held it
+    explains the miss: the next revision changed that passage. If ``content``
+    already holds this edit where that revision had old_text, a peer made it,
+    and the edit applies as already held.
+    """
+
+    edit = apply_text_edit(content, old, new)
+    if isinstance(edit, TextEdit):
+        return edit
+    details: Json = {
+        "occurrences": edit.occurrences,
+        "similar": edit.similar,
+        "lines": list(edit.lines),
+        "passages": [
+            {"line": item.line, "text": item.text, "truncated": item.truncated}
+            for item in edit.passages
+        ],
+        "differences": list(edit.differences),
+        "different_lines": edit.different_lines,
+        "span": list(edit.span) if edit.span else None,
+    }
+    origin = None if edit.occurrences else _origin(connection, page_id, old, current)
+    if origin is not None:
+        revision, before, author = origin
+        line = held_in_place(before, content, old, new)
+        if line is not None:
+            return TextEdit(content, line, False)
+        details["origin"] = {"revision": revision, "author": author}
+    return details
+
+
+def _origin(
+    connection: sqlite3.Connection, page_id: str, old: str, current: int
+) -> tuple[int, str, str] | None:
+    """Return the newest recent revision that holds ``old``, its content, and who
+    saved the next revision, which changed that passage."""
+
+    if not old.strip():
+        return None
+    rows = connection.execute(
+        "SELECT revision,content FROM wiki_revisions WHERE page_id=? AND revision>=? "
+        "AND revision<? ORDER BY revision DESC",
+        (page_id, max(1, current - _ORIGIN_REVISIONS), current),
+    ).fetchall()
+    held = next((row for row in rows if holds_passage(row["content"], old)), None)
+    if held is None:
+        return None
+    author = connection.execute(
+        "SELECT author_name FROM wiki_revisions WHERE page_id=? AND revision=?",
+        (page_id, held["revision"] + 1),
+    ).fetchone()
+    return int(held["revision"]), str(held["content"]), str(author["author_name"])
 
 
 def _content_excerpt(content: str, line: int, changed_offset: int | None) -> Json:

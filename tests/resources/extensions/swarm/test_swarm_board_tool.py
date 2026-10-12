@@ -19,6 +19,7 @@ from resources.extensions.swarm.agent_text import (
     MENTION_EVERYONE,
     POST_DUPLICATE,
     POST_SEEN,
+    REFERENCE_MARKUP,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
     _name,
@@ -435,6 +436,17 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
     assert read["data"]["content"] == (
         f"[{first}] {_name(board, 0)} (in the main discussion d1):\ninferred post"
     )
+    # The Tool's own name as recipient or outer action only labels the wrapped call.
+    for labelled in (
+        {
+            "parameters": {"action": "read", "message_id": first},
+            "recipient_name": "functions.swarm_board",
+        },
+        {"action": "swarm_board", "parameters": {"action": "read", "message_id": first}},
+        {"action": "swarm_board", "message_id": first},
+    ):
+        result, _ = await dispatch(board, labelled, peer=2)
+        assert result["data"]["content"] == read["data"]["content"], result
     # A placeholder or a repeat beside the real text asks for nothing more.
     for message, text in [("placeholder", "kept"), ("same", "same")]:
         result, _ = await dispatch(board, {"action": "post", "message": message, "text": text})
@@ -458,10 +470,14 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
         ({"action": "check_inbox"}, 'Use {"action": "read"} to read the newest posts'),
         # A file path names the file the call meant for another Tool.
         ({"action": "read", "parameters": {"limit": 200, "path": "verify.py"}}, '"verify.py"'),
+        ({"recipient_name": "swarm_wiki", "text": "x"}, "recipient_name"),
     ]:
         result, _ = await dispatch(board, arguments)
         assert result["error"]["code"] == "invalid_arguments", result
         assert message in result["error"]["message"]
+    # A conflict names both values, so the caller can tell which one it meant.
+    conflict, _ = await dispatch(board, {"action": "post", "arguments": {"action": "read"}})
+    assert '"post"' in conflict["error"]["message"] and '"read"' in conflict["error"]["message"]
     assert len(await board_posts(board)) == len(posts)
 
 
@@ -583,6 +599,22 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     assert unposted["error"]["message"] == (
         'message_id "#9" names no post yet; the newest post is #4.'
     )
+    # Tool-call markup sent as a reference is named as such, never resolved or guessed.
+    for arguments, field, shown in (
+        (
+            {"action": "read", "message_id": "\n</atem:invoke>\n</atem:function_calls>"},
+            "message_id",
+            "</atem:invoke> </atem:function_calls>",
+        ),
+        ({"text": "leaked", "reply_to": "#3</invoke>"}, "reply_to", "#3</invoke>"),
+    ):
+        leaked, _ = await dispatch(board, arguments)
+        assert leaked["error"] == {
+            "code": "invalid_arguments",
+            "message": REFERENCE_MARKUP.format(
+                field=field, value=json.dumps(shown), kind="post", example="#42"
+            ),
+        }, leaked
 
     near_post = stored[:-1] + ("x" if stored[-1] != "x" else "y")
     close_message, _ = await dispatch(board, {"action": "read", "message_id": near_post})
@@ -631,6 +663,7 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     texts = [post["text"] for post in await board_posts(board)]
     assert "misreplied" not in texts
     assert "misaddressed" not in texts
+    assert "leaked" not in texts
 
 
 @pytest.mark.asyncio
@@ -710,8 +743,13 @@ async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(boar
     skipped, _ = await dispatch(board, {"action": "read", "limit": 1, "offset": "1"}, peer=1)
     assert skipped["data"]["content"].endswith(":\npost 1")
     assert continuation(skipped["data"]["older"])["before"] == "#2"
+    # The page names what offset skipped and the call for the newest posts it left out.
+    assert "#2" in skipped["data"]["page"]
+    newest, _ = await dispatch(board, continuation(skipped["data"]["page"]), peer=1)
+    assert newest["data"]["content"].endswith(":\npost 2")
     beyond, _ = await dispatch(board, {"action": "read", "offset": 3})
     assert beyond["ok"] and "content" not in beyond["data"]
+    assert continuation(beyond["data"]["page"]) == {"action": "read"}
     # Beside a post or a page start, offset positions nothing.
     one, _ = await dispatch(board, {"action": "read", "message_id": "#1", "offset": 2})
     assert one["data"]["content"].endswith(":\npost 0") and "note" not in one["data"]

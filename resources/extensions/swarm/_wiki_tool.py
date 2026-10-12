@@ -8,6 +8,7 @@ every other failure with the next call, and renders the result as readable text.
 
 from __future__ import annotations
 
+import json
 import re
 from difflib import get_close_matches, unified_diff
 from typing import Any
@@ -19,7 +20,7 @@ from . import wiki_text as text
 from ._board_view import call_text, spoken_list
 from ._extension_values import AgentCallError, Json, _call_request_id
 from ._store_values import wiki_number, wiki_ref
-from ._store_wiki import _FIELDS, MUTATIONS
+from ._store_wiki import _FIELDS, _MAX_EDITS, MUTATIONS
 from .agent_text import FIELD_IGNORED, LIMIT_CLAMPED, REPLAYED
 from .store import SwarmStore, SwarmStoreError
 
@@ -81,7 +82,7 @@ class WikiCall:
 
         action = self._prepare(arguments)
         if action == "update" and not arguments.get("page_id"):
-            arguments["page_id"] = await self._page_holding(arguments["old_text"])
+            arguments["page_id"] = await self._page_holding(_old_texts(arguments))
         elif action == "create" and "page_id" in arguments:
             await self._drop_create_page_id(arguments)
         elif "page_id" in arguments:
@@ -197,14 +198,18 @@ class WikiCall:
                 _nothing_changed(text.WIKI_NEEDS[key].format(**values)),
             )
 
-        if action not in {"list", "create"} and not arguments.get("page_id"):
-            old_text = arguments.get("old_text")
-            # run() finds the page that holds the text an update replaces.
-            if action != "update" or not isinstance(old_text, str) or not old_text.strip():
-                message = text.WIKI_NEEDS["page_id"].format(action=action)
-                if action in MUTATIONS:
-                    message = _nothing_changed(message)
-                raise AgentCallError("invalid_arguments", message)
+        if action == "update" and "edits" in arguments:
+            _check_edits(arguments)
+        # run() finds the page that holds the text an update replaces.
+        if (
+            action not in {"list", "create"}
+            and not arguments.get("page_id")
+            and (action != "update" or not any(old.strip() for old in _old_texts(arguments)))
+        ):
+            message = text.WIKI_NEEDS["page_id"].format(action=action)
+            if action in MUTATIONS:
+                message = _nothing_changed(message)
+            raise AgentCallError("invalid_arguments", message)
         if action == "update":
             passage = [field for field in ("old_text", "new_text") if field in arguments]
             if "content" in arguments and passage:
@@ -213,7 +218,7 @@ class WikiCall:
                 raise missing("old_text")
             if "old_text" in arguments and "new_text" not in arguments:
                 raise missing("new_text")
-            if not {"old_text", "content", "title"} & arguments.keys():
+            if not {"old_text", "edits", "content", "title"} & arguments.keys():
                 raise missing("change")
         if action == "create":
             if "content" not in arguments:
@@ -248,14 +253,18 @@ class WikiCall:
             )
         self.notes.append(text.WIKI_CREATE_IGNORED_ID.format(value=value))
 
-    async def _page_holding(self, old_text: str) -> str:
-        """Return the one live page whose content holds ``old_text``; else name the choices.
+    async def _page_holding(self, texts: list[str]) -> str:
+        """Return the one live page whose content holds any of ``texts``; else name the choices.
 
-        An update without page_id replaces a passage whose exact text identifies its
+        An update without page_id replaces passages whose exact text identifies their
         page; among several pages the call never picks one itself.
         """
 
-        pages = await self.store.wiki_pages(self.sid, containing=old_text)
+        found: dict[str, Json] = {}
+        for old_text in filter(str.strip, texts):
+            for page in await self.store.wiki_pages(self.sid, containing=old_text):
+                found.setdefault(page["page_id"], page)
+        pages = list(found.values())
         if len(pages) == 1:
             reference = wiki_ref(pages[0]["number"])
             self.notes.append(
@@ -360,14 +369,27 @@ class WikiCall:
                     )
                 ),
             )
+        if "edits" in details:
+            return AgentCallError(error.code, await self._edits_message(details, arguments))
         if "passages" in details:
-            expected = details.get("expected_revision")
+            expected, current = details.get("expected_revision"), details["current_revision"]
             changes = (
-                await self._changes(page_id, expected, details["current_revision"])
-                if expected is not None and expected < details["current_revision"]
+                await self._changes(page_id, expected, current)
+                if expected is not None and expected < current
                 else None
             )
-            return AgentCallError(error.code, closing(_miss_message(details, page_id, changes)))
+            # The recent revision that last held old_text, and who changed that passage.
+            found = details.get("origin")
+            origin = (found["revision"], found["author"]) if found else None
+            old = arguments.get("old_text")
+            return AgentCallError(
+                error.code,
+                closing(
+                    _miss_message(
+                        details, page_id, changes, origin, old if isinstance(old, str) else ""
+                    )
+                ),
+            )
         if error.code == "wiki_revision_conflict":
             return AgentCallError(
                 "wiki_revision_conflict", closing(await self._conflict_message(details, arguments))
@@ -382,6 +404,32 @@ class WikiCall:
                 ),
             )
         return error
+
+    async def _edits_message(self, details: Json, arguments: Json) -> str:
+        """Explain each of an update's edits that could not be applied, in input order."""
+
+        page_id = arguments["page_id"]
+        expected, current = details.get("expected_revision"), details["current_revision"]
+        changes = (
+            await self._changes(page_id, expected, current)
+            if expected is not None and expected < current
+            else None
+        )
+        total = details["total"]
+        failed = _edit_numbers([item["edit"] for item in details["edits"]])
+        parts = [text.WIKI_EDITS_NONE.format(every=_every_edit(total), failed=failed)]
+        if changes is not None:
+            # Shown once; each edit's explanation refers to them.
+            parts.append("\n".join(part for part in changes if part))
+        for item in details["edits"]:
+            found = item.get("origin")
+            origin = (found["revision"], found["author"]) if found else None
+            old = arguments["edits"][item["edit"] - 1]["old_text"]
+            state = {**item, "current_revision": current, "expected_revision": expected}
+            explanation = _miss_message(state, page_id, changes, origin, old, show_changes=False)
+            parts.append(text.WIKI_EDIT_MISS.format(number=item["edit"], explanation=explanation))
+        parts.append(text.WIKI_EDITS_RETRY.format(every=_every_edit(total), failed=failed))
+        return "\n".join(parts)
 
     async def _conflict_message(self, details: Json, arguments: Json) -> str:
         expected, current = details["expected_revision"], details["current_revision"]
@@ -649,7 +697,8 @@ class WikiCall:
             rendered["link"] = data["link"]
         status = text.WIKI_STATUS
         if data.get("unchanged"):
-            rendered["status"] = status.get(f"unchanged_{action}", status["unchanged"])
+            key = "unchanged_edits" if "edits" in arguments else f"unchanged_{action}"
+            rendered["status"] = status.get(key, status["unchanged"])
         elif action == "create":
             rendered["status"] = status["created"]
         elif action == "delete":
@@ -664,6 +713,9 @@ class WikiCall:
             parts = []
             if "old_text" in arguments:
                 parts.append(status["passage"].format(line=data.get("line", 1)))
+                self.notes.extend(data.get("notes", ()))
+            elif "edits" in arguments:
+                parts.append(_edits_status(data["edits"]))
                 self.notes.extend(data.get("notes", ()))
             elif "content" in arguments:
                 parts.append(status["content"])
@@ -699,6 +751,99 @@ def _call(arguments: Json) -> str:
     """Return a copyable swarm_wiki call, named so it is not sent to another Tool."""
 
     return f"swarm_wiki {call_text(arguments)}"
+
+
+def _old_texts(arguments: Json) -> list[str]:
+    """Return the passages an update replaces: its old_text, or those of its edits."""
+
+    if "edits" in arguments:
+        return [
+            item["old_text"]
+            for item in arguments["edits"]
+            if isinstance(item, dict) and isinstance(item.get("old_text"), str)
+        ]
+    old_text = arguments.get("old_text")
+    return [old_text] if isinstance(old_text, str) else []
+
+
+def _check_edits(arguments: Json) -> None:
+    """Refuse an update's edits unless each is an old_text with its new_text."""
+
+    edits = arguments["edits"]
+    if edits == []:
+        del arguments["edits"]  # No edits requests nothing.
+        return
+    problem: tuple[str, dict[str, Any]] | None
+    together = [field for field in ("old_text", "new_text", "content") if field in arguments]
+    if together:
+        problem = "edits_with", {"fields": spoken_list(together)}
+    elif not isinstance(edits, list):
+        problem = "edit", {"number": 1, "received": _shown(edits)}
+    elif len(edits) > _MAX_EDITS:
+        problem = "edits_many", {"count": len(edits), "maximum": _MAX_EDITS}
+    else:
+        problem = next(
+            (
+                ("edit", {"number": number, "received": received})
+                for number, received in enumerate(map(_edit_problem, edits), 1)
+                if received is not None
+            ),
+            None,
+        )
+    if problem is not None:
+        key, values = problem
+        raise AgentCallError(
+            "invalid_arguments", _nothing_changed(text.WIKI_NEEDS[key].format(**values))
+        )
+
+
+def _edit_problem(item: Any) -> str | None:
+    """Return what one of an update's edits holds instead of old_text and new_text."""
+
+    if not isinstance(item, dict):
+        return _shown(item)
+    if item.keys() != {"old_text", "new_text"}:
+        return ", ".join(item) or "{}"
+    wrong = next((field for field, value in item.items() if not isinstance(value, str)), None)
+    if wrong is not None:
+        return f"{wrong} {_shown(item[wrong])}"
+    return 'old_text ""' if not item["old_text"] else None
+
+
+def _shown(value: Any) -> str:
+    shown = json.dumps(value, ensure_ascii=False, default=str)
+    return shown if len(shown) <= 40 else shown[:37] + "..."
+
+
+def _edit_numbers(numbers: list[int]) -> str:
+    """Name edits by number: "edit 2", "edits 2 and 4"."""
+
+    named = spoken_list([str(number) for number in numbers])
+    return f"edit {named}" if len(numbers) == 1 else f"edits {named}"
+
+
+def _every_edit(total: int) -> str:
+    return text.WIKI_EDITS_BOTH if total == 2 else text.WIKI_EDITS_ALL.format(total=total)
+
+
+def _edits_status(outcomes: list[Json]) -> str:
+    """Say which of an update's edits changed the page, each with its line."""
+
+    held = [outcome["edit"] for outcome in outcomes if not outcome["applied"]]
+    applied = [outcome["edit"] for outcome in outcomes if outcome["applied"]]
+    status = text.WIKI_STATUS
+    head = (
+        status["edits_held"].format(applied=_edit_numbers(applied), held=_edit_numbers(held))
+        if held
+        else status["edits"].format(every=_every_edit(len(outcomes)))
+    )
+    lines = [
+        (text.WIKI_EDIT_APPLIED if outcome["applied"] else text.WIKI_EDIT_HELD).format(
+            number=outcome["edit"], line=outcome["line"]
+        )
+        for outcome in outcomes
+    ]
+    return "\n".join([head, *lines])
 
 
 def _found(content: str, query: str) -> tuple[str, tuple[int, int] | None]:
@@ -757,8 +902,23 @@ def _nothing_changed(message: str) -> str:
     return f"{text.NOTHING_CHANGED} {message}"
 
 
-def _miss_message(details: Json, page_id: str, changes: tuple[str, str] | None) -> str:
-    """Explain an old_text that identifies no single passage, with line hints."""
+def _miss_message(
+    details: Json,
+    page_id: str,
+    changes: tuple[str, str] | None,
+    origin: tuple[int, str] | None,
+    old: str,
+    *,
+    show_changes: bool = True,
+) -> str:
+    """Explain an old_text that identifies no single passage, with line hints.
+
+    ``origin`` names the newest recent revision that held ``old`` and who saved
+    the next one. When the changes shown since expected_revision removed it, they
+    explain the miss on their own; otherwise the closest passage follows, and the
+    origin, when known, replaces the advice to copy old_text from the page.
+    Without ``show_changes``, the caller shows the changes once for several edits.
+    """
 
     passages = details["passages"]
     current = details["current_revision"]
@@ -787,7 +947,12 @@ def _miss_message(details: Json, page_id: str, changes: tuple[str, str] | None) 
         else text.WIKI_NOT_FOUND.format(current=current)
     ]
     if changes is not None:
-        parts.append("\n".join(part for part in changes if part))
+        if show_changes:
+            parts.append("\n".join(part for part in changes if part))
+        if origin is not None and _removes(changes[1], old):
+            # A passage shown elsewhere would only distract from the change that explains it.
+            parts.append(text.WIKI_CHANGED_ABOVE.format(revision=origin[0] + 1, author=origin[1]))
+            return "\n".join(parts)
     # Closest passages often overlap by all but one line; show each line once.
     distinct: list[Json] = []
     for passage in passages:
@@ -810,6 +975,15 @@ def _miss_message(details: Json, page_id: str, changes: tuple[str, str] | None) 
         if more > 0:
             shown.append(text.WIKI_DIFFERENCES_MORE.format(count=more))
         parts.append("\n".join(shown))
+    if origin is not None:
+        revision, author = origin
+        since = {"action": "read", "page_id": page_id, "since_revision": revision}
+        parts.append(
+            text.WIKI_CHANGED_SINCE.format(
+                revision=revision, changed=revision + 1, author=author, call=_call(since)
+            )
+        )
+        return "\n".join(parts)
     # A read of the closest passage shows exactly the text to copy.
     read: Json = {"action": "read", "page_id": page_id}
     span = details.get("span")
@@ -817,6 +991,15 @@ def _miss_message(details: Json, page_id: str, changes: tuple[str, str] | None) 
         read.update(offset=span[0], limit=span[1])
     parts.append(text.WIKI_COPY_EXACTLY.format(call=_call(read)))
     return "\n".join(parts)
+
+
+def _removes(diff: str, old: str) -> bool:
+    """Whether ``diff`` removes a line of ``old``, comparing runs of whitespace as one."""
+
+    wanted = {" ".join(line.split()) for line in old.splitlines() if line.strip()}
+    return any(
+        line.startswith("-") and " ".join(line[1:].split()) in wanted for line in diff.splitlines()
+    )
 
 
 def _difference(item: Json) -> str:

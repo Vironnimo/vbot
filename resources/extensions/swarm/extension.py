@@ -105,8 +105,9 @@ _BOARD_CHANGES = {
 }
 # Accepted without being offered: a Participant's own identity copied from its
 # reminders, the single action of the inbox and state Tools, explicit Board
-# recipients, which "@" before names in the post text replaces, and the offset
-# other harnesses page with, which ``before`` replaces.
+# recipients, which "@" before names in the post text replaces, the offset
+# other harnesses page with, which ``before`` replaces, and a Wiki update's
+# list of passage edits, the form of the file edit Tool.
 UNADVERTISED_PARAMETERS: dict[str, Json] = {
     name: {
         **({"action": {"type": "string", "enum": [action]}} if action else {}),
@@ -122,6 +123,7 @@ UNADVERTISED_PARAMETERS: dict[str, Json] = {
             if name == "swarm_board"
             else {}
         ),
+        **({"edits": {"type": "array"}} if name == "swarm_wiki" else {}),
     }
     for name, _parameters, action in _TOOL_PARAMETERS
 }

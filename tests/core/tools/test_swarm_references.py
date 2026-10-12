@@ -51,6 +51,12 @@ async def message(root: Path, tool: str, arguments: dict, offered: set[str]) -> 
             {"path": "w2", "offset": 5400, "limit": 1400},
             'swarm_wiki {"action": "read", "page_id": "w2", "offset": 5400, "limit": 1400}.',
         ),
+        # Line numbers are no character positions, so the call leaves them out.
+        (
+            "read",
+            {"path": "w2", "offset": 190, "limit": 20},
+            'swarm_wiki {"action": "read", "page_id": "w2"}.',
+        ),
         ("read", {"path": "W12.md"}, 'swarm_wiki {"action": "read", "page_id": "w12"}.'),
         # A search for one plain text reads the page lines that hold it.
         (

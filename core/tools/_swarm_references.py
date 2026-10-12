@@ -22,6 +22,10 @@ SWARM_WIKI_TOOL = "swarm_wiki"
 SWARM_BOARD_TOOL = "swarm_board"
 
 _PAGE_NUMBER = re.compile(r"w(\d+)(?:\.md)?", re.IGNORECASE)
+# swarm_wiki counts offset and limit in characters, file reads in lines. Values this
+# large come from a swarm_wiki continuation; smaller ones are line numbers (Swarm run
+# 2026-10-12: one of two such reads sent lines a peer had cited).
+_CHARACTER_POSITIONS = 1000
 
 
 def wiki_page_call(
@@ -31,12 +35,15 @@ def wiki_page_call(
     *,
     change: bool = False,
     fields: Mapping[str, Any] | None = None,
+    positions: Mapping[str, int] | None = None,
 ) -> str | None:
     """Name the swarm_wiki call for a missing path that is a bare Wiki page number.
 
     ``missing`` is the resolved path; only a page number in the working directory
     itself (``w3``, ``w3.md``) counts, and only when the Agent is offered swarm_wiki.
-    A read call carries ``fields`` (such as a character ``offset``) along.
+    A read call carries ``fields`` (such as a query) along. ``positions`` are a
+    file read's ``offset`` and ``limit``: the call carries them only when every one
+    reads as a character count, and otherwise says they were left out.
     """
     match = _PAGE_NUMBER.fullmatch(missing.name)
     if match is None or os.path.normcase(missing.parent) != os.path.normcase(cwd):
@@ -49,8 +56,18 @@ def wiki_page_call(
             f'Swarm Wiki page {page} changes with {SWARM_WIKI_TOOL}: action "update", '
             f'page_id "{page}", and old_text and new_text for the passage.'
         )
-    call = json.dumps({"action": "read", "page_id": page, **(fields or {})}, ensure_ascii=False)
-    return f"Swarm Wiki page {page} reads with {SWARM_WIKI_TOOL} {call}."
+    arguments = {"action": "read", "page_id": page, **(fields or {})}
+    left_out = ""
+    if positions and all(value >= _CHARACTER_POSITIONS for value in positions.values()):
+        arguments.update(positions)
+    elif positions:
+        named = " and ".join(f"{name} {value}" for name, value in positions.items())
+        left_out = (
+            f" The call leaves out {named}: {SWARM_WIKI_TOOL} counts them in characters, not "
+            "lines. To read around a passage, add query with words from it."
+        )
+    call = json.dumps(arguments, ensure_ascii=False)
+    return f"Swarm Wiki page {page} reads with {SWARM_WIKI_TOOL} {call}.{left_out}"
 
 
 def board_post_call(message_id: Any, offers: Callable[[str], bool]) -> str | None:

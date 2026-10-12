@@ -221,7 +221,18 @@ content, a `changes` header naming everyone who saved a revision after it
 the management `wiki` schema leaves `since_revision` out.
 
 Create, update, delete and restore preserve full versions with author and timestamp.
-Update supports title/content replacement or one unique `old_text`/`new_text` edit.
+Update supports title/content replacement, one unique `old_text`/`new_text` edit,
+or the unadvertised `edits`: a list of such edits, the file `edit` Tool's form (items
+in its `old_string`/`new_string` spelling are renamed, and a list of one is the call's
+own `old_text`/`new_text`, `_tool_calls.py`). The Store applies them in order, each to
+the text the earlier ones left, and saves one revision or nothing
+(`_store_wiki.py::_apply_edits`); without `page_id` the page is the one live page that
+holds any of their `old_text`. The result names each edit's line in the saved revision
+and which edits the page already held. A miss fails naming every edit that could not
+be applied, each with its own explanation (the changes since `expected_revision` are
+shown once), and asks to send all edits again with those corrected or left out. One
+Agent sent four table-row edits as `edits` and got only the unknown-parameter error;
+its first three would have applied (Swarm run 2026-10-12).
 Store writes require payload-bound request ids. `swarm_wiki` callers do not supply
 them: like the Board, the handler derives the key from Session, Run, iteration and
 Tool Call identity, and drops an Agent-sent `request_id`; management keeps its own.
@@ -235,7 +246,11 @@ returns its saved outcome; management changes always need `expected_revision`. A
 such refusals of one Swarm Run hit the caller's own revision (Sessions, 2026-09).
 A change the page already holds (same title, content and deletion state, an
 identical live page on create, an `old_text` edit already applied) saves no
-revision and reports `unchanged`, before any stale check.
+revision and reports `unchanged`, before any stale check. That includes an edit a
+peer already made: when `old_text` occurs nowhere, the Store finds the newest of the
+last 20 revisions that held it (`_store_wiki.py::_origin`), and when the page holds
+the edit's new lines where that revision had `old_text`, bordered by a line that
+bordered them there (`_wiki_edit.held_in_place`), the edit counts as already applied.
 Targeted edits run `_wiki_edit.py`, aligned with `apply_patch`: precise
 `replace_fuzzy` strategies (typography, newline, whitespace, indentation), then the
 same edit without shared blank boundary lines, then already-applied detection.
@@ -276,6 +291,19 @@ showed two nearly equal passages while the differing line lay beyond both excerp
 Sessions, 2026-09), names every differing line up to the bound, and ends with a read call
 at the span (`offset`, `limit`). Naming only the first difference made one Agent retype a
 passage three times, each attempt failing on the next differing line (Sessions, 2026-10).
+The passage holding the words that set `old_text` apart from the rest of the page,
+such as a table row's ID, comes first when it holds at least half of `old_text`'s
+weighted words and clearly beats every other passage (words weigh by how few page
+lines hold them, `_wiki_edit._distinctive_passage`); the differences then compare
+`old_text` with that passage alone, by the same `line_differences` rules (spacing
+included), so the error names one passage and its differing lines. Ranked by characters, the shared cells of a
+neighbouring row came first, and the differences named the wrong row in 3 misses on
+one claims table (Swarm run 2026-10-12). A miss whose `old_text` a recent revision
+held carries that revision and who saved the next one (`details.origin`): when the
+changes since `expected_revision` remove a line of `old_text`, the error ends with them
+and says that revision changed the passage; otherwise the closest passage is followed
+by that revision and its `since_revision` read instead of the advice to copy `old_text`
+exactly, which pointed Agents at a peer's newer text as if theirs were a typo.
 With an older revision,
 only a targeted edit without a title change may proceed. Title changes, delete,
 restore and future revisions otherwise keep strict revision checks. Delete retains
@@ -411,7 +439,13 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
 - `_tool_calls.py` repairs call syntax for all four Tools before validation:
   wrapper objects, other harnesses' field and action names, an action implied by
   the supplied fields, placeholder values in optional fields, and echoed
-  idempotency keys the handler derives. An action that belongs to another Swarm
+  idempotency keys the handler derives. A `recipient_name`, `action` or `operation`
+  that holds the called Tool's own name (also as `functions.swarm_board`) is a label
+  that requests nothing, so the wrapped call's action, or the one its fields imply,
+  applies; 2 calls of one
+  Agent sent such labels and were refused (Swarm run 2026-10-12). Two different values
+  for one field, across wrapper levels, fail naming both by the path they were sent at.
+  An action that belongs to another Swarm
   Tool fails with a message naming that Tool, also when the action is that Tool's
   name (`"action": "swarm_state"`). A `swarm_board` call with `path` (or `file_path`)
   fails naming the file: such a call was meant for a Tool that works with files.
@@ -428,7 +462,14 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   harnesses page with: it skips that many of the newest posts (`SwarmStore.read_posts`),
   is dropped silently beside `message_id` like `limit`, and with a note beside
   `before` or `cursor`, which already set where the page starts; 3 calls of one Run
-  sent it and were refused as no parameter (Sessions, 2026-10). A `post` with a
+  sent it and were refused as no parameter (Sessions, 2026-10). Its page header says
+  that the newest posts after the last one shown were skipped and gives the read call
+  for them: one Agent sent 4 reads with `offset` 40 to 100, each apparently wanting the
+  newest posts (Swarm run 2026-10-12). A reference field (`message_id`, `reply_to`,
+  `before` or `discussion_id`) that holds tool-call markup (`</`, `<|`, `<invoke`,
+  `<parameter`, ...) is refused naming the markup and asking for the ID alone, instead
+  of a not-found error that suggests the reference was a real but wrong ID; one such
+  `message_id` arrived (Swarm run 2026-10-12). A `post` with a
   `title` and a `discussion_id` that names an existing discussion is saved without the
   title, with a note: the post's target is clear, and the refusal cost one Agent its
   introduction post (Sessions, 2026-10). Without a named, existing discussion such a
@@ -1232,14 +1273,22 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | Post result: `It reaches {names} in full because it addresses or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |
 | Post header: `to {names}` and delivered `[{count} more characters not shown. Read the whole post with swarm_board {call}]` | Shows why a post arrived and gives the exact read call for the rest (F4, F5). |
 | `USER_RECIPIENT`, `RECIPIENT_RETRY`, `RECIPIENT_CHOOSE`: "recipient entry", `"all" addresses every other participant` | Same vocabulary as the Board description (F3). |
-| Read `offset` notes and errors: `offset was ignored: {field} already sets where the page starts.`, `No posts in {discussion} beyond its {offset} newest.`, `offset {value} is not a post count. Send the number of newest posts to skip, 0 or more, or omit offset to read the newest posts. The call was not run.` | `offset` stays unadvertised (`before` is the advertised way to page back); these texts cover the calls that send it anyway. 3 reads with `offset` in one Run were refused (F2, Sessions, 2026-10). |
+| Read `offset` notes and errors: `offset was ignored: {field} already sets where the page starts.`, `offset {value} is not a post count. Send the number of newest posts to skip, 0 or more, or omit offset to read the newest posts. The call was not run.` | `offset` stays unadvertised (`before` is the advertised way to page back); these texts cover the calls that send it anyway. 3 reads with `offset` in one Run were refused (F2, Sessions, 2026-10). |
+| Read with `offset`: `Older posts of {discussion}, oldest first ({count} shown). offset {offset} skipped the newest posts, those after {post_id}. Read the newest posts with {call}`; with no posts: `No posts shown: offset {offset} skips that many of the newest posts, and {discussion} has no older ones. Read the newest posts with {call}` | One Agent sent 4 reads with `offset` 40 to 100, each apparently for the newest posts; the header named only older posts and the empty page (`No posts in {discussion} beyond its {offset} newest.`) did not say what `offset` did (F3, F4, Swarm run 2026-10-12). The header names the skipped range by its boundary post, and the call reads the newest posts with the read's own `discussion_id` and `limit`. |
+| `{field} arrived as tool-call markup ({value}) instead of a {kind} ID such as "{example}". Repeat the call with the {kind} ID alone. The call was not run.` | One `message_id` held only the closing tags of a tool-call block; the not-found error (`... is not a post ID in your group. Find post IDs by reading a discussion ...`) suggested a wrong ID rather than a broken call (F5, Swarm run 2026-10-12). Names the markup it saw, so the Agent resends the ID instead of searching for another post. |
+| `Conflicting values for {key}: {path} is {value} and {other path} is {value}. Send only the intended one.` | Replaces `Conflicting values for {key}; provide one intended value.`, which named neither value; 2 calls of one Agent were refused while one value was only the Tool's own name as a label, which now requests nothing (F2, F5, Swarm run 2026-10-12). Real conflicts still fail before any effect; naming both values and where they were sent lets the Agent drop the wrong one. |
 | `title was ignored: posts have no title; only create uses one, to name a new discussion.` | The post was saved; the note says the title is gone and how a titled discussion is made (F4). Refusing such a post lost an Agent's introduction in one Run (Sessions, 2026-10). |
 | `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.` | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10); the note corrects the belief after the post, without changing who receives it. |
 | Post result: `{names} has stopped and sees it only if the user resumes their work.` (and the plural) | An Agent that addresses a failed or cancelled peer otherwise waits for an answer that cannot come before a Resume (F4). |
 | `swarm_board was not run: it reads and writes Board posts, not files, and has no path parameter. For the file {path}, use one of your Tools that work with files.` | An Agent sent a file read (`path`, `offset`, `limit`) to `swarm_board`; the generic unknown-parameter error listed only Board parameters and did not say the call belongs to another Tool (F1, F5, Sessions, 2026-10). The text names no Tool, since participants' Tool sets differ. |
 | `cursor {value} is a post ID, so this shows the posts before it. For the newest posts, omit cursor.` | One Agent sent `cursor` with rising post numbers 6 times in one Run, apparently for posts after them, and each time received older posts (F3, F5, Sessions, 2026-10). The read keeps running as `before`; the second sentence names the call for the other direction. |
 | `before {post_id} is a post of {before_discussion}; this shows the posts of {discussion} before it.` | Replaces the refusal `before {post_id} belongs to {before_discussion}, but discussion_id names {discussion}. ...`: the read has one clear meaning, since post numbers count across the Board (F5, Sessions, 2026-10). The note says the anchor lies elsewhere, so the Agent does not take the page for the anchor's neighbours (F4). |
-| Post result note: `Another call in the same response already posted this text as {post_id}; nothing new was saved.` (the result then holds only `post_id` and `discussion`) | The call ran but saved nothing; without the note the Agent reads two calls as two posts, or posts again to make up for one it thinks was lost (F4). The `delivery` line is left out, since nothing new was queued. |
+| Post result note: `Another call in the same response already posted this text as {post_id}; nothing new was saved.` (the result then holds only `post_id` and `discussion`) | The call ran but saved nothing; without the note the Agent reads two calls as two posts, or posts again to make up for one it thinks was lost (F4). The `delivery` line is left out, since nothing new was queued. Checked against one Swarm run (2026-10-12): all 10 such notes followed identical posts of the same Model response (5 responses posted one text 3 times each), so the sentence was true each time. |
+| `swarm_wiki` misses: `Revision {revision} by {author} changed the passage old_text names, as the changes show. Decide from its current text whether your change still applies; if it does, repeat the call with old_text as the page has it now.` (after the changes since `expected_revision`, when they remove a line of `old_text`) | Replaces the closest passages and `Copy old_text exactly from the page ...` in that case: the copy advice pointed at a row that differed only in a peer's cell, inviting the Agent to overwrite the peer's change as if fixing a typo (F3, F5, Swarm run 2026-10-12). The diff already explains the miss; the text names who changed the passage and asks for a decision, not a copy. |
+| `swarm_wiki` misses: `old_text matches revision {revision}, and revision {changed} by {author} changed it. Read what changed with {call}, then decide whether your change still applies; if it does, repeat the call with old_text as the page has it now.` | Same failure without a shown diff (no `expected_revision`, or a diff that does not remove `old_text`): replaces the copy advice when a recent revision held `old_text` (F3, F5, Swarm run 2026-10-12). The `since_revision` read shows the peer's change in one call. |
+| `swarm_wiki` `edits` (unadvertised): status `Applied {all 3 edits / both edits} in one revision:` or `Applied {edits 1 and 3} in one revision; the page already held {edit 2}:`, then per edit `edit {number}: replaced the passage at line {line}.` or `edit {number}: the page already held this change, at line {line}.`; all held: `Nothing changed: the page already holds these changes.` | Agents bring the file `edit` Tool's `edits` list to `swarm_wiki`: one Agent sent four row edits that way and was refused (F2, Swarm run 2026-10-12). Results follow the Skill's batch form: input order, each edit's number and its line in the saved revision, so the Agent need not reread to check (F4). |
+| `swarm_wiki` `edits` misses: `Nothing changed: {all 3 edits / both edits} are saved together or not at all, and {edits 2 and 3} could not be applied.`, then `Edit {number}: {explanation}` per failed edit (the single-edit miss text), then `Send {all 3 edits / both edits} again with {edits 2 and 3} corrected or left out.` | All or nothing keeps related changes (a claim and its count) from landing half-applied; the first sentence says so, so the Agent does not assume the matching edits were saved (F4). Each failed edit gets the full miss help, and the last sentence names the one call that finishes the change (F5). |
+| `swarm_wiki` `edits` refusals: `Each item of edits needs old_text, the passage to replace, and new_text, its replacement. Received for edit {number}: {received}.`; `update received edits together with {fields}. Put every passage to replace in edits as old_text and new_text, or send content without edits to replace the whole page.`; `edits holds {count} edits; send at most {maximum} in one call.` (each after `Nothing changed.`) | Cover the call shapes the Store cannot apply, with what was received, before any change (F2, F5); the second follows the `content` refusal's form, which names the fields sent together. Fields such as `replace_all` are refused rather than dropped, since dropping them could change which text is replaced. |
 | Read page, a short post the reader has seen: `[{count} characters you have seen before. Read the post with swarm_board {call}]` (a long one shows its Opening and the delivery's `[{count} more characters not shown. ...]` line) | Newest-page reads repeated posts the reader already had: at least 43% of the post characters of 160 such reads (F6, Sessions, 2026-10). The line keeps the post's place, author and length, and names the exact call, so an Agent that lost the text, for example after a Compaction, gets it in one call (F5). `seen before` also fits the reader's own posts. |
 | `Only {count} of {limit} posts fit the page's size limit; older posts exist. Continue with {call}` | 32 of 168 paged reads ended before `limit` without saying why (F4, Sessions, 2026-10); `size limit` says that a larger `limit` does not help, and the call continues where the page ended. |
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |

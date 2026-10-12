@@ -8,12 +8,16 @@ import pytest
 from resources.extensions.swarm.agent_text import REPLAYED
 from resources.extensions.swarm.store import SwarmStoreError
 from resources.extensions.swarm.wiki_text import (
+    WIKI_CHANGED_ABOVE,
     WIKI_CHANGES_NONE,
     WIKI_CONFLICT_CONTENT,
     WIKI_CONFLICT_RETRY,
     WIKI_DIFFERENCE,
     WIKI_DIFFERENCE_SPACING,
     WIKI_DIFFERENCES_MORE,
+    WIKI_EDIT_APPLIED,
+    WIKI_EDIT_HELD,
+    WIKI_EDIT_MISS,
     WIKI_LIST_MATCHES,
     WIKI_LIST_NO_MATCH,
     WIKI_LIST_NO_WORD_MATCH,
@@ -21,6 +25,7 @@ from resources.extensions.swarm.wiki_text import (
     WIKI_OFFSET_FROM_END,
     WIKI_OWN_REVISION,
     WIKI_SINCE_IGNORES,
+    WIKI_STATUS,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
     _swarm,
@@ -313,11 +318,13 @@ async def test_wiki_collaboration_conflicts_history_delete_restore(board):
         invoke(board, update, 1),
         invoke(board, {**update, "title": "Another title"}, 2),
     )
-    assert sum(item["ok"] for item in (updated, conflict)) == 1
-    assert (
-        next(item for item in (updated, conflict) if not item["ok"])["error"]["code"]
-        == "wiki_revision_conflict"
-    )
+    # Whichever change lands first, the other never overwrites it: the stale rename
+    # conflicts, and the stale passage edit finds its change already made.
+    assert updated["ok"], updated
+    if conflict["ok"]:
+        assert updated["data"]["status"] == WIKI_STATUS["unchanged"]
+    else:
+        assert conflict["error"]["code"] == "wiki_revision_conflict"
     current = await stored(board, page_id)
     assert current["content"] == "First finding\nRevised finding"
     assert current["revision"] == 2
@@ -428,6 +435,12 @@ async def test_wiki_scope_management_recovery_and_targeted_edits(board):
         board, {"request": {"operation": "READ", "page_id": page_id, "limti": "4"}}
     )
     assert repaired["data"]["content"] == "same"
+    # The Tool's own name as the outer action only labels the wrapped call.
+    labelled = await invoke(
+        board,
+        {"action": "swarm_wiki", "parameters": {"action": "read", "page_id": page_id, "limit": 4}},
+    )
+    assert labelled["data"]["content"] == "same"
     changed = await board.service.operation(
         "wiki",
         {
@@ -551,6 +564,28 @@ async def test_wiki_request_ids_come_from_the_tool_call(board):
             },
             "Nothing changed: the page already holds this change.",
         ),
+        # A table row's empty cells after the change anchor it with the cells before.
+        (
+            "| B01 | 1 (H) | *free* | |\n| B02 | 2 (He) | Alba | |\n| B03 | 3 (Li) | *free* | |",
+            {"old_text": "| B02 | 2 (He) | *free* | |", "new_text": "| B02 | 2 (He) | Alba | |"},
+            "Nothing changed: the page already holds this change.",
+        ),
+        (
+            "Intro\nStatus: final\nNext: review\nTimeout is 30 seconds for retries\nEnd",
+            {
+                "edits": [
+                    {
+                        "old_text": "Status: done\nNext: review",
+                        "new_text": "Status: final\nNext: review",
+                    },
+                    {
+                        "old_text": "Timeout is 20 seconds for retries",
+                        "new_text": "Timeout is 30 seconds for retries",
+                    },
+                ]
+            },
+            WIKI_STATUS["unchanged_edits"],
+        ),
         (
             "First finding",
             {"title": "Notes", "expected_revision": 1},
@@ -571,6 +606,69 @@ async def test_wiki_changes_the_page_already_holds_change_nothing(
     result = await invoke(board, {"action": "update", "page_id": page_id, **arguments})
     assert result["data"]["status"] == status
     assert await stored(board, page_id) == before
+
+
+@pytest.mark.asyncio
+async def test_wiki_update_edits_apply_together_or_not_at_all(board):
+    page_id = await create(board, "# Claims\n| B01 | *free* |\n| B02 | *free* |\n| B03 | *free* |")
+    first = {"old_text": "| B01 | *free* |", "new_text": "| B01 | Ada |"}
+    missing = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "edits": [first, {"old_text": "| B05 | *free* |", "new_text": "| B05 | Ada |"}],
+        },
+    )
+    assert missing["error"]["code"] == "wiki_edit_conflict"
+    assert WIKI_EDIT_MISS.format(number=2, explanation="") in missing["error"]["message"]
+    assert WIKI_EDIT_MISS.format(number=1, explanation="") not in missing["error"]["message"]
+    assert (await stored(board, page_id))["revision"] == 1
+    # The file edit Tool's spelling, without page_id: one revision holds every edit.
+    applied = await invoke(
+        board,
+        {
+            "edits": [
+                {"old_string": "| B01 | *free* |", "new_string": "| B01 | Ada |"},
+                {"old_text": "| B03 | *free* |", "new_text": "| B03 | Bo |"},
+                {"old_text": "# Claims", "new_text": "# Claims\nClaim one row at a time."},
+            ]
+        },
+    )
+    assert applied["ok"], applied
+    current = await stored(board, page_id)
+    assert (current["revision"], current["content"]) == (
+        2,
+        "# Claims\nClaim one row at a time.\n| B01 | Ada |\n| B02 | *free* |\n| B03 | Bo |",
+    )
+    # Each edit names its line in the saved revision.
+    assert all(
+        WIKI_EDIT_APPLIED.format(number=number, line=line) in applied["data"]["status"]
+        for number, line in ((1, 3), (2, 5), (3, 1))
+    ), applied["data"]["status"]
+    again = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "edits": [first, {"old_text": "| B02 | *free* |", "new_text": "| B02 | Cy |"}],
+        },
+    )
+    assert WIKI_EDIT_HELD.format(number=1, line=3) in again["data"]["status"]
+    assert (await stored(board, page_id))["revision"] == 3
+    refused = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "edits": [
+                {"old_text": "| B02 | Cy |", "new_text": "| B02 | Dee |"},
+                {"old_text": "| B03 | Bo |", "new_text": "", "replace_all": True},
+            ],
+        },
+    )
+    assert refused["error"]["code"] == "invalid_arguments"
+    assert (await stored(board, page_id))["revision"] == 3
 
 
 @pytest.mark.asyncio
@@ -733,18 +831,40 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
         },
         1,
     )
-    lines, passage = await miss("Row 1: value", expected_revision=1)
-    assert lines[0].startswith("Nothing changed. The page changed since revision 1 (now 2)")
-    assert board.swarm["participants"][1]["display_name"] in lines[1]
-    assert lines[2:6] == [
+    peer = board.swarm["participants"][1]["display_name"]
+    stale = (await edit("Row 1: value", expected_revision=1))["error"]["message"].splitlines()
+    assert stale[0].startswith("Nothing changed. The page changed since revision 1 (now 2)")
+    assert peer in stale[1]
+    assert stale[2:6] == [
         "@@ -2,3 +2,3 @@",
         " The deployment uses three replicas behind the load balancer today.",
         "-Row 1: value",
         "+Row 1: ok",
     ]
+    # Those changes explain the miss, so no passage elsewhere is offered to copy.
+    assert stale[-1] == WIKI_CHANGED_ABOVE.format(revision=2, author=peer)
+    # Without a base revision, the miss names the revision that last held old_text, who
+    # changed it, and the read that shows what changed.
+    lines, changes = await miss("Row 1: value")
+    assert peer in lines[-1] and "revision 1" in lines[-1]
+    assert "-Row 1: value\n+Row 1: ok" in changes
     current = await stored(board, page_id)
-    assert passage in current["content"]
     assert current["revision"] == 2
+    # Among rows of one layout, the row whose words old_text holds is the closest passage,
+    # though another free row resembles it more character by character.
+    symbols = ["H", "He", "Li", "Be", "B", "C", "N", "O"]
+    rows = [
+        f"| B{number:02} | {number} ({symbol}) | *free* |"
+        for number, symbol in enumerate(symbols, 1)
+    ]
+    sheet = await create(
+        board, "\n".join(["# Claims", "| Batch | Elements | Owner |", *rows]), "Claims"
+    )
+    claimed = {"action": "update", "page_id": sheet, "old_text": rows[1]}
+    assert (await invoke(board, {**claimed, "new_text": "| B02 | 2 (He) | Alba |"}, 1))["ok"]
+    lines, _ = await miss(rows[1], sheet)
+    assert next(line for line in lines if line.startswith("| ")) == "| B02 | 2 (He) | Alba |"
+    assert _differing_lines(lines) == ["4"]
 
 
 def _differing_lines(lines):
@@ -779,6 +899,14 @@ async def test_wiki_conflicts_show_what_changed_and_the_retry(board):
         assert peer in header
         assert diff == ["@@ -1,3 +1,3 @@", " Intro", "-Status: pending", "+Status: done", " End"]
         assert last == next_step.format(current=2)
+    # A stale passage edit the peer already made changes nothing; another change of that
+    # passage names the revision and author that changed it, which the changes show.
+    same = {**stale, "old_text": "Status: pending", "new_text": "Status: done"}
+    assert (await invoke(board, same))["data"]["status"] == WIKI_STATUS["unchanged"]
+    other = await invoke(board, {**same, "new_text": "Status: blocked"})
+    lines = other["error"]["message"].splitlines()
+    assert "-Status: pending" in lines and "+Status: done" in lines
+    assert lines[-1] == WIKI_CHANGED_ABOVE.format(revision=2, author=peer)
     future = await invoke(board, {**stale, "expected_revision": 7, "title": "Renamed"})
     assert visible(future) == (
         "Error (wiki_revision_conflict): Nothing changed. Revision 7 does not exist yet; the "
