@@ -91,7 +91,7 @@ The Terminal probe is `scripts/probe_provider_tool_call.py --scenario terminal` 
 
 ## Agent-facing text
 
-Failure modes F1-F6: `tools.md` -> Terms. "Usage analysis", "interface audit" and "harness survey" are the 2026-10-04 studies behind the shell/terminal redesign (`tools/shell.md` -> Agent-facing text; Sessions and scenario drivers, counts only). "Eval round 1" is the 2026-10-05 evaluation of this interface (40 scripted runs, findings E2-E4), and "terminal review" the 2026-10-05 review of its terminal side (findings R1-R10, each reproduced with the Tool). Texts show the variant with the shell Tool offered as `powershell` unless noted, and are the same at every Session depth; `<id>`, `<label>` (the name, else the program), `<state>` and `N` are filled with real values, and `<call action>` stands for `{"action": "<action>", "terminal_id": "<id>"}`.
+Failure modes F1-F6: `tools.md` -> Terms. "Usage analysis", "interface audit" and "harness survey" are the 2026-10-04 studies behind the shell/terminal redesign (`tools/shell/agent-facing-text.md`; Sessions and scenario drivers, counts only). "Eval round 1" is the 2026-10-05 evaluation of this interface (40 scripted runs, findings E2-E4), and "terminal review" the 2026-10-05 review of its terminal side (findings R1-R10, each reproduced with the Tool). Texts show the variant with the shell Tool offered as `powershell` unless noted, and are the same at every Session depth; `<id>`, `<label>` (the name, else the program), `<state>` and `N` are filled with real values, and `<call action>` stands for `{"action": "<action>", "terminal_id": "<id>"}`.
 
 | Text | Failure it prevents | Evidence |
 |---|---|---|
