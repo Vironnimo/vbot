@@ -547,10 +547,11 @@ _MISSING_MODULE = re.compile(
 )
 # A Python script run by its path, such as `python tests/test_x.py` or `py -u tools\run.py`:
 # the interpreter as written, its options (after a closing quote of the
-# interpreter's path), and the script.
+# interpreter's path; -X and -W with their value, as in `-X utf8`), and the script.
 _PYTHON_SCRIPT = re.compile(
     r"(?:^|[\s;&|('\"])(?P<interpreter>(?:[^\s;&|()'\"]*[/\\])?(?:python[\d.]*|py)(?:\.exe)?)"
-    r"(?P<options>['\"]?(?:\s+-[A-Za-z]\w*)*)\s+['\"]?(?P<script>[^\s;&|<>'\"]+\.py)\b",
+    r"(?P<options>['\"]?(?:\s+-(?:[XW][ \t]*+[^\s;&|<>'\"-][^\s;&|<>'\"]*+|[A-Za-z]\w*))*)"
+    r"\s+['\"]?(?P<script>[^\s;&|<>'\"]+\.py)\b",
     re.I | re.M,
 )
 
@@ -601,11 +602,20 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
             "with -m, such as `python -m pytest`, or add the working directory to PYTHONPATH."
         )
     script, run = found
-    return (
+    cause = (
         f"Python cannot import '{name}' because running `{script.as_posix()}` by path puts "
         f"its directory `{script.parent.as_posix()}` on the import path instead of the "
-        f"working directory, where '{name}' is. Run it as a module from the working "
-        f"directory instead: {_run_as_module(failure.command, script, run)}."
+        f"working directory, where '{name}' is."
+    )
+    if all(part.isidentifier() for part in script.with_suffix("").parts):
+        return (
+            f"{cause} Run it as a module from the working directory instead: "
+            f"{_run_as_module(failure.command, script, run)}."
+        )
+    # A directory such as .scratch is no module name, so -m cannot run the script.
+    return (
+        f"{cause} Put the working directory on the import path for this run: "
+        f"{_run_with_working_directory(failure.command, run)}."
     )
 
 
@@ -719,9 +729,24 @@ def _run_as_module(command: str, script: Path, run: re.Match[str]) -> str:
     stay unchanged: one suggestion dropped `--impl minidb.sqlite_float.format_real`,
     which chose the implementation the script tested.
     """
-    dotted = script.with_suffix("").parts
-    if not all(part.isidentifier() for part in dotted):
-        return "`python -m` with its dotted module name and the same arguments"
+    start, _script_end, rest = _script_call(command, run)
+    call = f"{command[start : run.end('options')]} -m {'.'.join(script.with_suffix('').parts)}"
+    return _shown_call(call, rest)
+
+
+def _run_with_working_directory(command: str, run: re.Match[str]) -> str:
+    """The Python call that ran a script by path, with the working directory on PYTHONPATH.
+
+    For a script in a directory that is no module name, such as ``.scratch``,
+    where -m cannot run it. The variable is set in the shell's own syntax.
+    """
+    start, script_end, rest = _script_call(command, run)
+    setting = "$env:PYTHONPATH = (Get-Location).Path; " if _POWERSHELL else "PYTHONPATH=. "
+    return _shown_call(f"{setting}{command[start:script_end]}", rest)
+
+
+def _script_call(command: str, run: re.Match[str]) -> tuple[int, int, str]:
+    """Where the Python call *run* starts and its script ends, and the arguments after it."""
     start = run.start("interpreter")
     if start > 0 and command[start - 1] in "'\"":
         # A quoted interpreter path, run with PowerShell's call operator.
@@ -733,8 +758,10 @@ def _run_as_module(command: str, script: Path, run: re.Match[str]) -> str:
     if end < len(command) and command[end] in "'\"":
         end += 1
     arguments = _SCRIPT_ARGUMENTS.match(command, end)
-    rest = arguments[0].rstrip() if arguments else ""
-    call = f"{command[start : run.end('options')]} -m {'.'.join(dotted)}"
+    return start, end, arguments[0].rstrip() if arguments else ""
+
+
+def _shown_call(call: str, rest: str) -> str:
     if len(rest) > _ARGUMENTS_SHOWN_CHARS:
         return f"`{call}` followed by the same arguments"
     return f"`{call}{rest}`"

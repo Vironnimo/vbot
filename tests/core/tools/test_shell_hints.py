@@ -664,6 +664,10 @@ def _suggested_call(hint: str | None) -> str:
     return spans[-1]
 
 
+_PYTHONPATH = {True: "$env:PYTHONPATH = (Get-Location).Path; ", False: "PYTHONPATH=. "}
+
+
+@pytest.mark.parametrize("powershell", [False, True])
 @pytest.mark.parametrize(
     ("command", "module", "call"),
     [
@@ -685,21 +689,40 @@ def _suggested_call(hint: str | None) -> str:
             "shop",
             "python -m tests.test_cart --impl shop.fast.total 20000 'two words'",
         ),
+        # -m cannot run a script from a directory that is no module name.
+        (
+            "python .scratch/probe.py --offline",
+            "shop",
+            "{pythonpath}python .scratch/probe.py --offline",
+        ),
+        (
+            "python -X utf8 .scratch/probe.py 2>&1",
+            "shop",
+            "{pythonpath}python -X utf8 .scratch/probe.py",
+        ),
     ],
 )
 def test_module_not_found_from_script_run_by_path_names_module_run(
-    tmp_path: Path, command: str, module: str, call: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    powershell: bool,
+    command: str,
+    module: str,
+    call: str,
 ) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", powershell)
     workdir = _project(tmp_path)
-    script = workdir / "tests" / "test_cart.py"
+    scratch = ".scratch" in command
+    script = workdir / (".scratch/probe.py" if scratch else "tests/test_cart.py")
 
     hint = annotate_failure(
         command.format(script=f'"{script}"'), 1, _import_traceback(script, module), workdir=workdir
     )
 
     assert hint is not None
-    assert hint.startswith(_RUN_AS_MODULE.format(module=module).split(" Run it as")[0])
-    assert _suggested_call(hint) == call
+    if not scratch:
+        assert hint.startswith(_RUN_AS_MODULE.format(module=module).split(" Run it as")[0])
+    assert _suggested_call(hint) == call.format(pythonpath=_PYTHONPATH[powershell])
 
 
 def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -> None:
