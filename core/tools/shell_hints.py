@@ -1086,11 +1086,13 @@ def _hint_script_not_found(failure: _Failure) -> str | None:
     if dots:
         return (
             f"Python found no file {_shown_path(missing, workdir)}: a path separates "
-            f"directories with /, not dots, so the script is {shown[0]}. Run {call}."
+            f"directories with /, not dots, so the script is {shown[0]}. "
+            f"Run {call or 'it by that path'}."
         )
     return (
         f"Python found no file {_shown_path(missing, workdir)}, but similar files exist: "
-        f"{', '.join(shown)}. Run the one you meant by that path, such as {call}."
+        f"{', '.join(shown)}. Run the one you meant by that path"
+        f"{f', such as {call}' if call else ''}."
     )
 
 
@@ -1102,15 +1104,18 @@ def _shown_path(path: Path, workdir: Path) -> str:
         return path.as_posix()
 
 
-def _call_with_script(command: str, missing: Path, workdir: Path, script: str) -> str:
-    """The Python call that ran *missing*, with *script* in its place."""
+def _call_with_script(command: str, missing: Path, workdir: Path, script: str) -> str | None:
+    """The Python call that ran *missing*, with *script* in its place.
+
+    None when the command does not show that call, such as ``& $python x.py``.
+    """
     for run in _PYTHON_SCRIPT.finditer(command):
         written = workdir / run["script"]
         if str(written).casefold() != str(missing).casefold():
             continue
         start, _script_end, rest = _script_call(command, run)
         return _shown_call(f"{command[start : run.end('options')]} {script}", rest)
-    return "it by that path"
+    return None
 
 
 def _missing_submodule(name: str, workdir: Path | None) -> str:

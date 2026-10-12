@@ -1121,12 +1121,15 @@ def test_a_missing_submodule_names_what_the_working_directory_holds(
             "python -u tools/quote_check.py --limit 1",
         ),
         ("python tools/qoute_check.py", "tools/qoute_check.py", "python tools/quote_check.py"),
+        # An interpreter in a variable: the path without a made-up call.
+        ("& $python tools/qoute_check.py", "tools/qoute_check.py", ""),
         ("python report.py", "report.py", None),
     ],
 )
 def test_a_script_python_cannot_open_names_the_existing_path(
     tmp_path: Path, command: str, missing: str, call: str | None
 ) -> None:
+    """*call* is the suggested call, "" for a hint without one, None for no hint."""
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "quote_check.py").touch()
     # Python names the absolute path in its repr form.
@@ -1141,4 +1144,4 @@ def test_a_script_python_cannot_open_names_the_existing_path(
         assert hint is None
     else:
         assert hint is not None and "tools/quote_check.py" in hint
-        assert _suggested_call(hint) == call
+        assert re.findall(r"`([^`]+)`", hint)[-1:] == ([call] if call else [])
