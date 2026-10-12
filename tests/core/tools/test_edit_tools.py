@@ -176,6 +176,118 @@ async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
     assert joined is None or joined in notes[0]
 
 
+WRAPPED = (
+    "def spawn(db, api, *, fault=None, pace=1.0,\n"
+    "          exit_code=70, start=None):\n"
+    "    return 1\n"
+    "\n"
+    "\n"
+    "def check(rows):\n"
+    "    total = count(rows)        print(total)\n"
+    "    return total\n"
+)
+REWRAPPED_SIGNATURE = (
+    "def spawn(db, api, *, fault=None, pace=1.0, exit_code=70,\n          start=None):"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "edit", "outcome"),
+    [
+        # Every word is the file's, only the line breaks fall elsewhere: new_string
+        # is written as sent, with a note naming the lines it matched.
+        pytest.param(
+            WRAPPED,
+            (REWRAPPED_SIGNATURE, REWRAPPED_SIGNATURE.replace("None):", "None, rows=1):")),
+            WRAPPED.replace(
+                "pace=1.0,\n          exit_code=70, start=None):",
+                "pace=1.0, exit_code=70,\n          start=None, rows=1):",
+            ),
+            id="signature",
+        ),
+        pytest.param(
+            "# Notes\n\n- Rendering uses the engine's own\n  digit rules, not repr.\n- Next\n",
+            ("- Rendering uses the engine's own digit rules, not repr.", "- Rendering is exact."),
+            "# Notes\n\n- Rendering is exact.\n- Next\n",
+            id="prose",
+        ),
+        pytest.param(
+            WRAPPED.replace("\n", "\r\n"),
+            (REWRAPPED_SIGNATURE, REWRAPPED_SIGNATURE.replace("None):", "None, rows=1):")),
+            WRAPPED.replace(
+                "pace=1.0,\n          exit_code=70, start=None):",
+                "pace=1.0, exit_code=70,\n          start=None, rows=1):",
+            ).replace("\n", "\r\n"),
+            id="crlf",
+        ),
+        # Nearby inputs stay refused, with the line the line break differs on.
+        # An edit of whitespace alone is about the line breaks old_string misstates.
+        pytest.param(
+            WRAPPED,
+            ("    total = count(rows)\n    print(total)",) * 2,
+            ("text_not_found", {"7"}),
+            id="whitespace-only",
+        ),
+        pytest.param(
+            WRAPPED,
+            (
+                "    total = count(rows)\n    print(total)\n",
+                "    total = count(rows)\n    print(total)",
+            ),
+            ("text_not_found", {"7"}),
+            id="whitespace-only-final-break",
+        ),
+        # A copy that starts a line must start one in the file.
+        pytest.param(
+            WRAPPED,
+            ("\n    print(total)\n    return total", "\n    print(total)\n    return total + 1"),
+            ("text_not_found", {"7-8", "7"}),
+            id="starts-a-line",
+        ),
+        # Too few words to tell the place.
+        pytest.param(
+            WRAPPED,
+            ("rows)\nprint(total)", "rows) + print(total)"),
+            ("text_not_found", {"7"}),
+            id="few-words",
+        ),
+        # A blank line must be in the file as well.
+        pytest.param(
+            WRAPPED,
+            (REWRAPPED_SIGNATURE.replace(",\n", ",\n\n"), "def spawn():"),
+            ("text_not_found", {"1-2", "1"}),
+            id="blank-line",
+        ),
+        pytest.param(
+            WRAPPED + "\n\n" + WRAPPED.split("\n\n\n")[0] + "\n",
+            (REWRAPPED_SIGNATURE, "def spawn():"),
+            ("ambiguous_match", {"1"}),
+            id="ambiguous",
+        ),
+    ],
+)
+async def test_old_string_with_line_breaks_in_other_places_than_the_file(
+    tmp_path, content, edit, outcome
+) -> None:
+    (tmp_path / "a.py").write_bytes(content.encode())
+    old, new = edit
+
+    result = await call(
+        tmp_path, {"path": "a.py", "edits": [{"old_string": old, "new_string": new}]}, name="edit"
+    )
+
+    if isinstance(outcome, str):
+        assert result["ok"], text(result)
+        assert (tmp_path / "a.py").read_bytes() == outcome.encode()
+        assert len([line for line in text(result).split("\n") if line.startswith("Note: ")]) == 1
+        return
+    code, lines = outcome
+    assert result["error"]["code"] == code
+    assert (tmp_path / "a.py").read_bytes() == content.encode()
+    assert set(re.findall(r"\blines? (\d+(?:-\d+)?)", text(result))) == lines
+
+
 @pytest.mark.asyncio
 async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> None:
     (tmp_path / "empty.txt").write_bytes(b"")

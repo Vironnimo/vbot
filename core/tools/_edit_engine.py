@@ -49,6 +49,7 @@ from core.tools.fuzzy_match import (
     first_difference,
     preserve_typography,
     replace_fuzzy,
+    rewrapped_place,
 )
 from core.tools.tools import JsonObject
 
@@ -233,7 +234,11 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
     assert replacement is not None
     old, new, replace_all = replacement.old, replacement.new, replacement.replace_all
     notes: list[str] = []
-    found = replace_fuzzy(content, old, new, replace_all=replace_all, typographic=True)
+    found = replace_fuzzy(
+        content, old, new, replace_all=replace_all, typographic=True, rewrapped=True
+    )
+    if isinstance(found, FuzzyReplacement) and found.strategy == "rewrapped":
+        return _rewrapped(content, found, path)
     stripped = strip_line_number_gutters(old) if found is None else None
     if stripped is not None:
         # Text copied from read output: its gutters cover whole lines.
@@ -303,6 +308,31 @@ def _keep_decorated(content: str, found: FuzzyReplacement, path: object) -> tupl
     spans = list(zip(found.before_spans, found.after_spans, strict=True))
     edited, notes = place_before_decorators(content, found.new_content, spans, path)
     return edited, _deviations(notes)
+
+
+def _rewrapped(content: str, found: FuzzyReplacement, path: object) -> tuple[str, list[str]]:
+    """Write a replacement whose old text breaks its lines in other places than the file.
+
+    The note names the lines that held the old text: the written text follows
+    the call's line breaks, not the file's, so the result shows it.
+    """
+    places = []
+    for start, end in found.before_spans:
+        text = content[start:end]
+        first = len(_BREAK.findall(content, 0, start + len(text) - len(text.lstrip()))) + 1
+        last = len(_BREAK.findall(content, 0, start + len(text.rstrip()) - 1)) + 1
+        places.append(str(first) if first == last else f"{first}-{last}")
+    single = len(places) == 1 and "-" not in places[0]
+    lines = ("line " if single else "lines ") + ", ".join(places)
+    edited, placed = _keep_decorated(content, found, path)
+    note = DeviationNote(_REWRAPPED_NOTE.format(lines=lines))
+    return edited, [note, *_joined_lines(content, found), *placed]
+
+
+_REWRAPPED_NOTE = (
+    "old_string matched {lines}, where the file breaks the text in other places; "
+    "new_string was written with its own line breaks."
+)
 
 
 def _refuse_join(content: str, found: FuzzyReplacement, hunk: _Hunk, path: object) -> None:
@@ -473,7 +503,9 @@ def _context_not_found(content: str, hint: str, hunk: _Hunk, path: object) -> _P
     # the first line that differs, like the report for the lines to replace.
     block = "\n" in hint
     if block and details["candidates"]:
-        difference = first_difference(content, hint, details["candidates"][0]["line"])
+        difference = first_difference(
+            content, hint, details["candidates"][0]["line"], whole_lines=True
+        )
         if difference is not None:
             details["difference"] = {**difference, "source": "patch"}
     return _PatchError(
@@ -986,16 +1018,42 @@ def _not_found(
     split = _split_copy(content, old) if source == "old_string" else None
     if split is not None:
         return split
-    details = _candidates(content, old)
+    place = rewrapped_place(content, old) if source == "old_string" else None
+    details: JsonObject = (
+        # Every word of old_string is there, in order: only whitespace differs.
+        {"candidates": [_place_excerpt(content, *place)]}
+        if place is not None
+        else _candidates(content, old)
+    )
     if part is not None and not details["candidates"]:
         details["part_of"] = part
     if details["candidates"]:
-        difference = first_difference(content, old, details["candidates"][0]["line"])
+        difference = first_difference(
+            content,
+            old,
+            details["candidates"][0]["line"],
+            placed=place is not None,
+            whole_lines=source == "patch",
+        )
         if difference is not None:
             details["difference"] = {**difference, "source": source}
     return details
 
 
+def _place_excerpt(content: str, first: int, last: int) -> JsonObject:
+    """Show lines ``first``-``last``, at most as many as a closest-text candidate."""
+    lines = split_text_lines(content)
+    shown = min(last, first + _PLACE_MAX_LINES - 1)
+    excerpt = file_excerpt(lines, first, shown)
+    if shown < last:
+        excerpt["truncated"] = True
+        excerpt["continuations"].append(
+            {"offset": f"{shown + 1}:1", "limit": min(_PLACE_MAX_LINES, last - shown)}
+        )
+    return excerpt
+
+
+_PLACE_MAX_LINES = 8
 _SPLIT_MAX_LINES = 200
 # Parts in order with at most this many non-blank lines between them are one passage.
 _SPLIT_MAX_LEFT_OUT = 3

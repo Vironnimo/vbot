@@ -289,6 +289,8 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
         if difference.get("unprefixed")
         else []
     )
+    if difference.get("break"):
+        return [_break_text(difference, source, after), *unprefixed]
     if not difference.get("truncated"):
         held = (
             f": after {after}, line {difference['line']} reads"
@@ -316,6 +318,34 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
             else f"{label} character {start}: end of line."
         )
     return [*lines, *unprefixed]
+
+
+def _break_text(difference: JsonObject, source: str, after: str) -> str:
+    """Name a first difference that is a line break in another place."""
+    line, before, then = difference["line"], difference["before"], difference["after"]
+    kind = difference["break"]
+    if kind == "file":
+        if after:
+            return (
+                f"First difference: after {after}, line {line} breaks after {before!r}; "
+                f"{source} continues it with {then!r}."
+            )
+        return (
+            f"First difference, line {line}: the file breaks this line after {before!r}; "
+            f"{source} continues it with {then!r}."
+        )
+    if kind == "copy":
+        if after:
+            return (
+                f"First difference: {source} breaks the line after {before!r}; after {after}, "
+                f"line {line} continues it with {then!r}."
+            )
+        return (
+            f"First difference, line {line}: {source} breaks this line after {before!r}; "
+            f"the file continues it with {then!r}."
+        )
+    held = f"after {after}, line {line} has" if after else f"line {line} of the file has"
+    return f"First difference: {source} starts a line with {then!r}, which {held} after {before!r}."
 
 
 def _read_hint(error: JsonObject) -> str:

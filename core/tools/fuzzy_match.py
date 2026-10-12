@@ -176,6 +176,7 @@ def replace_fuzzy(
     at_eof: bool = False,
     typographic: bool = False,
     first: bool = False,
+    rewrapped: bool = False,
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Find ``old_string`` in ``content`` via the strategy chain and replace it.
 
@@ -184,7 +185,9 @@ def replace_fuzzy(
     ``first``, or ``None`` when no strategy matched.
 
     Patch callers can require whole-line spans, anchor a hunk at EOF, or take the
-    winning strategy's first match.
+    winning strategy's first match. ``rewrapped`` adds a last strategy for one
+    target: ``old_string`` whose line breaks fall in other places than the file's,
+    for an edit that changes more than whitespace.
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
@@ -223,29 +226,84 @@ def replace_fuzzy(
             )
 
         selected = _leftmost_non_overlapping(matches) if replace_all else matches[:1]
-        new_content, before_spans, after_spans = _apply_replacements(
+        return _replaced(
             content,
             selected,
             replacement_text,
+            name,
             reindent=reindent or (typographic and name == "normalized"),
             old_string_lf=old_lf,
             file_ending=file_ending,
         )
-        # The spans ascend without overlapping, so the last one reaches furthest.
-        first_line = _line_number_at(content, selected[0][0])
-        last_start, last_end = after_spans[-1]
-        last_line = _line_number_at(new_content, max(last_start, last_end - 1))
-        return FuzzyReplacement(
-            new_content,
-            first_line,
-            last_line,
-            len(selected),
-            name,
-            before_spans,
-            after_spans,
-        )
 
-    return None
+    # An edit of whitespace alone is about the line breaks that old_string
+    # misstates: what the edit means is unclear.
+    if (
+        not rewrapped
+        or first
+        or whole_lines
+        or at_eof
+        or _unspaced(old_string) == _unspaced(new_string)
+    ):
+        return None
+    matches = [
+        (start, end)
+        for start, end in _match_rewrapped(content, old_string)
+        if not _inside_crlf(content, start) and not _inside_crlf(content, end)
+    ]
+    if len(matches) > 1 and not replace_all:
+        line_starts = _line_starts(content)
+        return AmbiguousFuzzyMatch(
+            len(matches), [bisect_right(line_starts, start) for start, _ in matches]
+        )
+    if not matches:
+        return None
+    return _replaced(
+        content,
+        _leftmost_non_overlapping(matches),
+        replacement_text,
+        "rewrapped",
+        reindent=True,
+        old_string_lf=old_lf,
+        file_ending=file_ending,
+        lines_correspond=False,
+    )
+
+
+def _replaced(
+    content: str,
+    selected: list[tuple[int, int]],
+    replacement_text: str,
+    strategy: str,
+    *,
+    reindent: bool,
+    old_string_lf: str,
+    file_ending: str | None,
+    lines_correspond: bool = True,
+) -> FuzzyReplacement:
+    """Replace the ``selected`` spans and describe the result."""
+    new_content, before_spans, after_spans = _apply_replacements(
+        content,
+        selected,
+        replacement_text,
+        reindent=reindent,
+        old_string_lf=old_string_lf,
+        file_ending=file_ending,
+        lines_correspond=lines_correspond,
+    )
+    # The spans ascend without overlapping, so the last one reaches furthest.
+    first_line = _line_number_at(content, selected[0][0])
+    last_start, last_end = after_spans[-1]
+    last_line = _line_number_at(new_content, max(last_start, last_end - 1))
+    return FuzzyReplacement(
+        new_content,
+        first_line,
+        last_line,
+        len(selected),
+        strategy,
+        before_spans,
+        after_spans,
+    )
 
 
 def _candidate_normalize_line(line: str) -> str:
@@ -416,19 +474,24 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
     return candidates
 
 
-def first_difference(content: str, copy: str, start: int) -> dict[str, int | str | bool] | None:
+def first_difference(
+    content: str, copy: str, start: int, *, placed: bool = False, whole_lines: bool = False
+) -> dict[str, int | str | bool] | None:
     """Locate where ``copy`` first differs from ``content`` near line ``start``.
 
-    ``start`` is the 1-based line of the closest candidate for ``copy``. Lines
-    compare with runs of whitespace collapsed. The result names the file line
-    and the copied line with 1-based character positions, and at most
-    240-character windows of both lines around the difference. ``None`` means
-    every copied line matches the file from the aligned position on.
+    ``start`` is the 1-based line of the closest candidate for ``copy``;
+    ``placed`` says it holds the copy's first word. Lines compare with runs of
+    whitespace collapsed. The result names the file line and the copied line
+    with 1-based character positions, and at most 240-character windows of
+    both lines around the difference. ``None`` means every copied line matches
+    the file from the aligned position on. ``whole_lines`` says the copy's
+    first line is a whole line; otherwise only a copy that starts with a line
+    break claims to start one.
     """
     file_lines = split_text_lines(content)
     wanted_lines = split_text_lines(copy)
     first = next((index for index, line in enumerate(wanted_lines) if line.strip()), 0)
-    aligned = _aligned_start(file_lines, start, wanted_lines, first)
+    aligned = start if placed else _aligned_start(file_lines, start, wanted_lines, first)
     for position, wanted in enumerate(wanted_lines[first:], first):
         number = aligned + position - first
         if number > len(file_lines):
@@ -438,6 +501,10 @@ def first_difference(content: str, copy: str, start: int) -> dict[str, int | str
             file_position, copy_position = _difference_positions(actual, wanted)
             file_start, file_text = _difference_window(actual, file_position)
             copy_start, copy_text = _difference_window(wanted, copy_position)
+            following = (
+                file_lines[number] if number < len(file_lines) else None,
+                wanted_lines[position + 1] if position + 1 < len(wanted_lines) else None,
+            )
             return {
                 "line": number,
                 "character": file_position + 1,
@@ -448,6 +515,13 @@ def first_difference(content: str, copy: str, start: int) -> dict[str, int | str
                 "file": file_text,
                 "copy": copy_text,
                 "truncated": len(file_text) < len(actual) or len(copy_text) < len(wanted),
+                **_break_difference(
+                    actual,
+                    wanted,
+                    following,
+                    starts=position == first and (whole_lines or first > 0),
+                    part=position == first and not (whole_lines or first > 0),
+                ),
             }
     return None
 
@@ -618,6 +692,91 @@ def _line_difference(
         truncated = truncated or len(window) < len(text)
     difference["truncated"] = truncated
     return difference
+
+
+# A line break difference quotes at most this many characters on each side.
+_BREAK_SIDE_CHARACTERS = 60
+# A copy's first line is tried at most at this many places inside the file line.
+_BREAK_PLACES = 20
+
+
+def _break_difference(
+    actual: str,
+    wanted: str,
+    following: tuple[str | None, str | None],
+    *,
+    starts: bool,
+    part: bool = False,
+) -> dict[str, str]:
+    """Describe a first difference that is a line break in another place, if it is one.
+
+    ``following`` holds the file's and the copy's next lines. ``break`` is
+    ``file`` when the file line ends where the copy line goes on with what the
+    next file line starts with, ``copy`` for the reverse, and ``start`` when the
+    copy's first line, which ``starts`` a line, is the end of the file line.
+    ``before`` is the text before the break, ``after`` the text the other side
+    continues with. A copy's first line that is ``part`` of a line can start
+    inside the file line.
+    """
+    if part:
+        start = wanted.split()[:1]
+        places = re.finditer(re.escape(start[0]), actual) if start else iter(())
+        for _, found in zip(range(_BREAK_PLACES), places, strict=False):
+            difference = _break_difference(actual[found.start() :], wanted, following, starts=False)
+            if difference:
+                return difference
+        return {}
+    held = list(re.finditer(r"\S+", actual))
+    copied = list(re.finditer(r"\S+", wanted))
+    words = [found[0] for found in held]
+    copy_words = [found[0] for found in copied]
+
+    def side(text: str, *, end: bool) -> str:
+        text = text.strip()
+        if len(text) <= _BREAK_SIDE_CHARACTERS:
+            return text
+        if end:
+            return "..." + text[-_BREAK_SIDE_CHARACTERS:]
+        return text[:_BREAK_SIDE_CHARACTERS] + "..."
+
+    def first_word(line: str | None) -> str | None:
+        found = (line or "").split()
+        return found[0] if found else None
+
+    def holds(held_word: str | None, copied_word: str | None) -> bool:
+        # The copy can end inside a word.
+        return (
+            held_word is not None and copied_word is not None and held_word.startswith(copied_word)
+        )
+
+    count, copy_count = len(words), len(copy_words)
+    if (
+        0 < count < copy_count
+        and copy_words[:count] == words
+        and holds(first_word(following[0]), copy_words[count])
+    ):
+        return {
+            "break": "file",
+            "before": side(actual, end=True),
+            "after": side(wanted[copied[count].start() :], end=False),
+        }
+    if (
+        0 < copy_count < count
+        and words[:copy_count] == copy_words
+        and holds(words[copy_count], first_word(following[1]))
+    ):
+        return {
+            "break": "copy",
+            "before": side(wanted, end=True),
+            "after": side(actual[held[copy_count].start() :], end=False),
+        }
+    if starts and 0 < copy_count < count and words[-copy_count:] == copy_words:
+        return {
+            "break": "start",
+            "before": side(actual[: held[count - copy_count].start()], end=True),
+            "after": side(wanted, end=False),
+        }
+    return {}
 
 
 def _loose(text: str) -> str:
@@ -969,6 +1128,113 @@ def _match_whitespace_normalized(content: str, pattern: str) -> list[tuple[int, 
     return matches
 
 
+# A copy whose line breaks fall in other places identifies its passage only
+# with this many words: "return x" against "return\nx" is too short to tell.
+_REWRAPPED_MIN_WORDS = 4
+_WORD_RE = re.compile(r"\w+")
+_SPACE_RUN_RE = re.compile(r"[ \t\n]+")
+# Whitespace between words with at most one line break: any such run of the file.
+_ONE_BREAK = r"(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)"
+
+
+def _space_pattern(run: str) -> str:
+    """Match a whitespace run between two words of the copy in the file.
+
+    A space, a line break or both stand for each other; a blank line, two or
+    more line breaks, must be in the file as well.
+    """
+    breaks = run.count("\n")
+    return _ONE_BREAK if breaks < 2 else r"[ \t]*" + r"\n[ \t]*" * breaks
+
+
+def _unspaced(text: str) -> str:
+    return "".join(text.split())
+
+
+def _rewrapped_parts(old: str) -> tuple[str, str, str]:
+    """Split ``old``, folded like the normalized strategy, into lead, words and trail."""
+    text = _folded(old, typographic=True)
+    core = text.strip(" \t\n")
+    if not core:
+        return text, "", ""
+    start = text.index(core)
+    return text[:start], core, text[start + len(core) :]
+
+
+def _match_rewrapped(content: str, old: str) -> list[tuple[int, int]]:
+    """Match ``old`` with its line breaks in other places than the file's.
+
+    Every word (non-whitespace run) must be the file's, in order; a space and a
+    line break with any indentation stand for each other between words. Leading
+    and trailing whitespace keeps its line breaks: a copy that starts with a
+    line break starts a line of the file, one that ends with a line break ends
+    one. At least one line break must fall elsewhere, else a precise strategy
+    decides, and the copy needs ``_REWRAPPED_MIN_WORDS`` words.
+    """
+    lead, core, trail = _rewrapped_parts(old)
+    if len(_WORD_RE.findall(core)) < _REWRAPPED_MIN_WORDS:
+        return []
+    words = _SPACE_RUN_RE.split(core)
+    runs = _SPACE_RUN_RE.findall(core)
+    body = re.escape(words[0]) + "".join(
+        _space_pattern(run) + re.escape(word) for run, word in zip(runs, words[1:], strict=True)
+    )
+    lead_breaks = lead.count("\n")
+    if lead_breaks:
+        # Trailing spaces of the line before stay; the indentation is replaced.
+        head = r"\n" + r"[ \t]*\n" * (lead_breaks - 1) + r"[ \t]*"
+    else:
+        head = r"^[ \t]*" if lead else ""
+    trail_breaks = trail.count("\n")
+    if trail_breaks:
+        tail = r"[ \t]*\n" * trail_breaks + (r"[ \t]*" if trail[-1] != "\n" else "")
+    else:
+        tail = r"[ \t]*$" if trail else ""
+    pattern = re.compile(f"(?=({head}({body}){tail}))", re.MULTILINE)
+    wanted = [run.count("\n") for run in runs]
+    found = [
+        match.span(1)
+        for match in pattern.finditer(_folded(content, typographic=True))
+        # A copy whose line breaks are all the file's is the precise strategies' concern.
+        if [run.count("\n") for run in _SPACE_RUN_RE.findall(match[2])] != wanted
+    ]
+    if not found:
+        return []
+    spans = _normalize_with_spans(content, typographic=True)[1]
+    matches = []
+    for start, end in found:
+        # A part of an expanded glyph must not authorize replacing it.
+        if (start and spans[start - 1] == spans[start]) or (
+            end < len(spans) and spans[end - 1] == spans[end]
+        ):
+            continue
+        matches.append((spans[start][0], spans[end - 1][1]))
+    return matches
+
+
+def rewrapped_place(content: str, old: str) -> tuple[int, int] | None:
+    """Return the lines that hold every word of ``old`` in order, if exactly one place does.
+
+    Any whitespace stands for any other between the words; leading and trailing
+    whitespace counts for nothing. A failure report shows this place: there
+    ``old`` differs from the file only in its whitespace.
+    """
+    _lead, core, _trail = _rewrapped_parts(old)
+    if not core:
+        return None
+    words = _SPACE_RUN_RE.split(core)
+    pattern = re.compile("(?=(" + r"[ \t\n]+".join(map(re.escape, words)) + "))")
+    found = [match.span(1) for match in pattern.finditer(_folded(content, typographic=True))]
+    if len(found) != 1:
+        return None
+    start, end = found[0]
+    spans = _normalize_with_spans(content, typographic=True)[1]
+    return (
+        _line_number_at(content, spans[start][0]),
+        _line_number_at(content, spans[end - 1][0]),
+    )
+
+
 def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
     """Return every occurrence of ``needle``, including overlapping ones."""
     if not needle:
@@ -998,6 +1264,7 @@ def _apply_replacements(
     reindent: bool,
     old_string_lf: str,
     file_ending: str | None,
+    lines_correspond: bool = True,
 ) -> tuple[str, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
     # The spans do not overlap: the result is built in one pass, so many
     # replacements cost linear time instead of one copy of the content each.
@@ -1012,7 +1279,7 @@ def _apply_replacements(
     for start, end in sorted(matches):
         if reindent:
             replacement_lf = _reindent_replacement(
-                content[start:end], old_string_lf, replacement_text, file_unit
+                content[start:end], old_string_lf, replacement_text, file_unit, lines_correspond
             )
         else:
             replacement_lf = replacement_text
@@ -1050,6 +1317,7 @@ def _reindent_replacement(
     old_string_lf: str,
     replacement_text: str,
     file_unit: Callable[[], str | None],
+    lines_correspond: bool = True,
 ) -> str:
     """Rewrite the replacement's indentation in the file's own indentation style.
 
@@ -1062,7 +1330,8 @@ def _reindent_replacement(
     indentation units; when no consistent conversion exists, the model's base
     indent is anchored onto the file's, keeping the relative nesting the model
     intended. ``file_unit`` gives the file's indentation unit when a conversion
-    needs it.
+    needs it. Without ``lines_correspond``, as when the line breaks fall in other
+    places, only the first lines pair up.
     """
     if not replacement_text:
         return replacement_text
@@ -1073,7 +1342,7 @@ def _reindent_replacement(
         return replacement_text
     pairs = (
         list(zip(old_indents, file_indents, strict=True))
-        if len(old_indents) == len(file_indents)
+        if lines_correspond and len(old_indents) == len(file_indents)
         else [(old_indents[0], file_indents[0])]
     )
     # Most indented lines as the file has them: the model wrote in the file's
