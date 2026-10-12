@@ -545,10 +545,12 @@ _MISSING_MODULE = re.compile(
     r"(?:ModuleNotFoundError|ImportError): No module named '?([\w.]+)'?"
     r"(; '[\w.]+' is not a package)?"
 )
-# A Python script run by its path, such as `python tests/test_x.py` or `py -u tools\run.py`.
+# A Python script run by its path, such as `python tests/test_x.py` or `py -u tools\run.py`:
+# the interpreter as written, its options (after a closing quote of the
+# interpreter's path), and the script.
 _PYTHON_SCRIPT = re.compile(
-    r"(?:^|[\s;&|('\"])(?:[^\s;&|()'\"]*[/\\])?(?:python[\d.]*|py)(?:\.exe)?['\"]?\s+"
-    r"(?:-[A-Za-z]\w*\s+)*['\"]?([^\s;&|<>'\"]+\.py)\b",
+    r"(?:^|[\s;&|('\"])(?P<interpreter>(?:[^\s;&|()'\"]*[/\\])?(?:python[\d.]*|py)(?:\.exe)?)"
+    r"(?P<options>['\"]?(?:\s+-[A-Za-z]\w*)*)\s+['\"]?(?P<script>[^\s;&|<>'\"]+\.py)\b",
     re.I | re.M,
 )
 
@@ -584,30 +586,26 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
             "of that name. Check the spelling; if the project has a virtual environment, "
             "run its interpreter, otherwise install the package."
         )
-    script = _script_in_subdirectory(failure.command, failure.output, workdir)
-    if script is None and _imported_elsewhere(failure, match.start()):
+    found = _script_in_subdirectory(failure.command, failure.output, workdir)
+    if found is None and _imported_elsewhere(failure, match.start()):
         return (
             f"'{name}' is in the working directory, but the Python process that could not "
             "import it runs with another working directory or import path, such as a process "
             "the command started. Start that process in the working directory, or add the "
             "working directory to its PYTHONPATH."
         )
-    if script is None:
+    if found is None:
         return (
             f"'{name}' is in the working directory, but the working directory is not on "
             "Python's import path for this command. Run Python from the working directory "
             "with -m, such as `python -m pytest`, or add the working directory to PYTHONPATH."
         )
-    run_as = (
-        f"`python -m {'.'.join(script.with_suffix('').parts)}`"
-        if all(part.isidentifier() for part in script.with_suffix("").parts)
-        else "`python -m` with its dotted module name"
-    )
+    script, run = found
     return (
         f"Python cannot import '{name}' because running `{script.as_posix()}` by path puts "
         f"its directory `{script.parent.as_posix()}` on the import path instead of the "
         f"working directory, where '{name}' is. Run it as a module from the working "
-        f"directory instead: {run_as}."
+        f"directory instead: {_run_as_module(failure.command, script, run)}."
     )
 
 
@@ -679,26 +677,67 @@ def _in_workdir(module: str, workdir: Path) -> bool:
     return (workdir / module).is_dir() or (workdir / f"{module}.py").is_file()
 
 
-def _script_in_subdirectory(command: str, output: str, workdir: Path) -> Path | None:
-    """The script in a subdirectory of ``workdir`` that the command ran by path.
+def _script_in_subdirectory(
+    command: str, output: str, workdir: Path
+) -> tuple[Path, re.Match[str]] | None:
+    """The script in a subdirectory of ``workdir`` that the command ran by path,
+    with the match of the Python call that ran it.
 
     With several scripts, the first one a traceback names wins; None when no
     traceback names one.
     """
-    scripts: list[Path] = []
+    scripts: dict[Path, re.Match[str]] = {}
     for match in _PYTHON_SCRIPT.finditer(command):
-        path = Path(match.group(1).replace("\\", "/"))
+        path = Path(match["script"].replace("\\", "/"))
         if path.is_absolute():
             try:
                 path = path.relative_to(workdir)
             except ValueError:
                 continue
         if len(path.parts) > 1 and ".." not in path.parts and path not in scripts:
-            scripts.append(path)
-    if len(scripts) > 1:
+            scripts[path] = match
+    found = list(scripts.items())
+    if len(found) > 1:
         traceback = output.replace("\\", "/")
-        scripts = [script for script in scripts if f'/{script.as_posix()}"' in traceback]
-    return scripts[0] if scripts else None
+        found = [item for item in found if f'/{item[0].as_posix()}"' in traceback]
+    return found[0] if found else None
+
+
+# Longer arguments are named, not repeated, in a suggested call.
+_ARGUMENTS_SHOWN_CHARS = 400
+# The arguments after a script's path, up to a redirection or the end of its
+# statement: quoted or plain words.
+_SCRIPT_ARGUMENTS = re.compile(
+    r"""(?:[ \t]++(?![0-9*]*+>)(?:'[^'\n]*+'|"[^"\n]*+"|[^\s;&|<>'"])++)*+"""
+)
+
+
+def _run_as_module(command: str, script: Path, run: re.Match[str]) -> str:
+    """The Python call that ran *script* by path, rewritten to run it with -m.
+
+    The interpreter as written, its options and every argument after the script
+    stay unchanged: one suggestion dropped `--impl minidb.sqlite_float.format_real`,
+    which chose the implementation the script tested.
+    """
+    dotted = script.with_suffix("").parts
+    if not all(part.isidentifier() for part in dotted):
+        return "`python -m` with its dotted module name and the same arguments"
+    start = run.start("interpreter")
+    if start > 0 and command[start - 1] in "'\"":
+        # A quoted interpreter path, run with PowerShell's call operator.
+        start -= 1
+        before = command[:start].rstrip(" \t")
+        if before.endswith("&") and not before.endswith("&&"):
+            start = len(before) - 1
+    end = run.end("script")
+    if end < len(command) and command[end] in "'\"":
+        end += 1
+    arguments = _SCRIPT_ARGUMENTS.match(command, end)
+    rest = arguments[0].rstrip() if arguments else ""
+    call = f"{command[start : run.end('options')]} -m {'.'.join(dotted)}"
+    if len(rest) > _ARGUMENTS_SHOWN_CHARS:
+        return f"`{call}` followed by the same arguments"
+    return f"`{call}{rest}`"
 
 
 _CONFLICT = re.compile(r"^CONFLICT |Automatic merge failed|needs merge", re.M)

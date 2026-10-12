@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -656,17 +657,38 @@ _RUN_AS_MODULE = (
 )
 
 
+def _suggested_call(hint: str | None) -> str:
+    """The call a hint suggests: its last code span."""
+    assert hint is not None
+    spans: list[str] = re.findall(r"`([^`]+)`", hint)
+    return spans[-1]
+
+
 @pytest.mark.parametrize(
-    ("command", "module"),
+    ("command", "module", "call"),
     [
-        ("python tests/test_cart.py", "shop"),
-        ("python tests\\test_cart.py 2>&1 | Select-Object -Last 5", "tests"),
-        ('& "C:/venv/Scripts/python.exe" -u tests/test_cart.py', "shop"),
-        ("python {script}", "shop"),
+        ("python tests/test_cart.py", "shop", "python -m tests.test_cart"),
+        (
+            "python tests\\test_cart.py 2>&1 | Select-Object -Last 5",
+            "tests",
+            "python -m tests.test_cart",
+        ),
+        (
+            '& "C:/venv/Scripts/python.exe" -u tests/test_cart.py',
+            "shop",
+            '& "C:/venv/Scripts/python.exe" -u -m tests.test_cart',
+        ),
+        ("python {script}", "shop", "python -m tests.test_cart"),
+        # Every argument after the script stays, up to a redirection or the statement's end.
+        (
+            "python tests/test_cart.py --impl shop.fast.total 20000 'two words' > out.txt; echo",
+            "shop",
+            "python -m tests.test_cart --impl shop.fast.total 20000 'two words'",
+        ),
     ],
 )
 def test_module_not_found_from_script_run_by_path_names_module_run(
-    tmp_path: Path, command: str, module: str
+    tmp_path: Path, command: str, module: str, call: str
 ) -> None:
     workdir = _project(tmp_path)
     script = workdir / "tests" / "test_cart.py"
@@ -675,7 +697,9 @@ def test_module_not_found_from_script_run_by_path_names_module_run(
         command.format(script=f'"{script}"'), 1, _import_traceback(script, module), workdir=workdir
     )
 
-    assert hint == _RUN_AS_MODULE.format(module=module)
+    assert hint is not None
+    assert hint.startswith(_RUN_AS_MODULE.format(module=module).split(" Run it as")[0])
+    assert _suggested_call(hint) == call
 
 
 def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -> None:
