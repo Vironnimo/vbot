@@ -101,6 +101,10 @@ SHELL_DEFAULT_WAIT_SECONDS = 120.0
 SHELL_MAX_WAIT_SECONDS = 600.0
 # Windows rejects longer command lines.
 _WINDOWS_COMMAND_LINE_MAX_CHARS = 32_000
+# On Windows a command's processes have a hidden console whose input nothing
+# writes: a program that reads it directly instead of stdin (Python's getpass,
+# $Host.UI.RawUI.ReadKey()) waits silently until stopped instead of failing.
+_CONSOLE_READS_WAIT = sys.platform == "win32"
 
 
 # Definition
@@ -669,6 +673,7 @@ class ShellTool:
         error = waiting.exception() if waiting.done() and not waiting.cancelled() else None
         if error is not None:
             raise error
+        idle = waiting.done() and not waiting.cancelled() and waiting.result() == "idle"
         report = self._commands.report(command_id)
         if report.ended and not report.still_running:
             return _result(call, report, names)
@@ -679,7 +684,7 @@ class ShellTool:
         reason = "timeout" if call.timeout_given else "default"
         if moved.is_set():
             reason = "moved"
-        return _result(call, report, names, reason=reason)
+        return _result(call, report, names, reason=reason, idle=idle)
 
     async def _stop(self, command_id: str, reason: StopReason) -> None:
         try:
@@ -714,9 +719,15 @@ class ShellTool:
 
 
 def _result(
-    call: _ShellCall, report: CommandReport, names: ToolNames, *, reason: str = ""
+    call: _ShellCall,
+    report: CommandReport,
+    names: ToolNames,
+    *,
+    reason: str = "",
+    idle: bool = False,
 ) -> JsonObject:
-    """The Tool result of one call; *reason* says why a running command was returned."""
+    """The Tool result of one call; *reason* says why a running command was
+    returned, *idle* that its processes were idle when the wait passed."""
     if report.ended:
         data = ended_result(report, names)
     else:
@@ -724,20 +735,23 @@ def _result(
         output = running_output_text(report)
         if output:
             data["output"] = output
-        data["next"] = _running_next(report, names, reason=reason, wait_seconds=call.wait_seconds)
+        data["next"] = _running_next(
+            report, names, reason=reason, wait_seconds=call.wait_seconds, idle=idle
+        )
     if call.notes:
         data["notes"] = list(call.notes)
     return tool_success(data)
 
 
 def _running_next(
-    report: CommandReport, names: ToolNames, *, reason: str, wait_seconds: float
+    report: CommandReport, names: ToolNames, *, reason: str, wait_seconds: float, idle: bool
 ) -> str:
     """What to do about a command that continues in the background.
 
     *reason* is ``background`` for a call with ``run_in_background``, ``moved``
     when the user moved it, ``timeout`` when the Agent's timeout passed, and
-    ``default`` when the default wait passed.
+    ``default`` when the default wait passed. *idle*: the command's processes
+    were idle over the end of the wait (``CommandManager.wait``).
     """
     command_id = report.command_id
     log = log_sentence(report)
@@ -754,11 +768,27 @@ def _running_next(
             "turn if your next step needs the result."
         )
     # "or it runs until stopped" keeps an Agent from waiting for a server's exit.
+    stopping = (
+        f"If you no longer need it, or it runs until stopped, such as a server, stop it {stop}."
+    )
+    if (
+        _CONSOLE_READS_WAIT
+        and idle
+        and reason in ("timeout", "default")
+        and not report.transcript.total_lines
+    ):
+        # A program that waits for the console never ends, and its result
+        # otherwise reads like a slow command's that delivers later.
+        stopping = (
+            "It has printed nothing and its processes are idle. If it waits for console input, "
+            f"which commands never get, stop it {stop} and pass the answer as an option or "
+            "argument. If you no longer need it, or it runs until stopped, such as a server, "
+            "stop it the same way."
+        )
     tail = (
         "Its result arrives as a new message when it exits; do not start it again, and do not "
-        "sleep or poll for that result. If you no longer need it, or it runs until stopped, "
-        f"such as a server, stop it {stop}. Otherwise continue other work, or end your turn "
-        "if your next step needs the result."
+        f"sleep or poll for that result. {stopping} Otherwise continue other work, or end "
+        "your turn if your next step needs the result."
     )
     if reason == "moved":
         return (

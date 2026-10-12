@@ -15,6 +15,10 @@ something outside vBot caused, such as ``taskkill /T`` on the shell, is an
 ordinary end. Processes still running at the end keep the record live until
 they end or are stopped, by vBot or from outside; the record is finished once
 none runs.
+
+A wait that passes follows the processes over its last
+``COMMAND_IDLE_WINDOW_SECONDS`` and says whether they were quiet in the same
+sense (``idle``); nothing else follows them while the shell runs.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from core.utils.logging import get_logger
 from ._command_output import CommandOutput
 from ._command_types import (
     COMMAND_DRAIN_SECONDS,
+    COMMAND_IDLE_WINDOW_SECONDS,
     COMMAND_LEFTOVER_QUIET_SECONDS,
     COMMAND_LOG_REFRESH_SECONDS,
     COMMAND_PROGRESS_LINES,
@@ -75,7 +80,7 @@ class CommandServices:
 
 @dataclass(slots=True)
 class _QuietWatch:
-    """The baseline of the current quiet period of processes left running."""
+    """The baseline of the current quiet period of a command's processes."""
 
     activity: int = -1
     since: float = 0.0
@@ -233,9 +238,41 @@ class CommandRecord:
     async def wait(self, seconds: float | None) -> CommandWaitOutcome:
         if seconds is None:
             await self._ended.wait()
-        else:
-            await self._wait_or_sleep(self._ended, seconds)
-        return "ended" if self.ended else "deadline"
+            return "ended"
+        if seconds <= 0:
+            return "ended" if self.ended else "deadline"
+        deadline = self._services.monotonic() + seconds
+        # Only the end of the wait follows the processes.
+        lead = seconds - COMMAND_IDLE_WINDOW_SECONDS
+        if lead > 0:
+            await self._wait_or_sleep(self._ended, lead)
+        idle = False if self.ended else await self._quiet_until(deadline)
+        if self.ended:
+            return "ended"
+        return "idle" if idle else "deadline"
+
+    async def _quiet_until(self, deadline: float) -> bool:
+        """Follow the processes until *deadline* or the end; whether they stayed
+        quiet all along (``_quiet_for``)."""
+        quiet = _QuietWatch()
+        facts = await self._tree_facts()
+        if facts is not None:
+            self._quiet_for(quiet, facts)
+            baseline = quiet.since
+            # Activity sets a new baseline.
+            while not self.ended and quiet.since == baseline:
+                remaining = deadline - self._services.monotonic()
+                if remaining <= 0:
+                    return True
+                await self._wait_or_sleep(self._ended, min(TREE_POLL_SECONDS, remaining))
+                facts = None if self.ended else await self._tree_facts()
+                if facts is None:
+                    break
+                self._quiet_for(quiet, facts)
+        remaining = deadline - self._services.monotonic()
+        if remaining > 0:
+            await self._wait_or_sleep(self._ended, remaining)
+        return False
 
     async def wait_finished(self) -> None:
         await self._finished.wait()
@@ -493,7 +530,7 @@ class CommandRecord:
                         break
                     if self.ended:
                         self._follow_leftovers(facts)
-                    elif self._leftovers_quiet(quiet, facts):
+                    elif self._quiet_for(quiet, facts) >= COMMAND_LEFTOVER_QUIET_SECONDS:
                         self._record_end(facts)
                 await self._wait_or_sleep(self._killed, TREE_POLL_SECONDS)
                 if self._killed.is_set():
@@ -532,12 +569,13 @@ class CommandRecord:
         if not facts.running:
             self._record_end(facts)
 
-    def _leftovers_quiet(self, quiet: _QuietWatch, facts: ProcessTreeFacts) -> bool:
-        """Whether the processes the exited shell left running were quiet long enough.
+    def _quiet_for(self, quiet: _QuietWatch, facts: ProcessTreeFacts) -> float:
+        """How long the command's processes have been quiet as of *facts*.
 
-        Output, a new process or CPU time beyond a trace restarts the quiet
-        period; so does an exit that took its CPU time out of the sum (POSIX
-        counts running processes only).
+        Output, a new process or CPU time beyond a trace (``IDLE_CPU_SECONDS``
+        since the baseline) restarts the quiet period and returns 0; so does
+        an exit that took its CPU time out of the sum (POSIX counts running
+        processes only), and the first look with a new *quiet*.
         """
         now = self._services.monotonic()
         if (
@@ -549,8 +587,8 @@ class CommandRecord:
             quiet.since = now
             quiet.cpu_seconds = facts.cpu_seconds
             quiet.started = facts.started
-            return False
-        return now - quiet.since >= COMMAND_LEFTOVER_QUIET_SECONDS
+            return 0.0
+        return now - quiet.since
 
     def _follow_leftovers(self, facts: ProcessTreeFacts) -> None:
         """After the end: keep the processes still running current.

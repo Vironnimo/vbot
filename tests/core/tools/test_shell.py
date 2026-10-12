@@ -33,7 +33,7 @@ from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import CommandManager
 from core.tools.model_names import SHELL_MODEL_NAME
-from core.tools.process_tree import ProgramExit, RunningProcess
+from core.tools.process_tree import ProcessTreeFacts, ProgramExit, RunningProcess
 from core.tools.shell import (
     SHELL_DEFAULT_WAIT_SECONDS,
     SHELL_MAX_WAIT_SECONDS,
@@ -399,34 +399,65 @@ async def test_long_lines_keep_both_ends_of_the_output_within_its_budget(
 
 
 @pytest.mark.parametrize(
-    ("timeout", "wait", "noted"),
+    ("timeout", "wait", "noted", "run"),
     [
-        (None, SHELL_DEFAULT_WAIT_SECONDS, False),
-        (30, 30, False),
-        (0, SHELL_DEFAULT_WAIT_SECONDS, True),
-        (900, SHELL_MAX_WAIT_SECONDS, True),
+        (None, SHELL_DEFAULT_WAIT_SECONDS, False, "prints"),
+        (30, 30, False, "prints"),
+        (0, SHELL_DEFAULT_WAIT_SECONDS, True, "prints"),
+        (900, SHELL_MAX_WAIT_SECONDS, True, "prints"),
+        # A program that reads the console directly waits silently on Windows.
+        (None, SHELL_DEFAULT_WAIT_SECONDS, False, "silent-idle"),
+        (30, 30, False, "silent-busy"),
+        (None, SHELL_DEFAULT_WAIT_SECONDS, False, "silent-idle-posix"),
     ],
-    ids=["default", "timeout", "zero-is-omitted", "capped"],
+    ids=[
+        "default",
+        "timeout",
+        "zero-is-omitted",
+        "capped",
+        "silent-and-idle",
+        "silent-and-busy",
+        "silent-and-idle-on-posix",
+    ],
 )
 @pytest.mark.asyncio
 async def test_a_command_still_running_when_the_wait_passes_continues_and_delivers(
-    shell: Shell, timeout: int | None, wait: float, noted: bool
+    shell: Shell,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout: int | None,
+    wait: float,
+    noted: bool,
+    run: str,
 ) -> None:
+    monkeypatch.setattr(shell_module, "_CONSOLE_READS_WAIT", not run.endswith("posix"))
     arguments: JsonObject = {"command": "slow build"}
     if timeout is not None:
         arguments["timeout"] = timeout
     call = shell.call(arguments)
     process = await shell.started()
-    process.write("step 1\n")
+    if run == "prints":
+        process.write("step 1\n")
+    elif run == "silent-busy":
+        # Work without output: each look at the tree finds more CPU time.
+        facts = process.tree.facts
+
+        def working() -> ProcessTreeFacts:
+            process.tree.cpu_seconds += 1.0
+            return facts()
+
+        monkeypatch.setattr(process.tree, "facts", working)
 
     result = data(await shell.returned(call, step=5 if wait > 60 else 0.5))
     command_id = result["command_id"]
     assert wait <= shell.clock.now < wait + 1
-    assert (result["status"], result["output"]) == ("running", "step 1")
+    assert result["status"] == "running"
+    assert result.get("output") == ("step 1" if run == "prints" else None)
     assert ("notes" in result) is noted
-    # The result names the exact call that stops the command, and its log file.
+    # The result names the exact call that stops the command once, and its log file.
     assert stop_calls(result["next"]) == [{"action": "stop", "id": command_id}]
     log_file(result["next"])
+    # Only a silent command whose processes are idle on Windows may wait for the console.
+    assert ("console input" in result["next"]) is (run == "silent-idle")
     # Nothing stops a command for taking long: it is listed and keeps running.
     await shell.commands.advance(3 * SHELL_MAX_WAIT_SECONDS, step=30)
     report = shell.manager.report(command_id)
