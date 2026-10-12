@@ -131,6 +131,7 @@ class CommandRecord:
         self._facts: ProcessTreeFacts | None = None
         self._facts_failing = False
         self._ended_at: float | None = None
+        self._finished_at: float | None = None
         self._activity = 0
         self._eof = asyncio.Event()
         self._ended = asyncio.Event()
@@ -159,8 +160,9 @@ class CommandRecord:
         return self._finished.is_set()
 
     @property
-    def ended_at(self) -> float | None:
-        return self._ended_at
+    def finished_at(self) -> float | None:
+        """When the last process of the command ended; None while one runs."""
+        return self._finished_at
 
     @property
     def background(self) -> bool:
@@ -325,6 +327,8 @@ class CommandRecord:
         # waiting for the finish, returns.
         if self._ended_at is None:
             self._ended_at = self._services.monotonic()
+        if self._finished_at is None:
+            self._finished_at = self._services.monotonic()
         for event in (self._ended, self._finished):
             # The flag is set first; waking a waiter fails only on a closed Event Loop.
             with contextlib.suppress(RuntimeError):
@@ -479,6 +483,7 @@ class CommandRecord:
             self._facts = replace(self._facts, running=())
         self._cancel(self._flush_task)
         self._release()
+        self._finished_at = self._services.monotonic()
         self._finished.set()
         self._changed()
 

@@ -42,8 +42,8 @@ against the processes in ``still_running``, it ends like any other command, with
 the exit code it got, and delivers its result.
 
 A background command stays listed while it runs, while a process it left
-running still runs, and for ``COMMAND_RETENTION_SECONDS`` after it ended;
-then it is forgotten.
+running still runs, and for ``COMMAND_RETENTION_SECONDS`` after its last
+process ended; then it is forgotten.
 
 Calls that name a command find it by its id alone; every report names the
 Session it belongs to (``CommandReport.owner``), and the caller decides which
@@ -382,7 +382,7 @@ class CommandManager:
     def commands(self, owners: Collection[CommandOwner]) -> list[CommandReport]:
         """The background commands of the *owners* Sessions, newest first.
 
-        Running ones, ended ones whose processes still run, and ended ones
+        Running ones, ended ones whose processes still run, and finished ones
         until their retention ends; each report names its Session. Foreground
         commands, still inside their call, are not listed.
         """
@@ -635,14 +635,13 @@ class CommandManager:
         return record
 
     def _expire(self) -> None:
-        """Forget finished commands that ended longer than the retention ago."""
+        """Forget commands whose last process ended longer than the retention ago."""
         now = self._monotonic()
         expired = [
             record
             for record in self._records.values()
-            if record.finished
-            and record.ended_at is not None
-            and now - record.ended_at >= self._retention_seconds
+            if record.finished_at is not None
+            and now - record.finished_at >= self._retention_seconds
         ]
         for record in expired:
             del self._records[record.command_id]

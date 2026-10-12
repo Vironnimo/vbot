@@ -616,6 +616,13 @@ async def test_commands_are_forgotten_after_their_retention(harness: Harness) ->
         harness.manager.report(command_id)
     # A command whose leftovers still run stays.
     assert [row.command_id for row in harness.manager.commands([OWNER])] == [held_id]
+    # Its retention counts from when its last process ended, not from its end.
+    held.end_leftovers()
+    await harness.finish(held_id)
+    await harness.advance(COMMAND_RETENTION_SECONDS - 60, step=30)
+    assert harness.manager.status(held_id) == "completed"
+    await harness.advance(90, step=30)
+    assert harness.manager.status(held_id) is None
 
 
 # --- Real processes ----------------------------------------------------------
