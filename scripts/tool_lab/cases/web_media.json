@@ -57,7 +57,7 @@
    "name": "web_fetch: next wrapper is unwrapped",
    "tool": "web_fetch",
    "arguments": {"next": {"ref": "tmp_0123456789ab.m.12000"}},
-   "expect": {"ok": false, "error_code": "page_expired"}
+   "expect": {"ok": false, "error_code": "invalid_ref"}
   },
   {
    "name": "web_fetch: neither url nor ref",

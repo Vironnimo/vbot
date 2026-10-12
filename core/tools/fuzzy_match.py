@@ -29,6 +29,12 @@ All non-exact strategies search a normalized copy of the content and map the
 match back to the original characters through a per-character span map, so CRLF line
 endings and the exact original characters are always preserved. Old text copied
 with other errors is ``copy_match``'s concern.
+
+Searching text a reader sees (``fold_for_search``, used by web_fetch ``find``) is
+looser than locating an edit, because a wrong guess only shows another passage:
+every run of whitespace reads as one space, invisible characters as nothing, and
+quote, dash and ligature glyphs as their plain forms (every dash as one hyphen).
+The caller names further presentation to drop, such as Markdown syntax.
 """
 
 from __future__ import annotations
@@ -1584,6 +1590,114 @@ def _only(indent: str, character: str) -> bool:
     return not indent.strip(character)
 
 
+# Glyphs a reader takes for their plain form. Unlike the edit folds above, every
+# dash, the minus sign included, reads as one hyphen: on a page they are typography
+# for what a keyboard types as "-", and conflating them can only show one more
+# passage. Primes and guillemets read as the quotes typed for them.
+_SEARCH_GLYPHS = {
+    **dict.fromkeys("‘’‚‛′‹›", "'"),
+    **dict.fromkeys("“”„‟″«»", '"'),
+    **dict.fromkeys("‐‑‒–—―−﹘﹣－", "-"),
+    "…": "...",
+    "ﬀ": "ff",
+    "ﬁ": "fi",
+    "ﬂ": "fl",
+    "ﬃ": "ffi",
+    "ﬄ": "ffl",
+}
+# Characters that take no room: zero-width spaces and joiners, the byte order mark
+# and the soft hyphen.
+_SEARCH_INVISIBLE = "­​‌‍⁠﻿"
+_SEARCH_SPECIAL_RE = re.compile(
+    r"(?P<space>\s+)|(?P<glyph>["
+    + "".join(_SEARCH_GLYPHS)
+    + "])|(?P<invisible>["
+    + _SEARCH_INVISIBLE
+    + "]+)"
+)
+
+
+class SearchText:
+    """Text as a reader sees it (``fold_for_search``), mapped back to the original.
+
+    ``text`` is the folded text. Each of its pieces either copies an original run
+    character by character or stands for a whole original range: a whitespace
+    run, a glyph, or a replacement the caller named.
+    """
+
+    def __init__(self, original: str, replacements: Iterable[tuple[int, int, str]]) -> None:
+        self._parts: list[str] = []
+        self._starts: list[int] = []
+        self._origins: list[tuple[int, int, bool]] = []
+        self._length = 0
+        self._original_length = len(original)
+        cursor = 0
+        for start, end, replacement in replacements:
+            self._fold(original, cursor, start)
+            if replacement.isspace():
+                self._space(start, end)
+            elif replacement:
+                self._add(replacement, start, end, copied=False)
+            cursor = end
+        self._fold(original, cursor, len(original))
+        self.text = "".join(self._parts)
+
+    def _fold(self, original: str, start: int, end: int) -> None:
+        cursor = start
+        for found in _SEARCH_SPECIAL_RE.finditer(original, start, end):
+            if found.start() > cursor:
+                self._add(original[cursor : found.start()], cursor, found.start(), copied=True)
+            if found["space"]:
+                self._space(found.start(), found.end())
+            elif found["glyph"]:
+                self._add(_SEARCH_GLYPHS[found["glyph"]], found.start(), found.end(), copied=False)
+            cursor = found.end()
+        if end > cursor:
+            self._add(original[cursor:end], cursor, end, copied=True)
+
+    def _add(self, text: str, start: int, end: int, *, copied: bool) -> None:
+        self._parts.append(text)
+        self._starts.append(self._length)
+        self._origins.append((start, end, copied))
+        self._length += len(text)
+
+    def _space(self, start: int, end: int) -> None:
+        """Read whitespace as one space, also across dropped ranges between runs."""
+        if self._parts and self._parts[-1] == " ":
+            first, _, copied = self._origins[-1]
+            self._origins[-1] = (first, end, copied)
+        else:
+            self._add(" ", start, end, copied=False)
+
+    def _piece(self, index: int) -> tuple[int, int, int, bool]:
+        piece = bisect_right(self._starts, index) - 1
+        return (self._starts[piece], *self._origins[piece])
+
+    def original(self, start: int, end: int) -> tuple[int, int]:
+        """Return the original range that ``text[start:end]`` (not empty) was read from."""
+        offset, first, last, copied = self._piece(start)
+        begin = first + (start - offset) if copied else first
+        offset, first, last, copied = self._piece(end - 1)
+        return begin, first + (end - offset) if copied else last
+
+    def resume(self, end: int) -> int:
+        """Return the original offset where ``text[end:]`` starts, after dropped syntax."""
+        if end >= self._length:
+            return self._original_length
+        offset, first, _, copied = self._piece(end)
+        return first + (end - offset) if copied else first
+
+
+def fold_for_search(text: str, replacements: Iterable[tuple[int, int, str]] = ()) -> SearchText:
+    """Return ``text`` as a reader sees it, for literal case-insensitive search.
+
+    ``replacements`` are sorted, non-overlapping ``(start, end, text)`` ranges of
+    presentation the caller reads differently: ``""`` drops a range, ``" "`` reads
+    it as a space. Every other character must match as written.
+    """
+    return SearchText(text, replacements)
+
+
 # (name, matcher, reindent-replacement) in increasing tolerance.
 _STRATEGIES = (
     ("exact", _match_exact, False),
@@ -1598,7 +1712,9 @@ __all__ = [
     "ClosestFuzzyCandidate",
     "FuzzyReplacement",
     "LineDifferences",
+    "SearchText",
     "find_closest_candidates",
+    "fold_for_search",
     "line_differences",
     "replace_fuzzy",
     "preserve_typography",
