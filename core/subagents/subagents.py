@@ -267,7 +267,9 @@ class SubAgentCoordinator:
                 return await self._send_call(context, arguments)
         except (ToolContractError, InvalidAgentAddressError, SettingsValidationError) as error:
             return tool_failure("invalid_arguments", str(error))
-        return tool_failure("invalid_arguments", "action must be one of: run, send")
+        return tool_failure(
+            "invalid_arguments", "subagent was not run: action must be one of: run, send."
+        )
 
     async def message_parent(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         """Handle one ``message_parent`` call from a Sub-Agent."""
