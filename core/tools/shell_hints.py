@@ -314,6 +314,39 @@ _DOUBLED_QUOTE = re.compile(r"''\w")
 _BASH_SYNTAX = re.compile(
     r"(?:^|[;&|])[ \t]*+(?:(?:then|fi|done)\b|do\b(?![ \t]*+\{)|\[\[?[ \t])", re.M
 )
+# PowerShell's parser refuses bash's `program < file`.
+_INPUT_REDIRECTION = re.compile(rf"[{_QUOTES}]<[{_QUOTES}] operator is reserved for future use")
+# A { } block passed to a native program, as when \" ended a python -c "..." string
+# early: "python.exe: ScriptBlock should only be specified as a value of the Command parameter."
+_SCRIPT_BLOCK_ARGUMENT = "ScriptBlock should only be specified as a value of the Command parameter"
+
+# Python source sent as the command: after blank and comment lines, its first line
+# imports, or defines a function or a class. A PowerShell class opens a { block,
+# also after `class Child : Parent`, so a Python class line ends in its colon.
+_PYTHON_SOURCE = re.compile(
+    r"(?:[ \t]*+(?:#[^\n]*+)?\r?\n)*+[ \t]*+"
+    r"(?:import[ \t]++[\w.]++(?:[ \t]++as[ \t]++\w++)?(?:[ \t]*+,[ \t]*+[\w.]++"
+    r"(?:[ \t]++as[ \t]++\w++)?)*+[ \t]*+(?:[;#][^\n]*+)?\r?$"
+    r"|from[ \t]++[\w.]++[ \t]++import[ \t]"
+    r"|def[ \t]++\w++[ \t]*+\("
+    r"|class[ \t]++\w++[ \t]*+(?:\([^)\n]*+\))?[ \t]*+:[ \t]*+(?:#[^\n]*+)?\r?$)",
+    re.M,
+)
+
+
+def _hint_python_source(failure: _Failure) -> str | None:
+    """Name Python code sent as a PowerShell command.
+
+    PowerShell reads it as its own code and fails on whatever line breaks its
+    grammar, with a ParserError or a "not recognized" error that names no cause.
+    """
+    if not _POWERSHELL or not _PYTHON_SOURCE.match(failure.command):
+        return None
+    return (
+        "The command is Python code, which PowerShell cannot run. Pipe it into Python as a "
+        "here-string: @' on its own line, the code, then '@ at the start of a line, followed "
+        "by `| python -`."
+    )
 
 
 def _here_strings(command: str) -> tuple[list[tuple[str, str]], str]:
@@ -359,10 +392,18 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
                 "line, the text, then '@ at the start of a line, followed by `| python -` or "
                 "`| Set-Content file`."
             )
+        if _INPUT_REDIRECTION.search(output):
+            return (
+                "PowerShell has no < input redirection. Pipe the file into the program "
+                "instead, as in `Get-Content input.txt | python script.py`."
+            )
         if _BASH_SYNTAX.search(outside):
             return _BASH_SYNTAX_HINT
         if _has_bash_quote_idiom(outside):
             return _BASH_QUOTE_HINT
+        return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
+    if _SCRIPT_BLOCK_ARGUMENT in output:
+        # \" ended the string early, and a { } block of the code became an argument.
         return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
     if not _POWERSHELL or "SyntaxError" not in output:
         return None
@@ -723,6 +764,8 @@ def _hint_gh_unknown_json_field(failure: _Failure) -> str | None:
 _OUTPUT_HINTS: tuple[Callable[[_Failure], str | None], ...] = (
     _hint_gh_unknown_json_field,
     _hint_merge_conflict,
+    # Read from the command alone: every error that follows comes from it.
+    _hint_python_source,
     _hint_powershell_prompt,
     _hint_container_tty,
     _hint_end_of_input,

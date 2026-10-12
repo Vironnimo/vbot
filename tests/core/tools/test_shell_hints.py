@@ -307,6 +307,42 @@ def test_platform_specific_hints_follow_the_host_shell(
         ),
         ("git add src/*.py", "fatal: pathspec 'src/*.py' did not match any files", None),
         ("rg -g '*.py' todo", "rg: *.py: No such file or directory (os error 2)", None),
+        # \" ended the string early and a { } block of the code became an argument.
+        (
+            'python -c "\nfor (sql,) in cases:\n    print(f\'{run(f\\"SELECT {sql}\\")}\')\n"',
+            "python.exe: ScriptBlock should only be specified as a value of the Command parameter.",
+            'In PowerShell, \\" does not escape a quote.',
+        ),
+        (
+            "node -e { console.log(1) }",
+            "node.exe: ScriptBlock should only be specified as a value of the Command parameter.",
+            None,
+        ),
+        # Python code sent as the command, whatever PowerShell reports about it.
+        (
+            "import sqlite3\ncon = sqlite3.connect(':memory:')\nprint([(1, 'x')])",
+            "ParserError:\nLine |\n   3 |  print([(1, 'x')])\n     |         ~\n"
+            "     | Missing type name after '['.",
+            "The command is Python code, which PowerShell cannot run.",
+        ),
+        (
+            "# probe\n\nfrom pathlib import Path\nprint(Path.cwd())",
+            "ParserError:\nLine |\n   3 |  from pathlib import Path\n     |  ~~~~\n"
+            "     | The 'from' keyword is not supported in this version of the language.",
+            "The command is Python code, which PowerShell cannot run.",
+        ),
+        (
+            "def f(x):\n    return x\nprint(f(1))",
+            _NOT_RECOGNIZED.format(name="x"),
+            "The command is Python code, which PowerShell cannot run.",
+        ),
+        # PowerShell's own class, also with a base class, and Import-Module.
+        ("class Child : Base {\n}", "ParserError: Unable to find type [Base].", None),
+        (
+            "Import-Module Pester",
+            "Import-Module: The specified module 'Pester' was not loaded.",
+            None,
+        ),
     ],
 )
 def test_bash_habits_in_powershell_name_the_powershell_form(
@@ -468,6 +504,11 @@ def test_hints_name_only_the_tools_the_agent_is_offered(
             'In PowerShell, \\" does not escape a quote.',
         ),
         ("Write-Output (", "Missing file specification after redirection operator.", None),
+        (
+            'python -m minidb "$work\\data.db" < "$work\\s1.sql"',
+            "The '<' operator is reserved for future use.",
+            "PowerShell has no < input redirection.",
+        ),
         # Bash control flow and tests, wherever a statement starts.
         (
             "for f in *.md; do echo $f; done",
