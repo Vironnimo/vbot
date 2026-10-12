@@ -224,12 +224,19 @@ def close_discussion(value: str, discussions: Sequence[Json]) -> Json | None:
 
 
 def post_block(
-    post: Json, roster: Roster, main_id: str, *, with_discussion: bool, opening: bool = False
+    post: Json,
+    roster: Roster,
+    main_id: str,
+    *,
+    with_discussion: bool,
+    opening: bool = False,
+    page: bool = False,
 ) -> str:
     """Render one post as a header line and its verbatim text.
 
     With ``opening``, a long main-discussion post that reached the reader only
     through the main discussion shows its opening and the call to read it all.
+    With ``page``, a post the reader has seen shows only what ``page_body`` keeps.
     """
 
     details = []
@@ -246,7 +253,8 @@ def post_block(
     header = f"[{post_ref(post['sequence'])}] {post['author']['name']}"
     if details:
         header += f" ({'; '.join(details)})"
-    return f"{header}:\n{_body(post, opening=opening)}"
+    body = page_body(post, roster.self_id) if page else _body(post, opening=opening)
+    return f"{header}:\n{body}"
 
 
 def delivered_chars(post: Json) -> int:
@@ -256,14 +264,52 @@ def delivered_chars(post: Json) -> int:
 
 
 def _body(post: Json, *, opening: bool) -> str:
-    body = str(post["text"])
     if opening and shortened(post):
-        start = _opening(body)
-        body = f"{start} ...\n" + text.POST_SHORTENED.format(
-            count=len(body) - len(start),
-            call=call_text({"action": "read", "message_id": post_ref(post["sequence"])}),
-        )
-    return body
+        return _opening_body(post)
+    return str(post["text"])
+
+
+def _opening_body(post: Json) -> str:
+    body = str(post["text"])
+    start = _opening(body)
+    return f"{start} ...\n" + text.POST_SHORTENED.format(
+        count=len(body) - len(start), call=_read_call(post)
+    )
+
+
+def _read_call(post: Json) -> str:
+    return call_text({"action": "read", "message_id": post_ref(post["sequence"])})
+
+
+def seen(post: Json, reader_id: str) -> bool:
+    """Whether the reader has seen the post's text: its own post, or one delivered to it.
+
+    A post outside the reader's audience (``pending`` absent) may never have reached it.
+    """
+
+    author = post["author"]
+    own = author["kind"] == "participant" and author["id"] == reader_id
+    return own or post.get("pending") is False
+
+
+def page_body(post: Json, reader_id: str) -> str:
+    """The text a read page shows for ``post``.
+
+    A post the reader has seen shows its opening when it is long, or only the call
+    that reads it; every other post shows whole, so a page repeats little.
+    """
+
+    if not seen(post, reader_id):
+        return str(post["text"])
+    if len(post["text"]) > text.FULL_POST_CHARS:
+        return _opening_body(post)
+    return text.POST_SEEN.format(count=len(post["text"]), call=_read_call(post))
+
+
+def page_chars(post: Json, reader_id: str) -> int:
+    """The length of the text a read page shows for ``post``; page budgets count it."""
+
+    return len(page_body(post, reader_id))
 
 
 def shortened(post: Json) -> bool:
@@ -286,11 +332,11 @@ def _opening(value: str) -> str:
     return cut.rstrip()
 
 
-def posts_text(
-    posts: Iterable[Json], roster: Roster, main_id: str, *, with_discussion: bool = False
-) -> str:
+def page_text(posts: Iterable[Json], roster: Roster, main_id: str) -> str:
+    """Render the posts of a read page; posts the reader has seen show compactly."""
+
     return "\n\n".join(
-        post_block(post, roster, main_id, with_discussion=with_discussion) for post in posts
+        post_block(post, roster, main_id, with_discussion=False, page=True) for post in posts
     )
 
 
@@ -532,12 +578,15 @@ __all__ = [
     "excerpt",
     "messages_text",
     "news_text",
+    "page_body",
+    "page_chars",
+    "page_text",
     "post_block",
     "post_discussion_label",
     "post_suggestion",
-    "posts_text",
     "queued_text",
     "resolve_recipients",
+    "seen",
     "shortened",
     "status_data",
     "unknown_recipients_message",

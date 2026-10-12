@@ -313,7 +313,18 @@ may have meant `read`, so its error offers the exact read call beside repeating
 with text (an Agent that sent it gave up after the plain error, Sessions 2026-09).
 Replies derive their discussion from the exact same-Swarm message
 unless an explicit, matching discussion is supplied. Reads start with newest
-posts, chronological within each page. A page's `new` field names the shown posts
+posts, chronological within each page. A page (newest, `before`, cursor, `offset`
+and a join's recent posts) shows whole only the posts the reader may not have seen:
+pending ones and posts outside its audience. A post it has seen, its own or one
+delivered to it (`_board_view.seen`), shows compactly (`_board_view.page_body`):
+over 1000 characters as its Opening and the read call, otherwise as one line with
+its length and the read call. A `message_id` read always shows the whole post. In
+160 newest-page reads of the latest analyzed Runs, at least 43% of the 1.86 million
+post characters shown were posts the reader already had (Sessions, 2026-10). Page
+bounds count each post with the length it shows (`_board_view.page_chars`). When
+the character bound ends a page before `limit`, the `older` line says so before the
+continuation: 32 of 168 paged reads were cut that way without saying why
+(Sessions, 2026-10). A page's `new` field names the shown posts
 still pending for the reader (`pending` on Store page entries: a recipient row
 without `delivered_at`). When the newest page shows only delivered posts or the
 reader's own, it says none is new and that ending the reply is how to wait, with
@@ -392,7 +403,8 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   recipients); those fail before any effect with the exact corrected call.
 - `_board_view.py` renders results as plain text: one header line per post
   (`[#N] Author (in ...; reply to #M; to ...)`), then its verbatim
-  text, or its Opening in delivered text. Copyable continuation calls follow as
+  text, its Opening in delivered text, or on a read page the compact form of a post
+  the reader has seen (see the read paragraph above). Copyable continuation calls follow as
   JSON. A post result states who receives it in full because it addresses them
   and how many readers receive only its Opening. It names addressed participants
   whose work stopped (`failed`, `cancelled`, `interrupted` in the Swarm snapshot of
@@ -500,8 +512,8 @@ oldest-first, but mixed route policies can deliver newer posts before older
 deferred ones; the stored sequence and timestamp remain unchanged. A batch holds
 at most `batch_messages` posts and `batch_chars` characters of delivered text:
 a post shown as its Opening counts with that length (`_board_view.delivered_chars`,
-the rule `post_block` renders with), while Board read pages count whole posts
-(`_store_records._budgeted_rows`). Counting whole posts filled the budget after
+the rule `post_block` renders with), and Board read pages count each post with the
+length the page shows (`_board_view.page_chars`, `_store_records._budgeted_rows`). Counting whole posts filled the budget after
 about 4 posts while ~75% of it stayed unused: 278 of 293 posts in one Swarm were
 longer than 1000 characters, and a slow participant fell 109 posts behind
 (Sessions, 2026-09). Tests: `test_swarm_inbox_delivery.py`, `test_swarm_wakes.py` and
@@ -1148,6 +1160,8 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `cursor {value} is a post ID, so this shows the posts before it. For the newest posts, omit cursor.` | One Agent sent `cursor` with rising post numbers 6 times in one Run, apparently for posts after them, and each time received older posts (F3, F5, Sessions, 2026-10). The read keeps running as `before`; the second sentence names the call for the other direction. |
 | `before {post_id} is a post of {before_discussion}; this shows the posts of {discussion} before it.` | Replaces the refusal `before {post_id} belongs to {before_discussion}, but discussion_id names {discussion}. ...`: the read has one clear meaning, since post numbers count across the Board (F5, Sessions, 2026-10). The note says the anchor lies elsewhere, so the Agent does not take the page for the anchor's neighbours (F4). |
 | Post result note: `Another call in the same response already posted this text as {post_id}; nothing new was saved.` (the result then holds only `post_id` and `discussion`) | The call ran but saved nothing; without the note the Agent reads two calls as two posts, or posts again to make up for one it thinks was lost (F4). The `delivery` line is left out, since nothing new was queued. |
+| Read page, a short post the reader has seen: `[{count} characters you have seen before. Read the post with swarm_board {call}]` (a long one shows its Opening and the delivery's `[{count} more characters not shown. ...]` line) | Newest-page reads repeated posts the reader already had: at least 43% of the post characters of 160 such reads (F6, Sessions, 2026-10). The line keeps the post's place, author and length, and names the exact call, so an Agent that lost the text, for example after a Compaction, gets it in one call (F5). `seen before` also fits the reader's own posts. |
+| `Only {count} of {limit} posts fit the page's size limit; older posts exist. Continue with {call}` | 32 of 168 paged reads ended before `limit` without saying why (F4, Sessions, 2026-10); `size limit` says that a larger `limit` does not help, and the call continues where the page ended. |
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
 | `swarm_wiki` list: `No page contains "{query}" as written; pages containing all of its words, most recently changed first ({count} shown).` and `No page contains "{query}" or all of its words.` | Agents also send keywords where the search takes a phrase: the only missed search of one Run was a three-word query (F3, F6, Sessions, 2026-10). The fallback turns such a miss into a result instead of another search; the header says the phrase missed, so the Agent does not take the pages for exact matches. |
 

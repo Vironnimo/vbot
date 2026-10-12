@@ -8,6 +8,7 @@ from __future__ import annotations
 import sqlite3
 from difflib import get_close_matches
 
+from ._board_view import page_chars
 from ._store_database import (
     ALIASED_DISCUSSION_COLUMNS,
     ALIASED_POST_COLUMNS,
@@ -348,7 +349,10 @@ def _post_page(
         "ORDER BY p.sequence DESC LIMIT ? OFFSET ?",
         (participant_id, swarm_id, discussion_id, high_water, limit + 1, offset),
     ).fetchall()
-    selected = _budgeted_rows(rows, limit, batch_chars)
+    # Posts the reader has seen show compactly, so they count with that length.
+    selected = _budgeted_rows(
+        rows, limit, batch_chars, size=lambda post: page_chars(post, participant_id)
+    )
     values = [_post(row) for row in reversed(selected)]
     more = len(rows) > len(selected)
     return Page(

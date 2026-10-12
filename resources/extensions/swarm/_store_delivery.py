@@ -247,7 +247,6 @@ def _prepare_automatic_delivery(
                 _delivery_rows(connection, swarm_id, participant_id, eligible_ids),
                 settings["batch_messages"],
                 settings["batch_chars"],
-                delivered=True,
             )
             if eligible_ids and not (wake_routes is not None and not wake)
             else []

@@ -337,6 +337,11 @@ BOARD_WAIT = {
 }
 BOARD_ONE_POST = "Post {post_id} in {discussion}."
 BOARD_OLDER = "Older posts exist. Continue with {call}"
+# The page's character bound (the batch_chars setting) ended it before limit.
+BOARD_OLDER_CUT = (
+    "Only {count} of {limit} posts fit the page's size limit; older posts exist. Continue "
+    "with {call}"
+)
 BOARD_MORE_DISCUSSIONS = "More discussions exist. Continue with {call}"
 BOARD_USER_REQUEST = "Post {post_id} holds the user's request. Read it with {call}"
 BOARD_QUEUED = "Queued for {participants}."
@@ -370,6 +375,8 @@ BOARD_PENDING_DETAIL = "pending for you: {count}"
 POST_HEADER_REPLY = "reply to {post_id}"
 POST_HEADER_TO = "to {names}"
 POST_SHORTENED = "[{count} more characters not shown. Read the whole post with swarm_board {call}]"
+# A read page shows a short post the reader has seen as only this line.
+POST_SEEN = "[{count} characters you have seen before. Read the post with swarm_board {call}]"
 POST_HEADER_IN = "in {discussion}"
 POST_HEADER_MAIN = "the main discussion {discussion_id}"
 POST_HEADER_DISCUSSION = '"{title}" {discussion_id}'

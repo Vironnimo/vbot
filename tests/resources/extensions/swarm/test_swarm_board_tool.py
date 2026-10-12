@@ -11,11 +11,13 @@ from resources.extensions.swarm.agent_text import (
     BOARD_ADDRESSED_STOPPED,
     BOARD_NEW,
     BOARD_NOTHING_NEW,
+    BOARD_OLDER_CUT,
     BOARD_PAGE_NEWEST,
     BOARD_WAIT,
     CURSOR_AS_BEFORE,
     MENTION_EVERYONE,
     POST_DUPLICATE,
+    POST_SEEN,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
     _name,
@@ -140,7 +142,7 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
         "limit": 1,
     }
     older, _ = await call(board, older_call)
-    assert older["data"]["content"].endswith(f"[{opening}] {_name(board, 0)}:\nopening")
+    assert older["data"]["content"].startswith(f"[{opening}] {_name(board, 0)}:\n")
     assert "older" not in older["data"]
     one, _ = await call(board, {"action": "read", "message_id": opening})
     assert one["data"]["content"] == (
@@ -586,7 +588,7 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
         if row["sequence"] == 2
     )
     near = topic_id[:-1] + ("x" if topic_id[-1] != "x" else "y")
-    close_read, _ = await dispatch(board, {"action": "read", "discussion_id": near})
+    close_read, _ = await dispatch(board, {"action": "read", "discussion_id": near}, peer=1)
     assert close_read["data"]["content"].endswith(":\nopening")
     assert close_read["data"]["note"] == (
         f'discussion_id "{near}" does not exist; this shows discussion "Topic" (d2), its only '
@@ -600,7 +602,9 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     assert older["data"]["note"] == CURSOR_AS_BEFORE.format(value=first)
     assert older["data"]["page"].startswith("Posts before #3 in the main discussion (d1)")
     # Post numbers count across the Board, so a post of another discussion ends the page too.
-    crossed, _ = await dispatch(board, {"action": "read", "discussion_id": topic, "before": first})
+    crossed, _ = await dispatch(
+        board, {"action": "read", "discussion_id": topic, "before": first}, peer=1
+    )
     assert crossed["data"]["page"].startswith('Posts before #3 in discussion "Topic" (d2)')
     assert crossed["data"]["content"].endswith(":\nopening")
     assert crossed["data"]["note"] == BEFORE_OTHER_DISCUSSION.format(
@@ -687,7 +691,7 @@ async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(boar
     assert clamped["data"]["note"] == "limit 500 is above the maximum of 100; used 100."
     assert "(3 shown)" in clamped["data"]["page"]
     # offset, as other harnesses page, skips that many of the newest posts.
-    skipped, _ = await dispatch(board, {"action": "read", "limit": 1, "offset": "1"})
+    skipped, _ = await dispatch(board, {"action": "read", "limit": 1, "offset": "1"}, peer=1)
     assert skipped["data"]["content"].endswith(":\npost 1")
     assert continuation(skipped["data"]["older"])["before"] == "#2"
     beyond, _ = await dispatch(board, {"action": "read", "offset": 3})
@@ -695,7 +699,7 @@ async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(boar
     # Beside a post or a page start, offset positions nothing.
     one, _ = await dispatch(board, {"action": "read", "message_id": "#1", "offset": 2})
     assert one["data"]["content"].endswith(":\npost 0") and "note" not in one["data"]
-    before, _ = await dispatch(board, {"action": "read", "before": "#3", "offset": 1})
+    before, _ = await dispatch(board, {"action": "read", "before": "#3", "offset": 1}, peer=1)
     assert before["data"]["content"].endswith(":\npost 1") and "note" in before["data"]
     negative, _ = await dispatch(board, {"action": "read", "offset": -1})
     assert negative["error"]["code"] == "invalid_arguments"
@@ -704,6 +708,14 @@ async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(boar
     assert "paged" in {post["text"] for post in await board_posts(board)}
     rejected, _ = await dispatch(board, {"action": "list", "limit": 0})
     assert rejected["error"]["code"] == "invalid_arguments"
+    # The page's character bound can end a page before limit; the result says so.
+    for index in range(3):
+        await dispatch(board, {"text": str(index) * 10_000})
+    cut, _ = await dispatch(board, {"action": "read"}, peer=2)
+    assert "(2 shown)" in cut["data"]["page"]
+    rest = continuation(cut["data"]["older"])
+    assert cut["data"]["older"] == BOARD_OLDER_CUT.format(count=2, limit=20, call=json.dumps(rest))
+    assert (await dispatch(board, rest, peer=2))[0]["data"]["content"].count("\n\n[#") == 4
 
 
 @pytest.mark.asyncio
@@ -722,6 +734,18 @@ async def test_board_results_read_as_plain_text(board):
         '{"action": "read", "discussion_id": "d1", "before": "#2", "limit": 1}\n\n'
         f"[#2] {_name(board, 1)}:\nsecond"
     )
+    # A page shows a post the reader has seen as the call that reads it, or as its
+    # opening when it is long; a post new to the reader shows whole.
+    long = " ".join(["word"] * 300)
+    await dispatch(board, {"text": long}, peer=1)
+    page, _ = await dispatch(board, {"action": "read"}, peer=1)
+    first, second, third = page["data"]["content"].split("\n\n")
+    assert first.endswith(":\nline one\nline two")
+    assert second == f"[#2] {_name(board, 1)}:\n" + POST_SEEN.format(
+        count=len("second"), call='{"action": "read", "message_id": "#2"}'
+    )
+    assert third.startswith(f"[#3] {_name(board, 1)}:\nword word")
+    assert third.endswith('{"action": "read", "message_id": "#3"}]') and len(third) < len(long)
 
 
 @pytest.mark.asyncio

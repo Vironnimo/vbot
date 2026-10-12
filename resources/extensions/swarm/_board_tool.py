@@ -26,10 +26,10 @@ from ._board_view import (
     everyone_mentions,
     excerpt,
     news_text,
+    page_text,
     post_block,
     post_discussion_label,
     post_suggestion,
-    posts_text,
     queued_text,
     spoken_list,
 )
@@ -61,6 +61,8 @@ _REFERENCES = ("discussion_id", "message_id", "reply_to", "before")
 # Participants whose work ended; they read new posts only once the user resumes them.
 _STOPPED = frozenset({"failed", "cancelled", "interrupted"})
 _MAX_LIMIT = 100
+# Posts on a page when the call sends no limit, as SwarmStore.read_posts applies it.
+_PAGE_LIMIT = 20
 _MAX_TEXT = {"text": 16000, "title": 120}
 
 
@@ -276,9 +278,9 @@ class BoardCall:
             }
             if "limit" in query:
                 continuation["limit"] = query["limit"]
-            data["older"] = text.BOARD_OLDER.format(call=call_text(continuation))
+            data["older"] = _older(page.entries, query.get("limit", _PAGE_LIMIT), continuation)
         if page.entries:
-            data["content"] = posts_text(page.entries, self.roster, self.main)
+            data["content"] = page_text(page.entries, self.roster, self.main)
         return data
 
     async def post(self, arguments: Json) -> Json:
@@ -383,17 +385,17 @@ class BoardCall:
             "status": text.BOARD_ALREADY_JOINED if data["already"] else text.BOARD_JOINED,
         }
         if recent["has_more"] and recent["entries"]:
-            result["older"] = text.BOARD_OLDER.format(
-                call=call_text(
-                    {
-                        "action": "read",
-                        "discussion_id": discussion_ref(row["sequence"]),
-                        "before": post_ref(recent["entries"][0]["sequence"]),
-                    }
-                )
+            result["older"] = _older(
+                recent["entries"],
+                _PAGE_LIMIT,
+                {
+                    "action": "read",
+                    "discussion_id": discussion_ref(row["sequence"]),
+                    "before": post_ref(recent["entries"][0]["sequence"]),
+                },
             )
         if recent["entries"]:
-            result["content"] = posts_text(recent["entries"], self.roster, self.main)
+            result["content"] = page_text(recent["entries"], self.roster, self.main)
         return result
 
     async def leave(self, arguments: Json) -> Json:
@@ -573,6 +575,18 @@ class BoardCall:
 
     async def _post(self, reference: str) -> Any:
         return (await self.store.read_posts(self.sid, self.pid, message_id=reference)).entries[0]
+
+
+def _older(entries: Sequence[Json], limit: int, continuation: Json) -> str:
+    """Name the call for the older posts; say when the page's size bound cut it short.
+
+    Pages fill from the newest post, so posts the bound left out are older ones.
+    """
+
+    call = call_text(continuation)
+    if len(entries) < limit:
+        return text.BOARD_OLDER_CUT.format(count=len(entries), limit=limit, call=call)
+    return text.BOARD_OLDER.format(call=call)
 
 
 def _names(reference: str, discussion_id: str, sequence: int) -> bool:
