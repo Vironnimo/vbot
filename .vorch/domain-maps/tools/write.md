@@ -25,7 +25,10 @@ Tool shares only its name.
   stamped, so the same call succeeds when sent again; `file_state.md`); identical
   content is a verified no-op without a read; a new file keeps the content's line
   endings, a replaced file keeps its own line-ending style, BOM and permission
-  bits; content without a final line break gets one when the file is new or empty
+  bits; both mean the style most lines end with (`dominant_line_ending`), so a
+  stray CRLF or lone CR in the content or the file does not convert every line
+  (before, any CRLF, then any lone CR, in new content set the ending of all
+  lines); content without a final line break gets one when the file is new or empty
   and keeps a replaced file's lack of one (Models drop the final line break from
   JSON strings; a probe case lost it), while `apply_patch` marks a missing final
   line break explicitly; content whose every line carries a consecutive `read`
@@ -37,8 +40,9 @@ Tool shares only its name.
   the error (`apply_patch.md` -> Agent-facing text). A file changed on disk while the call ran fails `file_changed`:
   `X changed on disk while this write ran. Read it before writing it again.`
 - Coverage: `tests/core/tools/test_edit_tools.py`
-  (`test_write_creates_replaces_after_a_read_and_keeps_identical_content`, the
-  failure and refusal inventories, the race test).
+  (`test_write_creates_replaces_after_a_read_and_keeps_identical_content`,
+  `test_written_lines_end_as_most_lines_of_the_file_or_content`, the failure and
+  refusal inventories, the race test).
 
 ## Agent-facing text
 

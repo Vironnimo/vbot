@@ -196,7 +196,7 @@ def replace_fuzzy(
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
-    file_ending = _detect_line_ending(content)
+    file_ending = dominant_line_ending(content)
 
     for name, matcher, reindent in _STRATEGIES:
         matches = (
@@ -881,12 +881,21 @@ def _normalize_replacement_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _detect_line_ending(content: str) -> str | None:
-    """Return the line ending used in ``content``, or ``None`` when absent."""
-    for ending in _LINE_ENDINGS:
-        if ending in content:
-            return ending
-    return None
+def dominant_line_ending(content: str) -> str | None:
+    """Return the line ending ``content`` uses most, or ``None`` when it has none.
+
+    Text whose lines end in different ways keeps the style most of them have,
+    so a stray CRLF or lone CR does not set the ending of every written line.
+    A tie goes to CRLF, then LF.
+    """
+    crlf = content.count("\r\n")
+    counts = {
+        "\r\n": crlf,
+        "\n": content.count("\n") - crlf,
+        "\r": content.count("\r") - crlf,
+    }
+    ending = max(_LINE_ENDINGS, key=counts.__getitem__)
+    return ending if counts[ending] else None
 
 
 def _to_line_ending(text_lf: str, file_ending: str | None) -> str:
@@ -1534,6 +1543,7 @@ __all__ = [
     "ClosestFuzzyCandidate",
     "FuzzyReplacement",
     "LineDifferences",
+    "dominant_line_ending",
     "find_closest_candidates",
     "line_differences",
     "replace_fuzzy",

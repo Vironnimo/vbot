@@ -48,6 +48,7 @@ from core.tools.copy_match import copy_warnings, match_copied_edit, replace_copi
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
+    dominant_line_ending,
     find_closest_candidates,
     first_difference,
     preserve_typography,
@@ -220,11 +221,8 @@ def _track_written(
 
 
 def line_ending(content: str) -> str:
-    """Return the first line ending ``content`` uses, else LF."""
-    for ending in ("\r\n", "\n", "\r"):
-        if ending in content:
-            return ending
-    return "\n"
+    """Return the line ending most lines of ``content`` use, else LF."""
+    return dominant_line_ending(content) or "\n"
 
 
 def file_excerpt(lines: list[str], first: int, last: int) -> JsonObject:

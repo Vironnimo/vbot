@@ -620,8 +620,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   File for a file an Add was creating (Sessions, 2026-09). BOM, surviving context bytes,
   existing EOF newline state, and file permissions are preserved. Lines are
   delimited like `read` (LF, CRLF, lone CR only; U+2028 and similar separators
-  are line content). New lines adopt the detected CRLF/LF/CR style, else LF;
-  explicit no-newline markers apply only at EOF.
+  are line content). New lines adopt the style most of the file's lines end
+  with (`fuzzy_match.dominant_line_ending`; a tie goes to CRLF, then LF), else
+  LF; a stray CRLF or lone CR in an LF file no longer sets the ending of every
+  added or replacing line. An Add of a new file ends all its lines as most lines
+  of its text do. Explicit no-newline markers apply only at EOF.
   Binary files may be moved or deleted without text decoding.
 - Writes reuse `atomic_write_bytes`; its optional `mode` carries source
   permissions to a move destination. Its `before_replace` callback rechecks all

@@ -600,6 +600,56 @@ async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(t
     assert bare.read_bytes() == b"new"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("before", "tool", "arguments", "after"),
+    [
+        # A stray CRLF or lone CR does not set the ending of every written line.
+        pytest.param(
+            None,
+            "write",
+            {"path": "a.txt", "content": "one\ntwo\r\nthree\n"},
+            b"one\ntwo\nthree\n",
+            id="new-file",
+        ),
+        pytest.param(
+            None,
+            "write",
+            {"path": "a.txt", "content": "one\r\ntwo\rthree\r\n"},
+            b"one\r\ntwo\r\nthree\r\n",
+            id="new-file-crlf",
+        ),
+        pytest.param(
+            b"one\ntwo\r\nthree\n",
+            "write",
+            {"path": "a.txt", "content": "1\r\n2\r\n"},
+            b"1\n2\n",
+            id="replaced-file",
+        ),
+        pytest.param(
+            b"one\r\ntwo\nthree\n",
+            "edit",
+            {"path": "a.txt", "old_string": "three", "new_string": "three\nfour"},
+            b"one\r\ntwo\nthree\nfour\n",
+            id="added-lines",
+        ),
+    ],
+)
+async def test_written_lines_end_as_most_lines_of_the_file_or_content(
+    tmp_path, before, tool, arguments, after
+) -> None:
+    state = FileReadState()
+    path = tmp_path / "a.txt"
+    if before is not None:
+        path.write_bytes(before)
+        state.record_read("session-test", path)
+
+    result = await call(tmp_path, arguments, tools=registry(state), name=tool)
+
+    assert result["ok"], result
+    assert path.read_bytes() == after
+
+
 FILES = {
     "a.txt": b"one\ntwo\none\n",
     "app.py": b"def main():\n    total = compute(1, 2)\n    print(total)\n    return total\n",
