@@ -41,6 +41,8 @@ from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 
+from core.tools._path_suggestions import similar_entries
+
 # The shell Tool runs commands in PowerShell on Windows and in bash elsewhere.
 _POWERSHELL = sys.platform == "win32"
 # Bounded scan windows at both ends: error headers open short output and end
@@ -1044,6 +1046,73 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
     )
 
 
+# Python's report of a script it cannot open, with the path in repr form.
+_SCRIPT_NOT_FOUND = re.compile(r"can't open file '([^'\n]++)': \[Errno 2\]")
+
+
+def _hint_script_not_found(failure: _Failure) -> str | None:
+    """Name the existing script that a missing script path most likely means.
+
+    Agents wrote a script's path as a module name: ``python tools.quote_check.py``
+    for tools/quote_check.py failed eight times in one run without a hint. As
+    read's not-found error does, the hint names existing paths: the dotted name
+    as directories, the same name in a subdirectory, and similar names beside it.
+    """
+    workdir = failure.workdir
+    match = _SCRIPT_NOT_FOUND.search(failure.error)
+    if workdir is None or match is None:
+        return None
+    missing = workdir / match[1].replace("\\\\", "\\")
+    name = missing.name
+    parts = name.removesuffix(".py").split(".")
+    dotted = missing.parent.joinpath(*parts[:-1], f"{parts[-1]}.py")
+    if name.endswith(".py") and len(parts) > 1 and dotted.is_file():
+        found, dots = [dotted], True
+    else:
+        found = [
+            directory / name
+            for directory in _subdirectories(missing.parent)
+            if (directory / name).is_file()
+        ] or [
+            path
+            for path in similar_entries(missing, kind="files")
+            if path.suffix.casefold() == missing.suffix.casefold()
+        ]
+        found, dots = found[:_SHOWN_PATHS], False
+    if not found:
+        return None
+    shown = [_shown_path(path, workdir) for path in found]
+    call = _call_with_script(failure.command, missing, workdir, shown[0])
+    if dots:
+        return (
+            f"Python found no file {_shown_path(missing, workdir)}: a path separates "
+            f"directories with /, not dots, so the script is {shown[0]}. Run {call}."
+        )
+    return (
+        f"Python found no file {_shown_path(missing, workdir)}, but similar files exist: "
+        f"{', '.join(shown)}. Run the one you meant by that path, such as {call}."
+    )
+
+
+def _shown_path(path: Path, workdir: Path) -> str:
+    """*path* relative to *workdir* where it is below it, with forward slashes."""
+    try:
+        return path.relative_to(workdir).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _call_with_script(command: str, missing: Path, workdir: Path, script: str) -> str:
+    """The Python call that ran *missing*, with *script* in its place."""
+    for run in _PYTHON_SCRIPT.finditer(command):
+        written = workdir / run["script"]
+        if str(written).casefold() != str(missing).casefold():
+            continue
+        start, _script_end, rest = _script_call(command, run)
+        return _shown_call(f"{command[start : run.end('options')]} {script}", rest)
+    return "it by that path"
+
+
 def _missing_submodule(name: str, workdir: Path | None) -> str:
     """The hint for a package that has no module of the imported name.
 
@@ -1416,6 +1485,7 @@ _OUTPUT_HINTS: tuple[Callable[[_Failure], str | None], ...] = (
     _hint_select_string_recurse,
     _hint_dev_null,
     _hint_native_glob,
+    _hint_script_not_found,
     _hint_module_not_found,
     _hint_already_exists,
     _hint_port_in_use,

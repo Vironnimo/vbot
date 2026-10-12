@@ -1103,3 +1103,42 @@ def test_a_missing_submodule_names_what_the_working_directory_holds(
         assert text in hint
     for text in omits:
         assert text not in hint
+
+
+@pytest.mark.parametrize(
+    ("command", "missing", "call"),
+    [
+        # A module name written as the script's path.
+        (
+            "python tools.quote_check.py snippets --find 'a b'; python tools.quote_check.py x",
+            "tools.quote_check.py",
+            "python tools/quote_check.py snippets --find 'a b'",
+        ),
+        # The same name in a subdirectory, and a similar name beside it.
+        (
+            "python -u quote_check.py --limit 1",
+            "quote_check.py",
+            "python -u tools/quote_check.py --limit 1",
+        ),
+        ("python tools/qoute_check.py", "tools/qoute_check.py", "python tools/quote_check.py"),
+        ("python report.py", "report.py", None),
+    ],
+)
+def test_a_script_python_cannot_open_names_the_existing_path(
+    tmp_path: Path, command: str, missing: str, call: str | None
+) -> None:
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "quote_check.py").touch()
+    # Python names the absolute path in its repr form.
+    output = (
+        f"C:\\Python314\\python.exe: can't open file {str(tmp_path / missing)!r}: "
+        "[Errno 2] No such file or directory"
+    )
+
+    hint = annotate_failure(command, 2, output, workdir=tmp_path)
+
+    if call is None:
+        assert hint is None
+    else:
+        assert hint is not None and "tools/quote_check.py" in hint
+        assert _suggested_call(hint) == call
