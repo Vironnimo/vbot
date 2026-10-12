@@ -273,7 +273,10 @@ STATE_MORE = "More participants exist. Continue with {call}"
 
 # Notes on a call that ran after a repair the Agent should know about.
 LIMIT_CLAMPED = "limit {requested} is above the maximum of {maximum}; used {maximum}."
-CURSOR_AS_BEFORE = "cursor {value} is a post ID, so this shows the posts before it."
+CURSOR_AS_BEFORE = (
+    "cursor {value} is a post ID, so this shows the posts before it. For the newest posts, "
+    "omit cursor."
+)
 FIELD_IGNORED = "{field} is not used by {action} and was ignored."
 OFFSET_IGNORED = "offset was ignored: {field} already sets where the page starts."
 POST_TITLE_IGNORED = (

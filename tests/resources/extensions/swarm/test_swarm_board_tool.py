@@ -12,6 +12,7 @@ from resources.extensions.swarm.agent_text import (
     BOARD_NOTHING_NEW,
     BOARD_PAGE_NEWEST,
     BOARD_WAIT,
+    CURSOR_AS_BEFORE,
     MENTION_EVERYONE,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
@@ -584,7 +585,7 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     assert 'Repeat the call with discussion_id "d2".' in close_post["error"]["message"]
 
     older, _ = await dispatch(board, {"action": "read", "cursor": first})
-    assert older["data"]["note"] == "cursor #3 is a post ID, so this shows the posts before it."
+    assert older["data"]["note"] == CURSOR_AS_BEFORE.format(value=first)
     assert older["data"]["page"].startswith("Posts before #3 in the main discussion (d1)")
     conflict, _ = await dispatch(board, {"action": "read", "discussion_id": topic, "before": first})
     assert conflict["error"]["message"].startswith(
