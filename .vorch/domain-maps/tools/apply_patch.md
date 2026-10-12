@@ -125,8 +125,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   regions merge; more than two keep first and last plus an omission line; long
   lines show a window with an `N:C|` gutter), follow such a line (`Updated X
   (places):`) only when the written text differs from what the call sent: a copy
-  tolerance note (lines that differed or were kept, respelled words; the engine
-  marks these as `DeviationNote`) or the note on which occurrence of a repeated
+  tolerance note (lines that differed or were kept, respelled words), a note on
+  a closing `*** End of File` (the engine marks these as `DeviationNote`), or
+  the note on which occurrence of a repeated
   text was changed, when the change removed lines, and in partial results.
   Removed lines leave nothing to name in the file as it is now. Agent-eval
   2026-10-10, removing three lines, a reread or search in a call of its own:
@@ -170,6 +171,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   unquoted. A header repeated just before Begin Patch, and identical adjacent
   Update headers before a body, coalesce; a different empty Update target is not
   discarded (`empty_update`).
+  In a patch without `*** End Patch` whose last line is `*** End of File`, that
+  line may only close the patch (`_Hunk.closing_eof`): its hunk is placed at the
+  end of the file where its lines match there, and else as if the marker were
+  absent, with a note naming the changed line (`_CLOSING_EOF_NOTE`). Evidence
+  (replay of 7881 calls, 2026-10): one Model (mimo-v2.5) ended all 41 of its
+  patches so; 35 changed the end of the file, 6 were refused although their place
+  was clear, and 5 of those now apply at that place (checked by hand; 1 fails for
+  another reason).
   Missing context prefixes and omitted `@@` are accepted; unknown operation
   headers, unframed prose, and body text after End Patch without a new file header
   are rejected. Explicit `@@` hunks following Move File use Update-plus-Move semantics.
@@ -216,7 +225,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   4. The unchanged and removed lines match precisely as whole lines from the
      start of the last hint's line, so the final hint may also be the first
      context/removal line. `*** End of File` restricts matching to EOF; a hunk
-     is never retried without the marker.
+     is never retried without the marker, except one that only closes the
+     patch (framing above).
   5. After a miss, read gutters are stripped from the hunk (rule below); then
      surplus blank context at the hunk's edges is dropped (rule below).
   6. A change already in the file is a no-op (already-applied rule at the end of
@@ -245,7 +255,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   resemble their hint. Replaying 8883 recorded calls (2026-10), re-reading
   unprefixed lines carried 351 calls, and 46 of them wrote content that
   conflicts with the file the Session's later calls produced; the other dropped
-  recoveries carried 8 such calls. They return only with replay evidence.
+  recoveries carried 8 such calls. They return only with replay evidence. The
+  closing `*** End of File` (framing above) is such a narrow return.
 - Lines a hunk names that the file holds exactly, but not where its markers put
   them, fail with that reason instead of closest text equal to the patch: not at
   the end of the file under `*** End of File`, `eof_not_found` (`the file does
@@ -618,6 +629,7 @@ replacements still went through Delete File plus Add File (agent-eval
 | Decorator note (shared with `edit`): `The added lines went above line 13 (@staticmethod), not between it and the definition at line 14 it belongs to.` | The written text differs from the call, so the Agent learns it and gets the region shown; without the note it would see its lines below where it put them and could "fix" them back between decorator and definition. Line numbers name the decorators and the definition, not the added lines, whose numbers the `Updated X (lines ...)` header can count differently when an added line repeats a decorator. |
 | `context_lines_not_found`: `X: the context lines around the + lines were not found.` | A block that only adds lines was reported as `the lines to replace were not found`, which names lines the block does not have and points the Agent at text to replace instead of at its context lines (review of a Swarm Run, 2026-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
+| `The patch ends with *** End of File and has no *** End Patch, so that line was read as the end of the patch, not of the file: the change was made at line N.` | The marker asked for the end of the file and the change landed elsewhere; the line number lets the Agent see where without a read. Shown only when text follows the change. |
 
 ## Verification
 
@@ -631,8 +643,9 @@ replacements still went through Delete File plus Add File (agent-eval
   patches, Add syntax repair, other patch dialects and move headers.
 - `test_apply_patch_matching.py` covers the engine's steps: gutters, copied text
   with misspellings, code targets, typography, context hints and anchors that
-  do not place a hunk, EOF markers, whole-line matching, ordering of repeated
-  lines and changes already in the file.
+  do not place a hunk, EOF markers (also one that only closes the patch),
+  whole-line matching, ordering of repeated lines and changes already
+  in the file.
 - `test_apply_patch_reports.py` covers previews, `no_changes`, long mismatch
   evidence and failure -> displayed read continuation -> successful correction,
   including Unicode and LF/CRLF/CR, plus `part_of` diagnostics.

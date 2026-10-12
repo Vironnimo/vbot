@@ -225,6 +225,8 @@ class _Hunk:
     precise_only: bool = False
     replacement: _Replacement | None = None
     label: str = ""
+    # That *** End of File also ends a patch without *** End Patch, so it may only close it.
+    closing_eof: bool = False
 
     def changes_text(self) -> bool:
         if self.replacement is not None:
@@ -378,6 +380,13 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
     ended = False
     # A header repeated before Begin Patch adds no operation of its own.
     duplicate: _Operation | None = None
+    # Without *** End Patch, a final *** End of File can close the patch: a Model that
+    # writes it so does in every patch, also where its lines do not end the file.
+    closing = (
+        len(lines) - 1
+        if lines and _END_OF_FILE.fullmatch(lines[-1]) and not any(map(_END.fullmatch, lines))
+        else None
+    )
     index = 0
     while index < len(lines):
         line = lines[index]
@@ -444,6 +453,7 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
             continue
         if _END_OF_FILE.fullmatch(line) and hunk is not None:
             hunk.eof = True
+            hunk.closing_eof = index - 1 == closing
             continue
         if current is None and default_path is not None and line.strip():
             current = _Operation("update", default_path)

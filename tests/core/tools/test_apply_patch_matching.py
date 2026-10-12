@@ -559,6 +559,20 @@ def test_end_of_file_anchors_are_never_ignored(tmp_path, body, code):
             "file.txt: the file does not end with the lines before *** End of File."
         )
     assert path.read_bytes() == b"section\ntail\n"
+    if code == "text_not_found":
+        # Without *** End Patch, a final *** End of File anchors the hunk at the end
+        # where it can, and else only ends the patch.
+        unframed = f"*** Begin Patch\n*** Update File: file.txt\n{body}"
+        result = apply(tmp_path, unframed)
+        assert result["ok"], result
+        assert "\nNote: " in text(result)
+        changed = b"section\ninserted\ntail\n" if "inserted" in body else b"new\ntail\n"
+        assert path.read_bytes() == changed
+        if "inserted" not in body:
+            path.write_bytes(b"section\ntail\nsection\n")
+            result = apply(tmp_path, unframed)
+            assert path.read_bytes() == b"section\ntail\nnew\n"
+            assert "\nNote: " not in text(result)
 
 
 def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):

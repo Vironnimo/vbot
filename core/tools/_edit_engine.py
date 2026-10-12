@@ -82,6 +82,10 @@ _FIRST_AFTER_PREVIOUS_NOTE = (
     "The lines to replace occur {occurrences} times; the first after the previous change "
     "in this file, at line {line}, was changed."
 )
+_CLOSING_EOF_NOTE = (
+    "The patch ends with *** End of File and has no *** End Patch, so that line was read as "
+    "the end of the patch, not of the file: the change was made at line {line}."
+)
 _BREAK = TEXT_LINE_BREAK
 _GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
 
@@ -465,12 +469,21 @@ def _apply_line_hunk(
     """Apply one V4A hunk; ``previous`` is where the line of the file's last change starts."""
     if not hunk.changes_text():
         return content, []
+    if hunk.closing_eof:
+        # Its *** End of File places the hunk where it can; else it only closed the patch.
+        try:
+            return _apply_line_hunk(content, replace(hunk, closing_eof=False), path, previous)
+        except _PatchError:
+            hunk = replace(hunk, eof=False)
     hunk, notes = clean_additions(hunk, path)
     section = _locate_hints(content, hunk, path)
     if not any(prefix in " -" for prefix, _ in hunk.lines):
         if section.repeated is not None:
             raise section.repeated
         position = section.end if hunk.hints else len(content)
+        if hunk.closing_eof and content[position:].strip():
+            line = len(_BREAK.findall(content, 0, position)) + 1
+            notes.append(DeviationNote(_CLOSING_EOF_NOTE.format(line=line)))
         return _insert(content, hunk, position, path), notes
     start = section.start
     hunk, found = _match_old_lines(content, start, hunk, path, notes)
@@ -488,6 +501,9 @@ def _apply_line_hunk(
         occurrences = found.occurrences
         start, found = _first_occurrence(content, hunk, found, section, previous, copied, path)
         notes.append(DeviationNote(_ordering_note(content, hunk, occurrences, found, start)))
+    if hunk.closing_eof and content[start + found.before_spans[0][1] :].strip():
+        line = found.first_changed_line + len(_BREAK.findall(content, 0, start))
+        notes.append(DeviationNote(_CLOSING_EOF_NOTE.format(line=line)))
     return _splice(content, start, hunk, found, path, notes)
 
 
