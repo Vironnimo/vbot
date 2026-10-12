@@ -11,10 +11,13 @@ from typing import Literal
 
 from core.tools.model_names import model_tool_name
 from core.tools.search import display_search_path
+from core.utils.edit_distance import edit_distance
 
 _SCAN_LIMIT = 200
 _RESULT_LIMIT = 5
-_MIN_RATIO = 0.55
+# A similar name may differ by one typo per this many characters of the missing
+# name's stem, and always by one.
+_CHARACTERS_PER_TYPO = 4
 # The same name elsewhere is searched below the working directory, shallow levels
 # first, within this many directory entries and levels.
 _TREE_SCAN_LIMIT = 5000
@@ -37,6 +40,7 @@ def _score(requested: Path, candidate: Path) -> tuple[int, float] | None:
         return 4, 1.0
 
     stem_ratio = SequenceMatcher(None, requested_stem, candidate_stem).ratio()
+    pairs = [(requested_stem, candidate_stem)]
     if requested.suffix and requested.suffix.casefold() == candidate.suffix.casefold():
         # A shared extension says nothing about which file was meant: parser.py
         # is not like ast.py.
@@ -44,11 +48,16 @@ def _score(requested: Path, candidate: Path) -> tuple[int, float] | None:
     else:
         name_ratio = SequenceMatcher(None, requested_name, candidate_name).ratio()
         ratio = max(name_ratio, stem_ratio)
+        pairs.append((requested_name, candidate_name))
     if requested_name.startswith(candidate_name) or candidate_name.startswith(requested_name):
         return 3, ratio
     if requested_name in candidate_name or candidate_name in requested_name:
         return 2, ratio
-    if ratio >= _MIN_RATIO:
+    # Any other name is close only when it differs by a few typos. A shared beginning
+    # alone makes names look alike: test_expr.py suggested test_index.py,
+    # test_api.py, test_errors.py, test_planner.py and test_shell.py.
+    typos = max(1, len(requested_stem) // _CHARACTERS_PER_TYPO)
+    if any(edit_distance(first, second, typos) <= typos for first, second in pairs):
         return 1, ratio
     return None
 

@@ -19,6 +19,8 @@ import os
 import re
 from collections.abc import Collection, Container
 
+from core.utils.edit_distance import edit_distance
+
 BASH_TOOL_NAME = "bash"
 SUBAGENT_TOOL_NAME = "subagent"
 SHELL_MODEL_NAME = "powershell" if os.name == "nt" else BASH_TOOL_NAME
@@ -241,7 +243,7 @@ def called_tool_name(
         tool
         for tool in offered
         if any(
-            len(spelling) >= _TYPO_MIN_LENGTH and _one_edit_apart(key, spelling)
+            len(spelling) >= _TYPO_MIN_LENGTH and edit_distance(key, spelling, 1) == 1
             for spelling in (_spelling_key(tool), _spelling_key(model_tool_name(tool)))
         )
     }
@@ -250,29 +252,3 @@ def called_tool_name(
 
 def _spelling_key(name: str) -> str:
     return _SEPARATORS.sub("", name).casefold()
-
-
-def _one_edit_apart(first: str, second: str) -> bool:
-    """Whether one inserted, removed, replaced or swapped character separates the two."""
-    if first == second or abs(len(first) - len(second)) > 1:
-        return False
-    if len(first) == len(second):
-        differ = [
-            index
-            for index, pair in enumerate(zip(first, second, strict=True))
-            if pair[0] != pair[1]
-        ]
-        if len(differ) == 1:
-            return True
-        return (
-            len(differ) == 2
-            and differ[1] == differ[0] + 1
-            and first[differ[0]] == second[differ[1]]
-            and first[differ[1]] == second[differ[0]]
-        )
-    shorter, longer = sorted((first, second), key=len)
-    index = next(
-        (index for index, character in enumerate(shorter) if character != longer[index]),
-        len(shorter),
-    )
-    return shorter[index:] == longer[index + 1 :]

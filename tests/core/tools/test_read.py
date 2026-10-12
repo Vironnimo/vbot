@@ -166,11 +166,16 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     modules.mkdir()
     for name in ["ast.py", "lexer.py", "shell.py", "analyzer.py", "parsers.py", "parser.md"]:
         modules.joinpath(name).write_text(name, encoding="utf-8")
+    checks = tmp_path / "checks"
+    checks.mkdir()
+    for name in ["test_index.py", "test_api.py", "test_errors.py", "test_shell.py", "test_exrp.py"]:
+        checks.joinpath(name).write_text(name, encoding="utf-8")
 
     message = failure(await read(tmp_path, {"path": "ranked/settings.txt"}), "file_not_found")
     bounded = failure(await read(tmp_path, {"path": "many/settings.txt"}), "file_not_found")
     elsewhere = failure(await read(tmp_path, {"path": "corpus.py"}), "file_not_found")
     module = failure(await read(tmp_path, {"path": "modules/parser.py"}), "file_not_found")
+    prefixed = failure(await read(tmp_path, {"path": "checks/test_expr.py"}), "file_not_found")
 
     # Same stem first, then files or directories beside it; never unrelated names
     # or the absolute path.
@@ -187,6 +192,8 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     # A shared extension makes no name similar; the stem or the whole name has to be.
     suggested = module.partition("(similar: ")[2].rstrip(").").split(", ")
     assert suggested == ["modules/parser.md", "modules/parsers.py"]
+    # Nor does a shared beginning: only a name a few typos away is similar.
+    assert prefixed == "File not found: checks/test_expr.py (similar: checks/test_exrp.py)."
 
 
 @pytest.mark.asyncio
