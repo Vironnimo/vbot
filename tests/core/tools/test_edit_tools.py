@@ -246,45 +246,87 @@ async def test_edits_that_fail_are_skipped_and_the_others_written_once(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("edits", "joined"),
+    ("content", "edit", "after", "noted"),
     [
-        (
-            [("import a from 'a';\n", "import a2 from 'a';")],
-            "import a2 from 'a';import b from 'b';",
+        # A changed line that lost its final line break keeps it, in the file's line
+        # ending, where the next line holds text: the two lines stay apart.
+        pytest.param(
+            JOINABLE,
+            ("import a from 'a';\n", "import a2 from 'a';"),
+            JOINABLE.replace(b"a from", b"a2 from"),
+            True,
+            id="kept-break",
         ),
-        # Only a blank line or the end of the file follows: no line joins.
-        ([("import b from 'b';\n", "import b2 from 'b';")], None),
-        ([("end\n", "fin")], None),
-        ([("end\n", "end")], None),
+        pytest.param(
+            JOINABLE.replace(b"\n", b"\r\n"),
+            ("import a from 'a';\n", "import a2 from 'a';"),
+            JOINABLE.replace(b"a from", b"a2 from").replace(b"\n", b"\r\n"),
+            True,
+            id="kept-break-crlf",
+        ),
+        # Nearby edits stay as sent. Only a blank line or the end of the file follows:
+        # no text joins.
+        pytest.param(
+            JOINABLE,
+            ("import b from 'b';\n", "import b2 from 'b';"),
+            b"import a from 'a';\nimport b2 from 'b';\nend\n",
+            False,
+            id="blank-line-follows",
+        ),
+        pytest.param(JOINABLE, ("end\n", "fin"), JOINABLE[:-4] + b"fin", False, id="end-of-file"),
+        pytest.param(JOINABLE, ("end\n", "end"), JOINABLE[:-1], False, id="final-break-only"),
         # A new text that still ends its line deletes the blank line on purpose.
-        ([("import b from 'b';\n\n", "import b from 'b';\n")], None),
+        pytest.param(
+            JOINABLE,
+            ("import b from 'b';\n\n", "import b from 'b';\n"),
+            b"import a from 'a';\nimport b from 'b';\nend\n",
+            False,
+            id="blank-line-deleted",
+        ),
+        # A join that takes in the next line is written as sent.
+        pytest.param(
+            JOINABLE,
+            ("import a from 'a';\nimport b from 'b';\n", "import a from 'a'; import b from 'b';\n"),
+            b"import a from 'a'; import b from 'b';\n\nend\n",
+            False,
+            id="join-with-next-line",
+        ),
+        # A last line of only spaces holds no text: it joins as sent, with a note
+        # quoting the joined line.
+        pytest.param(
+            JOINABLE,
+            ("import a from 'a';\n", "import a2 from 'a';\n  "),
+            JOINABLE.replace(b"a from 'a';\n", b"a2 from 'a';\n  "),
+            True,
+            id="spaces-joined",
+        ),
         # An edit that changes nothing but drops the line break is refused, naming
         # the lines it would join.
-        ([("import a from 'a';\n", "import a from 'a';")], True),
+        pytest.param(JOINABLE, ("import a from 'a';\n", "import a from 'a';"), None, False),
     ],
 )
-async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
-    tmp_path, edits, joined
+async def test_an_edit_that_drops_a_final_line_break_joins_no_lines_of_text(
+    tmp_path, content, edit, after, noted
 ) -> None:
-    (tmp_path / "a.ts").write_bytes(JOINABLE)
+    (tmp_path / "a.ts").write_bytes(content)
 
     result = await call(
         tmp_path,
-        {"path": "a.ts", "edits": [{"old_string": old, "new_string": new} for old, new in edits]},
+        {"path": "a.ts", "edits": [{"old_string": edit[0], "new_string": edit[1]}]},
         name="edit",
     )
 
-    if joined is True:
+    if after is None:
         assert result["error"]["code"] == "line_join"
         # The refusal, naming the lines, then the closing.
         assert len(text(result).split("\n")) == 2
         assert "import b from 'b';" in text(result).split("\n")[1]
-        assert (tmp_path / "a.ts").read_bytes() == JOINABLE
+        assert (tmp_path / "a.ts").read_bytes() == content
         return
     notes = [line for line in text(result).split("\n") if line.startswith("Note: ")]
     assert result["ok"]
-    assert len(notes) == (0 if joined is None else 1)
-    assert joined is None or joined in notes[0]
+    assert (tmp_path / "a.ts").read_bytes() == after
+    assert len(notes) == noted
 
 
 @pytest.mark.asyncio

@@ -164,14 +164,37 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   reading and repairing them; 13 calls of the archived `edit` Tool (2026-08)
   show the same shape, and no follow-up shows a join that was meant (several
   call the edit unintended or a no-op, or repair the joined line).
-  An edit that also changes text and drops the final line break joins the next
-  line to its last line; when that line is not blank and not the end of the
-  file, a note quotes the joined line, at most 100 characters on each side of
-  the join (`_joined_lines`). That edit applies as sent: some joins are meant.
+  An edit that also changes text and drops the final line break would join the
+  next line to its last line. Where both lines hold text (neither blank nor only
+  spaces), `new_string` is written with the file's line break at its end, at
+  every place where the replaced text ended with one, and a deviation note says
+  so and how to join the lines on purpose (`_edit_engine._keep_final_break`;
+  the result then shows the changed lines). Such a `new_string` ends where the
+  line it replaces ends; the break was lost in the copy. Of the 4 such items in
+  all recorded Sessions of the main instance (2026-08 to 2026-10-12), the 2 that
+  joined text lines were unintended: one wrote
+  `problems = self.problems(elements, **kwargs)        self.assertTrue(`, which
+  the syntax check flagged and the Agent's next call split into exactly the
+  two lines the kept break writes (Swarm, 2026-10-12); in the other, the
+  Agent's check afterwards treated the following `## [...]` heading as its own
+  line. The other 2 failed or had a blank line next. The earlier sample
+  (2026-10, 4 of 2751 items, none on purpose) agrees. Executing with the break
+  kept costs nothing when the join was unintended and one more call when it was
+  meant, and both readings leave valid text; a refusal would cost a round trip
+  on every such edit, and the former as-sent write broke code first and needed
+  2 to 3 calls to repair. Kept as sent: a following blank line or the end of
+  the file (no text joins: the blank line goes, or the final line break), a
+  last written line of only spaces (it joins, with a note quoting the joined
+  line, at most 100 characters on each side, `_joined_lines`), a join that
+  includes the next line in `old_string` and `new_string`, and the refusal
+  above for an edit that only drops the line break. Replay 2026-10-12 of the
+  775 replayable `edit` and `apply_patch` cases since 2026-10-04 (523 `edit`):
+  no case kept a break or changed its written file; the joining call itself
+  was not replayable (its file state was unknown).
   Coverage: `test_edits_that_fail_are_skipped_and_the_others_written_once`
   (partial results, the single write, the display notices),
   `test_edits_that_leave_the_file_as_it_is_say_so`,
-  `test_an_edit_that_drops_a_final_line_break_names_the_joined_line`,
+  `test_an_edit_that_drops_a_final_line_break_joins_no_lines_of_text`,
   `test_old_string_with_line_breaks_in_other_places_than_the_file`. The
   display shows the path and the shared `file_changes` diff and notices.
 - **Failures** use the engine's messages with `edit` wording where they name the
@@ -250,7 +273,8 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `After an earlier edit of this call failed, old_string must match the file exactly (up to whitespace).` | After a failed edit the later ones match without copy tolerance, so a copy that applies in a call of its own fails here; without the sentence the not-found report reads as if the text were missing, and the Agent cannot tell why the same copy matched before. |
 | `Neither edit was applied; no file was changed.` first, then the reports, then `Send both edits again, each corrected or left out.` (`None of the N edits were applied; ...`, `all N edits`) | When every edit failed, each has its report above; naming them all again in the closing adds nothing. |
 | Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |
-| Joined-line note: `new_string does not end with a line break as old_string does, so the next line now continues its last line: import a2 from 'a';import b from 'b';` | In the recorded Sessions (2026-10), 4 of 2751 edit items joined two non-empty lines this way, none on purpose; the result said only `Updated X (line N).`, since the written text was what the call sent. Three cost 2 to 3 more calls each to find and undo the join (reads, a failed edit, the fix); the fourth, a joined TypeScript import, stayed in the file. The quoted line is a ready `old_string` for the fix; no line number, because a later edit of the same call can move it. |
+| Kept-break note: `new_string does not end with a line break as old_string does; it was written with one, so the next line stays a line of its own. To join the two lines, include the next line in old_string and new_string.` | The written text differs from the call, so the result says how (report every interpretation) and, as a deviation note, shows the changed lines, so the Agent need not reread. The second sentence names the call for a join that was meant; without it, an Agent that meant the join would resend the same edit and get the same result. Replaces writing the join as sent with the joined-line note, which still let broken code be written first (Swarm, 2026-10-12: a joined Python line, flagged by the syntax check and repaired in the next call). |
+| Joined-line note: `new_string does not end with a line break as old_string does, so the next line now continues its last line: ...` | Now only where the last written line holds only spaces, which the kept break does not cover. In the recorded Sessions (2026-10), 4 of 2751 edit items joined two non-empty lines this way, none on purpose; the result said only `Updated X (line N).`, since the written text was what the call sent. The quoted line is a ready `old_string` for the fix; no line number, because a later edit of the same call can move it. |
 | `line_join`: `X, edit K of N: new_string is old_string without its final line break, so this edit would only join the line '...' with the next line, '...'. Leave this edit out; to join the two lines, include the next line in old_string and new_string.` | 8 items in 7 calls dropped only the final line break (Sessions, 2026-10); each joined code lines or deleted a blank line, none on purpose, and the result said only `Updated X (line N).`. The edit changes nothing else, so leaving it out is the usual fix; the second clause keeps an intended join possible without guessing. Quoting the lines instead of numbering them stays right when earlier edits of the call moved lines. |
 | `blank_line_join`: `... so this edit would only delete the blank line after the line '...'. Leave this edit out; to delete that blank line, end old_string with two line breaks and new_string with one.` | The same shape before a blank line deletes it. "Include the next line" would invite `old_string` `X\n\n` with `new_string` `X`, which joins the line after the blank one; the counted line breaks name the edit that deletes only the blank line. |
 | Rewrap note: `old_string matched lines 4-5, where the file breaks the text in other places; new_string was written with its own line breaks.` | 2 failed calls of one Swarm (2026-10-12) sent a signature wrapped after another argument and a Markdown list item as one line; every word matched. The note says the written line breaks are `new_string`'s, not the file's, so the Agent need not reread to see what the lines look like now. |
