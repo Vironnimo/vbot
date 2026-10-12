@@ -149,6 +149,28 @@ def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
     return offloaded
 
 
+def _arguments_fit(contract: ToolContract, arguments: Any) -> bool:
+    """Return whether ``arguments`` read as a call of the Tool with ``contract``.
+
+    Every field is one of its parameters, every required one is present, and a
+    value of a parameter with fixed values, such as ``action``, is one of them.
+    """
+    if not isinstance(arguments, dict) or not arguments:
+        return False
+    properties = contract.input_schema.get("properties")
+    if not isinstance(properties, dict) or not arguments.keys() <= properties.keys():
+        return False
+    required = contract.input_schema.get("required", ())
+    if not set(required) <= arguments.keys():
+        return False
+    return all(
+        not isinstance(properties[field], dict)
+        or "enum" not in properties[field]
+        or value in properties[field]["enum"]
+        for field, value in arguments.items()
+    )
+
+
 def _checked_arguments(tool: Tool, contract: ToolContract, arguments: Any) -> Any:
     """Return the arguments the handler receives, or refuse the call before it runs.
 
@@ -602,7 +624,9 @@ class ToolRegistry:
         try:
             tool = self.get(context.tool_name)
         except ToolNotFoundError:
-            raise ToolNotFoundError(self._unknown_tool_message(context, allowed_tools)) from None
+            raise ToolNotFoundError(
+                self._unknown_tool_message(context, allowed_tools, arguments)
+            ) from None
         context._retain_result_contract(tool.contract)
         context._retain_dispatch_allowlist(allowed_tools)
         if tool.session_scoped and context.tool_name not in context.session_tool_grants:
@@ -648,15 +672,18 @@ class ToolRegistry:
         return self.validate_result(context.tool_name, result, contract=tool.contract)
 
     def _unknown_tool_message(
-        self, context: ToolContext, allowed_tools: Sequence[str] | None
+        self, context: ToolContext, allowed_tools: Sequence[str] | None, arguments: Any
     ) -> str:
         """Name the Tools this caller can use instead of an unknown one.
 
         These are the Tools the Model was shown and the On-demand Tools it can
-        load; an internal Tool counts only when the Model request listed it.
+        load; an internal Tool counts only when the Model request listed it. When
+        the arguments fit exactly one of them, the message names that Tool alone;
+        the call never runs it, because the name alone did not say which Tool was
+        meant.
         """
         available = [
-            model_tool_name(tool.name)
+            tool
             for tool in self.list_tools(allowed_tools, include_internal=True, ready_only=True)
             if not tool.deferred
             and (not tool.session_scoped or tool.name in context.session_tool_grants)
@@ -669,9 +696,16 @@ class ToolRegistry:
         ]
         if not available:
             return f"Unknown Tool: {context.tool_name}. No Tools are available in this Run."
+        fitting = [tool for tool in available if _arguments_fit(tool.contract, arguments)]
+        if len(fitting) == 1:
+            name = model_tool_name(fitting[0].name)
+            return (
+                f"Unknown Tool: {context.tool_name}. These arguments fit {name}; "
+                f"call {name} with them."
+            )
         return (
             f"Unknown Tool: {context.tool_name}. Call one of the available Tools instead: "
-            f"{', '.join(available)}."
+            f"{', '.join(model_tool_name(tool.name) for tool in available)}."
         )
 
     def _model_facing_tools(
