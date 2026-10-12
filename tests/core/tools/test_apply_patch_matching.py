@@ -585,6 +585,69 @@ def test_end_of_file_anchors_are_never_ignored(tmp_path, body, code):
             assert "\nNote: " not in text(result)
 
 
+UNMARKED_BEFORE = (
+    "def total(values):\n    result = 0\n    for value in values:\n"
+    "        result += value\n    return result\n"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "after"),
+    [
+        # A continuation line written without + between + lines is added as written.
+        (
+            "@@\n     result = 0\n+    if not values:\n+        raise ValueError(\n"
+            '            "values must not be empty")\n+    checked = True\n'
+            "     for value in values:",
+            UNMARKED_BEFORE.replace(
+                "    result = 0\n",
+                "    result = 0\n    if not values:\n        raise ValueError(\n"
+                '            "values must not be empty")\n    checked = True\n',
+            ),
+        ),
+        # So is a line written without any prefix.
+        (
+            "@@\n     return result\n+\n+\n# Totals are summed in order.\n+def other():\n+    pass",
+            UNMARKED_BEFORE + "\n\n# Totals are summed in order.\ndef other():\n    pass\n",
+        ),
+        # An empty line between + lines where the file has no blank line is added.
+        (
+            "@@\n     result = 0\n+    if not values:\n\n+        return 0\n"
+            "     for value in values:",
+            UNMARKED_BEFORE.replace(
+                "    result = 0\n", "    result = 0\n    if not values:\n\n        return 0\n"
+            ),
+        ),
+        # The file has that line elsewhere: it is read as unchanged.
+        (
+            "@@\n     result = 0\n+    checked = True\n         result += value\n"
+            "+    seen = 0\n     for value in values:",
+            None,
+        ),
+        # It resembles the file line it would stand on: a copy with errors, not new.
+        ("@@\n     result = 0\n+    checked = True\n     for item in values:\n+    seen = 0", None),
+        # After the last + line, it can be a line the patch expects to follow.
+        ("@@\n     return result\n+\n+\n class Missing:", None),
+    ],
+)
+async def test_lines_between_added_lines_without_plus_are_added_when_the_file_lacks_them(
+    tmp_path, body, after
+):
+    path = tmp_path / "file.py"
+    path.write_bytes(UNMARKED_BEFORE.encode())
+
+    result = await call(tmp_path, {"patch": update(body, "file.py")})
+
+    if after is None:
+        assert result["error"]["code"] == "text_not_found"
+        assert path.read_bytes() == UNMARKED_BEFORE.encode()
+    else:
+        assert result["ok"], result
+        assert path.read_bytes() == after.encode()
+        assert "\nNote: " in text(result)
+
+
 def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
     path = tmp_path / "file.txt"
     path.write_bytes(b"section\nold\ntail\n")

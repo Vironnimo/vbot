@@ -19,7 +19,8 @@ V4A line hunks (`` ``/``-``/``+`` lines, ``@@`` hints, ``*** End of File``):
 5. Read gutters stripped from the hunk; then surplus blank context at its edges.
 6. A change already in the file is a no-op.
 7. ``copy_match.match_copied_edit``: old lines copied with errors.
-8. Several precise matches: the first after the hint or the previous change.
+8. Unchanged lines between + lines that the file lacks are read as added lines.
+9. Several precise matches: the first after the hint or the previous change.
 
 ``_splice`` writes every placed hunk: unchanged lines keep the file's bytes,
 changed lines take the file's line endings, indentation and typography.
@@ -29,12 +30,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from itertools import pairwise
 from os.path import commonprefix
 from typing import Literal
 
 from core.tools._decorated_insert import place_before_decorators
-from core.tools._patch_syntax import _Hunk, _PatchError
+from core.tools._patch_syntax import _amid_additions, _Hunk, _PatchError
 from core.tools.arguments import (
     TEXT_LINE_BREAK,
     line_number_gutter_candidates,
@@ -81,6 +83,22 @@ _FIRST_AFTER_HINT_NOTE = (
 _FIRST_AFTER_PREVIOUS_NOTE = (
     "The lines to replace occur {occurrences} times; the first after the previous change "
     "in this file, at line {line}, was changed."
+)
+_UNMARKED_NOTE = (
+    "The line {example!r} between + lines has no + prefix and is not in the file; it was "
+    "added as a new line."
+)
+_UNMARKED_LINES_NOTE = (
+    "{count} lines between + lines have no + prefix and are not in the file, such as "
+    "{example!r}; they were added as new lines."
+)
+_UNMARKED_BLANK_NOTE = (
+    "The empty line between + lines has no prefix and, read as unchanged, does not match the "
+    "file; it was added as a new line."
+)
+_UNMARKED_BLANKS_NOTE = (
+    "{count} empty lines between + lines have no prefix and, read as unchanged, do not match the "
+    "file; they were added as new lines."
 )
 _CLOSING_EOF_NOTE = (
     "The patch ends with *** End of File and has no *** End Patch, so that line was read as "
@@ -494,7 +512,12 @@ def _apply_line_hunk(
     if found is None and _may_copy(window, hunk):
         found, copied = match_copied_edit(window, hunk.lines, at_eof=hunk.eof), True
     if found is None:
-        raise _hunk_not_found(content, hunk, section, path)
+        unmarked = _unmarked_additions(content, start, hunk)
+        if unmarked is None:
+            raise _hunk_not_found(content, hunk, section, path)
+        hunk, found, note = unmarked
+        copied = False
+        notes.append(note)
     if section.repeated is not None and (copied or isinstance(found, AmbiguousFuzzyMatch)):
         raise section.repeated
     if isinstance(found, AmbiguousFuzzyMatch):
@@ -650,6 +673,80 @@ def _may_copy(window: str, hunk: _Hunk) -> bool:
     return not hunk.precise_only and (not new or _match(window, new, new) is None)
 
 
+def _unmarked_additions(
+    content: str, start: int, hunk: _Hunk
+) -> tuple[_Hunk, FuzzyReplacement, str] | None:
+    """Step 8: read unchanged lines between + lines that the file lacks as added lines.
+
+    Such a line is an added line written without its + (Sessions 2026-10: about
+    60 hunks, mostly continuation and comment lines of an added block). It is
+    added as written, with the leading space of a space-prefixed line, since the
+    + was dropped rather than replaced. Empty lines written without a prefix
+    between + lines are then added too. The other unchanged and removed lines
+    must match once, precisely, from ``start``. A line so read that borders
+    no unchanged or removed line on one side must not resemble the file lines on
+    that side of the match: there it could be a copy of one of them with errors.
+    Returns the hunk as read, the match in ``content[start:]`` and the note.
+    """
+    lines = hunk.lines
+    present = {_loose(line) for line in split_text_lines(content)}
+    unmarked = [
+        i
+        for i, (prefix, text) in enumerate(lines)
+        if prefix == " "
+        and text.strip()
+        and _loose(text) not in present
+        and _between_additions(lines, i)
+    ]
+    read = [
+        ("+", text if i in hunk.bare else " " + text) if i in unmarked else (prefix, text)
+        for i, (prefix, text) in enumerate(lines)
+    ]
+    blank = [i for i in hunk.bare if not lines[i][1].strip() and _amid_additions(read, i)]
+    if not unmarked and not blank:
+        return None
+    for i in blank:
+        read[i] = ("+", lines[i][1])
+    old = [i for i, (prefix, _) in enumerate(read) if prefix in " -"]
+    if len("".join(read[i][1].strip() for i in old)) < 4:
+        return None
+    reread = replace(hunk, lines=read, bare=[])
+    window = content[start:]
+    found = _match_hunk(window, reread)
+    if not isinstance(found, FuzzyReplacement):
+        return None
+    begin, end = found.before_spans[0]
+    above = [read[i][1] for i in unmarked if i < old[0]]
+    below = [read[i][1] for i in unmarked if i > old[-1]]
+    previous = split_text_lines(content[: start + begin])[-len(above) - 2 :] if above else []
+    rest = window[end:]
+    ending = _BREAK.match(rest)
+    following = split_text_lines(rest[ending.end() if ending else 0 :])[: len(below) + 2]
+    if any(
+        _resembles(text, line)
+        for texts, near in ((above, previous), (below, following))
+        for text in texts
+        for line in near
+    ):
+        return None
+    if not unmarked:
+        note = _UNMARKED_BLANK_NOTE if len(blank) == 1 else _UNMARKED_BLANKS_NOTE
+        return reread, found, DeviationNote(note.format(count=len(blank)))
+    example = lines[unmarked[0]][1].strip()
+    example = example if len(example) <= 80 else example[:77] + "..."
+    if len(unmarked) == 1:
+        note = _UNMARKED_NOTE.format(example=example)
+    else:
+        note = _UNMARKED_LINES_NOTE.format(count=len(unmarked), example=example)
+    return reread, found, DeviationNote(note)
+
+
+def _resembles(text: str, line: str) -> bool:
+    """Whether ``text`` can be ``line`` copied with errors."""
+    left, right = _loose(text), _loose(line)
+    return bool(left and right) and SequenceMatcher(None, left, right).ratio() >= 0.6
+
+
 def _first_occurrence(
     content: str,
     hunk: _Hunk,
@@ -659,7 +756,7 @@ def _first_occurrence(
     copied: bool,
     path: object,
 ) -> tuple[int, FuzzyReplacement]:
-    """Step 8: take the first precise match after the hint or the previous change.
+    """Step 9: take the first precise match after the hint or the previous change.
 
     As in Codex, an ``@@`` line or the same Update's previous change orders the
     occurrences (Sessions: the Agent meant that one in 60 of 61 such hunks). A
@@ -686,7 +783,7 @@ def _first_occurrence(
 def _ordering_note(
     content: str, hunk: _Hunk, occurrences: int, found: FuzzyReplacement, start: int
 ) -> str:
-    """Name the occurrence step 8 changed; ``found`` matched in ``content[start:]``."""
+    """Name the occurrence step 9 changed; ``found`` matched in ``content[start:]``."""
     line = found.first_changed_line + len(_BREAK.findall(content, 0, start))
     if hunk.hints:
         hint = _hint_text(hunk.hints[-1]).strip()
@@ -963,18 +1060,22 @@ def _inline_context_identifies(content: str, old: str, new: str) -> bool:
 def _beside_additions(lines: list[tuple[str, str]], index: int) -> bool:
     """Tell whether the unchanged line at ``index`` can be an added line missing its +.
 
-    It can when unchanged lines alone separate it from + lines on both sides,
-    or when a + line is right next to it.
+    It can when it is between + lines, or when a + line is right next to it.
     """
+    return _between_additions(lines, index) or any(
+        0 <= i < len(lines) and lines[i][0] == "+" for i in (index - 1, index + 1)
+    )
+
+
+def _between_additions(lines: list[tuple[str, str]], index: int) -> bool:
+    """Whether unchanged lines alone separate the line at ``index`` from + lines on both sides."""
     before = index - 1
     while before >= 0 and lines[before][0] == " ":
         before -= 1
     after = index + 1
     while after < len(lines) and lines[after][0] == " ":
         after += 1
-    if before >= 0 and after < len(lines) and lines[before][0] == lines[after][0] == "+":
-        return True
-    return any(0 <= i < len(lines) and lines[i][0] == "+" for i in (index - 1, index + 1))
+    return before >= 0 and after < len(lines) and lines[before][0] == lines[after][0] == "+"
 
 
 def _change_end_line(before: str, after: str) -> int:

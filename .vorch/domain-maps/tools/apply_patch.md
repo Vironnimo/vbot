@@ -126,8 +126,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   lines show a window with an `N:C|` gutter), follow such a line (`Updated X
   (places):`) only when the written text differs from what the call sent: a copy
   tolerance note (lines that differed or were kept, respelled words), a note on
-  a closing `*** End of File` (the engine marks these as `DeviationNote`), or
-  the note on which occurrence of a repeated
+  lines read as added (step 8 below) or on a closing `*** End of File` (the
+  engine marks these as `DeviationNote`), or the note on which occurrence of a repeated
   text was changed, when the change removed lines, and in partial results.
   Removed lines leave nothing to name in the file as it is now. Agent-eval
   2026-10-10, removing three lines, a reread or search in a call of its own:
@@ -234,7 +234,22 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   7. `copy_match.match_copied_edit` places old lines copied with errors, unless
      the path is precise-only after an earlier failure or the new text is
      already present (`copy_match` rule below).
-  8. Lines a precise strategy finds several times are ordered as in Codex:
+  8. Unchanged lines between `+` lines that the file holds nowhere are read as
+     added lines missing their `+` (`_unmarked_additions`), as written: a
+     space-prefixed line keeps that space as indentation, since the `+` was
+     dropped, not replaced. Empty lines written without a prefix between `+`
+     lines are then added too. The remaining unchanged and removed lines must
+     hold at least 4 characters and match once, precisely; a re-read line
+     beyond them must not resemble (ratio >= 0.6) the file lines next to the
+     match on that side, where it can be a file line copied with errors. A note
+     names the line or the count (`_UNMARKED_NOTE`, `_UNMARKED_LINES_NOTE`,
+     `_UNMARKED_BLANK_NOTE`). Evidence (replay of 7881 calls, 2026-10): 60
+     calls refused in whole or part now apply (2 through empty lines alone).
+     The re-read lines are continuation lines of a wrapped call or string, or
+     comment and docstring lines of the added block. Of 126 such lines in the
+     first 52 calls, the Agents' next calls wrote 42 without `+` again, 45 with
+     `+`, and reworded the other 39 (reviewed by hand).
+  9. Lines a precise strategy finds several times are ordered as in Codex:
      after a hint, the first occurrence from the hint on is changed; a hunk
      without hints takes the first occurrence from the line where the same
      Update's last completed change ended (`_Batch.change_ends`,
@@ -255,8 +270,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   resemble their hint. Replaying 8883 recorded calls (2026-10), re-reading
   unprefixed lines carried 351 calls, and 46 of them wrote content that
   conflicts with the file the Session's later calls produced; the other dropped
-  recoveries carried 8 such calls. They return only with replay evidence. The
-  closing `*** End of File` (framing above) is such a narrow return.
+  recoveries carried 8 such calls. They return only with replay evidence. Step 8
+  and the closing `*** End of File` (framing above) are such narrow returns:
+  step 8 re-reads only lines between `+` lines that the file lacks, and only
+  after every other step missed.
 - Lines a hunk names that the file holds exactly, but not where its markers put
   them, fail with that reason instead of closest text equal to the patch: not at
   the end of the file under `*** End of File`, `eof_not_found` (`the file does
@@ -541,7 +558,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   the lines to replace were not found together`), the closest text and its first
   difference. The former report named the block's first line as not found,
   although the file had it (1 failure, Sessions, 2026-09). Duplicate matches after
-  the anchor resolve to the first (step 8 above). Anchors do
+  the anchor resolve to the first (step 9 above). Anchors do
   not leak into subsequent edits or files.
   An entirely context-only patch fails with `no_changes`, says that without a
   `-` or `+` line every line stays unchanged, and
@@ -640,6 +657,8 @@ replacements still went through Delete File plus Add File (agent-eval
 | Decorator note (shared with `edit`): `The added lines went above line 13 (@staticmethod), not between it and the definition at line 14 it belongs to.` | The written text differs from the call, so the Agent learns it and gets the region shown; without the note it would see its lines below where it put them and could "fix" them back between decorator and definition. Line numbers name the decorators and the definition, not the added lines, whose numbers the `Updated X (lines ...)` header can count differently when an added line repeats a decorator. |
 | `context_lines_not_found`: `X: the context lines around the + lines were not found.` | A block that only adds lines was reported as `the lines to replace were not found`, which names lines the block does not have and points the Agent at text to replace instead of at its context lines (review of a Swarm Run, 2026-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
+| Step 8 notes: `The line '...' between + lines has no + prefix and is not in the file; it was added as a new line.` / `N lines between + lines have no + prefix and are not in the file, such as '...'; they were added as new lines.` | The call was read differently from its prefixes, so the result says how (Tolerance: report every interpretation). It names a line, so the Agent can check it in the excerpt and need not reread the file. In the Agents' next calls, 42 of 126 such lines were written without `+` again (replay 2026-10); the note names the cause. |
+| `The empty line between + lines has no prefix and, read as unchanged, does not match the file; it was added as a new line.` (and the plural) | Same reading for empty lines only; it names why the line counts as added, since an empty line is in the file elsewhere. |
 | `The patch ends with *** End of File and has no *** End Patch, so that line was read as the end of the patch, not of the file: the change was made at line N.` | The marker asked for the end of the file and the change landed elsewhere; the line number lets the Agent see where without a read. Shown only when text follows the change. |
 
 ## Verification
@@ -655,8 +674,9 @@ replacements still went through Delete File plus Add File (agent-eval
 - `test_apply_patch_matching.py` covers the engine's steps: gutters, copied text
   with misspellings, code targets, typography, context hints and anchors that
   do not place a hunk, EOF markers (also one that only closes the patch),
-  whole-line matching, empty lines of an added block, ordering of repeated
-  lines and changes already in the file.
+  whole-line matching, empty lines of an added block, lines between `+` lines
+  written without `+` (step 8), ordering of repeated lines and changes already
+  in the file.
 - `test_apply_patch_reports.py` covers previews, `no_changes`, long mismatch
   evidence and failure -> displayed read continuation -> successful correction,
   including Unicode and LF/CRLF/CR, plus `part_of` diagnostics.
