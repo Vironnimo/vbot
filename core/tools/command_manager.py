@@ -2,7 +2,8 @@
 
 ``CommandManager`` owns every command the shell Tool runs: its launch on pipes
 (no input, no terminal; ``_command_launch``), its clean output with a live log
-file (``_command_output``), the decision when it ended, its stop, the background
+file (``_command_output``, cleaned on subinterpreter workers off the Event
+Loop), the decision when it ended, its stop, the background
 registry with status events, the delivery of a background result, and the
 lifecycle scopes it belongs to (``_command_record``). Agent-facing wording
 belongs to the Tool, which formats ``CommandReport``.
@@ -42,8 +43,8 @@ against the processes in ``still_running``, it ends like any other command, with
 the exit code it got, and delivers its result.
 
 A background command stays listed while it runs, while a process it left
-running still runs, and for ``COMMAND_RETENTION_SECONDS`` after it ended;
-then it is forgotten.
+running still runs, and for ``COMMAND_RETENTION_SECONDS`` after its last
+process ended; then it is forgotten.
 
 Calls that name a command find it by its id alone; every report names the
 Session it belongs to (``CommandReport.owner``), and the caller decides which
@@ -59,7 +60,6 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import BinaryIO
 
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
@@ -68,7 +68,7 @@ from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
 from ._command_launch import launch_pipe_process
-from ._command_output import CommandOutput
+from ._command_output import CommandOutput, command_output_host
 from ._command_record import BlockingRunner, CommandRecord, CommandServices
 from ._command_types import (
     COMMAND_DRAIN_SECONDS,
@@ -106,6 +106,7 @@ from ._command_types import (
     OutputCallback,
     StopReason,
 )
+from ._interpreter_host import InterpreterHost
 from .process_tree import ProcessTreeTracker, track_process_tree
 
 _LOGGER = get_logger("tools.command_manager")
@@ -141,7 +142,10 @@ class CommandManager:
         max_live: int = COMMAND_MAX_LIVE,
         retention_seconds: float = COMMAND_RETENTION_SECONDS,
         sweep_interval_seconds: float = COMMAND_SWEEP_INTERVAL_SECONDS,
+        output_host: InterpreterHost | None = None,
     ) -> None:
+        """*output_host* cleans the commands' output; by default the manager
+        owns one with subinterpreter workers and closes it with itself."""
         if max_live < 1:
             raise ValueError("The command limit must be positive")
         if retention_seconds <= 0 or sweep_interval_seconds <= 0:
@@ -155,6 +159,8 @@ class CommandManager:
         self._max_live = max_live
         self._retention_seconds = retention_seconds
         self._sweep_interval_seconds = sweep_interval_seconds
+        self._owns_output_host = output_host is None
+        self._output_host = output_host or command_output_host()
         self._services = CommandServices(
             trigger_service=trigger_service,
             monotonic=monotonic,
@@ -186,8 +192,10 @@ class CommandManager:
     def add_changed_callback(self, callback: CommandChangedCallback) -> Callable[[], None]:
         """Call *callback* with a background command's id when its status may have changed.
 
-        That is when it moves to the background, ends, finishes, and when it is
-        forgotten (``status`` is then None). Returns the unsubscribe function.
+        That is when it moves to the background, ends, when a process it left
+        running ends (``CommandReport.still_running`` shrank), when it
+        finishes, and when it is forgotten (``status`` is then None). Returns
+        the unsubscribe function.
         """
         self._callbacks.append(callback)
 
@@ -214,31 +222,38 @@ class CommandManager:
         await asyncio.sleep(0)
 
     def close(self) -> None:
-        """Kill every command's processes synchronously and release them (Runtime stop).
+        """``aclose`` without an Event Loop: each kill blocks the calling thread.
 
-        Nothing is delivered any more: a result not yet handed over is withdrawn.
         Raises ``CommandManagerError`` naming the commands whose kill was not
         confirmed.
         """
         self._closed = True
-        if self._sweeper is not None:
-            with contextlib.suppress(RuntimeError):
-                self._sweeper.cancel()
-        failures = [
-            record.command_id for record in list(self._records.values()) if not record.kill_now()
-        ]
-        if failures:
-            raise CommandManagerError(
-                "Could not stop the processes of commands: " + ", ".join(failures)
-            )
+        self._stop_sweeper()
+        records = list(self._records.values())
+        unconfirmed = [record for record in records if not record.kill_now()]
+        if self._owns_output_host:
+            self._output_host.close()
+        _raise_unconfirmed(unconfirmed)
 
     async def aclose(self) -> None:
-        """``close``, then await every task of the manager and its commands."""
-        failure: CommandManagerError | None = None
-        try:
-            self.close()
-        except CommandManagerError as error:
-            failure = error
+        """Kill every command's processes, release them and await every task (Runtime stop).
+
+        The kills run off the Event Loop and in parallel; each may wait for
+        the operating system to confirm it. Nothing is delivered any more: a
+        result not yet handed over is withdrawn. Raises ``CommandManagerError``
+        naming the commands whose kill was not confirmed.
+        """
+        self._closed = True
+        self._stop_sweeper()
+        # Launches in progress start their commands first, so their kill is not missed.
+        await _settle(list(self._pending))
+        records = list(self._records.values())
+        killed = await asyncio.gather(
+            *(record.kill_and_release() for record in records), return_exceptions=True
+        )
+        for result in killed:
+            if isinstance(result, BaseException):
+                _LOGGER.error("Killing a command at shutdown failed", exc_info=result)
         tasks: list[asyncio.Task[object]] = [*self._pending]
         if self._sweeper is not None:
             tasks.append(self._sweeper)
@@ -246,8 +261,18 @@ class CommandManager:
             tasks.extend(record.pending_tasks())
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        if failure is not None:
-            raise failure
+        if self._owns_output_host:
+            # Waits for the output work already queued, such as closing log files.
+            await self._run_blocking(self._output_host.close)
+        _raise_unconfirmed(
+            [record for record, result in zip(records, killed, strict=True) if result is not True]
+        )
+
+    def _stop_sweeper(self) -> None:
+        if self._sweeper is not None:
+            # Without a running Event Loop, nothing is left to cancel.
+            with contextlib.suppress(RuntimeError):
+                self._sweeper.cancel()
 
     # Commands
 
@@ -382,7 +407,7 @@ class CommandManager:
     def commands(self, owners: Collection[CommandOwner]) -> list[CommandReport]:
         """The background commands of the *owners* Sessions, newest first.
 
-        Running ones, ended ones whose processes still run, and ended ones
+        Running ones, ended ones whose processes still run, and finished ones
         until their retention ends; each report names its Session. Foreground
         commands, still inside their call, are not listed.
         """
@@ -455,12 +480,17 @@ class CommandManager:
     def transfer_scope(self, source: CommandOwner, target: CommandOwner) -> int:
         """Move commands to another Session after a Session move; returns how many moved.
 
-        A result not yet submitted goes to the new Session.
+        Results go to the new Session: one submitted to the old Session and not
+        yet delivered is withdrawn there and submitted again, unless its
+        delivery already claimed it.
         """
         return sum(record.transfer(source, target) for record in self._records.values())
 
     def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
-        """Move the commands of a renamed Identity Agent to its new id; returns how many."""
+        """Move the commands of a renamed Identity Agent to its new id; returns how many.
+
+        Results follow as in ``transfer_scope``.
+        """
         moved = 0
         for record in self._records.values():
             owner = record.owner
@@ -544,21 +574,31 @@ class CommandManager:
         on_output: OutputCallback | None,
     ) -> CommandRecord:
         lease: TemporaryFileLease | None = None
-        log_file: BinaryIO | None = None
+        log_fd: int | None = None
+        output: CommandOutput | None = None
         process: CommandProcess | None = None
         try:
             if not await self._run_blocking(cwd.is_dir):
                 raise CommandLaunchError(f"The workdir is not a directory: {model_path(cwd)}")
             if self._temporary_files is not None:
-                lease, log_file = await self._run_blocking(_open_log, self._temporary_files)
+                lease, log_fd = await self._run_blocking(_open_log, self._temporary_files)
+            # Starts an output worker for this command when one more may run.
+            await self._run_blocking(self._output_host.prepare)
+            try:
+                output = CommandOutput.open(self._output_host, log_fd)
+            except RuntimeError as error:
+                raise CommandNotStartedError("vBot is shutting down") from error
+            log_fd = None
             try:
                 process = await self._launcher(argv, cwd, env, self._process_tracker)
             except Exception as error:
                 raise CommandLaunchError(f"The command could not be started: {error}") from error
         except BaseException:
-            if log_file is not None:
+            if output is not None:
+                output.close()
+            if log_fd is not None:
                 with contextlib.suppress(OSError):
-                    log_file.close()
+                    os.close(log_fd)
             if lease is not None:
                 lease.finish()
             raise
@@ -574,7 +614,7 @@ class CommandManager:
             execution_owner=execution_owner,
             formatter=formatter,
             on_output=on_output,
-            output=CommandOutput(log_file),
+            output=output,
             log_path=lease.path if lease is not None else None,
             log_lease=lease,
             services=self._services,
@@ -635,14 +675,13 @@ class CommandManager:
         return record
 
     def _expire(self) -> None:
-        """Forget finished commands that ended longer than the retention ago."""
+        """Forget commands whose last process ended longer than the retention ago."""
         now = self._monotonic()
         expired = [
             record
             for record in self._records.values()
-            if record.finished
-            and record.ended_at is not None
-            and now - record.ended_at >= self._retention_seconds
+            if record.finished_at is not None
+            and now - record.finished_at >= self._retention_seconds
         ]
         for record in expired:
             del self._records[record.command_id]
@@ -668,16 +707,25 @@ class CommandManager:
                 )
 
 
-def _open_log(temporary_files: TemporaryFileManager) -> tuple[TemporaryFileLease, BinaryIO]:
-    """Create the command's private log file (blocking)."""
+def _open_log(temporary_files: TemporaryFileManager) -> tuple[TemporaryFileLease, int]:
+    """Create the command's private log file and open it for writing (blocking)."""
     lease = temporary_files.create(COMMAND_TEMPORARY_CATEGORY, ".log")
     try:
         if os.name != "nt":
             lease.path.chmod(0o600)
-        return lease, lease.path.open("wb")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+        return lease, os.open(lease.path, flags, 0o600)
     except BaseException:
         lease.finish()
         raise
+
+
+def _raise_unconfirmed(records: list[CommandRecord]) -> None:
+    if records:
+        raise CommandManagerError(
+            "Could not stop the processes of commands: "
+            + ", ".join(record.command_id for record in records)
+        )
 
 
 async def _settle(launches: list[asyncio.Task[CommandRecord]]) -> None:
