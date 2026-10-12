@@ -26,6 +26,7 @@ from typing import Literal
 from core.tools._change_preview import _PREVIEW_CONTEXT_LINES, _change_preview
 from core.tools._edit_engine import DeviationNote
 from core.tools._line_diff import line_opcodes
+from core.tools._patch_syntax import quoted
 from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, split_text_lines
 from core.tools.model_names import model_tool_name
 from core.tools.syntax_check import warning_for_edited_file, warning_for_written_file
@@ -301,8 +302,8 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
             else f", line {difference['line']}: the file has"
         )
         return [
-            f"First difference{held} {difference['file']!r} "
-            f"where {source} has {difference['copy']!r}.",
+            f"First difference{held} {quoted(difference['file'])} "
+            f"where {source} has {quoted(difference['copy'])}.",
             *unprefixed,
         ]
     place = f"after {after}, line" if after else "file line"
@@ -316,7 +317,7 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
         start = difference[f"{key}_start"]
         end = start + len(difference[key]) - 1
         lines.append(
-            f"{label} characters {start}-{end}: {difference[key]!r}"
+            f"{label} characters {start}-{end}: {quoted(difference[key])}"
             if difference[key]
             else f"{label} character {start}: end of line."
         )
@@ -330,25 +331,28 @@ def _break_text(difference: JsonObject, source: str, after: str) -> str:
     if kind == "file":
         if after:
             return (
-                f"First difference: after {after}, line {line} breaks after {before!r}; "
-                f"{source} continues it with {then!r}."
+                f"First difference: after {after}, line {line} breaks after {quoted(before)}; "
+                f"{source} continues it with {quoted(then)}."
             )
         return (
-            f"First difference, line {line}: the file breaks this line after {before!r}; "
-            f"{source} continues it with {then!r}."
+            f"First difference, line {line}: the file breaks this line after {quoted(before)}; "
+            f"{source} continues it with {quoted(then)}."
         )
     if kind == "copy":
         if after:
             return (
-                f"First difference: {source} breaks the line after {before!r}; after {after}, "
-                f"line {line} continues it with {then!r}."
+                f"First difference: {source} breaks the line after {quoted(before)}; "
+                f"after {after}, line {line} continues it with {quoted(then)}."
             )
         return (
-            f"First difference, line {line}: {source} breaks this line after {before!r}; "
-            f"the file continues it with {then!r}."
+            f"First difference, line {line}: {source} breaks this line after {quoted(before)}; "
+            f"the file continues it with {quoted(then)}."
         )
     held = f"after {after}, line {line} has" if after else f"line {line} of the file has"
-    return f"First difference: {source} starts a line with {then!r}, which {held} after {before!r}."
+    return (
+        f"First difference: {source} starts a line with {quoted(then)}, which {held} "
+        f"after {quoted(before)}."
+    )
 
 
 def _read_hint(error: JsonObject) -> str:
@@ -450,7 +454,7 @@ def failure_text(error: JsonObject) -> str:
             single = part["lines"].startswith("line ")
             whole = f"all of {part['lines']}" if single else "all of the line you mean"
             lines.append(
-                f"The patch line {text!r} is only part of "
+                f"The patch line {quoted(text)} is only part of "
                 f"{part['lines']}. Each patch line is a whole line, so copy {whole}:"
             )
             lines.extend(_excerpts(part["excerpts"], error.get("path_label")))
@@ -466,7 +470,9 @@ def failure_text(error: JsonObject) -> str:
                 )
             else:
                 cause = "A line without + or - is unchanged, so it must match a line of the file."
-            lines.append(f"The patch line {text!r} is not in the file. {cause}{_read_hint(error)}")
+            lines.append(
+                f"The patch line {quoted(text)} is not in the file. {cause}{_read_hint(error)}"
+            )
         elif error.get("path_label"):
             lines.append(f"No similar text is {held};{_read_hint(error)}")
         present = error.get("already_present")
