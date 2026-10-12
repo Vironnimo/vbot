@@ -36,7 +36,10 @@ _NOT_FOUND_CODES = {"text_not_found", "context_not_found", "line_numbered_conten
 _AMBIGUOUS_CODES = {"ambiguous_match", "ambiguous_context"}
 # An Update names at most this many changed places before counting the rest.
 _NAMED_PLACES = 5
-_PARTIAL_LEAD = re.compile(r"\d+ of \d+ changes (?:fully )?applied")
+# The leads of a partial result: apply_patch's change counts, edit's edit numbers.
+_PARTIAL_LEAD = re.compile(
+    r"\d+ of \d+ changes (?:fully )?applied|Edits? \d[-\d, and]* (?:was|were) applied; edits? \d"
+)
 _FILE_HEADS = ("Created ", "Replaced the content of ", "Deleted ", "Moved ", "Updated ")
 
 type EditOutcome = Literal["applied", "partial", "unchanged"]
@@ -371,9 +374,15 @@ def _written_text(error: JsonObject, shown: set[int]) -> list[str]:
     if replaced:
         wrote = "".join(f" and wrote {lines}" for label, lines in parts if label == replaced)
         parts = [part for part in parts if part[0] != replaced]
+        # Written with the call's other changes, that edit stays; else they go together.
+        fix = (
+            f"to change that text again, use what {replaced} wrote as old_string"
+            if error.get("replaced_kept")
+            else "merge the two edits into one"
+        )
         sentences.append(
             f"{replaced[:1].upper()}{replaced[1:]} of this call already replaced this "
-            f"old_string{wrote}; merge the two edits into one."
+            f"old_string{wrote}; {fix}."
         )
     if parts:
         (label, lines), *rest = parts
@@ -382,18 +391,6 @@ def _written_text(error: JsonObject, shown: set[int]) -> list[str]:
             sentence + "".join(f"; {other} wrote {more}" for other, more in rest) + "."
         )
     return sentences
-
-
-def _join_text(join: JsonObject) -> str:
-    """Name one more edit of the call that would only join two lines."""
-    label = str(join["label"])
-    lead = (
-        f"{label[:1].upper()}{label[1:]}: new_string is likewise old_string without its "
-        "final line break; it would only"
-    )
-    if join["next"]:
-        return f"{lead} join the line {join['line']!r} with the next line, {join['next']!r}."
-    return f"{lead} delete the blank line after the line {join['line']!r}."
 
 
 def _span(first: int, last: int) -> str:
@@ -485,8 +482,6 @@ def failure_text(error: JsonObject) -> str:
         lines.append(f"Where it occurs after {after}:" if after else "Where it occurs:")
         lines.extend(_excerpts(candidates, error.get("path_label")))
         lines.extend(_written_text(error, shown))
-    elif code == "line_join":
-        lines.extend(_join_text(join) for join in error.get("also") or ())
     if error.get("content"):
         lines.append(str(error["content"]))
     if error.get("completed_paths"):
@@ -560,8 +555,13 @@ def patch_result(
     files: list[_FileReport],
     entries: list[JsonObject],
     cancelled: list[str],
+    *,
+    lead: str | None = None,
 ) -> JsonObject:
-    """Return the Tool Result envelope for a completed apply_patch call."""
+    """Return the Tool Result envelope for a completed file edit call.
+
+    ``lead`` opens a partial result in place of the change counts.
+    """
     failed = [entry for entry in entries if entry["status"] in _FAILED]
     no_ops = [entry for entry in entries if entry["status"] in {"unchanged", "already_applied"}]
     if failed and not files and len(failed) == len(entries):
@@ -585,7 +585,7 @@ def patch_result(
         )
     sections: list[str] = []
     if failed:
-        sections.append(_partial_lead(entries, failed))
+        sections.append(lead or _partial_lead(entries, failed))
     sections.extend(_file_text(report, partial=bool(failed)) for report in files)
     notes: list[str] = []
     # Changes that leave no net effect, such as a line changed and changed back.

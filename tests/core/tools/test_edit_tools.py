@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
+from typing import Any
 
 import pytest
 
 from core.tools import _file_changes as file_changes_module
+from core.tools._patch_report import edit_outcome
 from core.tools.availability import ToolAccess, resolve_tool_access
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
@@ -16,7 +19,7 @@ from core.tools.edit import (
     edit_dialect,
 )
 from core.tools.file_state import FileReadState
-from tests.core.tools.apply_patch_test_support import call, registry, text
+from tests.core.tools.apply_patch_test_support import call, context, registry, text
 
 
 def test_edit_and_write_are_available_exactly_when_apply_patch_is() -> None:
@@ -123,6 +126,124 @@ async def test_edits_apply_in_order_as_one_change(tmp_path) -> None:
     assert (tmp_path / "a.py").read_bytes() == b"x = 3\nz = 2\nx = 3\n"
 
 
+LINES = b"one\ntwo\none\n"
+JOINABLE = b"import a from 'a';\nimport b from 'b';\n\nend\n"
+COMPUTE = b"def compute(total, count):\n    value = total / count\n    return value\n"
+WRAPPED = (
+    "def spawn(db, api, *, fault=None, pace=1.0,\n"
+    "          exit_code=70, start=None):\n"
+    "    return 1\n"
+    "\n"
+    "\n"
+    "def check(rows):\n"
+    "    total = count(rows)        print(total)\n"
+    "    return total\n"
+)
+REWRAPPED_SIGNATURE = (
+    "def spawn(db, api, *, fault=None, pace=1.0, exit_code=70,\n          start=None):"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "edits", "after", "failed"),
+    [
+        # Each edit sees the text the applied edits before it left.
+        pytest.param(
+            LINES,
+            [("two", "2"), ("TWO", "x"), ("one\n2", "1\n2")],
+            b"1\n2\none\n",
+            [2],
+            id="not-found",
+        ),
+        pytest.param(LINES, [("two", "one"), ("two", "2")], b"one\none\none\n", [2], id="replaced"),
+        pytest.param(
+            LINES, [("two", "one"), ("one", "1")], b"one\none\none\n", [2], id="ambiguous"
+        ),
+        pytest.param(
+            JOINABLE,
+            [
+                ("import a from 'a';\n", "import a from 'a';"),
+                ("end", "fin"),
+                ("import b from 'b';\n", "import b from 'b';"),
+            ],
+            JOINABLE.replace(b"end", b"fin"),
+            [1, 3],
+            id="line-join",
+        ),
+        # An item that leaves its edit open, or changes another file, is one failed edit.
+        pytest.param(
+            LINES,
+            [
+                {"new_string": "x"},
+                ("two", "2"),
+                {"path": "b.txt", "old_string": "a", "new_string": "b"},
+            ],
+            b"one\n2\none\n",
+            [1, 3],
+            id="refused-items",
+        ),
+        # After a failed edit, old_string must match up to whitespace: a copy with errors
+        # could stand for text the failed edit would have written. Alone, this copy applies.
+        pytest.param(
+            COMPUTE,
+            [
+                ("zzz", "z"),
+                (
+                    "    value = total / count\n    retrun value",
+                    "    value = total / count\n    return 0",
+                ),
+                ("def compute", "def calc"),
+            ],
+            COMPUTE.replace(b"compute", b"calc"),
+            [1, 2],
+            id="copy-after-a-failure",
+        ),
+        # None applied: an error that names every failed edit; the file stays.
+        pytest.param(LINES, [("zzz", "z"), ("TWO", "x")], LINES, [1, 2], id="none-applied"),
+    ],
+)
+async def test_edits_that_fail_are_skipped_and_the_others_written_once(
+    tmp_path, monkeypatch, content, edits, after, failed
+) -> None:
+    (tmp_path / "a.txt").write_bytes(content)
+    # Writes are counted at the private commit step: the file is written once per call,
+    # which the written file alone cannot show.
+    writes: list[int] = []
+    commit = file_changes_module._commit
+
+    def counted_commit(*args: Any) -> Any:
+        writes.append(1)
+        return commit(*args)
+
+    monkeypatch.setattr(file_changes_module, "_commit", counted_commit)
+    tools = registry()
+    ctx = replace(context(tmp_path), tool_name="edit")
+    arguments = {
+        "path": "a.txt",
+        "edits": [
+            edit if isinstance(edit, dict) else {"old_string": edit[0], "new_string": edit[1]}
+            for edit in edits
+        ],
+    }
+
+    result = await tools.dispatch(ctx, arguments)
+
+    message = text(result)
+    assert (tmp_path / "a.txt").read_bytes() == after
+    named = re.findall(r"^(?:Failed: )?(?:a\.txt, edit|edits item) (\d+)\b", message, re.M)
+    assert [int(number) for number in named] == failed
+    if after == content:
+        assert not result["ok"] and not writes
+        return
+    assert result["ok"] and writes == [1]
+    assert edit_outcome(message) == "partial"
+    # The WebUI shows the call as partial: its display records an error notice per failed edit.
+    display = tools.display_for_call("edit", arguments, context=ctx, result=result)
+    notices = [block for block in display["details"] if block.get("level") == "error"]
+    assert len(notices) == len(failed)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("edits", "joined"),
@@ -137,25 +258,15 @@ async def test_edits_apply_in_order_as_one_change(tmp_path) -> None:
         ([("end\n", "end")], None),
         # A new text that still ends its line deletes the blank line on purpose.
         ([("import b from 'b';\n\n", "import b from 'b';\n")], None),
-        # An edit that changes nothing but drops the line break is refused, all
-        # such edits of the call together (here 2), also one that only deletes a
-        # blank line.
-        ([("import a from 'a';\n", "import a from 'a';")], 1),
-        (
-            [
-                ("import a from 'a';\n", "import a from 'a';"),
-                ("end", "fin"),
-                ("import b from 'b';\n", "import b from 'b';"),
-            ],
-            2,
-        ),
+        # An edit that changes nothing but drops the line break is refused, naming
+        # the lines it would join.
+        ([("import a from 'a';\n", "import a from 'a';")], True),
     ],
 )
 async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
     tmp_path, edits, joined
 ) -> None:
-    original = b"import a from 'a';\nimport b from 'b';\n\nend\n"
-    (tmp_path / "a.ts").write_bytes(original)
+    (tmp_path / "a.ts").write_bytes(JOINABLE)
 
     result = await call(
         tmp_path,
@@ -163,32 +274,17 @@ async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
         name="edit",
     )
 
-    if isinstance(joined, int):
+    if joined is True:
         assert result["error"]["code"] == "line_join"
-        # One line per refused edit, naming the lines, then the closing.
-        assert len(text(result).split("\n")) == joined + 1
+        # The refusal, naming the lines, then the closing.
+        assert len(text(result).split("\n")) == 2
         assert "import b from 'b';" in text(result).split("\n")[0]
-        assert (tmp_path / "a.ts").read_bytes() == original
+        assert (tmp_path / "a.ts").read_bytes() == JOINABLE
         return
     notes = [line for line in text(result).split("\n") if line.startswith("Note: ")]
     assert result["ok"]
     assert len(notes) == (0 if joined is None else 1)
     assert joined is None or joined in notes[0]
-
-
-WRAPPED = (
-    "def spawn(db, api, *, fault=None, pace=1.0,\n"
-    "          exit_code=70, start=None):\n"
-    "    return 1\n"
-    "\n"
-    "\n"
-    "def check(rows):\n"
-    "    total = count(rows)        print(total)\n"
-    "    return total\n"
-)
-REWRAPPED_SIGNATURE = (
-    "def spawn(db, api, *, fault=None, pace=1.0, exit_code=70,\n          start=None):"
-)
 
 
 @pytest.mark.asyncio
@@ -502,85 +598,12 @@ NUL = (
         ),
         pytest.param(
             "edit",
-            {
-                "path": "a.txt",
-                "edits": [
-                    {"old_string": "two", "new_string": "2"},
-                    {"old_string": "TWO", "new_string": "x"},
-                ],
-            },
-            "text_not_found",
-            "a.txt, edit 2 of 2: old_string was not found.\n"
-            f"{NOT_FOUND.replace('in the file', 'in the file after edit 1')}\n"
-            "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
-            "corrected or left out.",
-            id="second-of-two-not-found",
-        ),
-        pytest.param(
-            "edit",
-            {
-                "path": "a.txt",
-                "edits": [
-                    {"old_string": "two", "new_string": "one"},
-                    {"old_string": "two", "new_string": "2"},
-                    {"old_string": "one", "new_string": "1"},
-                ],
-            },
-            "text_not_found",
-            "a.txt, edit 2 of 3: old_string was not found.\n"
-            f"{NOT_FOUND.replace('in the file', 'in the file after edit 1')}\n"
-            # An earlier edit of the call replaced the text: the edits belong together.
-            "Edit 1 of this call already replaced this old_string; merge the two edits into "
-            "one.\nNone of the 3 edits were applied, so no file was changed. Send all 3 edits "
-            "again with edit 2 corrected or left out.",
-            id="second-of-three-not-found",
-        ),
-        pytest.param(
-            "edit",
             {"path": "a.txt", "edits": [{"old_string": "one", "new_string": "1"}]},
             "ambiguous_match",
             "a.txt: old_string matches 2 places (lines 1, 3). Include more of the surrounding "
             "text so it matches once, or set replace_all to true to change every match.\n"
             "Where it occurs:\n1| one\n2| two\n3| one\nNo file was changed.",
             id="ambiguous",
-        ),
-        pytest.param(
-            "edit",
-            {
-                "path": "app.py",
-                "edits": [
-                    {"old_string": "print(total)", "new_string": "log(total)"},
-                    {"old_string": "print(total)", "new_string": "emit(total)"},
-                ],
-            },
-            "text_not_found",
-            "app.py, edit 2 of 2: old_string was not found.\n"
-            # The text edit 1 left is named as such, and so are the lines it wrote.
-            "The closest text in the file after edit 1, line 3:\n3|     log(total)\n"
-            "First difference: after edit 1, line 3 reads '    log(total)' where old_string has "
-            "'print(total)'.\nEdit 1 of this call already replaced this old_string and wrote "
-            "line 3; merge the two edits into one.\n"
-            "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
-            "corrected or left out.",
-            id="text-an-earlier-edit-replaced",
-        ),
-        pytest.param(
-            "edit",
-            {
-                "path": "a.txt",
-                "edits": [
-                    {"old_string": "two", "new_string": "one"},
-                    {"old_string": "one", "new_string": "1"},
-                ],
-            },
-            "ambiguous_match",
-            "a.txt, edit 2 of 2: old_string matches 3 places (lines 1, 2, 3). Include more of "
-            "the surrounding text so it matches once, or set replace_all to true to change every "
-            "match.\nWhere it occurs after edit 1:\n1| one\n2| one\n3| one\n"
-            "Edit 1 of this call wrote line 2.\n"
-            "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
-            "corrected or left out.",
-            id="ambiguous-after-an-earlier-edit",
         ),
         pytest.param(
             "edit",
@@ -687,7 +710,7 @@ SOURCE = (
             ],
             [11],
             {"11"},
-            {"3", "1-2", "2"},
+            {"3", "1", "2"},
             id="text-an-earlier-edit-replaced-below-another",
         ),
         # Whole lines from places apart are named as those places, and only they show.
@@ -742,8 +765,13 @@ async def test_a_failed_edit_names_the_lines_and_edits_its_text_came_from(
     result = await call(tmp_path, {"path": "app.py", "edits": edits}, name="edit")
 
     message = text(result)
-    assert result["error"]["code"] == "text_not_found"
-    assert (tmp_path / "app.py").read_bytes() == SOURCE
+    if len(edits) > 1:
+        # The other edits were written; the failed edit's report follows them.
+        assert edit_outcome(message) == "partial"
+        message = message[message.index("\nFailed: ") + 1 :]
+    else:
+        assert result["error"]["code"] == "text_not_found"
+        assert (tmp_path / "app.py").read_bytes() == SOURCE
     assert [int(line.split("|")[0]) for line in message.split("\n") if "| " in line] == shown
     assert set(re.findall(r"\blines? (\d+(?:-\d+)?)", message)) == lines
     assert set(re.findall(r"\b[Ee]dits? (\d+(?:-\d+)?)", message)) == named_edits
@@ -806,17 +834,16 @@ async def test_a_failed_edit_names_the_lines_and_edits_its_text_came_from(
             'new_string; old_string "" creates a file.',
             id="item-without-old",
         ),
-        # Another item's old text shows that the file has text: creating it is no option.
+        # With no item to apply, the call names every item's problem. Another item's
+        # old text shows that the file has text: creating it is no option.
         pytest.param(
             "edit",
-            {
-                "path": "a.txt",
-                "edits": [{"old_string": "one", "new_string": "1"}, {"new_string": "x"}],
-            },
-            "edits item 2 has no old_string, the current text to replace. To insert text, put "
-            "the line above it in old_string, and that line followed by the new text in "
-            "new_string.",
-            id="item-without-old-beside-old-text",
+            {"path": "a.txt", "edits": [{"old_string": "one"}, {"new_string": "x"}]},
+            'edits item 1 has old_string but no new_string. Send new_string, "" to delete the '
+            "text.\nedits item 2 has no old_string, the current text to replace. To insert "
+            "text, put the line above it in old_string, and that line followed by the new text "
+            "in new_string.",
+            id="items-without-old-beside-old-text",
         ),
         pytest.param(
             "edit",

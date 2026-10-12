@@ -7,9 +7,11 @@ changes), checks the read-before-write gate, writes atomically, verifies each
 write, and collects what the Model and the user read about the call
 (``file_reports``, the step outcomes in ``ChangeBatch.results``).
 
-A step is the unit that succeeds or fails as a whole. ``apply_patch`` runs each
-hunk, Add, Delete and Move as its own step, so a failed step leaves the others
-applied. ``edit`` runs its whole call as one atomic step.
+A step is the unit that is written at once. ``apply_patch`` runs each hunk,
+Add, Delete and Move as its own step, so a failed step leaves the others
+applied. ``edit`` runs its whole call as one step that writes the file once
+(``one_write``): a text change that fails is skipped and reported, and the
+others are written.
 """
 
 from __future__ import annotations
@@ -114,10 +116,12 @@ def _plan(
     paths: dict[str, Path],
     before: dict[Path, _Snapshot],
     change_ends: dict[Path, int | None],
+    failures: list[_PatchError] | None = None,
 ) -> tuple[dict[Path, _Snapshot], dict[Path, list[str]]]:
     """Plan the operations' effects; each Update's change end goes into ``change_ends``.
 
-    See ``apply_hunks`` for what a change end orders.
+    See ``apply_hunks`` for what a change end orders, and for ``failures``: with
+    it, an Update's hunks that fail are skipped and collected there.
     """
     pending = before.copy()
     warnings: dict[Path, list[str]] = {}
@@ -170,7 +174,7 @@ def _plan(
         if operation.action == "update":
             content = decode_text(payload, path)
             content, notes, change_ends[path] = apply_hunks(
-                content, operation.hunks, path, change_ends.get(path)
+                content, operation.hunks, path, change_ends.get(path), failures=failures
             )
             warnings.setdefault(path, []).extend(notes)
             bom = _BOM if payload.startswith(_BOM) else b""
@@ -444,6 +448,24 @@ def _guard_failure(
     }
 
 
+def _skipped_changes(
+    context: ToolContext,
+    state: FileReadState,
+    batch: ChangeBatch,
+    source: Path,
+    failures: list[_PatchError],
+) -> list[JsonObject]:
+    """Describe the text changes a one-write step skipped, in order.
+
+    The first mismatch says once that the file changed since its read.
+    """
+    skipped = [_error_data(error, batch) for error in failures]
+    mismatch = next((data for data in skipped if data["code"] in _MISMATCH_CODES), None)
+    if mismatch and state.check_stale(context.session_id, source) is StaleReason.MODIFIED:
+        mismatch["message"] += " " + _STALE_FAILURE.format(path=batch.shown(source))
+    return skipped
+
+
 def _run_step(
     context: ToolContext,
     state: FileReadState,
@@ -451,8 +473,15 @@ def _run_step(
     operations: list[_Operation],
     paths: dict[str, Path],
     outcome: JsonObject,
+    *,
+    one_write: bool = False,
 ) -> None:
-    """Plan and commit ``operations`` as one step: all of their changes, or none."""
+    """Plan and commit ``operations`` as one step: all of their changes, or none.
+
+    With ``one_write``, a text change that fails is skipped and the others are
+    written; the skipped ones go to ``outcome["failures"]``. When nothing is
+    left to write, the step fails with them.
+    """
     first = operations[0]
     resolved = set(paths.values())
     source = paths[first.path]
@@ -485,7 +514,13 @@ def _run_step(
                     for op in operations
                 ]
             change_ends = dict(batch.change_ends)
-            pending, warnings = _plan(operations, paths, before, change_ends)
+            failures: list[_PatchError] | None = [] if one_write else None
+            pending, warnings = _plan(operations, paths, before, change_ends, failures)
+            skipped = _skipped_changes(context, state, batch, source, failures or [])
+            if skipped and pending == before:
+                # Every change failed or left the text as it was: nothing to write.
+                outcome.update(status="failed", error=skipped[0], failures=skipped)
+                return
             if (
                 adds
                 and before[source].payload is not None
@@ -505,6 +540,8 @@ def _run_step(
             completed, failure = _commit(context, state, batch, before, pending, warnings)
             if not failure:
                 batch.change_ends.update(change_ends)
+                if skipped:
+                    outcome["failures"] = skipped
         if adds and completed:
             batch.replaced.add(source)
         elif moving and first.destination and source in batch.replaced:
@@ -572,13 +609,15 @@ def run_operations(
     batch: ChangeBatch,
     operations: list[_Operation],
     *,
-    atomic: bool = False,
+    one_write: bool = False,
 ) -> None:
     """Apply ``operations`` in order under their path locks; outcomes go to ``batch.results``.
 
     Each hunk, Add, Delete and Move is its own step, so the steps that succeed
-    stay applied when another fails. With ``atomic``, all ``operations`` form one
-    step that changes everything or nothing.
+    stay applied when another fails. With ``one_write``, all ``operations`` form
+    one step that writes once: its text changes that fail are skipped (see
+    ``_run_step``), while any other failure, such as a missing file, writes
+    nothing.
     """
     resolved: dict[str, Path] = {}
     resolution_errors: dict[str, JsonObject] = {}
@@ -608,7 +647,7 @@ def run_operations(
     overlaps = {
         p for p in all_paths if any(p in q.parents or q in p.parents for q in all_paths if p != q)
     }
-    groups = [operations] if atomic else [[operation] for operation in operations]
+    groups = [operations] if one_write else [[operation] for operation in operations]
     with ExitStack() as locks:
         # Order by the same platform path identity used by FileReadState locks.
         for path in sorted(all_paths):
@@ -616,7 +655,7 @@ def run_operations(
         for number, group in enumerate(groups, 1):
             # Occurrences are ordered by earlier changes of the same Update only.
             batch.change_ends.clear()
-            steps = [group] if atomic else [[step] for step in _steps(group[0])]
+            steps = [group] if one_write else [[step] for step in _steps(group[0])]
             operation_failed = False
             for step in steps:
                 first = step[0]
@@ -641,7 +680,9 @@ def run_operations(
                     except _PatchError as error:
                         step_error = step_error or _error_data(error, batch)
                 label = batch.shown(paths[first.path]) if first.path in paths else first.path
-                hunk_label = first.hunks[0].label if not atomic and first.action == "update" else ""
+                hunk_label = (
+                    first.hunks[0].label if not one_write and first.action == "update" else ""
+                )
                 outcome: JsonObject = {
                     "operation": number,
                     "action": step[-1].action,
@@ -670,7 +711,7 @@ def run_operations(
                         error={"code": "previous_operation_failed", "message": message},
                     )
                 else:
-                    _run_step(context, state, batch, step, paths, outcome)
+                    _run_step(context, state, batch, step, paths, outcome, one_write=one_write)
                 operation_failed |= outcome["status"] in {"failed", "skipped", "partial"}
 
 

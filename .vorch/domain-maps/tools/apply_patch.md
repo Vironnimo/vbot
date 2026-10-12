@@ -7,9 +7,11 @@ prompt epoch (`edit.md` -> Dialect helpers). It also runs calls shaped for other
 harnesses' edit/write Tools.
 Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 `core/tools/apply_patch.py` owns the Tool's definition, request failures, display and registration. Its internal `_patch_requests.py` turns other harnesses' argument shapes into canonical fields and parsed operations; `_patch_syntax.py` owns V4A parsing and parsed operation values; `_file_changes.py` owns the change pipeline all three file edit Tools share (resolving and locking paths, planning steps in memory, the read guard, atomic commits, rechecks, read stamps, change statistics and file reports; this map's Contract and Mutation invariants describe it); `_edit_engine.py` owns locating and splicing one file's hunks and `old_string` replacements in current text (a fixed sequence of matching steps per kind of change); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
-A step is the pipeline's unit that succeeds or fails as a whole: `apply_patch` runs each
+A step is the pipeline's unit that is written at once: `apply_patch` runs each
 hunk, Add, Delete and Move as its own step (partial success below), `edit` runs its
-whole call as one step (`run_operations(..., atomic=True)`), `write` one Add.
+whole call as one step that writes the file once (`run_operations(...,
+one_write=True)`; its text changes that fail are skipped and reported, the others
+written, `tools/edit.md` -> Semantics), `write` one Add.
 Shared failure messages are worded per Tool through `ChangeBatch.templates`
 (`change_batch(context, templates)`) over `apply_patch`'s defaults (`_patch_syntax._MESSAGES`).
 
@@ -146,7 +148,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   none, since that error is not the Agent's to find now.
 - Mixed outcomes are a success led by counts (`N of M changes
   applied; K did not.`, or `fully applied; K only in part` when a write was
-  incomplete) and the instruction to resend only unfinished changes; each failure
+  incomplete; `edit` leads with its edit numbers instead, `tools/edit.md` ->
+  Results) and the instruction to resend only unfinished changes; each failure
   follows as `Failed:`/`Skipped:`/`Incomplete:` with its `where` (path plus
   `hunk N`/`edit N` when several). All-failed calls use the ordinary failure
   envelope (`all_changes_failed` for several) with the same failure text and
@@ -344,7 +347,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   `X changed after this Session last read it; read it again before resending.`
   (`_STALE_FAILURE`); the patch was likely written against old content.
 - After any text-entry failure on a path, remaining hunks and `old_string` edits
-  on that path allow only unique precise matches (no `copy_match`), preventing
+  on that path (the later edits of an `edit` call too, inside its one step:
+  `apply_hunks` with `failures`) allow only unique precise matches (no `copy_match`), preventing
   tolerance from silently satisfying a failed earlier precondition. The failure
   also drops that path's `change_ends`, since the failed target still holds its
   old lines; only a hint then orders occurrences. Other files retain normal
