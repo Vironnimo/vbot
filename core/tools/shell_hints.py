@@ -10,8 +10,8 @@ names the next action.
 Design rules (keep them when adding a pattern):
 
 * Only non-zero exit codes get a hint, except for a command that did not run as
-  written, which the command text shows: a typographic quote that ended a
-  PowerShell string, or a program that failed in a pipeline with a
+  written, which the command text shows: a typographic quote or a \\" that ended
+  a PowerShell string, or a program that failed in a pipeline with a
   Select-Object -First stage.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
@@ -357,11 +357,11 @@ def _hint_select_string_recurse(failure: _Failure) -> str | None:
     return f"{hint}."
 
 
-_ESCAPED_QUOTE_HINT = (
-    'In PowerShell, \\" does not escape a quote. Put the argument in single quotes '
-    "(double quotes inside stay literal), or pass longer code through a here-string "
-    "piped to the program, such as `@'...'@ | python -`."
+_ESCAPED_QUOTE_FIX = (
+    "Put the argument in single quotes (double quotes inside stay literal), or pass longer "
+    "code through a here-string piped to the program, such as `@'...'@ | python -`."
 )
+_ESCAPED_QUOTE_HINT = f'In PowerShell, \\" does not escape a quote. {_ESCAPED_QUOTE_FIX}'
 # Bash's ways to put a single quote into a single-quoted string; PowerShell
 # doubles it instead.
 _BASH_QUOTE_IDIOMS = ("'\\''", "'\"'\"'")
@@ -503,6 +503,9 @@ _DOUBLE_MARK = re.compile(rf"[`{_DOUBLE_QUOTES}]")
 _HERE_STRING_START = re.compile(rf"@([{_SINGLE_QUOTES}{_DOUBLE_QUOTES}])[ \t]*\r?\n")
 # A comment's # starts a token: after a blank, a separator or a bracket.
 _TOKEN_BOUNDARY = frozenset(" \t\r\n;|&(){},")
+# What follows a string that ends an argument; anything else continues it, as a
+# word, a string or a block does after a \" written as an escape.
+_ARGUMENT_END = frozenset(" \t\r\n;|&)},")
 
 
 @dataclass(frozen=True)
@@ -511,11 +514,14 @@ class _PowerShellCode:
 
     Offsets are the command's own. ``early_end`` is the first string opened with
     ' or " that a typographic quote of the same kind ended: (opening offset,
-    closing offset).
+    closing offset). ``escaped_end`` is the offset of the first " that ended a
+    double-quoted string after a backslash, written as an escape: a word, a
+    string or a block follows it directly.
     """
 
     text: str
     early_end: tuple[int, int] | None
+    escaped_end: int | None = None
 
 
 def _powershell_code(command: str) -> _PowerShellCode:
@@ -528,6 +534,7 @@ def _powershell_code(command: str) -> _PowerShellCode:
     """
     code = list(command)
     early_end: tuple[int, int] | None = None
+    escaped_end: int | None = None
     end = len(command)
 
     def blank(start: int, stop: int) -> None:
@@ -583,8 +590,17 @@ def _powershell_code(command: str) -> _PowerShellCode:
             blank(start + 1, stop)
             if early_end is None and stop < end and char in "'\"" and command[stop] != char:
                 early_end = (start, stop)
+            if (
+                escaped_end is None
+                and char == '"'
+                and stop + 1 < end
+                and command[stop] == '"'
+                and command[stop - 1] == "\\"
+                and command[stop + 1] not in _ARGUMENT_END
+            ):
+                escaped_end = stop
             position = stop + 1
-    return _PowerShellCode("".join(code), early_end)
+    return _PowerShellCode("".join(code), early_end, escaped_end)
 
 
 _STRING_SHOWN_CHARS = 40
@@ -620,6 +636,39 @@ def _hint_typographic_quote(command: str) -> str | None:
         f"twice ({doubled}), or pass the text in a here-string: @' on its own line, the text, "
         "then '@ at the start of a line."
     )
+
+
+def _hint_escaped_quote(
+    command: str, exit_code: int | None, output: str, failed_programs: Sequence[str]
+) -> str | None:
+    """Name a \\" that ended a double-quoted argument early, whatever the exit code.
+
+    Agents escape quotes in ``python -c "..."`` as bash does. PowerShell ends the
+    string at the \\", and the rest of the code becomes more arguments, script
+    blocks or commands of their own: a quoted title's ``(English)`` ran as a
+    command, and the not-installed hint answered it; a SyntaxError and a
+    ScriptBlock error went unexplained when a later statement exited with 0.
+    Only an error the early end explains counts.
+    """
+    if not _POWERSHELL or '\\"' not in command:
+        return None
+    code = _powershell_code(command)
+    if code.escaped_end is None:
+        return None
+    window = _scan_window(output)
+    if _SCRIPT_BLOCK_ARGUMENT in window:
+        return _ESCAPED_QUOTE_HINT
+    missing = _POWERSHELL_NOT_RECOGNIZED.search(window)
+    if missing is not None and re.search(
+        rf"(?<![\w$.-]){re.escape(missing[1])}(?![\w-])", code.text[code.escaped_end :]
+    ):
+        return (
+            f'In PowerShell, \\" does not escape a quote: it ended the string, so `{missing[1]}` '
+            f"from inside it ran as a command. {_ESCAPED_QUOTE_FIX}"
+        )
+    if "SyntaxError" in window and (exit_code or failed_programs):
+        return _ESCAPED_QUOTE_HINT
+    return None
 
 
 # A stage that closes the output of the commands before it in its pipeline once
@@ -1272,14 +1321,16 @@ def annotate_failure(
 
     A command that did not run as written gets a hint whatever its exit code,
     since a later statement's success can hide its failure: a typographic quote
-    ended a string early (first, since every error follows from it), or a
-    program failed in a pipeline with a Select-Object -First stage (last).
+    or a \\" ended a string early (first, since every error follows from it), or
+    a program failed in a pipeline with a Select-Object -First stage (last).
     Otherwise exit code 0 or None stays unannotated.
     """
     command = command or ""
     output = output or ""
     try:
-        quote = _hint_typographic_quote(command)
+        quote = _hint_typographic_quote(command) or _hint_escaped_quote(
+            command, exit_code, output, failed_programs
+        )
     except Exception:
         quote = None
     if quote:

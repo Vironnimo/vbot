@@ -634,6 +634,84 @@ def test_bash_syntax_and_quoting_that_break_powershell_are_named(
         assert annotate_failure(command, 1, output) is None
 
 
+_ESCAPED_QUOTE = 'In PowerShell, \\" does not escape a quote'
+
+
+@pytest.mark.parametrize(
+    ("command", "exit_code", "output", "failed", "named"),
+    [
+        # A quoted title's (English) ran as a command; it is not a missing install.
+        (
+            'python -c "add = {\\"publisher\\": \\"Wikipedia (English)\\"}"',
+            1,
+            _NOT_RECOGNIZED.format(name="English"),
+            _FAILED,
+            "`English`",
+        ),
+        # A later statement exited with 0 after the early end broke the code.
+        (
+            'python -c "print(f\\"{x}\\")"; python check.py',
+            0,
+            "python.exe: ScriptBlock should only be specified as a value of the Command "
+            "parameter.\nchecked",
+            (),
+            "",
+        ),
+        (
+            'python -c "t.replace(\\"a\\", \\"b\\")"; python check.py',
+            0,
+            '  File "<string>", line 1\n    t.replace(\\\n'
+            "SyntaxError: unterminated string literal (detected at line 1)\nchecked",
+            _FAILED,
+            "",
+        ),
+        # A SyntaxError printed as data, a \" that ends a path's string, and a
+        # missing command from outside the string are not the early end's.
+        (
+            'python -c "t.replace(\\"a\\", \\"b\\")"; python report.py',
+            0,
+            "SyntaxError: counted 3 times",
+            (),
+            None,
+        ),
+        (
+            'python check.py "C:\\data\\" --fast; python lint.py',
+            0,
+            "SyntaxError: invalid syntax",
+            _FAILED,
+            None,
+        ),
+        (
+            'cargo build; python -c "print(\\"x\\")"',
+            1,
+            _NOT_RECOGNIZED.format(name="cargo"),
+            (),
+            None,
+        ),
+    ],
+)
+def test_an_escaped_quote_that_ended_a_powershell_string_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    exit_code: int,
+    output: str,
+    failed: tuple[str, ...],
+    named: str | None,
+) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, exit_code, output, failed_programs=failed)
+
+    if named is None:
+        assert hint is None or not hint.startswith(_ESCAPED_QUOTE)
+    else:
+        assert hint is not None and hint.startswith(_ESCAPED_QUOTE) and named in hint
+    # In bash, \" is an escape.
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    hint = annotate_failure(command, exit_code, output, failed_programs=failed)
+    assert hint is None or not hint.startswith(_ESCAPED_QUOTE)
+
+
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize(
     ("command", "doubled"),
