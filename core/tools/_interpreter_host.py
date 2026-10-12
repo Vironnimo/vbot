@@ -8,12 +8,13 @@ thread that owns a subinterpreter with its own GIL, loaded with only the
 host's modules, and runs the calls to the objects assigned to it in the order
 they were made. An object stays on one worker, so its calls stay ordered;
 objects are assigned to the workers in turn. Workers start as objects need
-them, up to the host's limit.
+them, up to the host's limit; an object opened while the first worker is still
+starting waits for it.
 
 Hosts share no workers: the objects of one host never wait behind another's.
 
 ``inline`` hosts run their objects in the calling thread instead: for
-deterministic tests, and as the fallback when a subinterpreter cannot start.
+deterministic tests, and as the fallback when no subinterpreter can start.
 """
 
 from __future__ import annotations
@@ -80,13 +81,18 @@ class InterpreterHost:
         self._modules = tuple(modules)
         self._name = name
         self._limit = workers
+        self._created_inline = inline
+        # Runs its objects inline: created so, or no subinterpreter could start.
         self._inline = inline
+        self._inline_reported = False
         self._workers: list[_InterpreterWorker] = []
         self._starting = 0
         self._started = 0
         self._turn = 0
         self._keys = itertools.count(1)
         self._lock = threading.Lock()
+        # Notified when a worker started, a start failed, or the host closed.
+        self._changed = threading.Condition(self._lock)
         self._closed = False
 
     @classmethod
@@ -97,14 +103,17 @@ class InterpreterHost:
     def open(self, factory: Callable[..., Any], *arguments: Any, **options: Any) -> HostedObject:
         """Create ``factory(*arguments, **options)`` on the next worker.
 
-        Without a started worker, this starts one and blocks briefly: call
-        ``prepare`` off the Event Loop first.
+        Without a started worker, this starts one or waits for the one
+        starting, and blocks briefly: call ``prepare`` off the Event Loop
+        first. The object runs inline only on an inline host. Raises
+        RuntimeError once the host is closed.
         """
         worker = self._next_worker()
         if worker is None and not self._inline:
             self.prepare()
             worker = self._next_worker()
         if worker is None:
+            self._report_inline()
             return _InlineObject(factory(*arguments, **options), self._name)
         key = next(self._keys)
         worker.submit_nowait(_hosted_objects.create, key, factory, arguments, options)
@@ -113,34 +122,47 @@ class InterpreterHost:
     def prepare(self) -> None:
         """Start one more worker unless the limit is reached; blocks briefly.
 
-        A subinterpreter that cannot start makes a host without workers run
-        its objects inline, and one with workers stop adding more.
+        While no worker runs yet and every allowed one is still starting, it
+        waits until one started or every start failed, so the next ``open``
+        has a worker. A subinterpreter that cannot start stops the host from
+        adding more workers; once none started and none is starting, the host
+        runs its objects inline.
         """
-        with self._lock:
-            if self._inline or self._closed or len(self._workers) + self._starting >= self._limit:
-                return
+        with self._changed:
+            while True:
+                if self._inline or self._closed:
+                    return
+                if len(self._workers) + self._starting < self._limit:
+                    break
+                if self._workers or not self._starting:
+                    return
+                self._changed.wait()
             self._starting += 1
             index = self._started
             self._started += 1
         try:
             worker = _InterpreterWorker(self._name, index, _bootstrap_source(self._modules))
-        except Exception:
-            with self._lock:
+        except BaseException as error:
+            with self._changed:
                 self._starting -= 1
-                fallback = not self._workers
+                # The starts in progress decide whether any worker runs.
+                self._limit = len(self._workers) + self._starting
+                fallback = self._limit == 0
                 if fallback:
                     self._inline = True
-                else:
-                    self._limit = len(self._workers)
+                self._changed.notify_all()
+            if not isinstance(error, Exception):
+                raise
             _LOGGER.warning(
                 "%s subinterpreters are unavailable; %s",
                 self._name,
-                "running on the Event Loop" if fallback else "using the started ones",
+                "running on the Event Loop" if fallback else "starting no more workers",
                 exc_info=True,
             )
             return
-        with self._lock:
+        with self._changed:
             self._starting -= 1
+            self._changed.notify_all()
             if not self._closed:
                 self._workers.append(worker)
                 return
@@ -149,13 +171,24 @@ class InterpreterHost:
 
     def close(self) -> None:
         """Stop the workers after the calls already made; later calls fail."""
-        with self._lock:
+        with self._changed:
             self._closed = True
             workers, self._workers = self._workers, []
+            self._changed.notify_all()
         for worker in workers:
             worker.stop()
         for worker in workers:
             worker.join(_WORKER_JOIN_SECONDS)
+
+    def _report_inline(self) -> None:
+        """Warn once when a host meant for workers runs an object on the caller's thread."""
+        with self._lock:
+            if self._created_inline or self._inline_reported:
+                return
+            self._inline_reported = True
+        _LOGGER.warning(
+            "The %s host runs its objects in the calling thread, on the Event Loop", self._name
+        )
 
     def _next_worker(self) -> _InterpreterWorker | None:
         with self._lock:
@@ -269,9 +302,10 @@ class _InterpreterWorker:
             self._jobs.put(job)
 
     def _run(self, bootstrap: str, started: concurrent.futures.Future[None]) -> None:
-        from concurrent import interpreters
-
+        # Every failure to start resolves ``started``: the host waits for it.
         try:
+            from concurrent import interpreters
+
             interpreter = interpreters.create()
         except BaseException as error:
             started.set_exception(error)
