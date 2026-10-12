@@ -104,16 +104,21 @@ def escape_inner_quotes(text: str, fields: Collection[str]) -> str | None:
     """Return ``text`` with the stray quotes inside its ``fields`` escaped, else ``None``.
 
     Inside the string value of one of ``fields``, a ``"`` ends the text only
-    where JSON structure follows it: ``}``, ``]`` or ``:``, a comma before the
-    next string, object or array, a comma before one of ``fields`` that lost
-    its opening quote, or the end of ``text``. Every other ``"`` there belongs
-    to the text and is escaped. ``None`` means no quote was escaped.
+    where JSON structure follows it: ``}`` or ``]``, a ``:`` before a value, a
+    comma before the next string, object or array, a comma before one of
+    ``fields`` that lost its opening quote, or the end of ``text``. Every other
+    ``"`` there belongs to the text and is escaped: read as structure, it would
+    leave text where JSON needs a value (``got "x": not a number``). ``None``
+    means no quote was escaped.
     """
     names = "|".join(re.escape(name) for name in sorted(fields, key=len, reverse=True) if name)
     if not names:
         return None
     opening = re.compile(rf'"(?:{names})"\s*:\s*"')
-    closing = re.compile(rf'"\s*(?:[}}\]:]|,\s*["{{\[]|,\s*(?:{names})"\s*:|\Z)')
+    closing = re.compile(
+        rf'"\s*(?:[}}\]]|:\s*(?:["{{\[\-\d]|(?:true|false|null)\b)|,\s*["{{\[]'
+        rf'|,\s*(?:{names})"\s*:|\Z)'
+    )
     parts: list[str] = []
     position = 0
     inside = False

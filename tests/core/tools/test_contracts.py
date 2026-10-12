@@ -728,6 +728,24 @@ _CHANGE: JsonObject = {
             {"old": 'a "b" c', "new": "d"},
             id="object",
         ),
+        # A raw line break or tab inside a text stands for itself.
+        pytest.param(
+            "change",
+            '{"old": "a = 1\nb = 2", "new": "\tc"}',
+            {"old": "a = 1\nb = 2", "new": "\tc"},
+            id="raw-control-characters",
+        ),
+        # A text that also writes a line break as an escape has a raw one that
+        # can be a slip of the output.
+        pytest.param("change", '{"old": "a\\nb", "new": "c\nd"}', None, id="mixed-line-breaks"),
+        # A quote before ":" ends the text only where a value follows the colon.
+        pytest.param(
+            "change",
+            '{"old": "got "x": not a number", "new": "x"}',
+            {"old": 'got "x": not a number', "new": "x"},
+            id="quote-colon-text",
+        ),
+        pytest.param("change", '{"old": "x = {"a": 2}", "new": "x"}', None, id="quote-colon-value"),
         # A comma and a quote after a quote are structure: no reading fits the schema.
         pytest.param("change", '{"old": "f("a", "b")", "new": "x"}', None, id="comma-quote"),
         pytest.param(
@@ -737,7 +755,7 @@ _CHANGE: JsonObject = {
         pytest.param("change", '{"old": "a "b" \\_", "new": "d"}', None, id="other-break"),
     ],
 )
-def test_unescaped_quotes_in_json_text_are_read_only_into_a_value_the_schema_accepts(
+def test_slips_in_json_text_are_read_only_into_a_value_the_schema_accepts(
     field: str, text: str, expected: Any
 ) -> None:
     contract = _open_contract({"changes": {"type": "array", "items": _CHANGE}, "change": _CHANGE})
