@@ -317,7 +317,8 @@ def _refuse_join(content: str, found: FuzzyReplacement, hunk: _Hunk, path: objec
     assert replacement is not None
     old, new = replacement.old, replacement.new
     ending = next((e for e in ("\r\n", "\n", "\r") if old.endswith(e)), None)
-    if ending is None or not new or new != old[: -len(ending)]:
+    # A new text that still ends a line, such as "\n" for "\n\n", deletes a blank line.
+    if ending is None or not new or new.endswith(("\n", "\r")) or new != old[: -len(ending)]:
         return
     end = next(
         (

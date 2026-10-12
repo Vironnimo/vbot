@@ -135,6 +135,8 @@ async def test_edits_apply_in_order_as_one_change(tmp_path) -> None:
         ([("import b from 'b';\n", "import b2 from 'b';")], None),
         ([("end\n", "fin")], None),
         ([("end\n", "end")], None),
+        # A new text that still ends its line deletes the blank line on purpose.
+        ([("import b from 'b';\n\n", "import b from 'b';\n")], None),
         # An edit that changes nothing but drops the line break is refused, all
         # such edits of the call together (here 2), also one that only deletes a
         # blank line.
@@ -168,9 +170,10 @@ async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
         assert "import b from 'b';" in text(result).split("\n")[0]
         assert (tmp_path / "a.ts").read_bytes() == original
         return
-    lines = text(result).split("\n")
-    assert len(lines) == (1 if joined is None else 2)
-    assert joined is None or joined in lines[1]
+    notes = [line for line in text(result).split("\n") if line.startswith("Note: ")]
+    assert result["ok"]
+    assert len(notes) == (0 if joined is None else 1)
+    assert joined is None or joined in notes[0]
 
 
 @pytest.mark.asyncio
