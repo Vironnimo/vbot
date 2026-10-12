@@ -265,7 +265,11 @@ def normalize_edit_arguments(arguments: Any) -> Any:
         )
     edits = normalized.get("edits")
     if isinstance(edits, list):
-        normalized["edits"] = [_edit_item(item, number) for number, item in enumerate(edits, 1)]
+        # An item with old text shows the call means a file that has text.
+        held = any(_holds_old_text(item) for item in edits)
+        normalized["edits"] = [
+            _edit_item(item, number, held=held) for number, item in enumerate(edits, 1)
+        ]
         _take_item_paths(normalized)
     if "path" not in normalized:
         raise ValueError(_NO_PATH)
@@ -344,11 +348,18 @@ def _json_value(text: str) -> Any:
         return None
 
 
+# How to send text without old_string, when the file has text and when that is unknown.
+_INSERT = (
+    "To insert text, put the line above it in old_string, and that line followed by the new "
+    "text in new_string."
+)
+_INSERT_OR_CREATE = _INSERT[:-1] + '; old_string "" creates a file.'
+
+
 def _check_flat_edit(edit: dict[str, Any]) -> None:
     if "old_string" not in edit:
         raise ValueError(
-            'new_string needs old_string, the current text it replaces (old_string "" creates '
-            "a file)."
+            f"new_string needs old_string, the current text it replaces. {_INSERT_OR_CREATE}"
         )
     if "new_string" not in edit:
         raise ValueError(
@@ -357,8 +368,29 @@ def _check_flat_edit(edit: dict[str, Any]) -> None:
         )
 
 
-def _edit_item(item: Any, number: int) -> Any:
-    """Return one ``edits`` item under canonical field names."""
+def _edit_field(key: str) -> str:
+    """Return the field an ``edits`` item key names, else the key itself."""
+    field = _EDIT_ALIASES.get(key, key)
+    if field not in (*_EDIT_FIELDS, "path"):
+        field = next((name for name in _EDIT_FIELDS if spelling(name) == spelling(key)), key)
+    return field
+
+
+def _holds_old_text(item: Any) -> bool:
+    """Say whether an ``edits`` item, in any spelling, has a nonempty old_string."""
+    if isinstance(item, str):
+        item = _json_value(item)
+    return isinstance(item, dict) and any(
+        _edit_field(key) == "old_string" and isinstance(value, str) and value != ""
+        for key, value in item.items()
+    )
+
+
+def _edit_item(item: Any, number: int, *, held: bool) -> Any:
+    """Return one ``edits`` item under canonical field names.
+
+    ``held`` says another item of the call has old text, so the file has text.
+    """
     if isinstance(item, str):
         item = _json_value(item)
     if not isinstance(item, dict):
@@ -368,9 +400,7 @@ def _edit_item(item: Any, number: int) -> Any:
         )
     edit: dict[str, Any] = {}
     for key, value in item.items():
-        field = _EDIT_ALIASES.get(key, key)
-        if field not in (*_EDIT_FIELDS, "path"):
-            field = next((name for name in _EDIT_FIELDS if spelling(name) == spelling(key)), key)
+        field = _edit_field(key)
         if field not in (*_EDIT_FIELDS, "path"):
             if not _edit_item_contract().normalize_arguments({key: value}):
                 # An empty value under a name that is not a field requests nothing.
@@ -390,8 +420,8 @@ def _edit_item(item: Any, number: int) -> Any:
     edit = _edit_item_contract().normalize_arguments(edit)
     if "old_string" not in edit:
         raise ValueError(
-            f"edits item {number} has no old_string, the current text to replace. Send "
-            'old_string and new_string (old_string "" creates a file).'
+            f"edits item {number} has no old_string, the current text to replace. "
+            + (_INSERT if held else _INSERT_OR_CREATE)
         )
     if "new_string" not in edit:
         raise ValueError(

@@ -62,7 +62,11 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   an item that is not an object, an unknown item field with a value, a field
   given twice with different values. An unknown item field with an empty value
   (`""`, `null`, `[]`, `{}`) requests nothing and is dropped, by the root rule
-  of `ToolContract.normalize_arguments` applied to the item. Coverage:
+  of `ToolContract.normalize_arguments` applied to the item. A `new_string`
+  without `old_string` says how to insert text with a neighbouring line; it adds
+  that `old_string ""` creates a file unless another item of the call has old
+  text, which shows that the file has text (the normalizer cannot see the file).
+  Coverage:
   `test_other_edit_spellings_make_the_same_change`,
   `test_edits_text_with_unescaped_quotes_runs_only_when_it_has_one_reading`,
   `test_open_or_misdirected_calls_say_which_call_to_send`.
@@ -189,6 +193,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `Edit K: new_string is likewise old_string without its final line break; it would only join ...` plus the closing `Send all N edits again with edits J and K corrected or left out.` | One of the 7 calls had two such items; naming only the first would cost a second refused call. |
 | Rewrap note: `old_string matched lines 4-5, where the file breaks the text in other places; new_string was written with its own line breaks.` | 2 failed calls of one Swarm (2026-10-12) sent a signature wrapped after another argument and a Markdown list item as one line; every word matched. The note says the written line breaks are `new_string`'s, not the file's, so the Agent need not reread to see what the lines look like now. |
 | Line-break first difference: `First difference, line N: the file breaks this line after '...'; old_string continues it with '...'.`, `... old_string breaks this line after '...'; the file continues it with '...'.`, `First difference: old_string starts a line with '...', which line N of the file has after '...'.` (after earlier edits: `after edits 1-2, line N breaks after ...`) | The former `the file has '<line>' where old_string has '<part of it>'` hid that only a line break differs; for an `old_string` starting with a line break inside a joined line, it named an unrelated line 9 lines above (Swarm, 2026-10-12). Quoting both sides of the break shows where to break or join `old_string`. |
+| `edits item K has no old_string, the current text to replace. To insert text, put the line above it in old_string, and that line followed by the new text in new_string.` (`...; old_string "" creates a file.` unless another item has old text; flat: `new_string needs old_string, the current text it replaces. ...`) | Both such refusals in the live Sessions (Swarm, 2026-10-12) were inserts into a file other items of the call edited; the former `Send old_string and new_string (old_string "" creates a file)` named only file creation. Repeating the line in `new_string` keeps it, which Models miss when told only to use it as `old_string`. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 | Broken `edits` JSON text: `edits is not valid JSON. At character N, <what breaks in which field>:` + the text around it + how to write it | The former `edits arrived as text, not as an array.` named no break, so the Model could not tell what to fix; 12 `edits` texts in the live Sessions failed this way, 7 of them still after the quote repair (tool review 2026-10-11). |
 | `If this text fails again, send one edit per call, or call write with the whole file.` | Only for a break inside a text (a quote, an escape, a line break): long code with quotes is what Models fail to escape; a smaller call or `write` avoids the nested JSON. Dispatch does not know whether the call repeats, so the sentence is conditional. |

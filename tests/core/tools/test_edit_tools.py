@@ -748,16 +748,30 @@ async def test_a_failed_edit_names_the_lines_and_edits_its_text_came_from(
         pytest.param(
             "edit",
             {"path": "a.txt", "new_string": "two"},
-            'new_string needs old_string, the current text it replaces (old_string "" creates a '
-            "file).",
+            "new_string needs old_string, the current text it replaces. To insert text, put the "
+            "line above it in old_string, and that line followed by the new text in new_string; "
+            'old_string "" creates a file.',
             id="flat-without-old",
         ),
         pytest.param(
             "edit",
             {"path": "a.txt", "edits": [{"new_string": "x"}]},
-            "edits item 1 has no old_string, the current text to replace. Send old_string and "
-            'new_string (old_string "" creates a file).',
+            "edits item 1 has no old_string, the current text to replace. To insert text, put "
+            "the line above it in old_string, and that line followed by the new text in "
+            'new_string; old_string "" creates a file.',
             id="item-without-old",
+        ),
+        # Another item's old text shows that the file has text: creating it is no option.
+        pytest.param(
+            "edit",
+            {
+                "path": "a.txt",
+                "edits": [{"old_string": "one", "new_string": "1"}, {"new_string": "x"}],
+            },
+            "edits item 2 has no old_string, the current text to replace. To insert text, put "
+            "the line above it in old_string, and that line followed by the new text in "
+            "new_string.",
+            id="item-without-old-beside-old-text",
         ),
         pytest.param(
             "edit",
