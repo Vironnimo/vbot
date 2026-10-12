@@ -118,6 +118,11 @@ class FakeProcess:
 
     # The test's side
 
+    @property
+    def unread(self) -> int:
+        """Chunks written and not read yet."""
+        return self._output.qsize()
+
     def write(self, data: str | bytes) -> None:
         self._output.put_nowait(data.encode() if isinstance(data, str) else data)
 

@@ -3,8 +3,8 @@
 VT rendering is pure-Python CPU work proportional to program output. Each
 screen is a ``TerminalEmulator`` on a renderer worker: a subinterpreter loaded
 with only ``terminal_emulator.py`` and pyte. ``inline`` hosts render in the
-calling thread instead: deterministic tests, and the fallback when a
-subinterpreter cannot start.
+calling thread instead: deterministic tests, and the fallback when no
+subinterpreter can start.
 """
 
 from __future__ import annotations
@@ -87,9 +87,10 @@ class TerminalRenderHost:
         return TerminalScreen(emulator, columns, rows)
 
     def prepare(self) -> None:
-        """Start a renderer worker for the next screen; blocks briefly.
+        """Start a renderer worker for the next screen, or wait for the one
+        starting; blocks briefly.
 
-        A subinterpreter that cannot start makes the host render inline.
+        When no subinterpreter can start, the host renders inline.
         """
         self._host.prepare()
 

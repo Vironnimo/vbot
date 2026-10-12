@@ -26,6 +26,7 @@ import pytest_asyncio
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools.command_manager import (
     COMMAND_HEAD_LINES,
     COMMAND_MEMORY_LINE_MAX_CHARS,
@@ -33,6 +34,7 @@ from core.tools.command_manager import (
     COMMAND_TEMPORARY_CATEGORY,
     CommandCapacityError,
     CommandManager,
+    CommandManagerError,
     CommandNotFoundError,
     CommandNotStartedError,
     CommandStopError,
@@ -145,6 +147,38 @@ async def test_log_file_has_every_line_whole_and_shows_the_current_line_live(
         "y" * COMMAND_MEMORY_LINE_MAX_CHARS,
         "last",
     )
+
+
+@pytest.mark.asyncio
+async def test_output_that_cannot_be_cleaned_is_still_read_and_discarded(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    command_id, process = await harness.launch()
+    log_path = harness.manager.report(command_id).log_path
+    process.write("collected 3 items\n")
+    await turns()
+
+    def broken(cleaner: OutputCleaner, data: bytes) -> OutputUpdate:
+        raise ValueError("cleaner bug")
+
+    monkeypatch.setattr(OutputCleaner, "feed", broken)
+    for number in range(3):
+        process.write(f"lost line {number}\n")
+    await turns()
+
+    # The pipe is still read: the command never waits on a full one.
+    assert process.unread == 0
+    process.exit(1)
+    report = await harness.finish(command_id)
+    assert (report.status, report.exit_code) == ("failed", 1)
+    transcript = report.transcript
+    assert (transcript.head + transcript.tail, transcript.processing_failed) == (
+        ("collected 3 items",),
+        True,
+    )
+    assert log_path is not None and log_path.read_text(encoding="utf-8") == "collected 3 items\n"
+    errors = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(errors) == 1
 
 
 @pytest.mark.asyncio
@@ -383,19 +417,32 @@ async def test_the_first_stop_wins_and_fixes_the_outcome(harness: Harness) -> No
 
 @pytest.mark.asyncio
 async def test_a_stop_after_the_end_kills_the_leftovers_and_keeps_the_outcome(
-    harness: Harness,
+    tmp_path: Path,
 ) -> None:
-    command_id, process = await harness.launch()
-    harness.manager.to_background(command_id, deliver=True)
-    process.exit(3, leftovers=[SERVER])
-    await harness.advance(3.25)
-    assert harness.sink.bodies == [format_report(harness.manager.report(command_id))]
+    async def run_blocking(function: Callable[..., object], /, *args: object) -> object:
+        if getattr(function, "__func__", None) is FakeTree.terminate:
+            # The server fails because of the kill, and a poll of the
+            # leftovers sees that before the kill is confirmed.
+            process.tree.exits.append(ProgramExit("server.exe", 1))
+            await harness.advance(1.0)
+        return function(*args)
 
-    report = await harness.manager.stop(command_id, "agent")
+    async with command_harness(tmp_path, run_blocking=run_blocking) as harness:
+        command_id, process = await harness.launch()
+        harness.manager.to_background(command_id, deliver=True)
+        process.exit(3, leftovers=[SERVER])
+        await harness.advance(3.25)
+        assert harness.sink.bodies == [format_report(harness.manager.report(command_id))]
+        process.tree.exits.append(ProgramExit("git.exe", 128))
 
-    assert (report.status, report.exit_code, report.stop_reason) == ("failed", 3, None)
-    assert (report.finished, report.still_running, process.tree.terminations) == (True, (), 1)
-    assert len(harness.sink.submissions) == 1
+        report = await harness.manager.stop(command_id, "agent")
+
+        assert (report.status, report.exit_code, report.stop_reason) == ("failed", 3, None)
+        assert (report.finished, report.still_running) == (True, ())
+        assert process.tree.terminations == 1
+        # A leftover that failed by itself is the command's; one the kill ended is not.
+        assert report.failed_programs == ("git.exe exited with code 128",)
+        assert len(harness.sink.submissions) == 1
 
 
 @pytest.mark.asyncio
@@ -418,23 +465,42 @@ async def test_posix_stop_interrupts_first_and_kills_after_the_grace(
 
 
 @pytest.mark.asyncio
-async def test_an_unconfirmed_kill_keeps_the_command_and_a_later_stop_retries(
-    harness: Harness,
+@pytest.mark.parametrize("then", ["stop-again", "end-by-itself"])
+async def test_an_unconfirmed_kill_leaves_the_command_running_as_before(
+    harness: Harness, then: str
 ) -> None:
     command_id, process = await harness.launch()
+    harness.manager.to_background(command_id, deliver=True)
     process.tree.terminate_error = OSError("access denied")
 
     with pytest.raises(CommandStopError) as failure:
-        await harness.manager.stop(command_id, "user")
+        await harness.manager.stop(command_id, "agent")
 
     assert failure.value.survivors == (RunningProcess(process.pid, "shell"),)
-    assert harness.manager.report(command_id).status == "running"
-    # A lifecycle close goes on: the failure is logged and the command stays live.
-    assert await harness.manager.close_scope(OWNER) == 1
-    assert harness.manager.report(command_id).status == "running"
-    process.tree.terminate_error = None
-    report = await harness.manager.stop(command_id, "user")
-    assert (report.status, process.tree.terminations) == ("stopped", 3)
+    running = harness.manager.report(command_id)
+    assert (running.status, running.stop_reason, running.delivers_result) == (
+        "running",
+        None,
+        True,
+    )
+    if then == "stop-again":
+        # A lifecycle close goes on: the failure is logged and the command stays live.
+        assert await harness.manager.close_scope(OWNER) == 1
+        assert harness.manager.report(command_id).status == "running"
+        process.tree.terminate_error = None
+        report = await harness.manager.stop(command_id, "user")
+        assert (report.status, report.stop_reason) == ("stopped", "user")
+        assert process.tree.terminations == 3
+        # The scope close withdrew the delivery for good.
+        assert harness.sink.submissions == []
+    else:
+        process.tree.exits.append(ProgramExit("pytest.exe", 1))
+        process.write("FAILED: 3 tests\n")
+        process.exit(1)
+        report = await harness.finish(command_id)
+        assert (report.status, report.exit_code, report.stop_reason) == ("failed", 1, None)
+        assert report.failed_programs == ("pytest.exe exited with code 1",)
+        assert harness.sink.bodies == [format_report(report)]
 
 
 # --- Background and delivery -------------------------------------------------
@@ -675,7 +741,7 @@ async def test_closing_the_manager_kills_every_command_and_ends_the_waits_for_it
 
 @pytest.mark.asyncio
 async def test_aclose_kills_the_remaining_commands_off_the_event_loop_together(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     async with command_harness(tmp_path, run_blocking=asyncio.to_thread) as harness:
         processes = [(await harness.launch())[1] for _ in range(2)]
@@ -689,11 +755,17 @@ async def test_aclose_kills_the_remaining_commands_off_the_event_loop_together(
                 FakeTree.terminate(tree)
 
             process.tree.terminate = kill_together  # type: ignore[method-assign]
+        unkillable_id, unkillable = await harness.launch()
+        unkillable.tree.terminate_error = OSError("access denied")
 
-        await harness.manager.aclose()
+        # Runtime stop does not wait for processes whose kill was not confirmed.
+        with pytest.raises(CommandManagerError, match=unkillable_id):
+            async with asyncio.timeout(5):
+                await harness.manager.aclose()
 
         assert [process.tree.terminations for process in processes] == [1, 1]
-        assert all(process.released for process in processes)
+        assert all(process.released for process in [*processes, unkillable])
+        assert f"pid {unkillable.pid}" in caplog.text
 
 
 @pytest.mark.asyncio

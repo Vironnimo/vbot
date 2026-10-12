@@ -50,7 +50,7 @@ from ._command_types import (
     StopReason,
     command_status,
 )
-from .process_tree import IDLE_CPU_SECONDS, TREE_POLL_SECONDS, ProcessTreeFacts
+from .process_tree import IDLE_CPU_SECONDS, TREE_POLL_SECONDS, ProcessTreeFacts, RunningProcess
 
 _LOGGER = get_logger("tools.command_manager")
 # The console host of a windowless console is a member of the command's Job; it
@@ -181,6 +181,12 @@ class CommandRecord:
         )
 
     @property
+    def _delivering(self) -> bool:
+        """Whether the end delivers the result: armed, and the Agent did not
+        stop the command, since its stop call shows the outcome."""
+        return self._deliver and self._stop_reason != "agent"
+
+    @property
     def notice_id(self) -> str:
         return f"command:{self.command_id}"
 
@@ -209,7 +215,7 @@ class CommandRecord:
                 facts.running if facts is not None and self.ended and not self.finished else ()
             ),
             background=self._background,
-            delivers_result=self._deliver,
+            delivers_result=self._delivering,
             elapsed_seconds=max(0.0, ended_at - self.started_at),
         )
 
@@ -262,21 +268,36 @@ class CommandRecord:
 
         The first reason wins. ``scope`` withdraws the result delivery; ``agent``
         delivers nothing more, since the kill's own result shows the outcome.
-        Raises ``CommandStopError`` when the kill is not confirmed.
+        Raises ``CommandStopError`` when the kill is not confirmed. Unless the
+        command ended meanwhile (an interrupt sent before the kill can end
+        it), it then runs on as if this stop had not happened: an end it
+        reaches by itself reports its exit code, and its result is delivered
+        unless a ``scope`` stop withdrew the delivery.
         """
-        self._request_stop(reason)
+        claimed = self._request_stop(reason)
         if reason == "scope":
             self.withdraw_delivery()
-        elif reason == "agent":
-            self._deliver = False
-        async with self._stop_lock:
-            if not self.finished and not self._killed.is_set():
-                if not self._interrupted:
-                    self._interrupted = True
-                    if self._process.interrupt():
-                        await self._wait_or_sleep(self._finished, COMMAND_STOP_GRACE_SECONDS)
-                if not self.finished:
-                    await self._kill()
+        froze = False
+        try:
+            async with self._stop_lock:
+                # A stop before this one whose kill failed gave its reason back.
+                claimed = self._request_stop(reason) or claimed
+                if not self.finished and not self._killed.is_set():
+                    froze = self._freeze_exits()
+                    if not self._interrupted:
+                        self._interrupted = True
+                        if self._process.interrupt():
+                            await self._wait_or_sleep(self._finished, COMMAND_STOP_GRACE_SECONDS)
+                    if not self.finished:
+                        await self._kill()
+        except CommandStopError:
+            if not self.ended:
+                # The command runs on; what it does from now on is its own.
+                if claimed:
+                    self._stop_reason = None
+                if froze:
+                    self._exits_before_stop = None
+            raise
         await self._finished.wait()
 
     def acknowledge(self) -> None:
@@ -301,35 +322,58 @@ class CommandRecord:
         """Kill every process off the Event Loop, withdraw the delivery and release
         the record (Runtime stop).
 
-        Returns False when the kill was not confirmed; the record stays then.
+        Returns whether the kill was confirmed. The record is released either
+        way, so Runtime stop never waits for processes that may still run; an
+        unconfirmed kill logs them.
         """
         self._request_stop("shutdown")
         self.withdraw_delivery()
-        if not self.finished:
+        try:
+            if self.finished:
+                return True
+            self._freeze_exits()
             try:
                 await self._services.run_blocking(self._tree.terminate)
             except OSError:
+                self._log_abandoned(await self._services.run_blocking(self._running_now))
                 return False
             self._killed.set()
-        self._abandon()
-        return True
+            return True
+        finally:
+            self._abandon()
 
     def kill_now(self) -> bool:
         """``kill_and_release`` with the kill on the calling thread, also without an
         Event Loop."""
         self._request_stop("shutdown")
         self.withdraw_delivery()
-        if not self.finished:
+        try:
+            if self.finished:
+                return True
+            self._freeze_exits()
             try:
                 self._tree.terminate()
             except OSError:
+                self._log_abandoned(self._running_now())
                 return False
             self._killed.set()
-        self._abandon()
-        return True
+            return True
+        finally:
+            self._abandon()
+
+    def _log_abandoned(self, survivors: tuple[RunningProcess, ...] | None) -> None:
+        _LOGGER.warning(
+            "The kill of command %s at shutdown was not confirmed; vBot no longer follows "
+            "its processes, which may still run: %s",
+            self.command_id,
+            "unknown"
+            if survivors is None
+            else ", ".join(f"{process.name} (pid {process.pid})" for process in survivors),
+        )
 
     def _abandon(self) -> None:
-        """No process runs any longer: stop following the command and release it."""
+        """Stop following the command and release it: no process runs any
+        longer, or vBot gives up on them (Runtime stop)."""
         for task in (
             self._reader_task,
             self._supervisor_task,
@@ -374,9 +418,9 @@ class CommandRecord:
                 # The next chunk is read once the previous one is cleaned: a
                 # command that prints faster waits for its pipe.
                 while data := await self._process.read():
-                    await self._output.feed(data)
                     self._activity += 1
-                    self._output_changed()
+                    if not self._output.failed:
+                        await self._feed(data)
             except Exception:
                 _LOGGER.error(
                     "Reading the output of command %s failed; it keeps running until it "
@@ -392,6 +436,18 @@ class CommandRecord:
         finally:
             self._eof.set()
             self._output_changed()
+
+    async def _feed(self, data: bytes) -> None:
+        try:
+            await self._output.feed(data)
+        except Exception:
+            # The pipe is still read, so the command never waits on a full pipe.
+            _LOGGER.error(
+                "Cleaning the output of command %s failed; its later output is read and discarded",
+                self.command_id,
+                exc_info=True,
+            )
+        self._output_changed()
 
     def _output_changed(self) -> None:
         if self._output.log_pending and (self._flush_task is None or self._flush_task.done()):
@@ -515,7 +571,7 @@ class CommandRecord:
         self._ended_at = self._services.monotonic()
         self._ended.set()
         self._cancel(self._progress_task)
-        if self._background and self._deliver and self._services.trigger_service is not None:
+        if self._background and self._delivering and self._services.trigger_service is not None:
             self._submit_result(self._services.trigger_service)
         self._changed()
 
@@ -569,11 +625,36 @@ class CommandRecord:
 
     # Stopping
 
-    def _request_stop(self, reason: StopReason) -> None:
-        if self._stop_reason is None and not self.ended:
-            self._stop_reason = reason
-            with contextlib.suppress(Exception):
-                self._exits_before_stop = self._tree.exit_count()
+    def _request_stop(self, reason: StopReason) -> bool:
+        """Claim *reason* for a command that runs and has none yet; whether it did."""
+        if self._stop_reason is not None or self.ended:
+            return False
+        self._stop_reason = reason
+        return True
+
+    def _freeze_exits(self) -> bool:
+        """Before vBot interrupts or kills: count the failed child exits so far.
+
+        Exits recorded later were caused by the stop and are no failures of
+        the command, also for processes left running after its end. Returns
+        whether this call fixed the count.
+        """
+        if self._exits_before_stop is not None:
+            return False
+        try:
+            self._exits_before_stop = self._tree.exit_count()
+        except Exception:
+            return False
+        return True
+
+    def _running_now(self) -> tuple[RunningProcess, ...] | None:
+        """The command's processes still running, without the console host; None
+        when unknown. Blocks."""
+        try:
+            running = self._tree.facts().running
+        except Exception:
+            return None
+        return tuple(process for process in running if process.name.lower() != _CONSOLE_HOST)
 
     async def _kill(self) -> None:
         try:
