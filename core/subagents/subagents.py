@@ -12,9 +12,9 @@ through :meth:`SubAgentCoordinator.subagents`, ``running_work`` and
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.agents import is_builtin_agent
 from core.projects import (
@@ -168,6 +168,31 @@ class SubAgentState:
     status: SubAgentStatus
     last_tool: str | None
     activity_file: str | None
+
+
+class SubAgentTree(Protocol):
+    """The Sub-Agents below a caller, what they run, and how to stop one.
+
+    ``background_tasks`` lists, checks and stops them and the background commands
+    of their Sessions; ``terminal`` names the Sub-Agent whose Session holds a
+    terminal. :class:`SubAgentCoordinator` implements it. The Tools import it for
+    annotations only, because this package imports the Tool package.
+    """
+
+    async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
+        """*caller*'s Sub-Agents at every depth, breadth first, as they are now."""
+        ...
+
+    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
+        """What *subagent* still runs besides its own turn, each as ``kind id (label)``."""
+        ...
+
+    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+        """Stop *subagent* with its queue, background work and own Sub-Agents.
+
+        Returns whether anything ran.
+        """
+        ...
 
 
 class SubAgentCoordinator:

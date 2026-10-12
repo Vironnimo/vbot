@@ -15,7 +15,7 @@ import shutil
 from collections.abc import Awaitable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from core.projects import ProjectStore
 from core.sessions import SessionAddress
@@ -84,7 +84,7 @@ from core.tools.tools import (
 from core.utils.paths import model_path
 
 if TYPE_CHECKING:
-    from core.subagents import SubAgentState
+    from core.subagents import SubAgentTree
 
 TERMINAL_TOOL_NAME = "terminal"
 TERMINAL_ACTIONS = (
@@ -276,18 +276,10 @@ def project_terminal_tool_definitions(definitions: list[JsonObject]) -> list[Jso
     return projected
 
 
-class SubAgentSessions(Protocol):
-    """The caller's Sub-Agents, whose Sessions ``list`` and ``status`` name as theirs."""
-
-    async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
-        """*caller*'s Sub-Agents at every depth, each with its Session and id."""
-        ...
-
-
 def make_terminal_handler(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
-    subagents: SubAgentSessions | None = None,
+    subagents: SubAgentTree | None = None,
 ):
     """Create a terminal Tool handler bound to one Terminal Manager."""
 
@@ -300,7 +292,7 @@ def make_terminal_handler(
 async def _handle_terminal(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
-    subagents: SubAgentSessions | None,
+    subagents: SubAgentTree | None,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -543,7 +535,7 @@ async def _handle_start(
 
 async def _handle_list(
     terminal_manager: TerminalManager,
-    subagents: SubAgentSessions | None,
+    subagents: SubAgentTree | None,
     context: ToolContext,
 ) -> JsonObject:
     owner = _owner(context)
@@ -564,7 +556,7 @@ async def _handle_list(
 
 
 async def _subagent_holders(
-    subagents: SubAgentSessions | None, owner: TerminalOwner, terminals: Sequence[TerminalInfo]
+    subagents: SubAgentTree | None, owner: TerminalOwner, terminals: Sequence[TerminalInfo]
 ) -> Mapping[SessionAddress, str]:
     """The Sessions of this Session's Sub-Agents (any depth) by Sub-Agent id, when one of
     *terminals* is attached to another Session."""
@@ -624,7 +616,7 @@ def _handle_detach(
 
 async def _handle_status(
     terminal_manager: TerminalManager,
-    subagents: SubAgentSessions | None,
+    subagents: SubAgentTree | None,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -1367,7 +1359,7 @@ def register_terminal_tool(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
     *,
-    subagents: SubAgentSessions | None = None,
+    subagents: SubAgentTree | None = None,
 ) -> None:
     """Register the Agent-facing terminal Tool.
 
@@ -1528,7 +1520,6 @@ __all__ = [
     "TERMINAL_UNADVERTISED_PARAMETERS",
     "TERMINAL_WAIT_DEFAULT_SECONDS",
     "TERMINAL_WAIT_MAX_SECONDS",
-    "SubAgentSessions",
     "make_terminal_handler",
     "project_terminal_tool_definitions",
     "register_terminal_tool",

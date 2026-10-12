@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 from core.sessions import SessionAddress
 from core.tools._background_tasks_arguments import (
@@ -69,7 +69,7 @@ from core.utils.paths import model_path
 
 if TYPE_CHECKING:
     # Imported for annotations only: ``core.subagents`` imports the Tool package.
-    from core.subagents import SubAgentState
+    from core.subagents import SubAgentState, SubAgentTree
 
 BACKGROUND_TASKS_TOOL_DESCRIPTION = "List, check or stop your background commands and Sub-Agents."
 BACKGROUND_TASKS_TOOL_PARAMETERS: JsonObject = {
@@ -102,25 +102,6 @@ _STOPPED_BY_YOU = "you stopped it."
 # Sub-Agent statuses whose answers are still to come.
 _WORKING = frozenset({"working", "queued"})
 _TAKEN_OVER = "taken over by the user"
-
-
-class SubAgentTree(Protocol):
-    """The caller's Sub-Agents at every depth, and what they run."""
-
-    async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
-        """*caller*'s Sub-Agents at every depth, breadth first, as they are now."""
-        ...
-
-    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
-        """What *subagent* still runs besides its own turn, each as ``kind id (label)``."""
-        ...
-
-    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
-        """Stop *subagent* with its queue, background work and own Sub-Agents.
-
-        Returns whether anything ran.
-        """
-        ...
 
 
 @dataclass(frozen=True)
@@ -644,7 +625,6 @@ __all__ = [
     "BACKGROUND_TASKS_TOOL_NAME",
     "BACKGROUND_TASKS_TOOL_PARAMETERS",
     "BackgroundTasksTool",
-    "SubAgentTree",
     "background_tasks_detail_blocks",
     "register_background_tasks_tool",
 ]

@@ -31,7 +31,7 @@ from core.tools.terminal import (
     register_terminal_tool,
 )
 from core.tools.terminal_manager import TerminalManager, TerminalOwner, TerminalRenderHost
-from core.tools.tools import JsonObject, ToolRegistry, tool_failure
+from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
 from core.utils.paths import model_path
 from core.utils.tokens import estimate_json_tokens
 from tests.core.tools.terminal_helpers import call, details, make_context
@@ -609,6 +609,12 @@ class _SubAgents:
             )
             for session, subagent_id in self.sessions.items()
         ]
+
+    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
+        raise AssertionError("terminal asks only which Sessions are Sub-Agents'")
+
+    async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
+        raise AssertionError("terminal never stops a Sub-Agent")
 
 
 @pytest.mark.asyncio
