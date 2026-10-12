@@ -51,6 +51,16 @@ GUTTER_NOTE = "Note: Removed read-output line-number prefixes"
         ("last\r\n", "@@\n last\n \n+added\n+more", "last\r\n\r\nadded\r\nmore\r\n"),
         ("alpha\n\nomega\n", "@@\n alpha\n \n+middle\n omega", "alpha\n\nmiddle\nomega\n"),
         ("alpha\nold\nomega\n", "@@\n \n alpha\n-old\n+new\n omega\n ", "alpha\nnew\nomega\n"),
+        # Empty lines between + lines past the unchanged lines belong to the added
+        # block; the file's blank lines after those unchanged lines stay in place.
+        (
+            "def a():\n    return 1\n\n\ndef c():\n    pass\n",
+            '@@\n     return 1\n+\n+\n+def b():\n+    """Doc.\n\n+    More."""\n\n+    pass',
+            'def a():\n    return 1\n\n\ndef b():\n    """Doc.\n\n    More."""\n\n    pass'
+            "\n\n\ndef c():\n    pass\n",
+        ),
+        # Between unchanged lines, an empty line is the file's blank line.
+        ("alpha\n\nomega\n", "@@\n alpha\n+one\n\n+two\n omega", "alpha\none\n\ntwo\nomega\n"),
         ("alpha\r\nold\nomega\r", "@@\n alpha\n-old\n+new\n omega", "alpha\r\nnew\r\nomega\r"),
         # Gutter-shaped file content matches literally; indented gutters keep indentation.
         (
@@ -555,10 +565,93 @@ def test_end_of_file_anchors_are_never_ignored(tmp_path, body, code):
     result = apply(tmp_path, update(body))
     assert result["error"]["code"] == code
     if code == "text_not_found":
-        assert text(result).startswith(
-            "file.txt: the file does not end with the lines before *** End of File."
-        )
+        # The refusal names the marker that placed the change.
+        assert "*** End of File" in text(result).splitlines()[0]
     assert path.read_bytes() == b"section\ntail\n"
+    if code == "text_not_found":
+        # Without *** End Patch, a final *** End of File anchors the hunk at the end
+        # where it can, and else only ends the patch.
+        unframed = f"*** Begin Patch\n*** Update File: file.txt\n{body}"
+        result = apply(tmp_path, unframed)
+        assert result["ok"], result
+        assert "\nNote: " in text(result)
+        changed = b"section\ninserted\ntail\n" if "inserted" in body else b"new\ntail\n"
+        assert path.read_bytes() == changed
+        if "inserted" not in body:
+            path.write_bytes(b"section\ntail\nsection\n")
+            result = apply(tmp_path, unframed)
+            assert path.read_bytes() == b"section\ntail\nnew\n"
+            assert "\nNote: " not in text(result)
+
+
+UNMARKED_BEFORE = (
+    "def total(values):\n    result = 0\n    for value in values:\n"
+    "        result += value\n    return result\n"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "after"),
+    [
+        # A continuation line written without + between + lines is added as written.
+        (
+            "@@\n     result = 0\n+    if not values:\n+        raise ValueError(\n"
+            '            "values must not be empty")\n+    checked = True\n'
+            "     for value in values:",
+            UNMARKED_BEFORE.replace(
+                "    result = 0\n",
+                "    result = 0\n    if not values:\n        raise ValueError(\n"
+                '            "values must not be empty")\n    checked = True\n',
+            ),
+        ),
+        # So is a line written without any prefix.
+        (
+            "@@\n     return result\n+\n+\n# Totals are summed in order.\n+def other():\n+    pass",
+            UNMARKED_BEFORE + "\n\n# Totals are summed in order.\ndef other():\n    pass\n",
+        ),
+        # An empty line between + lines where the file has no blank line is added.
+        (
+            "@@\n     result = 0\n+    if not values:\n\n+        return 0\n"
+            "     for value in values:",
+            UNMARKED_BEFORE.replace(
+                "    result = 0\n", "    result = 0\n    if not values:\n\n        return 0\n"
+            ),
+        ),
+        # The file has that line elsewhere: it is read as unchanged.
+        (
+            "@@\n     result = 0\n+    checked = True\n         result += value\n"
+            "+    seen = 0\n     for value in values:",
+            None,
+        ),
+        # It resembles the file line it would stand on: a copy with errors, not new.
+        ("@@\n     result = 0\n+    checked = True\n     for item in values:\n+    seen = 0", None),
+        # After the last + line, it can be a line the patch expects to follow.
+        ("@@\n     return result\n+\n+\n class Missing:", None),
+        # After an earlier failure in the file, it can be a line that change would add.
+        (
+            "@@\n-    missing = 1\n+    missing = 2\n@@\n     result = 0\n+    if not values:\n"
+            '+        raise ValueError(\n            "values must not be empty")\n'
+            "+    checked = True\n     for value in values:",
+            None,
+        ),
+    ],
+)
+async def test_lines_between_added_lines_without_plus_are_added_when_the_file_lacks_them(
+    tmp_path, body, after
+):
+    path = tmp_path / "file.py"
+    path.write_bytes(UNMARKED_BEFORE.encode())
+
+    result = await call(tmp_path, {"patch": update(body, "file.py")})
+
+    if after is None:
+        assert not result["ok"]
+        assert path.read_bytes() == UNMARKED_BEFORE.encode()
+    else:
+        assert result["ok"], result
+        assert path.read_bytes() == after.encode()
+        assert "\nNote: " in text(result)
 
 
 def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
@@ -655,7 +748,8 @@ def test_repeated_context_line_places_lines_that_occur_once_after_it(tmp_path):
         (
             "@@\n first\n secnd\n@@\n-value=1\n+value=2",
             "context_not_found",
-            "file.txt: the lines of the @@ block above the lines to replace were not found",
+            'file.txt: the lines of the @@ block "first ..." above the lines to replace were '
+            "not found",
         ),
     ],
 )

@@ -127,8 +127,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   regions merge; more than two keep first and last plus an omission line; long
   lines show a window with an `N:C|` gutter), follow such a line (`Updated X
   (places):`) only when the written text differs from what the call sent: a copy
-  tolerance note (lines that differed or were kept, respelled words; the engine
-  marks these as `DeviationNote`) or the note on which occurrence of a repeated
+  tolerance note (lines that differed or were kept, respelled words), a note on
+  lines read as added (step 8 below) or on a closing `*** End of File` (the
+  engine marks these as `DeviationNote`), or the note on which occurrence of a repeated
   text was changed, when the change removed lines, and in partial results.
   Removed lines leave nothing to name in the file as it is now. Agent-eval
   2026-10-10, removing three lines, a reread or search in a call of its own:
@@ -173,6 +174,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   unquoted. A header repeated just before Begin Patch, and identical adjacent
   Update headers before a body, coalesce; a different empty Update target is not
   discarded (`empty_update`).
+  In a patch without `*** End Patch` whose last line is `*** End of File`, that
+  line may only close the patch (`_Hunk.closing_eof`): its hunk is placed at the
+  end of the file where its lines match there, and else as if the marker were
+  absent, with a note naming the changed line (`_CLOSING_EOF_NOTE`). Evidence
+  (replay of 7881 calls, 2026-10): one Model (mimo-v2.5) ended all 41 of its
+  patches so; 35 changed the end of the file, 6 were refused although their place
+  was clear, and 5 of those now apply at that place (checked by hand; 1 fails for
+  another reason).
   Missing context prefixes and omitted `@@` are accepted; unknown operation
   headers, unframed prose, and body text after End Patch without a new file header
   are rejected. Explicit `@@` hunks following Move File use Update-plus-Move semantics.
@@ -219,7 +228,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   4. The unchanged and removed lines match precisely as whole lines from the
      start of the last hint's line, so the final hint may also be the first
      context/removal line. `*** End of File` restricts matching to EOF; a hunk
-     is never retried without the marker.
+     is never retried without the marker, except one that only closes the
+     patch (framing above).
   5. After a miss, read gutters are stripped from the hunk (rule below); then
      surplus blank context at the hunk's edges is dropped (rule below).
   6. A change already in the file is a no-op (already-applied rule at the end of
@@ -227,7 +237,24 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   7. `copy_match.match_copied_edit` places old lines copied with errors, unless
      the path is precise-only after an earlier failure or the new text is
      already present (`copy_match` rule below).
-  8. Lines a precise strategy finds several times are ordered as in Codex:
+  8. Unchanged lines between `+` lines that the file holds nowhere are read as
+     added lines missing their `+` (`_unmarked_additions`), as written: a
+     space-prefixed line keeps that space as indentation, since the `+` was
+     dropped, not replaced. Empty lines written without a prefix between `+`
+     lines are then added too. The remaining unchanged and removed lines must
+     hold at least 4 characters and match once, precisely; a re-read line
+     beyond them must not resemble (ratio >= 0.6) the file lines next to the
+     match on that side, where it can be a file line copied with errors. Like
+     step 7, step 8 does not run on a precise-only path: after an earlier
+     failure in the file, a line the file lacks can be one the failed change
+     would have written. A note names the line or the count (`_UNMARKED_NOTE`, `_UNMARKED_LINES_NOTE`,
+     `_UNMARKED_BLANK_NOTE`). Evidence (replay of 7881 calls, 2026-10): 60
+     calls refused in whole or part now apply (2 through empty lines alone).
+     The re-read lines are continuation lines of a wrapped call or string, or
+     comment and docstring lines of the added block. Of 126 such lines in the
+     first 52 calls, the Agents' next calls wrote 42 without `+` again, 45 with
+     `+`, and reworded the other 39 (reviewed by hand).
+  9. Lines a precise strategy finds several times are ordered as in Codex:
      after a hint, the first occurrence from the hint on is changed; a hunk
      without hints takes the first occurrence from the line where the same
      Update's last completed change ended (`_Batch.change_ends`,
@@ -248,16 +275,26 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   resemble their hint. Replaying 8883 recorded calls (2026-10), re-reading
   unprefixed lines carried 351 calls, and 46 of them wrote content that
   conflicts with the file the Session's later calls produced; the other dropped
-  recoveries carried 8 such calls. They return only with replay evidence.
+  recoveries carried 8 such calls. They return only with replay evidence. Step 8
+  and the closing `*** End of File` (framing above) are such narrow returns:
+  step 8 re-reads only lines between `+` lines that the file lacks, and only
+  after every other step missed.
 - Lines a hunk names that the file holds exactly, but not where its markers put
   them, fail with that reason instead of closest text equal to the patch: not at
   the end of the file under `*** End of File`, `eof_not_found` (`the file does
-  not end with the lines before *** End of File.`); above its `@@` lines,
+  not end with the lines before *** End of File. That marker changes only the
+  end of the file; to change these lines where they are, leave it out.`); above its `@@` lines,
   `not_after_hint` (`the lines to replace are not after the @@ line "..."; they
   are at line N, above it. After @@, put a line above them, such as the first
   line of the enclosing function, or leave @@ empty.`). Both still show the
   candidate excerpt. In the 2026-10 replay, these reports replaced 5 and 2
-  results that the dropped retries had applied.
+  results that the dropped retries had applied. An addition-only hunk whose last
+  `@@` line is not the file's last line fails `eof_after_hint` (`*** End of File
+  adds the lines at the end of the file, but the @@ line "..." is not the last
+  line. To add them after that line, leave out *** End of File; to add them at
+  the end of the file, leave out the @@ line.`) with that line's excerpt; it said
+  `No similar text is in the file` before, because it searched for the added
+  lines.
 - Match errors show bounded candidate excerpts with `read`-style gutters
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
@@ -516,14 +553,26 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   Blank lines explicitly marked for deletion remain meaningful operations.
   A blank last context line matches the empty line past the file's final line
   break; `+` lines after it end with that line break, so the file keeps it.
+- Empty lines written without a prefix between `+` lines, outside a hunk's
+  nonblank unchanged and removed lines, are added lines
+  (`_patch_syntax._read_added_blank_lines`). Read as unchanged, they matched the
+  file's blank lines beside those lines and moved them into the added block, so
+  the code after the block lost its blank-line separation. Evidence (replay of
+  7881 calls, 2026-10): 45 such lines in 35 calls, none meant as unchanged; 27
+  applied calls had lost one or two blank lines this way, and 5 refused calls
+  now apply. Between unchanged lines, such an empty line stays unchanged and
+  step 8 adds it only when that reading misses; an empty line written with its
+  space prefix always stays unchanged (all 8 between `+` lines were the file's
+  blank line).
 - Context-only blocks before another `@@` become ordered precise locator hints
   for that next hunk, including multiline context. A missing anchor fails like a
   missing hint, and repeated anchors follow the hint rule above (step 2). A multiline block that is not found fails `context_not_found`
-  with the `context_block_not_found` wording (`the lines of the @@ block above
-  the lines to replace were not found together`), the closest text and its first
+  with the `context_block_not_found` wording (`the lines of the @@ block "..."
+  above the lines to replace were not found together`, naming the block by its
+  first line), the closest text and its first
   difference. The former report named the block's first line as not found,
   although the file had it (1 failure, Sessions, 2026-09). Duplicate matches after
-  the anchor resolve to the first (step 8 above). Anchors do
+  the anchor resolve to the first (step 9 above). Anchors do
   not leak into subsequent edits or files.
   An entirely context-only patch fails with `no_changes`, says that without a
   `-` or `+` line every line stays unchanged, and
@@ -622,6 +671,12 @@ replacements still went through Delete File plus Add File (agent-eval
 | Decorator note (shared with `edit`): `The added lines went above line 13 (@staticmethod), not between it and the definition at line 14 it belongs to.` | The written text differs from the call, so the Agent learns it and gets the region shown; without the note it would see its lines below where it put them and could "fix" them back between decorator and definition. Line numbers name the decorators and the definition, not the added lines, whose numbers the `Updated X (lines ...)` header can count differently when an added line repeats a decorator. |
 | `context_lines_not_found`: `X: the context lines around the + lines were not found.` | A block that only adds lines was reported as `the lines to replace were not found`, which names lines the block does not have and points the Agent at text to replace instead of at its context lines (review of a Swarm Run, 2026-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
+| Step 8 notes: `The line '...' between + lines has no + prefix and is not in the file; it was added as a new line.` / `N lines between + lines have no + prefix and are not in the file, such as '...'; they were added as new lines.` | The call was read differently from its prefixes, so the result says how (Tolerance: report every interpretation). It names a line, so the Agent can check it in the excerpt and need not reread the file. In the Agents' next calls, 42 of 126 such lines were written without `+` again (replay 2026-10); the note names the cause. |
+| `The empty line between + lines has no prefix and, read as unchanged, does not match the file; it was added as a new line.` (and the plural) | Same reading for empty lines only; it names why the line counts as added, since an empty line is in the file elsewhere. |
+| `The patch ends with *** End of File and has no *** End Patch, so that line was read as the end of the patch, not of the file: the change was made at line N.` | The marker asked for the end of the file and the change landed elsewhere; the line number lets the Agent see where without a read. Shown only when text follows the change. |
+| `eof_not_found` next step: `That marker changes only the end of the file; to change these lines where they are, leave it out.` | The error named the mismatch but no next step (Errors: three parts); the lines are in the file, so leaving out the marker is the call that applies the change where the excerpt shows them. |
+| `eof_after_hint`: `*** End of File adds the lines at the end of the file, but the @@ line "..." is not the last line. To add them after that line, leave out *** End of File; to add them at the end of the file, leave out the @@ line.` | Replaces `the file does not end with the lines before *** End of File` plus `No similar text is in the file`, a misleading cause for added lines, which are never in the file. Both next steps are safe as written. |
+| `context_block_not_found`: `the lines of the @@ block "..." above the lines to replace were not found together.` | Names the block by its first line: a patch can hold several `@@` blocks, and without candidates nothing else in the error said which one failed. |
 
 ## Verification
 
@@ -635,8 +690,10 @@ replacements still went through Delete File plus Add File (agent-eval
   patches, Add syntax repair, other patch dialects and move headers.
 - `test_apply_patch_matching.py` covers the engine's steps: gutters, copied text
   with misspellings, code targets, typography, context hints and anchors that
-  do not place a hunk, EOF markers, whole-line matching, ordering of repeated
-  lines and changes already in the file.
+  do not place a hunk, EOF markers (also one that only closes the patch),
+  whole-line matching, empty lines of an added block, lines between `+` lines
+  written without `+` (step 8), ordering of repeated lines and changes already
+  in the file.
 - `test_apply_patch_reports.py` covers previews, `no_changes`, long mismatch
   evidence and failure -> displayed read continuation -> successful correction,
   including Unicode and LF/CRLF/CR, plus `part_of` diagnostics.

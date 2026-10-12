@@ -128,7 +128,15 @@ _MESSAGES = {
         "only delete the blank line after the line {line}. Leave this edit out; to delete "
         "that blank line, end old_string with two line breaks and new_string with one."
     ),
-    "eof_not_found": "{where}: the file does not end with the lines before *** End of File.",
+    "eof_not_found": (
+        "{where}: the file does not end with the lines before *** End of File. That marker "
+        "changes only the end of the file; to change these lines where they are, leave it out."
+    ),
+    "eof_after_hint": (
+        '{where}: *** End of File adds the lines at the end of the file, but the @@ line "{hint}" '
+        "is not the last line. To add them after that line, leave out *** End of File; to add "
+        "them at the end of the file, leave out the @@ line."
+    ),
     "not_after_hint": (
         '{where}: the lines to replace are not after the @@ line "{hint}"; they are at '
         "{lines}, above it. After @@, put a line above them, such as the first line of the "
@@ -143,7 +151,7 @@ _MESSAGES = {
         "the file, such as the first line of the enclosing function, or leave @@ empty."
     ),
     "context_block_not_found": (
-        "{where}: the lines of the @@ block above the lines to replace were not found "
+        '{where}: the lines of the @@ block "{hint}" above the lines to replace were not found '
         "together. That block has no - or + line, so it only locates the lines to replace. "
         "Copy its lines exactly from the file, or leave that block out."
     ),
@@ -225,6 +233,10 @@ class _Hunk:
     precise_only: bool = False
     replacement: _Replacement | None = None
     label: str = ""
+    # Positions in ``lines`` of lines written without a prefix, read as unchanged.
+    bare: list[int] = field(default_factory=list)
+    # That *** End of File also ends a patch without *** End Patch, so it may only close it.
+    closing_eof: bool = False
 
     def changes_text(self) -> bool:
         if self.replacement is not None:
@@ -378,6 +390,13 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
     ended = False
     # A header repeated before Begin Patch adds no operation of its own.
     duplicate: _Operation | None = None
+    # Without *** End Patch, a final *** End of File can close the patch: a Model that
+    # writes it so does in every patch, also where its lines do not end the file.
+    closing = (
+        len(lines) - 1
+        if lines and _END_OF_FILE.fullmatch(lines[-1]) and not any(map(_END.fullmatch, lines))
+        else None
+    )
     index = 0
     while index < len(lines):
         line = lines[index]
@@ -444,6 +463,7 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
             continue
         if _END_OF_FILE.fullmatch(line) and hunk is not None:
             hunk.eof = True
+            hunk.closing_eof = index - 1 == closing
             continue
         if current is None and default_path is not None and line.strip():
             current = _Operation("update", default_path)
@@ -467,6 +487,7 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
                 if anchor.strip():
                     hunk.hints.append(anchor)
                 hunk.lines = []
+                hunk.bare = []
             if hunk is None or hunk.lines:
                 hunk = _Hunk()
                 current.hunks.append(hunk)
@@ -519,7 +540,50 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
             # Keep all whitespace; interpreting one space as a diff prefix would
             # silently change indentation in otherwise recognizable creations.
             prefix, text = "+", line[1:] if line.startswith("+") else line
+        elif line and line[0] in " +-":
+            prefix, text = line[0], line[1:]
         else:
-            prefix, text = (line[0], line[1:]) if line and line[0] in " +-" else (" ", line)
+            prefix, text = " ", line
+            hunk.bare.append(len(hunk.lines))
         hunk.lines.append((prefix, text))
+    for operation in operations:
+        for each in operation.hunks:
+            _read_added_blank_lines(each)
     return operations
+
+
+def _read_added_blank_lines(hunk: _Hunk) -> None:
+    """Read empty lines between + lines, beyond the unchanged and removed lines, as added.
+
+    Such a line is a blank line of the added block written without its + (Sessions
+    2026-10: about 45 lines, none meant as unchanged). Read as unchanged, it would
+    match a blank line beside the unchanged lines and so move that blank line of the
+    file into the block. Between unchanged lines, an empty line stays unchanged.
+    """
+    lines = hunk.lines
+    old = [i for i, (prefix, text) in enumerate(lines) if prefix in " -" and text.strip()]
+    added = [
+        i
+        for i in hunk.bare
+        if not lines[i][1].strip()
+        and (not old or i < old[0] or i > old[-1])
+        and _amid_additions(lines, i)
+    ]
+    for i in added:
+        lines[i] = ("+", lines[i][1])
+    hunk.bare = [i for i in hunk.bare if i not in added]
+
+
+def _amid_additions(lines: list[tuple[str, str]], index: int) -> bool:
+    """Whether only blank unchanged lines separate ``index`` from + lines on both sides."""
+
+    def blank(i: int) -> bool:
+        return lines[i][0] == " " and not lines[i][1].strip()
+
+    before = index - 1
+    while before >= 0 and blank(before):
+        before -= 1
+    after = index + 1
+    while after < len(lines) and blank(after):
+        after += 1
+    return before >= 0 and after < len(lines) and lines[before][0] == lines[after][0] == "+"
