@@ -11,7 +11,8 @@ Design rules (keep them when adding a pattern):
 
 * Only non-zero exit codes get a hint, except for a command that did not run as
   written, which the command text shows: a typographic quote that ended a
-  PowerShell string, or a Select-Object -First stage that stopped a program.
+  PowerShell string, or a program that failed in a pipeline with a
+  Select-Object -First stage.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
@@ -621,10 +622,10 @@ def _hint_typographic_quote(command: str) -> str | None:
     )
 
 
-# A stage that stops the commands before it in its pipeline once N lines have
-# passed: Select-Object -First N (any prefix down to -f) without -Wait. The
-# bootstrap's head reads its input to the end. The stage's text runs to the
-# next pipe or statement.
+# A stage that closes the output of the commands before it in its pipeline once
+# N lines have passed: Select-Object -First N (any prefix down to -f) without
+# -Wait. The bootstrap's head reads its input to the end. The stage's text runs
+# to the next pipe or statement.
 _FIRST_STAGE = re.compile(
     r"(?<!\|)\|(?!\|)[ \t]*+(?:Select-Object|select)(?=[ \t])(?P<arguments>[^|;\n]*+)",
     re.IGNORECASE,
@@ -648,6 +649,16 @@ _WORKING_PROGRAMS = frozenset(
     }
 )
 _SCRIPT_SUFFIXES = (".py", ".ps1", ".js", ".mjs", ".cmd", ".bat")
+# A redirection that merges a program's errors into its output.
+_MERGED_ERRORS = re.compile(r"(?<![\w>&])[2*]>&1")
+# What a program prints when it fails writing to an output that was closed:
+# Python on Windows (EINVAL) and elsewhere (EPIPE), Node, and .NET.
+_CLOSED_OUTPUT = re.compile(
+    r"^(?:OSError: \[Errno 22\] Invalid argument|BrokenPipeError: \[Errno 32\] Broken pipe)\r?$"
+    r"|write EPIPE|The pipe is being closed|The pipe has been ended",
+    re.M,
+)
+_STAGE_SHOWN_CHARS = 60
 
 
 def _working_program(word: str) -> str | None:
@@ -659,50 +670,111 @@ def _working_program(word: str) -> str | None:
     return stem if re.sub(r"[\d.]+$", "", stem.lower()) in _WORKING_PROGRAMS else None
 
 
-def _hint_first_stage(
-    command: str, output_lines: int, failed_programs: Sequence[str]
-) -> str | None:
-    """Name a program a Select-Object -First stage stopped before it finished.
+def _program_at(command: str, code: str, start: int, end: int | None = None) -> str | None:
+    """The working program the pipeline at *start* begins with, lowercase without .exe."""
+    first = _PIPELINE_PROGRAM.match(code, start, len(code) if end is None else end)
+    if first is None:
+        return None
+    program = _working_program(command[first.start(1) : first.end(1)])
+    return None if program is None else program.lower().removesuffix(".exe")
 
-    PowerShell stops the commands before Select-Object -First N once N lines
-    have passed it, native programs included: ``python build.py | Select-Object
-    -First 8`` printed 8 progress lines and never wrote the file it writes at
-    the end, and the result looked normal. Only a program that does work counts,
-    and only when the output reached N lines; a failed program of that name
-    confirms the stop.
+
+def _exit_codes(failed_programs: Sequence[str], program: str) -> list[str]:
+    """The distinct codes *program*'s failed runs exited with, in order."""
+    codes: dict[str, None] = {}
+    for entry in failed_programs:
+        name, _, code = entry.partition(" exited with code ")
+        if code and name.lower().removesuffix(".exe") == program:
+            codes[code.split(" ", 1)[0]] = None
+    return list(codes)
+
+
+def _stage_text(command: str, code: str, start: int, end: int) -> str:
+    """The stage as written, up to a bracket that closes a block around it."""
+    depth = 0
+    for index in range(start, end):
+        if code[index] in "([{":
+            depth += 1
+        elif code[index] in ")]}":
+            if not depth:
+                end = index
+                break
+            depth -= 1
+    text = " ".join(command[start:end].split())
+    if len(text) > _STAGE_SHOWN_CHARS:
+        text = text[: _STAGE_SHOWN_CHARS - 3] + "..."
+    return text
+
+
+def _hint_first_stage(
+    command: str,
+    exit_code: int | None,
+    output: str,
+    output_lines: int,
+    failed_programs: Sequence[str],
+) -> str | None:
+    """Explain a program that failed in a pipeline with a Select-Object -First stage.
+
+    Once N lines have passed Select-Object -First N, PowerShell closes the
+    output of the commands before it and moves on without waiting for them. A
+    native program that writes no more finishes its work; one that writes again
+    fails at that write: ``python build.py | Select-Object -First 8`` died at its
+    ninth line and never wrote the file it writes at the end, exit code 0. The
+    stage also drops an error the program merged into the output after line N:
+    a script's own usage error and an HTTP error read as a stop it was not.
+
+    So a failed run of the pipeline's program is required, and a stop is named
+    only with the closed output's error in the output. Otherwise, when the stage
+    received the program's errors (2>&1), the hint names the program's failure
+    and that the stage can have hidden why. A program also run outside such a
+    pipeline may have failed there, and gets no hint.
     """
-    if not _POWERSHELL or "|" not in command:
+    if not _POWERSHELL or "|" not in command or not failed_programs:
         return None
     code = _powershell_code(command).text
     starts = [0, *(match.end() for match in _PIPELINE_START.finditer(code))]
+    staged: dict[int, tuple[re.Match[str], int]] = {}
     for stage in _FIRST_STAGE.finditer(code):
-        arguments = stage["arguments"]
-        count = _FIRST_COUNT.search(arguments)
-        if count is None or _WAIT.search(arguments):
-            continue
-        lines = int(count[1])
-        if not 0 < lines <= output_lines:
+        count = _FIRST_COUNT.search(stage["arguments"])
+        if count is None or _WAIT.search(stage["arguments"]):
             continue
         start = starts[bisect.bisect_right(starts, stage.start()) - 1]
-        first = _PIPELINE_PROGRAM.match(code, start, stage.start())
-        if first is None:
+        if start not in staged and 0 < int(count[1]) <= output_lines:
+            staged[start] = (stage, int(count[1]))
+    if not staged:
+        return None
+    # The program that starts each pipeline outside the stages' pipelines.
+    elsewhere = {_program_at(command, code, start) for start in starts if start not in staged}
+    window = _scan_window(output)
+    for start, (stage, lines) in staged.items():
+        program = _program_at(command, code, start, stage.start())
+        if program is None or program in elsewhere:
             continue
-        program = _working_program(command[first.start(1) : first.end(1)])
-        if program is None:
+        codes = _exit_codes(failed_programs, program)
+        if not codes:
             continue
-        written = " ".join(command[stage.start() + 1 : stage.end()].split())
-        stem = program.lower().removesuffix(".exe")
-        confirmed = any(
-            entry.split(" exited ", 1)[0].lower().removesuffix(".exe") == stem
-            for entry in failed_programs
-        )
-        stopped = "was stopped" if confirmed else "was most likely stopped"
+        written = _stage_text(command, code, stage.start() + 1, stage.end())
+        counted = f"{lines} line{'' if lines == 1 else 's'}"
+        zero = ", although the command exited with code 0" if exit_code == 0 else ""
+        closed = _CLOSED_OUTPUT.search(window)
+        if closed is not None:
+            return (
+                f"`{written}` closed {program}'s output after {counted}, and {program} failed "
+                f"at its next write ({closed[0].strip()}){zero}: what {program} does after "
+                "that, such as writing files, did not happen. To let it finish, run it "
+                "without that stage (long output keeps its first and last lines), or add "
+                "-Wait to Select-Object."
+            )
+        if not _MERGED_ERRORS.search(code, start, stage.start()):
+            continue
+        listed = codes[0] if len(codes) == 1 else f"{', '.join(codes[:-1])} and {codes[-1]}"
         return (
-            f"`{written}` stops {program} once {lines} lines have passed it, and the output "
-            f"reached {lines} lines: {program} {stopped} before it finished, and what it does "
-            "after that, such as writing files, did not happen. To let it finish, run it "
-            "without that stage (long output keeps its first and last lines) or add -Wait to "
-            "Select-Object."
+            f"{program} exited with code{'s' if len(codes) > 1 else ''} {listed}{zero}. Its "
+            f"output, errors included (2>&1), went through `{written}`, which passes on "
+            f"only the first {counted} and then closes that output: the lines that say why "
+            f"{program} failed can be missing, or {program} failed writing after the close. "
+            "To see why it failed, run it again without that stage (long output keeps its "
+            "first and last lines)."
         )
     return None
 
@@ -1198,10 +1270,11 @@ def annotate_failure(
     (``<name> exited with code <code>``) and *output_lines* the number of lines
     it printed (the lines of *output* when omitted).
 
-    A command that did not run as written gets a hint whatever its exit code: a
-    typographic quote ended a string early (first, since every error follows
-    from it), or a Select-Object -First stage stopped a program before it
-    finished (last). Otherwise exit code 0 or None stays unannotated.
+    A command that did not run as written gets a hint whatever its exit code,
+    since a later statement's success can hide its failure: a typographic quote
+    ended a string early (first, since every error follows from it), or a
+    program failed in a pipeline with a Select-Object -First stage (last).
+    Otherwise exit code 0 or None stays unannotated.
     """
     command = command or ""
     output = output or ""
@@ -1216,9 +1289,16 @@ def annotate_failure(
         return hint
     lines = len(output.splitlines()) if output_lines is None else output_lines
     try:
-        return _hint_first_stage(command, lines, failed_programs)
+        return _hint_first_stage(command, exit_code, output, lines, failed_programs)
     except Exception:
         return None
+
+
+def _scan_window(output: str) -> str:
+    """The first and the last ``_SCAN_CHARS`` characters of *output*."""
+    if len(output) > 2 * _SCAN_CHARS:
+        return f"{output[:_SCAN_CHARS]}\n{output[-_SCAN_CHARS:]}"
+    return output
 
 
 def _failure_hint(
@@ -1228,9 +1308,7 @@ def _failure_hint(
     workdir: Path | None,
     offers: Callable[[str], bool],
 ) -> str | None:
-    window = output
-    if len(output) > 2 * _SCAN_CHARS:
-        window = f"{output[:_SCAN_CHARS]}\n{output[-_SCAN_CHARS:]}"
+    window = _scan_window(output)
     if window:
         failure = _Failure(command, window, workdir, offers, _error_start(window))
         for hint_for in _OUTPUT_HINTS:

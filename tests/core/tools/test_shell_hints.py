@@ -27,6 +27,7 @@ _BASH_SYNTAX = (
     "This is bash syntax: in PowerShell write `if (cond) { ... }`, "
     "`foreach ($f in Get-ChildItem *.md) { ... }`, and `Test-Path` for file tests."
 )
+_FAILED = ("python.exe exited with code 1",)
 
 
 @pytest.mark.parametrize(
@@ -671,52 +672,100 @@ def test_typographic_quotes_that_end_a_powershell_string_are_named(
     assert annotate_failure(command, 0, output) is None
 
 
+# What Python on Windows prints when it writes to an output that was closed.
+_CLOSED_OUTPUT = (
+    "Traceback (most recent call last):\n"
+    '  File "build.py", line 9, in <module>\n'
+    "OSError: [Errno 22] Invalid argument"
+)
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize(
-    ("command", "printed", "failed", "program"),
+    ("command", "output", "failed", "printed", "names"),
     [
-        ("python build.py 2>&1 | Select-Object -First 8", 8, (), "python"),
+        # The closed output's error proves the stop.
         (
             "python build.py | Select-Object -First 8",
+            _CLOSED_OUTPUT,
+            _FAILED,
             8,
-            ("python.exe exited with code 1",),
-            "python",
+            ("`Select-Object -First 8`", "python", "Errno 22", "-Wait"),
+        ),
+        # Otherwise the program's own failure, whose error lines the stage received.
+        (
+            "python check.py --url x 2>&1 | Select-Object -First 3",
+            "usage: check.py [-h]",
+            ("python.exe exited with code 2",),
+            3,
+            ("`Select-Object -First 3`", "python", "code 2"),
         ),
         (
-            "& 'C:/venv/Scripts/python.exe' build.py | Select-String step | select -f 8; 'done'",
-            9,
-            (),
-            "python",
+            "foreach ($u in 'a', 'b') { python check.py $u 2>&1 | Select-String hits | "
+            "Select-Object -First 1 }",
+            "hits=0",
+            _FAILED * 2,
+            2,
+            ("`Select-Object -First 1`", "code 1"),
         ),
-        ("Write-Output start; node build.js | Select-Object -First:8", 40, (), "node"),
-        # The program ended before 8 lines, -Wait lets it finish, a query loses
+        (
+            "& 'C:/venv/Scripts/python.exe' build.py *>&1 | select -f:4; 'done'",
+            "step",
+            _FAILED,
+            5,
+            ("`select -f:4`", "python"),
+        ),
+        # No failed program: it finished its work; its errors bypassed the stage;
+        # a run outside such a pipeline may have failed.
+        ("python build.py 2>&1 | Select-Object -First 8", "step", (), 8, None),
+        ("python build.py | Select-Object -First 8", "ValueError: bad", _FAILED, 8, None),
+        (
+            "python build.py 2>&1 | Select-Object -First 2; python build.py --check",
+            "step",
+            _FAILED,
+            8,
+            None,
+        ),
+        # The output never reached 8 lines, -Wait lets it finish, a query loses
         # nothing, and -Last and head read to the end.
-        ("python build.py 2>&1 | Select-Object -First 20", 8, (), None),
-        ("python build.py | Select-Object -First 8 -Wait", 8, (), None),
-        ("git log --oneline | Select-Object -First 8", 8, (), None),
-        ("python build.py | Select-Object -Last 8", 8, (), None),
-        ("python build.py | head -n 8", 8, (), None),
-        ("Write-Output '| Select-Object -First 1'; python build.py", 8, (), None),
+        ("python build.py 2>&1 | Select-Object -First 20", "step", _FAILED, 8, None),
+        ("python build.py 2>&1 | Select-Object -First 8 -Wait", "step", _FAILED, 8, None),
+        (
+            "git log 2>&1 | Select-Object -First 8",
+            "commit",
+            ("git.exe exited with code 128",),
+            8,
+            None,
+        ),
+        ("python build.py 2>&1 | Select-Object -Last 8", "step", _FAILED, 8, None),
+        ("python build.py 2>&1 | head -n 8", "step", _FAILED, 8, None),
+        ("Write-Output '| Select-Object -First 1'; python build.py 2>&1", "step", _FAILED, 8, None),
     ],
 )
-def test_a_select_first_stage_that_stopped_a_program_is_named(
+def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
     monkeypatch: pytest.MonkeyPatch,
     command: str,
-    printed: int,
+    output: str,
     failed: tuple[str, ...],
-    program: str | None,
+    printed: int,
+    names: tuple[str, ...] | None,
+    exit_code: int,
 ) -> None:
-    # Long output keeps only its first and last lines.
-    output = "\n".join(f"step {n}" for n in range(min(printed, 4)))
     monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
 
-    hint = annotate_failure(command, 0, output, failed_programs=failed, output_lines=printed)
+    hint = annotate_failure(
+        command, exit_code, output, failed_programs=failed, output_lines=printed
+    )
 
-    if program is None:
+    if names is None:
         assert hint is None
     else:
-        assert hint is not None and program in hint and "-Wait" in hint
-        # A failed program of that name confirms the stop.
-        assert ("most likely" in hint) is not failed
+        assert hint is not None
+        for name in names:
+            assert name in hint
+        assert "1 lines" not in hint
+        # Exit code 0 does not show the failure; the hint says so.
+        assert ("code 0" in hint) is (exit_code == 0)
     # Select-Object is PowerShell's.
     monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
     assert annotate_failure(command, 0, output, failed_programs=failed) is None
