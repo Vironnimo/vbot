@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from core.tools.web_fetch import LocalBrowser
 from server.rpc import settings_methods
 from tests.server.rpc_test_support import (
     JsonObject,
@@ -54,6 +55,11 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-live-secret")
     monkeypatch.setenv("BRAVE_API_KEY", "brave-live-secret")
+    monkeypatch.setattr(
+        settings_methods,
+        "find_local_browser",
+        lambda: LocalBrowser("Microsoft Edge", "C:/Edge/msedge.exe"),
+    )
     for key in (
         "ANTHROPIC_API_KEY",
         "OPENAI_OAUTH_TOKEN",
@@ -278,7 +284,9 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         "web_fetch": {
             "provider": "direct",
             "mode": "fallback",
+            "browser": True,
             "available_providers": ["direct", "firecrawl", "tavily", "exa", "parallel"],
+            "local_browser": "Microsoft Edge",
             "services": [
                 {
                     "id": "firecrawl",

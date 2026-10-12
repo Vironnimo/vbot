@@ -102,6 +102,7 @@ from core.subagents import SubAgentCoordinator
 from core.tools import (
     ChangeTracker,
     FileReadState,
+    PageBrowser,
     UpdateHandoffs,
     register_analyze_image_tool,
     register_apply_patch_tool,
@@ -371,12 +372,15 @@ def bootstrap(runtime: Runtime) -> None:
         )
         register_search_files_tool(runtime._tools)
         register_memory_tool(runtime._tools, runtime._memory_service)
+        # The local browser starts with the first page that needs it.
+        runtime._page_browser = PageBrowser(runtime._storage.layout.temporary / "browser")
         register_web_fetch_tool(
             runtime._tools,
             attachment_store=runtime._attachment_store,
             temporary_files=runtime._storage.temporary_files,
             credential_resolver=runtime.resolve_environment_credential,
             settings_loader=runtime._storage.load_web_fetch_settings,
+            browser=runtime._page_browser,
         )
         register_web_search_tool(
             runtime._tools,

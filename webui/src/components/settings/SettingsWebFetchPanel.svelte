@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import ServiceApiKey from './ServiceApiKey.svelte';
   import {
     createDebouncedAutosave,
@@ -66,6 +67,8 @@
       ?.pricing_url ?? '',
   );
   const dataDirectory = $derived(settings?.general?.data_directory ?? '');
+  // The installed browser the server found, or null; a server fact.
+  const localBrowser = $derived(settings?.web_fetch?.local_browser ?? null);
   const modes = $derived([
     {
       value: 'fallback',
@@ -90,7 +93,9 @@
   function hasChanges() {
     const persisted = getWebFetchSettings(settings);
     return (
-      draft.provider !== persisted.provider || draft.mode !== persisted.mode
+      draft.provider !== persisted.provider ||
+      draft.mode !== persisted.mode ||
+      draft.browser !== persisted.browser
     );
   }
 
@@ -110,6 +115,26 @@
 </script>
 
 <div class="s-group">
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.webFetch.browser')}
+        <InfoHint text={t('settings.webFetch.browserHelp')} />
+      </div>
+      <div class="s-row-desc">
+        {localBrowser
+          ? t('settings.webFetch.browserFound', { browser: localBrowser })
+          : t('settings.webFetch.browserMissing')}
+      </div>
+    </div>
+    <Toggle
+      id="settings-web-fetch-browser"
+      checked={draft.browser}
+      onChange={(value) => change('browser', value)}
+      ariaLabel={t('settings.webFetch.browser')}
+    />
+  </div>
+
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">

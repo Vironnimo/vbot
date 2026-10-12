@@ -264,6 +264,7 @@ async def test_settings_update_projects_web_fetch_services_without_credentials(
     assert state.runtime.storage.load_web_fetch_settings() == {
         "provider": "parallel",
         "mode": "prefer",
+        "browser": True,
     }
 
 

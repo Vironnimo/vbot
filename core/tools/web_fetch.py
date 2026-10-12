@@ -23,6 +23,12 @@ from core.tools._web_fetch_arguments import (
     OUTPUTS,
     normalize_web_fetch_arguments,
 )
+from core.tools._web_fetch_browser import (
+    BrowserFetchError,
+    LocalBrowser,
+    PageBrowser,
+    find_local_browser,
+)
 from core.tools._web_fetch_pages import (
     DEFAULT_MAX_CHARS,
     MAX_CHARS,
@@ -80,7 +86,18 @@ _CHALLENGE_TITLE_MARKERS: frozenset[str] = frozenset(
 _REDDIT_HOST_SUFFIX = "reddit.com"
 _REDDIT_CHALLENGE_MARKER = "prove your humanity"
 _REDDIT_LOGIN_PATH_PREFIX = "/login"
-_WALL_GUIDANCE = "Try another source, or a browser Tool if one is available."
+# A line demanding JavaScript, as script-only apps show without it: "You need to
+# enable JavaScript to run this app." A page explaining how to enable it does not
+# start a line that way.
+_SCRIPT_DEMAND = re.compile(
+    r"^[#>*\s]*(?:(?:you (?:need|have) to|please,?) )?(?:enable|turn on) javascript"
+    r"|^[#>*\s]*(?:this (?:app|site|page|website) )?(?:requires|needs) javascript"
+    r"|^[#>*\s]*javascript (?:is required|must be enabled)",
+    re.I | re.M,
+)
+_WALL_GUIDANCE = "Try another source."
+# Direct failures a real browser can still read: bot checks and JavaScript pages.
+_BROWSER_CODES = frozenset({"access_denied", "no_content"})
 # Several URLs in one call share roughly two single-page results of Context.
 _MULTI_PAGE_BUDGET = 2 * DEFAULT_MAX_CHARS
 _MULTI_PAGE_MIN_CHARS = 2_000
@@ -381,14 +398,13 @@ def _shape_success(
         return tool_failure("access_denied", wall, retryable=False)
     if not main.strip() or (
         len(main) < 600
-        and re.match(
-            (
-                "(?:please )?(?:enable|turn on) javascript|javascript (?:is required|must be "
-                "enabled)|checking your browser|verify (?:that )?you are (?:a "
-                ")?human"
-            ),
-            re.sub(r"^[#>*\s]+", "", main),
-            re.I,
+        and (
+            _SCRIPT_DEMAND.search(main)
+            or re.match(
+                "checking your browser|verify (?:that )?you are (?:a )?human",
+                re.sub(r"^[#>*\s]+", "", main),
+                re.I,
+            )
         )
     ):
         return tool_failure(
@@ -427,7 +443,7 @@ async def _direct_fetch(
     except PublicFetchError as error:
         return error.failure(), error.recoverable
     shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, result, output_mode)
-    return shaped, not shaped["ok"] and shaped["error"]["code"] in {"access_denied", "no_content"}
+    return shaped, not shaped["ok"] and shaped["error"]["code"] in _BROWSER_CODES
 
 
 def _shape_success_for_mode(
@@ -555,8 +571,46 @@ def make_web_fetch_handler(
     temporary_files: TemporaryFileManager | None = None,
     credential_resolver: Callable[[str], str | None] | None = None,
     settings_loader: Callable[[], Mapping[str, Any]] | None = None,
+    browser: PageBrowser | None = None,
 ) -> ToolHandler:
     """Bind transport, optional services, and saved views to existing owners."""
+
+    async def render(url: str, output: WebFetchOutput) -> JsonObject | str:
+        """Read ``url`` in the local browser; a string says why it could not."""
+        assert browser is not None
+        try:
+            response = await browser.fetch(url)
+        except BrowserFetchError as error:
+            return str(error)
+        shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, response, output)
+        if not shaped["ok"]:
+            return (
+                "it showed a bot check or login wall"
+                if shaped["error"]["code"] == "access_denied"
+                else "the page has no readable content"
+            )
+        shaped["data"]["source"] = "browser"
+        return shaped
+
+    async def direct(
+        url: str, output: WebFetchOutput, settings: Mapping[str, Any]
+    ) -> tuple[JsonObject, bool]:
+        """Read directly; the local browser retries a bot check or JavaScript page."""
+        result, recoverable = await _direct_fetch(url, output, attachment_store)
+        if (
+            result["ok"]
+            or result["error"]["code"] not in _BROWSER_CODES
+            or browser is None
+            or output == "raw"
+            or settings.get("browser") is False
+            or not browser.available()
+        ):
+            return result, recoverable
+        rendered = await render(url, output)
+        if not isinstance(rendered, str):
+            return rendered, False
+        result["error"]["message"] += f" The local browser could not read it either: {rendered}."
+        return result, recoverable
 
     async def service(url: str, output: str, provider: str) -> JsonObject:
         variable = WEB_FETCH_CREDENTIALS[provider]
@@ -610,9 +664,9 @@ def make_web_fetch_handler(
             result = await service(url, output, provider)
             if not result["ok"]:
                 service_failure = result["error"]["message"]
-                result, _ = await _direct_fetch(url, output, attachment_store)
+                result, _ = await direct(url, output, settings)
         else:
-            result, recoverable = await _direct_fetch(url, output, attachment_store)
+            result, recoverable = await direct(url, output, settings)
             if enabled and recoverable:
                 recovered = await service(url, output, provider)
                 if recovered["ok"]:
@@ -750,6 +804,7 @@ def register_web_fetch_tool(
     temporary_files: TemporaryFileManager | None = None,
     credential_resolver: Callable[[str], str | None] | None = None,
     settings_loader: Callable[[], Mapping[str, Any]] | None = None,
+    browser: PageBrowser | None = None,
 ) -> None:
     """Register the web_fetch tool with a vBot tool registry."""
     registry.register(
@@ -761,6 +816,7 @@ def register_web_fetch_tool(
             temporary_files=temporary_files,
             credential_resolver=credential_resolver,
             settings_loader=settings_loader,
+            browser=browser,
         ),
         summary="Read a web page or online file.",
         family="web",
@@ -774,9 +830,12 @@ def register_web_fetch_tool(
 
 
 __all__ = [
+    "LocalBrowser",
+    "PageBrowser",
     "WEB_FETCH_TOOL_DESCRIPTION",
     "WEB_FETCH_TOOL_NAME",
     "WEB_FETCH_TOOL_PARAMETERS",
+    "find_local_browser",
     "make_web_fetch_handler",
     "register_web_fetch_tool",
 ]

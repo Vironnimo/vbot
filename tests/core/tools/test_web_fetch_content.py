@@ -29,7 +29,7 @@ from tests.core.tools.web_fetch_test_support import (
 from tests.core.tools.web_fetch_test_support import stub_dns_resolution as stub_dns_resolution
 from tests.core.tools.web_fetch_test_support import stub_http_session as stub_http_session
 
-_WALL_GUIDANCE = "Try another source, or a browser Tool if one is available."
+_WALL_GUIDANCE = "Try another source."
 _MAIN_CONTENT_NOTE = (
     "Only the main content is shown; find also searches navigation, sidebars and footers."
 )
@@ -516,8 +516,32 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
             "https://example.com/app has no readable content without JavaScript, or shows an "
             "access check instead.",
         ),
+        (
+            "https://example.com/app",
+            "<html><body><noscript>You need to enable JavaScript to run this app."
+            "</noscript><div id='root'></div></body></html>",
+            "no_content",
+            "https://example.com/app has no readable content without JavaScript, or shows an "
+            "access check instead.",
+        ),
+        (
+            "https://example.com/app",
+            "<h1>Example Web</h1><p>Please, enable JavaScript to open the app.</p>",
+            "no_content",
+            "https://example.com/app has no readable content without JavaScript, or shows an "
+            "access check instead.",
+        ),
     ],
-    ids=["reddit-challenge", "challenge-title", "access-check", "script-only", "bom", "js-wall"],
+    ids=[
+        "reddit-challenge",
+        "challenge-title",
+        "access-check",
+        "script-only",
+        "bom",
+        "js-wall",
+        "app-noscript",
+        "titled-js-wall",
+    ],
 )
 async def test_bot_checks_and_script_only_pages_are_not_retryable_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, html: str, code: str, message: str

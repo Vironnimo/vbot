@@ -361,6 +361,13 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         allowed_values=WEB_FETCH_MODES,
     ),
     _static(
+        "web_fetch.browser",
+        "boolean",
+        "Render pages in a local headless browser when direct reading meets a bot check or "
+        "an empty JavaScript page.",
+        default=True,
+    ),
+    _static(
         "web_search.provider",
         "string",
         "Provider used by the web_search Tool.",

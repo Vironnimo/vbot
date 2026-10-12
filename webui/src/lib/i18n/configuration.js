@@ -544,13 +544,20 @@ export default Object.freeze({
   'settings.webFetch.fallback': 'Only when direct reading fails',
   'settings.webFetch.prefer': 'Prefer this service',
   'settings.webFetch.provider': 'Extraction service',
+  'settings.webFetch.browser': 'Local browser',
+  'settings.webFetch.browserFound':
+    'Uses {browser} on the server for pages that block bots or need JavaScript.',
+  'settings.webFetch.browserMissing':
+    'No Chrome, Edge or Chromium found on the server. Install one to use this.',
+  'settings.webFetch.browserHelp':
+    'When vBot cannot read a page directly because it shows a bot check or needs JavaScript, it opens the page in a hidden browser window on the server and reads it there. This is free but takes a few seconds.\n\nEach page opens in a fresh browser profile without your sign-ins or cookies, and the browser can only reach public internet addresses. Some sites still block it; an extraction service can help with those.',
   'settings.webFetch.description':
     'Optional service for sites that block bots or need JavaScript.',
   'settings.webFetch.providerHelp':
-    'By default, vBot reads web pages itself when an Agent opens one (web_fetch Tool). An extraction service can read pages that block automated visitors or only show their content with JavaScript.\n\nThe service receives every URL it reads and may charge per page; free allowances and prices vary. Paging through or searching a page that was already read makes no new service request.',
+    'By default, vBot reads web pages itself when an Agent opens one (web_fetch Tool), with the local browser as backup. An extraction service can read pages that still block automated visitors.\n\nThe service receives every URL it reads and may charge per page; free allowances and prices vary. Paging through or searching a page that was already read makes no new service request.',
   'settings.webFetch.mode': 'When to use it',
   'settings.webFetch.modeHelp':
-    'Only when direct reading fails: vBot reads the page itself first and uses the service for blocked, failed or unreadable pages.\n\nPrefer this service: the service reads pages first; if it fails, vBot reads the page itself. Images and documents are always read directly first.',
+    'Only when direct reading fails: vBot reads the page itself first, then with the local browser, and uses the service for pages that stay blocked, failed or unreadable.\n\nPrefer this service: the service reads pages first; if it fails, vBot reads the page itself. Images and documents are always read directly first.',
   'settings.webFetch.cost':
     'The service receives the URLs it reads and may charge per page.',
   'settings.webFetch.pricing': 'Pricing',
