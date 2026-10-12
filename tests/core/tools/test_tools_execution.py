@@ -222,11 +222,62 @@ async def test_unknown_or_disallowed_tool_becomes_a_failed_result(
     if listed is not None:
         config["input_contracts"] = {tool: registry.get(tool).contract for tool in listed}
         config["loadable_tools"] = {tool: {"name": tool} for tool in listed if tool == "lazy"}
+    # Arguments that fit none of the Tools: the message lists them all.
     result = await _run_one(
-        registry, name, {"path": "SOUL.md"}, allowed_tools=allowed_tools, **config
+        registry, name, {"file": "SOUL.md"}, allowed_tools=allowed_tools, **config
     )
 
     assert result == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "fitting"),
+    [
+        ({"path": "SOUL.md"}, "read_file"),
+        ({"action": "post", "text": "Done."}, "board"),
+        ({"action": "read", "page_id": "w2"}, "wiki"),
+        # Two Tools take a read action; a required action is missing; an action the
+        # one Tool with such fields does not have; no arguments at all.
+        ({"action": "read"}, None),
+        ({"text": "noop"}, None),
+        ({"action": "delete", "text": "Done."}, None),
+        ({}, None),
+    ],
+)
+async def test_an_unknown_tool_names_the_one_tool_its_arguments_fit(
+    arguments: JsonObject, fitting: str | None
+) -> None:
+    registry = ToolRegistry()
+    register_read_file(registry)
+    for name, actions, fields in (
+        ("board", ["read", "post"], ("text", "message_id")),
+        ("wiki", ["read", "update"], ("page_id",)),
+    ):
+        registry.register(
+            name,
+            f"Use the {name}.",
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": actions},
+                    **{field: {"type": "string"} for field in fields},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+            lambda _context, _arguments: tool_success({}),
+        )
+
+    result = await _run_one(registry, "pash", arguments)
+
+    hint = (
+        f"These arguments fit {fitting}; call {fitting} with them."
+        if fitting
+        else "Call one of the available Tools instead: board, read_file, wiki."
+    )
+    # The fitting Tool is named, never run.
+    assert result == tool_failure("tool_not_found", f"Unknown Tool: pash. {hint}")
 
 
 @pytest.mark.asyncio

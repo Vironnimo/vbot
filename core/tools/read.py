@@ -15,6 +15,7 @@ from core.tools._path_suggestions import missing_file_message
 from core.tools._read_arguments import (
     READ_HIDDEN_PARAMETERS,
     change_command_refusal,
+    message_id_refusal,
     normalize_read_arguments,
 )
 from core.tools._read_text import (
@@ -28,6 +29,7 @@ from core.tools._read_text import (
     render_text_path,
     without_bom,
 )
+from core.tools._swarm_references import wiki_page_call
 from core.tools.arguments import optional_int, split_text_lines
 from core.tools.contracts import ToolContractError
 from core.tools.edit import offered_edit_tool
@@ -178,7 +180,16 @@ def make_read_handler(
         label = _path_label(resolved, cwd)
 
         if not resolved.exists():
-            return tool_failure("file_not_found", missing_file_message(resolved, cwd))
+            # A Swarm Wiki continuation names a character offset and limit.
+            fields = {
+                name: arguments[name]
+                for name in ("offset", "limit")
+                if isinstance(arguments.get(name), int) and arguments[name] > 0
+            }
+            page = wiki_page_call(resolved, cwd, context.offers, fields=fields)
+            return tool_failure(
+                "file_not_found", missing_file_message(resolved, cwd, elsewhere=page)
+            )
         if resolved.is_dir():
             if arguments.get("pattern") is not None:
                 return tool_failure(
@@ -305,6 +316,10 @@ def make_read_handler(
             return tool_failure(
                 "invalid_arguments",
                 change_command_refusal(arguments["command"], offered_edit_tool(context)),
+            )
+        if "message_id" in arguments:
+            return tool_failure(
+                "invalid_arguments", message_id_refusal(arguments["message_id"], context.offers)
             )
         prepared = await run_tool_worker(prepare_read, context, arguments)
         if isinstance(prepared, _PreparedAudio):
@@ -539,8 +554,9 @@ def register_read_tool(
         display=ToolDisplay(parts_builder=_display_parts, fact_builder=_read_line_range_facts),
         parallel_safe=True,
         open_input_schema=True,
-        # A command that changes a file reaches the handler, which refuses it.
-        unadvertised_parameters={**READ_HIDDEN_PARAMETERS, "command": {}},
+        # A command that changes a file, or a Swarm Board post in place of a path,
+        # reaches the handler, which refuses it.
+        unadvertised_parameters={**READ_HIDDEN_PARAMETERS, "command": {}, "message_id": {}},
         argument_normalizer=normalize_read_arguments,
     )
 

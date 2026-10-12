@@ -4,6 +4,10 @@ Pages count results: matching lines (or matches with ``-o``) for line output,
 files for file and count output, entries for listings. A page ends at its
 ``limit`` or at the output byte budget, never inside a result, and the next
 page starts exactly after the last result shown.
+
+Line output names each file once, like ripgrep's ``--heading``: the file's
+label on its own line, then its lines as ``N:text`` (matches) and ``N-text``
+(context), and an empty line before the next file's label.
 """
 
 from __future__ import annotations
@@ -97,6 +101,8 @@ class Page:
     size: int = 0
     byte_limited: bool = False
     cut: Cut | None = None
+    # Label of the file whose heading the page's line output showed last.
+    heading_label: str | None = None
 
     @property
     def room(self) -> int:
@@ -105,10 +111,18 @@ class Page:
     def fits(self, lines: list[str]) -> bool:
         return sum(len(line.encode("utf-8")) + 1 for line in lines) <= self.room
 
-    def add(self, lines: list[str], units: int = 1) -> None:
+    def heading(self, label: str) -> list[str]:
+        """The lines that name a file before its first line on this page."""
+        if self.lines and self.heading_label == label:
+            return []
+        return ["", label] if self.lines else [label]
+
+    def add(self, lines: list[str], units: int = 1, *, label: str | None = None) -> None:
         self.lines.extend(lines)
         self.size += sum(len(line.encode("utf-8")) + 1 for line in lines)
         self.returned += units
+        if label is not None:
+            self.heading_label = label
 
 
 def entry_page(entries: list[Entry], query: SearchQuery) -> Page:
@@ -220,11 +234,11 @@ def _only_matching(page: Page, entry: Entry, file_events: list[dict[str, Any]], 
                 continue
             number = (data.get("line_number") or 1) + raw[: submatch["start"]].count(b"\n")
             text = _excerpt(decode_event_text(submatch["match"]), None)
-            line = f"{entry.label}:{number}:{text}"
-            if not page.fits([line]):
+            lines = [*page.heading(entry.label), f"{number}:{text}"]
+            if not page.fits(lines):
                 page.byte_limited = True
                 return
-            page.add([line])
+            page.add(lines, label=entry.label)
 
 
 def _file_lines(
@@ -287,46 +301,44 @@ def _file_lines(
 
 @dataclass
 class _Block:
-    """Adds one file's lines to a page, separating gaps with ``--`` when context is shown."""
+    """Adds one file's lines to a page under its heading, separating gaps with ``--``
+    when context is shown."""
 
     page: Page
     entry: Entry
     separate: bool
     previous: int | None = None
 
-    def _rendered(self, lines: list[_Line]) -> list[str]:
+    def _body(self, lines: list[_Line]) -> list[str]:
         rendered: list[str] = []
         previous = self.previous
         for line in lines:
-            gap = (previous is None and bool(self.page.lines)) or (
-                previous is not None and line.number != previous + 1
-            )
-            if self.separate and gap:
+            if self.separate and previous is not None and line.number != previous + 1:
                 rendered.append("--")
-            match = ":" if line.match else "-"
-            rendered.append(f"{self.entry.label}{match}{line.number}{match}{line.text}")
+            rendered.append(f"{line.number}{':' if line.match else '-'}{line.text}")
             previous = line.number
         return rendered
 
     def add(self, lines: list[_Line], result: list[_Line], units: int) -> bool:
         """Add lines, or only the result lines for a page's first result; False when full."""
-        rendered = self._rendered(lines)
-        if not self.page.fits(rendered):
+        heading = self.page.heading(self.entry.label)
+        body = self._body(lines)
+        if not self.page.fits(heading + body):
             self.page.byte_limited = True
             if self.page.returned or not units:
                 return False
             # A page's first result always appears, without its context if need be.
             lines = result
-            rendered = self._rendered(lines)
-            while len(rendered) > 1 and not self.page.fits(rendered):
-                rendered.pop()
-            shown = sum(1 for line in rendered if line != "--")
+            body = self._body(lines)
+            while len(body) > 1 and not self.page.fits(heading + body):
+                body.pop()
+            shown = sum(1 for line in body if line != "--")
             if shown < len(lines):
                 self.page.cut = Cut(
                     self.entry.label, lines[0].number, lines[shown - 1].number, lines[-1].number
                 )
                 lines = lines[:shown]
-        self.page.add(rendered, units)
+        self.page.add(heading + body, units, label=self.entry.label)
         if lines:
             self.previous = lines[-1].number
         return not self.page.byte_limited

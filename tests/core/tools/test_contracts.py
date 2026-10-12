@@ -12,6 +12,7 @@ from core.tools import (
     ToolContractError,
     ToolRegistry,
     compile_tool_contract,
+    tool_failure,
     tool_success,
 )
 from core.tools.call_syntax import normalize_call_arguments
@@ -28,6 +29,9 @@ def _input_schema() -> JsonObject:
         "required": ["count"],
         "additionalProperties": False,
     }
+
+
+_IGNORED = '"transition" had no effect: sample has no such parameter.'
 
 
 def _open_contract(properties: JsonObject, **schema: Any) -> Any:
@@ -187,9 +191,38 @@ def test_a_tuple_schema_stays_rejected_after_its_json_twin_compiled() -> None:
             'sample was not run: "count" must be an integer; received "1e1000".',
         ),
         ({"count": "0"}, 'sample was not run: "count" must be at least 1; received 0.'),
+        # Unknown fields the call cannot run without: a likely misspelled parameter, a
+        # mode or safety switch, a target or a content of its own.
         (
-            {"count": "2", "extra": True},
-            'sample was not run:\n- "extra" is not a parameter.\n'
+            {"count": "2", "labels": "x"},
+            'sample was not run:\n- "labels" is not a parameter. Did you mean "label"?\n'
+            "sample parameters: count (required), label.",
+        ),
+        (
+            {"count": "2", "dryRun": True},
+            'sample was not run:\n- "dryRun" is not a parameter.\n'
+            "sample parameters: count (required), label.",
+        ),
+        (
+            {"count": "2", "thread_id": "42", "message": "Hi"},
+            'sample was not run:\n- "thread_id" is not a parameter.\n'
+            '- "message" is not a parameter.\nsample parameters: count (required), label.',
+        ),
+        # Content or call fields under any name: text with a line break, an object.
+        (
+            {"count": "2", "retext": "## Correction\nThe parser stays."},
+            'sample was not run:\n- "retext" is not a parameter.\n'
+            "sample parameters: count (required), label.",
+        ),
+        (
+            {"count": "2", "parameters": {"label": "x"}},
+            'sample was not run:\n- "parameters" is not a parameter.\n'
+            "sample parameters: count (required), label.",
+        ),
+        # A refused call names its other unknown fields too; commentary requests nothing.
+        (
+            {"label": "x", "mood": "calm", "commentary": "analysis"},
+            'sample was not run:\n- "mood" is not a parameter.\n- "count" is required.\n'
             "sample parameters: count (required), label.",
         ),
     ],
@@ -213,6 +246,75 @@ async def test_dispatch_rejects_invalid_arguments_before_handler(
 
     assert str(exc_info.value) == message
     assert calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        pytest.param(
+            tool_success({"value": "ok"}),
+            tool_success({"value": "ok", "note": _IGNORED}),
+            id="success",
+        ),
+        pytest.param(
+            tool_success({"value": "ok", "note": "Read as a list."}),
+            tool_success({"value": "ok", "note": f"{_IGNORED} Read as a list."}),
+            id="success-with-a-note",
+        ),
+        pytest.param(
+            tool_failure("not_found", "No such item."),
+            tool_failure("not_found", f"No such item.\n{_IGNORED}"),
+            id="failure",
+        ),
+        pytest.param(
+            ToolContractError("sample was not run: the label is taken."),
+            ToolContractError(f"sample was not run: the label is taken.\n{_IGNORED}"),
+            id="refusal",
+        ),
+    ],
+)
+async def test_an_unknown_field_without_effect_is_left_out_and_the_result_says_so(
+    outcome: Any, expected: Any
+) -> None:
+    received: list[JsonObject] = []
+
+    def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        received.append(arguments)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return dict(outcome)
+
+    registry = ToolRegistry()
+    # A closed result schema still admits the note.
+    result_schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "additionalProperties": False,
+    }
+    registry.register("sample", "Sample.", _input_schema(), handler, result_schema=result_schema)
+    arguments = {"count": 2, "transition": "support wiring", "commentary": "analysis"}
+
+    if isinstance(expected, Exception):
+        with pytest.raises(ToolContractError) as exc_info:
+            await registry.dispatch(make_context("sample"), arguments, ["sample"])
+        assert str(exc_info.value) == str(expected)
+    else:
+        assert await registry.dispatch(make_context("sample"), arguments, ["sample"]) == expected
+    assert received == [{"count": 2}]
+
+
+@pytest.mark.asyncio
+async def test_a_parameter_the_model_request_left_out_is_never_ignored() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "sample", "Sample.", _input_schema(), lambda _c, _a: tool_success({"value": "ok"})
+    )
+    offered = _open_contract({"count": {"type": "integer"}}, required=["count"])
+    context = replace(make_context("sample"), input_contract=offered)
+
+    with pytest.raises(ToolContractError, match='"label" is not a parameter'):
+        await registry.dispatch(context, {"count": 2, "label": "x"}, ["sample"])
 
 
 @pytest.mark.asyncio
@@ -612,9 +714,11 @@ def test_normalization_drops_empty_unknown_arguments_but_keeps_meaningful_ones()
             "mapping": {},
             "zero": 0,
             "flag": False,
+            "commentary": "analysis",
         }
     )
 
+    # commentary labels a Model's output channel; it requests nothing either.
     assert normalized == {"count": 1, "label": "", "zero": 0, "flag": False}
     with pytest.raises(ToolContractError) as exc_info:
         contract.validate_arguments(normalized)

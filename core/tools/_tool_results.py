@@ -10,7 +10,7 @@ from core.tools._tool_definitions import (
     ToolNotAllowedError,
     ToolNotFoundError,
 )
-from core.tools.contracts import JsonObject, ToolContractError
+from core.tools.contracts import CALL_NOTE_FIELD, JsonObject, ToolContractError
 from core.tools.model_names import model_tool_name
 from core.utils.logging import get_logger
 
@@ -76,6 +76,25 @@ def tool_failure(
         "data": None,
         "artifacts": _copy_artifacts(artifacts),
     }
+
+
+def with_call_note(result: JsonObject, note: str) -> JsonObject:
+    """Return a result envelope that also says ``note`` about how its call was read.
+
+    A success carries it first in its data's ``note``; a failure ends its message
+    with it.
+    """
+    if result.get("ok") is True and isinstance(result.get("data"), dict):
+        data = dict(result["data"])
+        existing = data.get(CALL_NOTE_FIELD)
+        if existing is not None and not isinstance(existing, str):
+            return result
+        data[CALL_NOTE_FIELD] = f"{note} {existing}" if existing else note
+        return {**result, "data": data}
+    error = result.get("error")
+    if result.get("ok") is False and isinstance(error, dict):
+        return {**result, "error": {**error, "message": f"{error['message']}\n{note}"}}
+    return result
 
 
 def tool_failure_for_exception(tool_name: str, error: Exception) -> JsonObject:

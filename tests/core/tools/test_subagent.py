@@ -268,7 +268,7 @@ def _id_without_action(subagent_id: str) -> str:
             'Conflicting "background" and "blocking" values; provide one intended value.',
         ),
         # Requests vBot cannot honor as written.
-        ({"content": BRIEF, "priority": "high"}, _unknown("priority")),
+        ({"content": BRIEF, "isolation": "worktree"}, _unknown("isolation")),
         ({"content": BRIEF, "run_id": "private-run"}, _unknown("run_id", ' Did you mean "id"?')),
         (
             {"goal": BRIEF, "toolsets": ["terminal", "web"]},

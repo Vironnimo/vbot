@@ -144,11 +144,6 @@ def test_env_requirements_add_environment_access_guidance(tmp_path: Path) -> Non
     assert "<environment_access>" not in guidance
 
 
-def test_unknown_arguments_are_rejected_before_the_handler(tmp_path: Path) -> None:
-    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
-        debugging_tool(tmp_path).call({"name": "debugging", "unexpected": True})
-
-
 def test_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
     # A name hand-dropped just before the call gets one rescan before the miss is final.
     refreshes: list[None] = []

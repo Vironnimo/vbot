@@ -119,7 +119,6 @@ async def test_state_tool_rejects_all_participant_status_mutations(board):
         {"state": "idle"},
         {"action": "name", "name": "Changed"},
         {"name": "Changed"},
-        {"include_summaries": True},
     ]:
         with pytest.raises(ToolContractError):
             await board.tools.dispatch(context, arguments, allowed_tools=["swarm_state"])

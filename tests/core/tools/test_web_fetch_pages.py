@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from core.tools import _web_fetch_pages as pages
-from core.tools.contracts import ToolContractError
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
 from tests.core.tools.web_fetch_test_support import (
     fetch,
@@ -27,6 +26,11 @@ def continuation(data):
     match = re.search(r"Continue with (\{.*?\})[,.]", data["more"])
     assert match is not None, data["more"]
     return json.loads(match[1])
+
+
+def read_on_calls(content):
+    """The read-on calls that end the passages of a find result."""
+    return [json.loads(call) for call in re.findall(r"^Read on with (\{.*\})$", content, re.M)]
 
 
 def shown_range(data):
@@ -75,6 +79,7 @@ async def test_find_searches_full_page_and_match_reference_reads_more(tmp_path, 
         "<main>Short article</main><footer>"
         + "Policy details. " * 2500
         + "ZEBRA42 license"
+        + " Terms apply." * 200
         + "</footer>"
     )
     install_http_get(monkeypatch, lambda url: make_result(text=html, url=url))
@@ -86,11 +91,42 @@ async def test_find_searches_full_page_and_match_reference_reads_more(tmp_path, 
         AsyncMock(side_effect=AssertionError("ref must not fetch")),
     )
     found = await tool.dispatch(context, {"ref": first["data"]["ref"], "find": "zebra42"})
-    assert "ZEBRA42 license" in found["data"]["content"]
-    match = re.search(r"\[ref ([^\]]+)\]", found["data"]["content"])
-    assert match is not None
-    full = await tool.dispatch(context, {"ref": match[1]})
-    assert "ZEBRA42" in full["data"]["content"]
+    passage, _, _ = found["data"]["content"].partition("\nRead on with ")
+    assert "ZEBRA42 license" in passage
+    # The passage's read-on call continues the page right where the passage stopped.
+    (read_on,) = read_on_calls(found["data"]["content"])
+    following = await tool.dispatch(context, read_on)
+    assert "ZEBRA42" not in following["data"]["content"]
+    assert "ZEBRA42 license" + " Terms apply." * 200 in passage + following["data"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_find_in_code_shows_nearby_matches_once_and_reads_on_after_each_passage(
+    tmp_path, monkeypatch
+):
+    lines = [f"int line{i:03d} = {i};" for i in range(400)]
+    for i in (100, 103, 110, 300):
+        lines[i] += " /* needle */"
+    install_http_get(
+        monkeypatch,
+        lambda url: make_result(text="\n".join(lines), headers={"content-type": "text/plain"}),
+    )
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+
+    found = await tool.dispatch(context, {"url": "https://example.com/a.c", "find": "needle"})
+
+    data = found["data"]
+    # Matches a few lines apart share one passage; no line is shown twice.
+    assert data["shown"].startswith("2 passages")
+    shown = [line for line in data["content"].split("\n") if line.startswith("int ")]
+    assert len(shown) == len(set(shown)) and lines[110] in shown and lines[300] in shown
+    # Each passage ends with the call that reads on from the next whole line.
+    for call in read_on_calls(data["content"]):
+        following = await tool.dispatch(context, call)
+        assert following["data"]["content"].split("\n")[0] in lines
+    # A plain text page has no navigation or footers to name when nothing matches.
+    missing = await tool.dispatch(context, {"ref": data["ref"], "find": "absent"})
+    assert "navigation" not in missing["data"]["content"]
 
 
 @pytest.mark.asyncio
@@ -137,8 +173,9 @@ async def test_redundant_url_must_name_the_saved_page(tmp_path, monkeypatch):
         f"ref {ref} is the saved page of {final_url}, not https://example.com/other. Pass "
         "only ref to read the saved page, or only url to fetch the other address."
     )
-    with pytest.raises(ToolContractError, match='"fresh" is not a parameter'):
-        await tool.dispatch(context, {"url": final_url, "ref": ref, "fresh": True})
+    # An unknown field fetches nothing again; the result says it had no effect.
+    stale = await tool.dispatch(context, {"url": final_url, "ref": ref, "fresh": True})
+    assert stale["data"]["note"].startswith('"fresh" had no effect')
     network.assert_awaited_once()
 
 

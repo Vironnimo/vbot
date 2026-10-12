@@ -118,9 +118,9 @@ async def test_paths_resolve_from_the_working_directory_or_are_absolute(
     ("arguments", "refusal"),
     [
         pytest.param(
-            {"path": "notes.txt", "encoding": "latin-1"},
-            '"encoding" is not a parameter',
-            id="unknown-argument",
+            {"path": "notes.txt", "mode": "bytes"},
+            '"mode" is not a parameter',
+            id="unknown-mode",
         ),
         # A NUL makes no path on any platform; the refusal must not depend on
         # whether this host's filesystem layer raises for it or ignores it.
@@ -166,11 +166,16 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     modules.mkdir()
     for name in ["ast.py", "lexer.py", "shell.py", "analyzer.py", "parsers.py", "parser.md"]:
         modules.joinpath(name).write_text(name, encoding="utf-8")
+    checks = tmp_path / "checks"
+    checks.mkdir()
+    for name in ["test_index.py", "test_api.py", "test_errors.py", "test_shell.py", "test_exrp.py"]:
+        checks.joinpath(name).write_text(name, encoding="utf-8")
 
     message = failure(await read(tmp_path, {"path": "ranked/settings.txt"}), "file_not_found")
     bounded = failure(await read(tmp_path, {"path": "many/settings.txt"}), "file_not_found")
     elsewhere = failure(await read(tmp_path, {"path": "corpus.py"}), "file_not_found")
     module = failure(await read(tmp_path, {"path": "modules/parser.py"}), "file_not_found")
+    prefixed = failure(await read(tmp_path, {"path": "checks/test_expr.py"}), "file_not_found")
 
     # Same stem first, then files or directories beside it; never unrelated names
     # or the absolute path.
@@ -187,6 +192,8 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     # A shared extension makes no name similar; the stem or the whole name has to be.
     suggested = module.partition("(similar: ")[2].rstrip(").").split(", ")
     assert suggested == ["modules/parser.md", "modules/parsers.py"]
+    # Nor does a shared beginning: only a name a few typos away is similar.
+    assert prefixed == "File not found: checks/test_expr.py (similar: checks/test_exrp.py)."
 
 
 @pytest.mark.asyncio
@@ -326,7 +333,7 @@ async def test_line_numbers_break_only_at_lf_crlf_and_cr_like_search_files(
 
     assert whole == f"1| import os\n2| {separator}\n3| def foo():\n4|     pass\n5| x = 1\n"
     assert line.startswith("4|     pass\n")
-    assert found["data"]["content"] == "ff.py:4:    pass"
+    assert found["data"]["content"] == "ff.py\n4:    pass"
     assert read_module.render_text_file(raw) == whole
 
 

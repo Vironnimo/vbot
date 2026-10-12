@@ -296,12 +296,10 @@ def test_project_tool_rejects_unknown_argument_before_loading(tmp_path: Path) ->
     projects.create("vbot", "vBot", repo)
     file_state = FileReadState()
 
-    result = _call(
-        tmp_path, projects, {"project_id": "vbot", "unexpected": True}, file_state=file_state
-    )
+    result = _call(tmp_path, projects, {"project_id": "vbot", "force": True}, file_state=file_state)
 
     assert result["error"]["code"] == "invalid_arguments"
-    assert '"unexpected" is not a parameter' in result["error"]["message"]
+    assert '"force" is not a parameter' in result["error"]["message"]
     assert file_state.check_stale("session-one", agents_file.resolve()) is StaleReason.NEVER_READ
 
 

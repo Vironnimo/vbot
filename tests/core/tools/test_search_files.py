@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import errno
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,7 +24,9 @@ from tests.core.tools.search_files_test_support import context, dispatch, search
 
 # The flags search_files always passes, in the form a ripgrep command line takes them.
 _RG_DEFAULTS = ["--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive"]
-_RG_TEXT = ["--no-heading", "--with-filename", "--line-number", "--color=never"]
+_RG_TEXT = ["--heading", "--with-filename", "--line-number", "--color=never"]
+# ripgrep flags whose output lists files or counts instead of lines.
+_RG_ENTRY_FLAGS = {"-c", "-l", "--count-matches", "--files-without-match"}
 
 
 def _write(root: Path, files: dict[str, str | bytes]) -> None:
@@ -88,6 +91,23 @@ def _ripgrep(root: Path, arguments: list[str]) -> str:
     )
     assert completed.returncode in (0, 1), completed.stderr
     return completed.stdout.decode("utf-8", errors="backslashreplace").replace("\r\n", "\n")
+
+
+def _results(lines: list[str]) -> list[str]:
+    """Flatten line output, pages of it included, to one ``label:N:text`` line per shown line.
+
+    Every line that is neither numbered, empty nor ``--`` is a file heading.
+    """
+    flat: list[str] = []
+    label = None
+    for line in lines:
+        numbered = re.fullmatch(r"(\d+)([:-])(.*)", line, re.S)
+        if numbered:
+            number, separator, text = numbered.groups()
+            flat.append(f"{label}{separator}{number}{separator}{text}")
+        elif line not in {"", "--"}:
+            label = line
+    return flat
 
 
 def _all_pages(root: Path, arguments: dict[str, Any], limit: int) -> list[str]:
@@ -165,9 +185,13 @@ def test_content_results_equal_ripgreps_across_pages(
     ).splitlines()
     assert expected
     assert _all_pages(project, arguments, limit=10000) == expected
-    # Small pages hold the same results, each exactly once, in the same order.
-    paged = [line for line in _all_pages(project, arguments, limit=2) if line != "--"]
-    assert paged == [line for line in expected if line != "--"]
+    # Small pages hold the same results, each exactly once, in the same order; each
+    # page of line output names the file of its first line again.
+    paged = _all_pages(project, arguments, limit=2)
+    if _RG_ENTRY_FLAGS.isdisjoint(flags):
+        assert _results(paged) == _results(expected)
+    else:
+        assert paged == expected
 
 
 @pytest.mark.parametrize(
@@ -288,7 +312,7 @@ def test_a_result_over_the_record_bound_fails_naming_the_file_to_leave_out(
     }
     # The calls the error names succeed.
     excluded = search(tmp_path, pattern="needle", glob="!data/big.min.js")
-    assert excluded["content"] == "src/a.py:1:needle"
+    assert excluded["content"] == "src/a.py\n1:needle"
     listed = search(tmp_path, pattern="needle", output="files")
     assert listed["content"] == "data/big.min.js\nsrc/a.py"
 
@@ -503,9 +527,9 @@ def test_file_lists_are_newest_first_unless_sorted(tmp_path: Path) -> None:
 def test_context_never_shows_a_match_the_page_leaves_out(tmp_path: Path) -> None:
     _write(tmp_path, {"a": "one\nhit 1\nmid\nhit 2\nmid\nhit 3\nlast\n"})
     first = search(tmp_path, pattern="hit", context=2, limit=1)
-    assert first["content"] == "a-1-one\na:2:hit 1\na-3-mid"
+    assert first["content"] == "a\n1-one\n2:hit 1\n3-mid"
     second = search(tmp_path, pattern="hit", context=2, limit=1, offset=1)
-    assert second["content"] == "a-3-mid\na:4:hit 2\na-5-mid"
+    assert second["content"] == "a\n3-mid\n4:hit 2\n5-mid"
 
 
 def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(tmp_path: Path) -> None:
@@ -518,7 +542,7 @@ def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(tmp_path: 
         assert len(data["content"].encode()) <= 50 * 1024
         seen.extend(
             line.split(":", 2)[1]
-            for line in data["content"].splitlines()
+            for line in _results(data["content"].splitlines())
             if line.startswith(("a:", "b:"))
         )
         if "next_offset" not in data:
@@ -528,11 +552,11 @@ def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(tmp_path: 
     assert seen == [str(number) for number in range(1, 151)] + ["61"]
     # A result left without its context, or itself trimmed, says so: paging cannot show the rest.
     alone = search(tmp_path, pattern="needle in b", context=60)
-    assert alone["content"] == "b:61:needle in b"
+    assert alone["content"] == "b\n61:needle in b"
     assert "context lines were left out" in alone["summary"]
     _write(tmp_path, {"c": "begin\n" + ("z" * 900 + "\n") * 100 + "end\n"})
     cut = search(tmp_path, pattern="begin[\\s\\S]*?end", path="c", args=["-U"])
-    shown = cut["content"].splitlines()
+    shown = _results(cut["content"].splitlines())
     assert 1 < len(shown) < 102 and "next_offset" not in cut
     assert "spans lines 1-102" in cut["summary"]
     assert f"from line {len(shown) + 1} " in cut["summary"]
@@ -542,24 +566,29 @@ def test_multiline_matches_count_and_page_as_whole_matches(tmp_path: Path) -> No
     _write(tmp_path, {"a": "start\nmiddle\nend\nstart\nend\n"})
     arguments = {"pattern": "start\\n(middle\\n)?end", "args": ["-U"]}
     whole = search(tmp_path, **arguments)
-    assert whole["content"] == "a:1:start\na:2:middle\na:3:end\na:4:start\na:5:end"
+    assert whole["content"] == "a\n1:start\n2:middle\n3:end\n4:start\n5:end"
     assert whole["summary"] == "Found 2 matches in 1 file."
     assert search(tmp_path, **arguments, output="count")["content"] == "a:2"
     first = search(tmp_path, **arguments, limit=1)
-    assert first["content"] == "a:1:start\na:2:middle\na:3:end"
+    assert first["content"] == "a\n1:start\n2:middle\n3:end"
     assert first["next_offset"] == 1
-    assert _all_pages(tmp_path, arguments, limit=1) == whole["content"].split("\n")
+    assert _results(_all_pages(tmp_path, arguments, limit=1)) == _results(
+        whole["content"].split("\n")
+    )
     # Matches that share a line are separate results; the line appears once per page.
     _write(tmp_path, {"b": "a a\nb\na\n"})
     shared = search(tmp_path, pattern="a", path="b", args=["-U"])
     assert (shared["summary"], shared["content"]) == (
         "Found 3 matches in 1 file.",
-        "b:1:a a\nb:3:a",
+        "b\n1:a a\n3:a",
     )
     assert _all_pages(tmp_path, {"pattern": "a", "path": "b", "args": ["-U"]}, limit=1) == [
-        "b:1:a a",
-        "b:1:a a",
-        "b:3:a",
+        "b",
+        "1:a a",
+        "b",
+        "1:a a",
+        "b",
+        "3:a",
     ]
 
 
@@ -569,13 +598,13 @@ def test_roots_outside_the_working_directory_keep_absolute_labels(tmp_path: Path
     _write(outside, {"lib/b.py": "needle\n", "lib/c.txt": "needle\n"})
     data = search(workspace, pattern="needle", path=["tests", str(outside / "lib")], glob="*.py")
     assert sorted(data["content"].split("\n")) == sorted(
-        ["tests/test_a.py:1:needle", f"{(outside / 'lib/b.py').as_posix()}:1:needle"]
+        ["tests/test_a.py", "1:needle", "", (outside / "lib/b.py").as_posix(), "1:needle"]
     )
     # A glob with a slash also applies relative to each searched directory.
     anchored = search(workspace, pattern="needle", path="tests", glob="tests/*.py")
-    assert anchored["content"] == "tests/test_a.py:1:needle"
+    assert anchored["content"] == "tests/test_a.py\n1:needle"
     relative = search(workspace, pattern="needle", path="tests", glob="/*.py")
-    assert relative["content"] == "tests/test_a.py:1:needle"
+    assert relative["content"] == "tests/test_a.py\n1:needle"
 
 
 @pytest.mark.parametrize(
@@ -622,21 +651,21 @@ def test_long_lines_show_the_match_in_an_excerpt(tmp_path: Path) -> None:
     _write(tmp_path, {"a": "x" * 100000 + "NEEDLE" + "y" * 100000 + "\n"})
     content = search(tmp_path, pattern="NEEDLE")["content"]
     assert "NEEDLE" in content
-    assert content.startswith("a:1:[99800 characters omitted] ")
+    assert content.startswith("a\n1:[99800 characters omitted] ")
     assert content.endswith(" [99206 characters omitted]")
 
 
 def test_binary_files_and_encodings(project: Path, tmp_path: Path) -> None:
     assert "content" not in search(project, pattern="binary", path="data")
     assert search(project, pattern="binary", path="data", args=["-a"])["content"] == (
-        "data/blob.bin:1:needle\x00binary"
+        "data/blob.bin\n1:needle\x00binary"
     )
     latin = search(project, pattern="café", path="data", args=["-E", "latin1"])
-    assert latin["content"] == "data/latin1.txt:1:café needle"
+    assert latin["content"] == "data/latin1.txt\n1:café needle"
     _write(tmp_path, {"utf16": "needle\n".encode("utf-16"), "crlf": b"needle\r\n"})
-    assert search(tmp_path, pattern="needle", path="utf16")["content"] == "utf16:1:needle"
+    assert search(tmp_path, pattern="needle", path="utf16")["content"] == "utf16\n1:needle"
     assert search(tmp_path, pattern="^needle$", path="crlf", args=["--crlf"])["content"] == (
-        "crlf:1:needle"
+        "crlf\n1:needle"
     )
 
 
@@ -648,7 +677,7 @@ def test_link_loops_become_warnings_and_the_rest_is_searched(tmp_path: Path) -> 
     except OSError:
         pytest.skip("Host does not permit creating symbolic links")
     data = search(tmp_path, pattern="needle", path="link", args=["-L"])
-    assert data["content"] == "link/a:1:needle"
+    assert data["content"] == "link/a\n1:needle"
     assert any("loop" in warning for warning in data["warnings"])
     assert data["summary"].endswith("The search is incomplete; see warnings.")
 
@@ -671,7 +700,7 @@ def test_a_file_deleted_during_the_search_is_no_read_failure(
 
     monkeypatch.setattr(execution, "native_lines", with_read_errors)
     data = search(tmp_path, pattern="needle")
-    assert data["content"] == "a.txt:1:needle"
+    assert data["content"] == "a.txt\n1:needle"
     warned = " ".join(data["warnings"])
     assert "locked.txt" in warned and "a.txt" in warned and "gone" not in warned
 
@@ -686,13 +715,13 @@ def test_junctions_are_followed_only_on_request_or_as_explicit_roots(tmp_path: P
     _write(outside, {"secret.txt": "needle"})
     _winapi.CreateJunction(str(outside), str(project / "linked"))
 
-    assert search(project, pattern="needle")["content"] == "a.txt:1:needle"
+    assert search(project, pattern="needle")["content"] == "a.txt\n1:needle"
     assert search(project)["content"] == "a.txt"
     assert search(project, pattern="needle", args=["-L"])["content"] == (
-        "a.txt:1:needle\nlinked/secret.txt:1:needle"
+        "a.txt\n1:needle\n\nlinked/secret.txt\n1:needle"
     )
     assert search(project, pattern="needle", path="linked")["content"] == (
-        "linked/secret.txt:1:needle"
+        "linked/secret.txt\n1:needle"
     )
 
 
@@ -754,7 +783,7 @@ def test_schema_display_and_registry_repairs(project: Path) -> None:
     )
     assert [part["value"] for part in display["primary"]] == ["-e alpha -e beta src tests"]
     result = asyncio.run(dispatch(project, {"argv": ["-n", "needle", "src/pkg"], "limit": "1"}))
-    assert result["data"]["content"] == "src/pkg/mod.py:1:x = 'needle'"
+    assert result["data"]["content"] == "src/pkg/mod.py\n1:x = 'needle'"
 
 
 @pytest.mark.asyncio

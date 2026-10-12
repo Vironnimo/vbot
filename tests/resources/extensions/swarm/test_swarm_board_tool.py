@@ -354,9 +354,9 @@ async def test_board_validation_names_the_missing_or_misplaced_field_before_any_
         assert result["error"]["code"] == "invalid_arguments"
         assert message in result["error"]["message"]
         assert context._delivery_receipts == []
-    # Dispatch rejects a name that is not a parameter before the handler.
-    rejected, _ = await dispatch(board, {"action": "list", "unavailable_feature": 1})
-    assert '"unavailable_feature" is not a parameter' in rejected["error"]["message"]
+    # Dispatch rejects an unknown switch before the handler.
+    rejected, _ = await dispatch(board, {"action": "post", "text": "Done.", "silent": True})
+    assert '"silent" is not a parameter' in rejected["error"]["message"]
     assert not await board_posts(board)
 
 

@@ -19,6 +19,8 @@ import os
 import re
 from collections.abc import Collection, Container
 
+from core.utils.edit_distance import edit_distance
+
 BASH_TOOL_NAME = "bash"
 SUBAGENT_TOOL_NAME = "subagent"
 SHELL_MODEL_NAME = "powershell" if os.name == "nt" else BASH_TOOL_NAME
@@ -29,6 +31,9 @@ _REGISTRY_NAMES = {model: name for name, model in _MODEL_NAMES.items()}
 # Namespaces some Models put in front of a function name.
 _WRAPPER_PREFIXES = ("functions.", "function.", "default_api.", "default_api:", "tools.", "tool.")
 _SEPARATORS = re.compile(r"[\s_.:/-]+")
+# Tool-call markup some Models leak into the name after it, such as DeepSeek's
+# ``board_placeholder</｜DSML｜ parameter>\n<｜DSML｜ parameter name=``.
+_LEAKED_MARKUP = re.compile(r"\s*</?[|｜A-Za-z].*", re.DOTALL)
 # One typo in a shorter name (read, bash) too often spells a different word.
 _TYPO_MIN_LENGTH = 5
 
@@ -211,13 +216,18 @@ def called_tool_name(
 
     ``offered`` holds the registry names of the Tools in the Model request. A
     registered name is never remapped, even when it was not offered: it names a
-    real Tool, and dispatch explains why that Tool cannot run. Otherwise a
-    namespace prefix, case and separators are ignored, and a name another
-    harness uses for the same capability maps to the offered vBot Tool. Any
-    other name maps to the one offered Tool it misspells by a single character.
+    real Tool, and dispatch explains why that Tool cannot run. Otherwise
+    tool-call markup leaked after the name is cut off, and the rest is resolved
+    like any called name or comes back as the name. A namespace prefix, case and
+    separators are ignored, and a name another harness uses for the same
+    capability maps to the offered vBot Tool. Any other name maps to the one
+    offered Tool it misspells by a single character.
     """
     if name in offered or name in registered:
         return name
+    markup = _LEAKED_MARKUP.search(name)
+    if markup is not None and markup.start() > 0 and name[: markup.start()].strip():
+        return called_tool_name(name[: markup.start()].strip(), offered, registered=registered)
     bare = name.strip()
     for prefix in _WRAPPER_PREFIXES:
         if bare.casefold().startswith(prefix):
@@ -241,7 +251,7 @@ def called_tool_name(
         tool
         for tool in offered
         if any(
-            len(spelling) >= _TYPO_MIN_LENGTH and _one_edit_apart(key, spelling)
+            len(spelling) >= _TYPO_MIN_LENGTH and edit_distance(key, spelling, 1) == 1
             for spelling in (_spelling_key(tool), _spelling_key(model_tool_name(tool)))
         )
     }
@@ -250,29 +260,3 @@ def called_tool_name(
 
 def _spelling_key(name: str) -> str:
     return _SEPARATORS.sub("", name).casefold()
-
-
-def _one_edit_apart(first: str, second: str) -> bool:
-    """Whether one inserted, removed, replaced or swapped character separates the two."""
-    if first == second or abs(len(first) - len(second)) > 1:
-        return False
-    if len(first) == len(second):
-        differ = [
-            index
-            for index, pair in enumerate(zip(first, second, strict=True))
-            if pair[0] != pair[1]
-        ]
-        if len(differ) == 1:
-            return True
-        return (
-            len(differ) == 2
-            and differ[1] == differ[0] + 1
-            and first[differ[0]] == second[differ[1]]
-            and first[differ[1]] == second[differ[0]]
-        )
-    shorter, longer = sorted((first, second), key=len)
-    index = next(
-        (index for index, character in enumerate(shorter) if character != longer[index]),
-        len(shorter),
-    )
-    return shorter[index:] == longer[index + 1 :]

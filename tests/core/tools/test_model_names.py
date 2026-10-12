@@ -68,6 +68,11 @@ def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
         ("serach_files", "search_files"),
         ("web_fetchh", "web_fetch"),
         ("subagant", "subagent"),
+        # Tool-call markup leaked after the name is cut off; an unknown rest stays
+        # as called, without the markup.
+        ("read</｜DSML｜ parameter>\n<｜DSML｜ parameter name=", "read"),
+        ("Read<|tool_call_end|>", "read"),
+        ("board_placeholder</｜DSML｜ parameter>", "board_placeholder"),
     ],
 )
 def test_called_names_resolve_to_the_offered_tool_they_mean(called: str, expected: str) -> None:

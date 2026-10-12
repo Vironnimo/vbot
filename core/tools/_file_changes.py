@@ -35,6 +35,7 @@ from core.tools._patch_report import _FileReport, file_report
 from core.tools._patch_syntax import _Operation, _PatchError
 from core.tools._path_suggestions import missing_file_message
 from core.tools._read_text import add_line_numbers, plain_line_end
+from core.tools._swarm_references import wiki_page_call
 from core.tools.arguments import split_text_lines
 from core.tools.file_state import (
     FileReadState,
@@ -196,6 +197,8 @@ class ChangeBatch:
     shown: Callable[[Path], str]
     cwd: Path
     templates: Mapping[str, str] = field(default_factory=dict)
+    # Whether the Model request offered a Tool (``ToolContext.offers``).
+    offers: Callable[[str], bool] = field(default=lambda _name: False)
     # Actual observations and completed mutations only; never a speculative final plan.
     observed: dict[Path, _Snapshot] = field(default_factory=dict)
     before: dict[Path, _Snapshot] = field(default_factory=dict)
@@ -222,7 +225,10 @@ def change_batch(context: ToolContext, templates: Mapping[str, str] | None = Non
     """Start the batch of one call, showing paths relative to its working directory."""
     cwd = _call_cwd(context)
     return ChangeBatch(
-        shown=lambda path: display_search_path(path, cwd=cwd), cwd=cwd, templates=templates or {}
+        shown=lambda path: display_search_path(path, cwd=cwd),
+        cwd=cwd,
+        templates=templates or {},
+        offers=context.offers,
     )
 
 
@@ -258,7 +264,8 @@ def _error_data(error: _PatchError | OSError, batch: ChangeBatch) -> JsonObject:
     if isinstance(path, Path):
         data["path_label"] = batch.shown(path)
         if error.code == "file_not_found":
-            data["message"] = missing_file_message(path, batch.cwd)
+            page = wiki_page_call(path, batch.cwd, batch.offers, change=True)
+            data["message"] = missing_file_message(path, batch.cwd, elsewhere=page)
     label = error.values.get("label")
     if isinstance(label, str) and label:
         data["label"] = label

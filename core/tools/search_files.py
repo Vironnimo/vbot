@@ -11,7 +11,7 @@ import json
 import os
 import re
 import shlex
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -57,6 +57,7 @@ from core.tools._search_results import (
     path_label,
     summary,
 )
+from core.tools._swarm_references import wiki_page_call
 from core.tools._tool_context import _path_argument
 from core.tools.arguments import optional_int
 from core.tools.call_syntax import SpellingAliases as _SpellingAliases
@@ -298,8 +299,9 @@ def _values(value: Any) -> list[str] | None:
 def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
     """Turn flag-shaped fields from other search interfaces into args.
 
-    A field is translated only when its meaning is exact; anything else stays
-    for validation to report.
+    A field is translated only when its meaning is exact. A flag field whose
+    value is unclear (``ignore_case: "maybe"``) refuses the call; any other
+    field stays for validation.
     """
     result = dict(arguments)
     tokens: list[str] = []
@@ -308,6 +310,13 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
         if field in result and result[field] != value:
             raise ToolContractError(f"Conflicting values for {field}; provide one intended value.")
         result[field] = value
+
+    def unclear(key: str, value: Any, expected: str) -> ToolContractError:
+        received = json.dumps(value, ensure_ascii=False)
+        return ToolContractError(
+            f'{SEARCH_FILES_TOOL_NAME} was not run: "{key}" must be {expected}; '
+            f"received {received}."
+        )
 
     for key, value in arguments.items():
         if key in SEARCH_FILES_TOOL_PARAMETERS["properties"]:
@@ -319,28 +328,28 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
             set_field("pattern", value)
         elif letter in _SWITCH_LETTERS:
             if switch is None:
-                continue
+                raise unclear(key, value, "true or false")
             if switch:
                 tokens.extend(_SWITCH_LETTERS[letter])
         elif word in _SWITCH_WORDS:
             if switch is None:
-                continue
+                raise unclear(key, value, "true or false")
             tokens.extend(_SWITCH_WORDS[word][0 if switch else 1])
         elif letter in {"l", "c"} or word in {"count", "fileswithmatches", "filesonly"}:
             if switch is None:
-                continue
+                raise unclear(key, value, "true or false")
             if switch:
                 set_field("output", "count" if letter == "c" or word == "count" else "files")
         elif letter in _VALUED_LETTERS or word in _VALUED_WORDS:
             values = _values(value)
             if values is None:
-                continue
+                raise unclear(key, value, "a value or a list of values")
             flag = _VALUED_LETTERS.get(letter) or _VALUED_WORDS[word]
             tokens.extend(token for item in values for token in (flag, item))
         elif word in _EXCLUDE_WORDS:
             values = _values(value)
             if values is None:
-                continue
+                raise unclear(key, value, "a value or a list of values")
             tokens.extend(token for item in values for token in ("-g", "!" + item.lstrip("!")))
         elif letter in _FIELD_LETTERS:
             set_field(_FIELD_LETTERS[letter], value)
@@ -490,8 +499,10 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
     return roots
 
 
-def _missing_warnings(query: SearchQuery, roots: _Roots, cwd: Path) -> list[str]:
-    warnings = [_missing_root_message(raw, path, cwd) for raw, path in roots.missing]
+def _missing_warnings(
+    query: SearchQuery, roots: _Roots, cwd: Path, offers: Callable[[str], bool]
+) -> list[str]:
+    warnings = [_missing_root_message(raw, path, cwd, query, offers) for raw, path in roots.missing]
     missing_operands = [raw for raw, _ in roots.missing if raw in query.operand_roots]
     if missing_operands and query.mode == "list_files":
         warnings.append(
@@ -563,6 +574,7 @@ def _glob_root(text: str, cwd: Path, query: SearchQuery) -> Path | None:
 
 
 _GLOB_SYNTAX = re.compile(r"[*?\[\]{}]")
+_REGEX_SYNTAX = re.compile(r"[.^$*+?()\[\]{}|\\]")
 
 
 def _directory_globs(query: SearchQuery, roots: list[Path], cwd: Path) -> None:
@@ -593,15 +605,23 @@ def _directory_globs(query: SearchQuery, roots: list[Path], cwd: Path) -> None:
     query.globs = globs
 
 
-def _missing_root_message(raw: str, root: Path, cwd: Path) -> str:
+def _missing_root_message(
+    raw: str, root: Path, cwd: Path, query: SearchQuery, offers: Callable[[str], bool]
+) -> str:
+    # A Swarm Wiki page searched for one plain text reads with the lines holding it.
+    patterns = query.patterns
+    plain = len(patterns) == 1 and (query.literal or not _REGEX_SYNTAX.search(patterns[0]))
+    page = wiki_page_call(root, cwd, offers, fields={"query": patterns[0]} if plain else None)
     message = f"Path not found: {path_label(root, cwd)}"
     suggestions = corrected_paths(root, cwd)
     if suggestions:
         message += f" (similar: {', '.join(path_label(path, cwd) for path in suggestions)})"
+    elif page:
+        return f"{path_label(root, cwd)} is not a file or directory. {page}"
     elif not Path(raw).expanduser().is_absolute():
         # Agents pass paths relative to another directory than the one search_files uses.
         message += f" (relative to the working directory {cwd.as_posix()})"
-    return message + "."
+    return f"{message}. {page}" if page else message + "."
 
 
 def _ignored_summary(paths: list[Path], cwd: Path) -> str:
@@ -1138,7 +1158,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             text = reference_text(binary, query.reference_args, context, budget)
             return tool_success({"content": text})
         roots = _resolve_roots(query, cwd)
-        missing = _missing_warnings(query, roots, cwd)
+        missing = _missing_warnings(query, roots, cwd, context.offers)
         if not roots.paths:
             return tool_failure(
                 "path_not_found",
@@ -1292,9 +1312,9 @@ glob that names files also selects files those rules exclude. __pycache__ is ski
 unless -u is given or a glob names __pycache__ or .pyc files. Globs and file types
 match names in any letter case unless --no-glob-case-insensitive is given.
 
-Output: content shows path:line:text for matching lines and path-line-text for context
-lines. Content results are ordered by path, file lists newest first. Every page says
-how many results exist; continue with next_offset.
+Output: content names each file on its own line, followed by line:text for its matching
+lines and line-text for context lines. Content results are ordered by path, file lists
+newest first. Every page says how many results exist; continue with next_offset.
 
 args items, one flag or value per item. Other ripgrep flags work as well:
   -i / -s / -S          ignore case / match case / ignore case unless the pattern has capitals

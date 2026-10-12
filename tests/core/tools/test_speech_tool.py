@@ -190,12 +190,12 @@ def _auth_failure() -> SpeechExecutionError:
     ("arguments", "error", "expected"),
     [
         pytest.param(
-            {"text": "hello", "unexpected": True},
+            {"text": "hello", "voice_id": "nova"},
             None,
             {
                 "code": "invalid_arguments",
                 "message": "generate_speech was not run:\n"
-                '- "unexpected" is not a parameter.\n'
+                '- "voice_id" is not a parameter.\n'
                 "generate_speech parameters: text (required).",
             },
             id="unknown-argument",

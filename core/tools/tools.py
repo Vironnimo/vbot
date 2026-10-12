@@ -83,11 +83,17 @@ from core.tools._tool_results import (
     tool_failure,
     tool_failure_for_exception,
     tool_success,
+    with_call_note,
 )
 from core.tools.availability import (
     TOOL_ACTIVATION_CONFIGURABLE,
 )
-from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from core.tools.contracts import (
+    ToolContract,
+    ToolContractError,
+    compile_tool_contract,
+    ignored_fields_note,
+)
 from core.tools.model_names import model_tool_name, reserved_model_name
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -149,22 +155,65 @@ def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
     return offloaded
 
 
-def _checked_arguments(tool: Tool, contract: ToolContract, arguments: Any) -> Any:
+def _arguments_fit(contract: ToolContract, arguments: Any) -> bool:
+    """Return whether ``arguments`` read as a call of the Tool with ``contract``.
+
+    Every field is one of its parameters, every required one is present, and a
+    value of a parameter with fixed values, such as ``action``, is one of them.
+    """
+    if not isinstance(arguments, dict) or not arguments:
+        return False
+    properties = contract.input_schema.get("properties")
+    if not isinstance(properties, dict) or not arguments.keys() <= properties.keys():
+        return False
+    required = contract.input_schema.get("required", ())
+    if not set(required) <= arguments.keys():
+        return False
+    return all(
+        not isinstance(properties[field], dict)
+        or "enum" not in properties[field]
+        or value in properties[field]["enum"]
+        for field, value in arguments.items()
+    )
+
+
+def _checked_arguments(
+    tool: Tool, contract: ToolContract, arguments: Any
+) -> tuple[Any, tuple[str, ...]]:
     """Return the arguments the handler receives, or refuse the call before it runs.
 
-    Whatever argument repair and validation raise refuses the call as a
-    ``ToolContractError``, because nothing has run yet. A call refused that
-    arrived as ``{}`` lost its arguments on the way and is told so. A repair
-    that crashes for another reason than a ``ValueError`` is a defect and is
-    logged.
+    Also returns the unknown fields the call runs without, which its result
+    names as without effect (``ToolContract.drop_inert_fields``); a refused call
+    names them as unknown, since it ran without anything. Whatever argument
+    repair and validation raise refuses the call as a ``ToolContractError``,
+    because nothing has run yet. A call refused that arrived as ``{}`` lost its
+    arguments on the way and is told so. A repair that crashes for another
+    reason than a ``ValueError`` is a defect and is logged.
     """
     received = arguments
+    ignored: tuple[str, ...] = ()
     try:
         if tool.argument_normalizer is not None:
             arguments = tool.argument_normalizer(copy.deepcopy(arguments))
         normalized = contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
         if not tool.handler_validates_arguments:
-            contract.validate_arguments(normalized, unadvertised=tool.unadvertised_parameters)
+            unadvertised = tool.unadvertised_parameters
+            # Parameters a Model request's definition left out are never ignored.
+            withheld = (
+                ()
+                if contract is tool.contract
+                else tool.contract.input_schema.get("properties", {})
+            )
+            kept, ignored = contract.drop_inert_fields(
+                normalized, unadvertised=unadvertised, withheld=withheld
+            )
+            try:
+                contract.validate_arguments(kept, unadvertised=unadvertised)
+            except ToolContractError:
+                if ignored:
+                    contract.validate_arguments(normalized, unadvertised=unadvertised)
+                raise
+            normalized = kept
     except ValueError as error:  # ToolContractError included
         if isinstance(received, dict) and not received:
             raise ToolContractError(contract.no_arguments_message()) from error
@@ -175,7 +224,7 @@ def _checked_arguments(tool: Tool, contract: ToolContract, arguments: Any) -> An
         _LOGGER.error("Tool %s argument repair crashed unexpectedly", tool.name, exc_info=error)
         cause = str(error).strip() or type(error).__name__
         raise ToolContractError(f"{model_tool_name(tool.name)} was not run: {cause}") from error
-    return normalized
+    return normalized, ignored
 
 
 def _detail_blocks(
@@ -602,7 +651,9 @@ class ToolRegistry:
         try:
             tool = self.get(context.tool_name)
         except ToolNotFoundError:
-            raise ToolNotFoundError(self._unknown_tool_message(context, allowed_tools)) from None
+            raise ToolNotFoundError(
+                self._unknown_tool_message(context, allowed_tools, arguments)
+            ) from None
         context._retain_result_contract(tool.contract)
         context._retain_dispatch_allowlist(allowed_tools)
         if tool.session_scoped and context.tool_name not in context.session_tool_grants:
@@ -624,39 +675,49 @@ class ToolRegistry:
                 "its extension is not configured",
                 retryable=tool.readiness_retryable,
             )
-        normalized_arguments = _checked_arguments(
+        normalized_arguments, ignored = _checked_arguments(
             tool, context.input_contract or tool.contract, arguments
         )
+        note = ignored_fields_note(context.tool_name, ignored) if ignored else None
         # From here on the handler runs: only a ToolContractError it raises
         # still means nothing happened; any other exception leaves the call's
         # effects unknown (``tool_failure_for_exception``).
-        if tool.extension is not None and not inspect.iscoroutinefunction(tool.handler):
-            result = await run_tool_worker(
-                _invoke_sync_tool_handler,
-                tool.handler,
-                context,
-                normalized_arguments,
-            )
-        else:
-            result = _invoke_sync_tool_handler(
-                tool.handler,
-                context,
-                normalized_arguments,
-            )
-        if inspect.isawaitable(result):
-            result = await result
-        return self.validate_result(context.tool_name, result, contract=tool.contract)
+        try:
+            if tool.extension is not None and not inspect.iscoroutinefunction(tool.handler):
+                result = await run_tool_worker(
+                    _invoke_sync_tool_handler,
+                    tool.handler,
+                    context,
+                    normalized_arguments,
+                )
+            else:
+                result = _invoke_sync_tool_handler(
+                    tool.handler,
+                    context,
+                    normalized_arguments,
+                )
+            if inspect.isawaitable(result):
+                result = await result
+        except ToolContractError as error:
+            if note is None:
+                raise
+            raise ToolContractError(f"{error}\n{note}") from error
+        result = self.validate_result(context.tool_name, result, contract=tool.contract)
+        return result if note is None else with_call_note(result, note)
 
     def _unknown_tool_message(
-        self, context: ToolContext, allowed_tools: Sequence[str] | None
+        self, context: ToolContext, allowed_tools: Sequence[str] | None, arguments: Any
     ) -> str:
         """Name the Tools this caller can use instead of an unknown one.
 
         These are the Tools the Model was shown and the On-demand Tools it can
-        load; an internal Tool counts only when the Model request listed it.
+        load; an internal Tool counts only when the Model request listed it. When
+        the arguments fit exactly one of them, the message names that Tool alone;
+        the call never runs it, because the name alone did not say which Tool was
+        meant.
         """
         available = [
-            model_tool_name(tool.name)
+            tool
             for tool in self.list_tools(allowed_tools, include_internal=True, ready_only=True)
             if not tool.deferred
             and (not tool.session_scoped or tool.name in context.session_tool_grants)
@@ -669,9 +730,16 @@ class ToolRegistry:
         ]
         if not available:
             return f"Unknown Tool: {context.tool_name}. No Tools are available in this Run."
+        fitting = [tool for tool in available if _arguments_fit(tool.contract, arguments)]
+        if len(fitting) == 1:
+            name = model_tool_name(fitting[0].name)
+            return (
+                f"Unknown Tool: {context.tool_name}. These arguments fit {name}; "
+                f"call {name} with them."
+            )
         return (
             f"Unknown Tool: {context.tool_name}. Call one of the available Tools instead: "
-            f"{', '.join(available)}."
+            f"{', '.join(model_tool_name(tool.name) for tool in available)}."
         )
 
     def _model_facing_tools(

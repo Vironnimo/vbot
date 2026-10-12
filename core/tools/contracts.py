@@ -9,7 +9,7 @@ import json
 import re
 import threading
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +21,148 @@ from core.tools._contract_error import ToolContractError
 from core.tools.model_names import model_tool_name
 
 JsonObject = dict[str, Any]
+# The data field of a successful result that says how the call was read.
+CALL_NOTE_FIELD = "note"
+# A label some Models attach to a call; it requests nothing.
+_REMARK = "commentary"
+# Words in the name of an unknown field that make ignoring it unsafe: the field
+# reads as a mode, condition or safety switch of the call, or as a target or
+# content of its own. The call without it could have an effect the Agent did not
+# ask for: dryRun on edit would write for real, mode on write would overwrite
+# instead of append, thread_id on channel_send would post to the channel.
+_DECISIVE_WORDS = frozenset(
+    {
+        # The operation itself, modes, states, formats, conditions and safety switches.
+        "action",
+        "all",
+        "allow",
+        "append",
+        "atomic",
+        "backup",
+        "base64",
+        "binary",
+        "check",
+        "chmod",
+        "condition",
+        "confirm",
+        "create",
+        "delete",
+        "draft",
+        "dry",
+        "dryrun",
+        "encoded",
+        "encoding",
+        "escaped",
+        "etag",
+        "executable",
+        "exist",
+        "exists",
+        "expect",
+        "expected",
+        "force",
+        "if",
+        "insert",
+        "isolated",
+        "isolation",
+        "keep",
+        "lock",
+        "method",
+        "mode",
+        "no",
+        "notification",
+        "notify",
+        "only",
+        "op",
+        "operation",
+        "overwrite",
+        "permission",
+        "prepend",
+        "preview",
+        "private",
+        "public",
+        "raw",
+        "recursive",
+        "remove",
+        "replace",
+        "require",
+        "revision",
+        "safe",
+        "sandbox",
+        "sandboxed",
+        "silent",
+        "simulate",
+        "skip",
+        "state",
+        "status",
+        "strict",
+        "unless",
+        "validate",
+        "verify",
+        "version",
+        "visibility",
+        "whatif",
+        "when",
+        # Targets.
+        "account",
+        "address",
+        "agent",
+        "branch",
+        "channel",
+        "chat",
+        "dest",
+        "destination",
+        "dir",
+        "directory",
+        "discussion",
+        "email",
+        "file",
+        "folder",
+        "id",
+        "into",
+        "key",
+        "name",
+        "page",
+        "parent",
+        "path",
+        "post",
+        "project",
+        "recipient",
+        "ref",
+        "reply",
+        "session",
+        "target",
+        "thread",
+        "to",
+        "uri",
+        "url",
+        "user",
+        # Contents.
+        "attachment",
+        "body",
+        "code",
+        "command",
+        "content",
+        "data",
+        "diff",
+        "image",
+        "input",
+        "instruction",
+        "message",
+        "new",
+        "old",
+        "patch",
+        "payload",
+        "prompt",
+        "replacement",
+        "script",
+        "text",
+        "value",
+    }
+)
+_NAME_WORDS = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+# The longest text an unknown field can hold and still read as a label of the
+# call ("support wiring", "Check working directory") rather than content.
+_LABEL_LENGTH = 80
 _TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 # Compiled contracts keyed by the digest of their exact JSON inputs. Chat compiles
 # every Provider Tool definition per request; the definitions rarely change.
@@ -45,7 +187,8 @@ class ToolContract:
         """Repair common unambiguous model encodings in a copied argument value.
 
         An empty value under a name that is not a parameter requests nothing,
-        so it is dropped instead of rejected.
+        and neither does ``commentary``, which some Models attach to calls as a
+        label of their output channel; both are dropped instead of rejected.
         """
         copied_arguments = copy.deepcopy(arguments)
         normalized = normalize_schema_value(
@@ -60,8 +203,46 @@ class ToolContract:
         return {
             key: value
             for key, value in normalized.items()
-            if key in parameters or value not in (None, "", [], {})
+            if key in parameters or (value not in (None, "", [], {}) and key != _REMARK)
         }
+
+    def drop_inert_fields(
+        self,
+        arguments: Any,
+        *,
+        unadvertised: Mapping[str, JsonObject] | None = None,
+        withheld: Collection[str] = (),
+    ) -> tuple[Any, tuple[str, ...]]:
+        """Return the arguments without unknown fields the call can run without.
+
+        Also returns the dropped names, which the call's result names as without
+        effect. An unknown field stays, and ``validate_arguments`` refuses the
+        call, when ignoring it could change what the call does: its name is
+        close to a parameter, so it is likely a misspelled one; it is one of
+        ``withheld``, parameters of the Tool this Model request left out; it
+        reads as a mode, condition or safety switch (``dryRun``, ``mode``,
+        ``force``), or as a target or content of its own (``thread_id``,
+        ``message``); or its value is content or fields of the call rather
+        than a label (an object, or text with a line break or longer than a
+        label).
+        """
+        parameters = _closed_root_parameters(self.input_schema)
+        if parameters is None or not isinstance(arguments, dict):
+            return arguments, ()
+        known = {*parameters, *(unadvertised or {})}
+        inert = tuple(
+            key
+            for key, value in arguments.items()
+            if key not in known
+            and key not in withheld
+            and not _similar_names(key, list(known))
+            and not _decisive(key)
+            and _label_value(value)
+        )
+        if not inert:
+            return arguments, ()
+        kept = {key: value for key, value in arguments.items() if key not in inert}
+        return kept, inert
 
     def validate_arguments(
         self, arguments: Any, *, unadvertised: Mapping[str, JsonObject] | None = None
@@ -97,11 +278,23 @@ class ToolContract:
         return "\n".join(lines)
 
     def validate_success_data(self, data: Any) -> None:
-        """Raise an actionable error when successful Tool data violates its schema."""
+        """Raise an actionable error when successful Tool data violates its schema.
+
+        Every successful result can carry ``note``, a sentence about how the call
+        was read (``with_call_note``); a result schema that does not declare it
+        is checked without it.
+        """
         if self.result_validator is None:
             if not isinstance(data, dict):
                 raise ToolContractError("data must be an object")
             return
+        properties = (self.result_schema or {}).get("properties")
+        if (
+            isinstance(data, dict)
+            and CALL_NOTE_FIELD in data
+            and not (isinstance(properties, dict) and CALL_NOTE_FIELD in properties)
+        ):
+            data = {key: value for key, value in data.items() if key != CALL_NOTE_FIELD}
         _validate_instance(self.result_validator, data, label="data")
 
 
@@ -407,17 +600,60 @@ def _unknown_parameter(key: str, parameters: tuple[str, ...], arguments: JsonObj
 
 def _similar_name(key: str, candidates: list[str]) -> str | None:
     """Suggest a parameter for an unknown name; the suggestion is never applied."""
-    tokens = {token for token in re.split(r"[^a-z0-9]+", key.casefold()) if token}
-    containing = [name for name in candidates if name.casefold() in tokens]
+    containing = _contained_names(key, candidates)
     if len(containing) == 1:
         return containing[0]
+    close = _typo_names(key, candidates)
+    return close[0] if close else None
+
+
+def _similar_names(key: str, candidates: list[str]) -> list[str]:
+    """Return the parameters an unknown name contains or misspells."""
+    return [*_contained_names(key, candidates), *_typo_names(key, candidates)]
+
+
+def _contained_names(key: str, candidates: list[str]) -> list[str]:
+    """Return the parameters that are a word of ``key`` (``path`` in ``file_path``)."""
+    tokens = {token for token in re.split(r"[^a-z0-9]+", key.casefold()) if token}
+    return [name for name in candidates if name.casefold() in tokens]
+
+
+def _typo_names(key: str, candidates: list[str]) -> list[str]:
+    """Return the parameters a typo away from ``key``, the closest first."""
     # A typo keeps the length; "country" is another word, not a misspelled "count".
-    close = [
+    return [
         name
         for name in difflib.get_close_matches(key, candidates, n=3, cutoff=0.75)
         if abs(len(name) - len(key)) <= max(1, len(name) // 4)
     ]
-    return close[0] if close else None
+
+
+def _decisive(key: str) -> bool:
+    """Return whether an unknown field's name reads as a switch, target or content."""
+    words = [word.casefold() for word in _NAME_WORDS.findall(key)]
+    compact = "".join(words)
+    return compact in _DECISIVE_WORDS or any(
+        word in _DECISIVE_WORDS or word.removesuffix("s") in _DECISIVE_WORDS for word in words
+    )
+
+
+def _label_value(value: Any) -> bool:
+    """Return whether an unknown field's value reads as a label, not as content."""
+    if isinstance(value, str):
+        return "\n" not in value and len(value) <= _LABEL_LENGTH
+    if isinstance(value, list):
+        return all(not isinstance(item, (dict, list)) and _label_value(item) for item in value)
+    return not isinstance(value, dict)
+
+
+def ignored_fields_note(tool_name: str, names: Collection[str]) -> str:
+    """Return the note that unknown fields of a call had no effect."""
+    quoted = [json.dumps(name, ensure_ascii=False) for name in names]
+    listed = quoted[0] if len(quoted) == 1 else f"{', '.join(quoted[:-1])} and {quoted[-1]}"
+    tool = model_tool_name(tool_name)
+    if len(quoted) == 1:
+        return f"{listed} had no effect: {tool} has no such parameter."
+    return f"{listed} had no effect: {tool} has no such parameters."
 
 
 def _describe_problem(root_schema: Any, error: ValidationError) -> list[str]:
@@ -687,8 +923,10 @@ def _format_path(path: Any) -> str:
 
 
 __all__ = [
+    "CALL_NOTE_FIELD",
     "ToolContract",
     "ToolContractError",
     "compile_tool_contract",
     "decode_json_argument",
+    "ignored_fields_note",
 ]

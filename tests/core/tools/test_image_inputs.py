@@ -157,13 +157,13 @@ async def test_other_image_dialects_analyze_the_same_file(
             id="no-images",
         ),
         pytest.param(
-            {"prompt": "a", "images": ["photos/cat.png"], "extra": True},
+            {"prompt": "a", "images": ["photos/cat.png"], "mode": "ocr"},
             contract_refusal(
                 "analyze_image was not run:\n"
-                '- "extra" is not a parameter.\n'
+                '- "mode" is not a parameter.\n'
                 "analyze_image parameters: prompt (required), images (required)."
             ),
-            id="unknown-argument",
+            id="unknown-mode",
         ),
     ],
 )

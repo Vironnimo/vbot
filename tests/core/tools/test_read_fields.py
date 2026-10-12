@@ -329,11 +329,6 @@ async def test_notes_and_one_file_lists_read_that_file(project: Path, arguments:
             {"path": "src/app.txt", "file_path": "src/code.py"},
             "Conflicting values for path",
         ),
-        # A requested summary of other lines is not silently dropped.
-        (
-            {"path": "src/app.txt", "limit": 3, "IncludeSummaryOfOtherLines": True},
-            '"IncludeSummaryOfOtherLines" is not a parameter.',
-        ),
         (
             {"path": "src", "pattern": "greet", "glob": "*.py", "output_mode": "content"},
             "read shows one file or lists one directory and has no glob, output_mode field. "

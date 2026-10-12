@@ -59,10 +59,15 @@ def test_example_extensions_load_cleanly_and_word_count_honors_its_schema(
     for text, count in (("one two three", 3), (" \t\n", 0)):
         result = asyncio.run(tools.dispatch(context, {"text": text}))
         assert (result["ok"], result["data"]) == (True, {"word_count": count})
+    # An unknown field has no effect, and its note passes the closed result schema.
+    ignored = asyncio.run(tools.dispatch(context, {"text": "one", "extra": True}))
+    assert ignored["data"] == {
+        "word_count": 1,
+        "note": '"extra" had no effect: word_count has no such parameter.',
+    }
     for arguments, problem in (
         ({"words": "one two"}, '"text" is required'),
         ({"text": None}, '"text" must be a string'),
-        ({"text": "one", "extra": True}, '"extra" is not a parameter'),
     ):
         with pytest.raises(ToolContractError) as exc_info:
             asyncio.run(tools.dispatch(context, arguments))

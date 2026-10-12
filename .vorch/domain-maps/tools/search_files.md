@@ -158,8 +158,8 @@ Other rules:
 
 - Single-letter keys keep ripgrep's case: `-c` counts, `-C` is context.
 - A `pattern` list becomes repeated `-e`.
-- Unclear values, conflicting aliases and unknown fields are rejected.
-- The old `action` and `kind` fields are unknown fields.
+- Unclear values (`ignore_case: "maybe"`, a flag field without a usable value) and conflicting aliases are refused.
+- Unknown fields follow the shared rule (`tools.md` -> Unknown fields): the old `action` field refuses the call, the old `kind` runs without effect and says so.
 - A double-quoted encoded list in `args` keeps regex backslashes that are missing
   from its JSON escaping.
 - A scalar `args` string that starts with an option and contains no backslash
@@ -198,6 +198,14 @@ Roots (`_resolve_roots`):
   another directory (Sessions, 2026-09: 48 `path_not_found` failures, mostly
   relative roots). When every root is missing, the call fails with `path_not_found`, ending
   `Nothing was searched. Correct path, or omit it to search the working directory.`
+- A missing root that is a bare Swarm Wiki page number in the working directory
+  (`w2`, `w2.md`) names the `swarm_wiki` read call instead of the working directory
+  when `swarm_wiki` is offered, carrying a single plain-text pattern as `query`:
+  `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki
+  {"action": "read", "page_id": "w2", "query": "Neumaier"}.` A regular expression
+  is left out, since the Wiki searches plain text (`wiki_page_call` in
+  `core/tools/_swarm_references.py`; Swarm Sessions, 2026-10-12: three searches
+  with `path: ["w2"]` or `["w3"]`).
 - When the pattern came from the first `args` operand, the warning shows how to
   search missing words as further patterns. Words are missing operands without a
   path separator. The suggestion takes the form `pattern "a|b|c"`, or repeated
@@ -368,8 +376,17 @@ A successful result has these fields:
 
 Content lines:
 
-- Matching lines are `path:line:text` and context lines are `path-line-text`.
-  Gaps between non-adjacent lines are marked with `--` when context is shown.
+- Each file is named once, as in ripgrep's `--heading`: its path on a line of
+  its own, then its matching lines as `line:text` and context lines as
+  `line-text`; an empty line precedes the next file's path. `-o` matches use
+  the same layout. Gaps between non-adjacent lines of one file are marked with
+  `--` when context is shown. A page that starts inside a file names it again.
+  The former `path:line:text` on every line made path prefixes 28.6% of all
+  result characters in one Swarm Run, where 184 of 234 content results came
+  from one file (Sessions, 2026-10-12); re-rendering its 233 content results in
+  this layout shortened them by 27.5% (24.2% of all its search_files result
+  characters). `test_content_results_equal_ripgreps_across_pages` compares the
+  output with `rg --heading`.
 - Paths are relative to the cwd when possible and absolute otherwise.
   Directory entries end in `/`.
 - Names with control characters are JSON-quoted so they can be passed back.
@@ -507,6 +524,9 @@ blank placeholders, so no sentence has to warn about them.
 | args: `["--help"] lists all.` | Route to the full flag reference instead of guessing (F5). |
 | limit: `Results per page.` plus schema default 100 | Plannable number (F6). |
 | offset: `Pass next_offset to continue.` | Continuation uses the returned value, never a computed one (F4); Agents sent `offset: 0` in 213 of 217 calls that set it (Sessions, 2026-09). |
+| Help: `Output: content names each file on its own line, followed by line:text for its matching lines and line-text for context lines.` | States the heading layout (Results and Paging -> Content lines) for an Agent that asks how to read results (F4); it replaced `content shows path:line:text for matching lines and path-line-text for context lines` with the layout change (2026-10-12). |
+| `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
+| Unclear flag value: `search_files was not run: "ignore_case" must be true or false; received "maybe".` (lists: `must be a value or a list of values`) | A flag field the call cannot read used to stay an unknown field; unknown fields can now run without effect (`tools.md` -> Unknown fields), which would search without the flag the Agent asked for (F3). |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
 covered by `test_search_files_arguments.py` (the help examples run against a

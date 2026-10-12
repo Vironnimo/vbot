@@ -167,7 +167,6 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
         ({"action": "input", "terminal_id": "missing", "data": "raw", "key": "enter"}, "data"),
         ({"action": "resize", "terminal_id": "missing", "columns": 120}, "no call resizes it"),
         ({"action": "status", "terminal_id": "missing", "lines": 150}, "lines"),
-        ({"action": "status", "terminal_id": "missing", "cursor": "signed"}, "cursor"),
         ({"action": "unknown"}, "action"),
     ],
     ids=[
@@ -175,7 +174,6 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
         "data-with-key",
         "resize",
         "too-many-lines",
-        "cursor",
         "action",
     ],
 )

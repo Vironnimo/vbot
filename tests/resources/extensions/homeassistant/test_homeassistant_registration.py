@@ -121,19 +121,19 @@ async def test_wrong_typed_arguments_fail_at_dispatch_before_any_request(
 @pytest.mark.parametrize(
     ("tool_name", "arguments"),
     [
-        (HA_LIST_ENTITIES_NAME, {"unknown": True}),
-        (HA_GET_STATE_NAME, {"entity_id": "light.living_room", "unknown": True}),
-        (HA_LIST_SERVICES_NAME, {"unknown": True}),
-        (HA_CALL_SERVICE_NAME, {"domain": "light", "service": "turn_on", "unknown": True}),
+        (HA_LIST_ENTITIES_NAME, {"force": True}),
+        (HA_GET_STATE_NAME, {"entity_id": "light.living_room", "force": True}),
+        (HA_LIST_SERVICES_NAME, {"force": True}),
+        (HA_CALL_SERVICE_NAME, {"domain": "light", "service": "turn_on", "force": True}),
     ],
 )
-async def test_unknown_arguments_fail_at_dispatch_before_any_request(
+async def test_unknown_switch_arguments_fail_at_dispatch_before_any_request(
     tool_name: str, arguments: dict[str, Any]
 ) -> None:
     result = await dispatch(tools_with_token(), tool_name, arguments)
 
     error = assert_failure_envelope(result, "invalid_arguments")
-    assert '"unknown" is not a parameter' in error["message"]
+    assert '"force" is not a parameter' in error["message"]
     assert not respx.calls
 
 

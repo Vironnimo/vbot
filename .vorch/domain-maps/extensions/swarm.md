@@ -45,7 +45,11 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   Extension databases). Swarm never opens SQLite files itself, and the host
   closes the handle after shutdown.
 - `agent_text.py` and `wiki_text.py` own the scoped Tool definitions and reviewed
-  runtime wording. `_store_wiki.py` implements Wiki transactions within the existing
+  runtime wording. Outside the Extension, `core/tools/_swarm_references.py` names the
+  `swarm_wiki` read/update and `swarm_board` read calls in file Tool errors for a
+  Wiki page number or Board post sent to `read`, `edit`, `apply_patch` or
+  `search_files` (`tools/read.md`); a rename of these Tools or fields updates it.
+  `_store_wiki.py` implements Wiki transactions within the existing
   Swarm database owner.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page.
   `SwarmPage.svelte` is the page root; its areas (the shell with sidebar, Run
