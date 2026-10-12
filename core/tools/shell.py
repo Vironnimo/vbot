@@ -18,6 +18,7 @@ failures (``_shell_results``).
 from __future__ import annotations
 
 import asyncio
+import errno
 import shutil
 import subprocess
 import sys
@@ -66,6 +67,7 @@ from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.command_manager import (
     CommandCapacityError,
+    CommandLaunchError,
     CommandManager,
     CommandManagerError,
     CommandNotFoundError,
@@ -257,7 +259,9 @@ def _cannot_start(problem: str) -> _NotStartedError:
     )
 
 
-def _start_failure(error: Exception, names: ToolNames) -> JsonObject:
+def _start_failure(
+    error: Exception, call: _ShellCall, context: ToolContext, names: ToolNames
+) -> JsonObject:
     """The failure for a command the manager did not start."""
     if isinstance(error, CommandCapacityError):
         message = (
@@ -279,13 +283,89 @@ def _start_failure(error: Exception, names: ToolNames) -> JsonObject:
             f"{SHELL_MODEL_NAME} was not run: this turn was cancelled, or vBot is shutting down.",
             retryable=False,
         )
-    cause = error.__cause__ if error.__cause__ is not None else error
+    if not call.workdir.is_dir():
+        # The directory was removed after the call was checked.
+        given = call.workdir != context.effective_cwd
+        return tool_failure(
+            "command_not_started",
+            f"{SHELL_MODEL_NAME} was not run: {_missing_workdir(call.workdir, given=given)}",
+            retryable=False,
+        )
+    _LOGGER.warning("Starting a shell command failed", exc_info=error)
+    problem, retryable = _launch_problem(error, call, names)
     return tool_failure(
-        "command_not_started",
-        f"{SHELL_MODEL_NAME} was not run: the shell could not be started ({cause}). Run the "
-        "command again; if it fails the same way, tell the user.",
-        retryable=True,
+        "command_not_started", f"{SHELL_MODEL_NAME} was not run: {problem}", retryable=retryable
     )
+
+
+# Operating system errors a start can meet, by errno and by Windows error code.
+_NO_RESOURCES_ERRNOS = frozenset({errno.ENOMEM, errno.EAGAIN, errno.EMFILE, errno.ENFILE})
+_NO_RESOURCES_WINERRORS = frozenset({4, 8, 14, 1450, 1455})
+_DISK_FULL_ERRNOS = frozenset({errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)})
+_DISK_FULL_WINERRORS = frozenset({39, 112})
+_RETRY = "Run the command again; if it fails the same way, tell the user."
+
+
+def _launch_problem(error: Exception, call: _ShellCall, names: ToolNames) -> tuple[str, bool]:
+    """What kept the command from starting and what to do, and whether a retry can help.
+
+    The operating system's own message is in the host's language and names no
+    next step: the text names the state it reports instead.
+    """
+    os_error = _os_error(error)
+    # A launch error is the shell process's; any other is the output file's.
+    process = isinstance(error, CommandLaunchError)
+    if os_error is None:
+        return f"vBot could not start the shell. {_RETRY} vBot's log has the details.", True
+    winerror = getattr(os_error, "winerror", None)
+    if os_error.errno in _NO_RESOURCES_ERRNOS or winerror in _NO_RESOURCES_WINERRORS:
+        problem = "the system is out of memory or process resources, so the shell could not start."
+        if names(BACKGROUND_TASKS_TOOL_NAME):
+            return (
+                f"{problem} Stop the background commands you no longer need (find them with "
+                f'{BACKGROUND_TASKS_TOOL_NAME} {{"action": "list"}}), then run the command again; '
+                "if it fails the same way, tell the user.",
+                True,
+            )
+        return f"{problem} {_RETRY}", True
+    if os_error.errno in _DISK_FULL_ERRNOS or winerror in _DISK_FULL_WINERRORS:
+        return (
+            "the disk is full, so vBot could not write the command's output. Tell the user that "
+            "the disk is full.",
+            False,
+        )
+    if isinstance(os_error, PermissionError):
+        if process:
+            return (
+                f"access was denied when vBot started the shell in {model_path(call.workdir)}. "
+                "If the command can run in another directory, pass that directory as workdir; "
+                "otherwise tell the user.",
+                False,
+            )
+        return (
+            "access was denied to vBot's data directory, where the command's output is written. "
+            "Tell the user.",
+            False,
+        )
+    code = winerror if winerror is not None else os_error.errno
+    detail = f" (operating system error {code})" if code is not None else ""
+    if process:
+        problem = f"the operating system could not start the shell{detail}."
+    else:
+        problem = f"vBot could not create the file for the command's output{detail}."
+    return f"{problem} {_RETRY}", True
+
+
+def _os_error(error: BaseException) -> OSError | None:
+    """The operating system error *error* is or was caused by, if any."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, OSError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
 
 
 def _parse_call(
@@ -544,7 +624,7 @@ class ShellTool:
             )
         except (OSError, CommandManagerError) as error:
             started.cancel()
-            raise _NotStartedError(_start_failure(error, names)) from error
+            raise _NotStartedError(_start_failure(error, call, context, names)) from error
         except BaseException:
             started.cancel()
             raise
@@ -555,6 +635,9 @@ class ShellTool:
         self, context: ToolContext, call: _ShellCall, command_id: str, names: ToolNames
     ) -> JsonObject:
         moved = asyncio.Event()
+        # Set once this call hands the command to the background: from then on a
+        # stop of the call or its Run leaves the command running.
+        handed_off = False
 
         def move_to_background() -> bool:
             if moved.is_set() or self._commands.report(command_id).ended:
@@ -562,7 +645,9 @@ class ShellTool:
             moved.set()
             return True
 
-        def cancel() -> asyncio.Task[Any]:
+        def cancel() -> asyncio.Task[Any] | None:
+            if handed_off:
+                return None
             reason: StopReason = "run_cancelled" if context.is_cancelled() else "user"
             return self._keep(self._stop(command_id, reason))
 
@@ -591,6 +676,7 @@ class ShellTool:
             return _result(call, report, names)
         # Listed from now on, so the user and the Agent can see and stop it; a
         # command that ended is delivered by this result, not later.
+        handed_off = True
         report = self._commands.to_background(command_id, deliver=not report.ended)
         reason = "timeout" if call.timeout_given else "default"
         if moved.is_set():
@@ -708,7 +794,12 @@ def shell_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> lis
     if data.get("status") == "stopped" and isinstance(data.get("stopped_because"), str):
         blocks.append(display_notice("warning", f"Stopped: {data['stopped_because']}"))
     exit_code = data.get("exit_code")
-    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+    if (
+        data.get("status") == "exited"
+        and isinstance(exit_code, int)
+        and not isinstance(exit_code, bool)
+        and exit_code != 0
+    ):
         blocks.append(display_notice("warning", f"The command exited with code {exit_code}."))
     failed = data.get("failed_programs")
     if isinstance(failed, list) and failed:
