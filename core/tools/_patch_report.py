@@ -295,6 +295,12 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
     )
     if difference.get("break"):
         return [_break_text(difference, source, after), *unprefixed]
+    # A copy that starts or ends inside a line keeps the file's whitespace at its line breaks.
+    spacing = (
+        f"only the whitespace at the {difference['spacing']} of the line differs"
+        if difference.get("spacing")
+        else ""
+    )
     if not difference.get("truncated"):
         held = (
             f": after {after}, line {difference['line']} reads"
@@ -303,9 +309,12 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
         )
         return [
             f"First difference{held} {quoted(difference['file'])} "
-            f"where {source} has {quoted(difference['copy'])}.",
+            f"where {source} has {quoted(difference['copy'])}"
+            + (f"; {spacing}." if spacing else "."),
             *unprefixed,
         ]
+    if spacing:
+        unprefixed = [f"{spacing[0].upper()}{spacing[1:]}.", *unprefixed]
     place = f"after {after}, line" if after else "file line"
     lines = [
         f"First difference, {place} {difference['line']}, "

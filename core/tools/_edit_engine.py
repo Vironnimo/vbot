@@ -438,15 +438,15 @@ def _refuse_join(content: str, found: FuzzyReplacement, hunk: _Hunk, path: objec
 def _keep_final_break(
     content: str, found: FuzzyReplacement, hunk: _Hunk
 ) -> tuple[FuzzyReplacement, list[str]]:
-    """Keep the line break a replacement dropped where it would join two lines of text.
+    """Keep the line break a replacement dropped before more lines of the file.
 
     ``new_string`` lacks the line break that ends ``old_string``, and at one of
-    the places its last line, holding text, would continue with a following
-    line that holds text too. That join was meant in none of the recorded edits
-    (2026-10): such a ``new_string`` ends where the line it replaces ends, the
-    break was lost in the copy. It gets the file's line break then, at every
-    place where the replaced text ended with one, and a note says so. A
-    following blank line or the end of the file joins no text and stays as sent.
+    the places its last line, holding text, would continue with the file's next
+    line: a line of text joins it, a blank line disappears into it. Neither was
+    meant in the recorded edits (2026-10): such a ``new_string`` ends where the
+    line it replaces ends, the break was lost in the copy. It gets the file's
+    line break then, at every place where the replaced text ended with one, and
+    a note says so. At the end of the file nothing follows: it stays as sent.
     """
     replacement = hunk.replacement
     assert replacement is not None
@@ -463,13 +463,11 @@ def _keep_final_break(
         and text[end - 1] not in "\r\n"
     ]
 
-    def joins_text(end: int) -> bool:
+    def joins_next_line(end: int) -> bool:
         first = max(text.rfind("\n", 0, end), text.rfind("\r", 0, end)) + 1
-        after = _BREAK.search(text, end)
-        following = text[end : after.start() if after else None]
-        return bool(text[first:end].strip() and following.strip())
+        return bool(text[first:end].strip()) and end < len(text)
 
-    if not any(joins_text(end) for _, end in open_ends):
+    if not any(joins_next_line(end) for _, end in open_ends):
         return found, []
     pieces: list[str] = []
     spans: list[tuple[int, int]] = []
@@ -491,8 +489,8 @@ def _keep_final_break(
 
 _KEPT_BREAK_NOTE = (
     "new_string does not end with a line break as old_string does; it was written with one, "
-    "so the next line stays a line of its own. To join the two lines, include the next line "
-    "in old_string and new_string."
+    "so the next line stays a line of its own. To join or remove the next line, include it "
+    "in old_string."
 )
 
 

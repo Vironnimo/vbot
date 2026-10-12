@@ -249,7 +249,7 @@ async def test_edits_that_fail_are_skipped_and_the_others_written_once(
     ("content", "edit", "after", "noted"),
     [
         # A changed line that lost its final line break keeps it, in the file's line
-        # ending, where the next line holds text: the two lines stay apart.
+        # ending, where more lines follow: a line of text stays apart, a blank line stays.
         pytest.param(
             JOINABLE,
             ("import a from 'a';\n", "import a2 from 'a';"),
@@ -264,15 +264,14 @@ async def test_edits_that_fail_are_skipped_and_the_others_written_once(
             True,
             id="kept-break-crlf",
         ),
-        # Nearby edits stay as sent. Only a blank line or the end of the file follows:
-        # no text joins.
         pytest.param(
             JOINABLE,
             ("import b from 'b';\n", "import b2 from 'b';"),
-            b"import a from 'a';\nimport b2 from 'b';\nend\n",
-            False,
+            JOINABLE.replace(b"b from", b"b2 from"),
+            True,
             id="blank-line-follows",
         ),
+        # Nearby edits stay as sent. At the end of the file nothing follows.
         pytest.param(JOINABLE, ("end\n", "fin"), JOINABLE[:-4] + b"fin", False, id="end-of-file"),
         pytest.param(JOINABLE, ("end\n", "end"), JOINABLE[:-1], False, id="final-break-only"),
         # A new text that still ends its line deletes the blank line on purpose.
@@ -305,7 +304,7 @@ async def test_edits_that_fail_are_skipped_and_the_others_written_once(
         pytest.param(JOINABLE, ("import a from 'a';\n", "import a from 'a';"), None, False),
     ],
 )
-async def test_an_edit_that_drops_a_final_line_break_joins_no_lines_of_text(
+async def test_an_edit_that_drops_a_final_line_break_keeps_the_next_line(
     tmp_path, content, edit, after, noted
 ) -> None:
     (tmp_path / "a.ts").write_bytes(content)

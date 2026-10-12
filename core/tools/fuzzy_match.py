@@ -494,17 +494,61 @@ def first_difference(
     the file from the aligned position on. ``whole_lines`` says the copy's
     first line is a whole line; otherwise only a copy that starts with a line
     break claims to start one.
+
+    Without ``whole_lines``, a copy of several lines can start inside its first
+    file line and end inside its last; those lines differ only when the file
+    line does not end, or start, with them. Such a copy matches only with the
+    whitespace at its inner line breaks, so a line that differs there alone,
+    such as a continuation line without its indentation, is the difference, and
+    ``spacing`` names its side (``line_differences`` compares the same way).
     """
     file_lines = split_text_lines(content)
     wanted_lines = split_text_lines(copy)
     first = next((index for index, line in enumerate(wanted_lines) if line.strip()), 0)
     aligned = start if placed else _aligned_start(file_lines, start, wanted_lines, first)
+    last = len(wanted_lines) - 1
+    # Whether the copy can start inside its first file line, or end inside its last.
+    starts_inside = not whole_lines and first == 0 and last > first
+    ends_inside = not whole_lines and not copy.endswith(("\n", "\r")) and last > first
+    spaced = _copied_inside(
+        file_lines,
+        wanted_lines,
+        [
+            (aligned, first, starts_inside, False),
+            (aligned + last - first, last, False, ends_inside),
+        ],
+    )
     for position, wanted in enumerate(wanted_lines[first:], first):
         number = aligned + position - first
         if number > len(file_lines):
             return None
         actual = file_lines[number - 1]
-        if _loose(actual) != _loose(wanted):
+        differs, spacing = _paired_difference(
+            actual,
+            wanted,
+            start=position == first and starts_inside,
+            end=position == last and ends_inside,
+            spaced=spaced,
+        )
+        if differs and spacing is not None:
+            file_position, copy_position = (
+                (0, 0) if spacing == "start" else (len(actual), len(wanted))
+            )
+            file_start, file_text = _difference_window(actual, file_position)
+            copy_start, copy_text = _difference_window(wanted, copy_position)
+            return {
+                "line": number,
+                "character": file_position + 1,
+                "copy_line": position + 1,
+                "copy_character": copy_position + 1,
+                "file_start": file_start,
+                "copy_start": copy_start,
+                "file": file_text,
+                "copy": copy_text,
+                "truncated": len(file_text) < len(actual) or len(copy_text) < len(wanted),
+                "spacing": spacing,
+            }
+        if differs:
             file_position, copy_position = _difference_positions(actual, wanted)
             file_start, file_text = _difference_window(actual, file_position)
             copy_start, copy_text = _difference_window(wanted, copy_position)
@@ -654,6 +698,25 @@ def _paired_difference(
     trailing = held.endswith(" ") != copied.endswith(" ")
     # The first line's leading whitespace lies inside its file line.
     return True, "start" if leading and not (start and trailing) else "end"
+
+
+def _copied_inside(
+    file_lines: list[str], copy_lines: list[str], edges: list[tuple[int, int, bool, bool]]
+) -> bool:
+    """Whether a copy starts inside its first file line or ends inside its last.
+
+    ``edges`` holds the 1-based file line, the copy line and whether it may
+    ``start`` or ``end`` inside that line, for the copy's first and last line.
+    A copy of whole lines matches with other indentation; one that starts or
+    ends inside a line matches only with the whitespace at its line breaks.
+    """
+    for number, index, start, end in edges:
+        if not (start or end) or not 0 < number <= len(file_lines):
+            continue
+        held, copied = _loose(file_lines[number - 1]), _loose(copy_lines[index])
+        if held != copied and _fits(held, copied, start=start, end=end):
+            return True
+    return False
 
 
 def _fits(held: str, copied: str, *, start: bool, end: bool) -> bool:

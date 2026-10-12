@@ -58,7 +58,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   otherwise. A replacement whose `new_string` is its `old_string` without the
   final line break is refused where the file continues after the match
   (`line_join`), and one that also changes text keeps the file's line break
-  where its last line and the next would join two lines of text (`edit.md` ->
+  where the file continues after it and its last line holds text (`edit.md` ->
   Results). `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
 - The definition is minimal (user decision 2026-10-04): the description names
@@ -308,7 +308,21 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   (`_patch_syntax.quoted`, not `repr`): a backslash or quote stays single, and
   only a character that shows nothing and is not whitespace is written as an
   escape (`​`); text in `'` uses `"` when it holds `'` but not `"`
-  (`edit.md` -> Agent-facing text). Candidate windows come from the three longest
+  (`edit.md` -> Agent-facing text). An `old_string` of several lines may start
+  inside its first file line and end inside its last: those lines differ only
+  when the file line does not end, or start, with them (`first_difference`
+  without `whole_lines`; patch lines are whole lines, and one that is only part
+  of a line keeps its `is only part of` report). Such a copy matches only with
+  the whitespace at its inner line breaks (the precise strategies accept other
+  indentation only for copies of whole lines), so a line differing there alone,
+  such as a continuation line that lost its indentation, is the first
+  difference, reported with `; only the whitespace at the start of the line
+  differs.` (`end`; the `spacing` field and the per-line test
+  `_paired_difference` are shared with `line_differences`, `extensions/swarm.md`).
+  It named the mid-line first line before, whose start the Agent then copies
+  into its retry while the lost indentation stays (Swarm Wiki, Sessions 2026-10;
+  the edit report had the same fault). Lost indentation stays a mismatch (user
+  decision 2026-10-12). Candidate windows come from the three longest
   copied lines and from distinctive copied lines (at most 3 occurrences) the file
   holds exactly; a window at least 2 such lines place is shown even below the
   0.60 similarity floor (`find_closest_candidates`). The line-by-line comparison
