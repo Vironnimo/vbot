@@ -1,10 +1,14 @@
 """Start a command process on pipes, contained in its process tree from creation on.
 
 A command never gets input and never has a terminal: stdout and stderr share one
-pipe (their order is kept), no console or PTY is attached, and stdin is empty: a
-program that asks for input reads EOF at once, and ``isatty()`` is false for all
-three. POSIX gives it the null device. Windows gives it a pipe without a writer:
-the null device is a character device there, which programs take for a console.
+pipe (their order is kept), no PTY is attached, and stdin is empty: a program
+that asks for input reads EOF at once, and ``isatty()`` is false for all three.
+POSIX gives it the null device, and its new session has no controlling
+terminal. Windows gives it a pipe without a writer: the null device is a
+character device there, which programs take for a console. A windowless process
+on Windows still has a hidden console of its own, whose input nothing writes: a
+program that reads that console directly instead of stdin, such as Python's
+``getpass``, waits until it is stopped.
 
 Containment leaves no moment in which the command could start a process that
 escapes:
