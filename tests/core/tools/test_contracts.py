@@ -289,8 +289,13 @@ def test_argument_error_names_every_problem_with_a_suggestion_and_the_parameters
                 },
                 "offset": {"type": "integer"},
                 "limit": {"type": "integer", "minimum": 1},
+                "mode": {
+                    "type": "string",
+                    "enum": ["text", "bytes"],
+                    "description": "text reads decoded lines; bytes reads raw bytes.",
+                },
             },
-            "required": ["path"],
+            "required": ["path", "mode"],
         },
         require_closed_input=False,
     )
@@ -304,7 +309,8 @@ def test_argument_error_names_every_problem_with_a_suggestion_and_the_parameters
         '- "limit" must be at least 1; received 0.\n'
         '- "path" is required: Path to the file to read (relative to the working '
         "directory, or absolute).\n"
-        "read parameters: path (required), offset, limit."
+        '- "mode" is required: one of "text", "bytes".\n'
+        "read parameters: path (required), offset, limit, mode (required)."
     )
 
 

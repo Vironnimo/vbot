@@ -478,6 +478,12 @@ def _describe_problem(root_schema: Any, error: ValidationError) -> list[str]:
 
 
 def _missing_parameter(field: str, property_schema: Any) -> str:
+    options = property_schema.get("enum") if isinstance(property_schema, dict) else None
+    if isinstance(options, list) and options:
+        # The valid values say what to send; a description cut to its first
+        # sentence can stop mid-list (an action described value by value).
+        named = ", ".join(json.dumps(option, ensure_ascii=False) for option in options)
+        return f'"{field}" is required: one of {named}.'
     description = property_schema.get("description") if isinstance(property_schema, dict) else None
     if not isinstance(description, str) or not description.strip():
         return f'"{field}" is required.'
