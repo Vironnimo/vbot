@@ -278,7 +278,7 @@ async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
         assert result["error"]["code"] == "line_join"
         # The refusal, naming the lines, then the closing.
         assert len(text(result).split("\n")) == 2
-        assert "import b from 'b';" in text(result).split("\n")[0]
+        assert "import b from 'b';" in text(result).split("\n")[1]
         assert (tmp_path / "a.ts").read_bytes() == JOINABLE
         return
     notes = [line for line in text(result).split("\n") if line.startswith("Note: ")]
@@ -593,7 +593,7 @@ NUL = (
             "edit",
             {"path": "a.txt", "edits": [{"old_string": "zzz", "new_string": "z"}]},
             "text_not_found",
-            f"a.txt: old_string was not found.\n{NOT_FOUND}\nNo file was changed.",
+            f"a.txt: old_string was not found.\n{NOT_FOUND}",
             id="not-found",
         ),
         pytest.param(
@@ -602,7 +602,7 @@ NUL = (
             "ambiguous_match",
             "a.txt: old_string matches 2 places (lines 1, 3). Include more of the surrounding "
             "text so it matches once, or set replace_all to true to change every match.\n"
-            "Where it occurs:\n1| one\n2| two\n3| one\nNo file was changed.",
+            "Where it occurs:\n1| one\n2| two\n3| one",
             id="ambiguous",
         ),
         pytest.param(
@@ -611,42 +611,42 @@ NUL = (
             "file_exists",
             "a.txt: old_string is empty, which creates a file, but the file already has content. "
             "Put the current text to replace in old_string, or call write to replace the whole "
-            "file.\nNo file was changed.",
+            "file.",
             id="create-over-content",
         ),
         pytest.param(
             "edit",
             {"path": "gone.md", "edits": [{"old_string": "a", "new_string": "b"}]},
             "file_not_found",
-            'File not found: gone.md. read(path=".") lists its directory.\nNo file was changed.',
+            'File not found: gone.md. read(path=".") lists its directory.',
             id="missing-file",
         ),
         pytest.param(
             "edit",
             {"path": "sub", "edits": [{"old_string": "a", "new_string": "b"}]},
             "not_a_file",
-            "sub is not a regular file.\nNo file was changed.",
+            "sub is not a regular file.",
             id="folder",
         ),
         pytest.param(
             "edit",
             {"path": "bin.dat", "edits": [{"old_string": "binary", "new_string": "b"}]},
             "binary_file",
-            "bin.dat is a binary file, so edit cannot change its text.\nNo file was changed.",
+            "bin.dat is a binary file, so edit cannot change its text.",
             id="binary",
         ),
         pytest.param(
             "edit",
             {"path": "latin.txt", "edits": [{"old_string": "caf", "new_string": "b"}]},
             "unsupported_encoding",
-            "latin.txt is not UTF-8 text, so edit cannot change its text.\nNo file was changed.",
+            "latin.txt is not UTF-8 text, so edit cannot change its text.",
             id="encoding",
         ),
         pytest.param(
             "edit",
             {"path": "a.txt", "edits": [{"old_string": "two", "new_string": "t\x00o"}]},
             "binary_file",
-            f"a.txt: {NUL}\nNo file was changed.",
+            f"a.txt: {NUL}",
             id="nul",
         ),
         pytest.param(
@@ -656,22 +656,21 @@ NUL = (
             "a.txt already exists and was not read with read in this conversation, so it was "
             "not replaced. Its "
             "current content follows and now counts as read: send the same call again to replace "
-            "it, or call edit to change only part of it.\n1| one\n2| two\n3| one\n"
-            "No file was changed.",
+            "it, or call edit to change only part of it.\n1| one\n2| two\n3| one",
             id="write-unread",
         ),
         pytest.param(
             "write",
             {"path": "w.txt", "content": "a\x00b"},
             "binary_file",
-            f"w.txt: {NUL}\nNo file was changed.",
+            f"w.txt: {NUL}",
             id="write-nul",
         ),
         pytest.param(
             "write",
             {"path": "sub", "content": "x"},
             "not_a_file",
-            "sub is not a regular file.\nNo file was changed.",
+            "sub is not a regular file.",
             id="write-folder",
         ),
     ],
@@ -685,7 +684,7 @@ async def test_failed_changes_change_nothing_and_say_what_to_send(
 
     result = await call(tmp_path, arguments, name=tool)
 
-    assert (result["error"]["code"], text(result)) == (code, message)
+    assert (result["error"]["code"], text(result)) == (code, f"No file was changed.\n{message}")
     assert {name: (tmp_path / name).read_bytes() for name in FILES} == FILES
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted([*FILES, "sub"])
 
@@ -930,7 +929,7 @@ async def test_open_or_misdirected_calls_say_which_call_to_send(
     result = await call(tmp_path, arguments, name=tool)
 
     assert result["error"]["code"] == "invalid_arguments"
-    assert text(result) == f"{message}\nNo file was changed."
+    assert text(result) == f"No file was changed.\n{message}"
     assert [p.name for p in tmp_path.iterdir()] == ["a.txt"]
     assert (tmp_path / "a.txt").read_bytes() == b"one\ntwo\n"
 
@@ -991,6 +990,6 @@ async def test_a_file_changed_during_the_call_is_not_overwritten(
 
     assert (result["error"]["code"], text(result)) == (
         "file_changed",
-        f"{message}\nNo file was changed.",
+        f"No file was changed.\n{message}",
     )
     assert path.read_bytes() == b"external\n"

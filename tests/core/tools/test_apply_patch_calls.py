@@ -242,7 +242,8 @@ async def test_replacement_counts_follow_the_call(tmp_path):
     ambiguous = await call(tmp_path, edit)
     message = text(ambiguous)
     assert "old_string matches 2 places (lines 1, 2)" in message and "replace_all" in message
-    assert message.endswith("Where it occurs:\n1| x = 1\n2| x = 1\nNo file was changed.")
+    assert message.startswith("No file was changed.\n")
+    assert message.endswith("Where it occurs:\n1| x = 1\n2| x = 1")
     assert path.read_bytes() == b"x = 1\nx = 1\n"
     everywhere = await call(tmp_path, {**edit, "replace_all": True})
     assert everywhere["ok"] and path.read_bytes() == b"x = 3\nx = 3\n"
@@ -360,7 +361,7 @@ async def test_open_or_conflicting_calls_change_nothing(tmp_path, arguments, cod
     assert result["error"]["code"] == code, result
     # Every refusal says that nothing ran or changed.
     refusal = text(result)
-    assert refusal.endswith("\nNo file was changed.") or refusal.startswith(
+    assert refusal.startswith("No file was changed.\n") or refusal.startswith(
         "apply_patch was not run:"
     )
     if message is not None:

@@ -153,11 +153,13 @@ def test_add_refuses_minus_lines_where_it_replaces_a_file(tmp_path):
 
     assert result["error"]["code"] == "invalid_patch"
     message = text(result)
-    assert message.startswith("notes.txt: patch line 3 in the *** Add File body starts with -")
+    assert message.startswith(
+        "No file was changed.\nnotes.txt: patch line 3 in the *** Add File body starts with -"
+    )
     assert "use *** Update File" in message and "start every line of the new content with +" in (
         message
     )
-    assert message.endswith("\nNo file was changed.")
+
     assert path.read_bytes() == b"keep\nold\n"
 
 
@@ -175,11 +177,12 @@ def test_other_patch_dialects_fail_naming_the_patch_form(tmp_path, patch, first)
 
     assert result["error"]["code"] == "invalid_patch"
     assert text(result) == (
+        "No file was changed.\n"
         f"Patch line 1 comes before any file header: {first}\n"
         "A patch names each file in a header before its changes, like this:\n"
         "*** Begin Patch\n*** Update File: <path>\n@@\n-old line\n+new line\n*** End Patch\n"
         "The file headers are *** Update File: <path>, *** Add File: <path>, "
-        "*** Delete File: <path> or *** Move File: <from> -> <to>.\nNo file was changed."
+        "*** Delete File: <path> or *** Move File: <from> -> <to>."
     )
     assert (tmp_path / "file.txt").read_bytes() == b"old\n"
 

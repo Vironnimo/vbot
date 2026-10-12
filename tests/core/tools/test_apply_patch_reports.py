@@ -171,8 +171,10 @@ def test_context_only_patch_changes_nothing_and_shows_where_it_matches(tmp_path,
     assert result["error"]["code"] == "no_changes"
     assert path.read_bytes() == b"start();\nsummary();\n"
     if tail is not None:
-        assert text(result).startswith("The patch changes nothing: it has no - or + line")
-        assert text(result).endswith(tail + "No file was changed.")
+        assert text(result).startswith(
+            "No file was changed.\nThe patch changes nothing: it has no - or + line"
+        )
+        assert text(result).endswith(tail.removesuffix("\n"))
 
 
 def test_context_only_patch_shows_the_lines_around_each_occurrence(tmp_path):
@@ -189,7 +191,7 @@ def test_context_only_patch_shows_the_lines_around_each_occurrence(tmp_path):
         "--\n"
         "8| line 8\n9| line 9\n10|     return total\n11| line 11\n12| line 12\n"
     ) in text(result)
-    assert text(result).endswith("\nNo file was changed.")
+    assert text(result).startswith("No file was changed.\n")
 
 
 @pytest.mark.asyncio
@@ -201,9 +203,10 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
         tmp_path, {"file_path": "a.py", "old_string": "def f():\n    return 2", "new_string": "x"}
     )
     assert result["error"]["message"] == (
+        "No file was changed.\n"
         "a.py: old_string was not found.\nThe closest text in the file, lines 1-2:\n"
         "1| def f():\n2|     return 1\nFirst difference, line 2: the file has '    return 1' "
-        "where old_string has '    return 2'.\nNo file was changed."
+        "where old_string has '    return 2'."
     )
     done = await call(tmp_path, {"file_path": "b.py", "old_string": "x = 1", "new_string": "x = 3"})
     assert "The new text already occurs at line 1" in text(done)
@@ -249,9 +252,8 @@ def test_missing_hunk_without_close_candidate_names_a_line_the_file_lacks(
     result = apply(tmp_path, update(body))
     assert result["error"] == {
         "code": "text_not_found",
-        "message": f"file.txt: {lead}\n{report} "
-        'read(path="file.txt") shows its current content.\n'
-        "No file was changed.",
+        "message": f"No file was changed.\nfile.txt: {lead}\n{report} "
+        'read(path="file.txt") shows its current content.',
     }
     assert path.read_bytes() == b"alpha\nbeta\n"
 
@@ -334,8 +336,7 @@ def test_ambiguous_hint_reports_actual_locations_including_offset(tmp_path):
     assert result["error"]["code"] == "ambiguous_context"
     assert 'the @@ line "repeated" occurs 2 times (lines 3, 5).' in text(result)
     assert text(result).endswith(
-        "Where it occurs:\n2| section\n3| repeated\n4| left\n5| repeated\n6| left\n"
-        "No file was changed."
+        "Where it occurs:\n2| section\n3| repeated\n4| left\n5| repeated\n6| left"
     )
     assert path.read_bytes() == b"intro\nsection\nrepeated\nleft\nrepeated\nleft\n"
 
@@ -347,12 +348,12 @@ def test_context_block_that_is_not_found_shows_its_first_difference(tmp_path):
     result = apply(tmp_path, update("@@\n second\n markr\n@@\n-value=1\n+value=2"))
     assert result["error"]["code"] == "context_not_found"
     assert text(result) == (
+        "No file was changed.\n"
         'file.txt: the lines of the @@ block "second ..." above the lines to replace were not '
         "found together. That block has no - or + line, so it only locates the lines to replace. "
         "Copy its lines exactly from the file, or leave that block out.\n"
         "The closest text in the file, lines 4-5:\n4| second\n5| marker\n"
-        "First difference, line 5: the file has 'marker' where the patch has 'markr'.\n"
-        "No file was changed."
+        "First difference, line 5: the file has 'marker' where the patch has 'markr'."
     )
     assert path.read_bytes() == before
 
@@ -415,7 +416,8 @@ def test_patch_line_inside_longer_lines_names_those_lines(tmp_path, before, body
     (tmp_path / "file.txt").write_bytes(before.encode())
     result = apply(tmp_path, update(body))
     assert result["error"]["code"] == "text_not_found"
-    assert listed in text(result)
+    # The error ends with the listed lines.
+    assert listed in f"{text(result)}\n"
     assert ("is only part of" in text(result)) is ("Greeter" in before)
 
 
@@ -505,7 +507,8 @@ def test_first_difference_is_aligned_with_the_copied_lines(tmp_path, case):
     path.write_bytes(before.encode())
     result = apply(tmp_path, update(body, "file.py"))
     assert result["error"]["code"] == "text_not_found"
-    assert expected in text(result)
+    # The error ends with the excerpt.
+    assert expected in f"{text(result)}\n"
     assert path.read_bytes() == before.encode()
     if case == "unprefixed":
         marked = body.replace('\n            "values', '\n+            "values')
@@ -565,7 +568,8 @@ DIFFERENCE = re.compile(
 
 
 def _excerpts(message: str) -> dict[str, object]:
-    found = DIFFERENCE.search(message)
+    # The error ends with the excerpts.
+    found = DIFFERENCE.search(f"{message}\n")
     assert found, message
     parts: dict[str, object] = {
         key: int(value) for key, value in found.groupdict().items() if value.isdigit()

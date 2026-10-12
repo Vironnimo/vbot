@@ -570,7 +570,7 @@ def patch_result(
             error = failed[0]["error"]
             return tool_failure(
                 error["code"],
-                failure_text(error) + "\nNo file was changed.",
+                "No file was changed.\n" + failure_text(error),
                 retryable=error.get("retryable"),
                 attempts_made=error.get("attempts_made"),
             )

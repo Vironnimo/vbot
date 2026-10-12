@@ -106,8 +106,8 @@ async def test_full_replacement_needs_a_current_read_by_this_session(
     message = text(refused)
     # The error shows the whole small file, which counts as the read the guard asks for.
     assert "Its current content follows and now counts as read" in message
-    assert "\n1| one\n2| two\n" in message and "\r" not in message
-    assert message.endswith("\nNo file was changed.")
+    assert "\n1| one\n2| two\n" in f"{message}\n" and "\r" not in message
+    assert message.startswith("No file was changed.\n")
     assert path.read_bytes() == before
     replaced = await call(tmp_path, arguments, tools=tools)
     assert text(replaced) == "Replaced the content of file.txt (1 line)."
@@ -277,9 +277,10 @@ def test_nul_character_in_new_text_is_refused_with_its_escape_sequence(tmp_path,
     result = apply(tmp_path, operation)
     assert result["error"]["code"] == "binary_file"
     assert text(result) == (
+        "No file was changed.\n"
         "file.txt: the new text contains a NUL character (U+0000), which only binary files "
         "hold. To produce that character in source code, write its escape sequence instead, "
-        "such as \\x00.\nNo file was changed."
+        "such as \\x00."
     )
     assert (path.read_bytes() if path.exists() else None) == before
 
@@ -1097,6 +1098,7 @@ def test_replace_failure_is_bounded_and_keeps_other_operations(
             assert "retryable" not in error and "attempts_made" not in error
         if code == 32:
             assert error["message"].startswith(
+                "No file was changed.\n"
                 "Could not change file.txt: another program is using it. file.txt is "
                 "unchanged; send this change again after that program has finished, for "
                 "example a running test or script."

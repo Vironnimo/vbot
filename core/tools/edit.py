@@ -526,7 +526,7 @@ def _refusing(normalizer: Any) -> Any:
         try:
             return normalizer(arguments)
         except ValueError as error:
-            raise ToolContractError(f"{error}\nNo file was changed.") from error
+            raise ToolContractError(f"No file was changed.\n{error}") from error
 
     return normalize
 
@@ -618,24 +618,23 @@ def _failed_edit(
 def _edit_failure(context: ToolContext, errors: Sequence[JsonObject], total: int) -> JsonObject:
     """Say that no edit was applied, why each failed edit failed, and which to correct."""
     numbers = [n for n in (_edit_number(error, total) for error in errors) if n is not None]
-    lines = []
+    failures = []
     for error in errors:
         context.add_display_notice("error", str(error["message"]))
-        lines.append(failure_text(_failed_edit(error, numbers, total, written=False)))
+        failures.append(failure_text(_failed_edit(error, numbers, total, written=False)))
     if total == 1:
-        lines.append("No file was changed.")
+        lines = ["No file was changed.", *failures]
     else:
         none, every = (
             ("Neither edit was", "both edits")
             if total == 2
             else (f"None of the {total} edits were", f"all {total} edits")
         )
-        closing = f"{none} applied, so no file was changed."
+        lines = [f"{none} applied; no file was changed.", *failures]
         if len(numbers) == total:
-            closing += f" Send {every} again, each corrected or left out."
+            lines.append(f"Send {every} again, each corrected or left out.")
         elif numbers:
-            closing += f" Send {every} again with {_edit_numbers(numbers)} corrected or left out."
-        lines.append(closing)
+            lines.append(f"Send {every} again with {_edit_numbers(numbers)} corrected or left out.")
     first = errors[0]
     return tool_failure(
         str(first["code"]),

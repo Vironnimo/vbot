@@ -566,7 +566,7 @@ def test_end_of_file_anchors_are_never_ignored(tmp_path, body, code):
     assert result["error"]["code"] == code
     if code == "text_not_found":
         # The refusal names the marker that placed the change.
-        assert "*** End of File" in text(result).splitlines()[0]
+        assert "*** End of File" in text(result).splitlines()[1]
     assert path.read_bytes() == b"section\ntail\n"
     if code == "text_not_found":
         # Without *** End Patch, a final *** End of File anchors the hunk at the end
@@ -697,6 +697,7 @@ def test_context_constraints_cannot_be_ignored_or_choose_ambiguous_target(tmp_pa
     assert (tmp_path / "file.txt").read_bytes() == original
     if "gama" in body:
         assert text(result).startswith(
+            "No file was changed.\n"
             "file.txt: the lines to replace do not match the file exactly and resemble 2 "
             "places (lines 3, 7)."
         )
@@ -743,7 +744,7 @@ def test_repeated_context_line_places_lines_that_occur_once_after_it(tmp_path):
             'file.txt: the lines to replace are not after the @@ line "second"; they are at '
             "line 2, above it. After @@, put a line above them, such as the first line of the "
             "enclosing function, or leave @@ empty.\nThe closest text in the file, line 2:\n"
-            "2| value=1\nNo file was changed.",
+            "2| value=1",
         ),
         (
             "@@\n first\n secnd\n@@\n-value=1\n+value=2",
@@ -758,7 +759,7 @@ def test_at_at_lines_that_do_not_place_the_lines_refuse_the_hunk(tmp_path, body,
     path.write_bytes(b"first\nvalue=1\nsecond\nend\n")
     result = apply(tmp_path, update(body))
     assert result["error"]["code"] == code
-    assert text(result).startswith(message)
+    assert text(result).startswith("No file was changed.\n" + message)
     assert path.read_bytes() == b"first\nvalue=1\nsecond\nend\n"
 
 

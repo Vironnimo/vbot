@@ -44,7 +44,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   at dispatch (`edit was not run: ... edit parameters: path (required), edits
   (required).`).
 - **Argument repair** (`normalize_edit_arguments`, wrapped by `_refusing`, so every
-  refusal is `invalid_arguments` ending `No file was changed.`): `file_path`/
+  refusal is `invalid_arguments` opening with `No file was changed.`): `file_path`/
   `filename` -> `path`, `old_str`/`old_text`/`oldText` and the `new_*` twins,
   any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
   or one of its items sent as JSON text, also with unescaped `"` or raw line
@@ -175,14 +175,16 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   `test_old_string_with_line_breaks_in_other_places_than_the_file`. The
   display shows the path and the shared `file_changes` diff and notices.
 - **Failures** use the engine's messages with `edit` wording where they name the
-  Tool (`_EDIT_TEMPLATES`) and a closing that names the edits to fix
-  (`_edit_failure`): one edit -> `No file was changed.`; several -> each failed edit
-  is labeled `edit K of N`, and when none applied the error lists every failed
-  edit's report in input order (its code is the first one's) and closes with
-  `Neither edit was applied, so no file was changed. Send both edits again, each
-  corrected or left out.` (`None of the N edits were applied ... all N edits`)
-  when every edit failed, or `... Send all N edits again with edit K corrected or
-  left out.` when the edits that did not fail left the file as it was. A
+  Tool (`_EDIT_TEMPLATES`); every error first says what was applied, as the
+  `vbot-agent-tools` Skill's Errors section requires (user decision 2026-10-12)
+  (`_edit_failure`): one edit -> `No file was changed.` before its report;
+  several -> each failed edit is labeled `edit K of N`, and when none applied the
+  error opens with `Neither edit was applied; no file was changed.` (`None of the
+  N edits were applied; ...`), lists every failed edit's report in input order
+  (its code is the first one's) and closes with `Send both edits again, each
+  corrected or left out.` (`all N edits`) when every edit failed, or `Send all N
+  edits again with edit K corrected or left out.` when the edits that did not
+  fail left the file as it was. A
   whole-call failure in a call with refused items lists them after its own
   message. A `text_not_found` after an earlier failed edit of the call adds
   `After an earlier edit of this call failed, old_string must match the file
@@ -244,7 +246,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `Edit J of this call already replaced this old_string; to change that text again, use what edit J wrote as old_string.` | In a partial result edit J stays written, so merging would resend an edit whose `old_string` is gone; the next call can only build on what edit J wrote. |
 | Partial lead: `Edits 1, 2 and 4 were applied; edit 3 was not. Send only edit 3 again, corrected or left out.` (`edits 2 and 3 were not. Send only edits 2 and 3 again, each corrected or left out.`) | User decision 2026-10-12: a call applies every edit it can; results name the items by their numbers in input order (`vbot-agent-tools` -> Results). `Send only` keeps the Agent from resending the applied edits, whose `old_string` is gone or whose insertion would repeat; `left out` covers a failed edit whose change is already in the file. Replay 2026-10-12: 14 live calls refused as a whole apply in part this way. |
 | `After an earlier edit of this call failed, old_string must match the file exactly (up to whitespace).` | After a failed edit the later ones match without copy tolerance, so a copy that applies in a call of its own fails here; without the sentence the not-found report reads as if the text were missing, and the Agent cannot tell why the same copy matched before. |
-| `Neither edit was applied, so no file was changed. Send both edits again, each corrected or left out.` (`None of the N edits were applied, ... all N edits ...`) | When every edit failed, each has its report above; naming them all again in the closing adds nothing. |
+| `Neither edit was applied; no file was changed.` first, then the reports, then `Send both edits again, each corrected or left out.` (`None of the N edits were applied; ...`, `all N edits`) | When every edit failed, each has its report above; naming them all again in the closing adds nothing. |
 | Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |
 | Joined-line note: `new_string does not end with a line break as old_string does, so the next line now continues its last line: import a2 from 'a';import b from 'b';` | In the recorded Sessions (2026-10), 4 of 2751 edit items joined two non-empty lines this way, none on purpose; the result said only `Updated X (line N).`, since the written text was what the call sent. Three cost 2 to 3 more calls each to find and undo the join (reads, a failed edit, the fix); the fourth, a joined TypeScript import, stayed in the file. The quoted line is a ready `old_string` for the fix; no line number, because a later edit of the same call can move it. |
 | `line_join`: `X, edit K of N: new_string is old_string without its final line break, so this edit would only join the line '...' with the next line, '...'. Leave this edit out; to join the two lines, include the next line in old_string and new_string.` | 8 items in 7 calls dropped only the final line break (Sessions, 2026-10); each joined code lines or deleted a blank line, none on purpose, and the result said only `Updated X (line N).`. The edit changes nothing else, so leaving it out is the usual fix; the second clause keeps an intended join possible without guessing. Quoting the lines instead of numbering them stays right when earlier edits of the call moved lines. |

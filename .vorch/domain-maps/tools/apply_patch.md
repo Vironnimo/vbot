@@ -32,7 +32,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   fail before mutation, naming both keys and values (`Conflicting values for patch:
   patch is "..." and input is "...". Send only the intended one.`; shared
   `normalize_call_arguments` wording). Unsupported fields fail as well. Patch
-  contents remain literal. Normalizer refusals end with `No file was changed.`
+  contents remain literal. Normalizer refusals open with `No file was changed.`
   (`_normalize_call`). The advertised schema stays `patch` only.
 - Other harnesses' edit shapes run when they name one exact change. Unadvertised
   root fields (`PATCH_HIDDEN_PARAMETERS`: `path`, `old_string`, `new_string`,
@@ -153,8 +153,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   Results) and the instruction to resend only unfinished changes; each failure
   follows as `Failed:`/`Skipped:`/`Incomplete:` with its `where` (path plus
   `hunk N`/`edit N` when several). All-failed calls use the ordinary failure
-  envelope (`all_changes_failed` for several) with the same failure text and
-  `No file was changed.`; no applied effect hides behind a failure envelope.
+  envelope (`all_changes_failed` for several), opening with `No file was
+  changed.` (several: `None of the N changes was applied; no file was changed.`)
+  before the same failure text, as every error says first what was applied
+  (user decision 2026-10-12); no applied effect hides behind a failure envelope.
 - `unchanged` covers verified no-ops (`already has this content`, `already
   contains this change`, `already has that name`, identical old/new text) and
   changes that cancel out (`cancel each other out`). It never substitutes for

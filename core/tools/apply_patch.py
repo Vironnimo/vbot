@@ -119,7 +119,7 @@ def _request_failure(context: ToolContext, batch: ChangeBatch, error: _PatchErro
     context.add_display_notice("error", message[0])
     for name, lines in error.details.get("context_only", [])[:3]:
         message.extend(_locate_context(context, batch, name, lines))
-    return tool_failure(error.code, "\n".join(message) + "\nNo file was changed.")
+    return tool_failure(error.code, "\n".join(["No file was changed.", *message]))
 
 
 def _label_hunks(operations: list[_Operation]) -> None:
@@ -134,7 +134,7 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
     try:
         arguments = normalize_patch_arguments(arguments)
     except ValueError as error:
-        return tool_failure("invalid_arguments", f"{error}\nNo file was changed.")
+        return tool_failure("invalid_arguments", f"No file was changed.\n{error}")
     try:
         operations = patch_operations(arguments)
     except _PatchError as error:
@@ -187,7 +187,7 @@ def _normalize_call(arguments: object) -> object:
     try:
         return normalize_patch_arguments(arguments)
     except ValueError as error:
-        raise ToolContractError(f"{error}\nNo file was changed.") from error
+        raise ToolContractError(f"No file was changed.\n{error}") from error
 
 
 def make_apply_patch_handler(file_state: FileReadState) -> ToolHandler:
