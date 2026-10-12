@@ -268,21 +268,35 @@ async def _close_project(manager: CommandManager) -> object:
 
 async def _close_group(manager: CommandManager) -> object:
     await manager.close_execution_group("ext", "group-1", "epoch-1")
-    return 1
+    return None
+
+
+# Commands a scope close must leave running: (Session, execution owner).
+_SESSION_BYSTANDERS = [(SessionAddress("project-a", "agent-a", "session-c"), None)]
+_PROJECT_BYSTANDERS = [
+    (SessionAddress("project-b", "agent-a", "session-a"), None),
+    (SessionAddress(None, "agent-a", "session-a"), None),
+]
+_AGENT_BYSTANDERS = [*_PROJECT_BYSTANDERS, (OTHER, None)]
+_GROUP_BYSTANDERS = [
+    (OWNER, RunExecutionOwner("ext", "group-2", "participant", "generation", "epoch-1")),
+    (OWNER, RunExecutionOwner("ext", "group-1", "participant", "generation", "epoch-2")),
+    (OWNER, None),
+]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stop", "reason", "background", "delivered"),
+    ("stop", "reason", "background", "delivered", "bystanders"),
     [
-        (lambda m, c: m.stop(c, "agent"), "agent", True, False),
-        (lambda m, c: m.stop(c, "parent"), "parent", True, True),
-        (lambda m, c: m.stop(c, "user"), "user", True, True),
-        (lambda m, c: m.cancel_run("run-a"), "run_cancelled", False, False),
-        (lambda m, c: _close_session(m), "scope", True, False),
-        (lambda m, c: _close_agent(m), "scope", True, False),
-        (lambda m, c: _close_project(m), "scope", True, False),
-        (lambda m, c: _close_group(m), "scope", True, False),
+        (lambda m, c: m.stop(c, "agent"), "agent", True, False, []),
+        (lambda m, c: m.stop(c, "parent"), "parent", True, True, []),
+        (lambda m, c: m.stop(c, "user"), "user", True, True, []),
+        (lambda m, c: m.cancel_run("run-a"), "run_cancelled", False, False, []),
+        (lambda m, c: _close_session(m), "scope", True, False, _SESSION_BYSTANDERS),
+        (lambda m, c: _close_agent(m), "scope", True, False, _AGENT_BYSTANDERS),
+        (lambda m, c: _close_project(m), "scope", True, False, _PROJECT_BYSTANDERS),
+        (lambda m, c: _close_group(m), "scope", True, False, _GROUP_BYSTANDERS),
     ],
     ids=[
         "agent",
@@ -296,24 +310,38 @@ async def _close_group(manager: CommandManager) -> object:
     ],
 )
 async def test_each_stop_kills_the_whole_tree_and_records_its_reason(
-    harness: Harness,
+    tmp_path: Path,
     stop: Callable[[CommandManager, str], Awaitable[object]],
     reason: str,
     background: bool,
     delivered: bool,
+    bystanders: list[tuple[SessionAddress, RunExecutionOwner | None]],
 ) -> None:
-    command_id, process = await harness.launch(execution_owner=GROUP)
-    if background:
-        harness.manager.to_background(command_id, deliver=True)
-    assert harness.manager.has_execution_work(GROUP)
+    async with command_harness(tmp_path, max_live=8) as harness:
+        command_id, process = await harness.launch(execution_owner=GROUP)
+        if background:
+            harness.manager.to_background(command_id, deliver=True)
+        others = [
+            await harness.launch(owner=owner, execution_owner=execution_owner)
+            for owner, execution_owner in bystanders
+        ]
+        for other_id, _other in others:
+            harness.manager.to_background(other_id, deliver=True)
+        assert harness.manager.has_execution_work(GROUP)
 
-    await stop(harness.manager, command_id)
-    report = await harness.finish(command_id)
+        stopped = await stop(harness.manager, command_id)
+        report = await harness.finish(command_id)
 
-    assert (report.status, report.stop_reason) == ("stopped", reason)
-    assert process.tree.terminations == 1 and process.tree.closed
-    assert not harness.manager.has_execution_work(GROUP)
-    assert harness.sink.bodies == ([format_report(report)] if delivered else [])
+        assert (report.status, report.stop_reason) == ("stopped", reason)
+        assert process.tree.terminations == 1 and process.tree.closed
+        assert not harness.manager.has_execution_work(GROUP)
+        assert harness.sink.bodies == ([format_report(report)] if delivered else [])
+        # A scope close stops only its own commands, and counts only them.
+        if reason == "scope" and stopped is not None:
+            assert stopped == 1
+        for other_id, other in others:
+            assert harness.manager.report(other_id).status == "running"
+            assert other.tree.terminations == 0
 
 
 @pytest.mark.asyncio
