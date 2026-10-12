@@ -224,7 +224,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       // (`{ status, stillRunning }`), from `chat.history`'s
       // `background_command_statuses` and
       // `background_commands_still_running`. A command the server no longer
-      // knows has no entry: it has ended.
+      // knows has ended: it has no entry after a full read, and `ended` after
+      // an incremental read that leaves out a `running` it held.
       backgroundCommandStatuses: {},
       // The background commands the Session's Sub-Agents (at every depth)
       // still ran at the last History read, from `chat.history`'s
