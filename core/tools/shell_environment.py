@@ -21,6 +21,12 @@ One owner builds it from explicit layers, each applied over the previous one:
 6. **Run identity** (commands only): who runs the command, and the one-time
    update handoff. Applied last, so nothing above replaces it.
 
+A command's environment comes in two parts (``CommandEnvironment``): layers 1
+to 4 are its shell's start environment, the same for every call until the login
+environment or the instance changes, so a shell started before the call can
+serve it; layers 5 and 6 are the call's own, applied by the shell before the
+command runs.
+
 The environment is built fresh for every start; building it costs about a
 millisecond, so no cache can go stale.
 """
@@ -111,16 +117,40 @@ def terminal_environment(overlay: Mapping[str, str] | None = None) -> dict[str, 
     return environment
 
 
+@dataclass(frozen=True)
+class CommandEnvironment:
+    """One command's environment: its shell's start environment and the call's layer.
+
+    ``base`` holds layers 1 to 4. ``changes`` is what layers 5 and 6 make of it:
+    a value sets the variable, None removes it.
+    """
+
+    base: dict[str, str]
+    changes: dict[str, str | None]
+
+    def complete(self) -> dict[str, str]:
+        """The environment the command runs with."""
+        environment = dict(self.base)
+        for name, value in self.changes.items():
+            if value is None:
+                _remove(environment, (name,))
+            else:
+                _apply(environment, {name: value})
+        return environment
+
+
 def command_environment(
     run: RunIdentity,
     *,
     variables: Mapping[str, str] | None = None,
     credentials: Mapping[str, str] | None = None,
-) -> dict[str, str]:
+) -> CommandEnvironment:
     """Environment of one shell command run by an Agent."""
-    environment = _instance_environment()
-    _apply(environment, {"TERM": _COMMAND_TERM})
-    _apply(environment, _UNATTENDED_DEFAULTS)
+    base = _instance_environment()
+    _apply(base, {"TERM": _COMMAND_TERM})
+    _apply(base, _UNATTENDED_DEFAULTS)
+    _remove(base, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV))
+    environment = dict(base)
     _apply(environment, variables or {})
     _apply(environment, credentials or {})
     _remove(environment, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV))
@@ -130,7 +160,11 @@ def command_environment(
     if run.update_handoff is not None:
         run_variables[UPDATE_HANDOFF_ENV] = run.update_handoff
     _apply(environment, run_variables)
-    return environment
+    changes: dict[str, str | None] = {
+        name: value for name, value in environment.items() if base.get(name) != value
+    }
+    changes.update({name: None for name in base if name not in environment})
+    return CommandEnvironment(base, changes)
 
 
 def _instance_environment() -> dict[str, str]:
@@ -280,6 +314,7 @@ __all__ = [
     "RUN_PROJECT_ID_ENV",
     "RUN_SESSION_ID_ENV",
     "UPDATE_HANDOFF_ENV",
+    "CommandEnvironment",
     "RunIdentity",
     "command_environment",
     "inherited_value",

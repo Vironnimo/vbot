@@ -1,9 +1,10 @@
-"""Windows commands: the PowerShell wrapper's exit status, errors, filters and text.
+"""Windows commands: the PowerShell bootstrap's exit status, errors, filters and text.
 
-Each real-PowerShell case starts ``pwsh -NoProfile -NonInteractive -Command`` on
-pipes through ``CommandManager``, as the shell Tool does (about half a second),
-so a case exists only for a distinct path through the wrapper; cases that share
-a path share a process.
+Each real-PowerShell case starts ``pwsh -NoProfile -NonInteractive -Command`` with
+the bootstrap on pipes through ``CommandManager`` and sends the command as its
+request, as the shell Tool does when no shell waits for a command (about a third
+of a second), so a case exists only for a distinct path through the bootstrap;
+cases that share a path share a process.
 """
 
 from __future__ import annotations
@@ -11,17 +12,17 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from core.sessions import SessionAddress
+from core.tools._command_launch import PipeLauncher
 from core.tools._powershell import (
-    NULL_DEVICE_STATEMENTS,
     OUTPUT_COLUMNS,
+    POWERSHELL_BOOTSTRAP,
     POWERSHELL_ERROR_NOTE,
-    powershell_command,
+    powershell_request,
 )
 from core.tools.command_manager import CommandManager
 from core.tools.shell_environment import RunIdentity, command_environment
@@ -31,31 +32,18 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_command_travels_as_a_literal_parsed_after_the_setup() -> None:
-    text = powershell_command("it's ‘x’")
-
-    assert text.startswith(
-        "[Console]::OutputEncoding = [Console]::InputEncoding = "
-        "[System.Text.UTF8Encoding]::new($false); "
-    )
-    assert "\n$__vbotCommand = 'it''s ‘‘x’’'\n" in text
-
-
 # --- Line filters PowerShell lacks -----------------------------------------
 
 
 async def _run(
-    cwd: Path,
-    command: str,
-    *,
-    path: str | None = None,
-    wrap: Callable[[str], str] = powershell_command,
+    cwd: Path, command: str, *, path: str | None = None, prefix: str = ""
 ) -> tuple[int | None, str]:
-    """Run the wrapped *command* as the shell Tool does; return its exit code and output.
+    """Run *command* as the shell Tool does; return its exit code and output.
 
-    *path* replaces PATH in the command environment.
+    *path* replaces PATH in the shell's environment; *prefix* runs before the bootstrap.
     """
-    environment = command_environment(RunIdentity("agent-a", "session-a", None))
+    layers = command_environment(RunIdentity("agent-a", "session-a", None))
+    environment = layers.base
     if path is not None:
         environment = {
             **{name: value for name, value in environment.items() if name.upper() != "PATH"},
@@ -63,17 +51,18 @@ async def _run(
         }
     pwsh = shutil.which("pwsh")
     assert pwsh is not None
-    manager = CommandManager()
+    manager = CommandManager(launcher=PipeLauncher(warm=False))
     try:
         handle = await manager.launch(
             SessionAddress(None, "agent-a", "session-a"),
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", wrap(command)],
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", prefix + POWERSHELL_BOOTSTRAP],
             command=command,
             description=None,
             cwd=cwd,
             env=environment,
             origin_run_id="run-a",
             formatter=str,
+            request=powershell_request(command, str(cwd), layers.changes),
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
         report = manager.report(handle.command_id)
@@ -137,7 +126,7 @@ async def test_line_filters_run_where_powershell_has_none(tmp_path: Path) -> Non
     exit_code, output = await _run(tmp_path, script, path=path)
 
     assert exit_code == 0, output
-    # The caught stops leave error records, which the wrapper notes on the error stream.
+    # The caught stops leave error records, which the bootstrap notes on the error stream.
     printed = "".join(
         line
         for line in output.splitlines(keepends=True)
@@ -294,7 +283,7 @@ async def test_exit_status_and_error_records_follow_the_last_statement(
     for text in shows:
         assert text in output
     assert "silenced-sentinel" not in output
-    # The wrapper's own statements never fail visibly.
+    # The bootstrap's own statements never fail visibly.
     assert "__vbot" not in output
 
 
@@ -361,7 +350,9 @@ async def test_bash_null_device_discards_and_reaches_native_programs_as_nul(
 def test_only_commands_that_can_spell_the_null_device_carry_its_rewrite(
     command: str, rewritten: bool
 ) -> None:
-    assert (NULL_DEVICE_STATEMENTS in powershell_command(command)) is rewritten
+    # The request's second line switches the rewrite on.
+    switch = powershell_request(command, "C:/work", {}).splitlines()[1]
+    assert switch == (b"1" if rewritten else b"0")
 
 
 @pytest.mark.asyncio
@@ -386,16 +377,14 @@ async def test_successful_write_after_method_error_reports_record_without_changi
 async def test_full_existing_error_collection_uses_identity_instead_of_count(
     tmp_path: Path, new_error: bool
 ) -> None:
-    def with_profile_errors(command: str) -> str:
-        return (
-            "$Error.Clear(); 1..300 | ForEach-Object { "
-            "Write-Error 'profile-sentinel' -ErrorAction SilentlyContinue }; "
-            + powershell_command(command)
-        )
-
+    # Errors a profile left behind fill $Error to its capacity before the command.
+    profile_errors = (
+        "$Error.Clear(); 1..300 | ForEach-Object { "
+        "Write-Error 'profile-sentinel' -ErrorAction SilentlyContinue }; "
+    )
     command = "try { throw 'new-sentinel' } catch {}; 'finished'" if new_error else "'finished'"
 
-    code, output = await _run(tmp_path, command, wrap=with_profile_errors)
+    code, output = await _run(tmp_path, command, prefix=profile_errors)
 
     assert code == 0
     assert (POWERSHELL_ERROR_NOTE in output) is new_error

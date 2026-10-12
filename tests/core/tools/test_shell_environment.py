@@ -37,11 +37,12 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
     login_base: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("VBOT_DATA_DIR", "/data/dev")
-    environment = command_environment(
+    layers = command_environment(
         RunIdentity("agent-1", "session-1", None, update_handoff="token-1"),
         variables={"PAGER": "more", "VBOT_RUN_AGENT_ID": "someone-else", "MODE": "ci"},
         credentials={"API_TOKEN": "secret"},
     )
+    environment = layers.complete()
 
     assert environment["HOME"] == "/home/user"
     assert environment["VBOT_DATA_DIR"] == "/data/dev"
@@ -60,6 +61,12 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
     assert "VBOT_RUN_PROJECT_ID" not in environment
     assert environment["VBOT_UPDATE_HANDOFF"] == "token-1"
     assert "VBOT_SERVER_PORT" not in environment
+    # The shell starts with the layers every call shares; the call's own come on top.
+    other = command_environment(RunIdentity("agent-2", "session-2", "project-2", "token-2"))
+    assert layers.base == other.base
+    assert layers.base["PAGER"] == "cat"
+    per_call = {"MODE", "API_TOKEN", "VBOT_RUN_AGENT_ID", "VBOT_RUN_PROJECT_ID"}
+    assert not (per_call | {"VBOT_RUN_SESSION_ID", "VBOT_UPDATE_HANDOFF"}) & layers.base.keys()
 
 
 def test_terminal_environment_has_no_command_layers(login_base: dict[str, str]) -> None:
@@ -96,7 +103,9 @@ def test_server_environment_base_drops_what_vbot_added(monkeypatch: pytest.Monke
 def test_windows_base_is_a_fresh_login_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VBOT_SERVER_ONLY_VARIABLE", "1")
 
-    environment = command_environment(RunIdentity("a", "s", None), variables={"path": r"C:\x"})
+    environment = command_environment(
+        RunIdentity("a", "s", None), variables={"path": r"C:\x"}
+    ).complete()
 
     assert "VBOT_SERVER_ONLY_VARIABLE" not in environment
     assert "SYSTEMROOT" in environment
@@ -109,7 +118,7 @@ def test_windows_base_is_a_fresh_login_environment(monkeypatch: pytest.MonkeyPat
 def test_git_uses_prepared_messages_and_fails_with_the_fix_where_it_needs_text(
     tmp_path: Path,
 ) -> None:
-    environment = command_environment(RunIdentity("a", "s", None))
+    environment = command_environment(RunIdentity("a", "s", None)).complete()
     environment["PATH"] = os.environ["PATH"]
     # The repository's own identity; nothing outside it is configured.
     identity = {

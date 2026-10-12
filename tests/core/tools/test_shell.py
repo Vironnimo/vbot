@@ -10,6 +10,7 @@ Unicode output.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import dataclasses
 import errno
@@ -30,6 +31,7 @@ from core.projects import ProjectNotFoundError
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import shell as shell_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
+from core.tools._command_launch import PipeLauncher
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import CommandManager
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -45,6 +47,7 @@ from core.tools.shell import (
     register_shell_tool,
     shell_detail_blocks,
 )
+from core.tools.shell_environment import CommandEnvironment
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_success
 from core.tools.update_handoff import (
     UpdateHandoffs,
@@ -210,6 +213,32 @@ def log_file(text: str) -> str:
     return match[1]
 
 
+def launched(launcher: FakeLauncher, index: int = 0) -> tuple[str, dict[str, str]]:
+    """A launch's command and complete environment, as the host shell runs it.
+
+    On Windows the command and the call's layer of the environment travel in
+    the request PowerShell reads from stdin; elsewhere they are bash's argument
+    and environment.
+    """
+    environment = dict(launcher.envs[index])
+    request = launcher.requests[index]
+    if request is None:
+        return launcher.argv[index][-1], environment
+    lines = request.decode("ascii").splitlines()
+    assert lines[-1] == "."
+
+    def text(field: str) -> str:
+        return base64.b64decode(field).decode("utf-8")
+
+    for line in lines[3:-1]:
+        name, separator, value = line.partition(" ")
+        if separator:
+            environment[text(name)] = text(value)
+        else:
+            environment.pop(text(name), None)
+    return text(lines[2]), environment
+
+
 def note(content: str) -> Any:
     """A stored delivery, as the status fold reads it."""
     return SimpleNamespace(role="note", content=content, name=None)
@@ -250,14 +279,17 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
     if failed_programs is not None:
         expected["failed_programs"] = failed_programs
     assert result == expected
-    argv = shell.launcher.argv[0]
-    assert "build --all" in argv[-1]
+    command, env = launched(shell.launcher)
+    assert command == "build --all"
     # No input, no terminal: PowerShell cannot prompt.
-    assert argv[1:-1] == (
+    assert shell.launcher.argv[0][1:-1] == (
         ["-NoProfile", "-NonInteractive", "-Command"] if sys.platform == "win32" else ["-c"]
     )
     assert shell.launcher.cwds[0] == shell.commands.cwd
-    env = shell.launcher.envs[0]
+    if sys.platform == "win32":
+        # The call's own layer travels in the request: PowerShell starts with the same
+        # environment for every call, so a shell started before the call can serve it.
+        assert not {"API_TOKEN", "MODE", "VBOT_RUN_AGENT_ID"} & set(shell.launcher.envs[0])
     assert (env["VBOT_RUN_AGENT_ID"], env["VBOT_RUN_PROJECT_ID"]) == ("agent-a", "project-a")
     assert (env["API_TOKEN"], env["MODE"]) == ("value-of-API_TOKEN", "ci")
     assert env["GIT_TERMINAL_PROMPT"] == "0"
@@ -299,9 +331,9 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
     paths = iter(("first-path", "changed-path"))
     tmp_path = shell.commands.cwd
 
-    def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+    def environment(*_args: Any, **_kwargs: Any) -> CommandEnvironment:
         prepared.append(threading.get_ident())
-        return {"PATH": next(paths)}
+        return CommandEnvironment({"PATH": next(paths)}, {})
 
     def executable(_name: str, *, path: str | None = None) -> str:
         resolved.append((threading.get_ident(), path))
@@ -820,26 +852,6 @@ async def test_project_workdir_runs_in_the_project_directory(tmp_path: Path) -> 
     )
 
 
-@pytest.mark.skipif(
-    sys.platform != "win32" or shutil.which("pwsh") is None, reason="Windows PowerShell 7"
-)
-@pytest.mark.asyncio
-async def test_command_too_long_for_the_windows_command_line_names_the_room(
-    shell: Shell,
-) -> None:
-    refused = await shell.call({"command": "#" * 32_000})
-    message = refused["error"]["message"]
-    room = int(re.findall(r"at most about ([\d,]+)", message)[0].replace(",", ""))
-    assert refused["error"]["code"] == "command_not_started"
-    assert message.endswith("Save the script to a .ps1 file and run that file.")
-    assert shell.launcher.argv == []
-
-    # Exactly the room named fits.
-    call = shell.call({"command": "#" * room})
-    (await shell.started()).exit(0)
-    assert data(await shell.returned(call))["status"] == "exited"
-
-
 @pytest.mark.asyncio
 async def test_update_handoff_token_is_claimable_exactly_while_the_command_runs(
     tmp_path: Path,
@@ -850,7 +862,7 @@ async def test_update_handoff_token_is_claimable_exactly_while_the_command_runs(
         result = data(await shell.call({"command": "vbot update", "run_in_background": True}))
         assert result["status"] == "running"
         process = await shell.started()
-        token = shell.launcher.envs[0]["VBOT_UPDATE_HANDOFF"]
+        token = launched(shell.launcher)[1]["VBOT_UPDATE_HANDOFF"]
 
         ticket = handoffs.mint(token)
         assert read_update_handoff_ticket(data_dir, ticket.ticket_id).acknowledged is False
@@ -879,7 +891,7 @@ async def test_update_handoff_token_is_claimable_exactly_while_the_command_runs(
         failed = await shell.call({"command": "vbot update"})
         assert failed["error"]["code"] == "command_not_started"
         assert failed["error"]["retryable"] is True
-        assert released(shell.launcher.envs[-1]["VBOT_UPDATE_HANDOFF"])
+        assert released(launched(shell.launcher, -1)[1]["VBOT_UPDATE_HANDOFF"])
 
 
 @pytest.mark.asyncio
@@ -953,7 +965,12 @@ real_shell_only = pytest.mark.skipif(_HOST_SHELL is None, reason="the host shell
 
 @contextlib.asynccontextmanager
 async def real_shell(tmp_path: Path) -> AsyncIterator[ToolRegistry]:
-    manager = CommandManager(FakeSink(), temporary_files=TemporaryFileManager(tmp_path / "data"))
+    # Each command starts its own shell; the warm shell has a test of its own.
+    manager = CommandManager(
+        FakeSink(),
+        temporary_files=TemporaryFileManager(tmp_path / "data"),
+        launcher=PipeLauncher(warm=False),
+    )
     manager.start()
     registry = ToolRegistry()
     register_shell_tool(registry, manager)
