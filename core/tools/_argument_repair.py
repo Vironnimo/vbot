@@ -2,10 +2,11 @@
 
 ``ToolContract.normalize_arguments`` runs this on a copy of every call's
 arguments: numbers and booleans sent as text, JSON containers sent as text
-(also with unescaped quotes inside the text of declared fields), a single
-value where an array is expected. A value with more than one valid reading
-raises ``ToolContractError`` instead of choosing one. The rules are in
-``tools.md`` -> Shared argument repair and Quote repair of JSON text.
+(also with unescaped quotes or raw line breaks inside the text of declared
+fields), a single value where an array is expected. A value with more than
+one valid reading raises ``ToolContractError`` instead of choosing one. The
+rules are in ``tools.md`` -> Shared argument repair and Quote repair of JSON
+text.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from core.utils.json_text import escape_inner_quotes
 
 JsonObject = dict[str, Any]
 _JSON_NUMBER_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$")
+# A line break written as a JSON escape: \n or \r after an even run of backslashes.
+_LINE_BREAK_ESCAPE = re.compile(r"(?<!\\)(?:\\\\)*\\[nr]")
 _MAX_FLOAT_DECIMAL_EXPONENT = 308
 _MIN_FLOAT_DECIMAL_EXPONENT = -324
 
@@ -333,22 +336,32 @@ def decode_json_argument(text: str, schema: JsonObject) -> Any:
     """Return the value JSON ``text`` encodes for an argument whose schema is ``schema``.
 
     Some Providers pass an argument they could not decode on as text, most
-    often because a ``"`` inside the text of one of its fields is not escaped.
-    When ``text`` is not JSON, the stray quotes inside the text of the
-    schema's fields are escaped (``core.utils.json_text.escape_inner_quotes``);
-    that reading counts only when it gives a value the schema accepts with no
-    undeclared fields. Otherwise the strict decoding error is raised, a
-    ``json.JSONDecodeError``. A repeated field raises ``ToolContractError``.
+    often because a ``"`` inside the text of one of its fields is not escaped,
+    or a line break in it is not written as an escape. When ``text`` is not
+    JSON, raw control characters inside its texts are read as themselves
+    (unless it also writes line breaks as escapes) and the stray quotes inside
+    the text of the schema's fields are escaped
+    (``core.utils.json_text.escape_inner_quotes``); that reading counts only
+    when it gives one value the schema accepts with no undeclared fields.
+    Otherwise a ``json.JSONDecodeError`` is raised: the first break past the
+    raw control characters, else the strict decoding error. A repeated field
+    raises ``ToolContractError``.
     """
     try:
         return load_json_value(text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as error:
         repaired = _repaired_json_text(
             text, schema, root_schema=schema, root_validator=Draft202012Validator(schema)
         )
-        if repaired is _NOT_REPAIRED:
-            raise
-        return repaired
+        if repaired is not _NOT_REPAIRED:
+            return repaired
+        strict_error = error
+    try:
+        json.loads(text, strict=False)
+    except json.JSONDecodeError as error:
+        # A raw line break reads as itself: the break past it is the one to report.
+        raise error from None
+    raise strict_error
 
 
 _NOT_REPAIRED = object()
@@ -361,20 +374,56 @@ def _repaired_json_text(
     root_schema: JsonObject,
     root_validator: Draft202012Validator,
 ) -> Any:
-    """Return the schema-valid value ``text`` encodes once its stray quotes are escaped.
+    """Return the schema-valid value ``text`` encodes once its slips in text are read.
 
-    ``_NOT_REPAIRED`` when escaping changes nothing or the result is not a
-    value of ``schema`` with only declared fields.
+    Inside the text of a value, a raw line break, tab or other control
+    character stands for itself (``_schema_reading`` has the exception), and a
+    stray ``"`` inside the text of a declared field belongs to the text
+    (``escape_inner_quotes``). Only a schema that declares fields is read this
+    way. ``_NOT_REPAIRED`` when that reading is not a value of ``schema`` with
+    only declared fields, or when the text with and without its quotes escaped
+    gives two such values.
     """
-    repaired = escape_inner_quotes(text, _schema_field_names(schema, root_schema))
-    if repaired is None:
+    fields = _schema_field_names(schema, root_schema)
+    if not fields:
         return _NOT_REPAIRED
+    readings: list[Any] = []
+    for candidate in (text, escape_inner_quotes(text, fields)):
+        if candidate is None:
+            continue
+        value = _schema_reading(
+            candidate, schema, root_schema=root_schema, root_validator=root_validator
+        )
+        if value is not _NOT_REPAIRED and not any(
+            same_json_value(value, other) for other in readings
+        ):
+            readings.append(value)
+    return readings[0] if len(readings) == 1 else _NOT_REPAIRED
+
+
+def _schema_reading(
+    text: str,
+    schema: JsonObject,
+    *,
+    root_schema: JsonObject,
+    root_validator: Draft202012Validator,
+) -> Any:
+    """Return the value of ``schema`` that ``text`` encodes, control characters as text.
+
+    A text that writes line breaks both raw and as escapes has no such value: a
+    raw one there can be a slip of the output, such as a break inside a word.
+    """
     try:
+        decoded = json.loads(
+            text,
+            strict=False,
+            parse_constant=_reject_non_json_constant,
+            object_pairs_hook=_unique_json_object,
+        )
+        if _LINE_BREAK_ESCAPE.search(text) and _has_raw_line_break(text, decoded):
+            return _NOT_REPAIRED
         value = normalize_schema_value(
-            load_json_value(repaired),
-            schema,
-            root_schema=root_schema,
-            root_validator=root_validator,
+            decoded, schema, root_schema=root_schema, root_validator=root_validator
         )
     except ValueError, RecursionError:
         # Includes ToolContractError: a repeated field or an ambiguous encoding.
@@ -384,6 +433,18 @@ def _repaired_json_text(
     if not _declared_fields_only(value, schema, root_schema):
         return _NOT_REPAIRED
     return value
+
+
+def _has_raw_line_break(text: str, decoded: Any) -> bool:
+    """Say whether a raw line break stands inside a string of the JSON ``text``.
+
+    Outside strings a line break is whitespace: only one inside a string changes
+    ``decoded``, the value ``text`` encodes, when it becomes a space.
+    """
+    if "\n" not in text and "\r" not in text:
+        return False
+    spaced = text.replace("\r", " ").replace("\n", " ")
+    return bool(json.loads(spaced, strict=False) != decoded)
 
 
 def _schema_field_names(schema: Any, root_schema: JsonObject, depth: int = 0) -> set[str]:

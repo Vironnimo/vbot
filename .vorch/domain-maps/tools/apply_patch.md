@@ -53,7 +53,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   effect. `old_string` replacements match as substrings, precisely, else as a copy
   with errors (`copy_match`, below; never with `replace_all`); an empty
   `old_string` creates a file or fills an empty one and fails with `file_exists`
-  otherwise. `patch_targets(arguments)` lists every named path for callers that
+  otherwise. A replacement whose `new_string` is its `old_string` without the
+  final line break is refused where the file continues after the match
+  (`line_join`; `edit.md` -> Results). `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
 - The definition is minimal (user decision 2026-10-04): the description names
   its effects, and `patch` names its frame and that Add File replaces an existing file. The patch route is offered only to
@@ -290,7 +292,16 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   text already occurs (a change made earlier; not when `old_string` contains
   `new_string`, as after a deletion); without candidates the text names
   the `read` call. A first difference for a one-line copy is shown at the closest
-  candidate's line; longer copies are aligned by the lines the file holds. Ambiguity reports the winning match's actual locations
+  candidate's line; longer copies are aligned by the lines the file holds.
+  An `old_string` whose words are all at exactly one place of the file, with
+  other whitespace between them (`rewrapped_place`), shows that place (at most 8
+  lines) as its candidate, and its first difference starts there. A first
+  difference that is a line break in another place carries `break` (`file`,
+  `copy`, or `start` for a copied line that starts a line the file continues)
+  with the text on both sides, and the report says so (`the file breaks this
+  line after '...'; old_string continues it with '...'`) instead of quoting the
+  whole line. Only a copy that starts with a line break, or a patch line,
+  claims to start a line; an `old_string`'s first line can start inside one. Ambiguity reports the winning match's actual locations
   (including section offsets) under `Where it occurs:`, not guessed alternatives.
   These excerpts never authorize a write.
 - A patch line that occurs only inside longer file lines (a fragment copied as a
@@ -345,7 +356,17 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   starts or ends between the CR and LF of one line break: an old text starting
   with a line break replaces the whole CRLF instead of leaving a lone CR. Precise matches win;
   ambiguity at a winning strategy never falls through to a looser strategy
-  (`first=True` takes that strategy's first match instead).
+  (`first=True` takes that strategy's first match instead). With
+  `rewrapped=True` (substring `old_string` replacements only: `edit` and
+  `apply_patch`'s `old_string` shapes), a last strategy matches an old text
+  whose words (non-whitespace runs) are all the file's, in order, with line
+  breaks in other places: between words a space and a line break with any
+  indentation stand for each other, a blank line must be in the file too, a
+  leading or trailing line break must start or end a file line, at least one
+  break must fall elsewhere, and the old text needs 4 words. It never serves an
+  edit that changes only whitespace, since such an edit is about the breaks the
+  old text misstates. It is ambiguous like the others; the replacement is
+  reindented from its first line only (`lines_correspond=False`).
   Ambiguity counts every occurrence, including overlapping ones (repeated
   closing-brace lines) and ones following a filtered partial occurrence, for
   hunks and `@@` anchors alike; `replace_all` still replaces leftmost

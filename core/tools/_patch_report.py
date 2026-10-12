@@ -289,6 +289,8 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
         if difference.get("unprefixed")
         else []
     )
+    if difference.get("break"):
+        return [_break_text(difference, source, after), *unprefixed]
     if not difference.get("truncated"):
         held = (
             f": after {after}, line {difference['line']} reads"
@@ -318,6 +320,34 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
     return [*lines, *unprefixed]
 
 
+def _break_text(difference: JsonObject, source: str, after: str) -> str:
+    """Name a first difference that is a line break in another place."""
+    line, before, then = difference["line"], difference["before"], difference["after"]
+    kind = difference["break"]
+    if kind == "file":
+        if after:
+            return (
+                f"First difference: after {after}, line {line} breaks after {before!r}; "
+                f"{source} continues it with {then!r}."
+            )
+        return (
+            f"First difference, line {line}: the file breaks this line after {before!r}; "
+            f"{source} continues it with {then!r}."
+        )
+    if kind == "copy":
+        if after:
+            return (
+                f"First difference: {source} breaks the line after {before!r}; after {after}, "
+                f"line {line} continues it with {then!r}."
+            )
+        return (
+            f"First difference, line {line}: {source} breaks this line after {before!r}; "
+            f"the file continues it with {then!r}."
+        )
+    held = f"after {after}, line {line} has" if after else f"line {line} of the file has"
+    return f"First difference: {source} starts a line with {then!r}, which {held} after {before!r}."
+
+
 def _read_hint(error: JsonObject) -> str:
     """Name the read call that shows the file, after a space; empty without a path."""
     if not error.get("path_label"):
@@ -326,18 +356,44 @@ def _read_hint(error: JsonObject) -> str:
 
 
 def _written_text(error: JsonObject, shown: set[int]) -> list[str]:
-    """Name the earlier edits of the call that wrote lines the failure shows."""
+    """Name the earlier edits of the call that wrote lines the failure shows.
+
+    The edit that ``replaced_by`` names replaced the failed edit's old text.
+    """
     parts = []
     for item in error.get("written") or []:
         first, last = int(item["first"]), int(item["last"])
         if shown.intersection(range(first, last + 1)):
             lines = f"line {first}" if first == last else f"lines {first}-{last}"
             parts.append((str(item["label"]), lines))
-    if not parts:
-        return []
-    (label, lines), *rest = parts
-    sentence = f"{label[:1].upper()}{label[1:]} of this call wrote {lines}"
-    return [sentence + "".join(f"; {other} wrote {more}" for other, more in rest) + "."]
+    sentences = []
+    replaced = str(error.get("replaced_by") or "")
+    if replaced:
+        wrote = "".join(f" and wrote {lines}" for label, lines in parts if label == replaced)
+        parts = [part for part in parts if part[0] != replaced]
+        sentences.append(
+            f"{replaced[:1].upper()}{replaced[1:]} of this call already replaced this "
+            f"old_string{wrote}; merge the two edits into one."
+        )
+    if parts:
+        (label, lines), *rest = parts
+        sentence = f"{label[:1].upper()}{label[1:]} of this call wrote {lines}"
+        sentences.append(
+            sentence + "".join(f"; {other} wrote {more}" for other, more in rest) + "."
+        )
+    return sentences
+
+
+def _join_text(join: JsonObject) -> str:
+    """Name one more edit of the call that would only join two lines."""
+    label = str(join["label"])
+    lead = (
+        f"{label[:1].upper()}{label[1:]}: new_string is likewise old_string without its "
+        "final line break; it would only"
+    )
+    if join["next"]:
+        return f"{lead} join the line {join['line']!r} with the next line, {join['next']!r}."
+    return f"{lead} delete the blank line after the line {join['line']!r}."
 
 
 def _span(first: int, last: int) -> str:
@@ -429,6 +485,8 @@ def failure_text(error: JsonObject) -> str:
         lines.append(f"Where it occurs after {after}:" if after else "Where it occurs:")
         lines.extend(_excerpts(candidates, error.get("path_label")))
         lines.extend(_written_text(error, shown))
+    elif code == "line_join":
+        lines.extend(_join_text(join) for join in error.get("also") or ())
     if error.get("content"):
         lines.append(str(error["content"]))
     if error.get("completed_paths"):

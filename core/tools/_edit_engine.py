@@ -49,6 +49,7 @@ from core.tools.fuzzy_match import (
     first_difference,
     preserve_typography,
     replace_fuzzy,
+    rewrapped_place,
 )
 from core.tools.tools import JsonObject
 
@@ -94,10 +95,15 @@ def apply_hunks(
     returned change end, is where the line holding the file's last change starts;
     it orders the occurrences of lines a later hunk matches. A hunk that fails
     after others applied carries ``written`` in its error details: the lines of
-    the text it saw that each earlier hunk wrote, as ``{label, first, last}``.
+    the text it saw that each earlier hunk wrote, as ``{label, first, last}``,
+    and ``replaced_by``, the label of the earlier hunk that replaced its old text.
     """
     notes: list[str] = []
     written: list[tuple[str, int, int]] = []
+    # The text each hunk that changed it saw, in order.
+    seen: list[tuple[str, str]] = []
+    # Edits that would only join lines are refused together: the first carries the others.
+    joins: list[_PatchError] = []
     for hunk in hunks:
         try:
             if hunk.replacement is not None:
@@ -105,17 +111,49 @@ def apply_hunks(
             else:
                 edited, placed = _apply_line_hunk(content, hunk, path, previous)
         except _PatchError as error:
+            if error.code == "line_join":
+                joins.append(error)
+                continue
+            if joins:
+                # A later failure can follow from the refused edits; they come first.
+                break
             if written:
                 error.details["written"] = [
                     {"label": label, "first": first, "last": last} for label, first, last in written
                 ]
+            replaced_by = _replaced_by(seen, hunk) if error.code == "text_not_found" else None
+            if replaced_by is not None:
+                error.details["replaced_by"] = replaced_by
             raise
         if edited != content:
+            seen.append((hunk.label, content))
             previous = _change_end_line(content, edited)
             written = _track_written(written, content, edited, hunk.label)
         content = edited
         notes.extend(placed)
+    if joins:
+        first, *others = joins
+        if others:
+            first.details["also"] = [
+                {"label": other.values.get("label", ""), **other.details} for other in others
+            ]
+        raise first
     return content, notes, previous
+
+
+def _replaced_by(seen: list[tuple[str, str]], hunk: _Hunk) -> str | None:
+    """Name the earlier hunk that replaced the old text ``hunk`` replaces, if one did.
+
+    That is the last hunk whose text held it, matched precisely: the hunks after
+    it never saw it.
+    """
+    old = hunk.replacement.old if hunk.replacement is not None else ""
+    if not old:
+        return None
+    for label, before in reversed(seen):
+        if replace_fuzzy(before, old, old, replace_all=False, typographic=True) is not None:
+            return label
+    return None
 
 
 def _track_written(
@@ -218,7 +256,11 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
     assert replacement is not None
     old, new, replace_all = replacement.old, replacement.new, replacement.replace_all
     notes: list[str] = []
-    found = replace_fuzzy(content, old, new, replace_all=replace_all, typographic=True)
+    found = replace_fuzzy(
+        content, old, new, replace_all=replace_all, typographic=True, rewrapped=True
+    )
+    if isinstance(found, FuzzyReplacement) and found.strategy == "rewrapped":
+        return _rewrapped(content, found, path)
     stripped = strip_line_number_gutters(old) if found is None else None
     if stripped is not None:
         # Text copied from read output: its gutters cover whole lines.
@@ -244,6 +286,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             **values,
         )
     if found is not None:
+        _refuse_join(content, found, hunk, path)
         edited, placed = _keep_decorated(content, found, path)
         return edited, notes + _joined_lines(content, found) + placed
     details = _not_found(content, old, source="old_string")
@@ -266,6 +309,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
                 **values,
             )
         if copied is not None:
+            _refuse_join(content, copied, hunk, path)
             edited, placed = _keep_decorated(content, copied, path)
             return edited, [
                 *_deviations(copy_warnings(copied)),
@@ -286,6 +330,77 @@ def _keep_decorated(content: str, found: FuzzyReplacement, path: object) -> tupl
     spans = list(zip(found.before_spans, found.after_spans, strict=True))
     edited, notes = place_before_decorators(content, found.new_content, spans, path)
     return edited, _deviations(notes)
+
+
+def _rewrapped(content: str, found: FuzzyReplacement, path: object) -> tuple[str, list[str]]:
+    """Write a replacement whose old text breaks its lines in other places than the file.
+
+    The note names the lines that held the old text: the written text follows
+    the call's line breaks, not the file's, so the result shows it.
+    """
+    places = []
+    for start, end in found.before_spans:
+        text = content[start:end]
+        first = len(_BREAK.findall(content, 0, start + len(text) - len(text.lstrip()))) + 1
+        last = len(_BREAK.findall(content, 0, start + len(text.rstrip()) - 1)) + 1
+        places.append(str(first) if first == last else f"{first}-{last}")
+    single = len(places) == 1 and "-" not in places[0]
+    lines = ("line " if single else "lines ") + ", ".join(places)
+    edited, placed = _keep_decorated(content, found, path)
+    note = DeviationNote(_REWRAPPED_NOTE.format(lines=lines))
+    return edited, [note, *_joined_lines(content, found), *placed]
+
+
+_REWRAPPED_NOTE = (
+    "old_string matched {lines}, where the file breaks the text in other places; "
+    "new_string was written with its own line breaks."
+)
+
+
+def _refuse_join(content: str, found: FuzzyReplacement, hunk: _Hunk, path: object) -> None:
+    """Refuse a replacement whose only change drops the line break ending its old text.
+
+    Its next line would continue the matched text's last line, or a blank line
+    after it would go. In the recorded Sessions (2026-10), 9 such edits in 7
+    calls joined code lines or deleted blank lines, none on purpose. At the end
+    of the file it only removes the final line break, which can be meant.
+    """
+    replacement = hunk.replacement
+    assert replacement is not None
+    old, new = replacement.old, replacement.new
+    ending = next((e for e in ("\r\n", "\n", "\r") if old.endswith(e)), None)
+    # A new text that still ends a line, such as "\n" for "\n\n", deletes a blank line.
+    if ending is None or not new or new.endswith(("\n", "\r")) or new != old[: -len(ending)]:
+        return
+    end = next(
+        (
+            end
+            for _, end in found.before_spans
+            if content[end - 1 : end] in ("\n", "\r") and end < len(content)
+        ),
+        None,
+    )
+    if end is None:
+        return
+    stop = end - 2 if content[end - 2 : end] == "\r\n" else end - 1
+    start = max(content.rfind("\n", 0, stop), content.rfind("\r", 0, stop)) + 1
+    after = _BREAK.search(content, end)
+    line = content[start:stop].strip()
+    following = content[end : after.start() if after else len(content)].strip()
+    if len(line) > _JOINED_SIDE_CHARACTERS:
+        line = "..." + line[-_JOINED_SIDE_CHARACTERS:]
+    if len(following) > _JOINED_SIDE_CHARACTERS:
+        following = following[:_JOINED_SIDE_CHARACTERS] + "..."
+    details: JsonObject = {"line": line, "next": following}
+    raise _PatchError(
+        "line_join",
+        template="line_join" if following else "blank_line_join",
+        path=path,
+        label=hunk.label,
+        details=details,
+        line=repr(line),
+        next=repr(following),
+    )
 
 
 def _joined_lines(content: str, found: FuzzyReplacement) -> list[str]:
@@ -410,7 +525,9 @@ def _context_not_found(content: str, hint: str, hunk: _Hunk, path: object) -> _P
     # the first line that differs, like the report for the lines to replace.
     block = "\n" in hint
     if block and details["candidates"]:
-        difference = first_difference(content, hint, details["candidates"][0]["line"])
+        difference = first_difference(
+            content, hint, details["candidates"][0]["line"], whole_lines=True
+        )
         if difference is not None:
             details["difference"] = {**difference, "source": "patch"}
     return _PatchError(
@@ -923,16 +1040,42 @@ def _not_found(
     split = _split_copy(content, old) if source == "old_string" else None
     if split is not None:
         return split
-    details = _candidates(content, old)
+    place = rewrapped_place(content, old) if source == "old_string" else None
+    details: JsonObject = (
+        # Every word of old_string is there, in order: only whitespace differs.
+        {"candidates": [_place_excerpt(content, *place)]}
+        if place is not None
+        else _candidates(content, old)
+    )
     if part is not None and not details["candidates"]:
         details["part_of"] = part
     if details["candidates"]:
-        difference = first_difference(content, old, details["candidates"][0]["line"])
+        difference = first_difference(
+            content,
+            old,
+            details["candidates"][0]["line"],
+            placed=place is not None,
+            whole_lines=source == "patch",
+        )
         if difference is not None:
             details["difference"] = {**difference, "source": source}
     return details
 
 
+def _place_excerpt(content: str, first: int, last: int) -> JsonObject:
+    """Show lines ``first``-``last``, at most as many as a closest-text candidate."""
+    lines = split_text_lines(content)
+    shown = min(last, first + _PLACE_MAX_LINES - 1)
+    excerpt = file_excerpt(lines, first, shown)
+    if shown < last:
+        excerpt["truncated"] = True
+        excerpt["continuations"].append(
+            {"offset": f"{shown + 1}:1", "limit": min(_PLACE_MAX_LINES, last - shown)}
+        )
+    return excerpt
+
+
+_PLACE_MAX_LINES = 8
 _SPLIT_MAX_LINES = 200
 # Parts in order with at most this many non-blank lines between them are one passage.
 _SPLIT_MAX_LEFT_OUT = 3

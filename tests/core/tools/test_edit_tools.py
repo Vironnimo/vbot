@@ -125,26 +125,167 @@ async def test_edits_apply_in_order_as_one_change(tmp_path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("old", "new", "joined"),
+    ("edits", "joined"),
     [
-        ("import a from 'a';\n", "import a2 from 'a';", "import a2 from 'a';import b from 'b';"),
+        (
+            [("import a from 'a';\n", "import a2 from 'a';")],
+            "import a2 from 'a';import b from 'b';",
+        ),
         # Only a blank line or the end of the file follows: no line joins.
-        ("import b from 'b';\n", "import b2 from 'b';", None),
-        ("end\n", "fin", None),
+        ([("import b from 'b';\n", "import b2 from 'b';")], None),
+        ([("end\n", "fin")], None),
+        ([("end\n", "end")], None),
+        # A new text that still ends its line deletes the blank line on purpose.
+        ([("import b from 'b';\n\n", "import b from 'b';\n")], None),
+        # An edit that changes nothing but drops the line break is refused, all
+        # such edits of the call together (here 2), also one that only deletes a
+        # blank line.
+        ([("import a from 'a';\n", "import a from 'a';")], 1),
+        (
+            [
+                ("import a from 'a';\n", "import a from 'a';"),
+                ("end", "fin"),
+                ("import b from 'b';\n", "import b from 'b';"),
+            ],
+            2,
+        ),
     ],
 )
 async def test_an_edit_that_drops_a_final_line_break_names_the_joined_line(
-    tmp_path, old, new, joined
+    tmp_path, edits, joined
 ) -> None:
-    (tmp_path / "a.ts").write_bytes(b"import a from 'a';\nimport b from 'b';\n\nend\n")
+    original = b"import a from 'a';\nimport b from 'b';\n\nend\n"
+    (tmp_path / "a.ts").write_bytes(original)
 
     result = await call(
-        tmp_path, {"path": "a.ts", "edits": [{"old_string": old, "new_string": new}]}, name="edit"
+        tmp_path,
+        {"path": "a.ts", "edits": [{"old_string": old, "new_string": new} for old, new in edits]},
+        name="edit",
     )
 
-    lines = text(result).split("\n")
-    assert len(lines) == (1 if joined is None else 2)
-    assert joined is None or joined in lines[1]
+    if isinstance(joined, int):
+        assert result["error"]["code"] == "line_join"
+        # One line per refused edit, naming the lines, then the closing.
+        assert len(text(result).split("\n")) == joined + 1
+        assert "import b from 'b';" in text(result).split("\n")[0]
+        assert (tmp_path / "a.ts").read_bytes() == original
+        return
+    notes = [line for line in text(result).split("\n") if line.startswith("Note: ")]
+    assert result["ok"]
+    assert len(notes) == (0 if joined is None else 1)
+    assert joined is None or joined in notes[0]
+
+
+WRAPPED = (
+    "def spawn(db, api, *, fault=None, pace=1.0,\n"
+    "          exit_code=70, start=None):\n"
+    "    return 1\n"
+    "\n"
+    "\n"
+    "def check(rows):\n"
+    "    total = count(rows)        print(total)\n"
+    "    return total\n"
+)
+REWRAPPED_SIGNATURE = (
+    "def spawn(db, api, *, fault=None, pace=1.0, exit_code=70,\n          start=None):"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "edit", "outcome"),
+    [
+        # Every word is the file's, only the line breaks fall elsewhere: new_string
+        # is written as sent, with a note naming the lines it matched.
+        pytest.param(
+            WRAPPED,
+            (REWRAPPED_SIGNATURE, REWRAPPED_SIGNATURE.replace("None):", "None, rows=1):")),
+            WRAPPED.replace(
+                "pace=1.0,\n          exit_code=70, start=None):",
+                "pace=1.0, exit_code=70,\n          start=None, rows=1):",
+            ),
+            id="signature",
+        ),
+        pytest.param(
+            "# Notes\n\n- Rendering uses the engine's own\n  digit rules, not repr.\n- Next\n",
+            ("- Rendering uses the engine's own digit rules, not repr.", "- Rendering is exact."),
+            "# Notes\n\n- Rendering is exact.\n- Next\n",
+            id="prose",
+        ),
+        pytest.param(
+            WRAPPED.replace("\n", "\r\n"),
+            (REWRAPPED_SIGNATURE, REWRAPPED_SIGNATURE.replace("None):", "None, rows=1):")),
+            WRAPPED.replace(
+                "pace=1.0,\n          exit_code=70, start=None):",
+                "pace=1.0, exit_code=70,\n          start=None, rows=1):",
+            ).replace("\n", "\r\n"),
+            id="crlf",
+        ),
+        # Nearby inputs stay refused, with the line the line break differs on.
+        # An edit of whitespace alone is about the line breaks old_string misstates.
+        pytest.param(
+            WRAPPED,
+            ("    total = count(rows)\n    print(total)",) * 2,
+            ("text_not_found", {"7"}),
+            id="whitespace-only",
+        ),
+        pytest.param(
+            WRAPPED,
+            (
+                "    total = count(rows)\n    print(total)\n",
+                "    total = count(rows)\n    print(total)",
+            ),
+            ("text_not_found", {"7"}),
+            id="whitespace-only-final-break",
+        ),
+        # A copy that starts a line must start one in the file.
+        pytest.param(
+            WRAPPED,
+            ("\n    print(total)\n    return total", "\n    print(total)\n    return total + 1"),
+            ("text_not_found", {"7-8", "7"}),
+            id="starts-a-line",
+        ),
+        # Too few words to tell the place.
+        pytest.param(
+            WRAPPED,
+            ("rows)\nprint(total)", "rows) + print(total)"),
+            ("text_not_found", {"7"}),
+            id="few-words",
+        ),
+        # A blank line must be in the file as well.
+        pytest.param(
+            WRAPPED,
+            (REWRAPPED_SIGNATURE.replace(",\n", ",\n\n"), "def spawn():"),
+            ("text_not_found", {"1-2", "1"}),
+            id="blank-line",
+        ),
+        pytest.param(
+            WRAPPED + "\n\n" + WRAPPED.split("\n\n\n")[0] + "\n",
+            (REWRAPPED_SIGNATURE, "def spawn():"),
+            ("ambiguous_match", {"1"}),
+            id="ambiguous",
+        ),
+    ],
+)
+async def test_old_string_with_line_breaks_in_other_places_than_the_file(
+    tmp_path, content, edit, outcome
+) -> None:
+    (tmp_path / "a.py").write_bytes(content.encode())
+    old, new = edit
+
+    result = await call(
+        tmp_path, {"path": "a.py", "edits": [{"old_string": old, "new_string": new}]}, name="edit"
+    )
+
+    if isinstance(outcome, str):
+        assert result["ok"], text(result)
+        assert (tmp_path / "a.py").read_bytes() == outcome.encode()
+        assert len([line for line in text(result).split("\n") if line.startswith("Note: ")]) == 1
+        return
+    code, lines = outcome
+    assert result["error"]["code"] == code
+    assert (tmp_path / "a.py").read_bytes() == content.encode()
+    assert set(re.findall(r"\blines? (\d+(?:-\d+)?)", text(result))) == lines
 
 
 @pytest.mark.asyncio
@@ -187,6 +328,9 @@ async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> Non
             "edits": [{"path": "./a.py", "old_string": "x = 1", "new_string": "x = 3"}],
         },
         {"edits": [{"file_path": "a.py", "old_string": "x = 1", "new_string": "x = 3"}]},
+        # An empty value under a name that is not a field requests nothing; a
+        # value there is refused (item-unknown-field).
+        {"path": "a.py", "edits": [{"old_string": "x = 1", "new_string": "x = 3", "new_2": ""}]},
     ],
 )
 async def test_other_edit_spellings_make_the_same_change(tmp_path, arguments) -> None:
@@ -197,39 +341,84 @@ async def test_other_edit_spellings_make_the_same_change(tmp_path, arguments) ->
     assert result["data"] == {"content": "Updated a.py (line 1)."}
 
 
+_CUT_EDITS = '[{"old_string": "x = 1", "new_string": "x = 2\ny'
+_PART_EDITS = '[{"old_string": "x = 1", '
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("edits", "content"),
+    ("arguments", "outcome"),
     [
         pytest.param(
-            '[{"old_string": "x = 1", "new_string": "x = f("a")"}]', b'x = f("a")\n', id="array"
-        ),
-        pytest.param('{"old_string": "x = 1", "new_string": "x = "a""}', b'x = "a"\n', id="one"),
-        # Both have another reading than quotes inside new_string: nothing runs.
-        pytest.param(
-            '[{"old_string": "x = 1", "new_string": "x = f("a", "b")"}]', None, id="comma-quote"
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = f("a")"}]'},
+            b'x = f("a")\n',
+            id="array",
         ),
         pytest.param(
-            '[{"old_string": "x = 1", "new_string": "x = "a"", "line": 2}]',
-            None,
+            {"edits": '{"old_string": "x = 1", "new_string": "x = "a""}'}, b'x = "a"\n', id="one"
+        ),
+        # A raw line break inside a text stands for itself.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = 2\ny = 3"}]'},
+            b"x = 2\ny = 3\n",
+            id="raw-line-break",
+        ),
+        # A quote before ":" ends the text only where a value follows the colon.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "got "x": not a number"}]'},
+            b'got "x": not a number\n',
+            id="quote-colon-text",
+        ),
+        # These have another reading than slips inside new_string: nothing runs,
+        # and the error names the field the JSON breaks in.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = 2\\ny = 3\nz = 4"}]'},
+            "new_string",
+            id="mixed-line-breaks",
+        ),
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = {"a": 2}"}]'},
+            "new_string",
+            id="quote-colon-value",
+        ),
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = f("a", "b")"}]'},
+            "new_string",
+            id="comma-quote",
+        ),
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = "a"", "line": 2}]'},
+            "new_string",
             id="undeclared-field",
         ),
-        pytest.param('[{"old_string": "x = 1", "new_string": "x = \\_"}]', None, id="other"),
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = \\_"}]'},
+            "new_string",
+            id="other",
+        ),
+        # Text that ends early lost part of the call, also when the rest arrived
+        # beside it: nothing runs, and the error says where the text ends.
+        pytest.param({"edits": _CUT_EDITS}, f"character {len(_CUT_EDITS)}", id="cut-off"),
+        pytest.param(
+            {"edits": _PART_EDITS, "new_string": 'x = 3"}]'},
+            f"character {len(_PART_EDITS)}",
+            id="field-beside",
+        ),
     ],
 )
-async def test_edits_text_with_unescaped_quotes_runs_only_when_it_has_one_reading(
-    tmp_path, edits, content
+async def test_edits_json_text_runs_only_when_it_has_one_reading(
+    tmp_path, arguments, outcome
 ) -> None:
     (tmp_path / "a.py").write_bytes(b"x = 1\n")
 
-    result = await call(tmp_path, {"path": "a.py", "edits": edits}, name="edit")
+    result = await call(tmp_path, {"path": "a.py", **arguments}, name="edit")
 
-    if content is not None:
+    if isinstance(outcome, bytes):
         assert result["ok"]
-        assert (tmp_path / "a.py").read_bytes() == content
+        assert (tmp_path / "a.py").read_bytes() == outcome
         return
     assert result["error"]["code"] == "invalid_arguments"
-    assert "new_string" in text(result)  # The error names the field the JSON breaks in.
+    assert outcome in text(result)
     assert (tmp_path / "a.py").read_bytes() == b"x = 1\n"
 
 
@@ -340,8 +529,10 @@ NUL = (
             "text_not_found",
             "a.txt, edit 2 of 3: old_string was not found.\n"
             f"{NOT_FOUND.replace('in the file', 'in the file after edit 1')}\n"
-            "None of the 3 edits were applied, so no file was changed. Send all 3 edits again "
-            "with edit 2 corrected or left out.",
+            # An earlier edit of the call replaced the text: the edits belong together.
+            "Edit 1 of this call already replaced this old_string; merge the two edits into "
+            "one.\nNone of the 3 edits were applied, so no file was changed. Send all 3 edits "
+            "again with edit 2 corrected or left out.",
             id="second-of-three-not-found",
         ),
         pytest.param(
@@ -367,7 +558,8 @@ NUL = (
             # The text edit 1 left is named as such, and so are the lines it wrote.
             "The closest text in the file after edit 1, line 3:\n3|     log(total)\n"
             "First difference: after edit 1, line 3 reads '    log(total)' where old_string has "
-            "'print(total)'.\nEdit 1 of this call wrote line 3.\n"
+            "'print(total)'.\nEdit 1 of this call already replaced this old_string and wrote "
+            "line 3; merge the two edits into one.\n"
             "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
             "corrected or left out.",
             id="text-an-earlier-edit-replaced",
@@ -601,16 +793,30 @@ async def test_a_failed_edit_names_the_lines_and_edits_its_text_came_from(
         pytest.param(
             "edit",
             {"path": "a.txt", "new_string": "two"},
-            'new_string needs old_string, the current text it replaces (old_string "" creates a '
-            "file).",
+            "new_string needs old_string, the current text it replaces. To insert text, put the "
+            "line above it in old_string, and that line followed by the new text in new_string; "
+            'old_string "" creates a file.',
             id="flat-without-old",
         ),
         pytest.param(
             "edit",
             {"path": "a.txt", "edits": [{"new_string": "x"}]},
-            "edits item 1 has no old_string, the current text to replace. Send old_string and "
-            'new_string (old_string "" creates a file).',
+            "edits item 1 has no old_string, the current text to replace. To insert text, put "
+            "the line above it in old_string, and that line followed by the new text in "
+            'new_string; old_string "" creates a file.',
             id="item-without-old",
+        ),
+        # Another item's old text shows that the file has text: creating it is no option.
+        pytest.param(
+            "edit",
+            {
+                "path": "a.txt",
+                "edits": [{"old_string": "one", "new_string": "1"}, {"new_string": "x"}],
+            },
+            "edits item 2 has no old_string, the current text to replace. To insert text, put "
+            "the line above it in old_string, and that line followed by the new text in "
+            "new_string.",
+            id="item-without-old-beside-old-text",
         ),
         pytest.param(
             "edit",

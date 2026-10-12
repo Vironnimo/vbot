@@ -46,23 +46,38 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   refusal is `invalid_arguments` ending `No file was changed.`): `file_path`/
   `filename` -> `path`, `old_str`/`old_text`/`oldText` and the `new_*` twins,
   any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
-  or one of its items sent as JSON text, also with unescaped `"` inside
-  `old_string`/`new_string` (`decode_json_argument`, the shared quote repair in
-  `tools.md` -> Shared argument repair, against the schema of an edit; 5 of 12
-  real stringified `edits` decoded this way, all as the reviewed reading). Text
-  that is not JSON at all is refused with `edits arrived as text, not as an
-  array. ...`; broken JSON text is refused with where it breaks (character,
-  item and field, the text around it, how to write it) and, for a break inside
-  a text, `If this text fails again, send one edit per call, or call write with
-  the whole file.` A flat `old_string`/`new_string` call is one edit; an item's
-  own `path` is accepted when it names the call's file (or supplies the missing
-  root path) and refused when it names another file. Refused before any effect,
+  or one of its items sent as JSON text, also with unescaped `"` or raw line
+  breaks inside `old_string`/`new_string` (`decode_json_argument`, the shared
+  quote repair in `tools.md` -> Shared argument repair, against the schema of an
+  edit; 5 of 12 real stringified `edits` decoded this way, all as the reviewed
+  reading; of the 6 `edits` texts that failed in the Swarm of 2026-10-12, 1
+  more decodes with raw line breaks read). Text that is not JSON at all is
+  refused with `edits arrived as text, not as an array. ...`; broken JSON text
+  is refused with where it breaks (character, item and field, the text around
+  it, how to write it) and one closing sentence. When the call also has a root
+  `old_string` or `new_string` (the text closed early and the rest arrived
+  beside it), that sentence names the field and asks for the complete call again
+  with each `old_string` and `new_string` inside its item: the parts are never
+  joined, since which text belongs to which item is a guess. Text that ends
+  before its JSON is complete asks for the complete call again, and for one edit
+  per call if it is cut off again. A break inside a text (a quote, an escape, a
+  line break) gets `If this text fails again, send one edit per call, or call
+  write with the whole file.` A flat `old_string`/`new_string` call is one
+  edit; an item's own `path` is accepted when it names the call's file (or
+  supplies the missing root path) and refused when it names another file.
+  Refused before any effect,
   each naming the call to send: `edits` beside flat fields, a root `replace_all`
   beside `edits`, `content` (points to `write`), no path, no change, a half pair,
-  an item that is not an object, an unknown item field, a field given twice with
-  different values. Coverage:
+  an item that is not an object, an unknown item field with a value, a field
+  given twice with different values. An unknown item field with an empty value
+  (`""`, `null`, `[]`, `{}`) requests nothing and is dropped, by the root rule
+  of `ToolContract.normalize_arguments` applied to the item. A `new_string`
+  without `old_string` says how to insert text with a neighbouring line; it adds
+  that `old_string ""` creates a file unless another item of the call has old
+  text, which shows that the file has text (the normalizer cannot see the file).
+  Coverage:
   `test_other_edit_spellings_make_the_same_change`,
-  `test_edits_text_with_unescaped_quotes_runs_only_when_it_has_one_reading`,
+  `test_edits_json_text_runs_only_when_it_has_one_reading`,
   `test_open_or_misdirected_calls_say_which_call_to_send`.
 - **Semantics:** the call is one step of the shared pipeline run with `atomic=True`:
   every edit is planned in memory, in order, each against the text the edits before
@@ -71,6 +86,17 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   engine's precise steps, read gutters, then `copy_match`, never `copy_match` with
   `replace_all`; `apply_patch.md` -> Matching and recovery); several matches fail
   `ambiguous_match` with their lines, also after an earlier edit of the call.
+  An `old_string` that differs from the file only in where its lines break (a
+  signature wrapped after another argument, a paragraph sent as one line)
+  matches through the precise `rewrapped` step (`apply_patch.md` -> Matching and
+  recovery) when it has at least 4 words and the edit changes more than
+  whitespace; `new_string` is written with its own line breaks, in the file's
+  indentation and line endings, and a note names the matched lines. An edit of
+  whitespace alone (the same text, or only a final line break more or less)
+  stays `text_not_found`: replaying the two such failed calls with the step
+  applied added or deleted a blank line the Agent's later fix did not have,
+  because the Agents repaired a joined line without knowing where the file
+  broke it.
   `replace_all` replaces every leftmost non-overlapping occurrence. An empty
   `old_string` creates a missing file (parent folders included) or fills an empty
   or whitespace-only one, and fails `file_exists` otherwise. Changing existing text
@@ -85,13 +111,31 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   `X already reads as this edit would leave it.` (`these edits`) when the edits
   leave the file as it was, such as a change and its reversal (the
   `already_applied` template).
-  An edit whose `old_string` ends with a line break and whose non-empty
-  `new_string` does not joins the next line to its last line; when that line is
-  not blank and not the end of the file, a note quotes the joined line, at most
-  100 characters on each side of the join (`_joined_lines`). The edit applies as
-  sent: some joins are meant.
+  An edit whose non-empty `new_string` is its `old_string` without the final
+  line break changes nothing else; when the file continues after the match, the
+  call is refused before any effect (`line_join`, `_edit_engine._refuse_join`,
+  also for `apply_patch`'s `old_string` shapes): the edit would only join the
+  next line to the matched text's last line, or delete the blank line after it.
+  The refusal quotes both lines, at most 100 characters each, and says to leave
+  the edit out or, to join the lines, to include the next line in `old_string`
+  and `new_string`. Every such edit of the call is named in the one refusal
+  (`also` details, `Edit K: new_string is likewise ...`), and the closing names
+  them all (`with edits 2 and 3 corrected or left out`). At the end of the file
+  the edit applies: it only drops the final line break, and a `new_string` that
+  still ends with a line break (`X\n\n` -> `X\n`) deletes a blank line as meant.
+  Evidence: in the recorded Sessions (2026-10), 8 such items in 7 successful
+  calls, mostly from one Model, joined code lines (twice breaking Python
+  syntax) or deleted blank lines, none on purpose, and the Agents spent calls on
+  reading and repairing them; 13 calls of the archived `edit` Tool (2026-08)
+  show the same shape, and no follow-up shows a join that was meant (several
+  call the edit unintended or a no-op, or repair the joined line).
+  An edit that also changes text and drops the final line break joins the next
+  line to its last line; when that line is not blank and not the end of the
+  file, a note quotes the joined line, at most 100 characters on each side of
+  the join (`_joined_lines`). That edit applies as sent: some joins are meant.
   Coverage: `test_edits_that_leave_the_file_as_it_is_say_so`,
-  `test_an_edit_that_drops_a_final_line_break_names_the_joined_line`. The
+  `test_an_edit_that_drops_a_final_line_break_names_the_joined_line`,
+  `test_old_string_with_line_breaks_in_other_places_than_the_file`. The
   display shows the path and the shared `file_changes` diff and notices.
 - **Failures** use the engine's messages with `edit` wording where they name the
   Tool (`_EDIT_TEMPLATES`) and a closing that names the edit to fix
@@ -104,12 +148,22 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   reads ...`, `Where it occurs after edit 1:`); when shown lines are ones an
   earlier edit of the call wrote, it names that edit (`Edit 2 of this call wrote
   line N.`; `apply_hunks` tracks each edit's written lines through the later
-  ones). An `old_string` whose lines the file holds whole, each part at exactly
+  ones). When an earlier edit of the call replaced the failed edit's
+  `old_string` (the last edit whose text held it, matched precisely,
+  `_edit_engine._replaced_by`), the report says so and that the edits belong
+  together: `Edit 1 of this call already replaced this old_string; merge the two
+  edits into one.` (`... and wrote line N; ...` when that edit wrote a shown
+  line). An `old_string` whose lines the file holds whole, each part at exactly
   one place, but at places apart (not in order with at most 3 non-blank lines
   left out between them) names the places instead of a closest text: `old_string
   joins lines from different places in the file: its lines 1-3 are lines 60-62
   and its lines 5-6 are lines 41-42. Give each place its own edit.` plus those
   lines (`_edit_engine._split_copy`; lines compare with whitespace collapsed).
+  An `old_string` whose words the file holds at one place with other line
+  breaks shows that place, and a first difference that is a line break says
+  where the file and `old_string` break the line (`First difference, line N:
+  the file breaks this line after '...'; old_string continues it with '...'.`,
+  `apply_patch.md` -> Matching and recovery).
   Each part needs 2 lines with a word of 3 or more characters: in a replay of
   582 failed calls (2026-10), 4 of 8 such reports rested on single lines, one of
   them `return tool_success(result)` of another function; the first difference
@@ -140,11 +194,20 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | Match report for edit K > 1: `The closest text in the file after edits 1-4, line 287:`, `First difference: after edits 1-4, line 287 reads '...' where old_string has '...'.`, `Edit 2 of this call wrote line 287.` | Replaces `the file has` plus a trailing `Line numbers count the text as edits 1-4 left it.`: the report said the file had `Param(1)` at line 287, which edit 2 of the same call had written; the file held `Param(0)` (Swarm Run 2026-10). The trailing sentence came after the text it qualified, and naming the edit shows that the failed edit's place overlaps a change the call already makes. |
+| `Edit J of this call already replaced this old_string; merge the two edits into one.` | An item that reused the `old_string` of the item before it, which that item had replaced, got only `No similar text is in the file after edit 1` (Swarm, 2026-10-12), which does not say that the text was there before the call. Merging is the fix for both readings: the second change builds on the first, or the first was a draft of it. |
 | Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |
 | Joined-line note: `new_string does not end with a line break as old_string does, so the next line now continues its last line: import a2 from 'a';import b from 'b';` | In the recorded Sessions (2026-10), 4 of 2751 edit items joined two non-empty lines this way, none on purpose; the result said only `Updated X (line N).`, since the written text was what the call sent. Three cost 2 to 3 more calls each to find and undo the join (reads, a failed edit, the fix); the fourth, a joined TypeScript import, stayed in the file. The quoted line is a ready `old_string` for the fix; no line number, because a later edit of the same call can move it. |
+| `line_join`: `X, edit K of N: new_string is old_string without its final line break, so this edit would only join the line '...' with the next line, '...'. Leave this edit out; to join the two lines, include the next line in old_string and new_string.` | 8 items in 7 calls dropped only the final line break (Sessions, 2026-10); each joined code lines or deleted a blank line, none on purpose, and the result said only `Updated X (line N).`. The edit changes nothing else, so leaving it out is the usual fix; the second clause keeps an intended join possible without guessing. Quoting the lines instead of numbering them stays right when earlier edits of the call moved lines. |
+| `blank_line_join`: `... so this edit would only delete the blank line after the line '...'. Leave this edit out; to delete that blank line, end old_string with two line breaks and new_string with one.` | The same shape before a blank line deletes it. "Include the next line" would invite `old_string` `X\n\n` with `new_string` `X`, which joins the line after the blank one; the counted line breaks name the edit that deletes only the blank line. |
+| `Edit K: new_string is likewise old_string without its final line break; it would only join ...` plus the closing `Send all N edits again with edits J and K corrected or left out.` | One of the 7 calls had two such items; naming only the first would cost a second refused call. |
+| Rewrap note: `old_string matched lines 4-5, where the file breaks the text in other places; new_string was written with its own line breaks.` | 2 failed calls of one Swarm (2026-10-12) sent a signature wrapped after another argument and a Markdown list item as one line; every word matched. The note says the written line breaks are `new_string`'s, not the file's, so the Agent need not reread to see what the lines look like now. |
+| Line-break first difference: `First difference, line N: the file breaks this line after '...'; old_string continues it with '...'.`, `... old_string breaks this line after '...'; the file continues it with '...'.`, `First difference: old_string starts a line with '...', which line N of the file has after '...'.` (after earlier edits: `after edits 1-2, line N breaks after ...`) | The former `the file has '<line>' where old_string has '<part of it>'` hid that only a line break differs; for an `old_string` starting with a line break inside a joined line, it named an unrelated line 9 lines above (Swarm, 2026-10-12). Quoting both sides of the break shows where to break or join `old_string`. |
+| `edits item K has no old_string, the current text to replace. To insert text, put the line above it in old_string, and that line followed by the new text in new_string.` (`...; old_string "" creates a file.` unless another item has old text; flat: `new_string needs old_string, the current text it replaces. ...`) | Both such refusals in the live Sessions (Swarm, 2026-10-12) were inserts into a file other items of the call edited; the former `Send old_string and new_string (old_string "" creates a file)` named only file creation. Repeating the line in `new_string` keeps it, which Models miss when told only to use it as `old_string`. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 | Broken `edits` JSON text: `edits is not valid JSON. At character N, <what breaks in which field>:` + the text around it + how to write it | The former `edits arrived as text, not as an array.` named no break, so the Model could not tell what to fix; 12 `edits` texts in the live Sessions failed this way, 7 of them still after the quote repair (tool review 2026-10-11). |
-| `If this text fails again, send one edit per call, or call write with the whole file.` | Only for a break inside a text (a quote, an escape, a line break): long code with quotes is what Models fail to escape; a smaller call or `write` avoids the nested JSON. Dispatch does not know whether the call repeats, so the sentence is conditional. |
+| `If this text fails again, send one edit per call, or call write with the whole file.` | Only for a break inside a text (a quote, an escape, a line break) with no edit field beside `edits`: long code with quotes is what Models fail to escape; a smaller call or `write` avoids the nested JSON. Dispatch does not know whether the call repeats, so the sentence is conditional. |
+| `old_string arrived beside edits instead of inside an edits item. Send the complete call again, with each old_string and new_string inside its edits item.` (`new_string` or `old_string and new_string` when those arrived) | In the Swarm of 2026-10-12 one `edits` text ended after part of its item while its `old_string` arrived as a root field, and another had an unquoted `new_string` with `old_string` beside it. The former result named only the break, which reads as a typo to fix in place; the call came apart, and joining the parts would guess which text belongs to which item. |
+| `Send the complete call again; if it is cut off again, send one edit per call.` | For text that ends before its JSON is complete and has nothing beside it. `the JSON ends before it is complete` alone does not say that the rest of the call was lost, and fixing the shown end cannot restore it. A cut that repeats is usually a length limit, which smaller calls avoid. |
 
 ## Verification
 

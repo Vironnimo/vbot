@@ -21,7 +21,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Collection, Sequence
-from functools import cache
+from functools import cache, partial
 from typing import Any, Literal
 
 from core.tools._file_changes import cancelled_paths, change_batch, file_reports, run_operations
@@ -236,11 +236,17 @@ def normalize_edit_arguments(arguments: Any) -> Any:
     the call's one file; a shape that leaves the change open, or changes another
     file, fails with the call to send instead.
     """
+    # Old or new text sent beside edits text that breaks: the call came apart.
+    beside = [
+        field
+        for field in ("old_string", "new_string")
+        if isinstance(arguments, dict) and any(_edit_field(key) == field for key in arguments)
+    ]
     normalized = normalize_call_arguments(
         _edit_repair_contract(),
         arguments,
         field_aliases=_EDIT_ALIASES,
-        field_normalizers={"edits": _edits_value},
+        field_normalizers={"edits": partial(_edits_value, beside=beside)},
         empty_as_omitted=("path", "replace_all"),
     )
     if not isinstance(normalized, dict):
@@ -265,7 +271,11 @@ def normalize_edit_arguments(arguments: Any) -> Any:
         )
     edits = normalized.get("edits")
     if isinstance(edits, list):
-        normalized["edits"] = [_edit_item(item, number) for number, item in enumerate(edits, 1)]
+        # An item with old text shows the call means a file that has text.
+        held = any(_holds_old_text(item) for item in edits)
+        normalized["edits"] = [
+            _edit_item(item, number, held=held) for number, item in enumerate(edits, 1)
+        ]
         _take_item_paths(normalized)
     if "path" not in normalized:
         raise ValueError(_NO_PATH)
@@ -285,11 +295,13 @@ def _edits_text_schemas() -> tuple[JsonObject, JsonObject]:
     return {"type": "array", "items": item}, item
 
 
-def _edits_value(value: Any) -> Any:
+def _edits_value(value: Any, *, beside: Sequence[str] = ()) -> Any:
     """Return ``edits`` sent as JSON text as the array or object it encodes.
 
-    Text that is JSON except for unescaped quotes inside old_string or
-    new_string is read with those quotes escaped (``decode_json_argument``).
+    Text that is JSON except for unescaped quotes or raw line breaks inside
+    old_string or new_string is read with those escaped
+    (``decode_json_argument``). ``beside`` names the call's other fields that
+    belong in an edit, for the refusal of text that is not JSON.
     """
     if not isinstance(value, str):
         return value
@@ -301,7 +313,7 @@ def _edits_value(value: Any) -> Any:
         if encoded not in ("[", "{"):
             decoded = None
         else:
-            raise ValueError(_broken_edits_text(value, error)) from None
+            raise ValueError(_broken_edits_text(value, error, beside)) from None
     except ToolContractError:
         raise
     except ValueError, RecursionError:
@@ -314,11 +326,25 @@ def _edits_value(value: Any) -> Any:
     )
 
 
-def _broken_edits_text(text: str, error: json.JSONDecodeError) -> str:
-    """Say where ``edits`` stops being JSON and how to send it."""
+def _broken_edits_text(text: str, error: json.JSONDecodeError, beside: Sequence[str]) -> str:
+    """Say where ``edits`` stops being JSON and how to send it.
+
+    Text that ends early, or that has edit fields beside it, lost part of the
+    call: no reading restores it, so the call is sent again.
+    """
     found, explanation = explain_json_break(text, error, label=_edits_field)
     lines = [f"edits is not valid JSON. {explanation}"]
-    if found.concerns_text:
+    if beside:
+        lines.append(
+            f"{' and '.join(beside)} arrived beside edits instead of inside an edits item. "
+            "Send the complete call again, with each old_string and new_string inside its "
+            "edits item."
+        )
+    elif found.kind == "incomplete":
+        lines.append(
+            "Send the complete call again; if it is cut off again, send one edit per call."
+        )
+    elif found.concerns_text:
         write = model_tool_name(WRITE_TOOL_NAME)
         lines.append(
             "If this text fails again, send one edit per call, or call "
@@ -344,11 +370,18 @@ def _json_value(text: str) -> Any:
         return None
 
 
+# How to send text without old_string, when the file has text and when that is unknown.
+_INSERT = (
+    "To insert text, put the line above it in old_string, and that line followed by the new "
+    "text in new_string."
+)
+_INSERT_OR_CREATE = _INSERT[:-1] + '; old_string "" creates a file.'
+
+
 def _check_flat_edit(edit: dict[str, Any]) -> None:
     if "old_string" not in edit:
         raise ValueError(
-            'new_string needs old_string, the current text it replaces (old_string "" creates '
-            "a file)."
+            f"new_string needs old_string, the current text it replaces. {_INSERT_OR_CREATE}"
         )
     if "new_string" not in edit:
         raise ValueError(
@@ -357,8 +390,29 @@ def _check_flat_edit(edit: dict[str, Any]) -> None:
         )
 
 
-def _edit_item(item: Any, number: int) -> Any:
-    """Return one ``edits`` item under canonical field names."""
+def _edit_field(key: str) -> str:
+    """Return the field an ``edits`` item key names, else the key itself."""
+    field = _EDIT_ALIASES.get(key, key)
+    if field not in (*_EDIT_FIELDS, "path"):
+        field = next((name for name in _EDIT_FIELDS if spelling(name) == spelling(key)), key)
+    return field
+
+
+def _holds_old_text(item: Any) -> bool:
+    """Say whether an ``edits`` item, in any spelling, has a nonempty old_string."""
+    if isinstance(item, str):
+        item = _json_value(item)
+    return isinstance(item, dict) and any(
+        _edit_field(key) == "old_string" and isinstance(value, str) and value != ""
+        for key, value in item.items()
+    )
+
+
+def _edit_item(item: Any, number: int, *, held: bool) -> Any:
+    """Return one ``edits`` item under canonical field names.
+
+    ``held`` says another item of the call has old text, so the file has text.
+    """
     if isinstance(item, str):
         item = _json_value(item)
     if not isinstance(item, dict):
@@ -368,10 +422,11 @@ def _edit_item(item: Any, number: int) -> Any:
         )
     edit: dict[str, Any] = {}
     for key, value in item.items():
-        field = _EDIT_ALIASES.get(key, key)
+        field = _edit_field(key)
         if field not in (*_EDIT_FIELDS, "path"):
-            field = next((name for name in _EDIT_FIELDS if spelling(name) == spelling(key)), key)
-        if field not in (*_EDIT_FIELDS, "path"):
+            if not _edit_item_contract().normalize_arguments({key: value}):
+                # An empty value under a name that is not a field requests nothing.
+                continue
             raise ValueError(
                 f'edits item {number} has "{key}", which is not a field of an edit. Each edit '
                 "takes old_string, new_string and replace_all."
@@ -387,8 +442,8 @@ def _edit_item(item: Any, number: int) -> Any:
     edit = _edit_item_contract().normalize_arguments(edit)
     if "old_string" not in edit:
         raise ValueError(
-            f"edits item {number} has no old_string, the current text to replace. Send "
-            'old_string and new_string (old_string "" creates a file).'
+            f"edits item {number} has no old_string, the current text to replace. "
+            + (_INSERT if held else _INSERT_OR_CREATE)
         )
     if "new_string" not in edit:
         raise ValueError(
@@ -488,8 +543,11 @@ def _edit_failure(
     """Say that no edit was applied, why, and which edit to correct."""
     context.add_display_notice("error", str(error["message"]))
     total = len(edits)
-    label = str(error.get("label", ""))
-    number = next((n for n in range(1, total + 1) if label == f"edit {n} of {total}"), None)
+
+    def number_of(label: object) -> int | None:
+        return next((n for n in range(1, total + 1) if label == f"edit {n} of {total}"), None)
+
+    number = number_of(error.get("label", ""))
     if number is not None and number > 1:
         # The failed edit saw the text the earlier edits left, not the file.
         written = [
@@ -498,6 +556,14 @@ def _edit_failure(
         ]
         after = "edit 1" if number == 2 else f"edits 1-{number - 1}"
         error = {**error, "after": after, "written": written}
+        if error.get("replaced_by"):
+            error["replaced_by"] = str(error["replaced_by"]).split(" of ")[0]
+    # Further edits refused with the first, such as other edits that only join lines.
+    also = error.get("also") or []
+    numbers = [n for n in [number, *(number_of(item["label"]) for item in also)] if n is not None]
+    if also:
+        also = [{**item, "label": str(item["label"]).split(" of ")[0]} for item in also]
+        error = {**error, "also": also}
     lines = [failure_text(error)]
     if total == 1:
         lines.append("No file was changed.")
@@ -508,8 +574,13 @@ def _edit_failure(
             else (f"None of the {total} edits were", f"all {total} edits")
         )
         closing = f"{none} applied, so no file was changed."
-        if number is not None:
-            closing += f" Send {every} again with edit {number} corrected or left out."
+        if numbers:
+            named = (
+                f"edit {numbers[0]}"
+                if len(numbers) == 1
+                else "edits " + ", ".join(map(str, numbers[:-1])) + f" and {numbers[-1]}"
+            )
+            closing += f" Send {every} again with {named} corrected or left out."
         lines.append(closing)
     return tool_failure(
         str(error["code"]),
