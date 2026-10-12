@@ -180,13 +180,12 @@ def make_read_handler(
         label = _path_label(resolved, cwd)
 
         if not resolved.exists():
-            # A Swarm Wiki continuation names a character offset and limit.
-            fields = {
+            positions = {
                 name: arguments[name]
                 for name in ("offset", "limit")
                 if isinstance(arguments.get(name), int) and arguments[name] > 0
             }
-            page = wiki_page_call(resolved, cwd, context.offers, fields=fields)
+            page = wiki_page_call(resolved, cwd, context.offers, positions=positions)
             return tool_failure(
                 "file_not_found", missing_file_message(resolved, cwd, elsewhere=page)
             )
