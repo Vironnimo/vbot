@@ -523,7 +523,9 @@ async def test_background_tasks_lists_and_checks_the_whole_tree(
     assert "parent_id" not in rows[0]
     assert (rows[1]["parent_id"], rows[1]["title"]) == (outer["id"], "Do inner")
     assert rows[2]["subagent"] == outer["id"]
-    assert "calling list again does not make them finish faster" in listed["data"]["notes"][0]
+    # Only a deeper Sub-Agent works, and its answer goes to its own Parent: no
+    # message is to come to the caller.
+    assert "notes" not in listed["data"]
     assert checked["data"]["running"] == [
         f"background command {tests} (Run the tests)",
         f"Sub-Agent {inner['id']} (Do inner)",

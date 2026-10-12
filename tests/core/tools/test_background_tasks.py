@@ -14,15 +14,18 @@ import dataclasses
 import json
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
 import pytest_asyncio
 
+from core.runtime import _bootstrap
+from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
 from core.subagents import SubAgentState
-from core.tools.availability import ToolAccess, resolve_tool_access
+from core.tools.availability import TOOL_ACTIVATION_FOLLOWS, ToolAccess, resolve_tool_access
 from core.tools.background_tasks import (
     BACKGROUND_TASKS_TOOL_NAME,
     register_background_tasks_tool,
@@ -31,19 +34,17 @@ from core.tools.command_manager import CommandManager
 from core.tools.model_names import called_tool_name
 from core.tools.process_tree import RunningProcess
 from core.tools.shell import SHELL_TOOL_NAME, register_shell_tool
-from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry
+from core.utils.config import Config
 from tests.core.tools.command_manager_helpers import (
     OWNER,
+    FakeLauncher,
     FakeProcess,
     Harness,
     command_harness,
     format_report,
 )
-from tests.core.tools.terminal_helpers import call as terminal_call
 from tests.core.tools.terminal_helpers import make_context as terminal_context
-from tests.core.tools.terminal_helpers import manager as manager
-from tests.core.tools.terminal_manager_helpers import AdapterFactory
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
 # The caller's Sub-Agent, its own Sub-Agent, and a Session outside the caller's tree.
@@ -85,7 +86,8 @@ class FakeSubAgents:
 
     async def stop_subagent(self, context: ToolContext, subagent: SubAgentState) -> bool:
         self.stopped.append(subagent.id)
-        return subagent.status in {"working", "queued"} or bool(self.running)
+        # A taken-over Sub-Agent's status does not say whether its turn runs; here it does.
+        return subagent.status != "idle" or bool(self.running)
 
 
 class Tasks:
@@ -99,6 +101,7 @@ class Tasks:
         register_background_tasks_tool(self.registry, commands.manager, subagents=self.subagents)
         # Callbacks the calls registered to run once their Tool Results are persisted.
         self.persisted: list[Callable[[], None]] = []
+        self.contexts: list[ToolContext] = []
 
     def context(self, owner: SessionAddress = OWNER) -> ToolContext:
         tmp_path = self.commands.cwd
@@ -126,9 +129,19 @@ class Tasks:
     ) -> JsonObject:
         """One call as the executor sends it; a call that waits on time fails the test."""
         allowed = [BACKGROUND_TASKS_TOOL_NAME, *tools]
+        context = self.context(owner)
+        self.contexts.append(context)
         return await asyncio.wait_for(
-            dispatch_as_executor(self.registry, self.context(owner), arguments, allowed), 5
+            dispatch_as_executor(self.registry, context, arguments, allowed), 5
         )
+
+    def shown(self, arguments: JsonObject, result: JsonObject) -> list[JsonObject]:
+        """What the user sees of the last call."""
+        display = self.registry.display_for_call(
+            BACKGROUND_TASKS_TOOL_NAME, arguments, context=self.contexts[-1], result=result
+        )
+        details: list[JsonObject] = display["details"]
+        return details
 
     async def background(
         self, *, owner: SessionAddress = OWNER, command: str = "serve"
@@ -192,10 +205,10 @@ def output_file(text: str) -> Path:
 async def test_list_shows_the_subagents_then_the_commands_of_this_session_and_its_subagents(
     tasks: Tasks,
 ) -> None:
-    running, _ = await tasks.background(command="serve")
+    running, running_process = await tasks.background(command="serve")
     ended, ended_process = await tasks.background(command="build")
-    ended_process.exit(1)
-    await tasks.commands.finish(ended)
+    # The shell exits; a process it started runs on.
+    ended_process.exit(1, leftovers=[SERVER])
     child, _ = await tasks.background(owner=CHILD, command="watch")
     sibling, _ = await tasks.background(owner=SIBLING, command="other")
     # A command still inside its call is no background task.
@@ -247,7 +260,8 @@ async def test_list_shows_the_subagents_then_the_commands_of_this_session_and_it
         ("build", "exited", None),
         ("serve", "running", None),
     ]
-    assert rows[1]["exit_code"] == 1
+    assert (rows[1]["exit_code"], rows[1]["still_running"]) == (1, ["server.exe (pid 5001)"])
+    assert "still_running" not in rows[2]
     assert rows[2]["runtime"].startswith("1 minute ")
     # Answers and results arrive by themselves: listing again is no way to wait.
     assert len(listed["notes"]) == 1
@@ -271,6 +285,14 @@ async def test_list_shows_the_subagents_then_the_commands_of_this_session_and_it
     empty = data(await tasks.call({"action": "list"}, owner=SessionAddress("p", "a", "s")))
     assert (empty["tasks"], len(empty["notes"])) == ([], 1)
 
+    # A deeper Sub-Agent's answers go to its own Parent: with nothing of the caller's
+    # own running, no message is to come.
+    running_process.exit(0)
+    await tasks.commands.finish(running)
+    tasks.subagents.child = dataclasses.replace(tasks.subagents.child, status="idle")
+    tasks.subagents.grandchild = dataclasses.replace(tasks.subagents.grandchild, status="working")
+    assert "notes" not in data(await tasks.call({"action": "list"}))
+
 
 # --- status ------------------------------------------------------------------
 
@@ -284,13 +306,19 @@ async def test_status_shows_a_running_command_with_its_newest_output(
     process.write("listening on 8000\n")
     await tasks.commands.advance(30, step=5)
 
-    status = data(await tasks.call({"action": "status", "id": command_id}))
+    result = await tasks.call({"action": "status", "id": command_id})
+    status = data(result)
 
     assert (status["status"], status["command_id"], status["output"]) == (
         "running",
         command_id,
         "listening on 8000",
     )
+    # The call names only the id; the user sees which command it is.
+    shown = tasks.shown({"action": "status", "id": command_id}, result)
+    assert [
+        item["title"] for block in shown if block["type"] == "results" for item in block["items"]
+    ] == ["serve"]
     own = owner == OWNER
     assert status.get("subagent") == (None if own else "sub_child")
     # Its result goes to the Session that ran it; the Agent can stop it with the call named.
@@ -414,6 +442,13 @@ async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
             "terminals, and its own Sub-Agents. Its Session keeps the history; your Sub-Agent "
             "sub_child can send it a message to continue.",
         ),
+        # The user continues a Sub-Agent it took over; subagent send refuses it.
+        (
+            "taken over by the user",
+            False,
+            "Stopped: its current turn, its queued messages, its background commands and "
+            "terminals, and its own Sub-Agents. Its Session keeps the history.",
+        ),
         (
             "idle",
             False,
@@ -421,15 +456,15 @@ async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
             "commands or terminals, so nothing needed stopping.",
         ),
     ],
-    ids=["working", "working-deeper", "idle"],
+    ids=["working", "working-deeper", "taken-over", "idle"],
 )
 @pytest.mark.asyncio
 async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
     tasks: Tasks, status: Any, deeper: bool, note: str
 ) -> None:
-    working = status == "working"
+    working = status != "idle"
     subagent = dataclasses.replace(
-        tasks.subagents.child, status=status, last_tool="bash" if working else None
+        tasks.subagents.child, status=status, last_tool="bash" if status == "working" else None
     )
     if deeper:
         subagent = dataclasses.replace(
@@ -485,6 +520,8 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
         "you stopped it.",
         "serving",
     )
+    # Its exit code is vBot's kill, not the command's.
+    assert "exit_code" not in stopped
     output_file(stopped["next"])
     assert process.tree.terminations == 1
     if owner == OWNER:
@@ -523,7 +560,7 @@ async def test_stopping_an_ended_command_succeeds_and_stops_what_it_left_running
 
 
 @pytest.mark.asyncio
-async def test_an_unconfirmed_stop_says_what_may_still_run_and_how_to_retry(
+async def test_an_unconfirmed_stop_names_what_still_ran_and_how_to_retry(
     tasks: Tasks,
 ) -> None:
     command_id, process = await tasks.background()
@@ -544,20 +581,46 @@ async def test_an_unconfirmed_stop_says_what_may_still_run_and_how_to_retry(
 
 
 @pytest.mark.parametrize(
-    ("arguments", "outcome"),
+    ("arguments", "outcome", "ignored"),
     [
-        ({"action": "kill", "task_id": "{id}"}, "stopped"),
-        ({"action": "output", "bash_id": "{id}"}, "running"),
-        ({"action": "status", "terminal_id": "{id}"}, "running"),
-        ({"action": "status", "id": ["{id}"]}, "running"),
-        ({"action": "ls", "id": "{id}"}, "listed"),
+        ({"action": "kill", "task_id": "{id}"}, "stopped", ()),
+        ({"action": "output", "bash_id": "{id}"}, "running", ()),
+        ({"action": "status", "terminal_id": "{id}"}, "running", ()),
+        ({"action": "status", "id": ["{id}"]}, "running", ()),
+        ({"action": "ls", "id": "{id}"}, "listed", ()),
         # Without an action an id is only looked at, also under a harness's name.
-        ({"shell_id": "{id}"}, "looked-at"),
+        ({"shell_id": "{id}"}, "looked-at", ()),
+        # Claude Code's TaskOutput and BashOutput: nothing waits for a task or filters
+        # its output, and the call says so.
+        (
+            {"task_id": "{id}", "block": True, "timeout": 30000},
+            "looked-at",
+            ("block and timeout have no effect: background_tasks never waits.",),
+        ),
+        ({"task_id": "{id}", "block": False, "timeout": 30000}, "looked-at", ()),
+        (
+            {"bash_id": "{id}", "filter": "error"},
+            "looked-at",
+            ("filter has no effect: the output is shown unfiltered.",),
+        ),
+        ({"action": "status", "id": "{id}", "wait": True}, "running", ("wait has no effect",)),
+    ],
+    ids=[
+        "kill-task_id",
+        "output-bash_id",
+        "terminal_id",
+        "id-list",
+        "ls",
+        "shell_id-without-action",
+        "TaskOutput-block",
+        "TaskOutput-no-block",
+        "BashOutput-filter",
+        "wait-field",
     ],
 )
 @pytest.mark.asyncio
 async def test_other_harnesses_shapes_reach_the_intended_action(
-    tasks: Tasks, arguments: JsonObject, outcome: str
+    tasks: Tasks, arguments: JsonObject, outcome: str, ignored: tuple[str, ...]
 ) -> None:
     command_id, process = await tasks.background()
     sent = json.loads(json.dumps(arguments).replace("{id}", command_id))
@@ -572,11 +635,17 @@ async def test_other_harnesses_shapes_reach_the_intended_action(
         return
     assert result["status"] == ("stopped" if outcome == "stopped" else "running")
     assert process.tree.terminations == (1 if outcome == "stopped" else 0)
+    notes = result.get("notes", [])
     if outcome == "looked-at":
-        # The note names the stop the Agent may have meant.
-        assert calls(result["notes"][0]) == [{"action": "stop", "id": command_id}]
-    else:
-        assert "notes" not in result
+        # The first note names the stop the Agent may have meant.
+        assert calls(notes[0]) == [{"action": "stop", "id": command_id}]
+        notes = notes[1:]
+    assert len(notes) == len(ignored)
+    for note, start in zip(notes, ignored, strict=True):
+        assert note.startswith(start)
+    if "filter" in sent:
+        # The complete output is where the Agent can search it.
+        output_file(notes[0])
 
 
 @pytest.mark.asyncio
@@ -595,6 +664,11 @@ async def test_ids_outside_this_session_and_its_subagents_are_refused(tasks: Tas
     own, _ = await tasks.background(command="serve")
     sibling, sibling_process = await tasks.background(owner=SIBLING)
     foreground, _ = await tasks.commands.launch(command="foreground")
+    # Its shell exited, but a process it started runs on.
+    left, left_process = await tasks.background(command="start-server")
+    left_process.exit(0, leftovers=[SERVER])
+    await tasks.commands.advance(4)
+    assert tasks.commands.manager.report(left).ended
     parent_view = tasks.commands.manager.report(own).command_id
 
     refusals = [
@@ -611,7 +685,10 @@ async def test_ids_outside_this_session_and_its_subagents_are_refused(tasks: Tas
         failure = error(refusal)
         assert failure["code"] == "task_not_found"
         # The refusal names what of the caller's runs now, working Sub-Agents first.
-        assert f"Running now: sub_child (Review docs), {own} (serve)." in failure["message"]
+        assert (
+            f"Running now: sub_child (Review docs), {left} (start-server), {own} (serve)."
+            in failure["message"]
+        )
     assert error(refusals[3])["code"] == "task_not_found"
     assert missing["code"] == "invalid_arguments" and f"{own} (serve)" in missing["message"]
     assert several["code"] == "invalid_arguments"
@@ -622,28 +699,25 @@ async def test_ids_outside_this_session_and_its_subagents_are_refused(tasks: Tas
 # --- Availability ----------------------------------------------------------------
 
 
-def test_background_tasks_is_available_exactly_when_the_shell_or_subagent_is() -> None:
+def test_background_tasks_follows_the_shell_and_subagent() -> None:
     commands = CommandManager()
     tools = ToolRegistry()
     register_shell_tool(tools, commands)
     schema = {"type": "object", "properties": {}, "additionalProperties": False}
     tools.register(SUBAGENT, "Delegate tasks.", schema, lambda _context, _arguments: {})
-    register_background_tasks_tool(tools, commands)
-    catalog = tools.list_tools()
+    tool = register_background_tasks_tool(tools, commands)
+    registered = tools.get(BACKGROUND_TASKS_TOOL_NAME)
 
-    def allowed(policy: ToolAccess) -> set[str]:
-        return set(resolve_tool_access(policy, catalog, "off").allowed_tools)
-
-    tasks = BACKGROUND_TASKS_TOOL_NAME
-    assert allowed(ToolAccess(mode="all")) == {SHELL_TOOL_NAME, SUBAGENT, tasks}
-    assert allowed(ToolAccess(mode="selected", allowed=(SHELL_TOOL_NAME,))) == {
-        SHELL_TOOL_NAME,
-        tasks,
-    }
-    assert allowed(ToolAccess(mode="selected", allowed=(SUBAGENT,))) == {SUBAGENT, tasks}
-    assert allowed(ToolAccess(mode="all", denied=(SHELL_TOOL_NAME,))) == {SUBAGENT, tasks}
-    assert allowed(ToolAccess(mode="all", denied=(SHELL_TOOL_NAME, SUBAGENT))) == set()
-    assert allowed(ToolAccess(mode="selected", allowed=(tasks,))) == set()
+    # How a followed Tool resolves is availability's contract; this is its registration.
+    assert (registered.activation, registered.activation_source) == (
+        TOOL_ACTIVATION_FOLLOWS,
+        (SHELL_TOOL_NAME, SUBAGENT),
+    )
+    assert registered.handler is tool
+    allowed = resolve_tool_access(
+        ToolAccess(mode="selected", allowed=(SUBAGENT,)), tools.list_tools(), "off"
+    ).allowed_tools
+    assert set(allowed) == {SUBAGENT, BACKGROUND_TASKS_TOOL_NAME}
     # The user configures the shell and subagent; their companion is no switch of its own.
     assert [tool.name for tool in tools.list_tools(include_catalog_hidden=False)] == [
         SHELL_TOOL_NAME,
@@ -654,10 +728,10 @@ def test_background_tasks_is_available_exactly_when_the_shell_or_subagent_is() -
 # --- User requirement --------------------------------------------------------------
 
 
-@pytest.mark.parametrize("terminal", [True, False])
+@pytest.mark.parametrize("callable_tools", [True, False], ids=["terminal-subagent", "neither"])
 @pytest.mark.asyncio
 async def test_background_tasks_sends_no_input_and_never_waits(
-    tasks: Tasks, terminal: bool
+    tasks: Tasks, callable_tools: bool
 ) -> None:
     """User requirement: background_tasks never gives a command input and never waits."""
     command_id, process = await tasks.background()
@@ -665,33 +739,50 @@ async def test_background_tasks_sends_no_input_and_never_waits(
     await tasks.commands.advance(1)
     before = tasks.commands.manager.latest_output(command_id, 5)
     started_at = tasks.commands.clock.now
-    tools = (SHELL_TOOL_NAME, "terminal") if terminal else (SHELL_TOOL_NAME,)
-    inputs = [
+    tools = (SHELL_TOOL_NAME, "terminal", SUBAGENT) if callable_tools else (SHELL_TOOL_NAME,)
+    inputs: list[JsonObject] = [
         {"action": "input", "id": command_id, "text": "y\n"},
         {"action": "send_keys", "id": command_id, "keys": ["Enter"]},
         {"action": "write", "id": command_id, "content": "y"},
         {"action": "stdin", "id": command_id, "input": "y"},
         {"action": "send", "id": command_id, "message": "y"},
     ]
-    waits = [
+    waits: list[JsonObject] = [
         {"action": "wait", "id": command_id, "timeout": 600},
         {"action": "await", "id": command_id},
         {"action": "poll_until", "id": command_id, "pattern": "ready"},
     ]
+    # Fields that ask to wait, as Claude Code's TaskOutput sends them, have no effect.
+    wait_fields: list[JsonObject] = [
+        {"action": "status", "id": command_id, "block": True, "timeout": 600},
+        {"task_id": command_id, "block": True, "timeout": 30000},
+    ]
+
+    async def answered(arguments: JsonObject) -> JsonObject:
+        """The call's result; fake time passes only for a call that waits."""
+        call = asyncio.ensure_future(tasks.call(arguments, tools=tools))
+        await asyncio.wait({call}, timeout=1)
+        while not call.done():
+            await tasks.commands.advance(5, step=5)
+        return call.result()
 
     for arguments in inputs:
-        failure = error(await tasks.call(arguments, tools=tools))
+        failure = error(await answered(arguments))
         assert failure["code"] == "invalid_arguments"
         # terminal, which takes input, is named only when the Agent can call it.
-        assert ("terminal" in failure["message"]) is terminal
+        assert ("terminal" in failure["message"]) is callable_tools
     for arguments in waits:
-        assert error(await tasks.call(arguments, tools=tools))["code"] == "invalid_arguments"
-    message = error(await tasks.call({"action": "send", "id": "sub_child", "content": "hurry"}))
+        assert error(await answered(arguments))["code"] == "invalid_arguments"
+    for arguments in wait_fields:
+        assert data(await answered(arguments))["status"] == "running"
+    message = error(await answered({"action": "send", "id": "sub_child", "content": "hurry"}))
+    # subagent, which sends messages, is named only when the Agent can call it.
     assert (
-        'subagent {"action": "send", "id": "sub_child", "content": "hurry"}' in (message["message"])
-    )
+        'subagent {"action": "send", "id": "sub_child", "content": "hurry"}' in message["message"]
+    ) is callable_tools
+    assert ("subagent" in message["message"]) is callable_tools
 
-    # Nothing was written or sent, nothing waited, and the command runs on.
+    # Nothing was written or sent, no call waited for fake time, and the command runs on.
     assert tasks.commands.clock.now == started_at
     assert tasks.commands.manager.latest_output(command_id, 5) == before
     assert tasks.commands.sink.submissions == []
@@ -700,35 +791,46 @@ async def test_background_tasks_sends_no_input_and_never_waits(
 
 
 @pytest.mark.asyncio
-async def test_background_tasks_are_never_terminals(
-    tasks: Tasks, manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+async def test_background_commands_are_never_terminals(
+    tmp_path: Path, current_format_data_directory: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """User requirement: no shell command is ever a terminal, in either Tool."""
-    terminals, factory = manager
-    shell_context = dataclasses.replace(tasks.context(), tool_name=SHELL_TOOL_NAME)
-    started = await dispatch_as_executor(
-        tasks.registry,
-        shell_context,
-        {"command": "serve", "run_in_background": True},
-        [SHELL_TOOL_NAME, BACKGROUND_TASKS_TOOL_NAME, "terminal"],
-    )
-    command_id = data(started)["command_id"]
-    context = terminal_context(
-        tmp_path, offered_tools=(SHELL_TOOL_NAME, BACKGROUND_TASKS_TOOL_NAME)
-    )
+    """User requirement: no shell command is ever a terminal, in either Tool.
 
-    listed = await terminal_call(terminals, context, {"action": "list"})
-    status = await terminal_call(
-        terminals, context, {"action": "status", "terminal_id": command_id}
-    )
-    kill = await terminal_call(terminals, context, {"action": "kill", "terminal_id": command_id})
-    refused = error(await tasks.call({"action": "status", "id": "term_abc123"}))
+    Checked on the Runtime's own wiring, where the shell, background_tasks and
+    terminal share one Runtime; only the command's process is a fake.
+    """
+    launcher = FakeLauncher()
+    monkeypatch.setattr(_bootstrap, "CommandManager", partial(CommandManager, launcher=launcher))
+    runtime = Runtime(Config(data_dir=tmp_path), safe_startup_mode="test")
+    runtime.start()
+    try:
+        allowed = [SHELL_TOOL_NAME, BACKGROUND_TASKS_TOOL_NAME, "terminal"]
 
-    assert command_id not in json.dumps(data(listed))
-    assert terminals.list_terminals() == [] and factory.adapters == []
-    for refusal in (error(status), error(kill)):
-        assert refusal["code"] == "not_a_terminal"
-        assert calls(refusal["message"]) == [{"action": "status", "id": command_id}]
-    assert not tasks.commands.manager.report(command_id).ended
-    assert refused["code"] == "not_a_background_task"
-    assert 'terminal {"action": "status", "terminal_id": "term_abc123"}' in refused["message"]
+        async def call(tool_name: str, arguments: JsonObject) -> JsonObject:
+            context = dataclasses.replace(
+                terminal_context(tmp_path, offered_tools=allowed), tool_name=tool_name
+            )
+            return await dispatch_as_executor(runtime.tools, context, arguments, allowed)
+
+        # Asked for a terminal, the command still runs as a plain process.
+        started = data(
+            await call(
+                SHELL_TOOL_NAME, {"command": "serve", "run_in_background": True, "pty": True}
+            )
+        )
+        command_id = started["command_id"]
+        listed = data(await call("terminal", {"action": "list"}))
+        status = error(await call("terminal", {"action": "status", "terminal_id": command_id}))
+        refused = error(
+            await call(BACKGROUND_TASKS_TOOL_NAME, {"action": "status", "id": "term_abc123"})
+        )
+
+        assert len(launcher.processes) == 1
+        assert command_id not in json.dumps(listed)
+        assert runtime.terminal_manager.list_terminals() == []
+        assert status["code"] == "not_a_terminal"
+        assert not runtime.command_manager.report(command_id).ended
+        assert refused["code"] == "not_a_background_task"
+        assert 'terminal {"action": "status", "terminal_id": "term_abc123"}' in refused["message"]
+    finally:
+        await runtime.aclose()
