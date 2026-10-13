@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
-from urllib.parse import parse_qsl, unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urljoin, urlparse
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.fetch_config import DEFAULT_WEB_FETCH_SETTINGS, WEB_FETCH_CREDENTIALS
@@ -104,6 +105,8 @@ _BROWSER_CODES = frozenset({"access_denied", "no_content", "redirect_loop"})
 # Several URLs in one call share roughly two single-page results of Context.
 _MULTI_PAGE_BUDGET = 2 * DEFAULT_MAX_CHARS
 _MULTI_PAGE_MIN_CHARS = 2_000
+# Conversations whose last read page the handler remembers (Site paths below).
+_REMEMBERED_CONVERSATIONS = 1024
 
 WebFetchOutput = Literal["markdown", "text", "raw"]
 
@@ -555,6 +558,45 @@ def _redirect_note(requested: str, final: str) -> str:
     return f"This is not the requested page: {requested} redirected here."
 
 
+def _is_site_path(url: str) -> bool:
+    """Whether ``url`` is a root-relative path such as ``/wiki/Iron``."""
+    return url.startswith("/") and not url.startswith("//")
+
+
+def _with_site(request: _Request, base: str | None) -> _Request | JsonObject:
+    """Resolve root-relative urls against the page this conversation read last.
+
+    A saved page shows links to its own site as root-relative paths, and Agents
+    pass them on as url. Returns the resolved request with a note per path, or a
+    failure when no page gives the site.
+    """
+    paths = [url for url in request.urls if _is_site_path(url)]
+    if not paths:
+        return request
+    if base is None:
+        return tool_failure(
+            "invalid_url",
+            f"{paths[0]} is a path without its site, and the site is not known here. Pass "
+            f"the full address: the scheme and host of the page that links to it (its url) "
+            f"followed by {paths[0]}.",
+            retryable=False,
+        )
+    resolved = {path: urljoin(base, path) for path in paths}
+    if len(resolved) == 1:
+        ((path, address),) = resolved.items()
+        note = f"url {path} was read as {address}, on the site of the page read last."
+    else:
+        site = urljoin(base, "/").rstrip("/")
+        note = (
+            f"The paths {', '.join(resolved)} were read on {site}, the site of the page read last."
+        )
+    return replace(
+        request,
+        urls=tuple(resolved.get(url, url) for url in request.urls),
+        notes=(note, *request.notes),
+    )
+
+
 def _with_notes(result: JsonObject, notes: list[str]) -> JsonObject:
     notes = [note for note in notes if note]
     if not result["ok"] or not notes:
@@ -606,6 +648,19 @@ def make_web_fetch_handler(
     browser: PageBrowser | None = None,
 ) -> ToolHandler:
     """Bind transport, optional services, and saved views to existing owners."""
+    # The address of the page each conversation (Session and Agent, as a saved
+    # page's owner) read last, the site a root-relative url belongs to. Kept in
+    # memory: after a restart a path fails until a page is read again.
+    last_pages: OrderedDict[tuple[str, str], str] = OrderedDict()
+
+    def remember(context: ToolContext, results: list[JsonObject]) -> None:
+        for result in results:
+            if result["ok"] and "ref" in result["data"] and "url" in result["data"]:
+                key = (context.session_id, context.agent_id)
+                last_pages[key] = result["data"]["url"]
+                last_pages.move_to_end(key)
+        while len(last_pages) > _REMEMBERED_CONVERSATIONS:
+            last_pages.popitem(last=False)
 
     async def render(url: str, output: WebFetchOutput) -> JsonObject | str:
         """Read ``url`` in the local browser; a string says why it could not."""
@@ -792,13 +847,19 @@ def make_web_fetch_handler(
             request = _parse_request(arguments)
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error), retryable=False)
+        sited = _with_site(request, last_pages.get((context.session_id, context.agent_id)))
+        if not isinstance(sited, _Request):
+            return sited
+        request = sited
         manager = temporary_files or TemporaryFileManager(context.data_root)
         notes = list(request.notes)
         if request.ref is not None:
             result = await read_saved(context, manager, request)
+            remember(context, [result])
         elif len(request.urls) == 1:
             url = request.urls[0]
             result = await fetch_one(context, manager, url, request.output, request.view)
+            remember(context, [result])
         else:
             budget = request.view.get("max_chars", DEFAULT_MAX_CHARS)
             per_page = max(
@@ -808,6 +869,7 @@ def make_web_fetch_handler(
             results = await asyncio.gather(
                 *(fetch_one(context, manager, url, request.output, view) for url in request.urls)
             )
+            remember(context, list(results))
             return _with_notes(_multi_page_result(request.urls, list(results)), notes)
         if (
             result["ok"]

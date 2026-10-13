@@ -4,6 +4,7 @@ shapes, and unclear calls refused before anything is fetched."""
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -246,6 +247,31 @@ async def test_missing_conflicting_or_oversized_requests_are_refused_before_fetc
         "retryable": False,
     }
     assert fetched == []
+
+
+@pytest.mark.asyncio
+async def test_a_site_path_is_fetched_on_the_site_of_the_page_read_last(
+    tmp_path: Path, fetched: list[str]
+) -> None:
+    registry = web_fetch_registry()
+    context = make_context(tmp_path)
+
+    unknown = await registry.dispatch(context, {"url": "/x"})
+    assert unknown["error"]["code"] == "invalid_url"
+    assert "/x" in unknown["error"]["message"]
+
+    page = await registry.dispatch(context, {"url": HTML_PAGE})
+    # The page names its full address, the base of the paths it shows.
+    assert page["data"]["url"] == HTML_PAGE
+    assert "[link](/x)" in page["data"]["content"]
+
+    followed = await registry.dispatch(context, {"url": "[link](/x)"})
+    assert followed["ok"], followed
+    assert "https://example.com/x" in followed["data"]["note"]
+    # The site belongs to the conversation that read the page.
+    other = await registry.dispatch(replace(context, agent_id="agent-2"), {"url": "/x"})
+    assert other["error"]["code"] == "invalid_url"
+    assert fetched == [HTML_PAGE, "https://example.com/x"]
 
 
 @pytest.mark.asyncio
