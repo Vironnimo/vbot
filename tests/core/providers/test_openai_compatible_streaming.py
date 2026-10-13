@@ -170,6 +170,16 @@ async def test_stream_ending_without_done_marker_raises_network_error() -> None:
             {"message": "quota exceeded"}, ProviderError, False, "quota exceeded", id="unclassified"
         ),
         pytest.param(
+            {
+                "type": "server_error",
+                "message": "Streaming response failed: [504] Upstream idle timeout exceeded",
+            },
+            ProviderError,
+            True,
+            "Upstream idle timeout exceeded",
+            id="upstream-idle-timeout-type",
+        ),
+        pytest.param(
             "upstream exploded", ProviderError, False, "upstream exploded", id="non-object"
         ),
     ],

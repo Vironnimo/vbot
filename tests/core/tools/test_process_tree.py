@@ -6,8 +6,11 @@ import contextlib
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
+from types import SimpleNamespace
+from typing import Any
 
 import psutil  # type: ignore[import-untyped]
 import pytest
@@ -148,6 +151,119 @@ def test_tree_records_the_exit_code_of_a_failed_direct_child() -> None:
     with _tracked_root(_ROOT_WITH_A_FAILED_CHILD) as (root, tree):
         _start_children(root)
         facts = _first_facts(tree, lambda facts: bool(facts.nonzero_exits))
-        assert [failure.describe() for failure in facts.nonzero_exits] == [
-            f"{os.path.basename(sys.executable)} exited with code 5"
+        assert [(failure.name, failure.exit_code) for failure in facts.nonzero_exits] == [
+            (os.path.basename(sys.executable), 5)
         ]
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "invocation"),
+    [
+        ("python.exe", ["python", "-m", "package.check", "--token", "SECRET"], "-m package.check"),
+        ("pythonw.exe", ["pythonw", "scripts/check.py", "SECRET"], "scripts/check.py"),
+        (
+            "Python3.14.exe",
+            ["python", r"C:\my scripts\check.py", "SECRET"],
+            "C:/my scripts/check.py",
+        ),
+        ("python.exe", ["python", "-c", "print('SECRET')", "other.py"], "-c"),
+        ("python.exe", ["python", "-cprint('SECRET')"], "-c"),
+        ("python.exe", ["python", "-", "SECRET"], "-"),
+        (
+            "python.exe",
+            ["python", "-uB", "-X", "SECRET", "-Wignore:SECRET", "-mpackage.check", "SECRET"],
+            "-m package.check",
+        ),
+        ("python.exe", ["python", "--", "-script.py", "SECRET"], "-script.py"),
+        ("python.exe", ["python", "--unknown", "SECRET", "script.py"], ""),
+        ("python.exe", ["python", "-m", "SECRET\nnot-a-module"], ""),
+        ("python.exe", ["python", "SECRET\nscript.py"], ""),
+        ("python.exe", ["python", "x" * 201, "SECRET"], ""),
+        ("python.exe", psutil.AccessDenied(2), ""),
+        ("python.exe", psutil.NoSuchProcess(2), ""),
+        ("curl.exe", ["curl", "--user", "SECRET"], ""),
+    ],
+    ids=[
+        "module",
+        "script",
+        "script-path",
+        "inline-code",
+        "attached-inline-code",
+        "stdin",
+        "interpreter-options",
+        "end-of-options",
+        "unknown-option",
+        "invalid-module",
+        "control-bearing-path",
+        "long-path",
+        "access-denied",
+        "already-exited",
+        "other-program",
+    ],
+)
+def test_child_start_retains_only_its_invocation_selector_through_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    arguments: list[str] | psutil.Error,
+    invocation: str,
+) -> None:
+    # Drive the OS notification boundary deterministically: command-line reads
+    # can fail for an exited child even while its retained handle has its code.
+    reads: list[int] = []
+    closed: list[int] = []
+
+    def image_name(handle: int, flags: int, buffer: Any, size: Any) -> bool:
+        buffer.value = name
+        return True
+
+    def parent(handle: int, kind: int, information: Any, size: int, returned: Any) -> int:
+        information._obj.InheritedFromUniqueProcessId = 1
+        return 0
+
+    def exit_code(handle: int, code: Any) -> bool:
+        code._obj.value = 5
+        return True
+
+    class Child:
+        def __init__(self, pid: int) -> None:
+            reads.append(pid)
+
+        def cmdline(self) -> list[str]:
+            if isinstance(arguments, psutil.Error):
+                raise arguments
+            return arguments
+
+    kernel32 = SimpleNamespace(
+        OpenProcess=lambda access, inherit, pid: pid,
+        CloseHandle=closed.append,
+        QueryFullProcessImageNameW=image_name,
+        GetExitCodeProcess=exit_code,
+        QueryInformationJobObject=lambda *args: True,
+    )
+    # Job creation belongs to the real-process tests above; these notifications
+    # enter the same tracker and facts interface without launching processes.
+    tree = object.__new__(process_tree._WindowsJobTree)
+    tree._kernel = SimpleNamespace(ntdll=SimpleNamespace(NtQueryInformationProcess=parent))  # type: ignore[assignment]
+    tree._k = kernel32
+    tree._root_pid = 1
+    tree._lock = threading.Lock()
+    tree._children = {}
+    tree._exits = []
+    tree._closed = False
+    tree._job = 10
+    monkeypatch.setattr(process_tree.psutil, "Process", Child)
+
+    tree.notify(process_tree._MSG_NEW_PROCESS, 2)
+    tree.notify(process_tree._MSG_EXIT_PROCESS, 2)
+    facts = tree.facts()
+    (failure,) = facts.nonzero_exits
+    assert (failure.name, failure.exit_code, failure.invocation) == (name, 5, invocation)
+    described_name, _, described_code = failure.describe().partition(" exited with code ")
+    assert (described_name, described_code.split(" ", 1)[0]) == (name, "5")
+    assert "SECRET" not in failure.describe()
+    if invocation:
+        assert invocation in failure.describe()
+    assert tree.facts() == facts
+    assert tree.exit_count() == 1
+    assert reads == ([] if name == "curl.exe" else [2])
+    assert closed == [2]

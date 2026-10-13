@@ -12,10 +12,11 @@ sibling the route did not offer still runs under that Tool's own contract, so
 Chat's dispatch allowlist carries ``edit_tool_siblings`` of an offered edit Tool.
 
 All three run on the same change pipeline (``_file_changes.py``) and engine
-(``_edit_engine.py``). An ``edit`` call applies its edits in order, each to the
+(``_edit_engine.py``). A canonical ``edit`` call applies its edits in order, each to the
 text the edits before it left, and writes the file once: an edit that fails is
 skipped and reported by its number, and the others are written. A problem of
-the whole call, such as a missing file, writes nothing.
+the whole call, such as a missing file, writes nothing. The explicit per-item
+path dialect runs each item in order under all of the call's file locks.
 """
 
 from __future__ import annotations
@@ -24,12 +25,14 @@ import copy
 import json
 from collections.abc import Collection, Mapping, Sequence
 from functools import cache, partial
+from pathlib import Path
 from typing import Any, Literal
 
 from core.tools._file_changes import cancelled_paths, change_batch, file_reports, run_operations
+from core.tools._patch_entries import _resolve
 from core.tools._patch_report import EQUAL_TEXT, failure_text, patch_result
 from core.tools._patch_requests import APPLY_PATCH_TOOL_NAME, content_operation
-from core.tools._patch_syntax import _Hunk, _Operation, _Replacement, _same_path
+from core.tools._patch_syntax import _Hunk, _Operation, _PatchError, _Replacement, _same_path
 from core.tools._swarm_references import wiki_change_call
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
@@ -244,10 +247,9 @@ def _write_repair_contract() -> ToolContract:
 def normalize_edit_arguments(arguments: Any) -> Any:
     """Return edit arguments as ``path`` plus ``edits``, other spellings translated.
 
-    A flat ``old_string``/``new_string`` call is one edit. Every edit belongs to
-    the call's one file. A shape that leaves the change open fails with the call
-    to send instead; so does an ``edits`` item that leaves its edit open or
-    changes another file, unless other items can apply: then it stays in place
+    A flat ``old_string``/``new_string`` call is one edit. Without a root path,
+    explicit item paths can name several files. Contradictory targets refuse
+    the call before effects. An item that leaves its edit open stays in place
     as a refused edit (``_REFUSED``), and the handler reports it by its number.
     """
     # Old or new text sent beside edits text that breaks: the call came apart.
@@ -290,14 +292,17 @@ def normalize_edit_arguments(arguments: Any) -> Any:
         held = any(_holds_old_text(item) for item in edits)
         items: list[Any] = []
         for number, item in enumerate(edits, 1):
+            target = _edit_item_path(item, number)
             try:
                 edit = _edit_item(item, number, held=held)
-                _take_item_path(normalized, edit, number)
             except ValueError as error:
                 refusals.append(str(error))
                 # Kept in place, so the other edits keep their numbers.
                 edit = {"old_string": "", "new_string": "", _REFUSED: str(error)}
+                if target is not None:
+                    edit["path"] = target
             items.append(edit)
+        _take_item_paths(normalized, items)
         if refusals and len(refusals) == len(items):
             raise ValueError("\n".join(refusals))
         normalized["edits"] = items
@@ -483,20 +488,60 @@ def _edit_item(item: Any, number: int, *, held: bool) -> Any:
     return edit
 
 
-def _take_item_path(arguments: dict[str, Any], edit: dict[str, Any], number: int) -> None:
-    """Accept an item path that names the call's file; refuse one that names another.
-
-    The first item path names the call's file when the call names none.
-    """
-    if "path" not in edit:
-        return
-    named = edit.pop("path")
-    path = arguments.setdefault("path", named)
-    if not _same_path(named, path):
+def _edit_item_path(item: Any, number: int) -> str | None:
+    """Keep an explicit target even when the item's content cannot apply."""
+    if isinstance(item, str):
+        item = _json_value(item)
+    if not isinstance(item, dict):
+        return None
+    paths = [
+        value
+        for key, value in item.items()
+        if _edit_field(key) == "path" and value not in (None, "")
+    ]
+    if not paths:
+        return None
+    if any(not isinstance(path, str) for path in paths):
         raise ValueError(
-            f"edits item {number} changes {named}, but this call changes {path}. Call edit "
-            "once per file in the same response, each with the edits of its file."
+            f"edits item {number} needs path as text, relative to the working directory "
+            "or absolute."
         )
+    if any(path != paths[0] for path in paths[1:]):
+        raise ValueError(f"edits item {number} gives path twice with different values; send one.")
+    return str(paths[0])
+
+
+def _take_item_paths(arguments: dict[str, Any], edits: Sequence[JsonObject]) -> None:
+    """Read every target before inferring a missing root path.
+
+    One unambiguous file supplies a missing root. Several files keep explicit
+    item paths; the inferred root only satisfies the advertised contract.
+    """
+    root = arguments.get("path")
+    paths: list[str] = []
+    for number, edit in enumerate(edits, 1):
+        named = edit.get("path")
+        if named is None:
+            continue
+        if isinstance(root, str) and not _same_path(named, root):
+            raise ValueError(
+                f"edits item {number} changes {named}, but this call changes {root}. "
+                "Remove the root path to use each edit's own path, or make the paths agree."
+            )
+        if not any(_same_path(named, path) for path in paths):
+            paths.append(named)
+    if root is None and paths:
+        if len(paths) > 1:
+            for number, edit in enumerate(edits, 1):
+                if "path" not in edit and _REFUSED not in edit:
+                    raise ValueError(
+                        f"edits item {number} has no path, but the call names several files. "
+                        "Give each edit its own path."
+                    )
+        arguments["path"] = paths[0]
+    if root is not None or len(paths) <= 1:
+        for edit in edits:
+            edit.pop("path", None)
 
 
 def normalize_write_arguments(arguments: Any) -> Any:
@@ -565,23 +610,34 @@ def _refusing(normalizer: Any) -> Any:
 # --- Execution --------------------------------------------------------------------------
 
 
-def _edit_operations(path: str, edits: Sequence[JsonObject]) -> list[_Operation]:
-    """Return one file's operations: a creation for an empty old_string, else replacements.
+def _edit_operations(
+    context: ToolContext, path: str, edits: Sequence[JsonObject], *, combine: bool = True
+) -> list[_Operation]:
+    """Return creations and replacements, combining one-file calls into a single write.
 
     A refused edit has none; the replacements after it match precisely only,
     as after any failed edit (see ``apply_hunks``).
     """
     total = len(edits)
     operations: list[_Operation] = []
-    refused = False
+    refused: set[Path | str] = set()
+    identities: dict[str, Path | str] = {}
     for number, edit in enumerate(edits, 1):
+        target = edit.get("path", path)
+        if target not in identities:
+            try:
+                identities[target] = _resolve(context, target)
+            except _PatchError:
+                # The pipeline reports an invalid path; it cannot alias a valid one.
+                identities[target] = target
+        identity = identities[target]
         label = f"edit {number} of {total}" if total > 1 else ""
         if _REFUSED in edit:
-            refused = True
+            refused.add(identity)
             continue
         if edit["old_string"] == "":
             operations.append(
-                content_operation(path, edit["new_string"], only_if_empty=True, label=label)
+                content_operation(target, edit["new_string"], only_if_empty=True, label=label)
             )
             continue
         hunk = _Hunk(
@@ -589,12 +645,12 @@ def _edit_operations(path: str, edits: Sequence[JsonObject]) -> list[_Operation]
                 edit["old_string"], edit["new_string"], edit.get("replace_all", False)
             ),
             label=label,
-            precise_only=refused,
+            precise_only=identity in refused,
         )
-        if operations and operations[-1].action == "update":
+        if combine and operations and operations[-1].action == "update":
             operations[-1].hunks.append(hunk)
         else:
-            operations.append(_Operation("update", path, hunks=[hunk]))
+            operations.append(_Operation("update", target, hunks=[hunk]))
     return operations
 
 
@@ -664,7 +720,9 @@ def _edit_failure(
     failures = []
     for error in errors:
         context.add_display_notice("error", str(error["message"]))
-        failures.append(failure_text(_failed_edit(error, numbers, total, written=False)))
+        failures.append(
+            failure_text(_failed_edit(error, {*numbers, *in_place}, total, written=False))
+        )
     if total == 1:
         lines = ["No file was changed.", *failures]
     else:
@@ -707,12 +765,14 @@ def _partial_lead(failed: Sequence[int], total: int, unchanged: Collection[int] 
 
 def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadState) -> JsonObject:
     edits = arguments["edits"]
+    if any("path" in edit for edit in edits):
+        return _execute_multi_edit(context, arguments, state)
     total = len(edits)
     # Edits that leave the file as it was, such as a change and its reversal.
     result = "these edits would leave it" if total > 1 else "this edit would leave it"
     already = {"already_applied": f"{{where}} already reads as {result}."}
     batch = change_batch(context, {**_EDIT_TEMPLATES, **already})
-    operations = _edit_operations(arguments["path"], edits)
+    operations = _edit_operations(context, arguments["path"], edits)
     run_operations(context, state, batch, operations, one_write=True)
     [outcome] = batch.results
     refused: list[JsonObject] = [
@@ -780,6 +840,94 @@ def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadSt
     return patch_result(context, files, entries, cancelled_paths(batch), lead=lead)
 
 
+def _execute_multi_edit(
+    context: ToolContext, arguments: JsonObject, state: FileReadState
+) -> JsonObject:
+    """Apply explicit per-item targets in input order under the shared path locks."""
+    edits = arguments["edits"]
+    total = len(edits)
+    batch = change_batch(
+        context,
+        {
+            **_EDIT_TEMPLATES,
+            "already_applied": "{where} already reads as this edit would leave it.",
+        },
+    )
+    operations = _edit_operations(context, arguments["path"], edits, combine=False)
+    run_operations(context, state, batch, operations)
+    outcomes = iter(zip(batch.results, operations, strict=True))
+    entries: list[JsonObject] = []
+    statuses: list[str] = []
+    failed: list[int] = []
+    unchanged: list[int] = []
+    for number, edit in enumerate(edits, 1):
+        label = f"edit {number} of {total}"
+        entry: JsonObject
+        operation = None
+        if _REFUSED in edit:
+            entry = {
+                "status": "failed",
+                "error": {"code": "invalid_arguments", "message": edit[_REFUSED]},
+            }
+        else:
+            entry, operation = next(outcomes)
+            entry["where"] = f"{entry['path']}, {label}"
+        error = entry.get("error")
+        if error is not None and not error.get("label"):
+            error["message"] = f"{label[:1].upper()}{label[1:]}: {error['message']}"
+            error["label"] = label
+        if (
+            error is not None
+            and error["code"] == "text_not_found"
+            and operation is not None
+            and any(hunk.precise_only for hunk in operation.hunks)
+        ):
+            error["message"] += " " + _PRECISE_AFTER_FAILURE
+        status = entry["status"]
+        if status in {"failed", "skipped", "partial"}:
+            failed.append(number)
+            effect = "written but not confirmed" if status == "partial" else "not applied"
+        elif status in {"unchanged", "already_applied"}:
+            unchanged.append(number)
+            effect = "nothing to change"
+        else:
+            effect = "applied"
+        target = f" ({entry['path']})" if "path" in entry else ""
+        statuses.append(f"Edit {number} of {total}{target}: {effect}.")
+        entries.append(entry)
+    applied = total - len(failed) - len(unchanged)
+    files = file_reports(context, batch, edits=applied)
+    lead = (
+        _partial_lead(failed, total, unchanged)
+        if failed and applied and not any(entry["status"] == "partial" for entry in entries)
+        else None
+    )
+    if (
+        failed
+        and not applied
+        and not files
+        and all(entry["status"] != "partial" for entry in entries)
+    ):
+        in_place = {number: f"{entries[number - 1]['where']}: {EQUAL_TEXT}" for number in unchanged}
+        result = _edit_failure(
+            context, [entry["error"] for entry in entries if "error" in entry], total, in_place
+        )
+    else:
+        result = patch_result(context, files, entries, cancelled_paths(batch), lead=lead)
+    if result["ok"]:
+        content = result["data"]["content"]
+        # Keep the partial-result lead first, as in the canonical one-file dialect.
+        if failed:
+            first, _, rest = content.partition("\n")
+            result["data"]["content"] = "\n".join([first, *statuses, rest]).rstrip()
+        else:
+            result["data"]["content"] = "\n".join([*statuses, content])
+    else:
+        first, _, rest = result["error"]["message"].partition("\n")
+        result["error"]["message"] = "\n".join([first, *statuses, rest]).rstrip()
+    return result
+
+
 def _execute_write(context: ToolContext, arguments: JsonObject, state: FileReadState) -> JsonObject:
     batch = change_batch(context, _WRITE_TEMPLATES)
     operation = content_operation(arguments["path"], arguments["content"])
@@ -821,6 +969,20 @@ def _path_parts(normalizer: Any, arguments: JsonObject) -> tuple[ToolDisplayPart
 
 
 def _edit_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+    try:
+        normalized = normalize_edit_arguments(arguments)
+    except ValueError:
+        normalized = None
+    if isinstance(normalized, dict) and any("path" in edit for edit in normalized.get("edits", [])):
+        paths = dict.fromkeys(
+            edit["path"] for edit in normalized["edits"] if isinstance(edit.get("path"), str)
+        )
+        return tuple(
+            ToolDisplayPart(
+                value=path, kind="path", truncate="start", tooltip="always", copyable=True
+            )
+            for path in paths
+        )
     return _path_parts(normalize_edit_arguments, arguments)
 
 

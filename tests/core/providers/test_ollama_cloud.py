@@ -16,7 +16,12 @@ from PIL import Image
 from core.attachments.images import ImageConverter
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.messages import ChatMessage
-from core.providers.errors import ProviderRequestTooLargeError
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderRequestTooLargeError,
+)
 from core.providers.providers import ProviderRegistry
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
@@ -47,6 +52,137 @@ WEATHER_TOOL = {
     "description": "Test weather tool",
     "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
 }
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
+@pytest.mark.parametrize(
+    ("status", "body", "error_type", "retryable", "attempts"),
+    [
+        pytest.param(
+            429,
+            json.dumps(
+                {
+                    "error": {
+                        "type": "api_error",
+                        "code": None,
+                        "message": "You reached your Pro 5-hour limit. Test-owned details.",
+                    }
+                }
+            ),
+            ProviderError,
+            False,
+            1,
+            id="exhausted-pro-allowance",
+        ),
+        pytest.param(
+            429,
+            json.dumps({"error": {"type": "api_error", "message": "Server is busy."}}),
+            ProviderRateLimitError,
+            True,
+            4,
+            id="ordinary-throttling",
+        ),
+        pytest.param(
+            429,
+            json.dumps(
+                {
+                    "error": {
+                        "type": "api_error",
+                        "message": "You reached your Pro 5-hour request rate limit.",
+                    }
+                }
+            ),
+            ProviderRateLimitError,
+            True,
+            4,
+            id="other-limit-wording",
+        ),
+        pytest.param(
+            429,
+            json.dumps(
+                {
+                    "error": {
+                        "type": "rate_limit_error",
+                        "message": "You reached your Pro 5-hour limit.",
+                    }
+                }
+            ),
+            ProviderRateLimitError,
+            True,
+            4,
+            id="other-structured-error",
+        ),
+        pytest.param(
+            429,
+            json.dumps(
+                {
+                    "error": {
+                        "type": "api_error",
+                        "code": "rate_limit_exceeded",
+                        "message": "You reached your Pro 5-hour limit.",
+                    }
+                }
+            ),
+            ProviderRateLimitError,
+            True,
+            4,
+            id="specific-throttling-code",
+        ),
+        pytest.param(
+            429,
+            "You reached your Pro 5-hour limit.",
+            ProviderRateLimitError,
+            True,
+            4,
+            id="unstructured-body",
+        ),
+        pytest.param(429, "[]", ProviderRateLimitError, True, 4, id="non-object-body"),
+        pytest.param(
+            403,
+            json.dumps(
+                {
+                    "error": {
+                        "type": "api_error",
+                        "message": "You reached your Pro 5-hour limit.",
+                    }
+                }
+            ),
+            ProviderAuthError,
+            False,
+            1,
+            id="auth-status-unchanged",
+        ),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_cloud_http_errors_distinguish_allowance_from_transient_throttling(
+    streaming: bool,
+    status: int,
+    body: str,
+    error_type: type[ProviderError],
+    retryable: bool,
+    attempts: int,
+) -> None:
+    route = respx.post(CLOUD_CHAT_URL).mock(
+        return_value=httpx.Response(status, text=body, headers={"Retry-After": "7"})
+    )
+    adapter = cloud_adapter()
+    try:
+        with pytest.raises(ProviderError) as failure:
+            if streaming:
+                _ = [chunk async for chunk in adapter.stream(SAMPLE_MESSAGES, model_id=V41)]
+            else:
+                await adapter.send(SAMPLE_MESSAGES, model_id=V41)
+    finally:
+        await adapter.aclose()
+
+    assert type(failure.value) is error_type
+    assert failure.value.status_code == status
+    assert failure.value.retryable is retryable
+    assert failure.value.retry_after == (7 if retryable else None)
+    assert body in str(failure.value)
+    assert route.call_count == attempts
 
 
 @respx.mock

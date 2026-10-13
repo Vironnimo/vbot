@@ -1,7 +1,8 @@
 # Edit Tool
 
-Replaces exact text in one file, several edits per call, applied in order and
-written once; an edit that fails is skipped and the others are written. `edit` and
+Replaces exact text, canonically in one file, with several edits applied in order
+and written once; an edit that fails is skipped and the others are written. An
+unadvertised batch dialect accepts explicit per-item file paths. `edit` and
 `write` (`write.md`) form the replacement dialect of the
 file edit Tools; `apply_patch` (`apply_patch.md`) is the patch dialect. Chat offers
 one dialect per prompt epoch, chosen by the primary route's Model family
@@ -65,14 +66,23 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   per call if it is cut off again. A break inside a text (a quote, an escape, a
   line break) gets `If this text fails again, send one edit per call, or call
   write with the whole file.` A flat `old_string`/`new_string` call is one
-  edit; an item's own `path` is accepted when it names the call's file (or
-  supplies the missing root path) and refused when it names another file.
+  edit. An item's own `path` is accepted when it names the root path. Without a
+  root path, one distinct item path supplies it; several distinct paths are
+  accepted when every applicable edit names its own file. Conflicting explicit
+  root/item paths, conflicting item path aliases, invalid item path types, or
+  an applicable item with no path among several targets refuse the entire call
+  before effects. A refused content item keeps its target and index. The root
+  path inferred for a multi-file batch only satisfies dispatch validation; it
+  never replaces an item's explicit target. The Model-facing schema stays the
+  simple one-file form. Evidence: one Swarm call (2026-10-13) gave four explicit
+  file paths without a root; only the first applied, and three separate retries
+  applied the remaining edits.
   Refused before any effect,
   each naming the call to send: `edits` beside flat fields, a root `replace_all`
   beside `edits`, `content` (points to `write`), no path, no change, a half pair.
   An `edits` item that is not an object, lacks `old_string` or `new_string`, has
-  an unknown field with a value, gives a field twice with different values, or
-  names another file is refused alone: the normalizer keeps it in place as a
+  an unknown field with a value, or gives a content field twice with different
+  values is refused alone: the normalizer keeps it in place as a
   refused edit (an internal `_REFUSED` marker the Model never sees), the other
   edits keep their numbers and apply, and the result reports it as a failed
   edit with the refusal text (`Failed: edits item 3 has no old_string, ...`).
@@ -87,7 +97,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   `test_other_edit_spellings_make_the_same_change`,
   `test_edits_json_text_runs_only_when_it_has_one_reading`,
   `test_open_or_misdirected_calls_say_which_call_to_send`.
-- **Semantics:** the call is one step of the shared pipeline run with
+- **Semantics:** the canonical one-file call is one step of the shared pipeline run with
   `one_write=True`: every edit is planned in memory, in order, each against the
   text the applied edits before it left, then the file is written once with the
   edits that applied. An edit that fails (not found, ambiguous, `line_join`, a
@@ -129,6 +139,23 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   needs no read stamp: the unique match against current bytes is the precondition;
   a file changed since the Session's read adds the stale note to a successful
   result or a match failure (`file_state.md`).
+- **Explicit multi-file batches:** `_execute_multi_edit` uses the same pipeline
+  without `one_write`: all resolved paths are locked in deterministic order for
+  the whole call, and each applicable item is one step in input order, including
+  a return to an earlier file. Each step checks its own file and writes
+  atomically. A failed step does not stop independent files; later changes to
+  its own file retain the pipeline's precise-match and blocked-path rules.
+  Results list every item's global index and effect in input order, then the
+  shared net file reports and failure details. Applied edits that cancel out
+  remain applied items, with the cancelled net effect named separately. No-ops
+  do not count as applied; failures plus only no-ops return a failure, while
+  all no-ops succeed. The display names the explicit paths and counts changed
+  files when more than one has a net change. A refused item's target is resolved
+  for the precise-after-failure guard, so relative and absolute aliases of the
+  same file cannot bypass it. Replay of the affected Swarm batch and its three
+  successful retries (2026-10-13), on full files reconstructed from recorded
+  writes and intervening edits: the batch applies all four intended changes;
+  the three retries retain their effects, with zero wrong effects.
 - **Results** are `apply_patch`'s (`_patch_report.patch_result`, `{content}`):
   `Updated X (places).`, with the changed regions as they are now only when the
   written text differs from the call or the call was partial (`apply_patch.md`),
@@ -297,7 +324,11 @@ where every form a Model sends is accepted (relative and absolute paths).
 |---|---|
 | `Replace text in a file.` | Names the effect; what to do with a whole file comes from `write`'s name and the `content` refusal. |
 | `Calls that change different files never need each other finished first; send them in the same response.` | Batching changes is a user requirement. "Calls that change" covers `write` calls too, which the eval failure (a new file before the edit that imports it) involved; the former "Calls for different files" read as `edit` calls only (review 2026-10-10). Without it, 3 of 8 multi-file eval runs sent the calls for a second file in a later response (a new file before the edit that imports it, a definition before its callers), reading the System Prompt's hold-back rule as a dependency; one round trip each (agent-eval 2026-10-05). |
-| `edits`: `All changes to this file.` | Puts every change to the file into one call instead of one call per change. Later edits that build on earlier ones and items naming another file fail with the fix. |
+| `edits`: `All changes to this file.` | Puts every change to one file into one call instead of one call per change. The accepted per-item path dialect does not add schema cost to the canonical form. |
+| `edits item K changes X, but this call changes Y. Remove the root path to use each edit's own path, or make the paths agree.` | A root path and a different item path give contradictory targets. Refuse the whole call before effects; removing the root explicitly selects the accepted per-item target dialect. |
+| `edits item K has no path, but the call names several files. Give each edit its own path.` | No first-item default can tell which file a pathless edit means in a multi-file batch. Refuse before effects instead of silently choosing the first file. |
+| `edits item K needs path as text, relative to the working directory or absolute.`; `edits item K gives path twice with different values; send one.` | An invalid or conflicting explicit target refuses the whole call, even if other items are complete. Target repairs cannot select one of several intended files. |
+| `Edit K of N (X): applied.` (`not applied`, `nothing to change`, `written but not confirmed`) | Multi-file items need their own indices and targets: net file reports alone cannot distinguish a failed item, a no-op and two applied edits whose effects cancel. An unconfirmed write is never reported as unapplied. |
 | `edits[].old_string`: `Text to replace. Without replace_all, it must occur exactly once.` | A repeated `old_string` is the common failing edit; the rule prevents it before the first call. The `replace_all` condition keeps a literal reader from padding an `old_string` it means to replace everywhere. |
 | `edits[].replace_all`: `Replace every occurrence. Omit to replace one.` | Weak Models fill every field; a filled `replace_all: true` changes text the Agent did not mean (F3). |
 | `path`, `edits[].new_string`: no text | The names say the role, both path forms are accepted, and `""` deleting is trained behavior (review 2026-10-10). |

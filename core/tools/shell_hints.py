@@ -13,7 +13,8 @@ Design rules (keep them when adding a pattern):
   written: a typographic quote or a \\" that ended a PowerShell string, a
   command PowerShell did not recognize behind exit code 0 (its recorded-error
   note), or a program that failed in a pipeline with a Select-Object -First
-  stage; and a command that sleeps to read a background command's log.
+  stage; a successful command with expandable variables inside Python source;
+  and a command that sleeps to read a background command's log.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
@@ -40,7 +41,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import islice
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import POWERSHELL_ERROR_NOTE
@@ -598,13 +599,15 @@ class _PowerShellCode:
     double-quoted string after a backslash, written as an escape: a word, a
     string or a block follows it directly. ``flat`` is ``text`` with the line
     breaks inside strings and here-strings blanked too, so every line break left
-    in it ends a statement or continues one in code.
+    in it ends a statement or continues one in code. ``double_strings`` holds
+    the opening and closing offsets of ordinary double-quoted strings.
     """
 
     text: str
     early_end: tuple[int, int] | None
     escaped_end: int | None = None
     flat: str = ""
+    double_strings: tuple[tuple[int, int], ...] = ()
 
 
 def _powershell_code(command: str) -> _PowerShellCode:
@@ -620,6 +623,7 @@ def _powershell_code(command: str) -> _PowerShellCode:
     early_end: tuple[int, int] | None = None
     escaped_end: int | None = None
     end = len(command)
+    double_strings: list[tuple[int, int]] = []
 
     def blank(start: int, stop: int) -> None:
         for index in range(start, min(stop, end)):
@@ -673,6 +677,8 @@ def _powershell_code(command: str) -> _PowerShellCode:
                     stop = at
                     break
             blank(start + 1, stop)
+            if not single and stop < end:
+                double_strings.append((start, stop))
             if early_end is None and stop < end and char in "'\"" and command[stop] != char:
                 early_end = (start, stop)
             if (
@@ -685,7 +691,9 @@ def _powershell_code(command: str) -> _PowerShellCode:
             ):
                 escaped_end = stop
             position = stop + 1
-    return _PowerShellCode("".join(code), early_end, escaped_end, "".join(flat))
+    return _PowerShellCode(
+        "".join(code), early_end, escaped_end, "".join(flat), tuple(double_strings)
+    )
 
 
 _STRING_SHOWN_CHARS = 40
@@ -823,6 +831,72 @@ def _program_at(command: str, code: str, start: int, end: int | None = None) -> 
     return None if program is None else program.lower().removesuffix(".exe")
 
 
+_PYTHON_SOURCE_FLAGS = re.compile(r"[ \t]+(?:(?:-[BEOIPqsuUv]+|-3(?:\.\d+)?)[ \t]+)*-c[ \t]+")
+_EXPANDED_VARIABLE = re.compile(r"`[\s\S]|\$(?:\{[\w:]+\}|[\w]+(?::[\w]+)?)")
+_SUBEXPRESSION = re.compile(r"`[\s\S]|\$\(")
+
+
+def _hint_python_interpolation(command: str, exit_code: int | None) -> str | None:
+    """Name variable expansion in a direct double-quoted Python source argument.
+
+    This is a syntax observation, not proof that a branch ran, a variable was
+    empty, or interpolation was unintended. Never inspect or rewrite Python
+    code; even its single-quoted strings are inside PowerShell's outer quotes.
+    """
+    if not _POWERSHELL or exit_code != 0 or "$" not in command:
+        return None
+    # This bounded recognizer is not PowerShell's parser. A subexpression can
+    # contain its own quotes, and a nested block comment can contain apparent
+    # code after the inner #>. Leave those commands to the shell itself.
+    if any(match[0] == "$(" for match in _SUBEXPRESSION.finditer(command)):
+        return None
+    if command.count("<#") > 1:
+        return None
+    code = _powershell_code(command)
+    starts = [0, *(match.end() for match in _PIPELINE_START.finditer(code.flat))]
+    for start, stop in code.double_strings:
+        if command[start] != '"' or command[stop] != '"':
+            continue
+        if stop + 1 < len(command) and command[stop + 1] not in _ARGUMENT_END:
+            continue
+        pipeline = starts[bisect.bisect_right(starts, start) - 1]
+        first = _PIPELINE_PROGRAM.match(code.flat, pipeline, start)
+        if first is None:
+            continue
+        program = _program_at(command, code.flat, pipeline, start)
+        if program is None or re.fullmatch(r"(?:pythonw?|py)(?:[\d.]+)?", program) is None:
+            continue
+        if not _PYTHON_SOURCE_FLAGS.fullmatch(code.flat[first.end() : start]):
+            continue
+        # Scoped variables explicitly name PowerShell state; a whole $code
+        # argument deliberately passes that variable's Python source.
+        names = list(
+            islice(
+                dict.fromkeys(
+                    match[0]
+                    for match in _EXPANDED_VARIABLE.finditer(command, start + 1, stop)
+                    if match[0].startswith("$") and ":" not in match[0]
+                ),
+                4,
+            )
+        )
+        if not names:
+            continue
+        if command[start + 1 : stop].strip() in names:
+            continue
+        shown = ", ".join(
+            f"`{name}`" if len(name) <= 40 else f"`{name[:37]}...`" for name in names[:3]
+        )
+        if len(names) > 3:
+            shown += " and other variables"
+        return (
+            f"PowerShell expands {shown} inside the double-quoted Python source before "
+            "Python runs. If this was meant as literal text, use a single-quoted here-string. "
+            "Check any files this command changed before repeating it."
+        )
+    return None
+
+
 def _exit_codes(failed_programs: Sequence[str], program: str) -> list[str]:
     """The distinct codes *program*'s failed runs exited with, in order."""
     codes: dict[str, None] = {}
@@ -850,6 +924,91 @@ def _stage_text(command: str, code: str, start: int, end: int) -> str:
     return text
 
 
+_LITERAL_PYTHON_SELECTOR = re.compile(
+    r"[ \t]+(?:-[bBdEiIOPqsSuvx]+[ \t]+)*(?P<module>-m[ \t]+)?"
+    r"(?P<selector>\"[^\"\r\n]*+\"|'[^'\r\n]*+'|[^\s|;&<>(){}'\"]++)"
+    r"(?=$|[\s|;&<>])"
+)
+_EXIT_WITH_INVOCATION = re.compile(r"(\d+)(?: \(0x[0-9A-F]{8}\))? \(([^\r\n]+)\)")
+
+
+def _invocation_key(selector: str) -> str | None:
+    """Comparable literal module/script identity; inline code has no identity."""
+    if selector.startswith("-m "):
+        module = selector[3:]
+        return selector if all(part.isidentifier() for part in module.split(".")) else None
+    if (
+        not selector.lower().endswith((".py", ".pyw", ".pyz"))
+        or any(char in selector for char in "$`*?[]")
+        or not selector.isprintable()
+    ):
+        return None
+    return PureWindowsPath(selector).as_posix().casefold()
+
+
+def _first_invocation_failures(
+    command: str, code: str, program: str, failed_programs: Sequence[str]
+) -> dict[int, tuple[str, list[str]]]:
+    """Correlate one failure only within simple, separate literal Python calls.
+
+    Nested expressions, another command family, unknown selectors or an extra
+    native pipeline stage leave attribution unknown. A repeated selector also
+    cannot tell which invocation failed, even when its arguments differ.
+    """
+    if not re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*)?", program):
+        return {}
+    if re.search(r"[(){}=`]|\|\|", code):
+        return {}
+    selectors: dict[int, str] = {}
+    occurrences: dict[str, int] = {}
+    for left, right in _top_level_statements(code):
+        if _program_at(command, code, left, right) != program:
+            return {}
+        first = _PIPELINE_PROGRAM.match(code, left, right)
+        assert first is not None
+        # Only the leading call operator and stream-merging redirections may
+        # contain &: chains or another invocation would defeat the correlation.
+        if "&" in re.sub(r"[0-6*]>&[0-6]", "", code[first.end() : right]):
+            return {}
+        for pipe in re.finditer(r"\|", code[first.end() : right]):
+            stage = _PIPELINE_PROGRAM.match(code, first.end() + pipe.end(), right)
+            if stage is None or stage[1].lower() not in (
+                "select",
+                "select-object",
+                "select-string",
+            ):
+                return {}
+        match = _LITERAL_PYTHON_SELECTOR.match(command, first.end(), right)
+        if match is None:
+            return {}
+        selector = match["selector"]
+        if selector[0] in "'\"":
+            selector = selector[1:-1]
+        if match["module"]:
+            selector = f"-m {selector}"
+        key = _invocation_key(selector)
+        if key is None:
+            return {}
+        selectors[left] = key
+        occurrences[key] = occurrences.get(key, 0) + 1
+    failures: dict[str, tuple[str, list[str]]] = {}
+    for entry in failed_programs:
+        name, _, detail = entry.partition(" exited with code ")
+        if name.lower().removesuffix(".exe") != program:
+            continue
+        failure = _EXIT_WITH_INVOCATION.fullmatch(detail)
+        if failure is None or (key := _invocation_key(failure[2])) is None:
+            continue
+        _, codes = failures.setdefault(key, (failure[2], []))
+        if failure[1] not in codes:
+            codes.append(failure[1])
+    return {
+        left: failures[key]
+        for left, key in selectors.items()
+        if occurrences[key] == 1 and key in failures
+    }
+
+
 def _hint_first_stage(
     command: str,
     exit_code: int | None,
@@ -871,11 +1030,13 @@ def _hint_first_stage(
     only with the closed output's error in the output. Otherwise, when the stage
     received the program's errors (2>&1), the hint names the program's failure
     and that the stage can have hidden why. A program also run outside such a
-    pipeline may have failed there, and gets no hint.
+    pipeline gets a hint only when a recorded literal Python selector identifies
+    this invocation among simple, separate calls; their shared output cannot
+    prove which call failed at a closed pipe.
     """
     if not _POWERSHELL or "|" not in command or not failed_programs:
         return None
-    code = _powershell_code(command).text
+    code = _powershell_code(command).flat
     starts = [0, *(match.end() for match in _PIPELINE_START.finditer(code))]
     staged: dict[int, tuple[re.Match[str], int]] = {}
     for stage in _FIRST_STAGE.finditer(code):
@@ -887,20 +1048,35 @@ def _hint_first_stage(
             staged[start] = (stage, int(count[1]))
     if not staged:
         return None
-    # The program that starts each pipeline outside the stages' pipelines.
-    elsewhere = {_program_at(command, code, start) for start in starts if start not in staged}
+    occurrences: dict[str, int] = {}
+    for start in starts:
+        if (program := _program_at(command, code, start)) is not None:
+            occurrences[program] = occurrences.get(program, 0) + 1
+    # Correlation requires every statement to call the same Python program, so
+    # one attempt also settles every other candidate, without rescanning.
+    invocations: dict[int, tuple[str, list[str]]] | None = None
     window = _scan_window(output)
     for start, (stage, lines) in staged.items():
         program = _program_at(command, code, start, stage.start())
-        if program is None or program in elsewhere:
+        if program is None:
             continue
-        codes = _exit_codes(failed_programs, program)
+        correlated = occurrences.get(program, 0) > 1
+        if correlated:
+            if invocations is None:
+                invocations = _first_invocation_failures(command, code, program, failed_programs)
+            identity = invocations.get(start)
+            if identity is None:
+                continue
+            selector, codes = identity
+            program = f"{program} {selector}"
+        else:
+            codes = _exit_codes(failed_programs, program)
         if not codes:
             continue
         written = _stage_text(command, code, stage.start() + 1, stage.end())
         counted = f"{lines} line{'' if lines == 1 else 's'}"
         zero = ", although the command exited with code 0" if exit_code == 0 else ""
-        closed = _CLOSED_OUTPUT.search(window)
+        closed = None if correlated else _CLOSED_OUTPUT.search(window)
         if closed is not None:
             return (
                 f"`{written}` closed {program}'s output after {counted}, and {program} failed "
@@ -1712,8 +1888,10 @@ def annotate_failure(
     command PowerShell did not recognize behind exit code 0, or a program failed
     in a pipeline with a Select-Object -First stage. A non-zero exit code can
     come from a pipeline whose failed program made && skip the rest. Last, a
-    command that sleeps to read a background command's log is told that the
-    result arrives as a message. Otherwise exit code 0 or None stays unannotated.
+    successful command with expandable variables in double-quoted Python source
+    is told how to preserve literal text. A command that sleeps to read a
+    background command's log is told that the result arrives as a message.
+    Otherwise exit code 0 or None stays unannotated.
     """
     command = command or ""
     output = output or ""
@@ -1738,6 +1916,7 @@ def annotate_failure(
     for late in (
         lambda: _hint_skipped_after_pipeline(command, exit_code, failed_programs),
         lambda: _hint_first_stage(command, exit_code, output, lines, failed_programs),
+        lambda: _hint_python_interpolation(command, exit_code),
         lambda: _hint_waiting_for_background(command),
     ):
         try:

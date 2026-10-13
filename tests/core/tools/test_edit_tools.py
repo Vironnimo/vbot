@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 
@@ -106,24 +107,142 @@ def test_model_families_get_one_edit_dialect(family: str, dialect: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_edits_apply_in_order_as_one_change(tmp_path) -> None:
+@pytest.mark.parametrize("multiple_files", [False, True])
+async def test_edits_apply_in_order_as_one_change(tmp_path, monkeypatch, multiple_files) -> None:
     (tmp_path / "a.py").write_bytes(b"x = 1\ny = 2\nx = 1\n")
+    edits: list[dict[str, Any]] = [
+        {"old_string": "x = 1", "new_string": "x = 3", "replace_all": True},
+        # Sees the text the first edit left.
+        {"old_string": "x = 3\ny", "new_string": "x = 3\nz"},
+    ]
+    arguments = {"path": "a.py", "edits": edits}
+    state = FileReadState()
+    locked = set()
+    lock = state.lock_path
 
-    result = await call(
-        tmp_path,
-        {
-            "path": "a.py",
-            "edits": [
-                {"old_string": "x = 1", "new_string": "x = 3", "replace_all": True},
-                # Sees the text the first edit left.
-                {"old_string": "x = 3\ny", "new_string": "x = 3\nz"},
-            ],
-        },
-        name="edit",
-    )
+    @contextmanager
+    def observed_lock(path):
+        with lock(path):
+            locked.add(path)
+            try:
+                yield
+            finally:
+                locked.remove(path)
 
-    assert result["data"] == {"content": "Updated a.py (lines 1-3)."}
+    written = []
+    write = file_changes_module.atomic_write_bytes
+
+    def observed_write(path, payload, **kwargs):
+        if multiple_files:
+            assert locked == {tmp_path / "a.py", tmp_path / "b.txt"}
+        written.append(path.name)
+        return write(path, payload, **kwargs)
+
+    monkeypatch.setattr(state, "lock_path", observed_lock)
+    monkeypatch.setattr(file_changes_module, "atomic_write_bytes", observed_write)
+    if multiple_files:
+        (tmp_path / "b.txt").write_bytes(b"second\n")
+        for edit in edits:
+            edit["path"] = "a.py"
+        edits.insert(1, {"path": "b.txt", "old_string": "second", "new_string": "changed"})
+        arguments = {"edits": edits}
+
+    result = await call(tmp_path, arguments, tools=registry(state), name="edit")
+
+    assert result["ok"]
+    if multiple_files:
+        assert (tmp_path / "b.txt").read_bytes() == b"changed\n"
+        assert written == ["a.py", "b.txt", "a.py"]
+        assert re.findall(r"^Edit (\d+) of 3", text(result), re.M) == ["1", "2", "3"]
+    else:
+        assert written == ["a.py"]
+    assert not locked
     assert (tmp_path / "a.py").read_bytes() == b"x = 3\nz = 2\nx = 3\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("items", "expected", "applied", "failed"),
+    [
+        pytest.param(
+            [("a.txt", "one", "1"), ("missing.txt", "x", "y"), ("a.txt", "1", "first")],
+            {"a.txt": b"first\n", "b.txt": b"two\n"},
+            2,
+            1,
+            id="missing-file-does-not-block-other-target",
+        ),
+        pytest.param(
+            [("a.txt", "one", "1"), {"path": "b.txt", "new_string": "2"}, ("a.txt", "1", "first")],
+            {"a.txt": b"first\n", "b.txt": b"two\n"},
+            2,
+            1,
+            id="refused-content-keeps-its-target-and-index",
+        ),
+        pytest.param(
+            [("a.txt", "one", "one"), ("b.txt", "two", "two")],
+            {"a.txt": b"one\n", "b.txt": b"two\n"},
+            0,
+            0,
+            id="all-no-op",
+        ),
+        pytest.param(
+            [("a.txt", "absent", "x"), ("b.txt", "missing", "y")],
+            {"a.txt": b"one\n", "b.txt": b"two\n"},
+            0,
+            2,
+            id="all-failed",
+        ),
+        pytest.param(
+            [("a.txt", "absent", "x"), ("b.txt", "two", "two")],
+            {"a.txt": b"one\n", "b.txt": b"two\n"},
+            0,
+            1,
+            id="failure-with-no-op-is-not-applied",
+        ),
+        pytest.param(
+            [("a.txt", "one", "1"), ("b.txt", "two", "2"), ("a.txt", "1", "one")],
+            {"a.txt": b"one\n", "b.txt": b"2\n"},
+            3,
+            0,
+            id="applied-edits-with-cancelled-net-effect",
+        ),
+        pytest.param(
+            [("new.txt", "", "start\n"), ("a.txt", "one", "1"), ("new.txt", "start", "final")],
+            {"a.txt": b"1\n", "b.txt": b"two\n", "new.txt": b"final\n"},
+            3,
+            0,
+            id="create-and-edit-same-file",
+        ),
+    ],
+)
+async def test_multi_file_edits_report_each_items_actual_effect(
+    tmp_path, items, expected, applied, failed
+) -> None:
+    (tmp_path / "a.txt").write_bytes(b"one\n")
+    (tmp_path / "b.txt").write_bytes(b"two\n")
+    arguments = {
+        "edits": [
+            item
+            if isinstance(item, dict)
+            else {"path": item[0], "old_string": item[1], "new_string": item[2]}
+            for item in items
+        ]
+    }
+    tools = registry()
+    ctx = replace(context(tmp_path), tool_name="edit")
+
+    result = await tools.dispatch(ctx, arguments)
+
+    assert result["ok"] == (not failed or bool(applied))
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == expected
+    assert re.findall(r"^Edit (\d+) of \d+", text(result), re.M) == list(
+        map(str, range(1, len(items) + 1))
+    )
+    display = tools.display_for_call("edit", arguments, context=ctx, result=result)
+    notices = [block for block in display["details"] if block.get("level") == "error"]
+    assert len(notices) == failed
+    counts = {fact["unit"]: fact["value"] for fact in display["facts"] if fact["kind"] == "count"}
+    assert counts.get("edits", 0) == applied
 
 
 LINES = b"one\ntwo\none\n"
@@ -172,13 +291,13 @@ ONE_LINE_JSON = '{"note": "Marked as estimated.", "status": "predicted", "unit":
             [1, 3],
             id="line-join",
         ),
-        # An item that leaves its edit open, or changes another file, is one failed edit.
+        # An item that leaves its edit open is one failed edit.
         pytest.param(
             LINES,
             [
                 {"new_string": "x"},
                 ("two", "2"),
-                {"path": "b.txt", "old_string": "a", "new_string": "b"},
+                {"old_string": "a", "new_string": "b", "line": 2},
             ],
             b"one\n2\none\n",
             [1, 3],
@@ -246,6 +365,34 @@ async def test_edits_that_fail_are_skipped_and_the_others_written_once(
     # The row counts the applied edits; one file goes without a file count.
     counts = {f["unit"]: f["value"] for f in display["facts"] if f["kind"] == "count"}
     assert counts == {"edits": len(edits) - len(failed)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("absolute", [False, True])
+async def test_refused_item_blocks_fuzzy_edits_of_the_same_resolved_file(
+    tmp_path, absolute
+) -> None:
+    (tmp_path / "a.py").write_bytes(COMPUTE)
+    earlier_path = str(tmp_path / "a.py") if absolute else "./a.py"
+    result = await call(
+        tmp_path,
+        {
+            "edits": [
+                {"path": earlier_path, "new_string": "missing old text"},
+                {"path": "b.txt", "old_string": "", "new_string": "created"},
+                {
+                    "path": "a.py",
+                    "old_string": "    value = total / count\n    retrun value",
+                    "new_string": "    value = total / count\n    return 0",
+                },
+            ]
+        },
+        name="edit",
+    )
+    assert result["ok"]
+    assert edit_outcome(text(result)) == "partial"
+    assert (tmp_path / "a.py").read_bytes() == COMPUTE
+    assert (tmp_path / "b.txt").read_bytes() == b"created\n"
 
 
 @pytest.mark.asyncio
@@ -1161,9 +1308,59 @@ async def test_a_failed_edit_names_the_lines_and_edits_its_text_came_from(
                 "path": "a.txt",
                 "edits": [{"path": "b.txt", "old_string": "one", "new_string": "1"}],
             },
-            "edits item 1 changes b.txt, but this call changes a.txt. Call edit once per file in "
-            "the same response, each with the edits of its file.",
+            None,
             id="edit-another-file",
+        ),
+        pytest.param(
+            "edit",
+            {
+                "path": "a.txt",
+                "edits": [
+                    {"old_string": "one", "new_string": "1"},
+                    {"path": "b.txt", "old_string": "", "new_string": "created"},
+                ],
+            },
+            None,
+            id="contradictory-root-refuses-before-first-edit",
+        ),
+        pytest.param(
+            "edit",
+            {
+                "edits": [
+                    {"path": "a.txt", "old_string": "one", "new_string": "1"},
+                    {"path": "b.txt", "old_string": "", "new_string": "created"},
+                    {"old_string": "two", "new_string": "2"},
+                ],
+            },
+            None,
+            id="no-guess-for-missing-item-path",
+        ),
+        pytest.param(
+            "edit",
+            {
+                "edits": [
+                    {"path": "a.txt", "old_string": "one", "new_string": "1"},
+                    {"path": ["b.txt"], "old_string": "", "new_string": "created"},
+                ],
+            },
+            None,
+            id="invalid-item-path-refuses-before-first-edit",
+        ),
+        pytest.param(
+            "edit",
+            {
+                "edits": [
+                    {"path": "a.txt", "old_string": "one", "new_string": "1"},
+                    {
+                        "path": "b.txt",
+                        "filename": "c.txt",
+                        "old_string": "",
+                        "new_string": "created",
+                    },
+                ],
+            },
+            None,
+            id="contradictory-item-path-refuses-before-first-edit",
         ),
         pytest.param(
             "edit",
@@ -1297,7 +1494,8 @@ async def test_open_or_misdirected_calls_say_which_call_to_send(
     result = await call(tmp_path, arguments, name=tool)
 
     assert result["error"]["code"] == "invalid_arguments"
-    assert text(result) == f"No file was changed.\n{message}"
+    if message is not None:
+        assert text(result) == f"No file was changed.\n{message}"
     assert [p.name for p in tmp_path.iterdir()] == ["a.txt"]
     assert (tmp_path / "a.txt").read_bytes() == b"one\ntwo\n"
 

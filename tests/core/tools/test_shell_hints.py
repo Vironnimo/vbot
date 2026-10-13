@@ -731,6 +731,59 @@ def test_an_escaped_quote_that_ended_a_powershell_string_is_named(
 
 
 @pytest.mark.parametrize(
+    ("command", "names"),
+    [
+        ("python -c \"print('$field')\"", ("$field",)),
+        ("py -3.14 -I -c \"print('${field} $other $field')\"", ("${field}", "$other")),
+        ('& "C:/tools/python.exe" -c "\nprint(\'$field\')\n"', ("$field",)),
+        ("python -c \"print('``$field')\"", ("$field",)),
+        ("python -c \"print('`$literal $expanded')\"", ("$expanded",)),
+        ("python -c \"print('$one $two $three $four $five')\"", ("$one", "$two", "$three")),
+        pytest.param(
+            "python -c \"print('$" + "x" * 40_000 + "')\"",
+            ("$" + "x" * 36 + "...",),
+            id="long-variable-name-is-bounded",
+        ),
+        ("python -c \"print('`$field')\"", ()),
+        ("python -c 'print(\"$field\")'", ()),
+        ("python -c \"print('$env:VALUE ${env:OTHER} $script:value')\"", ()),
+        ('python -c "$code"', ()),
+        ('python -c "  ${code}  "', ()),
+        ("python -c @'\nprint(\"$field\")\n'@", ()),
+        ("python -c @\"\nprint('$field')\n\"@", ()),
+        ("python --% -c \"print('$field')\"", ()),
+        ("node -c \"print('$field')\"", ()),
+        ("python -m check \"print('$field')\"", ()),
+        ("# python -c \"print('$field')\"", ()),
+        ("<# outer <# inner #> python -c \"print('$field')\" #>", ()),
+        ("python -c \"print('$($field)')\"", ()),
+        ("python -c \"print('$field')\"suffix", ()),
+        ("python -c \"print('$field')", ()),
+    ],
+)
+def test_python_source_expansion_names_only_unescaped_literal_variables(
+    monkeypatch: pytest.MonkeyPatch, command: str, names: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, 0, "")
+
+    if names:
+        assert hint is not None
+        for name in names:
+            assert f"`{name}`" in hint
+        assert "single-quoted here-string" in hint
+        assert "$literal" not in hint and "$four" not in hint and "$five" not in hint
+    else:
+        assert hint is None
+    # Failure-specific hints win, and running commands have no outcome yet.
+    assert annotate_failure(command, 1, "") is None
+    assert annotate_failure(command, None, "") is None
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, 0, "") is None
+
+
+@pytest.mark.parametrize(
     ("command", "piped"),
     [
         ("for ($z in 12,31) { python harvest.py $z }", False),
@@ -858,6 +911,97 @@ _CLOSED_OUTPUT = (
             "python build.py 2>&1 | Select-Object -First 2; python build.py --check",
             "step",
             _FAILED,
+            8,
+            None,
+        ),
+        # Recorded selectors identify a failed call among distinct Python calls.
+        (
+            "python -m compileall .; python -m package.check 2>&1 | Select-Object -First 2",
+            "checked",
+            ("python.exe exited with code 2 (-m package.check)",),
+            8,
+            ("python -m package.check", "code 2", "`Select-Object -First 2`"),
+        ),
+        (
+            "python -u 'scripts/check.py' 2>&1 | Select-Object -First 2; python report.py",
+            "checked",
+            (
+                "python.exe exited with code 2 (scripts/check.py)",
+                "python.exe exited with code 3 (report.py)",
+            ),
+            8,
+            ("python scripts/check.py", "code 2"),
+        ),
+        (
+            'python "scripts/check files.py" 2>&1 | Select-Object -First 2; python report.py',
+            "checked",
+            ("python.exe exited with code 2 (scripts/check files.py)",),
+            8,
+            ("python scripts/check files.py", "code 2"),
+        ),
+        (
+            "python one.py 2>&1 | Select-Object -First 2; "
+            "python two.py 2>&1 | Select-Object -First 3",
+            "checked",
+            ("python.exe exited with code 2 (two.py)",),
+            8,
+            ("python two.py", "code 2", "`Select-Object -First 3`"),
+        ),
+        # A different or unavailable selector never implicates the trimmed call.
+        (
+            "python check.py 2>&1 | Select-Object -First 2; python report.py",
+            "checked",
+            ("python.exe exited with code 2 (report.py)",),
+            8,
+            None,
+        ),
+        (
+            "python check.py 2>&1 | Select-Object -First 2; python report.py",
+            "checked",
+            _FAILED,
+            8,
+            None,
+        ),
+        (
+            "python check.py 2>&1 | Select-Object -First 2; python ./check.py --other",
+            "checked",
+            ("python.exe exited with code 2 (check.py)",),
+            8,
+            None,
+        ),
+        (
+            'python -c "one()" 2>&1 | Select-Object -First 2; python -c "two()"',
+            "checked",
+            ("python.exe exited with code 2 (-c)",),
+            8,
+            None,
+        ),
+        (
+            "python check.py 2>&1 | Select-Object -First 2; python $other",
+            "checked",
+            ("python.exe exited with code 2 (check.py)",),
+            8,
+            None,
+        ),
+        (
+            "python check.py 2>&1 | Select-Object -First 2; python report.py | python check.py",
+            "checked",
+            ("python.exe exited with code 2 (check.py)",),
+            8,
+            None,
+        ),
+        (
+            "python check.py 2>&1 | Select-Object -First 2; python report.py (python check.py)",
+            "checked",
+            ("python.exe exited with code 2 (check.py)",),
+            8,
+            None,
+        ),
+        # Shared output cannot establish which of two calls hit the closed pipe.
+        (
+            "python check.py 2>&1 | Select-Object -First 2; python report.py",
+            _CLOSED_OUTPUT,
+            ("python.exe exited with code 2 (check.py)",),
             8,
             None,
         ),
