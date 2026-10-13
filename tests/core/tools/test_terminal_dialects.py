@@ -183,15 +183,44 @@ async def test_start_with_a_terminal_id_opens_a_new_terminal_or_refuses_an_exist
     assert len(manager[1].calls) == 2
 
 
+@pytest.mark.parametrize(
+    ("fields", "note"),
+    [
+        (
+            {"text": "  \n"},
+            "text was not typed: start only launches the program. Answer what its screen asks "
+            "first, if anything; once it is ready for your text, send it with terminal action "
+            '"input", terminal_id "<id>", your text as text and key "enter".',
+        ),
+        (
+            {"data": "\x03"},
+            "data was not sent: start only launches the program. Answer what its screen asks "
+            "first, if anything; once it is ready for your data, send it with terminal action "
+            '"input", terminal_id "<id>", your data as data.',
+        ),
+        (
+            {"key": "Esc"},
+            'key "escape" was not pressed: start only launches the program. Once the program is '
+            'ready for it, call terminal {"action": "input", "terminal_id": "<id>", "key": '
+            '"escape"}.',
+        ),
+    ],
+    ids=["blank-text", "data", "key"],
+)
 @pytest.mark.asyncio
-async def test_start_refuses_input_it_cannot_send(
-    terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
+async def test_start_launches_and_says_how_to_send_the_input_it_got(
+    terminal: Terminal,
+    manager: tuple[TerminalManager, AdapterFactory],
+    fields: JsonObject,
+    note: str,
 ) -> None:
-    key = await terminal({"action": "start", "command": "fake-tui", "key": "Esc"})
-    assert 'send key "escape" with the input action' in _error(key)["message"]
-    data = await terminal({"action": "start", "command": "fake-tui", "data": "\x03"})
-    assert "send exact data with the input action" in _error(data)["message"]
-    assert manager[1].calls == []
+    """start sends no input: text, data and keys alike launch the program with
+    a note on how to send them (code review R11: data and keys were refused)."""
+    result = await terminal({"action": "start", "command": "fake-tui", **fields})
+
+    terminal_id = result["data"]["terminal_id"]
+    assert result["data"]["note"] == note.replace("<id>", terminal_id)
+    assert manager[1].adapters[0].writes == []
 
 
 @pytest.mark.asyncio
@@ -232,7 +261,6 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
         in (typed["data"]["note"])
     )
     submitted = await send(text="submit", key="enter")
-    assert submitted["data"]["key"] == "enter"
     assert "note" not in submitted["data"]
     await send(key="f12")
     raw = "\x1b[200~more\r\n\x1b[201~"
@@ -346,7 +374,7 @@ async def test_empty_optional_input_fields_are_ignored(
 
     assert result["ok"] is True
     if writes:
-        assert (result["data"]["state"], result["data"]["key"]) == ("running", "enter")
+        assert result["data"]["state"] == "running"
     else:
         # Input that sends nothing waits for no reply and says so.
         assert result["data"] == {
@@ -398,7 +426,7 @@ async def test_input_accepts_key_spellings_and_explains_unknown_keys(
     adapter = manager[1].adapters[0]
 
     sent = await terminal({"action": "input", "terminal_id": terminal_id, "key": "Ctrl+C"})
-    assert sent["data"]["key"] == "ctrl_c"
+    assert sent["ok"] is True
     await eventually(lambda: adapter.writes == ["\x03"])
 
     unknown = await terminal({"action": "input", "terminal_id": terminal_id, "key": "space"})
@@ -495,14 +523,29 @@ async def test_codex_and_hermes_input_shapes_type_into_the_terminal(
         ("launch", "start"),
         ("disconnect", "detach"),
         ("join", "wait"),
-        # Cancelling can mean interrupting the program: no spelling of it kills.
-        ("cancel", "cancel"),
-        ("abort", "abort"),
     ],
 )
 def test_action_spellings_name_the_action(action: str, canonical: str) -> None:
     normalized = normalize_terminal_arguments({"action": action, "terminal_id": "term_a"})
     assert normalized["action"] == canonical
+
+
+@pytest.mark.parametrize("action", ["cancel", "Abort", "interrupt"])
+def test_cancelling_names_both_calls_it_can_mean(action: str) -> None:
+    """Cancelling can mean interrupting the program's work or stopping the
+    program: no spelling of it does either (user decision D3)."""
+    with pytest.raises(ValueError) as refused:
+        normalize_terminal_arguments({"action": action, "terminal_id": "term_a"})
+    interrupt = json.dumps({"action": "input", "terminal_id": "term_a", "key": "ctrl_c"})
+    kill = json.dumps({"action": "kill", "terminal_id": "term_a"})
+    assert str(refused.value) == (
+        f'terminal was not run: "{action}" can mean two things; nothing was done. To interrupt '
+        f"what the program is doing, as Ctrl+C does, call terminal {interrupt}, or press the "
+        "key its screen names, such as escape. To stop the program and everything it started, "
+        f"call terminal {kill}."
+    )
+    with pytest.raises(ValueError, match="with the terminal's terminal_id"):
+        normalize_terminal_arguments({"action": action})
 
 
 @pytest.mark.asyncio
@@ -735,7 +778,7 @@ async def test_input_returns_the_reply_once_its_output_pauses(
 
     data = result["data"]
     assert data["screen"].splitlines() == [">>> print(6*7)", "42", ">>>"]
-    assert list(data) == ["terminal_id", "state", "screen", "cursor", "key", "next"]
+    assert list(data) == ["terminal_id", "state", "screen", "cursor", "next"]
 
 
 @pytest.mark.asyncio
@@ -776,20 +819,22 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
 ) -> None:
     started = await terminal({"action": "start", "command": "fake-tui", "args": ["-q"]})
-    assert list(started["data"]) == ["terminal_id", "state", "log", "screen", "cursor", "next"]
+    # An empty screen has no cursor, and the first screen is still to come.
+    assert list(started["data"]) == ["terminal_id", "state", "log", "screen", "next"]
+    assert started["data"]["next"].startswith("It has shown nothing yet.")
     terminal_id = started["data"]["terminal_id"]
     manager[1].adapters[0].emit("".join(f"line-{index}\r\n" for index in range(30)) + "ready> ")
     await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
 
     wait: JsonObject = {"action": "wait", "terminal_id": terminal_id, "pattern": "ready>"}
     waited = await terminal(wait)
+    # The history holds only the lines no result showed, and no pages (user decision D1).
     assert list(waited["data"]) == [
         "terminal_id",
         "state",
         "history",
         "screen",
         "cursor",
-        "scrollback",
         "wait_ended",
         "matched",
     ]
@@ -800,7 +845,6 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
         for label, key in (("scrollback", "history"), ("screen", "screen"))
     ]
     assert waited["data"]["history"].splitlines() == [f"line-{index}" for index in range(7)]
-    assert "text" not in waited["data"]["scrollback"]
     text = render_tool_result_envelope(waited)
     assert "history:\n  line-0\n  line-1\n" in text
     assert "attention" not in text

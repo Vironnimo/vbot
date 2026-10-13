@@ -841,7 +841,7 @@ class TerminalSession:
     ) -> dict[str, Any]:
         """Return the screen, one history page and the facts an Agent result shows.
 
-        ``screen`` marks highlighted text and ``cursor`` is the visible
+        ``screen`` marks reverse-video text and suggestions, ``cursor`` is the visible
         cursor's row and column (``ScreenObservation``); ``seen_line`` is the
         history line above which the attached Agent has seen every line (None
         before it saw any screen). ``log_file`` names the output log, and
@@ -1886,8 +1886,7 @@ def _compose_attention(
             )
         closing = [
             f'To type into it, call terminal with action "input", terminal_id "{terminal_id}", '
-            'your text as text and key "enter". When it shows something new and goes idle '
-            "again, that screen arrives as another message."
+            'your text as text and key "enter". Its next new screen arrives the same way.'
         ]
     elif attention.kind == "exited":
         headline = (
@@ -1957,14 +1956,19 @@ def unseen_lines_note(
     what = f"{lines} you have not seen" if seen else lines
     kept_from = max(unseen_from, first_line)
     kept = max(0, shown_from - kept_from)
-    page = "terminal " + json.dumps(
-        {
-            "action": "status",
-            "terminal_id": terminal_id,
-            "start_line": kept_from,
-            "lines": TERMINAL_STATUS_MAX_LINES,
-        }
-    )
+    if log and log_complete:
+        # The log has every line; the page is the newest of them the terminal
+        # keeps, right above what the message shows (user decision D1).
+        newest = min(kept, TERMINAL_STATUS_MAX_LINES)
+        page = _status_page(terminal_id, shown_from - newest, newest)
+        if newest == count:
+            where = f"to read them, call {page}, or read the log {log}"
+        else:
+            where = f"to read them, read the log {log}" + (
+                f"; the newest {newest} of them can also be read with {page}" if newest else ""
+            )
+        return f"{what} {_are(count)} not shown; {where}."
+    page = _status_page(terminal_id, kept_from, TERMINAL_STATUS_MAX_LINES)
     if log and not log_complete:
         if log_end_line is not None:
             where = _partial_log_sources(
@@ -1983,6 +1987,17 @@ def unseen_lines_note(
     else:
         where = "they are no longer kept"
     return f"{what} {_are(count)} not shown; {where}."
+
+
+def _status_page(terminal_id: str, start_line: int, lines: int) -> str:
+    """The status call that reads *lines* history lines from *start_line*."""
+    page = {
+        "action": "status",
+        "terminal_id": terminal_id,
+        "start_line": start_line,
+        "lines": lines,
+    }
+    return "terminal " + json.dumps(page)
 
 
 def _partial_log_sources(count: int, kept: int, logged: int, page: str, log: str) -> str:

@@ -175,9 +175,10 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
 async def test_results_say_what_they_leave_out_and_where_to_read_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A result says how many lines the Agent has not seen it leaves out, and a
-    page that cannot start where asked says so; both name the log, which has
-    every line, and say where it ends once writing it failed."""
+    """A result says how many lines the Agent has not seen it leaves out and
+    names the page of the newest of them the terminal keeps (user decision D1),
+    and a page that cannot start where asked says so; both name the log, which
+    has every line, and say where it ends once writing it failed."""
     disk_full = False
     open_file = Path.open
 
@@ -221,9 +222,9 @@ async def test_results_say_what_they_leave_out_and_where_to_read_it(
         assert named is not None, data["log"]
         log = named[1]
 
-        def request(start_line: int) -> str:
+        def request(start_line: int, lines: int = 100) -> str:
             page = {"action": "status", "terminal_id": terminal_id, "start_line": start_line}
-            return json.dumps({**page, "lines": 100})
+            return json.dumps({**page, "lines": lines})
 
         async def status(**fields: Any) -> dict[str, Any]:
             arguments = {"action": "status", "terminal_id": terminal_id, **fields}
@@ -235,7 +236,7 @@ async def test_results_say_what_they_leave_out_and_where_to_read_it(
         first = await status(lines=3)
         assert first["history"] == "line-34\nline-35\nline-36"
         assert re.search(r"\b34\b", first["note"]), first["note"]
-        assert log in first["note"] and request(27) in first["note"]
+        assert log in first["note"] and request(27, 7) in first["note"]
         persisted.pop()()
 
         # The Agent saw down to line 59; the note counts only the lines after it.
@@ -244,7 +245,7 @@ async def test_results_say_what_they_leave_out_and_where_to_read_it(
         second = await status(lines=3)
         assert second["history"] == "line-64\nline-65\nline-66"
         assert re.search(r"\b4\b", second["note"]), second["note"]
-        assert log in second["note"] and request(60) in second["note"]
+        assert log in second["note"] and request(60, 4) in second["note"]
 
         # Pages start at the oldest kept line and end at the newest line.
         older = await status(start_line=0, lines=3)
@@ -253,6 +254,10 @@ async def test_results_say_what_they_leave_out_and_where_to_read_it(
         newer = await status(start_line=500, lines=3)
         assert newer["scrollback"]["start_line"] == 90
         assert "500" in newer["note"] and "89" in newer["note"]
+        # A page right after the last line is empty and says so too (code review R9).
+        after = await status(start_line=90, lines=3)
+        assert "history" not in after
+        assert after["note"] == "Line 90 does not exist yet: the terminal has lines up to 89."
 
         # Once writing the log failed at line 90, results say which lines it lacks:
         # 0-89 are in the log, 97-106 are kept, 90-96 are lost.
@@ -443,6 +448,48 @@ async def test_resize_after_screen_capture_remains_unseen_after_persistence(
     change = data["size_change"]
     assert (change["previous_columns"], change["previous_rows"]) == (140, 40)
     assert "Current size: 160 columns x 48 rows." in change["notice"]
+
+
+@pytest.mark.asyncio
+async def test_input_and_wait_show_only_the_history_no_result_showed(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    """Results that follow the program show the lines above the screen only
+    when no result showed them, the newest 30 at most, and offer no pages; the
+    note names the page of the newest 100 lines they leave out (user decision D1)."""
+    terminal_manager, factory = manager
+    terminal_id, callbacks = await _start_persisted(terminal_manager, tmp_path)
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    wait: JsonObject = {"action": "wait", "terminal_id": terminal_id, "timeout": 0.01}
+
+    async def follow(arguments: JsonObject) -> dict[str, Any]:
+        data = cast(dict[str, Any], (await call(terminal_manager, context, arguments))["data"])
+        callbacks.pop()()
+        return data
+
+    # 30 lines on 24 rows: lines 0-6 scrolled off a screen no result showed.
+    await _render(terminal_manager, factory, terminal_id, "".join(f"a-{i}\r\n" for i in range(30)))
+    first = await follow(wait)
+    assert first["history"] == "\n".join(f"a-{i}" for i in range(7))
+    assert "scrollback" not in first and "note" not in first
+    # The lines that scroll off next were on the screen the result showed.
+    await _render(terminal_manager, factory, terminal_id, "".join(f"b-{i}\r\n" for i in range(10)))
+    second = await follow({"action": "input", "terminal_id": terminal_id, "text": "x"})
+    assert "history" not in second and "scrollback" not in second, second
+    # 250 lines from line 40 on: lines 40-266 scroll off unseen, the result
+    # shows the newest 30 of them and offers the page of the 100 above those.
+    await _render(terminal_manager, factory, terminal_id, "".join(f"c-{i}\r\n" for i in range(250)))
+    third = await follow(wait)
+    assert third["history"].split("\n") == [f"c-{i}" for i in range(197, 227)]
+    assert "scrollback" not in third
+    page = json.dumps(
+        {"action": "status", "terminal_id": terminal_id, "start_line": 137, "lines": 100}
+    )
+    assert re.fullmatch(
+        r"197 earlier lines you have not seen are not shown; to read them, read the log "
+        rf"\S+\.log; the newest 100 of them can also be read with terminal {re.escape(page)}\.",
+        third["note"],
+    ), third["note"]
 
 
 @pytest.mark.asyncio

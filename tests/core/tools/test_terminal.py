@@ -398,11 +398,18 @@ async def test_coding_agent_reference_launches_exact_arguments(
             "opened). Check command, args and workdir, then start again.",
             "log",
         ),
-        # A batch program's argument that cmd.exe cannot pass starts nothing.
+        # A batch program's argument that cmd.exe cannot pass starts nothing; the
+        # error names it by its text, as command can have been split into words.
         (
-            UnpassableArgumentError("argument 1 contains a line break", index=1),
+            UnpassableArgumentError(
+                "argument 1 contains a line break", index=1, value="two\nlines\0"
+            ),
             "invalid_arguments",
-            None,
+            "No terminal was started: fixture-command is a batch program (.cmd or .bat), which "
+            'runs through cmd.exe, and cmd.exe cannot pass the argument "two\\nlines\\u0000" to '
+            "it because it contains a line break and a NUL character. Pass that text without "
+            "line breaks and NUL characters, or leave it out and send it with the input action "
+            "once the program is ready.",
             "process",
         ),
     ],

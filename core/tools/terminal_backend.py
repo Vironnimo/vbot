@@ -51,12 +51,13 @@ class UnpassableArgumentError(ValueError):
     """An argument that cmd.exe cannot hand to a program unchanged.
 
     *index* counts the arguments after the program from 1; None names the
-    program itself.
+    program itself. *value* is that argument.
     """
 
-    def __init__(self, message: str, *, index: int | None) -> None:
+    def __init__(self, message: str, *, index: int | None, value: str = "") -> None:
         super().__init__(message)
         self.index = index
+        self.value = value
 
 
 class TerminalAdapter(Protocol):
@@ -559,8 +560,10 @@ def windows_command_processor_line(command: str, arguments: Sequence[str]) -> st
     for index, value in enumerate(arguments, start=1):
         if _CMD_UNPASSABLE.search(value):
             raise UnpassableArgumentError(
-                f"argument {index} contains a line break, which cmd.exe cannot pass to a program",
+                f"argument {index} contains a line break or NUL character, which cmd.exe cannot "
+                "pass to a program",
                 index=index,
+                value=value,
             )
         words.append(_command_processor_word(value))
     return " ".join(words)
