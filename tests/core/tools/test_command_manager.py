@@ -204,26 +204,38 @@ async def test_output_that_cannot_be_cleaned_is_kept_uncleaned_and_logged_whole(
     assert len(errors) == 1
 
 
-@pytest.mark.parametrize("kept", [b"first\nsecond\nth", b""], ids=["part", "nothing"])
+@pytest.mark.parametrize(
+    "kept", [b"first\nsecond\nth", b"fir", b""], ids=["later-part", "first-part", "nothing"]
+)
+@pytest.mark.parametrize("unexpected", [False, True], ids=["os-error", "unexpected-error"])
 @pytest.mark.asyncio
 async def test_a_log_file_that_cannot_be_written_reports_what_it_kept_and_why(
     harness: Harness,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     kept: bytes,
+    unexpected: bool,
 ) -> None:
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
-    full = OSError(errno.ENOSPC, "No space left on device")
+    failure = (
+        RuntimeError("Unexpected write failure")
+        if unexpected
+        else OSError(errno.ENOSPC, "No space left on device")
+    )
     room = [len(kept)]
+    write = os.write
 
-    def full_disk(fd: int, data: bytes) -> tuple[int, OSError | None]:
-        # The disk takes the first bytes of the output and nothing more.
-        count = os.write(fd, data[: room[0]]) if room[0] else 0
+    def failing_write(fd: int, data: bytes | memoryview) -> int:
+        # The real write loop must retain each partial write when its next
+        # attempt fails, even if the failure is not an operating-system error.
+        if not room[0]:
+            raise failure
+        count = write(fd, data[: room[0]])
         room[0] -= count
-        return (count, None) if count == len(data) else (count, full)
+        return count
 
-    monkeypatch.setattr(command_output_module, "_write_all", full_disk)
+    monkeypatch.setattr(command_output_module.os, "write", failing_write)
     for chunk in ("first\n", "second\nthird\n", "fourth\n"):
         process.write(chunk)
         await turns()
@@ -232,7 +244,7 @@ async def test_a_log_file_that_cannot_be_written_reports_what_it_kept_and_why(
 
     # The file keeps what was written before the failure; the report says how
     # much and why, and names no file that holds nothing. The transcript goes on.
-    assert report.log_loss is not None and report.log_loss.error is full
+    assert report.log_loss is not None and report.log_loss.error is failure
     assert (report.log_loss.kept_bytes, report.log_loss.kept_lines) == (
         len(kept),
         kept.count(b"\n"),

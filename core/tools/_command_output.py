@@ -115,14 +115,14 @@ class CommandLog:
                 os.close(fd)
 
 
-def _write_all(fd: int, data: bytes) -> tuple[int, OSError | None]:
+def _write_all(fd: int, data: bytes) -> tuple[int, Exception | None]:
     """Write *data*: the bytes written, and the error that stopped the write, if any."""
     view = memoryview(data)
     written = 0
     while written < len(view):
         try:
             written += os.write(fd, view[written:])
-        except OSError as error:
+        except Exception as error:
             return written, error
     return written, None
 
