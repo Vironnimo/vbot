@@ -337,9 +337,17 @@ def test_posix_adapter_read_is_bounded_and_preserves_split_unicode(monkeypatch):
             adapter.read(4096)
         os.write(write_fd, encoded[2:])
         assert adapter.read(4096) == "😀"
+        # Output that ends inside a character keeps its bytes (code review R4).
+        os.write(write_fd, encoded[:2])
+        assert adapter.read(4096) == ""
+        os.close(write_fd)
+        assert adapter.read(4096).encode("utf-8", "surrogateescape") == encoded[:2]
+        with pytest.raises(EOFError):
+            adapter.read(4096)
     finally:
         adapter.close()
-        os.close(write_fd)
+        with contextlib.suppress(OSError):
+            os.close(write_fd)
     with pytest.raises(EOFError):
         adapter.read(4096)
 

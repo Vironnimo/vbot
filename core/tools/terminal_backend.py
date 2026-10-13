@@ -388,7 +388,15 @@ class _PosixTerminalAdapter:
                 data = os.read(fd, size)
             except BlockingIOError:
                 raise TimeoutError from None
+            except OSError:
+                # Linux reports EIO once every holder of the terminal closed it.
+                data = b""
         if not data:
+            # The output ended: the bytes of a character it cut off still
+            # reach the Session, which logs them as they came.
+            rest = self._decoder.decode(b"", final=True)
+            if rest:
+                return rest
             raise EOFError
         return self._decoder.decode(data, final=False)
 
