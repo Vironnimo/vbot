@@ -66,10 +66,13 @@ command: PowerShell keeps the last statement's success (``$?``) only within the
 command's statement list, so no statement outside it can read that success. It
 follows the command's last line, so no line of the command moves.
 
-Output. The command's output goes to PowerShell's Out-Default as one pipeline,
-as ``pwsh -Command`` formats a script's output, and the bootstrap exits with the
-recorded code after that pipeline ended. As in ``pwsh -Command``, an ``exit`` in
-the command discards objects the table formatter still holds.
+Output. The command's output and its errors go to PowerShell's Out-Default as
+one pipeline (``2>&1``), as ``pwsh -Command`` merges them, so an error shows
+between the rows the formatter printed before it and those after it. Native
+programs' stderr is not captured by that merge and passes as bytes. The
+bootstrap exits with the recorded code after that pipeline ended. As in ``pwsh
+-Command``, an ``exit`` in the command discards objects the table formatter
+still holds.
 
 Hidden bookkeeping. The command sees none of the bootstrap's variables; it runs
 as a function's dot-sourced body, and ``$Error`` is empty when it starts, as in
@@ -136,7 +139,7 @@ if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
             'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management')
         $null = [pscustomobject]@{ Name = 1 } | Out-String
         ${function:__vbotBody} = [scriptblock]::Create('')
-        . __vbotInvoke | Out-Default
+        . __vbotInvoke 2>&1 | Out-Default
         Remove-Variable -Name __vbotWarm* -Scope Global
         Set-Location - -ErrorAction Stop
         Set-Location -LiteralPath ([Environment]::CurrentDirectory) -ErrorAction Stop
@@ -204,7 +207,7 @@ $__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
 ${function:__vbotBody} = [scriptblock]::Create($__vbotCommand)
 Remove-Variable -Name __vbot* -Scope Global
 $Error.Clear()
-. __vbotInvoke | Out-Default
+. __vbotInvoke 2>&1 | Out-Default
 $__vbotExitCode = Get-Variable -Name __vbotExitCode -Scope Global -ValueOnly -ErrorAction Ignore
 if (-not $__vbotExitCode) { exit 0 }
 exit $__vbotExitCode

@@ -131,6 +131,13 @@ _PRINTED_ERROR_TEXT = "; ".join(
         # An error behind a successful end shows as PowerShell printed it, and a
         # silenced one stays silent, also when it fails the last statement.
         ("Get-Item shown-sentinel\n'finished'", 0, ("shown-sentinel", "finished")),
+        # An error shows between the rows printed before and after it.
+        (
+            "1..3 | ForEach-Object { if ($_ -eq 2) { Write-Error 'between-sentinel' } "
+            'else { [pscustomobject]@{ N = "row-$_" } } }',
+            0,
+            ("row-1\nWrite-Error: between-sentinel\nrow-3",),
+        ),
         (
             "Get-ChildItem silenced-sentinel -ErrorAction SilentlyContinue | Select-Object Name",
             1,
@@ -187,6 +194,7 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "parse-error",
         "unknown-pipeline-command",
         "shown-error",
+        "error-between-rows",
         "silenced-last-statement",
         "silenced-then-native-exit",
         "exit-0",
@@ -296,12 +304,17 @@ async def test_output_keeps_non_ascii_text(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_native_output_keeps_its_bytes_and_timing(tmp_path: Path) -> None:
-    """No decoding or newline buffering, also through an alias or a function."""
+    """No decoding or newline buffering, also through an alias or a function.
+
+    stderr passes as bytes too: merging the command's errors into its output
+    does not capture a native program's stderr.
+    """
     pwsh = shutil.which("pwsh")
     assert pwsh is not None
     gate = tmp_path / "continue"
     source = (
         "import pathlib,sys,time; "
+        "sys.stderr.buffer.write(bytes([67,13,68,254])); sys.stderr.buffer.flush(); "
         "sys.stdout.buffer.write(bytes([65,13,66,255])); sys.stdout.buffer.flush(); "
         f"gate=pathlib.Path({str(gate)!r}); "
         "deadline=time.monotonic()+8; "
@@ -338,7 +351,7 @@ async def test_native_output_keeps_its_bytes_and_timing(tmp_path: Path) -> None:
         gate.touch()
         output, errors = await asyncio.wait_for(process.communicate(), timeout=5)
         assert process.returncode == 0, errors
-        assert not errors
+        assert errors == b"C\rD\xfe" * 3
         assert prefix + output == b"A\rB\xff" * 3
     finally:
         if process.returncode is None:
