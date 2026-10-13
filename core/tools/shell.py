@@ -32,7 +32,12 @@ from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.sessions import SessionAddress
 from core.tools._path_suggestions import similar_entries
-from core.tools._powershell import POWERSHELL_BOOTSTRAP, powershell_request
+from core.tools._powershell import (
+    POWERSHELL_BOOTSTRAP,
+    REQUEST_UNREADABLE_EXIT_CODE,
+    WORKDIR_UNAVAILABLE_EXIT_CODE,
+    powershell_request,
+)
 from core.tools._shell_arguments import (
     NO_EFFECT_FIELDS,
     SHELL_UNADVERTISED_PARAMETERS,
@@ -238,6 +243,8 @@ class _ShellCall:
     command: str
     description: str | None
     workdir: Path
+    # The call named the workdir, rather than taking the working directory.
+    workdir_given: bool
     # How long the call waits; *timeout_given* when the Agent chose it.
     wait_seconds: float
     timeout_given: bool
@@ -442,6 +449,7 @@ def _parse_call(
         command=command,
         description=description.strip() if description and description.strip() else None,
         workdir=workdir,
+        workdir_given=workdir != context.effective_cwd,
         wait_seconds=wait_seconds,
         timeout_given=timeout_given,
         background=background,
@@ -651,7 +659,7 @@ class ShellTool:
                 env=start.env,
                 origin_run_id=context.run_id,
                 # The delivery names only Tools named now; it outlives this context.
-                formatter=partial(format_command_delivery, names=delivery_names(names)),
+                formatter=partial(_delivery, call, names=delivery_names(names)),
                 execution_owner=context.execution_owner,
                 on_output=progress,
                 request=start.request,
@@ -762,6 +770,14 @@ def _result(
     """The Tool result of one call; *reason* says why a running command was
     returned, *idle* that its processes were idle when the wait passed."""
     if report.ended:
+        not_run = _not_run_problem(call, report)
+        if not_run is not None:
+            problem, retryable = not_run
+            return tool_failure(
+                "command_not_started",
+                f"{SHELL_MODEL_NAME} was not run: {problem}",
+                retryable=retryable,
+            )
         data = ended_result(report, names)
     else:
         data = {"status": "running", "command_id": report.command_id}
@@ -774,6 +790,51 @@ def _result(
     if call.notes:
         data["notes"] = list(call.notes)
     return tool_success(data)
+
+
+def _not_run_problem(call: _ShellCall, report: CommandReport) -> tuple[str, bool] | None:
+    """Why PowerShell ran nothing of an ended command, and whether a retry can help.
+
+    The bootstrap exits with a code of its own and prints nothing when it cannot
+    read the request or enter the workdir (``_powershell``). None when the
+    command ran, or may have: it printed, a program failed, or vBot stopped it.
+    """
+    if (
+        report.exit_code not in (REQUEST_UNREADABLE_EXIT_CODE, WORKDIR_UNAVAILABLE_EXIT_CODE)
+        or not report.ended
+        or report.stop_reason is not None
+        or report.transcript.total_lines
+        or report.failed_programs
+        or report.still_running
+    ):
+        return None
+    if report.exit_code == REQUEST_UNREADABLE_EXIT_CODE:
+        _LOGGER.warning(
+            "Shell command %s did not run: PowerShell could not read it", report.command_id
+        )
+        return f"vBot could not pass the command to the shell. {_RETRY}", True
+    _LOGGER.warning(
+        "Shell command %s did not run: PowerShell could not enter %s",
+        report.command_id,
+        call.workdir,
+    )
+    if not call.workdir.is_dir():
+        # The directory was removed after the call was checked.
+        return _missing_workdir(call.workdir, given=call.workdir_given), False
+    return (
+        f"vBot could not enter the workdir {model_path(call.workdir)}. If the command can run in "
+        "another directory, pass that directory as workdir; otherwise tell the user.",
+        False,
+    )
+
+
+def _delivery(call: _ShellCall, report: CommandReport, *, names: ToolNames) -> str:
+    """The message that delivers a background command's result; one that ran nothing says why."""
+    not_run = _not_run_problem(call, report)
+    if not_run is None:
+        return format_command_delivery(report, names=names)
+    status = f"did not run: {not_run[0]}"
+    return f"{COMMAND_STATUS_NOTE_MARKER}{report.command_id} ({report.label}) {status}"
 
 
 def _running_next(

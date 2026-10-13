@@ -508,6 +508,7 @@ _DELIVERY_STATUS = re.compile(
     r"The background command (?P<command>cmd_[a-z0-9]+) \(.*?\) "
     r"(?:exited with code (?P<code>-?\d+) after [^.]*\."
     r"|exited after [^;]*; its exit code is unknown\."
+    r"|did not run:"
     r"|(?P<stopped>was stopped) after [^:]*:)"
 )
 
