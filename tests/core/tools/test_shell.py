@@ -631,7 +631,8 @@ async def test_running_output_is_the_newest_lines_and_its_log_file_has_every_lin
     assert result["status"] == "running"
     path = log_file(result["next"])
     marker, *newest = result["output"].splitlines()
-    assert marker.startswith("[... 130 earlier lines omitted") and path in marker, marker
+    # next names the log file, the marker only counts.
+    assert marker == "[... 130 earlier lines omitted ...]"
     assert newest == lines[-20:]
     assert Path(path).read_text(encoding="utf-8").splitlines() == lines
     # The user watched the output arrive while the call waited.

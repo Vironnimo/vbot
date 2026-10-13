@@ -370,7 +370,11 @@ def command_output_text(report: CommandReport) -> str:
 
 def running_output_text(report: CommandReport) -> str:
     """The newest output of a running command: its last lines within the running
-    limits, after a marker for what came before."""
+    limits, after a marker for what came before.
+
+    The marker only counts: the result's ``next`` names the log file
+    (``running_output_note``), and a marker naming it too said it twice.
+    """
     transcript = report.transcript
     whole = _whole_lines(transcript)
     lines = whole if whole is not None else list(transcript.tail)
@@ -380,8 +384,7 @@ def running_output_text(report: CommandReport) -> str:
     kept, cut = _last_lines(lines, first_cut, SHELL_RUNNING_OUTPUT_CHARS)
     earlier = transcript.total_lines - len(kept)
     if earlier or cut:
-        omission = _omission(earlier, cut, earlier=True)
-        kept.insert(0, f"[... {omission} omitted{_full_output(report)} ...]")
+        kept.insert(0, f"[... {_omission(earlier, cut, earlier=True)} omitted ...]")
     return "\n".join(kept)
 
 
