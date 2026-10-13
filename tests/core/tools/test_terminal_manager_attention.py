@@ -643,13 +643,16 @@ async def test_a_start_result_keeps_only_the_screen_it_showed_from_being_deliver
 
 @pytest.mark.parametrize("failing", ["read", "render"])
 @pytest.mark.asyncio
-async def test_terminal_failure_keeps_the_program_until_it_ends_then_delivers_the_error(
+async def test_terminal_failure_keeps_the_program_until_it_ends_then_delivers_its_end(
     clocked_manager: Clocked,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     failing: str,
 ) -> None:
+    """A failure to read the output ends the terminal as failed; a screen that
+    misses output (here without a log to draw it anew from) says so, but the
+    program's exit is no failure."""
     manager, factory, trigger, clock = clocked_manager
     started = await spawn(manager, tmp_path)
     terminal_id = started.terminal_id
@@ -693,6 +696,7 @@ async def test_terminal_failure_keeps_the_program_until_it_ends_then_delivers_th
     assert running.attention is None or running.attention.kind == "idle"
 
     adapter.finish(0)
+    kind = "error" if failing == "read" else "exited"
 
     async def delivered() -> bool:
         # Without output to read, the program's end is noticed by a poll.
@@ -700,15 +704,24 @@ async def test_terminal_failure_keeps_the_program_until_it_ends_then_delivers_th
         attention = terminal_info(manager, terminal_id).attention
         return (
             attention is not None
-            and attention.kind == "error"
+            and attention.kind == kind
             and any(kw["notice_id"] == attention.notice_id for _a, kw in trigger.submissions)
         )
 
     await eventually(delivered)
     body = trigger.submissions[-1][1]["body"]
-    assert error in body
-    assert body.endswith(f"\n```text\n{last_screen}\n```")
+    assert f"\n```text\n{last_screen}\n```" in body
     status = await call(
         manager, make_context(tmp_path), {"action": "status", "terminal_id": terminal_id}
     )
-    assert status["data"]["state"] == "failed"
+    if failing == "read":
+        assert body.endswith(f"\n```text\n{last_screen}\n```")
+        assert error in body
+        assert status["data"]["state"] == "failed"
+    else:
+        behind = (
+            f"This screen is out of date: drawing the program's output failed ({error}), so "
+            "the screen lacks some of that output."
+        )
+        assert body.endswith(f"\n```\n{behind}")
+        assert (status["data"]["state"], status["data"]["note"]) == ("exited", behind)

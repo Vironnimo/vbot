@@ -70,6 +70,7 @@ from core.tools.terminal_manager import (
     TerminalNotOwnedError,
     TerminalOwner,
     TerminalStaleScreenError,
+    screen_behind_note,
     unseen_lines_note,
 )
 from core.tools.tools import (
@@ -1119,8 +1120,8 @@ def _screen_result(
         projected["scrollback"] = scrollback
     notes: list[str] = []
     behind = snapshot.get("screen_behind")
-    if include_screen and behind and projected["state"] == "running":
-        notes.append(_screen_behind_note(str(behind), log, complete=log_complete))
+    if include_screen and behind:
+        notes.append(screen_behind_note(str(behind), log, complete=log_complete))
     if view == "status" and snapshot.get("alternate_screen"):
         notes.append(_ALTERNATE_SCREEN_NOTE)
     if requested_start is not None and isinstance(page.get("start_line"), int):
@@ -1141,19 +1142,6 @@ def _screen_result(
         if unseen is not None:
             notes.append(unseen)
     return _with_notes(projected, notes)
-
-
-def _screen_behind_note(error: str, log: str | None, *, complete: bool) -> str:
-    """The screen misses the program's latest output: it could not be drawn."""
-    note = (
-        f"This screen is out of date: drawing the program's latest output failed ({error}), "
-        "so the screen does not show that output yet."
-    )
-    if log is None:
-        return note
-    if complete:
-        return f"{note} The output is in the log {log}."
-    return f"{note} The log {log} has the output only until writing it failed."
 
 
 def _moved_page_note(

@@ -31,9 +31,6 @@ TERMINAL_FINISHED_TTL = timedelta(minutes=30)
 # A message that brings a screen holds at most this many characters; screen
 # rows beyond it are left out from the top, and the message says how many.
 TERMINAL_NOTICE_MESSAGE_CAP_CHARS = 16_000
-# Output the screen missed while rendering failed is fed again once rendering
-# works; at most this many of its newest characters are kept for that.
-TERMINAL_UNRENDERED_MAX_CHARS = 262_144
 TERMINAL_TEMPORARY_CATEGORY = "terminals"
 # Output paused this long after input or start ends the reply a Tool call shows,
 # and, with the evidence that the work ended, the cycle (``TerminalActivity``).

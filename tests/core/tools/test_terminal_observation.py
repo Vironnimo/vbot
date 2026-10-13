@@ -278,8 +278,9 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """While drawing output fails, input still reaches the program and results
-    say the screen is out of date; once drawing works again, the screen shows
-    the output it missed."""
+    say the screen is out of date; once drawing works again, a screen drawn anew
+    from the log shows the output the old one missed, in the size and the modes
+    the terminal has now."""
     terminal_manager, factory = manager
     context = make_context(tmp_path)
     started = await call(terminal_manager, context, {"action": "start", "command": "fake"})
@@ -291,7 +292,8 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
         raise RuntimeError("renderer broke")
 
     monkeypatch.setattr(TerminalScreen, "feed", broken_feed)
-    factory.adapters[0].emit("missed\r\n")
+    # The output the screen misses turns bracketed paste on.
+    factory.adapters[0].emit("missed\r\n\x1b[?2004h")
     status: JsonObject = {"action": "status", "terminal_id": terminal_id}
 
     async def behind() -> bool:
@@ -306,12 +308,21 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
     assert typed["ok"] is True, typed
     assert factory.adapters[0].writes[-1] == "y"
     assert "renderer broke" in cast(dict[str, Any], typed["data"])["note"]
+    await terminal_manager.resize_for_operator(terminal_id, columns=100, rows=30)
 
     monkeypatch.setattr(TerminalScreen, "feed", feed)
     await _render(terminal_manager, factory, terminal_id, "after\r\n")
-    data = cast(dict[str, Any], (await call(terminal_manager, context, status))["data"])
-    assert data["screen"].splitlines() == ["before", "missed", "after"]
-    assert "renderer broke" not in data.get("note", "")
+
+    async def caught_up() -> bool:
+        data = cast(dict[str, Any], (await call(terminal_manager, context, status))["data"])
+        return data["screen"].splitlines() == ["before", "missed", "after"] and (
+            "renderer broke" not in data.get("note", "")
+        )
+
+    await eventually(caught_up, attempts=600)
+    assert (await terminal_manager.read_for_operator(terminal_id))["bracketed_paste"] is True
+    info = terminal_manager.terminal(terminal_id, OWNER)
+    assert (info.columns, info.rows) == (100, 30)
 
 
 @pytest.mark.parametrize(

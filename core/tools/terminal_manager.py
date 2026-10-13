@@ -42,12 +42,13 @@ from core.utils.processes import process_tree_runs
 
 from ._terminal_catalog import TerminalCatalog
 from ._terminal_launch import ShellLaunch, interactive_shell, shell_launch
-from ._terminal_render_host import TerminalRenderHost
+from ._terminal_render_host import TerminalRenderHost, TerminalScreen
 from ._terminal_session import (
     TerminalLaunch,
     TerminalObservation,
     TerminalSession,
     TerminalSessionServices,
+    screen_behind_note,
     unseen_lines_note,
 )
 from ._terminal_state import (
@@ -179,6 +180,7 @@ class TerminalManager:
             program_probe=program_probe,
             operator_summary=self._catalog.summary,
             changed=self._catalog.notify_changed,
+            open_screen=self._open_screen,
         )
         self._sweeper_task: asyncio.Task[None] | None = None
 
@@ -490,10 +492,7 @@ class TerminalManager:
         observer: ProcessTree | None = None
         integration: ShellLaunch | None = None
         try:
-            await asyncio.to_thread(self._render_host.prepare)
-            screen = self._render_host.open_screen(
-                columns, rows, scrollback_lines=self._scrollback_lines
-            )
+            screen = await self._open_screen(columns, rows)
             log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log)
             process_env = await asyncio.to_thread(terminal_environment, env)
             if integrate_shell:
@@ -1043,6 +1042,11 @@ class TerminalManager:
                 terminals=mine,
             )
 
+    async def _open_screen(self, columns: int, rows: int) -> TerminalScreen:
+        """Open a rendered screen; raises RuntimeError once the render host is closed."""
+        await asyncio.to_thread(self._render_host.prepare)
+        return self._render_host.open_screen(columns, rows, scrollback_lines=self._scrollback_lines)
+
     def _open_raw_log(
         self,
     ) -> tuple[Path | None, BinaryIO | None, TemporaryFileLease | None]:
@@ -1109,5 +1113,6 @@ __all__ = [
     "WaitEnded",
     "agent_group_id",
     "observe_process_tree",
+    "screen_behind_note",
     "unseen_lines_note",
 ]
