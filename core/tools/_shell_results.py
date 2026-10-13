@@ -55,8 +55,6 @@ SHELL_RUNNING_OUTPUT_CHARS = 4_000
 # A delivery shows the command up to this many characters.
 _DELIVERY_COMMAND_CHARS = 1_000
 RUN_AGAIN = "Run the command again; if it fails the same way, tell the user."
-# How an Agent gets the output a log file misses that vBot could not write.
-_LESS_OUTPUT = "with less output or with its output redirected to a file"
 # A pipeline stage that passes nothing on before its input ends: the last lines,
 # a sort, a count or a group, or one string of everything. Output piped into it
 # appears only once the command before the pipe has finished.
@@ -125,8 +123,8 @@ def running_output_note(report: CommandReport) -> str:
     lost = lost_output(report)
     if lost is not None:
         note = (
-            f" {lost}. If you need all of the output, stop the command and run it again "
-            f"{_LESS_OUTPUT}."
+            f" {lost}. The command is still running. Stop and repeat it only if "
+            "interrupting it and repeating its effects are safe."
         )
     elif report.log_path is not None:
         # A running result shows only the newest output; Agents did not know what a
@@ -468,8 +466,11 @@ def _full_output(report: CommandReport) -> str:
     if kept is None:
         return ""
     if report.log_loss is not None:
-        # The file cannot give what the marker leaves out.
-        return f"; {kept}. To see all of the output, run the command again {_LESS_OUTPUT}"
+        # A lost copy does not undo the command's effects.
+        return (
+            f"; {kept}. The command has already run. "
+            "Repeat it only if repeating its effects is safe."
+        )
     return f"; {kept}"
 
 
@@ -499,8 +500,8 @@ def lost_output(report: CommandReport, *, name_file: bool = True) -> str | None:
     not all of it, naming the file unless *name_file* is False; None while it
     holds every byte.
 
-    A file that writing stopped short of is no copy of the output: its end is
-    not the command's, and only running the command again shows the rest.
+    A file that writing stopped short of holds only the bytes written before
+    the failure. Its end is not the command's, and the command's effects remain.
     """
     loss = report.log_loss
     if loss is None or report.not_run is not None:
@@ -512,11 +513,10 @@ def lost_output(report: CommandReport, *, name_file: bool = True) -> str | None:
     path = report.log_path
     if path is None:
         return f"vBot could not keep this command's raw output; writing it failed: {reason}"
-    lines = loss.kept_lines
-    if lines > 1:
-        kept = f"the first {lines:,} lines"
-    else:
-        kept = "the first line" if lines else "the start of the first line"
+    # Raw output has no single line grammar or encoding: CR-only progress and
+    # UTF-16 both make a count of LF bytes misleading. The written extent is exact.
+    count = loss.kept_bytes
+    kept = f"the first {count:,} {'byte' if count == 1 else 'bytes'}"
     where = f", in {model_path(path)}" if name_file else ""
     return (
         f"vBot kept only {kept} of this command's raw output{where}; writing more failed: {reason}"
