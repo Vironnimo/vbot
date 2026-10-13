@@ -893,7 +893,7 @@ def _error_summary(error: BaseException) -> str:
 def _schedule_callback(callback: CancelCallback) -> asyncio.Future[Any] | None:
     try:
         result = callback()
-    except Exception:
+    except Exception, asyncio.CancelledError:
         _LOGGER.warning("Run cancel callback failed", exc_info=True)
         return None
     if inspect.isawaitable(result):
