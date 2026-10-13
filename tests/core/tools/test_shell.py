@@ -31,6 +31,7 @@ from core.projects import ProjectNotFoundError
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import shell as shell_module
+from core.tools import shell_hints
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools._command_launch import PipeLauncher
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
@@ -777,31 +778,49 @@ _MISSING_MAKE = "bash: make: command not found\n"
 
 
 @pytest.mark.asyncio
-async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(shell: Shell) -> None:
-    call = shell.call({"command": "make"})
+@pytest.mark.parametrize(
+    ("command", "output", "exit_code", "expected"),
+    [
+        ("make", _MISSING_MAKE, 127, "`make`"),
+        ("python -c \"print('$field')\"", "\n", 0, "`$field`"),
+    ],
+)
+async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(
+    shell: Shell,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    output: str,
+    exit_code: int,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    call = shell.call({"command": command})
     process = await shell.started()
-    process.write(_MISSING_MAKE)
-    process.exit(127)
+    process.write(output)
+    process.exit(exit_code)
 
     result = await shell.returned(call)
     hint = data(result)["hint"]
-    assert hint.startswith("`make` is not installed or not on PATH.")
+    assert expected in hint
+    assert data(result)["exit_code"] == exit_code
     # The user sees the hint as well.
     assert {"type": "notice", "level": "info", "text": f"Hint: {hint}"} in shell_detail_blocks(
-        {"command": "make"}, result
+        {"command": command}, result
     )
 
-    command_id = data(await shell.call({"command": "make", "run_in_background": True}))[
+    command_id = data(await shell.call({"command": command, "run_in_background": True}))[
         "command_id"
     ]
     process = await shell.started(2)
-    process.write(_MISSING_MAKE)
-    process.tree.exits = [ProgramExit("make.exe", 127)]
-    process.exit(127)
+    process.write(output)
+    process.tree.exits = [ProgramExit("make.exe", exit_code)] if exit_code else []
+    process.exit(exit_code)
     await shell.commands.finish(command_id)
     # The hint follows the status line, which the status fold reads.
     body = shell.sink.bodies[0]
-    assert background_command_statuses([note(body)]) == {command_id: "failed"}
+    assert background_command_statuses([note(body)]) == {
+        command_id: "failed" if exit_code else "completed"
+    }
     assert body.splitlines()[1] == f"Hint: {hint}"
     # A single failed program with the exit code the status line names is not repeated.
     assert "Failed programs" not in body

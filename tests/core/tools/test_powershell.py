@@ -9,6 +9,7 @@ cases that share a path share a process.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import sys
@@ -240,6 +241,48 @@ _PRINTED_ERROR_TEXT = "; ".join(
             False,
             (),
         ),
+        # Different output shapes get their own table, including output from
+        # control flow. Captures keep objects until they reach the output boundary.
+        (
+            "function Records { [pscustomobject]@{Count=3} }; $rows = Records; "
+            "$rows | Select-Object Count; "
+            "if ($true) { [pscustomobject]@{Name='name-sentinel'} }; "
+            "'capture-type: ' + $rows.Count.GetType().Name; "
+            "[pscustomobject]@{Name='file-sentinel'; Length=9} | Select-Object Name,Length; "
+            "if ($true) { 'match-sentinel' | Select-String match | Select-Object -First 1 }",
+            0,
+            False,
+            (
+                "Count",
+                "3",
+                "name-sentinel",
+                "capture-type: Int32",
+                "file-sentinel",
+                "match-sentinel",
+            ),
+        ),
+        # A shape compares property names directly, not an ambiguous joined key.
+        # Empty type-name lists and an explicit output formatter also remain valid.
+        (
+            "Set-StrictMode -Version Latest; "
+            "[pscustomobject]@{'a,b'=11;c=22}; [pscustomobject]@{a=33;'b,c'=44}; "
+            "$o = [pscustomobject]@{Name='empty-types-sentinel'}; "
+            "$o.PSObject.TypeNames.Clear(); $o; "
+            "[pscustomobject]@{Custom='list-sentinel'} | Format-List; "
+            "function Out-Default { process { 'hijacked-sentinel' } }; "
+            "[pscustomobject]@{Name='private-formatter-sentinel'}",
+            0,
+            False,
+            (
+                "11",
+                "22",
+                "33",
+                "44",
+                "empty-types-sentinel",
+                "Custom : list-sentinel",
+                "private-formatter-sentinel",
+            ),
+        ),
         # Explicit control flow and failure status keep their meaning.
         ("Write-Error 'recorded-sentinel'; exit 0", 0, False, ()),
         ("Write-Error 'recorded-sentinel'; $Error.Clear(); 'finished'", 0, False, ()),
@@ -293,6 +336,8 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "shown-and-silenced",
         "silenced-last-statement",
         "silenced-then-native-exit",
+        "mixed-output-and-captures",
+        "formatting-boundaries",
         "exit-0",
         "cleared",
         "printed-text-and-quotes",
@@ -501,3 +546,55 @@ async def test_output_keeps_non_ascii_text(tmp_path: Path) -> None:
     assert sorted(lines) == sorted(
         ["ß", "Jürgen €", "Übersicht €.txt", "ä€", "ö", "piped ü", "fäil"]
     )
+
+
+@pytest.mark.asyncio
+async def test_final_formatter_keeps_native_bytes_and_partial_output(tmp_path: Path) -> None:
+    """No native decoding or newline buffering, even after dynamic command resolution."""
+    pwsh = shutil.which("pwsh")
+    assert pwsh is not None
+    gate = tmp_path / "continue"
+    source = (
+        "import pathlib,sys,time; "
+        "sys.stdout.buffer.write(bytes([65,13,66,255])); sys.stdout.buffer.flush(); "
+        f"gate=pathlib.Path({str(gate)!r}); "
+        "deadline=time.monotonic()+8; "
+        'exec("while not gate.exists() and time.monotonic()<deadline: time.sleep(.01)")'
+    )
+    # Single-quoted PowerShell source preserves the Python quotes and backslashes.
+    literal = "'" + source.replace("'", "''") + "'"
+    python = "'" + sys.executable.replace("'", "''") + "'"
+    command = (
+        f"& {python} -c {literal}; "
+        f"Set-Alias echo {python} -Option AllScope; echo -c {literal}; "
+        f"function Emit-Bytes {{ & {python} -c {literal} }}; Emit-Bytes"
+    )
+    process = await asyncio.create_subprocess_exec(
+        pwsh,
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        POWERSHELL_BOOTSTRAP,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=tmp_path,
+    )
+    assert process.stdin is not None and process.stdout is not None
+    try:
+        process.stdin.write(powershell_request(command, str(tmp_path), {}))
+        await process.stdin.drain()
+        process.stdin.close()
+        # The producer waits for the test: bytes must arrive before it exits or
+        # emits a newline. A formatter that captures native output fails here.
+        prefix = await asyncio.wait_for(process.stdout.readexactly(4), timeout=5)
+        assert prefix == b"A\rB\xff"
+        gate.touch()
+        output, errors = await asyncio.wait_for(process.communicate(), timeout=5)
+        assert process.returncode == 0, errors
+        assert not errors
+        assert prefix + output == b"A\rB\xff" * 3
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()

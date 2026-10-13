@@ -32,13 +32,14 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import os
+import re
 import signal
 import sys
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import PurePath
+from pathlib import PurePath, PureWindowsPath
 from typing import Any, Protocol, cast
 
 import psutil  # type: ignore[import-untyped]
@@ -67,12 +68,15 @@ class ProgramExit:
 
     name: str
     exit_code: int
+    # Best-effort Python module/script selector, without code or program arguments.
+    invocation: str = ""
 
     def describe(self) -> str:
         code = f"{self.exit_code}"
         if self.exit_code >= 0x80000000:
             code += f" (0x{self.exit_code:08X})"
-        return f"{self.name} exited with code {code}"
+        identity = f" ({self.invocation})" if self.invocation else ""
+        return f"{self.name} exited with code {code}{identity}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,7 +449,7 @@ class _WindowsJobTree:
         self._k = k = kernel.kernel32
         self._root_pid = root_pid
         self._lock = threading.Lock()
-        self._children: dict[int, tuple[Any, str]] = {}
+        self._children: dict[int, tuple[Any, str, str]] = {}
         self._exits: list[ProgramExit] = []
         self._empty = threading.Event()
         self._closed = False
@@ -504,11 +508,12 @@ class _WindowsJobTree:
             self._k.CloseHandle(handle)
             return
         name = _image_name(self._k, handle) or f"process {pid}"
+        invocation = _python_invocation(pid, name)
         with self._lock:
             if self._closed:
                 self._k.CloseHandle(handle)
                 return
-            self._children[pid] = (handle, name)
+            self._children[pid] = (handle, name, invocation)
 
     def _record_exit(self, pid: int) -> None:
         from ctypes import wintypes
@@ -517,14 +522,14 @@ class _WindowsJobTree:
             child = self._children.pop(pid, None)
         if child is None:
             return
-        handle, name = child
+        handle, name, invocation = child
         code = wintypes.DWORD()
         try:
             if self._k.GetExitCodeProcess(handle, ctypes.byref(code)):
                 value = int(code.value)
                 if value not in (0, _STILL_ACTIVE):
                     with self._lock:
-                        self._exits.append(ProgramExit(name, value))
+                        self._exits.append(ProgramExit(name, value, invocation))
         finally:
             self._k.CloseHandle(handle)
 
@@ -620,7 +625,7 @@ class _WindowsJobTree:
             self._closed = True
             children, self._children = self._children, {}
         self._notifications.unregister(self._key)
-        for handle, _name in children.values():
+        for handle, _name, _invocation in children.values():
             self._k.CloseHandle(handle)
         self._k.CloseHandle(self._job)
 
@@ -637,6 +642,52 @@ def _image_name(kernel32: Any, handle: Any) -> str:
     ):
         return ""
     return PurePath(buffer.value).name
+
+
+def _python_invocation(pid: int, name: str) -> str:
+    """Read a Python child's selector once at its start, never code or arguments.
+
+    The command line can already be unavailable for a short-lived child. Its
+    retained process handle still lets the exit code be recorded without it.
+    Unknown interpreter options leave the selector unknown rather than risk
+    mistaking an option's value for the script.
+    """
+    if not re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?", name, re.IGNORECASE):
+        return ""
+    try:
+        arguments = psutil.Process(pid).cmdline()
+    except psutil.Error, OSError:
+        return ""
+    index = 1
+    while index < len(arguments):
+        argument = arguments[index]
+        index += 1
+        if argument.startswith("-c"):
+            return "-c"
+        if argument.startswith("-m"):
+            module = argument[2:] or (arguments[index] if index < len(arguments) else "")
+            if len(module) <= 200 and all(part.isidentifier() for part in module.split(".")):
+                return f"-m {module}"
+            return ""
+        if argument in ("-W", "-X", "--check-hash-based-pycs"):
+            index += 1
+            continue
+        if argument.startswith(("-W", "-X", "--check-hash-based-pycs=")):
+            continue
+        if argument == "--":
+            argument = arguments[index] if index < len(arguments) else ""
+        elif argument == "-":
+            return "-"
+        elif argument.startswith("-"):
+            if argument[1:] and all(flag in "bBdEiIOPqsSuvx" for flag in argument[1:]):
+                continue
+            return ""
+        # A script path is identity; everything after it belongs to the script
+        # and can contain credentials. Reject long or control-bearing paths.
+        if not argument or len(argument) > 200 or not argument.isprintable():
+            return ""
+        return PureWindowsPath(argument).as_posix()
+    return ""
 
 
 __all__ = [

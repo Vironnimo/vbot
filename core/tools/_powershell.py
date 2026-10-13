@@ -90,7 +90,12 @@ results or Get-Location, are held by the table formatter until its pipeline
 ends, and an ``exit`` before that discards them: ``Get-ChildItem | Select-Object
 Name; exit 0`` prints nothing. The command's output is therefore piped through
 Out-Default, and the bootstrap exits with the recorded code only after that
-pipeline has ended.
+pipeline has ended. At that final boundary, a private function named Out-Default
+starts a fresh formatter when the output type or the selected/custom object's
+property names change. Otherwise PowerShell keeps the first table's columns for
+later objects and silently drops their different properties. Explicit Format-*
+records stay together. The function's exact name preserves PowerShell's native
+stdout bypass: a differently named filter would capture and re-encode it.
 
 Hidden bookkeeping. The command sees none of the bootstrap's variables; it
 runs as a function's dot-sourced body, and the error report keeps what it needs
@@ -359,6 +364,61 @@ function __vbotReporter($ast, $initial) {
 }
 """
 REPORT_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REPORT_STATEMENTS)
+# A private FunctionInfo named Out-Default is the final output boundary. The
+# name matters: PowerShell's native-command processor bypasses an Out-Default
+# downstream command, so native stdout keeps its bytes and timing. An ordinary
+# filter with another name would capture, decode and buffer native output.
+# Resolve the real formatter by module name, and return the private function
+# from a closure: a command may define its own Out-Default without replacing it.
+# Only output which has already left the command is formatted; assignments,
+# functions, subexpressions, errors and explicit Format-* pipelines stay intact.
+FORMAT_STATEMENTS = r"""function __vbotOutputCommand {
+    function Out-Default {
+        [CmdletBinding()]
+        param([Parameter(ValueFromPipeline)] [psobject] $InputObject)
+        begin { $pipeline = $null; $shape = ''; $properties = @() }
+        process {
+            if ($null -eq $InputObject) { return }
+            $types = $InputObject.PSObject.TypeNames
+            $next = if ($types.Count) { [string]$types[0] } else { '' }
+            if ($pipeline -and $shape -ceq $next -and $properties.Count -eq 0 -and
+                -not $next.StartsWith('Selected.') -and
+                ($InputObject -is [string] -or $InputObject -is [ValueType])) {
+                $pipeline.Process($InputObject)
+                return
+            }
+            $names = @()
+            if ($next.StartsWith('Microsoft.PowerShell.Commands.Internal.Format.')) {
+                $next = 'format'
+            } elseif ($InputObject.PSObject.BaseObject -is
+                [System.Management.Automation.PSCustomObject] -or $next.StartsWith('Selected.')) {
+                $names = @(foreach ($property in $InputObject.PSObject.Properties) {
+                    $property.Name
+                })
+            }
+            $same = $shape -ceq $next -and $properties.Count -eq $names.Count
+            if ($same) {
+                for ($index = 0; $index -lt $names.Count; $index++) {
+                    if ($properties[$index] -cne $names[$index]) { $same = $false; break }
+                }
+            }
+            if ($pipeline -and -not $same) { $pipeline.End(); $pipeline = $null }
+            if (-not $pipeline) {
+                $pipeline = { Microsoft.PowerShell.Core\Out-Default }.GetSteppablePipeline()
+                $pipeline.Begin($PSCmdlet)
+                $shape = $next
+                $properties = $names
+            }
+            $pipeline.Process($InputObject)
+        }
+        end { if ($pipeline) { $pipeline.End() } }
+    }
+    Get-Command Out-Default
+}
+$__vbotFormatter = __vbotOutputCommand
+${function:__vbotOutputCommand} = { $__vbotFormatter }.GetNewClosure()
+"""
+FORMAT_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", FORMAT_STATEMENTS)
 # A shell started ahead of its command waits in Windows' system directory
 # (``_command_launch``). While it waits it pays the first use of what follows:
 # type lookups, the parser, PowerShell's utility and file cmdlets, formatting,
@@ -378,7 +438,7 @@ if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
         $null = [pscustomobject]@{ Name = 1 } | Out-String
         $null = __vbotReporter $null $null
         ${function:__vbotBody} = [scriptblock]::Create('')
-        . __vbotInvoke | Out-Default
+        . __vbotInvoke | & (__vbotOutputCommand)
         Remove-Variable -Name __vbotWarm* -Scope Global
         Set-Location - -ErrorAction Stop
         Set-Location -LiteralPath ([Environment]::CurrentDirectory) -ErrorAction Stop
@@ -450,7 +510,7 @@ $__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
 ${function:__vbotReport} = __vbotReporter $__vbotAst $__vbotInitialError
 ${function:__vbotBody} = [scriptblock]::Create($__vbotCommand)
 Remove-Variable -Name __vbot* -Scope Global
-. __vbotInvoke | Out-Default
+. __vbotInvoke | & (__vbotOutputCommand)
 $__vbotExitCode = Get-Variable -Name __vbotExitCode -Scope Global -ValueOnly -ErrorAction Ignore
 if (-not $__vbotExitCode) { __vbotReport; exit 0 }
 if ($__vbotExitCode -eq 1 -and
@@ -500,6 +560,7 @@ POWERSHELL_BOOTSTRAP = (
     + REPORT_STATEMENTS.replace("{note}", _escaped(POWERSHELL_ERROR_NOTE)).replace(
         "{silenced_note}", _escaped(POWERSHELL_SILENCED_ERROR_NOTE)
     )
+    + FORMAT_STATEMENTS
     + WARM_UP_STATEMENTS
     + REQUEST_STATEMENTS.replace(
         "{unreadable}", _joined(REQUEST_UNREADABLE_NOTE, reason="$_.Exception.Message")
