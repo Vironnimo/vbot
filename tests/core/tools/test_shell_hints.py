@@ -302,12 +302,30 @@ def test_platform_specific_hints_follow_the_host_shell(
             "Windows has no /dev/null",
         ),
         (
+            "git diff --no-index \\dev\\null new.txt",
+            "error: Could not access '\\dev\\null'",
+            "Windows has no /dev/null",
+        ),
+        (
             "python export.py --out /dev/null",
             "FileNotFoundError: [Errno 2] No such file or directory: '/dev/null'",
             "Windows has no /dev/null",
         ),
         # Output that names it, from a command that does not.
         ("python export.py", "error: cannot write /dev/null", None),
+        # A diff header names /dev/null for an added file; diff exits 1 for a difference.
+        (
+            "git diff --no-index /dev/null new.txt",
+            "diff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..3e75765\n"
+            "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new",
+            None,
+        ),
+        (
+            "diff -u /dev/null f",
+            "--- /dev/null\t1970-01-01 00:00:00.000000000 +0000\n"
+            "+++ f\t2026-10-13 09:00:00.000000000 +0200\n@@ -0,0 +1 @@\n+new",
+            None,
+        ),
         (
             "ls -la src",
             "Get-ChildItem: A parameter cannot be found that matches parameter name 'la'.",
