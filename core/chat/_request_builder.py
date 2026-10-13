@@ -71,6 +71,7 @@ from core.projects import ProjectError
 from core.prompts import BLOCK_KIND_DATA, BlockDefinition
 from core.prompts.pinned_context import (
     PINNED_DYNAMIC_BLOCKS_SLOT,
+    PINNED_THINKING_EFFORT_SLOT,
     PINNED_TOOL_DEFINITIONS_SLOT,
     stamp_prompt_files_read,
 )
@@ -353,7 +354,8 @@ class RequestBuilder:
         inputs = RequestBuildInputs.from_context(context, context.primary_target)
         failed_blocks: set[str] = set()
         session_blocks = await self._session_prompt_blocks(inputs, failed_blocks=failed_blocks)
-        return await _CHAT_TRANSFORM_WORKERS.run(
+        read_paths: list[Path] = []
+        note = await _CHAT_TRANSFORM_WORKERS.run(
             self._plan_prompt_block_change,
             context.agent,
             context.session.address,
@@ -361,7 +363,15 @@ class RequestBuilder:
             context.session_snapshot.active_messages,
             session_blocks,
             failed_blocks,
+            read_paths,
         )
+        await _CHAT_TRANSFORM_WORKERS.run(
+            stamp_prompt_files_read,
+            self._dependencies.file_read_state,
+            context.session.id,
+            read_paths,
+        )
+        return note
 
     def _plan_prompt_block_change(
         self,
@@ -371,17 +381,34 @@ class RequestBuilder:
         messages: list[ChatMessage],
         session_blocks: Sequence[BlockDefinition],
         failed_blocks: set[str],
+        read_paths: list[Path],
     ) -> str | None:
         sessions = self._dependencies.sessions
         pin = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
         tool_pin = self._stored_tool_epoch_pin(address)
         if pin is None or tool_pin is None:
             return None
+        effort_pin = EffortPin.from_payload(
+            sessions.prompt_pin(address, PINNED_THINKING_EFFORT_SLOT)
+        )
+        render_inputs = self._block_render_inputs(
+            inputs, tool_pin, prompt_effort=effort_pin.effort if effort_pin is not None else None
+        )
+        # Complete an older partial inventory before comparing it with live
+        # state, so an already visible static block is not announced as new.
+        pin = self._prompt_block_pin(
+            agent,
+            address,
+            render_inputs,
+            fresh=False,
+            session_blocks=session_blocks,
+            read_paths=read_paths,
+        )
         live = self._dependencies.get_system_prompts().render_dynamic_blocks(
             agent,
             request_block_definitions=session_blocks,
             failed_blocks=failed_blocks,
-            **self._block_render_inputs(inputs, tool_pin),
+            **render_inputs,
         )
         change = plan_prompt_block_change(pin, messages, live, unavailable=failed_blocks)
         return None if change is None else change.note_content()
@@ -434,7 +461,11 @@ class RequestBuilder:
         return tuple(blocks)
 
     def _block_render_inputs(
-        self, inputs: RequestBuildInputs, tool_pin: ToolEpochPin
+        self,
+        inputs: RequestBuildInputs,
+        tool_pin: ToolEpochPin,
+        *,
+        prompt_effort: str | None = None,
     ) -> dict[str, Any]:
         """The System Prompt inputs dynamic blocks render from, for builds and pins alike."""
         return {
@@ -444,14 +475,17 @@ class RequestBuilder:
             "memory_files_context": inputs.memory_files_context,
             "agent_project_id": inputs.agent_project_id,
             "subagent_session": inputs.subagent_session,
+            "skill_registry": inputs.skill_registry,
+            "skill_catalog": inputs.skill_catalog,
+            "thinking_effort": prompt_effort,
             "effective_tool_definitions": tool_pin.definitions,
             "on_demand_tools": tool_pin.on_demand,
         }
 
-    async def _prompt_block_pin(
+    def _prompt_block_pin(
         self,
         agent: Any,
-        session: ChatSession,
+        address: SessionAddress,
         render_inputs: Mapping[str, Any],
         *,
         fresh: bool,
@@ -467,11 +501,13 @@ class RequestBuilder:
         captured: PromptBlockPin | None = None
         captured_reads: list[Path] = []
 
-        def render() -> PromptBlockPin:
+        def render(previously_pinned: Collection[str] | None) -> PromptBlockPin:
             nonlocal captured
             order: list[str] = []
             blocks = system_prompts.render_dynamic_blocks(
                 agent,
+                skip=previously_pinned or (),
+                static_contributions_only=previously_pinned is not None,
                 block_order=order,
                 request_block_definitions=session_blocks,
                 read_paths=captured_reads,
@@ -481,14 +517,15 @@ class RequestBuilder:
             return captured
 
         if fresh:
-            pin = await _CHAT_TRANSFORM_WORKERS.run(render)
+            pin = render(None)
         else:
-            pin = await _CHAT_TRANSFORM_WORKERS.run(
-                ensure_prompt_block_pin, self._dependencies.sessions, session.address, render
-            )
-        # A concurrent pin or a layout-only enrichment keeps different text.
+            pin = ensure_prompt_block_pin(self._dependencies.sessions, address, render)
+        # An inventory extension keeps the old epoch id. A concurrent winning
+        # pin can hold different text from what this request just captured.
         # Stamp only files whose captured content this request actually shows.
-        if captured is not None and pin.epoch == captured.epoch:
+        if captured is not None and all(
+            pin.blocks.get(block_id) == block for block_id, block in captured.blocks.items()
+        ):
             read_paths.extend(captured_reads)
         return pin
 
@@ -571,17 +608,6 @@ class RequestBuilder:
             )
             if not inputs.fresh_prompt_epoch:
                 pin = await self._ensure_tool_epoch_pin(session, pin)
-        render_inputs = self._block_render_inputs(inputs, pin)
-        prompt_read_paths: list[Path] = []
-        request_block_definitions = await self._session_prompt_blocks(inputs)
-        prompt_blocks = await self._prompt_block_pin(
-            agent,
-            session,
-            render_inputs,
-            fresh=inputs.fresh_prompt_epoch,
-            session_blocks=request_block_definitions,
-            read_paths=prompt_read_paths,
-        )
         effort_pin = (
             EffortPin.start(
                 thinking_effort(agent)
@@ -594,6 +620,20 @@ class RequestBuilder:
                 self._dependencies.sessions,
                 session.address,
                 thinking_effort(agent),
+            )
+        )
+        render_inputs = self._block_render_inputs(inputs, pin, prompt_effort=effort_pin.effort)
+        prompt_read_paths: list[Path] = []
+        request_block_definitions = await self._session_prompt_blocks(inputs)
+        prompt_blocks = await _CHAT_TRANSFORM_WORKERS.run(
+            partial(
+                self._prompt_block_pin,
+                agent,
+                session.address,
+                render_inputs,
+                fresh=inputs.fresh_prompt_epoch,
+                session_blocks=request_block_definitions,
+                read_paths=prompt_read_paths,
             )
         )
         tool_epoch, effort, session_messages = await _CHAT_TRANSFORM_WORKERS.run(
@@ -642,13 +682,10 @@ class RequestBuilder:
         system_prompt = await system_prompts.build_system_prompt_async(
             agent,
             agent_body=inputs.agent_body,
-            skill_registry=inputs.skill_registry,
-            skill_catalog=inputs.skill_catalog,
             read_paths=prompt_read_paths,
             pinned_blocks=prompt_blocks.texts(),
             pinned_block_order=prompt_blocks.order,
             request_block_definitions=request_block_definitions,
-            thinking_effort=effort.pin.effort,
             **render_inputs,
         )
         # Auto-injected prompt files (SOUL, pinned memory, project auto-load files,

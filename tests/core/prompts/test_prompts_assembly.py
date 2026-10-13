@@ -21,6 +21,7 @@ from core.prompts import INLINE_FILE_MAX_BYTES
 from core.prompts.blocks import FILE_READ_HINT, FILE_TOO_LARGE_NOTICE
 from core.prompts.prompts import (
     SOUL_FRAMING,
+    PinnedSkillCatalog,
     ProjectPromptContext,
     SystemPromptManager,
 )
@@ -695,6 +696,10 @@ def test_dynamic_block_membership_and_position_stay_pinned_after_reload(
     blocks = manager.render_dynamic_blocks(
         agent, request_block_definitions=request_blocks, block_order=order
     )
+    previously_live = manager.render_dynamic_blocks(
+        agent, request_block_definitions=request_blocks, static_contributions_only=True
+    )
+    assert (original.id in previously_live) == (source != "extension")
     pin = PromptBlockPin.start(blocks, order=order)
     # Persistence sorts object keys; the explicit layout order must survive it.
     import json
@@ -722,3 +727,49 @@ def test_dynamic_block_membership_and_position_stay_pinned_after_reload(
             pinned_block_order=stored.order,
         )
         assert rendered == first
+
+
+@pytest.mark.parametrize("pinned", [False, True], ids=["project-registry", "pinned-catalog"])
+def test_static_contributions_snapshot_uses_the_same_scoped_inputs_as_assembly(
+    tmp_path: Path, pinned: bool
+) -> None:
+    from core.prompts import BlockDefinition
+
+    manager = _manager(
+        tmp_path,
+        storage=StubStorage({}),
+        skills=StubSkills([StubSkill("global", "GLOBAL_SENTINEL")]),
+        block_definitions=[
+            BlockDefinition(
+                id="extension:catalog",
+                owner="always",
+                kind="text",
+                default_text="{generated:skill_catalog}\nEffort: {thinking_effort}",
+            )
+        ],
+    )
+    agent = replace(_agent(""), thinking_effort="high")
+    project_skills = StubSkills([StubSkill("project", "PROJECT_SENTINEL")])
+    catalog = PinnedSkillCatalog(catalog_text="PINNED_SENTINEL") if pinned else None
+    expected = manager.build_system_prompt(
+        agent, skill_registry=project_skills, skill_catalog=catalog, thinking_effort="low"
+    )
+    order: list[str] = []
+    captured = manager.render_dynamic_blocks(
+        agent,
+        skill_registry=project_skills,
+        skill_catalog=catalog,
+        thinking_effort="low",
+        block_order=order,
+    )
+    actual = manager.build_system_prompt(
+        agent,
+        skill_registry=project_skills,
+        skill_catalog=catalog,
+        thinking_effort="low",
+        pinned_blocks={key: value.text for key, value in captured.items()},
+        pinned_block_order=order,
+    )
+    assert actual == expected
+    assert ("PINNED_SENTINEL" if pinned else "PROJECT_SENTINEL") in actual
+    assert "GLOBAL_SENTINEL" not in actual and "Effort: low" in actual
