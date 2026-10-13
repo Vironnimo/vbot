@@ -153,9 +153,15 @@ async def test_page_facts_survive_main_content_selection(
     echo `done`</code></pre>Then <b>start</b> it.<ul><li>Child A</li><li>Child B</li></ul></li></ol>
     <table><caption>Prices in EUR per month</caption><tr><th>Plan</th><th>Price</th></tr>
     <tr><td rowspan="2">Basic</td><td>12</td></tr><tr><td>15</td></tr></table>
-    <a href="install">Install guide</a>
+    <a href="install">Install guide</a> <a href="https://other.example/source">Source</a>
     <img data-src="chart.png">
     <img alt="Trend" src="data:image/png;base64,AAAA">
+    <a href="/files/photo">
+    <img src="photo.jpg?utm_source=site&amp;w=2&amp;utm_campaign=x" alt="Photo"></a>
+    <a href="/good"><img src="badge.png" width="20" height="20" alt="Good article badge"></a>
+    <img src="spacer.gif" width="1" height="1">
+    <table><tr><td><a href="/h"><span style="color:transparent">Hydrogen</span></a></td>
+    <td><a href="/he"><span style="color: transparent">Helium</span></a></td></tr></table>
     <p style="display: none !important">Stale price 99</p>
     <div class="ad-container">Advertisement</div>
     </main><footer>License fact</footer></body>"""
@@ -182,11 +188,20 @@ async def test_page_facts_survive_main_content_selection(
         "Child B",
         "Prices in EUR per month",
         "rowspan=2",
-        "https://example.com/docs/install",
-        "https://example.com/docs/chart.png",
+        # Links and images of the page's own site are root-relative paths; others
+        # keep their site.
+        "[Install guide](/docs/install)",
+        "[Source](https://other.example/source)",
+        "![Image](/docs/chart.png)",
         "Trend",
+        # A linked image keeps only its own address, without tracking parameters.
+        "![Photo](/docs/photo.jpg?w=2)",
+        # An icon keeps its alt text without its address.
+        "Good article badge",
     ):
         assert expected in main["content"]
+    for noise in ("/files/photo", "utm_", "badge.png", "spacer.gif", "Hydrogen", "| |"):
+        assert noise not in main["content"]
     assert "3." in main["content"] and "Then **start** it." in main["content"]
     assert main["title"] == "Reference"
     assert main["note"] == _MAIN_CONTENT_NOTE
@@ -255,8 +270,26 @@ async def test_without_main_markup_navigation_and_footer_stay_in_the_page_view(
             [],
             "Complex HTML: text retained, layout and link targets unavailable.",
         ),
+        # Flattened, 3.0x10<sup>5</sup> read as 3.0x105 (Swarm run 2026-10-13).
+        (
+            "<p><sup>289</sup>Fl, 3.0&times;10<sup>5</sup> s, 10<sup>&minus;6</sup>, "
+            "H<sub>2</sub>O, Br<sup>&minus;</sup>, 10<sup>n</sup>, T<sub>c</sub>, "
+            "<sup>80m</sup>Br, the 1<sup>st</sup> one, a claim"
+            '<sup class="reference"><a href="#cite-1">[1]</a></sup>.</p>',
+            [
+                "²⁸⁹Fl, 3.0×10⁵ s, 10⁻⁶, H₂O, Br⁻, 10^n, T_c, ^(80m)Br, the 1st one, a claim[1].",
+            ],
+            [],
+            None,
+        ),
     ],
-    ids=["scripts-and-styles", "javascript-links", "code-breaks-and-svg", "deep-nesting"],
+    ids=[
+        "scripts-and-styles",
+        "javascript-links",
+        "code-breaks-and-svg",
+        "deep-nesting",
+        "superscripts-and-subscripts",
+    ],
 )
 async def test_html_becomes_readable_text(
     tmp_path: Path,

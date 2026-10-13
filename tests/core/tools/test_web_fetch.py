@@ -134,14 +134,14 @@ async def test_clear_addresses_are_fetched_as_meant(
     [
         ({"format": "html"}, "<main>", "Para [link]"),
         ({"format": "text"}, "Para link", "https://example.com/x"),
-        ({"extractMode": "markdown"}, "[link](https://example.com/x)", "<main>"),
-        ({"output_format": "md", "timeout": 30}, "[link](https://example.com/x)", "<main>"),
+        ({"extractMode": "markdown"}, "[link](/x)", "<main>"),
+        ({"output_format": "md", "timeout": 30}, "[link](/x)", "<main>"),
         # Older output switches combine when they agree.
         ({"raw": True, "include_links": True}, "<main>", "Para [link]"),
         ({"output": "raw", "include_links": True}, "<main>", "Para [link]"),
         ({"raw": False, "include_links": False}, "Para link", "https://example.com/x"),
-        ({"raw": False, "include_links": True}, "[link](https://example.com/x)", "<main>"),
-        ({"raw": False}, "[link](https://example.com/x)", "<main>"),
+        ({"raw": False, "include_links": True}, "[link](/x)", "<main>"),
+        ({"raw": False}, "[link](/x)", "<main>"),
     ],
 )
 async def test_output_names_of_other_harnesses_select_the_output(

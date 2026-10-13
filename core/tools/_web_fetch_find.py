@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from urllib.parse import urlsplit, urlunsplit
 
 from core.tools.fuzzy_match import SearchText, fold_for_search
 
@@ -43,6 +44,11 @@ _INLINE = re.compile(
     r"|(?P<marker>\*+|~~|`+)"
     r"|(?P<pipe>\|)"
 )
+# Superscript and subscript digits and signs read as the plain characters, so
+# "289Fl", "²⁸⁹Fl" and "^289Fl" find one another; "^" counts only before a digit
+# or sign, where it marks an exponent.
+_SCRIPTS = dict(zip("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎", "0123456789+-=()" * 2, strict=True))
+_SCRIPT_RUN = re.compile(r"[" + "".join(_SCRIPTS) + r"]|\^(?=[0-9+\-−(⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻])")
 _LINK_TEXT_LIMIT = 2_000
 # Scripts written without spaces between words (Thai, Lao, Myanmar, Khmer, and
 # CJK with kana; Hangul uses spaces), where a match never starts "inside a word".
@@ -221,7 +227,22 @@ def _presentation(text: str) -> tuple[list[_Replacement], list[str]]:
 @lru_cache(maxsize=4)
 def _readable(text: str, markdown: bool) -> SearchText:
     """The page as a reader sees it; repeated searches of one page share it."""
-    return fold_for_search(text, _presentation(text)[0] if markdown else ())
+    return _fold(text, _presentation(text)[0] if markdown else [])
+
+
+def _fold(text: str, replacements: list[_Replacement]) -> SearchText:
+    """Fold ``text`` for search, with superscripts and subscripts read as plain."""
+    scripts = [
+        (found.start(), found.end(), _SCRIPTS.get(found[0], ""))
+        for found in _SCRIPT_RUN.finditer(text)
+    ]
+    if not scripts:
+        return fold_for_search(text, replacements)
+    merged: list[_Replacement] = []
+    for replacement in sorted([*replacements, *scripts]):
+        if not merged or replacement[0] >= merged[-1][1]:
+            merged.append(replacement)
+    return fold_for_search(text, merged)
 
 
 def _search(readable: SearchText, query: str) -> list[tuple[int, int]]:
@@ -232,6 +253,16 @@ def _search(readable: SearchText, query: str) -> list[tuple[int, int]]:
         (found.start(), found.end())
         for found in re.finditer(re.escape(query), readable.text, re.IGNORECASE)
     ]
+
+
+def _names(passage: str, address: str) -> bool:
+    """Whether ``passage`` links to ``address``; a page shows links to its own site
+    as root-relative paths, which a query can name with the site."""
+    if address in passage:
+        return True
+    parts = urlsplit(address)
+    path = urlunsplit(("", "", parts.path or "/", parts.query, parts.fragment))
+    return bool(parts.netloc) and f"]({path})" in passage
 
 
 def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> FoundText:
@@ -245,20 +276,20 @@ def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> Foun
         _match(text, found.span(), text, found.span(), find)
         for found in re.finditer(re.escape(find), text, re.IGNORECASE)
     ]
-    plain = fold_for_search(find).text.strip()
+    plain = _fold(find, []).text.strip()
     for found in _search(readable, plain):
         matches.append(_match(text, readable.original(*found), readable.text, found, plain))
     matches = [match for match in matches if match.start >= offset]
     if markdown and not matches:
         replacements, addresses = _presentation(find)
-        query = fold_for_search(find, replacements).text.strip()
+        query = _fold(find, replacements).text.strip()
         if query != plain:
             for found in _search(readable, query):
                 start, end = readable.original(*found)
                 # The syntax after the match, such as a link's target, ends where
                 # the next readable character starts.
                 passage = text[start : readable.resume(found[1])]
-                if start >= offset and all(address in passage for address in addresses):
+                if start >= offset and all(_names(passage, address) for address in addresses):
                     matches.append(_match(text, (start, end), readable.text, found, query))
     matches.sort(key=lambda match: (match.start, match.end))
     merged: list[tuple[int, int]] = []

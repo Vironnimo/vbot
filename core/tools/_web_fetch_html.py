@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup, Comment, Tag
 from markdownify import MarkdownConverter
@@ -12,13 +12,29 @@ from markdownify import MarkdownConverter
 _NOISE = re.compile(
     r"^(?:cookie[-_]?(?:bar|banner|consent|notice|popup|overlay)"
     r"|consent[-_]?(?:bar|banner|modal)|ad[-_]?(?:banner|slot|wrapper|container|unit)"
-    r"|popup[-_]?overlay|modal[-_]?backdrop|newsletter[-_]?(?:signup|popup|modal))$",
+    r"|popup[-_]?overlay|modal[-_]?backdrop|newsletter[-_]?(?:signup|popup|modal)"
+    # MediaWiki's [edit] link after every section heading.
+    r"|mw-editsection)$",
     re.IGNORECASE,
 )
+# Inline styles that hide an element's text from a reader. Transparent text is
+# a colored swatch (Wikipedia's mini periodic table in every element infobox:
+# 118 links whose names are invisible).
 _HIDDEN = re.compile(
-    ("(?:^|;)\\s*(?:display\\s*:\\s*none|visibility\\s*:\\s*hidden)\\s*(?:!important\\s*)?(?:;|$)"),
+    "(?:^|;)\\s*(?:display\\s*:\\s*none|visibility\\s*:\\s*hidden|color\\s*:\\s*transparent)"
+    "\\s*(?:!important\\s*)?(?:;|$)",
     re.I,
 )
+# Images this small are icons (badges, protection locks, bullets): their address
+# costs more than the image tells. They keep their alt text.
+_ICON_PIXELS = 32
+# Superscript and subscript forms of the characters Unicode has them for.
+_SUPERSCRIPT = str.maketrans("0123456789+-−–=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁻⁼⁽⁾")
+_SUBSCRIPT = str.maketrans("0123456789+-−–=()", "₀₁₂₃₄₅₆₇₈₉₊₋₋₋₌₍₎")
+_SCRIPT_CHARACTERS = frozenset("0123456789+-−–=()")
+# Raised ordinal suffixes, which read as plain text after their number (1st, 2ème).
+# A single raised letter after a number stays marked: it is often a footnote.
+_ORDINAL_SUFFIXES = frozenset({"st", "nd", "rd", "th", "er", "re", "ème", "eme"})
 _STRIP = {"script", "style", "template", "head", "object", "embed"}
 # Navigation is never the main content, also where a site puts it inside its
 # main landmark (Wikipedia's page toolbar, navboxes). Header, footer and aside
@@ -41,9 +57,46 @@ def _safe_url(value: str, base: str) -> str:
     if not value or value.startswith("#"):
         return ""
     absolute = urljoin(base, value)
-    if urlparse(absolute).scheme.lower() not in {"https", "http", "mailto", "tel"}:
+    parts = urlsplit(absolute)
+    if parts.scheme.lower() not in {"https", "http", "mailto", "tel"}:
         return ""
+    if "utm_" in parts.query:
+        # Campaign tracking (Wikipedia tags every image address with three).
+        query = [pair for pair in parts.query.split("&") if not pair.startswith("utm_")]
+        absolute = urlunsplit(parts._replace(query="&".join(query)))
     return absolute
+
+
+def _is_icon(node: Tag) -> bool:
+    sizes = [_attr(node, "width"), _attr(node, "height")]
+    return all(size.isdigit() and int(size) <= _ICON_PIXELS for size in sizes)
+
+
+def _script(node: Tag, text: str, translation: dict[int, str], mark: str) -> str:
+    """Render a superscript or subscript so ``10<sup>5</sup>`` does not read as 105.
+
+    Digits and signs take their Unicode forms (``10⁵``, ``²⁸⁹Fl``, ``H₂O``). Other
+    content is marked (``10^n``, ``T_c``), except references and footnote links,
+    footnote symbols, and an ordinal suffix after a number (``1<sup>st</sup>``).
+    """
+    plain = node.get_text()
+    stripped = plain.strip()
+    if not stripped or node.find("a") is not None:
+        return text
+    if all(character in _SCRIPT_CHARACTERS for character in stripped):
+        return plain.translate(translation)
+    if not any(character.isalnum() for character in stripped):
+        return text
+    before = node.previous_sibling
+    if (
+        mark == "^"
+        and stripped.lower() in _ORDINAL_SUFFIXES
+        and isinstance(before, str)
+        and before[-1:].isdigit()
+    ):
+        return text
+    body = text.strip()
+    return f"{mark}{body}" if len(body) == 1 else f"{mark}({body})"
 
 
 class _Converter(MarkdownConverter):
@@ -81,10 +134,27 @@ class _Converter(MarkdownConverter):
             return "\n" + text
         return super().convert_br(el, text, parent_tags)
 
+    def convert_a(self, el, text, parent_tags):
+        # A linked image (a thumbnail linking to its file page or a larger copy)
+        # keeps the image's own address; a second one tells the reader nothing.
+        if el.find("img") is not None and not el.get_text(strip=True):
+            return text
+        return super().convert_a(el, text, parent_tags)
+
     def convert_img(self, el, text, parent_tags):
-        if not self.include_links:
+        if not self.include_links or _is_icon(el):
             return _attr(el, "alt")
         return super().convert_img(el, text, parent_tags)
+
+    def convert_sup(self, el, text, parent_tags):
+        if "_noformat" in parent_tags:
+            return text
+        return _script(el, text, _SUPERSCRIPT, "^")
+
+    def convert_sub(self, el, text, parent_tags):
+        if "_noformat" in parent_tags:
+            return text
+        return _script(el, text, _SUBSCRIPT, "_")
 
 
 def _metadata(soup: BeautifulSoup) -> dict[str, str]:
@@ -107,7 +177,20 @@ def _metadata(soup: BeautifulSoup) -> dict[str, str]:
     return result
 
 
-def _clean(soup: BeautifulSoup, base: str) -> None:
+def _site_path(target: str, page_url: str) -> str:
+    """Return a link to the page's own site as a root-relative path.
+
+    Most links of a page lead to its own site (an encyclopedia article holds
+    hundreds), and the scheme and host repeated in each cost a large part of
+    the page. The path resolves against the page's url as a browser would.
+    """
+    link, page = urlsplit(target), urlsplit(page_url)
+    if (link.scheme.lower(), link.netloc.lower()) != (page.scheme.lower(), page.netloc.lower()):
+        return target
+    return urlunsplit(("", "", link.path or "/", link.query, link.fragment))
+
+
+def _clean(soup: BeautifulSoup, base: str, page_url: str) -> None:
     # Token boundaries matter: thread/download containers and articles about
     # GDPR are content, not ad containers or consent dialogs.
     for node in list(soup.find_all(True)):
@@ -135,6 +218,9 @@ def _clean(soup: BeautifulSoup, base: str) -> None:
                 f"{': ' + href if href else ''}] "
             )
         elif node.name == "img":
+            if _is_icon(node) and not _attr(node, "alt").strip():
+                node.decompose()  # a spacer or unlabeled icon
+                continue
             src = _attr(node, "src")
             if not src or src.lower().startswith("data:"):
                 src = _attr(node, "data-src") or _attr(node, "data-lazy-src") or src
@@ -145,19 +231,24 @@ def _clean(soup: BeautifulSoup, base: str) -> None:
                     .strip()
                     .split(" ")[0]
                 )
-            node["src"] = _safe_url(src, base)
+            src = _safe_url(src, base)
+            node["src"] = src and _site_path(src, page_url)
             node["alt"] = (_attr(node, "alt") or _attr(node, "title") or "Image")[:500]
             if not node["src"]:
                 node.replace_with(f" [Image: {node['alt']}; embedded image omitted] ")
         elif node.name == "a":
             target = _safe_url(_attr(node, "href"), base)
             if target:
-                node["href"] = target
+                node["href"] = _site_path(target, page_url)
                 node.attrs.pop("title", None)
             else:
                 node.attrs.pop("href", None)
     for comment in list(soup.find_all(string=lambda value: isinstance(value, Comment))):
         comment.extract()
+    # A table left without text is layout (a grid of colored swatches), not data.
+    for table in reversed(soup.find_all("table")):
+        if not table.get_text(strip=True) and table.find("img") is None:
+            table.decompose()
 
 
 def _is_language_list(node: Tag) -> bool:
@@ -219,7 +310,7 @@ def extract_views(
             excessive = True
             break
         stack.extend((child, depth + 1) for child in node.children if isinstance(child, Tag))
-    _clean(soup, base)
+    _clean(soup, base, url)
     body = soup.body or soup
     if excessive:
         text = body.get_text("\n", strip=True)
@@ -233,7 +324,7 @@ def extract_views(
         heading_style="ATX",
         bullets="-",
         strip=[] if include_links else ["a"],
-        keep_inline_images_in=["td", "th", "h1", "h2"],
+        keep_inline_images_in=["td", "th", "h1", "h2", "a"],
         escape_underscores=False,
         include_links=include_links,
     )
