@@ -210,7 +210,7 @@ class OpenCodeAdapter:
                 usable = any(rule.allowed for rule in rules)
                 if pattern in {"task", "skill"}:
                     (target_rules if pattern == "task" else skill_rules).extend(rules)
-                    if not scoped:
+                    if not scoped or usable:
                         states[pattern] = usable
                     reports.append(
                         Translation(
@@ -225,6 +225,12 @@ class OpenCodeAdapter:
                     default_access = usable
                 for foreign in matches:
                     states[foreign] = usable
+                    # A broad permission also supplies the default for named
+                    # task/skill exceptions that follow, across both layers.
+                    if foreign == "task":
+                        target_rules.append(AgentTargetRule("*", usable))
+                    elif foreign == "skill":
+                        skill_rules.append(AgentTargetRule("*", usable))
                 if not matches:
                     detail = "vBot has no such capability."
                 elif scoped and usable:

@@ -112,6 +112,7 @@ Unrelated work in a reused target Session remains outside that group
 
 ## Constraints & Gotchas
 
+- A synchronous cancellation callback raising `asyncio.CancelledError` is isolated and logged like an ordinary callback failure. Later callbacks and executor cancellation still run, so terminal publication releases the Session and advances its Queue (`test_runs_cancellation.py`).
 - Only one Run may be active per `(project_id, agent_id, session_id)`; Runs in different Sessions (including a project and an identity session sharing agent/session ids) execute in parallel. `Run.project_id` mirrors the key's project dimension and is what the executor's session I/O reads.
 - Busy checks followed by awaited or external lifecycle work are inherently racy unless the scope remains guarded in `ChatRunManager`. Never reintroduce a check-then-archive/move/delete sequence based only on `has_activity_for_*`.
 - Queue state, ingress reservations, active Run lookup, completed Run lookup, and Run event replay windows are all in-memory and bounded. The shared waiting-work ceiling is 32 across queued Runs and reservations; process restart loses Queue state and old timeline replay. `connection_ready.queues` reports the new process's complete public Queue state for client reconciliation; it does not persist or resume discarded work.

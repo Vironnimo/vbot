@@ -214,22 +214,8 @@ def restore_files(
             raise AgentAlreadyExistsError(f"Agent already exists: {target_id}")
         agents_dir = store.data_dir / "agents"
         home = store._agent_dir(target_id)
-        agent = _agent_from_dict(
-            data,
-            data_dir=store.data_dir,
-            default_workspace=store._default_workspace(archived_id),
-        )
-        restored_workspace = (
-            _rebase_path_with_tree(agent.workspace, store._agent_dir(archived_id), home)
-            if workspace is None
-            else _resolve_workspace(workspace, data_dir=store.data_dir)
-        )
-        restored = replace(
-            agent,
-            id=target_id,
-            workspace=str(restored_workspace),
-            root_project_id=root_project_id,
-            updated_at=utc_now_timestamp(),
+        restored = _restored_agent(
+            store, data, target_id, workspace=workspace, root_project_id=root_project_id
         )
         try:
             archived_document = (source / "agent.json").read_bytes()
@@ -238,25 +224,74 @@ def restore_files(
         except OSError as exc:
             raise AgentError(f"Agent restore failed: {exc}") from exc
         try:
-            try:
-                write_json_document(
-                    home / "agent.json",
-                    _agent_document(
-                        restored,
-                        workspace=_workspace_for_storage(
-                            restored.workspace, data_dir=store.data_dir
-                        ),
-                    ),
-                    AGENT_FORMAT,
-                )
-            except JsonDocumentWriteError as error:
-                raise AgentError(str(error)) from error
-            store._seed_workspace(Path(restored.workspace))
+            _write_restored_agent(store, restored)
             yield _apply_defaults(restored, store._agent_defaults())
         except BaseException as exc:
             _return_to_payload(home / "agent.json", archived_document)
             _move_back(home, source, exc, "Agent restore failed")
             raise
+
+
+def _restored_agent(
+    store: AgentStore,
+    data: dict[str, Any],
+    target_id: str,
+    *,
+    workspace: str | None,
+    root_project_id: str | None,
+) -> Agent:
+    agent = _agent_from_dict(
+        data, data_dir=store.data_dir, default_workspace=store._default_workspace(data["id"])
+    )
+    restored_workspace = (
+        _rebase_path_with_tree(
+            agent.workspace, store._agent_dir(agent.id), store._agent_dir(target_id)
+        )
+        if workspace is None
+        else _resolve_workspace(workspace, data_dir=store.data_dir)
+    )
+    return replace(
+        agent,
+        id=target_id,
+        workspace=str(restored_workspace),
+        root_project_id=root_project_id,
+        updated_at=utc_now_timestamp(),
+    )
+
+
+def _write_restored_agent(store: AgentStore, restored: Agent) -> None:
+    try:
+        write_json_document(
+            store._agent_dir(restored.id) / "agent.json",
+            _agent_document(
+                restored,
+                workspace=_workspace_for_storage(restored.workspace, data_dir=store.data_dir),
+            ),
+            AGENT_FORMAT,
+        )
+    except JsonDocumentWriteError as error:
+        raise AgentError(str(error)) from error
+    store._seed_workspace(Path(restored.workspace))
+
+
+def complete_restore_files(
+    store: AgentStore,
+    target_id: str,
+    *,
+    source_id: str,
+    workspace: str | None,
+    root_project_id: str | None,
+) -> None:
+    """Replay the config rewrite after an interrupted move, without repairing Session pointers."""
+    with store._snapshot_barrier.compound_mutation(), store._change():
+        _validate_agent_id(target_id)
+        data = load_validated_agent_json(store._agent_dir(target_id) / "agent.json")
+        if data["id"] not in (source_id, target_id):
+            raise AgentError(f"Agent restore target belongs to another Agent: {target_id}")
+        restored = _restored_agent(
+            store, data, target_id, workspace=workspace, root_project_id=root_project_id
+        )
+        _write_restored_agent(store, restored)
 
 
 def restore_delegation_grants(

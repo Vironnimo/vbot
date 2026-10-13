@@ -476,12 +476,28 @@ async def test_cancel_by_session_finds_only_the_active_run_of_its_anchor() -> No
         manager.cancel_by_session("coder", "session-one", project_id="acme")
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("tool_callback", [False, True])
 async def test_cancel_callback_failures_are_logged_without_skipping_later_callbacks(
     caplog: pytest.LogCaptureFixture,
+    cancelled: bool,
+    tool_callback: bool,
 ) -> None:
-    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    manager = ChatRunManager()
+    entered = asyncio.Event()
+
+    async def execute(_run: Run) -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def successor(_run: Run) -> str:
+        return "successor"
+
+    run = await manager.start(SESSION, execute)
+    queued = await manager.enqueue(SESSION, successor)
+    await entered.wait()
     callbacks: list[str] = []
-    sync_failure = RuntimeError("cancel callback boom")
+    sync_failure = asyncio.CancelledError() if cancelled else RuntimeError("cancel callback boom")
     async_failure = RuntimeError("async cancel callback boom")
 
     def fail() -> None:
@@ -492,14 +508,25 @@ async def test_cancel_callback_failures_are_logged_without_skipping_later_callba
         callbacks.append("async-failed")
         raise async_failure
 
-    run.add_cancel_callback(fail)
+    if tool_callback:
+        run.register_tool_cancel("call-one", fail)
+    else:
+        run.add_cancel_callback(fail)
     run.add_cancel_callback(fail_async)
     run.add_cancel_callback(lambda: callbacks.append("succeeded"))
 
     caplog.set_level(logging.WARNING, logger="vbot.runs")
-    run.request_cancel()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    try:
+        run.request_cancel()
+        with pytest.raises(RunCancelledError):
+            await asyncio.wait_for(run.wait(), 1)
+        next_run = await asyncio.wait_for(queued.future, 1)
+        assert await next_run.wait() == "successor"
+    finally:
+        # Also drain the pre-fix failure: its callback skipped task cancellation.
+        if run._task is not None and not run._task.done():
+            run._task.cancel()
+        await manager.aclose()
 
     assert callbacks == ["failed", "succeeded", "async-failed"]
     assert run.cancel_requested is True

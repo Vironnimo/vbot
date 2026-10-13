@@ -226,8 +226,9 @@ async def test_a_moved_legacy_workspace_returns_to_its_folder_or_the_default_one
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target_id", [None, "vbot-2"], ids=["same-id", "new-id"])
+@pytest.mark.parametrize("replace_agent", [False, True])
 async def test_an_archived_project_returns_and_roots_its_agents_again(
-    world: ArchiveWorld, tmp_path: Path, target_id: str | None
+    world: ArchiveWorld, tmp_path: Path, target_id: str | None, replace_agent: bool
 ) -> None:
     repo = _repo(tmp_path)
     world.projects.create("vbot", "vBot", repo)
@@ -254,15 +255,21 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
     assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == "vbot"
     assert not build_scratch.area.exists() and notes_scratch.area.exists()
 
+    if replace_agent:
+        await world.service.archive_agent("coder")
+        replacement = world.agents.create("coder")
     await world.service.restore(archived.entry_id, target_id=target_id)
 
     project_id = target_id or "vbot"
     assert world.projects.get(project_id).display_name == "vBot"
     assert world.sessions.exists(replace(build, project_id=project_id))
     rooted = world.agents.get("coder")
-    assert (rooted.root_project_id, rooted.workspace) == (project_id, workspace)
+    assert (rooted.root_project_id, rooted.workspace) == (
+        (None, replacement.workspace) if replace_agent else (project_id, workspace)
+    )
     # Its Sessions work in the Project again, under its new id too.
-    assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == project_id
+    if not replace_agent:
+        assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == project_id
 
 
 @pytest.mark.asyncio

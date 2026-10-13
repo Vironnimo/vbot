@@ -32,12 +32,14 @@ class FakeResolver:
     def __init__(self) -> None:
         self.resolved: list[tuple[str | None, str]] = []
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> Any:
+    def resolve_agent(self, project_id: str | None, agent_id: str, **options: Any) -> Any:
         self.resolved.append((project_id, agent_id))
         return SimpleNamespace(id=agent_id)
 
-    async def resolve_agent_async(self, project_id: str | None, agent_id: str) -> Any:
-        return self.resolve_agent(project_id, agent_id)
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, **options: Any
+    ) -> Any:
+        return self.resolve_agent(project_id, agent_id, **options)
 
     async def resolve_working_project_async(
         self, project_id: str | None, agent: Any, *, requested: Any = AGENT_DEFAULT_PROJECT

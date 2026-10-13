@@ -347,6 +347,22 @@ def move(connection: sqlite3.Connection, source: SessionAddress, target: Session
     _store_prompts.carry_prompt_state(
         connection, source=state, target_key=session_key, same_scope=_same_scope(source, target)
     )
+    # Parent links store the public address, unlike history and fork relations.
+    # Move the live children's links in the same transaction as their Parent.
+    connection.execute(
+        "UPDATE sessions SET subagent_parent_project_id = ?, subagent_parent_agent_id = ?, "
+        "subagent_parent_session_id = ?, state_revision = state_revision + 1 "
+        "WHERE state = 'live' AND subagent_parent_project_id IS ? "
+        "AND subagent_parent_agent_id = ? AND subagent_parent_session_id = ?",
+        (
+            target.project_id,
+            target.agent_id,
+            target.session_id,
+            source.project_id,
+            source.agent_id,
+            source.session_id,
+        ),
+    )
 
 
 def fork_point(connection: sqlite3.Connection, state: sqlite3.Row) -> int:

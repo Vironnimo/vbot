@@ -65,11 +65,26 @@ def test_get_or_create_reads_an_existing_session_without_a_write(manager, monkey
     assert len(writes) == 1
 
 
-def test_move_updates_the_composite_address_without_losing_history(manager) -> None:
-    source = manager.create("coder", session_id="session-one")
+@pytest.mark.parametrize("project_id", [None, "project-b"])
+def test_move_updates_the_composite_address_without_losing_history(manager, project_id) -> None:
+    source = manager.create("coder", session_id="session-one", project_id=project_id)
     message = ChatMessage.user("hello")
     source.append(message)
-    target = _address("reviewer", source.id, "project-a")
+    target = _address("reviewer", "moved-session", "project-a")
+    child = manager.create("worker", session_id="child")
+    parent = {
+        "id": "sub_child",
+        "agent_id": source.address.agent_id,
+        "session_id": source.id,
+        "project_id": project_id,
+        "run_id": "run_parent",
+        "tool_call_id": "call_one",
+        "tool_call_index": 0,
+    }
+    manager.set_metadata(child.address, {"subagent_parent": parent})
+    unrelated = manager.create("worker", session_id="unrelated")
+    other_parent = {**parent, "project_id": "other-project"}
+    manager.set_metadata(unrelated.address, {"subagent_parent": other_parent})
 
     moved = asyncio.run(manager.move(source.address, target))
 
@@ -77,6 +92,15 @@ def test_move_updates_the_composite_address_without_losing_history(manager) -> N
     assert manager.exists(target)
     assert moved.address == target
     assert moved.load() == [message]
+    assert manager.subagent_children(source.address) == []
+    assert manager.subagent_children(target) == [child.address]
+    assert manager.metadata_value(child.address, "subagent_parent") == {
+        **parent,
+        "agent_id": target.agent_id,
+        "project_id": target.project_id,
+        "session_id": target.session_id,
+    }
+    assert manager.metadata_value(unrelated.address, "subagent_parent") == other_parent
 
 
 def _working_project(manager: ChatSessionManager, address: SessionAddress) -> str | None:
