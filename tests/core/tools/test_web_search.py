@@ -277,10 +277,26 @@ async def test_other_spellings_run_the_same_search(
         (
             # A path narrows to its site, and the note says so: engines that ignore
             # the operator returned other sites without any sign (Swarm run 2026-10-12).
+            # Its words stay search words, or the search loses what the path named
+            # (Swarm run 2026-10-13: site:host/rutherfordium/... returned Dubnium).
             {"query": "asyncio site:docs.python.org/3/library -site:reddit.com"},
-            "asyncio site:docs.python.org -site:reddit.com",
+            "asyncio library site:docs.python.org -site:reddit.com",
             {"domains": "docs.python.org", "excluded_domains": "reddit.com"},
             "site:docs.python.org/3/library",
+        ),
+        (
+            # A path alone still searches: its words become the search words.
+            {"query": "site:docs.python.org/3/library/asyncio-task.html"},
+            "library asyncio task site:docs.python.org",
+            {"domains": "docs.python.org"},
+            "site:docs.python.org/3/library/asyncio-task.html",
+        ),
+        (
+            # With several sites the paths are alternatives and add no words.
+            {"query": "asyncio (site:docs.python.org/3/library OR site:example.com/docs)"},
+            "asyncio site:docs.python.org OR site:example.com",
+            {"domains": "docs.python.org, example.com"},
+            "site:example.com/docs",
         ),
     ],
 )

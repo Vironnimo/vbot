@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import re
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import idna
 
@@ -18,6 +18,11 @@ _MAX_DOMAIN_FILTERS = 10
 _SITE_OPERATOR = re.compile(r"(?<![^\s(])(-?)site:([^\s()\"]+)", re.IGNORECASE)
 _EMPTY_GROUP = re.compile(r"\(\s*(?:(?:OR|\|)\s*)*\)")
 _CONNECTORS = frozenset({"OR", "|"})
+# Path parts that name a file type or a directory default, not what a page is about.
+_GENERIC_PATH_WORDS = frozenset(
+    {"htm", "html", "shtml", "xhtml", "php", "asp", "aspx", "jsp", "cfm", "cgi", "pdf"}
+    | {"index", "default"}
+)
 
 
 def _normalize_text(raw: Any) -> str:
@@ -75,41 +80,51 @@ def _unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-def _site(operand: str) -> tuple[str | None, bool]:
-    """Return the host a ``site:`` operand names, and whether it names a path too."""
+def _site(operand: str) -> tuple[str | None, list[str] | None]:
+    """Return the host a ``site:`` operand names, and the words of its path, if it has one."""
     parts = urlsplit(operand if "://" in operand else f"//{operand}")
     try:
         host = parts.hostname or ""
     except ValueError:
-        return None, False
+        return None, None
     domain, error = _canonicalize_domain(host)
     if error is not None:
-        return None, False
-    return domain, bool(parts.path.strip("/") or parts.query or parts.fragment)
+        return None, None
+    if not (parts.path.strip("/") or parts.query or parts.fragment):
+        return domain, None
+    words = [
+        word
+        for word in re.split(r"[\W_]+", unquote(parts.path))
+        if any(char.isalpha() for char in word) and word.lower() not in _GENERIC_PATH_WORDS
+    ]
+    return domain, words
 
 
 def split_site_operators(query: str) -> tuple[str, list[str], list[str], list[tuple[str, str]]]:
     """Move ``site:host`` and ``-site:host`` operators out of the query.
 
-    Restrictions cover whole sites, so ``site:host/path`` restricts to ``host``;
-    the last list names each such operator with the site it was read as.
-    ``-site:host/path`` stays in the query, since excluding the whole site would
-    drop results the Agent wanted; so do operators inside quoted phrases and
-    operators that would leave no search words. ``OR`` connectors and parentheses
-    left empty by the removal are dropped, so ``x (site:a.com OR site:b.com)``
-    becomes ``x`` restricted to both sites.
+    Restrictions cover whole sites, so ``site:host/path`` restricts to ``host``.
+    When it is the only site restriction, the words of its path (``iron`` in
+    ``site:host/iron/index.html``) join the search words, so the search still
+    aims at what the path names; with several sites, the paths belong to
+    alternatives and add no words. The last list pairs each such operator with
+    how it was read. ``-site:host/path`` stays in the query, since excluding the
+    whole site would drop results the Agent wanted; so do operators inside
+    quoted phrases and operators that would leave no search words. ``OR``
+    connectors and parentheses left empty by the removal are dropped, so
+    ``x (site:a.com OR site:b.com)`` becomes ``x`` restricted to both sites.
     """
     included: list[str] = []
     excluded: list[str] = []
-    widened: list[tuple[str, str]] = []
+    paths: list[tuple[str, str, list[str]]] = []
 
     def take(match: re.Match[str]) -> str:
-        domain, path = _site(match[2])
-        if domain is None or (path and match[1]):
+        domain, path_words = _site(match[2])
+        if domain is None or (path_words is not None and match[1]):
             return match[0]
         (excluded if match[1] else included).append(domain)
-        if path:
-            widened.append((match[0], domain))
+        if path_words is not None:
+            paths.append((match[0], domain, path_words))
         return " "
 
     parts = re.split(r'("[^"]*")', query)
@@ -129,9 +144,20 @@ def split_site_operators(query: str) -> tuple[str, list[str], list[str], list[tu
         words.append(word)
     while words and words[-1] in _CONNECTORS:
         words.pop()
-    if not words:
+    added: list[str] = []
+    if len(included) == 1 and paths:
+        present = {word.casefold() for word in re.findall(r"\w+", " ".join(words))}
+        for word in paths[0][2]:
+            if word.casefold() not in present:
+                present.add(word.casefold())
+                added.append(word)
+    if not words and not added:
         return query, [], [], []
-    return " ".join(words), _unique(included), _unique(excluded), widened
+    readings = [
+        (operator, " ".join([f"site:{domain}", *(added if index == 0 else ())]))
+        for index, (operator, domain, _) in enumerate(paths)
+    ]
+    return " ".join([*words, *added]), _unique(included), _unique(excluded), readings
 
 
 def _url_matches_domains(url: str, domains: list[str]) -> bool:
