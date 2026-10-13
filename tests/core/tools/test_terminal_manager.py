@@ -91,9 +91,23 @@ async def test_startup_waits_for_a_visible_screen_and_answers_terminal_queries_m
     assert adapter.writes == ["\x1b[1;1R"]
 
 
+@pytest.mark.parametrize(
+    ("key", "before", "during", "expected"),
+    [
+        ("enter", "", "", "\r"),
+        ("up", "\x1b[?1l", "\x1b[?1h", "\x1bOA"),
+        ("up", "\x1b[?1h", "\x1b[?1l", "\x1b[A"),
+    ],
+    ids=["enter", "enter-application-cursor-mode", "leave-application-cursor-mode"],
+)
 @pytest.mark.asyncio
 async def test_a_key_after_text_follows_at_the_latest_half_the_quiet_period_later(
-    clocked_manager: Clocked, tmp_path: Path
+    clocked_manager: Clocked,
+    tmp_path: Path,
+    key: str,
+    before: str,
+    during: str,
+    expected: str,
 ) -> None:
     """A program that keeps printing (a spinner) never pauses for the echo:
     the key still follows half the quiet period after the text."""
@@ -104,13 +118,18 @@ async def test_a_key_after_text_follows_at_the_latest_half_the_quiet_period_late
     def revision() -> int:
         return terminal_info(manager, started.terminal_id).screen_revision
 
+    if before:
+        shown = revision()
+        adapter.emit(before)
+        await eventually(lambda: revision() > shown)
+
     sending = asyncio.ensure_future(
         manager.send_input(
             started.terminal_id,
             owner(),
             data=None,
             text="fix the tests",
-            key="enter",
+            key=key,
             expected_screen_revision=None,
             origin_run_id="run-a",
         )
@@ -120,14 +139,17 @@ async def test_a_key_after_text_follows_at_the_latest_half_the_quiet_period_late
         if index:
             await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 10)
         shown = revision()
-        adapter.emit(f"\r{frame}")
+        # The program may change cursor-key mode in response to the text,
+        # before the following key is typed. Advance only the fake clock.
+        adapter.emit((during if index == 0 else "") + f"\r{frame}")
         await eventually(lambda shown=shown: revision() > shown)
     assert adapter.writes == ["fix the tests"]
 
     # The last frame came 0.4 quiet periods after the text: only the limit is due.
     await clock.advance(TEST_ACTIVITY_QUIET_SECONDS * 0.11)
-    await sending
-    assert adapter.writes == ["fix the tests", "\r"]
+    sent = await sending
+    assert adapter.writes == ["fix the tests", expected]
+    assert sent["characters_sent"] == len("fix the tests") + len(expected)
 
 
 @pytest.mark.asyncio
