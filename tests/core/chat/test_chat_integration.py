@@ -49,14 +49,26 @@ async def test_agent_sends_message_and_persists_assistant_response(
         assert assistant.content == "assistant response"
         assert runtime.has_provider_credentials("fake-provider") is True
         assert runtime.get_provider_credentials("fake-provider") == "test-key"
-        assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
+        assert [message.role for message in messages] == [
+            "user",
+            "note",
+            "assistant",
+            "run_summary",
+        ]
         assert messages[0].content == "Hello"
-        assert messages[1].model == "fake-provider/fake-model-v1"
+        assert isinstance(messages[1].content, str)
+        assert messages[1].content.startswith("[scratch-area] ")
+        assert messages[2].model == "fake-provider/fake-model-v1"
         assert messages[-1].iteration_count == 1
         request = adapter.requests[0]
         assert request.model_id == "fake-model-v1"
         assert (request.kwargs["thinking_effort"], request.kwargs["temperature"]) == ("high", None)
-        assert [message["role"] for message in request.messages] == ["system", "user"]
+        assert [message["role"] for message in request.messages] == ["system", "user", "user"]
+        # Scratch is persisted as a note and sent as a System Reminder, never as
+        # another real User turn or a provider-visible note role.
+        assert request.messages[1]["content"] == "Hello"
+        assert messages[1].content in request.messages[2]["content"]
+        assert request.messages[2]["content"].startswith("<system-reminder>")
 
 
 @pytest.mark.asyncio
@@ -92,13 +104,15 @@ async def test_read_tool_batch_persists_each_result_and_counts_one_iteration_per
         assert assistant.content == "One file was missing."
         assert [message.role for message in messages] == [
             "user",
+            "note",
             "assistant",
             "tool",
             "tool",
             "assistant",
             "run_summary",
         ]
-        found, missing = (json.loads(str(message.content)) for message in messages[2:4])
+        assert str(messages[1].content).startswith("[scratch-area] ")
+        found, missing = (json.loads(str(message.content)) for message in messages[3:5])
         assert (found["ok"], found["data"], found["error"], found["artifacts"]) == (
             True,
             {"content": "1| file content"},
@@ -110,8 +124,8 @@ async def test_read_tool_batch_persists_each_result_and_counts_one_iteration_per
         assert "missing.txt" in missing["error"]["message"]
         # The next request replays exactly the persisted Tool results.
         assert [m["content"] for m in adapter.requests[1].messages if m["role"] == "tool"] == [
-            messages[2].content,
             messages[3].content,
+            messages[4].content,
         ]
         # Two Tool calls in one Model response still count as one iteration.
         assert (run.iteration_count, run.tool_call_count) == (2, 2)
