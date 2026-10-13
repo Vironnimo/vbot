@@ -52,7 +52,8 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   quote repair in `tools.md` -> Shared argument repair, against the schema of an
   edit; 5 of 12 real stringified `edits` decoded this way, all as the reviewed
   reading; of the 6 `edits` texts that failed in the Swarm of 2026-10-12, 1
-  more decodes with raw line breaks read). Text that is not JSON at all is
+  more decodes with raw line breaks read; stray closing brackets after the
+  array are left out, Swarm 2026-10-13). Text that is not JSON at all is
   refused with `edits arrived as text, not as an array. ...`; broken JSON text
   is refused with where it breaks (character, item and field, the text around
   it, how to write it) and one closing sentence. When the call also has a root

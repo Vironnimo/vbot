@@ -549,6 +549,12 @@ _PART_EDITS = '[{"old_string": "x = 1", '
             b'got "x": not a number\n',
             id="quote-colon-text",
         ),
+        # Swarm run 2026-10-13: closing brackets after the value close nothing.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = "a""}]}\n'},
+            b'x = "a"\n',
+            id="stray-closers",
+        ),
         # These have another reading than slips inside new_string: nothing runs,
         # and the error names the field the JSON breaks in.
         pytest.param(
@@ -575,6 +581,12 @@ _PART_EDITS = '[{"old_string": "x = 1", '
             {"edits": '[{"old_string": "x = 1", "new_string": "x = \\_"}]'},
             "new_string",
             id="other",
+        ),
+        # A value after the end can be an edit meant to run: nothing runs.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = 2"}], {"old_string": "x"}]'},
+            "character 48",
+            id="value-after-the-end",
         ),
         # Text that ends early lost part of the call, also when the rest arrived
         # beside it: nothing runs, and the error says where the text ends.

@@ -27,6 +27,10 @@ JsonObject = dict[str, Any]
 _JSON_NUMBER_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$")
 # A line break written as a JSON escape: \n or \r after an even run of backslashes.
 _LINE_BREAK_ESCAPE = re.compile(r"(?<!\\)(?:\\\\)*\\[nr]")
+_JSON_WHITESPACE = re.compile(r"[ \t\n\r]*")
+# What can follow a complete value read from argument text: whitespace and
+# closing brackets left over from the call's own nesting, which close nothing.
+_STRAY_CLOSERS = re.compile(r"[ \t\n\r\]}]*")
 _MAX_FLOAT_DECIMAL_EXPONENT = 308
 _MIN_FLOAT_DECIMAL_EXPONENT = -324
 
@@ -341,7 +345,8 @@ def decode_json_argument(text: str, schema: JsonObject) -> Any:
     JSON, raw control characters inside its texts are read as themselves
     (unless it also writes line breaks as escapes) and the stray quotes inside
     the text of the schema's fields are escaped
-    (``core.utils.json_text.escape_inner_quotes``); that reading counts only
+    (``core.utils.json_text.escape_inner_quotes``), and closing brackets
+    after the end of the value are left out; that reading counts only
     when it gives one value the schema accepts with no undeclared fields.
     Otherwise a ``json.JSONDecodeError`` is raised: the first break past the
     raw control characters, else the strict decoding error. A repeated field
@@ -412,14 +417,11 @@ def _schema_reading(
 
     A text that writes line breaks both raw and as escapes has no such value: a
     raw one there can be a slip of the output, such as a break inside a word.
+    Closing brackets after the end of the value close nothing it opened and are
+    left out; any other text there leaves ``text`` without such a value.
     """
     try:
-        decoded = json.loads(
-            text,
-            strict=False,
-            parse_constant=_reject_non_json_constant,
-            object_pairs_hook=_unique_json_object,
-        )
+        decoded, text = _value_and_its_text(text)
         if _LINE_BREAK_ESCAPE.search(text) and _has_raw_line_break(text, decoded):
             return _NOT_REPAIRED
         value = normalize_schema_value(
@@ -433,6 +435,24 @@ def _schema_reading(
     if not _declared_fields_only(value, schema, root_schema):
         return _NOT_REPAIRED
     return value
+
+
+def _value_and_its_text(text: str) -> tuple[Any, str]:
+    """Decode ``text`` with control characters as text; return the value and its JSON text.
+
+    Only whitespace and stray closing brackets can follow the value; anything
+    else there raises ``json.JSONDecodeError`` as extra data.
+    """
+    decoder = json.JSONDecoder(
+        strict=False,
+        parse_constant=_reject_non_json_constant,
+        object_pairs_hook=_unique_json_object,
+    )
+    start = _JSON_WHITESPACE.match(text)
+    value, end = decoder.raw_decode(text, start.end() if start else 0)
+    if not _STRAY_CLOSERS.fullmatch(text, end):
+        raise json.JSONDecodeError("Extra data", text, end)
+    return value, text[:end]
 
 
 def _has_raw_line_break(text: str, decoded: Any) -> bool:
