@@ -4,16 +4,19 @@ Text attachments use the same renderer as the ``read`` Tool, so a file accepted
 through a channel has exactly the same limits and continuation hints.
 
 Local files read as UTF-8 with replacement characters. A command's log holds
-the bytes its programs wrote, and on Windows some write UTF-16, so ``read``
-can choose another ``TextDecoding`` for it.
+the bytes its programs wrote, and on Windows some write UTF-16 between the
+UTF-8 of the others, so a log decodes run by run (``_LogDecoder``), and its
+lines say which of them held UTF-16 text.
 """
 
 from __future__ import annotations
 
+import codecs
 import io
 import json
 import os
 import re
+from bisect import bisect_right
 from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -44,41 +47,251 @@ _MATCH_LINE_CHARACTERS = 2000
 # send, such as ``813`` or ``"813:5"``.
 READ_CONTINUATION = "Use offset={offset} to continue."
 
-# How a local file's bytes become text (``open_text``): UTF-8; UTF-16 after its
-# byte order mark; or UTF-8 holding UTF-16LE text (``_Utf16LeAsUtf8``).
-TextDecoding = Literal["utf-8", "utf-16", "utf-8+utf-16le"]
+# A command's log (``_LogDecoder``): the bytes one raw read takes.
 _DECODING_CHUNK_BYTES = 64 * 1024
-# A UTF-16LE character U+0080-U+00FF: its byte, then a NUL.
-_UTF16LE_LATIN1 = re.compile(rb"[\x80-\xff]\x00")
+# UTF-16LE text without a byte order mark counts from this many characters
+# U+0001-U+00FF in a row, each its byte and a NUL; a NUL beside UTF-8 is stray.
+_UTF16_RUN_UNITS = 3
+_UTF16_LATIN = re.compile(rb"(?:[\x01-\xff]\x00)+")
+# Where UTF-8 stops: a NUL byte, or the byte order mark that starts UTF-16LE text.
+_UTF8_STOP = re.compile(rb"\x00|\xff\xfe")
+# In UTF-16LE text after a byte order mark: up to the first character with a
+# non-zero high byte that follows one with a zero high byte, where UTF-8 resumed
+# if the text ended there (UTF-8 has no NUL byte).
+_UTF16_SWITCH = re.compile(rb"(?:..)*?.\x00(?=.[^\x00])", re.DOTALL)
+# The check for resumed UTF-8 reads to the next line feed, at most this far.
+_RESUME_WINDOW = 256
+# What a decision reads past its position; a chunk holds it back for the next one.
+_LOOKAHEAD = _RESUME_WINDOW + 8
+# A note names at most this many ranges of shown lines; more are summarized.
+_NOTE_RANGES = 6
 
 
-def open_text(resolved: Path, decoding: TextDecoding = "utf-8") -> IO[str]:
-    """Open *resolved* as text in *decoding*: invalid bytes read as U+FFFD, line ends stay."""
-    if decoding == "utf-8+utf-16le":
-        raw = io.BufferedReader(
-            _Utf16LeAsUtf8(resolved.open("rb", buffering=0)), _DECODING_CHUNK_BYTES
-        )
-        return io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
-    return resolved.open("r", encoding=decoding, errors="replace", newline="")
+def _open_text(resolved: Path, log: _LogDecoding | None = None) -> IO[str]:
+    """Open *resolved* as text: invalid bytes read as U+FFFD, line ends stay.
+
+    A command's log (*log*) decodes run by run, as ``_LogDecoder`` describes.
+    """
+    if log is None:
+        return resolved.open("r", encoding="utf-8", errors="replace", newline="")
+    raw = io.BufferedReader(log.open(resolved), _DECODING_CHUNK_BYTES)
+    return io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
 
 
-class _Utf16LeAsUtf8(io.RawIOBase):
-    """A file's bytes as UTF-8, with the UTF-16LE text written into it decoded.
+class _LogDecoder:
+    """A command's log as UTF-8, decoded run by run, with the lines that held UTF-16.
 
     On Windows some programs, such as wsl.exe, write UTF-16LE to a pipe, between
-    the UTF-8 the command's other output is in, so a command's log holds both, at
-    any byte offset. A byte followed by a NUL is the UTF-16LE character it makes,
-    U+0001-U+00FF, which covers ASCII and Western European text; other NUL bytes
-    are left out. UTF-16LE text beyond U+00FF is not decoded without a byte order
-    mark (``TextDecoding`` "utf-16").
+    the UTF-8 of the command's other output, at any byte offset, so no single
+    encoding fits the whole log. Valid UTF-8 comes first. UTF-16LE is read only in
+    clear runs: at least ``_UTF16_RUN_UNITS`` characters U+0001-U+00FF in a row
+    (each its byte and a NUL; text beyond U+00FF has no NUL to show it), or the
+    text after a byte order mark, which ends where the bytes from a character
+    after an ASCII-range one up to the next line feed read as UTF-8 without a NUL.
+    Other NUL bytes are left out. ``utf16_lines`` and ``nul_lines`` record the
+    lines, numbered as the renderer splits them, that held text decoded as UTF-16
+    and NUL bytes left out, as ranges in ascending order.
     """
 
-    def __init__(self, raw: IO[bytes]) -> None:
+    def __init__(self) -> None:
+        self._buffer = b""
+        self._mode: Literal["utf-8", "latin", "bom"] = "utf-8"
+        # In "bom": the last character had a zero high byte, or was the mark.
+        self._after_ascii = False
+        self._utf16 = codecs.getincrementaldecoder("utf-16-le")(errors="replace")
+        self.line = 1
+        self._after_cr = False
+        self.utf16_lines: list[list[int]] = []
+        self.nul_lines: list[list[int]] = []
+
+    def decode(self, data: bytes, *, final: bool = False) -> bytes:
+        """Return the UTF-8 for *data*, holding back what the next bytes decide."""
+        buffer = self._buffer + data
+        out: list[bytes] = []
+        limit = len(buffer) if final else len(buffer) - _LOOKAHEAD
+        position, more = 0, True
+        while more:
+            if self._mode == "utf-8":
+                position, more = self._utf8(buffer, position, limit, out)
+            elif self._mode == "latin":
+                position, more = self._latin(buffer, position, final, out)
+            else:
+                position, more = self._bom(buffer, position, limit, final, out)
+        self._buffer = buffer[position:]
+        if final and self._mode == "bom":
+            self._emit_utf16(b"", out, final=True)
+        return b"".join(out)
+
+    def _utf8(self, buffer: bytes, position: int, limit: int, out: list[bytes]) -> tuple[int, bool]:
+        end = len(buffer)
+        stop = _UTF8_STOP.search(buffer, position)
+        found = stop.start() if stop else end
+        start = found - 1  # where UTF-16LE text before a NUL would start
+        latin = (
+            stop is not None
+            and buffer[found] == 0
+            and start >= position
+            and buffer[start] != 0
+            and not _ends_utf8_sequence(buffer, position, start)
+        )
+        if (start if latin else found) >= limit and limit < end:
+            cut = max(position, _utf8_boundary(buffer, position, limit))
+            self._emit_utf8(buffer[position:cut], out)
+            return cut, False
+        if stop is None:
+            self._emit_utf8(buffer[position:], out)
+            return end, False
+        if buffer[found]:
+            self._emit_utf8(buffer[position:found], out)
+            self._mode, self._after_ascii = "bom", True
+            return found + 2, True
+        if latin:
+            run = _UTF16_LATIN.match(buffer, start)
+            if run and run.end() - start >= 2 * _UTF16_RUN_UNITS:
+                self._emit_utf8(buffer[position:start], out)
+                self._mode = "latin"
+                return start, True
+        self._emit_utf8(buffer[position:found], out)
+        _add_line(self.nul_lines, self.line, self.line)
+        return found + 1, True
+
+    def _latin(
+        self, buffer: bytes, position: int, final: bool, out: list[bytes]
+    ) -> tuple[int, bool]:
+        run = _UTF16_LATIN.match(buffer, position)
+        stop = run.end() if run else position
+        self._emit(buffer[position:stop:2].decode("latin-1").encode(), out, utf16=True)
+        if stop + 1 >= len(buffer) and not final:
+            return stop, False
+        self._mode = "utf-8"
+        return stop, True
+
+    def _bom(
+        self, buffer: bytes, position: int, limit: int, final: bool, out: list[bytes]
+    ) -> tuple[int, bool]:
+        end = len(buffer)
+        if end - position < 2:
+            if not final:
+                return position, False
+            # An odd last byte cannot be UTF-16.
+            self._emit_utf16(b"", out, final=True)
+            self._mode = "utf-8"
+            return position, position < end
+        if self._after_ascii and buffer[position + 1]:
+            switch: int | None = position
+        else:
+            found = _UTF16_SWITCH.match(buffer, position)
+            switch = found.end() if found else None
+        if switch is None:
+            stop = position + (end - position) // 2 * 2
+            self._emit_utf16(buffer[position:stop], out)
+            self._after_ascii = buffer[stop - 1] == 0
+            return stop, final and stop < end
+        self._emit_utf16(buffer[position:switch], out)
+        self._after_ascii = True
+        if switch >= limit and not final:
+            return switch, False
+        if _resumes_utf8(buffer, switch, final):
+            self._emit_utf16(b"", out, final=True)
+            self._mode = "utf-8"
+            return switch, True
+        stop = min(switch + 2, end)
+        self._emit_utf16(buffer[switch:stop], out)
+        self._after_ascii = False
+        return stop, True
+
+    def _emit_utf8(self, data: bytes, out: list[bytes]) -> None:
+        if not data.isascii():
+            data = data.decode("utf-8", errors="replace").encode()
+        self._emit(data, out, utf16=False)
+
+    def _emit_utf16(self, data: bytes, out: list[bytes], *, final: bool = False) -> None:
+        text = self._utf16.decode(data, final)
+        if final:
+            self._utf16.reset()
+        first, *rest = text.split("\x00")
+        self._emit(first.encode(), out, utf16=True)
+        for part in rest:
+            _add_line(self.nul_lines, self.line, self.line)
+            self._emit(part.encode(), out, utf16=True)
+
+    def _emit(self, data: bytes, out: list[bytes], *, utf16: bool) -> None:
+        """Append *data* and count its lines as the renderer splits them."""
+        if not data:
+            return
+        # A line feed after a carriage return ends the line that return ended.
+        first = self.line - 1 if self._after_cr and data.startswith(b"\n") else self.line
+        breaks = data.count(b"\n") + data.count(b"\r") - data.count(b"\r\n")
+        self.line += breaks - (first < self.line)
+        if utf16:
+            last = self.line - 1 if data.endswith((b"\n", b"\r")) else self.line
+            _add_line(self.utf16_lines, first, last)
+        self._after_cr = data.endswith(b"\r")
+        out.append(data)
+
+
+def _ends_utf8_sequence(buffer: bytes, low: int, index: int) -> bool:
+    """Whether ``buffer[index]`` ends a valid multi-byte UTF-8 character from *low* on."""
+    if not 0x80 <= buffer[index] <= 0xBF:
+        return False
+    for start in range(index - 1, max(low, index - 3) - 1, -1):
+        if not 0x80 <= buffer[start] <= 0xBF:
+            try:
+                buffer[start : index + 1].decode("utf-8")
+            except UnicodeDecodeError:
+                return False
+            return True
+    return False
+
+
+def _utf8_boundary(buffer: bytes, low: int, index: int) -> int:
+    """Move *index* back before a UTF-8 character that starts before it and ends after it."""
+    for start in range(index - 1, max(low, index - 3) - 1, -1):
+        byte = buffer[start]
+        if byte < 0x80:
+            return index
+        if byte >= 0xC0:
+            length = 2 if byte < 0xE0 else 3 if byte < 0xF0 else 4
+            return start if start + length > index else index
+    return index
+
+
+def _resumes_utf8(buffer: bytes, index: int, final: bool) -> bool:
+    """Whether UTF-8 text resumes at *index*: NUL-free UTF-8 up to the next line feed.
+
+    A line feed that starts the window looks on to the next one, since UTF-16LE
+    text holds that byte too (U+4E0A, for one).
+    """
+    window = buffer[index : index + _RESUME_WINDOW]
+    newline = window.find(b"\n", 1)
+    segment = window[: newline + 1] if newline >= 0 else window
+    if b"\x00" in segment:
+        return False
+    complete = newline >= 0 or (final and index + _RESUME_WINDOW >= len(buffer))
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(segment, complete)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _add_line(ranges: list[list[int]], first: int, last: int) -> None:
+    """Add lines *first* to *last* to ascending *ranges*, joining a neighboring range."""
+    if ranges and first <= ranges[-1][1] + 1:
+        ranges[-1][1] = max(ranges[-1][1], last)
+    else:
+        ranges.append([first, last])
+
+
+class _LogBytes(io.RawIOBase):
+    """A command's log file read through a ``_LogDecoder``."""
+
+    def __init__(self, raw: IO[bytes], decoder: _LogDecoder) -> None:
         super().__init__()
         self._raw = raw
+        self._decoder = decoder
         self._pending = b""
-        # A last byte a NUL at the start of the next chunk makes a character.
-        self._held = b""
+        self._ended = False
 
     @override
     def readable(self) -> bool:
@@ -86,18 +299,10 @@ class _Utf16LeAsUtf8(io.RawIOBase):
 
     @override
     def readinto(self, buffer: Any) -> int:
-        while not self._pending:
+        while not self._pending and not self._ended:
             data = self._raw.read(_DECODING_CHUNK_BYTES)
-            if not data:
-                self._pending, self._held = self._held, b""
-                break
-            data, self._held = self._held + data, b""
-            if data[-1] >= 0x80:
-                data, self._held = data[:-1], data[-1:]
-            if b"\x00" in data:
-                data = _UTF16LE_LATIN1.sub(lambda unit: chr(unit[0][0]).encode(), data)
-                data = data.replace(b"\x00", b"")
-            self._pending = data
+            self._ended = not data
+            self._pending = self._decoder.decode(data, final=self._ended)
         view = memoryview(buffer).cast("B")
         count = min(len(view), len(self._pending))
         view[:count] = self._pending[:count]
@@ -108,6 +313,64 @@ class _Utf16LeAsUtf8(io.RawIOBase):
     def close(self) -> None:
         self._raw.close()
         super().close()
+
+
+class _LogDecoding:
+    """How one read decodes a command's log, and the note on what it shows.
+
+    Every open decodes the file from its start; the one that got furthest knows
+    the most lines.
+    """
+
+    def __init__(self) -> None:
+        self._decoders: list[_LogDecoder] = []
+
+    def open(self, resolved: Path) -> _LogBytes:
+        decoder = _LogDecoder()
+        self._decoders.append(decoder)
+        return _LogBytes(resolved.open("rb", buffering=0), decoder)
+
+    def note(self, shown: Iterable[int]) -> str | None:
+        """Name the *shown* lines that held text decoded as UTF-16 or NUL bytes left out."""
+        decoder = max(self._decoders, key=lambda each: each.line, default=None)
+        if decoder is None:
+            return None
+        shown = list(shown)
+        utf16 = _lines_in(decoder.utf16_lines, shown)
+        nul = _lines_in(decoder.nul_lines, shown)
+        sentences = []
+        if utf16:
+            subject, plural = _name_lines(utf16, "Line")
+            verb = "contain" if plural else "contains"
+            sentences.append(f"{subject} {verb} text decoded as UTF-16.")
+        if nul:
+            subject, _ = _name_lines(nul, "line")
+            sentences.append(f"NUL bytes in {subject} are left out.")
+        return f"[{' '.join(sentences)}]" if sentences else None
+
+
+def _lines_in(ranges: list[list[int]], lines: list[int]) -> list[int]:
+    """Return the *lines* that lie in ascending *ranges*."""
+    starts = [first for first, _ in ranges]
+    found = []
+    for number in lines:
+        index = bisect_right(starts, number) - 1
+        if index >= 0 and ranges[index][1] >= number:
+            found.append(number)
+    return found
+
+
+def _name_lines(lines: list[int], word: str) -> tuple[str, bool]:
+    """Name ascending line numbers as "Lines 3-7, 12 and 20", and whether they are several."""
+    ranges: list[list[int]] = []
+    for number in lines:
+        _add_line(ranges, number, number)
+    if len(ranges) > _NOTE_RANGES:
+        return f"{len(lines)} of the lines shown, from {lines[0]} to {lines[-1]},", True
+    names = [f"{first}-{last}" if last > first else str(first) for first, last in ranges]
+    listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    plural = len(lines) > 1
+    return f"{word}{'s' if plural else ''} {listed}", plural
 
 
 @dataclass(frozen=True)
@@ -343,18 +606,16 @@ def render_text_window(
     if not (line_limited or byte_limited):
         return output, False
 
-    return (
-        finalize_limited_text(
-            rendered_lines,
-            start_line=start_line,
-            start_character=start_character,
-            total_lines=total_lines,
-            byte_limited=byte_limited,
-            number=number,
-            continuation=continuation,
-        ),
-        True,
+    output, _ = finalize_limited_text(
+        rendered_lines,
+        start_line=start_line,
+        start_character=start_character,
+        total_lines=total_lines,
+        byte_limited=byte_limited,
+        number=number,
+        continuation=continuation,
     )
+    return output, True
 
 
 def finalize_limited_text(
@@ -366,8 +627,8 @@ def finalize_limited_text(
     byte_limited: bool,
     number: bool,
     continuation: str = READ_CONTINUATION,
-) -> str:
-    """Fit rendered lines and append a continuation hint."""
+) -> tuple[str, int]:
+    """Fit rendered lines, append a continuation hint, and return the last line shown."""
     output = "".join(rendered_lines)
 
     shown_line_count = len(rendered_lines)
@@ -420,7 +681,7 @@ def finalize_limited_text(
         continuation=continuation,
     )
 
-    return output + ("\n\n" if output and not output.endswith("\n") else "") + hint
+    return output + ("\n\n" if output and not output.endswith("\n") else "") + hint, shown_end
 
 
 def _split_stream_fragments(
@@ -442,18 +703,30 @@ def _split_stream_fragments(
     return fragments, held_carriage_return
 
 
-def render_text_path(
-    resolved: Path, arguments: JsonObject, *, decoding: TextDecoding = "utf-8"
-) -> str:
-    """Render a local text file with bounded memory and early truncation."""
+def render_text_path(resolved: Path, arguments: JsonObject, *, command_log: bool = False) -> str:
+    """Render a local text file with bounded memory and early truncation.
+
+    A command's log (*command_log*) decodes run by run (``_LogDecoder``), and a note
+    before its lines names the lines shown that held UTF-16 text or NUL bytes.
+    """
+    log = _LogDecoding() if command_log else None
+    output, shown = _render_path(resolved, arguments, log)
+    note = log.note(shown) if log is not None else None
+    return output if note is None else f"{note}\n{output}"
+
+
+def _render_path(
+    resolved: Path, arguments: JsonObject, log: _LogDecoding | None
+) -> tuple[str, range]:
+    """Render like ``render_text_path`` and return the line numbers shown."""
     position = read_position(arguments)
     limit = optional_int(arguments.get("limit"), field_name="limit", minimum=1)
     max_lines = limit or DEFAULT_LINE_LIMIT
     known_total: int | None = None
     if position.line < 0:
-        known_total = count_lines(resolved, decoding=decoding)
+        known_total = count_lines(resolved, log=log)
         if not known_total:
-            return ""
+            return "", range(0)
         position = ReadPosition(_start_line(position.line, known_total))
     rendered_lines: list[str] = []
     rendered_bytes = 0
@@ -543,7 +816,7 @@ def render_text_path(
         current_selected_line_started = False
         return True
 
-    with open_text(resolved, decoding) as handle:
+    with _open_text(resolved, log) as handle:
         while not (line_limited or byte_limited or character_offset_beyond_end):
             chunk = handle.read(_TEXT_STREAM_CHUNK_CHARACTERS)
             if not chunk:
@@ -568,11 +841,10 @@ def render_text_path(
     if character_offset_beyond_end or (target_line_seen and not target_character_reached):
         fallback = _past_line_end(position, limit)
         if isinstance(fallback, str):
-            return fallback
+            return fallback, range(0)
         note, line, count = fallback
-        return note + render_text_path(
-            resolved, {"offset": line, "limit": count}, decoding=decoding
-        )
+        output, shown = _render_path(resolved, {"offset": line, "limit": count}, log)
+        return note + output, shown
 
     reached_eof = not (line_limited or byte_limited or character_offset_beyond_end)
     total_lines = (
@@ -581,19 +853,19 @@ def render_text_path(
         else None
     )
     if total_lines == 0:
-        return ""
+        return "", range(0)
     if not target_line_seen:
         return (
             f"[Offset {position.line} is beyond end of file ({total_lines or 0} lines). "
             "Nothing to show.]"
-        )
+        ), range(0)
 
     output = "".join(rendered_lines)
     if not (line_limited or byte_limited):
-        return output
+        return output, range(position.line, position.line + len(rendered_lines))
     if known_total is None:
-        known_total = count_lines(resolved, max_bytes=_LINE_COUNT_MAX_BYTES, decoding=decoding)
-    return finalize_limited_text(
+        known_total = count_lines(resolved, max_bytes=_LINE_COUNT_MAX_BYTES, log=log)
+    output, shown_end = finalize_limited_text(
         rendered_lines,
         start_line=position.line,
         start_character=position.character,
@@ -601,26 +873,22 @@ def render_text_path(
         byte_limited=byte_limited,
         number=True,
     )
+    return output, range(position.line, shown_end + 1)
 
 
 def count_lines(
-    resolved: Path, *, max_bytes: int | None = None, decoding: TextDecoding = "utf-8"
+    resolved: Path, *, max_bytes: int | None = None, log: _LogDecoding | None = None
 ) -> int | None:
     """Count lines the way the renderer splits them, or None past ``max_bytes``.
 
     Breaks are LF, CRLF and a lone CR. A final line without a break still counts.
+    A command's log (*log*) counts in the text it decodes to.
     """
-    if decoding == "utf-16":
-        return _count_text_lines(resolved, max_bytes, decoding)
     count = 0
     size = 0
     first = b""
     last = b""
-    handle: io.RawIOBase | IO[bytes] = (
-        _Utf16LeAsUtf8(resolved.open("rb", buffering=0))
-        if decoding == "utf-8+utf-16le"
-        else resolved.open("rb")
-    )
+    handle: io.RawIOBase | IO[bytes] = log.open(resolved) if log else resolved.open("rb")
     with handle:
         while chunk := handle.read(_COUNT_CHUNK_BYTES):
             if not size:
@@ -639,26 +907,7 @@ def count_lines(
     return count
 
 
-def _count_text_lines(resolved: Path, max_bytes: int | None, decoding: TextDecoding) -> int | None:
-    """``count_lines`` over decoded text, for a decoding whose line breaks are not bytes."""
-    if max_bytes is not None and resolved.stat().st_size > max_bytes:
-        return None
-    count = 0
-    last = ""
-    with open_text(resolved, decoding) as text:
-        while chunk := text.read(_TEXT_STREAM_CHUNK_CHARACTERS):
-            if not last:
-                chunk = chunk.removeprefix("\ufeff")
-            count += chunk.count("\n") + chunk.count("\r") - chunk.count("\r\n")
-            if last == "\r" and chunk.startswith("\n"):
-                count -= 1
-            last = chunk[-1:] or last
-    if last and last not in ("\n", "\r"):
-        count += 1
-    return count
-
-
-def without_bom(lines: Iterable[str]) -> Iterator[str]:
+def _without_bom(lines: Iterable[str]) -> Iterator[str]:
     """Yield text lines with a leading byte order mark removed."""
     iterator = iter(lines)
     first = next(iterator, None)
@@ -668,12 +917,35 @@ def without_bom(lines: Iterable[str]) -> Iterator[str]:
     yield from iterator
 
 
+def render_matching_path(
+    resolved: Path, arguments: JsonObject, label: str, *, command_log: bool = False
+) -> str:
+    """Show the lines of a local text file that match ``pattern``, as ``render_matching_lines``.
+
+    A command's log (*command_log*) is searched in the text a read shows of it,
+    with the note on the lines shown (``render_text_path``).
+    """
+    log = _LogDecoding() if command_log else None
+    with _open_text(resolved, log) as text:
+        output, shown = _matching_lines(_without_bom(text), arguments, label)
+    note = log.note(shown) if log is not None else None
+    return output if note is None else f"{note}\n{output}"
+
+
 def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: str) -> str:
     """Show the lines that match ``pattern``, numbered like a read, with optional context.
 
     A call that sends search fields to read asks for this file's matching lines.
     The first line states the filter, so the result never reads as the whole file.
     """
+    output, _ = _matching_lines(lines, arguments, label)
+    return output
+
+
+def _matching_lines(
+    lines: Iterable[str], arguments: JsonObject, label: str
+) -> tuple[str, list[int]]:
+    """Render like ``render_matching_lines`` and return the line numbers shown."""
     pattern = arguments["pattern"]
     flags = re.IGNORECASE if arguments.get("ignore_case") is True else 0
     note = ""
@@ -694,7 +966,7 @@ def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: st
     )
 
     shown: list[str] = []
-    shown_lines = 0
+    shown_numbers: list[int] = []
     shown_bytes = 0
     last_shown = 0
     resume_at: int | None = None
@@ -703,7 +975,7 @@ def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: st
     after = 0
 
     def show(number: int, text: str) -> None:
-        nonlocal last_shown, resume_at, shown_bytes, shown_lines
+        nonlocal last_shown, resume_at, shown_bytes
         if resume_at is not None:
             return
         if len(text) > _MATCH_LINE_CHARACTERS:
@@ -716,11 +988,11 @@ def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: st
         if last_shown and number > last_shown + 1:
             rendered = "--\n" + rendered
         size = len(rendered.encode("utf-8"))
-        if shown_lines >= max_lines or shown_bytes + size > MAX_FILE_BYTES:
+        if len(shown_numbers) >= max_lines or shown_bytes + size > MAX_FILE_BYTES:
             resume_at = number
             return
         shown.append(rendered)
-        shown_lines += 1
+        shown_numbers.append(number)
         shown_bytes += size
         last_shown = number
 
@@ -744,13 +1016,13 @@ def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: st
     scope = f" from line {position.line} on" if position.line > 1 else ""
     quoted = json.dumps(pattern, ensure_ascii=False)
     if not matches:
-        return f"No line of {label}{scope} matches {quoted}{note}."
+        return f"No line of {label}{scope} matches {quoted}{note}.", []
     noun = "line" if matches == 1 else "lines"
     header = f"{matches} {noun} of {label}{scope} match {quoted}{note}:\n"
     output = header + "".join(shown)
     if resume_at is not None:
         output += f"[Output stopped before line {resume_at}. Use offset={resume_at} to continue.]"
-    return output
+    return output, shown_numbers
 
 
 def render_directory_listing(

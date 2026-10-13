@@ -356,27 +356,43 @@ _WSL_LIST = "Windows Subsystem für Linux-Distributionen:\r\nUbuntu (Standard)\r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("raw", "text", "decoded"),
+    ("raw", "text", "utf16_lines", "nul"),
     [
-        (_WSL_LIST.encode("utf-16-le"), _WSL_LIST, True),
+        (_WSL_LIST.encode("utf-16-le"), _WSL_LIST, "1-3", False),
         # Between the command's own UTF-8 output, at an odd byte offset.
         (
             "start ä\r\n".encode() + _WSL_LIST.encode("utf-16-le") + b"end\r\n",
             f"start ä\r\n{_WSL_LIST}end\r\n",
-            True,
+            "2-4",
+            False,
         ),
-        # Text beyond U+00FF decodes after a byte order mark.
+        # Text beyond U+00FF decodes after a byte order mark, which applies to its
+        # own text only: the UTF-8 after it stays UTF-8, also mid-file.
         (
-            "\ufeffДистрибутивы:\r\nUbuntu\r\n".encode("utf-16-le"),
-            "Дистрибутивы:\r\nUbuntu\r\n",
-            True,
+            "\ufeffДистрибутивы:\r\nUbuntu\r\n".encode("utf-16-le") + "готово ä\r\n".encode(),
+            "Дистрибутивы:\r\nUbuntu\r\nготово ä\r\n",
+            "1-2",
+            False,
         ),
-        (b"ok\nUbuntu\n", "ok\nUbuntu\n", False),
+        (
+            b"start\r\n" + "\ufeff中文 text\r\nUbuntu\r\n".encode("utf-16-le") + b"end\r\n",
+            "start\r\n中文 text\r\nUbuntu\r\nend\r\n",
+            "2-3",
+            False,
+        ),
+        # Valid UTF-8 before a NUL stays as written; the stray NUL is left out.
+        ("Größe: ä\x00\r\nUbuntu\r\n".encode(), "Größe: ä\r\nUbuntu\r\n", None, True),
+        (b"ok\nUbuntu\n", "ok\nUbuntu\n", None, False),
     ],
-    ids=["utf16le", "between_utf8", "utf16_with_bom", "utf8"],
+    ids=["utf16le", "between_utf8", "bom_then_utf8", "bom_mid_file", "utf8_before_nul", "utf8"],
 )
 async def test_a_command_log_reads_as_the_text_its_programs_wrote(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw: bytes, text: str, decoded: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw: bytes,
+    text: str,
+    utf16_lines: str | None,
+    nul: bool,
 ) -> None:
     # The data directory is beside the workspace.
     workspace = tmp_path / "workspace"
@@ -394,16 +410,21 @@ async def test_a_command_log_reads_as_the_text_its_programs_wrote(
     last = content(await read(workspace, {"path": str(log), "offset": -1}))
     found = content(await read(workspace, {"path": str(log), "pattern": "Ubuntu"}))
 
-    # A NUL byte makes no command log binary; the result says what was decoded.
+    # A NUL byte makes no command log binary; the result names the lines decoded
+    # as UTF-16 and those whose NUL bytes are left out, among the lines it shows.
     numbered = "".join(f"{number}| {line}\n" for number, line in enumerate(lines, 1))
-    if decoded:
+    if utf16_lines or nul:
         note, rest = whole.split("\n", 1)
-        assert "UTF-16" in note
+        assert (f" {utf16_lines} " in note and "UTF-16" in note) == bool(utf16_lines)
+        assert ("NUL" in note) == nul
         assert rest == numbered
     else:
         assert whole == numbered
     assert last.splitlines()[-1] == f"{len(lines)}| {lines[-1]}"
+    assert ("UTF-16" in last) == (utf16_lines == "1-3")
+    # A search sees the text a read shows.
     assert f"\n{ubuntu}| {lines[ubuntu - 1]}" in found
+    assert ("UTF-16" in found) == bool(utf16_lines)
 
 
 _LONG = "".join(f"line{i}\n" for i in range(1, 2002))
