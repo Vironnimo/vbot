@@ -149,7 +149,8 @@ class _GuardProxy:
     def __init__(self) -> None:
         self._server: asyncio.Server | None = None
         self._writers: set[asyncio.StreamWriter] = set()
-        self._blocked: dict[str, float] = {}
+        # Hosts the proxy refused, with when and why (a public-fetch failure code).
+        self._refused: dict[str, tuple[float, str]] = {}
         self.port = 0
 
     async def start(self) -> None:
@@ -158,9 +159,15 @@ class _GuardProxy:
         )
         self.port = self._server.sockets[0].getsockname()[1]
 
-    def blocked_since(self, moment: float) -> bool:
-        """Whether the proxy refused an address since ``moment`` (``time.monotonic``)."""
-        return any(when >= moment for when in self._blocked.values())
+    def refused_since(self, moment: float) -> tuple[str, str] | None:
+        """Return the host last refused since ``moment`` (``time.monotonic``) and why.
+
+        The reason is ``blocked_url`` (a private or local address) or
+        ``host_not_found`` (the name does not resolve).
+        """
+        refusals = [(when, host, code) for host, (when, code) in self._refused.items()]
+        latest = max((refusal for refusal in refusals if refusal[0] >= moment), default=None)
+        return None if latest is None else (latest[1], latest[2])
 
     async def aclose(self) -> None:
         if self._server is not None:
@@ -192,9 +199,11 @@ class _GuardProxy:
                 )
             try:
                 address = await resolve_public_address(host, port)
-            except PublicFetchError:
-                self._remember_block(host)
-                await _answer(writer, "403 Forbidden")
+            except PublicFetchError as error:
+                self._remember_refusal(host, error.code)
+                await _answer(
+                    writer, "502 Bad Gateway" if error.code == "host_not_found" else "403 Forbidden"
+                )
                 return
             try:
                 async with asyncio.timeout(_PROXY_CONNECT_SECONDS):
@@ -219,10 +228,11 @@ class _GuardProxy:
                     self._writers.discard(stream)
                     stream.close()
 
-    def _remember_block(self, host: str) -> None:
-        self._blocked[host.lower()] = time.monotonic()
-        if len(self._blocked) > _BLOCK_MEMORY:
-            del self._blocked[next(iter(self._blocked))]
+    def _remember_refusal(self, host: str, code: str) -> None:
+        self._refused.pop(host.lower(), None)
+        self._refused[host.lower()] = (time.monotonic(), code)
+        if len(self._refused) > _BLOCK_MEMORY:
+            del self._refused[next(iter(self._refused))]
 
 
 def _forward_headers(header_block: bytes) -> bytes:
@@ -595,7 +605,7 @@ async def _render(running: _Running, url: str) -> PublicResponse:
         )
         if error := navigation.get("errorText"):
             raise BrowserFetchError(
-                _navigation_failure(str(error), running.proxy.blocked_since(started))
+                _navigation_failure(str(error), running.proxy.refused_since(started))
             )
         await _settle(devtools, session, events, navigation["frameId"], started + _FETCH_SECONDS)
         page = await _evaluate(devtools, session, _PAGE_SCRIPT)
@@ -665,13 +675,15 @@ async def _evaluate(devtools: _DevTools, session: str, expression: str) -> dict[
     return value
 
 
-def _navigation_failure(error: str, blocked: bool) -> str:
-    if blocked:
+def _navigation_failure(error: str, refused: tuple[str, str] | None) -> str:
+    if refused is not None and refused[1] == "host_not_found":
+        return f"the page leads to {refused[0]}, which could not be found (DNS lookup failed)"
+    if refused is not None:
         return "the page leads to a private or local network address, which is not followed"
     if "ERR_ABORTED" in error:
         return "the address starts a download or was cancelled instead of showing a page"
     if "CERT" in error or "SSL" in error:
-        return "the site's certificate or TLS setup is broken"
+        return "it could not set up a secure connection to the site"
     if "TIMED_OUT" in error:
         return "the site did not answer in time"
     return f"the browser could not open the page ({error.removeprefix('net::')})"

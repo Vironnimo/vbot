@@ -109,6 +109,14 @@ class _RedirectTargetBlockedError(Exception):
     """
 
 
+class _RedirectTargetUnreachableError(Exception):
+    """Raised when a server redirects to a host name that does not resolve.
+
+    Bot checks do this (a page redirects automated requests to a challenge host
+    that does not exist for them); the caller did not write that address.
+    """
+
+
 class _ResponseTooLargeError(Exception):
     """Raised when a fetched response exceeds the bounded in-memory transfer limit."""
 
@@ -126,15 +134,17 @@ class _HostNotFoundError(ValueError):
 
 
 class _TransportFailedError(Exception):
-    """A request failed below HTTP after the retries its kind allows."""
+    """A request to ``url`` (a redirect hop or the address asked for) failed below
+    HTTP after the retries its kind allows."""
 
-    def __init__(self, error: RequestException, attempts: int) -> None:
+    def __init__(self, error: RequestException, attempts: int, url: str) -> None:
         self.error = error
         self.attempts = attempts
+        self.url = url
         super().__init__(str(error))
 
 
-def _make_session(accept: str) -> AsyncSession:
+def _make_session(accept: str | None) -> AsyncSession:
     """Create a browser-impersonating session with an automatic cookie jar.
 
     ``impersonate`` gives every request a real Chrome TLS/HTTP-2 fingerprint,
@@ -146,10 +156,12 @@ def _make_session(accept: str) -> AsyncSession:
     ``CurlOpt.RESOLVE`` (see ``_fetch_with_retry``), so a DNS-rebinding answer
     cannot swap in a private address between validation and connection while the
     hostname still drives the Host header and TLS SNI / certificate check.
+    ``accept`` ``None`` keeps the impersonated browser's own Accept header.
     """
     from curl_cffi.requests import AsyncSession
 
-    return AsyncSession(impersonate=_IMPERSONATE_TARGET, headers={"Accept": accept})
+    headers = {} if accept is None else {"Accept": accept}
+    return AsyncSession(impersonate=_IMPERSONATE_TARGET, headers=headers)
 
 
 def _article(what: str) -> str:
@@ -463,7 +475,7 @@ async def _request_with_retry(session: AsyncSession, url: str, max_bytes: int) -
             result = await _http_get(session, url, max_bytes)
         except RequestException as error:
             if attempt >= _retries_allowed(error):
-                raise _TransportFailedError(error, attempt + 1) from error
+                raise _TransportFailedError(error, attempt + 1, url) from error
             await sleep_for_retry(attempt)
             continue
         # GET is idempotent — safe to repeat (includes a transient 500).
@@ -498,21 +510,33 @@ async def _fetch_with_retry(
     from curl_cffi import CurlOpt
 
     current_url = url
-    seen_urls: set[str] = set()
+    # The cookies held when each address was requested. A login or consent
+    # service sets cookies and sends the request back to the address it came
+    # from (nature.com and link.springer.com articles return through their
+    # identity service), which then serves the page; the same address with the
+    # same cookies answers the same way again, so that is a loop.
+    visited: dict[str, frozenset[tuple[str, str, str, str | None]]] = {}
 
     for redirect_count in range(_MAX_REDIRECTS + 1):
-        if current_url in seen_urls:
-            # A redirect to an already-visited URL can never resolve (observed
-            # as a bot-deflection self-loop); fail fast instead of burning
-            # the whole hop budget one request at a time.
+        cookies = _cookie_state(session)
+        if visited.get(current_url) == cookies:
             raise _RedirectLimitExceededError(
-                f"{url} redirects in a loop and never reaches {_article(what)}; the site "
-                "may require cookies or a browser. Try another source."
+                f"{url} redirects in a loop and never reaches {_article(what)}, also with "
+                "the cookies it sets. Try another source."
             )
-        seen_urls.add(current_url)
+        visited[current_url] = cookies
         try:
             scheme, host, port = _url_parts(current_url)
             normalized_host, pinned_ip = await _validate_public_target(scheme, host, port)
+        except _HostNotFoundError as error:
+            if redirect_count > 0:
+                raise _RedirectTargetUnreachableError(
+                    f"{url} redirected to {host}, which could not be found (DNS lookup "
+                    f"failed), so {_article(what)} cannot be reached there. Sites send "
+                    "automated requests to such addresses to turn them away. Try another "
+                    "source."
+                ) from error
+            raise
         except ValueError as error:
             if redirect_count > 0:
                 raise _RedirectTargetBlockedError(
@@ -544,6 +568,12 @@ async def _fetch_with_retry(
         current_url = urljoin(current_url, location)
 
     raise RuntimeError("unreachable retry loop state")
+
+
+def _cookie_state(session: AsyncSession) -> frozenset[tuple[str, str, str, str | None]]:
+    """Return the cookies a session holds, to tell a revisit after a login hop from a loop."""
+    jar = getattr(getattr(session, "cookies", None), "jar", ())
+    return frozenset((cookie.domain, cookie.path, cookie.name, cookie.value) for cookie in jar)
 
 
 def _curl_resolve_address(address: str) -> str:
@@ -595,11 +625,17 @@ def _status_error(url: str, status: int, what: str) -> PublicFetchError:
             f"HTTP {status}: {host} failed to serve {url}. The site may be down; try again "
             "later or use another source."
         )
+    elif status == 406:
+        code = "request_rejected"
+        message = (
+            f"HTTP 406: {host} offers {url} in none of the formats requested, also not to "
+            "an ordinary browser request. Try another source."
+        )
     elif 400 <= status < 500:
         code = "request_rejected"
         message = (
-            f"HTTP {status}: {host} rejected the request for {url}. The request was a plain "
-            "GET without custom headers, cookies or a body."
+            f"HTTP {status}: {host} rejected the request for {url}. Check the address for "
+            "mistakes; if it is right, try another source."
         )
     else:
         code = "unexpected_response"
@@ -617,11 +653,51 @@ def _curl_detail(error: RequestException) -> str:
     return detail[:300]
 
 
-def _transport_error(url: str, error: RequestException, attempts: int) -> PublicFetchError:
-    """Describe a failure below HTTP: timeout, TLS or connection."""
+# What curl's certificate reasons mean, in words a reader knows.
+_CERTIFICATE_PROBLEMS = (
+    ("expired", "it has expired"),
+    ("not yet valid", "it is not valid yet"),
+    ("certificate chain", "it was not issued by a trusted authority"),
+    ("self signed", "it is self-signed"),
+    ("self-signed", "it is self-signed"),
+    ("issuer", "it was not issued by a trusted authority"),
+    ("unknown ca", "it was not issued by a trusted authority"),
+    ("subject name", "it was issued for another address"),
+    ("does not match", "it was issued for another address"),
+    ("revoked", "it has been revoked"),
+)
+
+
+def _tls_message(host: str, error: RequestException, detail: str) -> str:
+    from curl_cffi.requests.exceptions import CertificateVerifyError
+
+    if isinstance(error, CertificateVerifyError):
+        lowered = detail.lower()
+        problem = next((text for marker, text in _CERTIFICATE_PROBLEMS if marker in lowered), "")
+        reason = f" ({problem})" if problem else ""
+        return (
+            f"The security certificate of {host} could not be verified{reason}, so the "
+            "connection was not trusted. Repeating the request will not help; try another source."
+        )
+    return (
+        f"{host} refused a secure connection with the settings current browsers use, as "
+        "outdated or misconfigured servers do. Repeating the request will not help; try "
+        "another source."
+    )
+
+
+def _transport_error(
+    url: str, error: RequestException, attempts: int, hop: str | None = None
+) -> PublicFetchError:
+    """Describe a failure below HTTP: timeout, TLS or connection.
+
+    ``hop`` is the address that failed when a redirect led away from ``url``.
+    """
     from curl_cffi.requests.exceptions import DNSError, Timeout
 
-    host = urlparse(url).hostname or url
+    host = urlparse(hop or url).hostname or url
+    if host != (urlparse(url).hostname or url):
+        host = f"{host} (where {url} redirected)"
     detail = _curl_detail(error)
     if isinstance(error, Timeout):
         return PublicFetchError(
@@ -633,12 +709,7 @@ def _transport_error(url: str, error: RequestException, attempts: int) -> Public
             recoverable=True,
         )
     if _is_tls_failure(error):
-        return PublicFetchError(
-            "tls_error",
-            f"The secure connection to {host} failed ({detail}). The site's certificate or "
-            "TLS setup is broken, so repeating the request will not help.",
-            recoverable=True,
-        )
+        return PublicFetchError("tls_error", _tls_message(host, error, detail), recoverable=True)
     if isinstance(error, DNSError):
         return PublicFetchError("host_not_found", _host_not_found(host), recoverable=True)
     return PublicFetchError(
@@ -689,8 +760,15 @@ async def fetch_public(
     try:
         async with _make_session(accept) as session:
             result = await _fetch_with_retry(session, url, {}, max_bytes, what)
+        if result.status_code == 406:
+            # The site serves none of the formats asked for; a browser's own
+            # request is what sites answer most (a page refused text/markdown).
+            async with _make_session(None) as session:
+                result = await _fetch_with_retry(session, url, {}, max_bytes, what)
     except _RedirectTargetBlockedError as error:
         raise PublicFetchError("blocked_url", str(error)) from error
+    except _RedirectTargetUnreachableError as error:
+        raise PublicFetchError("redirect_unreachable", str(error), recoverable=True) from error
     except ValueError as error:
         raise _url_error(error) from error
     except _ResponseTooLargeError as error:
@@ -701,7 +779,7 @@ async def fetch_public(
         raise PublicFetchError("redirect_loop", str(error), recoverable=True) from error
     except _TransportFailedError as failure:
         _LOGGER.warning("Public fetch failed for %s: %s", url, failure.error)
-        raise _transport_error(url, failure.error, failure.attempts) from failure
+        raise _transport_error(url, failure.error, failure.attempts, failure.url) from failure
     except RequestException as error:
         _LOGGER.warning("Public fetch failed for %s: %s", url, error)
         raise _transport_error(url, error, 1) from error

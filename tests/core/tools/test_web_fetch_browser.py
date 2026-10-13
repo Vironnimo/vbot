@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import respx
 
+import core.tools._public_http as public_http
 from core.tools import _web_fetch_browser as browser_module
 from core.tools._public_http import PublicResponse
 from core.tools._web_fetch_browser import BrowserFetchError
@@ -62,8 +63,9 @@ def _options(fake: FakeBrowser, **settings: Any) -> dict[str, Any]:
             text="<html><body><div id='root'></div></body></html>",
             url=URL,
         ),
+        make_result(status_code=302, headers={"Location": URL}, url=URL),
     ],
-    ids=["bot-check", "javascript-shell"],
+    ids=["bot-check", "javascript-shell", "redirect-loop"],
 )
 async def test_browser_reads_what_direct_reading_could_not_before_any_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, direct: PublicResponse
@@ -166,7 +168,10 @@ def upstream(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int, bytes]]:
     return connections
 
 
-async def _through_proxy(request: bytes, follow_up: bytes = b"") -> bytes:
+async def _through_proxy(
+    request: bytes, follow_up: bytes = b""
+) -> tuple[bytes, tuple[str, str] | None]:
+    """Send a request through a fresh proxy; return its answer and its last refusal."""
     proxy = browser_module._GuardProxy()
     await proxy.start()
     try:
@@ -179,28 +184,48 @@ async def _through_proxy(request: bytes, follow_up: bytes = b"") -> bytes:
         async with asyncio.timeout(5):
             answer = await reader.read(4096)
         writer.close()
-        return answer
+        return answer, proxy.refused_since(0)
     finally:
         await proxy.aclose()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "request_head",
+    ("request_head", "status", "reason"),
     [
-        b"CONNECT 127.0.0.1:443 HTTP/1.1\r\nHost: 127.0.0.1:443\r\n\r\n",
-        b"CONNECT localhost:8421 HTTP/1.1\r\n\r\n",
-        b"GET http://192.168.1.1/admin HTTP/1.1\r\nHost: 192.168.1.1\r\n\r\n",
-        b"CONNECT [::1]:443 HTTP/1.1\r\n\r\n",
+        (b"CONNECT 127.0.0.1:443 HTTP/1.1\r\nHost: 127.0.0.1:443\r\n\r\n", 403, "blocked_url"),
+        (b"CONNECT localhost:8421 HTTP/1.1\r\n\r\n", 403, "blocked_url"),
+        (
+            b"GET http://192.168.1.1/admin HTTP/1.1\r\nHost: 192.168.1.1\r\n\r\n",
+            403,
+            "blocked_url",
+        ),
+        (b"CONNECT [::1]:443 HTTP/1.1\r\n\r\n", 403, "blocked_url"),
+        # A bot check's challenge host that does not resolve is not a private address.
+        (b"CONNECT validate.bot-check.invalid:443 HTTP/1.1\r\n\r\n", 502, "host_not_found"),
     ],
-    ids=["loopback", "localhost", "private-http", "ipv6-loopback"],
+    ids=["loopback", "localhost", "private-http", "ipv6-loopback", "unresolvable"],
 )
-async def test_guard_proxy_refuses_private_and_local_addresses(
-    upstream: list[tuple[str, int, bytes]], request_head: bytes
+async def test_guard_proxy_refuses_private_local_and_unresolvable_addresses(
+    upstream: list[tuple[str, int, bytes]],
+    monkeypatch: pytest.MonkeyPatch,
+    request_head: bytes,
+    status: int,
+    reason: str,
 ) -> None:
-    answer = await _through_proxy(request_head)
+    resolve = public_http._resolve_host_addresses
 
-    assert answer.startswith(b"HTTP/1.1 403")
+    async def resolve_or_fail(host: str, port: int) -> list[public_http.IpAddress]:
+        if host.endswith(".invalid"):
+            raise public_http._HostNotFoundError(public_http._host_not_found(host))
+        return await resolve(host, port)
+
+    monkeypatch.setattr(public_http, "_resolve_host_addresses", resolve_or_fail)
+
+    answer, refused = await _through_proxy(request_head)
+
+    assert answer.startswith(f"HTTP/1.1 {status}".encode())
+    assert refused is not None and refused[1] == reason
     assert upstream == []
 
 
@@ -208,7 +233,7 @@ async def test_guard_proxy_refuses_private_and_local_addresses(
 async def test_guard_proxy_tunnels_to_the_address_it_validated(
     upstream: list[tuple[str, int, bytes]],
 ) -> None:
-    answer = await _through_proxy(
+    answer, _ = await _through_proxy(
         b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n",
         follow_up=b"tls bytes",
     )
@@ -221,7 +246,7 @@ async def test_guard_proxy_tunnels_to_the_address_it_validated(
 async def test_guard_proxy_forwards_plain_http_in_origin_form_and_closes(
     upstream: list[tuple[str, int, bytes]],
 ) -> None:
-    answer = await _through_proxy(
+    answer, _ = await _through_proxy(
         b"GET http://example.com/page?q=1 HTTP/1.1\r\nHost: example.com\r\n"
         b"Proxy-Connection: keep-alive\r\n\r\n"
     )

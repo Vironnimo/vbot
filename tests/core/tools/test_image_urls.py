@@ -251,9 +251,9 @@ async def test_a_redirect_to_a_private_address_is_not_followed(workspace: Path, 
         (
             CertificateVerifyError("curl: (60) SSL certificate problem: certificate has expired"),
             "tls_error",
-            "The secure connection to example.com failed (SSL certificate problem: certificate "
-            "has expired). The site's certificate or TLS setup is broken, so repeating the "
-            "request will not help.",
+            "The security certificate of example.com could not be verified (it has expired), "
+            "so the connection was not trusted. Repeating the request will not help; try "
+            "another source.",
             False,
         ),
         (

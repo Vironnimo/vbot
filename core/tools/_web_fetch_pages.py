@@ -360,6 +360,32 @@ def _find_text(
     return data
 
 
+_VIEW_NAMES = {"main": "the main content", "page": "the whole page"}
+
+
+def _past_the_end(snapshot: dict[str, Any], scope: str, offset: int) -> str:
+    """Say that a position lies past the end of a view, and which call reads on.
+
+    Continuation refs name their view (``.m.`` main content, ``.p.`` whole page);
+    a ref copied with the other letter points into the other view, which can
+    hold that position: name that call (an Agent sent ``.m.`` for a find
+    passage's ``.p.`` ref, 2026-10-13).
+    """
+    other = "main" if scope == "page" else "page"
+    length = len(snapshot["page" if scope == "page" else "content"])
+    situation = (
+        f"Position {offset} is past the end of {_VIEW_NAMES[scope]} of saved page "
+        f"{snapshot['ref']} ({length} characters)."
+    )
+    if offset <= len(snapshot["page" if other == "page" else "content"]):
+        ref = _continuation(snapshot["ref"], other, offset)
+        return (
+            f"{situation} In {_VIEW_NAMES[other]}, {ref} reads on from there: "
+            f"{_call({'ref': ref})}."
+        )
+    return f"{situation} Read it from the start with {_call({'ref': snapshot['ref']})}."
+
+
 def read_page(snapshot: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     """Return a contiguous part or literal search hits with copyable follow-up calls."""
     find = arguments.get("find")
@@ -369,10 +395,7 @@ def read_page(snapshot: dict[str, Any], arguments: dict[str, Any]) -> dict[str, 
     offset = arguments.get("offset", cursor if not find or view == "page" else 0)
     if offset > len(text):
         return tool_failure(
-            "invalid_arguments",
-            f"Position {offset} is past the end of the saved page ({len(text)} characters). "
-            f"Read it from the start with {_call({'ref': snapshot['ref']})}.",
-            retryable=False,
+            "invalid_arguments", _past_the_end(snapshot, scope, offset), retryable=False
         )
     max_chars = arguments.get("max_chars", DEFAULT_MAX_CHARS)
     data: dict[str, Any] = {

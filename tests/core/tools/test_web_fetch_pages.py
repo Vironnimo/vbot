@@ -98,6 +98,11 @@ async def test_find_searches_full_page_and_match_reference_reads_more(tmp_path, 
     following = await tool.dispatch(context, read_on)
     assert "ZEBRA42" not in following["data"]["content"]
     assert "ZEBRA42 license" + " Terms apply." * 200 in passage + following["data"]["content"]
+    # The ref copied with the main content's letter names the call that reads on
+    # (an Agent sent .m. for a passage's .p. ref, 2026-10-13).
+    slipped = await tool.dispatch(context, {"ref": read_on["ref"].replace(".p.", ".m.")})
+    assert slipped["error"]["code"] == "invalid_arguments"
+    assert json.dumps(read_on) in slipped["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -144,6 +149,7 @@ _ELEMENT_PAGE = """<main>
  Melting point</a>: 1811 K</li>
 <li>Density of solid: 968&nbsp;kg&#8239;m&#8209;3,
  measured by &ldquo;Smith&rdquo; at &minus;5&nbsp;&deg;C</li>
+<li>Isotope <sup>56</sup>Fe at 3.0&times;10<sup>5</sup> K in H<sub>2</sub>O</li>
 </ul>
 </main>"""
 
@@ -153,20 +159,26 @@ _ELEMENT_PAGE = """<main>
     [
         ("Iron is a chemical element", "**Iron** is a [chemical element]"),
         ("Discovery date approx 3500BC", "| **Discovery date** | approx 3500BC |"),
-        ("name, symbol, ordnungszahl eisen", "[Name](https://example.com/n), [Symbol]"),
-        ("Group name: Lanthanoid", "[Group name](https://example.com/group): Lanthanoid"),
-        ("Melting point: 1811", "Melting point](https://example.com/melting): 1811"),
+        ("name, symbol, ordnungszahl eisen", "[Name](/n), [Symbol]"),
+        ("Group name: Lanthanoid", "[Group name](/group): Lanthanoid"),
+        ("Melting point: 1811", "Melting point](/melting): 1811"),
+        # Superscripts and subscripts match written either way.
+        ("56Fe at 3.0×105 K in H2O", "⁵⁶Fe at 3.0×10⁵ K in H₂O"),
+        ("⁵⁶Fe at 3.0×10^5 K in H₂O", "⁵⁶Fe at 3.0×10⁵ K in H₂O"),
         ('968 kg m-3, measured by "Smith" at -5 °C', "968 kg"),
         # Markdown copied from a result finds its place in the readable text too.
         ("| **Density** | 7.87 |", "| **Density** | 7.87 |"),
         ("**Density** 7.87", "| **Density** | 7.87 |"),
-        ("[Group name](https://example.com/group): Lanthanoid", "Group name](https"),
+        ("[Group name](/group): Lanthanoid", "Group name](/group)"),
+        # A link of the page's own site, named with the site.
+        ("[Group name](https://example.com/group): Lanthanoid", "Group name](/group)"),
         # Every other character still counts.
         ("Discovery date approx 3600BC", None),
         ("Iron is a chemical elements", None),
         ("Density 7.871", None),
         ("[Group name](https://example.com/other): Lanthanoid", None),
         ("968kg", None),
+        ("57Fe", None),
     ],
 )
 @pytest.mark.asyncio
