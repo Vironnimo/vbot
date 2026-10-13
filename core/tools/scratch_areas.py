@@ -18,6 +18,7 @@ from threading import Event, Lock, RLock
 from core.runs import RunInterruptedError
 from core.sessions import SessionAddress
 from core.storage.layout import DataDirectoryLayout
+from core.tools._scratch_identity import linux_birthtime_ns
 from core.utils.errors import VBotError
 from core.utils.file_status import is_link_status, stat_or_none
 from core.utils.ids import is_safe_id
@@ -599,7 +600,10 @@ def _directory_identity(path: Path) -> str:
     _require_directory(path, status)
     # Birth time prevents file-id reuse where available. Neither ordinary file
     # writes nor directory-entry edits change these values, unlike ctime/mtime.
-    return f"{status.st_dev}:{status.st_ino}:{getattr(status, 'st_birthtime_ns', 0)}"
+    birthtime = getattr(status, "st_birthtime_ns", None)
+    if birthtime is None:
+        birthtime = linux_birthtime_ns(path, status)
+    return f"{status.st_dev}:{status.st_ino}:{birthtime if birthtime is not None else 0}"
 
 
 def _warn(root_id: str | None, error: OSError) -> None:

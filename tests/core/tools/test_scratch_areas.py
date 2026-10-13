@@ -93,6 +93,10 @@ async def test_recreation_and_process_launch_keep_a_durable_incarnation(tmp_path
     assert [entry.name for entry in first.own.iterdir()] == ["tmp"]
     assert [entry.name for entry in first.area.iterdir()] == [first.own.name]
     (first.own / "work.txt").write_text("intermediate", encoding="utf-8")
+    (first.tmp / "process.txt").write_text("temporary", encoding="utf-8")
+    assert (await tree.owner().folder_for(address)).incarnation == first.incarnation
+    (first.own / "work.txt").unlink()
+    (first.tmp / "process.txt").unlink()
     assert (await tree.owner().folder_for(address)).incarnation == first.incarnation
     shutil.rmtree(first.tmp)
     only_tmp = await owner.folder_for(address)
@@ -452,12 +456,18 @@ async def test_agent_can_empty_own_folder_and_recreate_it_before_next_call(tmp_p
     emptied = await owner.folder_for(address)
     assert [entry.name for entry in emptied.own.iterdir()] == ["tmp"]
     assert emptied.incarnation != first.incarnation
+    # Detect tmp replacement too when another process recreates it before lookup.
+    emptied.tmp.rmdir()
+    emptied.tmp.mkdir()
+    replaced_tmp = await tree.owner().folder_for(address)
+    assert replaced_tmp.incarnation != emptied.incarnation
+    assert replaced_tmp.recreated
     # An Agent can also replace the complete directory before the next lookup.
     shutil.rmtree(emptied.own)
     emptied.own.mkdir()
     emptied.tmp.mkdir()
     replaced = await tree.owner().folder_for(address)
-    assert replaced.incarnation != emptied.incarnation
+    assert replaced.incarnation != replaced_tmp.incarnation
     assert replaced.recreated
 
 

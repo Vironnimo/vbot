@@ -41,7 +41,13 @@ ensures the own folder and `tmp/`, touches `.activity`, and returns `ScratchFold
 with `own`, `area`, `tmp`, `recreated` and `incarnation`. External incarnation
 records identify the own and tmp directories by device, inode and birth time
 where available; normal writes do not change the token, including across restarts.
-Recreated/replaced directories or missing/malformed records receive a new token,
+Linux reads birth time through `statx`, because Python's `lstat` does not expose
+it; the returned device/inode must match the checked directory. Unsupported
+kernels, C libraries or filesystems retain device/inode-only best-effort identity:
+replacement can remain undetected if a recreated directory reuses its previous inode number.
+Access/I/O errors and inconsistent observations remain setup failures. Mutable
+ctime and mtime are never used as creation identity.
+Detected directory recreation/replacement and missing/malformed records receive a new token,
 so Chat can detect loss even when a process recreated the folder before the next
 Run. Missing tmp is recreated; a file or link replacing a disposable directory or
 metadata entry is removed as an entry and repaired, never followed. Repair of the
@@ -165,7 +171,8 @@ lifecycle mistake; the user-requested design is the evidence for these rules.
 ## Source and tests
 
 - Resource ownership and filesystem contracts: `core/tools/scratch_areas.py`,
-  `tests/core/tools/test_scratch_areas.py`.
+  `tests/core/tools/test_scratch_areas.py`; Linux creation-time lookup:
+  `core/tools/_scratch_identity.py`, `tests/core/tools/test_scratch_identity.py`.
 - Run-start note and Compaction retention: `core/chat/_run_execution.py`,
   `core/chat/_scratch_context.py`, `core/chat/_request_builder.py`,
   `tests/core/chat/test_chat_loop_scratch.py`.
