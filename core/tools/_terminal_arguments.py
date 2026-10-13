@@ -122,8 +122,6 @@ _ACTION_VALUES = {
             "end",
             "destroy",
             "killsession",
-            "cancel",
-            "abort",
         ),
         "kill",
     ),
@@ -253,7 +251,6 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
     if not isinstance(action, str) or action not in _ACCEPTED_FIELDS:
         return normalized
     if action == "start":
-        # start submits its text with Enter; Enter on a new program's prompt adds nothing.
         _normalize_start(normalized)
     elif action == "input":
         _normalize_input(normalized, press_enter)
@@ -395,7 +392,6 @@ def _drop_placeholders(arguments: dict[str, Any]) -> None:
             or value == []
             or (key in {"text", "data"} and value == "")
             or (key in _ZERO_PLACEHOLDERS and value == 0 and not isinstance(value, bool))
-            or (key == "args" and value == [""])
         ):
             del arguments[key]
 
@@ -414,19 +410,16 @@ def _normalize_start(arguments: dict[str, Any]) -> None:
         arguments["command"], arguments["args"] = command[0], command[1:]
         if not arguments["args"]:
             del arguments["args"]
+    # Enter for start's text is dropped with it: start types nothing, and its
+    # result says how to send the text once the program is ready.
     key = arguments.pop("key", None)
     if key not in (None, "enter"):
         raise ValueError(
             _not_run(f'start presses no keys; send key "{key}" with the input action after start.')
         )
-    # start presses Enter after its text; a line break at its end would be a second one.
-    _submit_line_break(arguments)
     if "data" in arguments:
         raise ValueError(
-            _not_run(
-                "start sends only text, followed by Enter once the program is ready; send exact "
-                "data with the input action after start."
-            )
+            _not_run("start types nothing; send exact data with the input action after start.")
         )
 
 
@@ -446,18 +439,22 @@ def _normalize_input(arguments: dict[str, Any], press_enter: bool) -> None:
             )
         arguments["key"] = "enter"
     if arguments.get("key") in (None, "enter") and _submit_line_break(arguments):
-        # Text that ends in a line break is meant to be submitted: press Enter
-        # once, instead of typing the break into a pasted block.
+        # Text that ends in a line break is meant to be submitted: that break
+        # is the Enter key, also after a pasted block. Every other line break
+        # is an Enter of its own.
         arguments["key"] = "enter"
 
 
 def _submit_line_break(arguments: dict[str, Any]) -> bool:
-    """Drop the line breaks that end text; True when there were any."""
+    """Drop the one line break that ends text; True when there was one."""
     text = arguments.get("text")
     if not isinstance(text, str):
         return False
-    stripped = text.rstrip("\r\n")
-    if stripped == text:
+    for line_break in ("\r\n", "\n", "\r"):
+        if text.endswith(line_break):
+            stripped = text[: -len(line_break)]
+            break
+    else:
         return False
     if stripped:
         arguments["text"] = stripped

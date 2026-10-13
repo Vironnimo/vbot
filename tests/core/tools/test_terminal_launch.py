@@ -83,7 +83,9 @@ def test_powershell_runs_a_batch_program_through_cmd_when_an_argument_needs_prot
 
     script = _powershell_script(unsafe)
     exact = windows_command_processor_line("codex", _SPECIAL)
-    assert script[-1] == f"& 'C:\\Windows\\system32\\cmd.exe' --% /d /s /c \"{exact}\""
+    assert script[-1] == (
+        f"& 'C:\\Windows\\system32\\cmd.exe' --% /d /e:on /v:off /s /c \"{exact}\""
+    )
     # The history keeps the line as the operator would type it in PowerShell.
     assert _history_entry(r"""codex 'a "b" c' '100%' 'x&y|z' 'it''s'""") in script[-2]
     assert _powershell_script(plain)[-1] == "codex --profile 'work space'"
@@ -102,8 +104,8 @@ def test_cmd_runs_an_exact_command_line_with_escaped_metacharacters() -> None:
 
     assert launch.argv == ["cmd.exe"]
     # An argument cmd could act on is quoted even without whitespace, since a
-    # batch program hands it to cmd once more.
-    assert launch.command_line == r'''/d /s /k "codex ^"a \^"b\^" c^" 100^% ^"x^&y^|z^" it's"'''
+    # batch program hands it to cmd once more; a percent sign stands between quotes.
+    assert launch.command_line == r'''/d /s /k "codex "a ""b"" c" "100"%"" "x&y|z" "it's""'''
     # The shell integration is the prompt: its mark, then the default prompt.
     assert (launch.environment, launch.scratch) == ({"PROMPT": r"$e]133;A$e\$P$G"}, None)
 
@@ -193,7 +195,7 @@ def test_zsh_dotdir_loads_the_users_files_then_runs_the_command(
             "nt",
             ["C:\\tools\\nu.exe"],
             ["C:\\Windows\\system32\\cmd.exe"],
-            r'''/d /s /c "codex --profile ^"work space^" it's & C:\tools\nu.exe"''',
+            r'''/d /e:on /v:off /s /c "codex --profile "work space" "it's" & C:\tools\nu.exe"''',
         ),
     ],
     ids=["fish", "other-posix-shell", "other-windows-shell"],

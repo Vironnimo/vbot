@@ -26,8 +26,7 @@ For a request specifying Sonnet and medium effort, with the values in angle brac
   "action": "start",
   "command": "claude",
   "args": ["--model", "sonnet", "--effort", "medium"],
-  "workdir": "<repository path>",
-  "text": "<the user's task>"
+  "workdir": "<repository path>"
 }
 ```
 

@@ -20,8 +20,7 @@ For a request specifying OpenAI GPT-5, with the values in angle brackets replace
   "action": "start",
   "command": "opencode",
   "args": ["--model", "openai/gpt-5"],
-  "workdir": "<repository path>",
-  "text": "<the user's task>"
+  "workdir": "<repository path>"
 }
 ```
 
@@ -31,7 +30,7 @@ For a request specifying OpenAI GPT-5, with the values in angle brackets replace
 
 OpenCode exposes model-specific variants through its `variant_cycle` keybinding (Ctrl+T by default). A configured agent can also supply provider options such as `reasoningEffort`. The model and configuration determine available variants; the interactive launch command does not expose a universal reasoning-level flag.
 
-When selecting a requested variant in the TUI before the task begins, omit initial `text`, select the displayed variant, then submit the task. Variant configuration is described in the [OpenCode model documentation](https://opencode.ai/docs/models/).
+To use a requested variant, select it in the TUI before you send the task. Variant configuration is described in the [OpenCode model documentation](https://opencode.ai/docs/models/).
 
 ## Saved conversations
 

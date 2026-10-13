@@ -15,7 +15,7 @@ from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure_for_exception
-from tests.core.tools.terminal_manager_helpers import AdapterFactory
+from tests.core.tools.terminal_manager_helpers import TEST_START_WAIT_SECONDS, AdapterFactory
 
 
 @pytest_asyncio.fixture
@@ -30,6 +30,8 @@ async def manager(tmp_path: Path) -> AsyncIterator[tuple[TerminalManager, Adapte
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
         idle_seconds=0.06,
+        # A fake program that prints nothing ends start's wait for its first screen.
+        start_wait_seconds=TEST_START_WAIT_SECONDS,
     )
     manager.start()
     try:

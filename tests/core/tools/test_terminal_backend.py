@@ -94,6 +94,12 @@ def test_batch_programs_receive_their_arguments_unchanged_through_the_command_pr
         "^d",
         "<e>",
         "dir&\\",
+        # A quote cmd reads as the start of a quoted span must not unquote the
+        # next argument's metacharacters (BatBadBut): no second command runs.
+        'a"b',
+        "alpha&echo SECOND_COMMAND",
+        '\\" & echo SECOND_COMMAND & \\"',
+        "%PATH%%PATH%",
     ]
     environment = {"PATH": os.environ["PATH"], "COMSPEC": os.environ["COMSPEC"]}
 
@@ -103,7 +109,10 @@ def test_batch_programs_receive_their_arguments_unchanged_through_the_command_pr
     completed = subprocess.run(
         f'"{executable}" {line}', capture_output=True, text=True, timeout=10, check=True
     )
-    assert json.loads(completed.stdout) == arguments
+    assert completed.stdout.splitlines() == [json.dumps(arguments)]
+    # cmd ends its command line at a line break, so such an argument starts nothing.
+    with pytest.raises(terminal_backend.UnpassableArgumentError):
+        terminal_backend._windows_command([str(shim), "two\nlines"], environment, None)
     # Other programs get the C runtime quoting of their arguments.
     assert terminal_backend._windows_command([sys.executable, "a b", 'c"d'], environment, None) == (
         sys.executable,

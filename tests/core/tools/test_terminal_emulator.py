@@ -6,7 +6,12 @@ import asyncio
 
 import pytest
 
-from core.tools.terminal_emulator import TERMINAL_TITLE_MAX_CHARS, TerminalEmulator
+from core.tools.terminal_emulator import (
+    HIGHLIGHT_END,
+    HIGHLIGHT_START,
+    TERMINAL_TITLE_MAX_CHARS,
+    TerminalEmulator,
+)
 from core.tools.terminal_manager import TerminalRenderHost
 
 
@@ -25,21 +30,70 @@ def drawn(sequence: str) -> str:
 def test_screen_signature_tracks_styles_but_ignores_cursor_and_empty_extent() -> None:
     emulator = TerminalEmulator(80, 24, scrollback_lines=100)
     emulator.feed("First\r\nSecond")
-    original = emulator.observe(0).signature
+    original = emulator.observe().signature
     emulator.feed("\x1b[1;1H\x1b[?25l")
-    assert emulator.observe(0).signature == original
+    assert emulator.observe().signature == original
     emulator.resize(120, 32)
-    assert emulator.observe(0).signature == original
+    assert emulator.observe().signature == original
     emulator.feed("\x1b[7mFirst\x1b[0m")
     assert emulator.screen_text() == "First\nSecond"
-    assert emulator.observe(0).signature != original
+    assert emulator.observe().signature != original
 
 
-def test_observation_tail_holds_the_newest_non_blank_rows() -> None:
+def test_observation_marks_highlighted_text_and_the_visible_cursor() -> None:
     emulator = TerminalEmulator(12, 4, scrollback_lines=20)
-    emulator.feed("a\r\nb\r\nc")
+    emulator.feed("a\r\n\x1b[7m> b\x1b[0m c\r\n\x1b[7m bar      \x1b[0m\r\n")
 
-    assert [emulator.observe(rows).tail for rows in (2, 10, 0)] == ["b\nc", "a\nb\nc", ""]
+    observed = emulator.observe()
+    # Reverse-video text stands between the marks; blank cells ending a row are
+    # left out, and so are blank rows below the last drawn one.
+    assert observed.screen == (
+        f"a\n{HIGHLIGHT_START}> b{HIGHLIGHT_END} c\n{HIGHLIGHT_START} bar{HIGHLIGHT_END}"
+    )
+    assert observed.cursor == (4, 1)
+    # In the screen-wide reverse mode, the blank background is reverse as well.
+    emulator.feed("\x1b[?5h")
+    assert HIGHLIGHT_START not in emulator.observe().screen
+    emulator.feed("\x1b[?5l\x1b[?25l")
+    assert emulator.observe().cursor is None
+
+
+@pytest.mark.parametrize(
+    ("output", "screen"),
+    [
+        # A zero-width character joins the character before it, and drawing goes on.
+        ("ok \u2764\ufe0f done", "ok \u2764\ufe0f done"),
+        ("a\u200bb c", "a\u200bb c"),
+        ("\U0001f468\u200d\U0001f4bb dev", "\U0001f468\u200d\U0001f4bb dev"),
+        # A narrow character over the left half of a wide one blanks the right half.
+        ("12345678\u23f3!\r\n\x1b[1A\x1b[9Gx", "12345678x !"),
+        # A sequence the screen cannot apply (pyte fails on ED 5) is skipped,
+        # and drawing goes on, also in later output.
+        ("before\x1b[5Jafter", "beforeafter"),
+    ],
+)
+def test_screen_shows_every_drawn_character(output: str, screen: str) -> None:
+    emulator = TerminalEmulator(20, 3, scrollback_lines=10)
+    update = emulator.feed(output)
+
+    assert emulator.observe().screen == screen
+    assert emulator.screen_text() == screen
+    assert update.skipped == ("\x1b[5J" in output)
+    assert emulator.feed("\r\nnext").skipped == 0
+    assert emulator.screen_text() == f"{screen}\nnext"
+
+
+def test_erasing_saved_lines_keeps_the_screen_and_a_clear_reports_its_first_line() -> None:
+    emulator = TerminalEmulator(10, 2, scrollback_lines=10)
+    emulator.feed("a\r\nb\r\nc")
+    assert history(emulator) == "a"
+
+    erased = emulator.feed("\x1b[3J")
+    assert (emulator.screen_text(), history(emulator)) == ("b\nc", "")
+    assert erased.cleared_line is None
+    # Clearing the screen reports the line number its new content starts at.
+    assert emulator.feed("\x1b[2J").cleared_line == emulator.observe().screen_start_line == 1
+    assert emulator.feed("d").cleared_line is None
 
 
 @pytest.mark.parametrize("chunk_size", [1, 7, 1000])
@@ -291,7 +345,7 @@ def test_dim_follows_sgr_2_22_and_0_but_not_color_operands() -> None:
     source.feed("\x1b[2mX")
     viewer = TerminalEmulator(20, 2, scrollback_lines=10)
     viewer.feed(source.ansi_snapshot())
-    assert viewer.observe(0).signature == source.observe(0).signature
+    assert viewer.observe().signature == source.observe().signature
 
 
 @pytest.mark.parametrize(
@@ -340,7 +394,7 @@ def test_unicode_snapshot_preserves_screen_and_cursor(text: str, alternate: bool
 
     assert viewer.screen_text() == source.screen_text()
     # The same cells with the same styles, and the cursor in the same place.
-    assert viewer.observe(0).signature == source.observe(0).signature
+    assert viewer.observe().signature == source.observe().signature
     assert viewer.feed("\x1b[6n").responses == source.feed("\x1b[6n").responses
 
 

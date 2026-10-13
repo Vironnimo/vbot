@@ -9,7 +9,7 @@ The `terminal` Tool and the user share the same live terminal. A `terminal_id` a
 
 ## Launch settings
 
-Start the CLI's interactive interface with `start`: the CLI executable as `command`, each argument as its own item in `args`, the repository path as `workdir`, and the user's task as `text`. Omit `text` when the request has no task yet.
+Start the CLI's interactive interface with `start`: the CLI executable as `command`, each argument as its own item in `args`, and the repository path as `workdir`. `start` returns the CLI's first screen. When that screen asks something first, such as whether to trust the folder, answer it. Once the CLI shows its prompt, send the user's task with `input`: the task as `text` and `key` `"enter"`.
 
 Pass the requested model, reasoning, profile, and other launch settings as separate CLI options. Omitted options retain the CLI's configuration. If the CLI rejects a requested setting, its error, help, or model catalog can identify supported values.
 
@@ -23,7 +23,7 @@ Before you start or resume one of these CLIs, read its reference for launch opti
 
 When the CLI goes idle, read the screen it shows: the CLI can be asking a question, waiting for an approval, or showing its final summary. Judge whether the coding task succeeded by the CLI's output and the task's results, such as changed files or test output, not by the output going quiet.
 
-The `log_file` of a `status` result contains raw terminal output with control sequences and redraws.
+The log that `start` and `status` results name contains raw terminal output with control sequences and redraws.
 
 ## Launch problems
 

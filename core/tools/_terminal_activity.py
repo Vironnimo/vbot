@@ -8,8 +8,10 @@ delivery, record or deliver attention).
 
 Work comes in cycles. Input from the Agent or the operator starts one, the
 program's start-up starts the first, and output after the program went idle
-starts a spontaneous one. A cycle ends at its idle boundary, which the
-evidence decides, by the first reason that holds:
+starts a spontaneous one. A start-up that ends on a blank screen (a
+terminal's own set-up sequences) shows no first screen: the program's next
+output opens the start-up cycle again. A cycle ends at its idle boundary,
+which the evidence decides, by the first reason that holds:
 
 - ``declared``: the program declared the end of its work (a bell or
   notification, a cleared progress indicator, a shell prompt) and then
@@ -29,12 +31,11 @@ whose quiet boundary ends the reply to input or start.
 
 Phases (``state`` shows ``repainting`` as ``ready``)::
 
-    starting --input--> working --idle--> ready --output/input--> working
-                                            |
-                                         resize, then output inside the
-                                         repaint window
-                                            v
-                                        repainting --quiet--> ready
+    ready --output/input--> working --idle--> ready
+      |
+    resize, then output inside the repaint window
+      v
+    repainting --quiet--> ready
 
 ``exited`` and ``error`` are final.
 """
@@ -49,7 +50,7 @@ from typing import Literal, NamedTuple
 from ._terminal_state import TerminalState
 from .process_tree import IDLE_CPU_SECONDS
 
-_Phase = Literal["starting", "ready", "repainting", "working", "exited", "error"]
+_Phase = Literal["ready", "repainting", "working", "exited", "error"]
 _Origin = Literal["start", "input", "output"]
 # What ended at a quiet boundary: activity, or only a redraw for a new size.
 SettleKind = Literal["activity", "repaint"]
@@ -128,13 +129,11 @@ class TerminalActivity:
     def __init__(
         self,
         *,
-        awaiting_initial_input: bool,
-        startup_silence: bool,
         repaint_window: float,
         quiet_seconds: float,
         idle_seconds: float,
     ) -> None:
-        self._phase: _Phase = "starting" if awaiting_initial_input else "ready"
+        self._phase: _Phase = "ready"
         self._repaint_window = repaint_window
         self._quiet_seconds = quiet_seconds
         self._idle_seconds = idle_seconds
@@ -150,18 +149,13 @@ class TerminalActivity:
         self._samples: deque[_Sample] = deque()
         # The current activity wakes the attached Agent at its idle boundary.
         self._wake_at_idle = False
-        # Spontaneous output (not caused by input) wakes the attached Agent.
-        # Armed by attach and by the first idle boundary while attached, so
-        # the start-up output of an Agent-started terminal wakes nobody.
-        self._output_wakes = False
-        # An Agent start without initial text wakes nobody until the first
-        # input or attach: the starting Agent sees the start-up screen in the
-        # start result and the operator sees it live.
-        self._startup_silence = startup_silence
         # Visible-cell signature of the screen the attached Agent last
-        # received or saw in a result. An idle boundary showing the same
-        # screen (status refreshes, cursor frames, repaint echoes) wakes nobody.
+        # received or saw in a result, such as the start result's first
+        # screen. An idle boundary showing the same screen (status refreshes,
+        # cursor frames, repaint echoes) wakes nobody.
         self._baseline: str | None = None
+        # Why the last cycle ended; None while one runs and before the first.
+        self.idle_reason: IdleReason | None = None
         self.generation = 0
 
     @property
@@ -189,10 +183,6 @@ class TerminalActivity:
         signals = tuple(signals)
         if self.finished:
             return OutputEffect(False, None, False)
-        if self._phase == "starting":
-            # The initial input is still waiting for a stable screen.
-            self._apply_signals(None, signals)
-            return OutputEffect(True, None, False)
         if not signals and self._repaint_deadline is not None and now < self._repaint_deadline:
             self._phase = "repainting"
             return OutputEffect(False, self._restart(notify=False, supersede=False), False)
@@ -206,7 +196,7 @@ class TerminalActivity:
             self._evidence(cycle, now)
         cycle.last_output_at = now
         self._apply_signals(cycle, signals)
-        restart = self._restart(notify=attached and self._output_wakes, supersede=delivery_pending)
+        restart = self._restart(notify=attached, supersede=delivery_pending)
         return OutputEffect(True, restart, changed)
 
     def input(
@@ -220,7 +210,6 @@ class TerminalActivity:
         """Agent or operator input was written, which starts a cycle; *running* are
         the processes that ran before it. Returns the restart and a state change."""
         self._repaint_deadline = None
-        self._startup_silence = False
         changed = self._phase != "working"
         self._phase = "working"
         self._open("input", now).baseline = running
@@ -233,15 +222,12 @@ class TerminalActivity:
 
     def attach(self, *, delivery_pending: bool) -> QuietRestart | None:
         """An Agent attached: its activity, including activity in progress, wakes it."""
-        self._output_wakes = True
-        self._startup_silence = False
         if self._phase != "working":
             return None
         return self._restart(notify=True, supersede=delivery_pending)
 
     def detach(self) -> None:
         self._wake_at_idle = False
-        self._output_wakes = False
 
     def sample(self, now: float, sample: ProcessSample) -> None:
         """The program's processes at *now*, sampled while a cycle runs."""
@@ -288,32 +274,33 @@ class TerminalActivity:
         )
 
     def idle(
-        self, generation: int, now: float, signature: str, *, attached: bool, seen: bool
+        self, generation: int, now: float, signature: str, *, seen: bool, blank: bool
     ) -> IdleEffect | None:
         """Whether the cycle of ``generation`` reached its idle boundary at *now*.
 
         *seen* tells that the attached Agent's last result showed this screen
-        revision. Returns None for a stale timer and while the program works.
+        revision; *blank* that the screen shows nothing. Returns None for a
+        stale timer and while the program works.
         """
-        if generation != self.generation or self._phase != "working" or self._cycle is None:
+        cycle = self._cycle
+        if generation != self.generation or self._phase != "working" or cycle is None:
             return None
-        reason = self._idle_reason(self._cycle, now)
+        reason = self._idle_reason(cycle, now)
         if reason is None:
             return None
         self._phase = "ready"
         self._cycle = None
-        self._next_origin = "output"
+        self.idle_reason = reason
         deliver = self._wake_at_idle
         self._wake_at_idle = False
-        self._output_wakes = attached
+        if blank and cycle.origin == "start":
+            # Nothing shows yet: the program's own output starts it up.
+            self._next_origin = "start"
+            return IdleEffect(False, False, reason)
+        self._next_origin = "output"
         if seen or signature == self._baseline:
             self._baseline = signature
             return IdleEffect(False, False, reason)
-        if self._startup_silence:
-            # Remember the start-up screen as seen, so an identical later
-            # refresh stays silent too.
-            self._baseline = signature
-            return IdleEffect(True, False, reason)
         if deliver:
             self._baseline = signature
         return IdleEffect(True, deliver, reason)
@@ -339,6 +326,7 @@ class TerminalActivity:
     def _open(self, origin: _Origin, now: float) -> _Cycle:
         self._cycle = _Cycle(origin, last_output_at=now, last_evidence_at=now)
         self._next_origin = "output"
+        self.idle_reason = None
         return self._cycle
 
     def _evidence(self, cycle: _Cycle, now: float) -> None:

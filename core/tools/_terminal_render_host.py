@@ -38,8 +38,8 @@ class TerminalScreen:
         self.rows = rows
         await self._emulator.call("resize", columns, rows)
 
-    async def observe(self, tail_lines: int) -> ScreenObservation:
-        observation: ScreenObservation = await self._emulator.call("observe", tail_lines)
+    async def observe(self) -> ScreenObservation:
+        observation: ScreenObservation = await self._emulator.call("observe")
         return observation
 
     async def screen_text(self) -> str:

@@ -1,4 +1,4 @@
-"""Terminal manager: launch environment, start input, and manual launch commands."""
+"""Terminal manager: launch environment, start-up, input, and manual launch commands."""
 
 from __future__ import annotations
 
@@ -27,7 +27,6 @@ from tests.core.tools.terminal_manager_helpers import (
     terminal_info,
 )
 from tests.core.tools.terminal_manager_helpers import clocked_manager as clocked_manager
-from tests.core.tools.terminal_manager_helpers import quick_readiness as quick_readiness
 from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
 
 Clocked = tuple[TerminalManager, AdapterFactory, PendingTriggerService, FakeClock]
@@ -54,24 +53,28 @@ async def test_launch_runs_in_the_terminal_environment_and_keeps_explicit_env(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("quick_readiness")
-async def test_start_input_waits_for_a_settled_screen_and_answers_terminal_queries_meanwhile(
+async def test_startup_waits_for_a_visible_screen_and_answers_terminal_queries_meanwhile(
     clocked_manager: Clocked, tmp_path: Path
 ) -> None:
+    """A terminal's own start-up sequences draw nothing, so they show no first
+    screen; the program's first visible output does. Starting types nothing."""
     manager, factory, _trigger, clock = clocked_manager
-    started = await spawn(manager, tmp_path, initial_text="agent task")
-    assert started.state == "starting"
+    started = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    waiting = asyncio.ensure_future(manager.wait_for_startup(started.terminal_id))
 
-    # A cursor query draws nothing: the blank screen is no start screen yet.
-    factory.adapters[0].emit("\x1b[6n")
-    await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R"])
-    factory.adapters[0].emit("READY> ")
-    await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R", "agent task"])
-    # Enter follows once the program took the text: its output paused for an
-    # eighth of the quiet period.
-    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 8)
-    await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R", "agent task", "\r"])
-    assert terminal_info(manager, started.terminal_id).state == "working"
+    # A cursor query draws nothing: the blank screen is no first screen.
+    adapter.emit("\x1b[6n")
+    await eventually(lambda: adapter.writes == ["\x1b[1;1R"])
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+    await eventually(lambda: terminal_info(manager, started.terminal_id).state == "ready")
+    assert not waiting.done()
+
+    adapter.emit("READY> ")
+    await eventually(lambda: terminal_info(manager, started.terminal_id).state == "working")
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+    await waiting
+    assert adapter.writes == ["\x1b[1;1R"]
 
 
 @pytest.mark.asyncio
@@ -142,18 +145,13 @@ async def test_a_program_asking_for_focus_reports_is_told_its_user_is_away(
 
 
 @pytest.mark.asyncio
-async def test_operator_input_supersedes_pending_agent_start_and_stale_observation(
+async def test_operator_input_makes_the_agent_observation_stale(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     manager, factory = terminal_manager
-    started = await spawn(manager, tmp_path, initial_text="agent task")
-    # Only the pending start task shows that the Agent's first input was dropped:
-    # it would otherwise be written once the start screen settles.
-    initial_input = manager._sessions[started.terminal_id]._initial_input_task
-    assert initial_input is not None
+    started = await spawn(manager, tmp_path)
 
     await manager.send_operator_input(started.terminal_id, "human input")
-    await eventually(initial_input.done)
     assert factory.adapters[0].writes == ["human input"]
     with pytest.raises(TerminalStaleScreenError):
         await manager.send_input(
@@ -168,12 +166,11 @@ async def test_operator_input_supersedes_pending_agent_start_and_stale_observati
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("quick_readiness")
-async def test_empty_agent_input_preserves_startup_and_pending_input(
+async def test_empty_agent_input_changes_nothing(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     manager, factory = terminal_manager
-    started = await spawn(manager, tmp_path, initial_text="agent task")
+    started = await spawn(manager, tmp_path)
 
     result = await manager.send_input(
         started.terminal_id,
@@ -187,11 +184,8 @@ async def test_empty_agent_input_preserves_startup_and_pending_input(
 
     assert result["characters_sent"] == 0
     after = terminal_info(manager, started.terminal_id)
-    assert (after.state, after.screen_revision) == ("starting", started.screen_revision)
+    assert (after.state, after.screen_revision) == ("ready", started.screen_revision)
     assert factory.adapters[0].writes == []
-    # The pending first input still goes out once the start screen settles.
-    factory.adapters[0].emit("READY> ")
-    await eventually(lambda: factory.adapters[0].writes == ["agent task", "\r"])
 
 
 @pytest.mark.asyncio

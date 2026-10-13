@@ -14,7 +14,6 @@ from typing import Any, override
 import pytest
 import pytest_asyncio
 
-import core.tools._terminal_session as terminal_session
 import core.tools.terminal_manager as terminal_manager_module
 from core.tools.process_tree import ProcessTreeFacts, RunningProcess
 from core.tools.terminal_manager import (
@@ -26,6 +25,8 @@ from core.tools.terminal_manager import (
 
 TEST_ACTIVITY_QUIET_SECONDS = 1.0
 TEST_IDLE_SECONDS = 5.0
+# How long start waits for the first screen of a fake program that prints nothing.
+TEST_START_WAIT_SECONDS = 0.2
 
 
 class FakeTerminalAdapter:
@@ -249,12 +250,6 @@ async def settle(
 
 
 @pytest.fixture
-def quick_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Treat a start screen or shell prompt as settled after 10 ms instead of 0.5 s."""
-    monkeypatch.setattr(terminal_session, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-
-
-@pytest.fixture
 def default_shell(monkeypatch: pytest.MonkeyPatch) -> str:
     """Make PowerShell the host's default interactive shell on every platform."""
     monkeypatch.setattr(terminal_manager_module, "default_terminal_argv", lambda _env: ["pwsh.exe"])
@@ -270,6 +265,7 @@ async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFact
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
         idle_seconds=0.06,
+        start_wait_seconds=TEST_START_WAIT_SECONDS,
     )
     manager.start()
     try:
@@ -292,6 +288,7 @@ async def delivering_manager() -> AsyncIterator[
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
         idle_seconds=0.06,
+        start_wait_seconds=TEST_START_WAIT_SECONDS,
     )
     manager.start()
     try:
@@ -339,7 +336,6 @@ async def spawn(
     tmp_path: Path,
     *,
     command: str = "fake-tui",
-    initial_text: str | None = None,
 ) -> TerminalInfo:
     return await manager.spawn(
         owner(),
@@ -349,7 +345,6 @@ async def spawn(
         columns=120,
         rows=32,
         origin_run_id="run-a",
-        initial_text=initial_text,
     )
 
 

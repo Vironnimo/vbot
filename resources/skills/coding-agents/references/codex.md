@@ -24,8 +24,7 @@ Reasoning is a TOML configuration value. Keep the quotes around the level inside
   "action": "start",
   "command": "codex",
   "args": ["--model", "gpt-5.6-terra", "-c", "model_reasoning_effort=\"medium\""],
-  "workdir": "<repository path>",
-  "text": "<the user's task>"
+  "workdir": "<repository path>"
 }
 ```
 

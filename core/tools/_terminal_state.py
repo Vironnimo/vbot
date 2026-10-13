@@ -28,12 +28,13 @@ TERMINAL_MAX_LIVE_PER_SESSION = 4
 TERMINAL_MAX_LIVE_GLOBAL = 32
 TERMINAL_SWEEP_INTERVAL_SECONDS = 60.0
 TERMINAL_FINISHED_TTL = timedelta(minutes=30)
+# A message that brings a screen holds at most this many characters; screen
+# rows beyond it are left out from the top, and the message says how many.
 TERMINAL_NOTICE_MESSAGE_CAP_CHARS = 16_000
-# Embed enough recent screen rows for the notified Agent to act directly.
-TERMINAL_DELIVERY_TAIL_LINES = 20
+# Output the screen missed while rendering failed is fed again once rendering
+# works; at most this many of its newest characters are kept for that.
+TERMINAL_UNRENDERED_MAX_CHARS = 262_144
 TERMINAL_TEMPORARY_CATEGORY = "terminals"
-TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
-TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
 # Output paused this long after input or start ends the reply a Tool call shows,
 # and, with the evidence that the work ended, the cycle (``TerminalActivity``).
 TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
@@ -43,8 +44,9 @@ TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
 # 6 s measured); waking at every 2 s pause woke Agents 17 times in 63 s while
 # their program kept working.
 TERMINAL_IDLE_SECONDS = 15.0
-# An Agent start returns once the start-up output is this quiet, its initial
-# text was sent, or the program ended; at the latest after this many seconds.
+# An Agent start returns once the program showed something and its output
+# then paused for the quiet period, or once the program ended; at the latest
+# after this many seconds. A terminal's own set-up sequences show nothing.
 TERMINAL_START_WAIT_SECONDS = 10.0
 # Output this soon after resizing a quiet terminal is the program redrawing
 # its screen for the new size. Claude Code, Codex and OpenCode finish that
@@ -87,7 +89,6 @@ TERMINAL_INPUT_KEY_SEQUENCES = {
     **{f"ctrl_{chr(code + 96)}": chr(code) for code in range(1, 27)},
 }
 TerminalState = Literal[
-    "starting",
     "ready",
     "working",
     "exited",
