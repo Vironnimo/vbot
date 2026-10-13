@@ -11,6 +11,7 @@ import pytest_asyncio
 from core.projects import ProjectStore
 from core.storage.temp_files import TemporaryFileManager
 from core.subagents import SubAgentTree
+from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure_for_exception
@@ -69,6 +70,7 @@ async def call(
     projects: ProjectStore | None = None,
     *,
     subagents: SubAgentTree | None = None,
+    scratch_areas: ScratchAreas | None = None,
 ) -> JsonObject:
     """Run one Agent call the way the Tool executor does.
 
@@ -84,6 +86,7 @@ async def call(
         manager,
         projects if projects is not None else ProjectStore(context.data_root),
         subagents=subagents,
+        scratch_areas=scratch_areas,
     )
     allowed = sorted({TERMINAL_TOOL_NAME, *(context.offered_tools or ())})
     try:

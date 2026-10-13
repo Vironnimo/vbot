@@ -59,6 +59,9 @@ An Identity Agent's own home for its identity and Memory files (`SOUL.md`, `USER
 ## Project
 A registered repository that Agents work in, with ordered repository Sources for instructions, Skills and its Team, plus defaults and capability ceilings; runtime Project state lives in vBot's data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
 
+## Scratch Area
+The temporary area in vBot's data directory for one conversation and its Sub-Agent tree, with an own Scratch folder for each participating Session (`tools/scratch.md`). Not a Workspace, Memory, a delivery location for the user, or the coding agent's own scratchpad directory.
+
 ## Team
 A Project's addressable Agents combined from active repository Sources in priority order; the first definition of each name wins and later definitions are shadowed (`projects.md`, `projects/scanning.md`). Membership belongs to the Project, not to vBot's stored Agents; loading Project Context does not make an Identity Agent a member.
 

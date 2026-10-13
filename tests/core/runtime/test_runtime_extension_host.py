@@ -380,26 +380,33 @@ async def test_owner_pages_and_archives_only_its_own_closed_groups(
         assert groups is not None
         first = await groups.create("group-a", "peer", _participant(tmp_path))
         second = await groups.create("group-b", "peer", _participant(tmp_path))
+        first_scratch = await runtime.scratch_areas.folder_for(first.address)
+        second_scratch = await runtime.scratch_areas.folder_for(second.address)
         terminals = [
             TerminalOwner(address.project_id, address.agent_id, address.session_id)
             for address in (first.address, second.address)
         ]
+        other_address = SessionAddress(None, "tmp_other", "ses_other")
         runtime.chat_sessions.create_bound_temporary_session(
-            SessionAddress(None, "tmp_other", "ses_other"),
+            other_address,
             owner_name="other",
             group_id="group-0",
             participant_id="peer",
             config={},
         )
+        other_scratch = await runtime.scratch_areas.folder_for(other_address)
 
         assert await groups.groups() == ["group-a", "group-b"]
         assert await groups.groups(after="group-a", limit=1) == ["group-b"]
         await groups.open_group("group-a")
         with pytest.raises(ValueError, match="group_not_closed"):
             await groups.archive_group("group-a")
+        assert first_scratch.area.exists()
         await groups.close_group("group-a")
 
         assert await groups.archive_group("group-a") == 1
+        assert not first_scratch.area.exists()
+        assert second_scratch.area.exists() and other_scratch.area.exists()
         # Like an ordinary Session removal, the participants' Terminals and commands close.
         assert closed == terminals[:1]
         assert closed_commands == [first.address]
@@ -408,12 +415,37 @@ async def test_owner_pages_and_archives_only_its_own_closed_groups(
         with pytest.raises(RunAdmissionBlockedError):
             await groups.open_group("group-a")
         assert await groups.archive_group("group-0") == 0  # another owner's group
+        assert other_scratch.area.exists()
         assert await runtime.chat_sessions.temporary_groups_async(owner_name="other") == ["group-0"]
         assert await groups.delete_group("group-b") == 1
+        assert not second_scratch.area.exists()
         assert closed == terminals
         assert closed_commands == [first.address, second.address]
         assert await groups.delete_group("group-a") == 1  # archived; its Terminals closed before
         assert closed == terminals
+
+        # A participant linked below another group's root shares its area. Releasing
+        # only this child must retain the root's files and the child's files in it.
+        child = await groups.create("group-child", "peer", _participant(tmp_path))
+        runtime.chat_sessions.set_metadata(
+            child.address,
+            {
+                "subagent_parent": {
+                    "id": "sub_child",
+                    "agent_id": other_address.agent_id,
+                    "session_id": other_address.session_id,
+                    "project_id": other_address.project_id,
+                }
+            },
+        )
+        child_scratch = await runtime.scratch_areas.folder_for(child.address)
+        assert child_scratch.area == other_scratch.area
+        assert await groups.archive_group("group-child") == 1
+        assert other_scratch.area.exists() and child_scratch.own.exists()
+
+        # The same release boundary handles an Extension removed from disk.
+        await runtime._archive_uninstalled_extension_groups(frozenset({"swarm"}))  # noqa: SLF001
+        assert not other_scratch.area.exists()
     finally:
         await runtime.aclose()
 

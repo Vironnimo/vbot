@@ -19,6 +19,13 @@ from core.chat._run_state import (
     report_subagent_takeover,
     takes_over_subagent_session,
 )
+from core.chat._scratch_context import (
+    SCRATCH_ANNOUNCED_META_KEY,
+    SCRATCH_RUN_KINDS,
+    scratch_note,
+    scratch_note_visible,
+    uses_scratch,
+)
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._step_outcomes import OUTPUT_INTEGRITY_RECOVERY_NOTE
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
@@ -400,6 +407,7 @@ class RunExecution:
                         context.session_snapshot.active_messages
                     ),
                 )
+                await self._announce_scratch(context)
             except ImageBudgetExceededError as exc:
                 _run_succeeded = False
                 await _persist_run_error(run, session, exc)
@@ -443,6 +451,7 @@ class RunExecution:
                 _run_succeeded = False
                 await _persist_run_error(run, session, exc)
                 raise
+
             except asyncio.CancelledError:
                 raise
             except BaseException:
@@ -546,6 +555,73 @@ class RunExecution:
                     )
 
             await _close_adapter(target.adapter)
+
+    async def _announce_scratch(self, context: _RunExecutionContext) -> None:
+        """Tell a file-capable Run about its folder before its first Model request."""
+        scratch = self._dependencies.scratch_areas
+        state = context.request_state
+        if scratch is None or state is None or context.run.run_kind not in SCRATCH_RUN_KINDS:
+            return
+        catalog = await self._requests.live_tool_catalog(
+            context,
+            known=state.allowed_tool_names,
+            told=state.tool_epoch.known_names if state.tool_epoch is not None else (),
+        )
+        tool_names = set(catalog.offered_by_name)
+        if context.request.tool_restriction is not None:
+            tool_names.intersection_update(context.request.tool_restriction)
+        denial = context.request.tool_denial_resolver
+        if denial is not None:
+            tool_names = {name for name in tool_names if denial(name) is None}
+        if not uses_scratch(context.run.run_kind, tool_names):
+            return
+        session = context.session
+        folder = await scratch.folder_for(session.address)
+        sessions = self._dependencies.sessions
+        async with sessions.write_lock(session.address):
+            await context.session_snapshot.refresh(session)
+            announced = await sessions.metadata_value_async(
+                session.address, SCRATCH_ANNOUNCED_META_KEY
+            )
+            own = str(folder.own)
+            prior = announced if isinstance(announced, dict) else {}
+            cleared = bool(prior) and (
+                folder.recreated
+                or prior.get("own") != own
+                or prior.get("incarnation") != folder.incarnation
+            )
+            visible = await _CHAT_TRANSFORM_WORKERS.run(
+                scratch_note_visible,
+                context.session_snapshot.active_messages,
+                prior.get("note_id"),
+            )
+            if prior and not cleared and visible:
+                return
+            note = scratch_note(
+                folder, cleared=cleared, process_tools=bool(tool_names & {"bash", "terminal"})
+            )
+            await context.session_snapshot.append(session, [note])
+            await sessions.run_async(
+                sessions.mutate_metadata,
+                session.address,
+                lambda metadata: metadata.update(
+                    {
+                        SCRATCH_ANNOUNCED_META_KEY: {
+                            "own": own,
+                            "incarnation": folder.incarnation,
+                            "note_id": note.id,
+                        }
+                    }
+                ),
+            )
+        context.request_state = await self._requests.rebuild_live_request_state(
+            context.agent,
+            session,
+            inputs=RequestBuildInputs.from_context(
+                context, context.primary_target
+            ).with_session_messages(context.session_snapshot.active_messages),
+            live_messages=state.messages,
+        )
 
     async def _advance_fallback_chain(
         self,

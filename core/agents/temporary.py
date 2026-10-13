@@ -10,7 +10,7 @@ from contextlib import AsyncExitStack
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ChatMessage
@@ -36,6 +36,9 @@ from core.settings.normalizers import normalize_compaction_policy
 from core.tools.availability import ToolAccess, normalize_tool_access
 from core.utils.errors import StorageError
 from core.utils.ids import new_id
+
+if TYPE_CHECKING:
+    from core.tools.scratch_areas import ScratchAreas
 
 
 @dataclass(frozen=True)
@@ -338,6 +341,7 @@ async def release_temporary_group(
     *,
     delete: bool,
     close_session_work: SessionWorkCloser | None,
+    scratch_areas: ScratchAreas | None,
     archive_reason: str = "extension",
 ) -> int:
     """Archive or delete one owner group's participant Sessions; return how many.
@@ -348,7 +352,8 @@ async def release_temporary_group(
     guarded work; nothing changes then. Archiving makes them one archive entry
     that records ``archive_reason``: ``extension`` when the owner asked,
     ``extension_removed`` when vBot cleans up after a removed Extension.
-    Deleting also removes archived ones.
+    Deleting also removes archived ones. Root Scratch Areas are captured before
+    their live Sessions disappear and removed only after the mutation succeeds.
     """
     addresses: list[SessionAddress] = []
     after = ""
@@ -366,13 +371,20 @@ async def release_temporary_group(
         if close_session_work is not None:
             for address in addresses:
                 await close_session_work(address)
-        if delete:
-            return await sessions.delete_temporary_group(owner_name=owner_name, group_id=group_id)
-        if not addresses:
-            return 0
-        return await sessions.archive_temporary_group(
-            owner_name=owner_name, group_id=group_id, reason=archive_reason
+        scratch_roots = (
+            await scratch_areas.roots_for_archive(addresses) if scratch_areas is not None else ()
         )
+        if delete:
+            count = await sessions.delete_temporary_group(owner_name=owner_name, group_id=group_id)
+        elif not addresses:
+            return 0
+        else:
+            count = await sessions.archive_temporary_group(
+                owner_name=owner_name, group_id=group_id, reason=archive_reason
+            )
+        if scratch_areas is not None:
+            await scratch_areas.remove_areas(scratch_roots)
+        return count
 
 
 @dataclass
@@ -402,6 +414,7 @@ class TemporaryExecutionGroups:
         validate_binding: Callable[[TemporarySessionBinding], Awaitable[None]] | None = None,
         title: Callable[[str, str], Awaitable[str | None]] | None = None,
         close_session_work: SessionWorkCloser | None = None,
+        scratch_areas: ScratchAreas | None = None,
     ) -> None:
         self._registry = registry
         self._chat = chat
@@ -414,6 +427,7 @@ class TemporaryExecutionGroups:
         self._title = title
         self._validate_binding = validate_binding
         self._close_session_work = close_session_work
+        self._scratch_areas = scratch_areas
         self._groups: dict[str, _Group] = {}
         self._lifecycle = asyncio.Lock()
         self._retiring = False
@@ -695,6 +709,7 @@ class TemporaryExecutionGroups:
                 group_id,
                 delete=True,
                 close_session_work=self._close_session_work,
+                scratch_areas=self._scratch_areas,
             )
             self._groups.pop(group_id, None)
             return count
@@ -719,6 +734,7 @@ class TemporaryExecutionGroups:
                 group_id,
                 delete=False,
                 close_session_work=self._close_session_work,
+                scratch_areas=self._scratch_areas,
             )
             self._groups.pop(group_id, None)
             return count

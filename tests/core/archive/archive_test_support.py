@@ -31,7 +31,10 @@ from core.sessions import (
     ArchiveTree,
     ChatSessionManager,
     SessionAddress,
+    SessionNotFoundError,
 )
+from core.subagents.links import ancestors
+from core.tools.scratch_areas import ScratchAreas
 from core.utils.timestamps import utc_now_timestamp
 
 
@@ -88,6 +91,7 @@ class ArchiveWorld:
     projects: ProjectStore
     runs: ChatRunManager
     team: _Team
+    scratch_areas: ScratchAreas
     commands: _Commands = field(default_factory=_Commands)
     usage_imports: list[None] = field(default_factory=list)
     recall_removals: list[tuple[str | None, str, str | None]] = field(default_factory=list)
@@ -167,6 +171,13 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
     barrier = SnapshotBarrier()
     agents = AgentStore(data_dir, sessions=sessions, snapshot_barrier=barrier)
     projects = ProjectStore(data_dir, sessions=sessions, snapshot_barrier=barrier)
+
+    def scratch_identity(address: SessionAddress) -> str | None:
+        try:
+            return sessions.get(address).generation_id
+        except SessionNotFoundError:
+            return None
+
     world = ArchiveWorld(
         data_dir=data_dir,
         sessions=sessions,
@@ -174,6 +185,12 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         projects=projects,
         runs=ChatRunManager(persistence=sessions),
         team=_Team(),
+        scratch_areas=ScratchAreas(
+            data_dir,
+            identity=scratch_identity,
+            ancestors=lambda address: ancestors(sessions, address),
+            busy_sessions=lambda: (),
+        ),
     )
     nothing = SimpleNamespace(list_jobs=lambda: [])
 
@@ -196,6 +213,7 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         automation=AutomationReferences(bootstrap=cast(Any, nothing), cron=cast(Any, nothing)),
         terminals=cast(Any, _Terminals()),
         commands=cast(Any, world.commands),
+        scratch_areas=world.scratch_areas,
         snapshot_barrier=barrier,
         agent_references=no_references,
         import_usage=lambda: world.usage_imports.append(None),

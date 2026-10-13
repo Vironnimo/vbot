@@ -20,6 +20,7 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts/temp"),
     Path("artifacts/temp/atomic"),
     Path("artifacts/temp/commands"),
+    Path("artifacts/temp/scratch"),
     Path("artifacts/temp/subagents"),
     Path("artifacts/temp/terminals"),
     Path("artifacts/temp/web_fetch"),
@@ -102,6 +103,10 @@ class DataDirectoryLayout:
     @property
     def command_temporary(self) -> Path:
         return self.temporary / "commands"
+
+    @property
+    def scratch_temporary(self) -> Path:
+        return self.temporary / "scratch"
 
     @property
     def subagent_temporary(self) -> Path:

@@ -19,13 +19,15 @@ One owner builds it from explicit layers, each applied over the previous one:
    write plain text without colors, and Python writes each line as it prints it
    and reads and writes files as UTF-8 unless the login base sets its own mode.
 5. **Agent variables and granted credentials** (commands only).
-6. **Run identity** (commands only): who runs the command, and the one-time
+6. **Session scratch** (Agent processes): temporary files and the own Scratch
+   folder, applied after explicit variables and credentials.
+7. **Run identity** (commands only): who runs the command, and the one-time
    update handoff. Applied last, so nothing above replaces it.
 
 A command's environment comes in two parts (``CommandEnvironment``): layers 1
 to 4 are its shell's start environment, the same for every call until the login
 environment or the instance changes, so a shell started before the call can
-serve it; layers 5 and 6 are the call's own, applied by the shell before the
+serve it; layers 5 to 7 are the call's own, applied by the shell before the
 command runs.
 
 The environment is built fresh for every start; building it costs about a
@@ -39,9 +41,12 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.tools.scratch_areas import ScratchFolder
 
 _LOGGER = get_logger("tools.shell_environment")
 
@@ -49,6 +54,7 @@ RUN_AGENT_ID_ENV = "VBOT_RUN_AGENT_ID"
 RUN_SESSION_ID_ENV = "VBOT_RUN_SESSION_ID"
 RUN_PROJECT_ID_ENV = "VBOT_RUN_PROJECT_ID"
 UPDATE_HANDOFF_ENV = "VBOT_UPDATE_HANDOFF"
+SCRATCH_DIR_ENV = "VBOT_SCRATCH_DIR"
 
 # Variables that identify this vBot instance; passed on when the server has them.
 _INSTANCE_VARIABLES = ("VBOT_DATA_DIR", "VBOT_SERVER_PORT", "VBOT_INSTALL_ROOT")
@@ -125,11 +131,21 @@ def terminal_environment(overlay: Mapping[str, str] | None = None) -> dict[str, 
     return environment
 
 
+def scratch_environment(folder: ScratchFolder) -> dict[str, str]:
+    """The Session's temporary directories, already ensured by ``ScratchAreas``."""
+    return {
+        "TEMP": str(folder.tmp),
+        "TMP": str(folder.tmp),
+        "TMPDIR": str(folder.tmp),
+        SCRATCH_DIR_ENV: str(folder.own),
+    }
+
+
 @dataclass(frozen=True)
 class CommandEnvironment:
     """One command's environment: its shell's start environment and the call's layer.
 
-    ``base`` holds layers 1 to 4. ``changes`` is what layers 5 and 6 make of it:
+    ``base`` holds layers 1 to 4. ``changes`` is what layers 5 to 7 make of it:
     a value sets the variable, None removes it.
     """
 
@@ -152,6 +168,7 @@ def command_environment(
     *,
     variables: Mapping[str, str] | None = None,
     credentials: Mapping[str, str] | None = None,
+    scratch: ScratchFolder | None = None,
 ) -> CommandEnvironment:
     """Environment of one shell command run by an Agent."""
     base = _instance_environment()
@@ -165,6 +182,8 @@ def command_environment(
     environment = dict(base)
     _apply(environment, variables or {})
     _apply(environment, credentials or {})
+    if scratch is not None:
+        _apply(environment, scratch_environment(scratch))
     _remove(environment, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV))
     run_variables = {RUN_AGENT_ID_ENV: run.agent_id, RUN_SESSION_ID_ENV: run.session_id}
     if run.project_id is not None:
@@ -325,10 +344,12 @@ __all__ = [
     "RUN_AGENT_ID_ENV",
     "RUN_PROJECT_ID_ENV",
     "RUN_SESSION_ID_ENV",
+    "SCRATCH_DIR_ENV",
     "UPDATE_HANDOFF_ENV",
     "CommandEnvironment",
     "RunIdentity",
     "command_environment",
     "inherited_value",
+    "scratch_environment",
     "terminal_environment",
 ]

@@ -25,7 +25,7 @@ from core.sessions import (
 )
 from core.tools.command_manager import CommandManager
 from server.events import ServerEventBus
-from tests.server.rpc_test_support_runtime import StubJobService
+from tests.server.rpc_test_support_runtime import StubJobService, StubScratchAreas
 
 
 class FakeResolver:
@@ -321,6 +321,7 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
             automation=runtime.automation_references,
             terminals=cast(Any, runtime.terminal_manager),
             commands=runtime.command_manager,
+            scratch_areas=cast(Any, StubScratchAreas()),
             snapshot_barrier=runtime.snapshot_barrier,
             agent_references=_no_agent_references,
             import_usage=lambda: None,

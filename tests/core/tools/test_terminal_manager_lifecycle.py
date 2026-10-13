@@ -17,6 +17,7 @@ import pytest
 import core.tools.terminal_backend as terminal_backend
 import core.tools.terminal_manager as terminal_module
 from core.runs import RunExecutionOwner
+from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.tools.terminal_manager import (
     TerminalAlreadyAttachedError,
@@ -82,11 +83,15 @@ async def test_session_move_transfers_attachment_and_only_an_agent_terminals_lif
     assert (moved_agent.owner, moved_agent.lifecycle_owner) == (owner(), target)
     assert (moved_manual.owner, moved_manual.lifecycle_owner) == (None, None)
     assert len(manager.list_terminals()) == 2
+    assert manager.busy_addresses() == {
+        SessionAddress(target.project_id, target.agent_id, target.session_id)
+    }
 
     await manager.close_scope(target)
     assert terminal_info(manager, manual_id).attachment is None
     assert factory.adapters[1].alive is True
     assert factory.adapters[0].alive is False
+    assert manager.busy_addresses() == set()
 
 
 @pytest.mark.asyncio
@@ -196,6 +201,7 @@ async def test_pending_starts_reserve_owner_and_global_capacity(
     tasks = [asyncio.create_task(spawn(manager, tmp_path)) for _ in range(2)]
     try:
         await eventually(lambda: len(adapters) == 2)
+        assert manager.busy_addresses() == {SessionAddress("project-a", "agent-a", "session-a")}
         with pytest.raises(TerminalCapacityError):
             await asyncio.wait_for(spawn(manager, tmp_path), 1)
         tasks.append(

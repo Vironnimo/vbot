@@ -125,6 +125,7 @@ from core.tools import (
 )
 from core.tools.command_manager import CommandManager
 from core.tools.live import LiveToolHosts
+from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.tools.web_fetch import PageBrowser
@@ -221,6 +222,7 @@ class Runtime:
         self._update_handoffs: UpdateHandoffs | None = None
         self._terminal_manager: TerminalManager | None = None
         self._command_manager: CommandManager | None = None
+        self._scratch_areas: ScratchAreas | None = None
         self._skills: SkillRegistry | None = None
         self._skill_authoring: SkillAuthoringService | None = None
         self._skill_policy: SkillPolicyService | None = None
@@ -311,6 +313,7 @@ class Runtime:
                 resources=(self.terminal_manager, self.command_manager, self.trigger_service),
                 terminals=self.terminal_manager,
                 commands=self.command_manager,
+                scratch_areas=self.scratch_areas,
                 get_change_publisher=lambda: self._extension_change_publisher,
                 get_title_service=lambda: self._session_title_service,
                 logger=self.logger,
@@ -551,6 +554,9 @@ class Runtime:
 
     def _start_archive_retention(self) -> None:
         start_event_loop_service(self._archive, "Archive is not available")
+
+    def _start_scratch_areas(self) -> None:
+        start_event_loop_service(self._scratch_areas, "Scratch Areas are not available")
 
     def _start_config_backups(self) -> None:
         """Back up the configuration files while serving (``core.database.config_backups``)."""
@@ -1168,6 +1174,10 @@ class Runtime:
 
     change_tracker: _StartedService[ChangeTracker] = _StartedService(
         lambda runtime: runtime._change_tracker, "Change tracker service not available"
+    )
+
+    scratch_areas: _StartedService[ScratchAreas] = _StartedService(
+        lambda runtime: runtime._scratch_areas, "Scratch Areas are not available"
     )
 
     skills: _StartedService[SkillRegistry] = _StartedService(

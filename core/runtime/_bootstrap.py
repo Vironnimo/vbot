@@ -85,7 +85,8 @@ from core.runtime._recall import RecallIntegration
 from core.runtime._shutdown import clean_up_failed_startup
 from core.runtime.databases import RETIRED_CANONICAL_DATABASES
 from core.runtime.keep_awake import KeepAwakeController
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.errors import SessionNotFoundError
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import (
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
@@ -99,6 +100,7 @@ from core.statistics import StatisticsIndex, StatisticsService
 from core.storage.errors import StorageError
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
+from core.subagents.links import ancestors
 from core.tools import (
     ChangeTracker,
     FileReadState,
@@ -129,6 +131,7 @@ from core.tools.command_manager import CommandManager
 from core.tools.cron import register_cron_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
+from core.tools.scratch_areas import ScratchAreas
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager, observe_process_tree
@@ -351,7 +354,9 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._file_state = FileReadState()
         # Session-scoped file-content tracker for git-style change statistics
         # (change_tracker.py). Shared by the file edit Tools and the chat loop.
-        runtime._change_tracker = ChangeTracker()
+        runtime._change_tracker = ChangeTracker(
+            scratch_root=runtime._storage.layout.scratch_temporary
+        )
         # Chat lists it only for Agents that load Tools on demand (core/tools/on_demand.py).
         register_load_tools_tool(runtime._tools, runtime._tool_prompt_blocks)
         register_read_tool(
@@ -553,6 +558,7 @@ def bootstrap(runtime: Runtime) -> None:
             admission_validator=runtime._validate_temporary_admission,
         )
         runtime.chat_runs = runtime._chat_run_manager
+        runtime._scratch_areas = _build_scratch_areas(runtime)
         runtime._recall.observe_runs(runtime._chat_run_manager)
         runtime._performance = _build_performance_service(
             runtime._storage, runtime._chat_run_manager
@@ -610,6 +616,7 @@ def bootstrap(runtime: Runtime) -> None:
             tools=runtime._tools,
             file_read_state=runtime._file_state,
             change_tracker=runtime._change_tracker,
+            scratch_areas=runtime._scratch_areas,
             storage=runtime._storage,
             get_extension_registry=lambda: runtime.extensions,
             get_system_prompts=lambda: runtime.system_prompts,
@@ -749,6 +756,7 @@ def bootstrap(runtime: Runtime) -> None:
             prompt_blocks=runtime._tool_prompt_blocks,
             update_handoffs=runtime._update_handoffs,
             projects=runtime._projects,
+            scratch_areas=runtime._scratch_areas,
         )
         runtime._subagent_coordinator = SubAgentCoordinator(runtime, runtime._trigger_service)
         runtime._subagent_coordinator.install(runtime._chat_run_manager)
@@ -767,6 +775,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._terminal_manager,
             runtime._projects,
             subagents=runtime._subagent_coordinator,
+            scratch_areas=runtime._scratch_areas,
         )
         register_status_tool(
             runtime._tools,
@@ -816,6 +825,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._start_provider_usage_service()
             runtime._start_recall_indexing()
             runtime._start_archive_retention()
+            runtime._start_scratch_areas()
             runtime._start_config_backups()
             runtime._start_librarian()
         runtime.logger.debug("Runtime started (%s)", runtime._startup_summary.describe())
@@ -885,6 +895,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
     automation = runtime._automation_references
     terminals = runtime._terminal_manager
     commands = runtime._command_manager
+    scratch_areas = runtime._scratch_areas
     if (
         storage is None
         or sessions is None
@@ -895,6 +906,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         or automation is None
         or terminals is None
         or commands is None
+        or scratch_areas is None
     ):
         raise RuntimeError("Archive services are not available")
 
@@ -929,6 +941,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         automation=automation,
         terminals=terminals,
         commands=commands,
+        scratch_areas=scratch_areas,
         snapshot_barrier=runtime._snapshot_barrier,
         agent_references=runtime.agent_references,
         import_usage=import_usage,
@@ -938,6 +951,42 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         invalidate_project=invalidate_project,
         retention_days=retention_days,
     )
+
+
+def _build_scratch_areas(runtime: Runtime) -> ScratchAreas:
+    """Compose live resource activity without making the Tools owner depend on Runtime."""
+    storage = runtime._storage
+    sessions = runtime._chat_sessions
+    runs = runtime._chat_run_manager
+    if storage is None or sessions is None or runs is None:
+        raise RuntimeError("Scratch Area dependencies are not available")
+
+    def identity(address: SessionAddress) -> str | None:
+        try:
+            return sessions.get(address).generation_id
+        except SessionNotFoundError:
+            return None
+
+    def busy_sessions() -> set[SessionAddress]:
+        busy = {
+            SessionAddress(run.project_id, run.agent_id, run.session_id)
+            for run in runs.active_runs()
+        }
+        busy.update(address for address, _item in runs.all_queued())
+        if runtime._command_manager is not None:
+            busy.update(runtime._command_manager.busy_addresses())
+        if runtime._terminal_manager is not None:
+            busy.update(runtime._terminal_manager.busy_addresses())
+        return busy
+
+    scratch = ScratchAreas(
+        storage.data_dir,
+        identity=identity,
+        ancestors=partial(ancestors, sessions, strict=True),
+        busy_sessions=busy_sessions,
+    )
+    runs.add_run_started_callback(lambda _run: scratch.record_run_start())
+    return scratch
 
 
 def _build_performance_service(

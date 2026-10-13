@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+import threading
 import tomllib
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -16,16 +20,19 @@ from core.models.models import ModelRegistry
 from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
+from core.runs import Run
 from core.runtime._configuration import _VBOT_ROOT
 from core.runtime.runtime import Runtime
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
+from core.subagents.links import link_session
 from core.tools.command_manager import CommandManager
 from core.tools.live import LIVE_TOOL_NAMES
+from core.tools.scratch_areas import ScratchAreas, ScratchFolder
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolNotFoundError, ToolRegistry
 from core.tools.update_handoff import UpdateHandoffs
@@ -183,10 +190,12 @@ def test_runtime_wires_its_services_to_the_data_directory(shared_runtime: Runtim
         ("live_voice", LiveVoiceService),
         ("cron_service", CronService),
         ("chat_loop", ChatLoop),
+        ("scratch_areas", ScratchAreas),
     ):
         assert isinstance(getattr(runtime, name), service_type), name
     assert runtime.agents.data_dir == runtime.storage.data_dir
     assert runtime.statistics_index.data_dir == runtime.storage.data_dir
+    assert runtime.chat_loop._dependencies.scratch_areas is runtime.scratch_areas  # noqa: SLF001
     # Image understanding availability is answered by the Runtime's image service.
     availability = runtime.chat_loop._dependencies.image_understanding_available  # noqa: SLF001
     assert getattr(availability, "__self__", None) is runtime._image  # noqa: SLF001
@@ -214,6 +223,142 @@ def test_start_prepares_the_canonical_data_directory(shared_runtime: Runtime) ->
     # shadow the bundled resource forever and freeze prompt defaults at first-run
     # state. Bundled fragments are read live; only a hand-created copy overrides.
     assert not (data_dir / "prompts" / "runtime.md").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["run", "queue", "command", "terminal"])
+async def test_scratch_retention_observes_each_live_resource_owner(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    session = runtime.chat_sessions.create("main")
+    address = session.address
+    folder = await runtime.scratch_areas.folder_for(address)
+    marker = folder.area / ".activity"
+    os.utime(marker, (1, 1))
+    run = Run(run_id="run_scratch", agent_id="main", session_id=address.session_id)
+    monkeypatch.setattr(runtime.chat_runs, "active_runs", lambda: [run] if source == "run" else [])
+    monkeypatch.setattr(
+        runtime.chat_runs,
+        "all_queued",
+        lambda: [(address, cast(Any, None))] if source == "queue" else [],
+    )
+    for name, manager in (
+        ("command", runtime.command_manager),
+        ("terminal", runtime.terminal_manager),
+    ):
+        active: set[SessionAddress] = {address} if source == name else set()
+        monkeypatch.setattr(manager, "busy_addresses", lambda active=active: active)
+
+    assert await runtime.scratch_areas.sweep() == 0
+    assert folder.own.is_dir()
+    assert marker.stat().st_mtime > 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unreadable", ["parent", "child"])
+async def test_scratch_retention_keeps_busy_tree_when_ancestry_is_unavailable(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, unreadable: str
+) -> None:
+    sessions = runtime.chat_sessions
+    parent = sessions.create("main", "parent").address
+    child = sessions.create("main", "child").address
+    link_session(
+        sessions,
+        child,
+        subagent_id="sub_scratch",
+        parent=parent,
+        run_id="run_parent",
+        tool_call_id=None,
+        tool_call_index=None,
+    )
+    folder = await runtime.scratch_areas.folder_for(child)
+    marker = folder.area / ".activity"
+    os.utime(marker, (1, 1))
+    run = Run(run_id="run_child", agent_id="main", session_id=child.session_id)
+    monkeypatch.setattr(runtime.chat_runs, "active_runs", lambda: [run])
+    original = sessions.get_metadata
+
+    def unavailable_metadata(address: SessionAddress) -> dict[str, Any]:
+        if address.session_id == unreadable:
+            raise PermissionError("Session metadata unavailable")
+        return original(address)
+
+    with monkeypatch.context() as unavailable:
+        unavailable.setattr(sessions, "get_metadata", unavailable_metadata)
+        with pytest.raises(PermissionError):
+            await runtime.scratch_areas.sweep()
+        with pytest.raises(PermissionError):
+            await runtime.scratch_areas.folder_for(child)
+        assert folder.own.is_dir()
+        assert marker.stat().st_mtime == 1
+
+    assert await runtime.scratch_areas.sweep() == 0
+    assert marker.stat().st_mtime > 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["before_retirement", "during_rename"])
+async def test_scratch_retention_preserves_files_when_a_run_starts_during_sweep(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    manager = runtime.chat_runs
+    assert manager is not None
+    address = runtime.chat_sessions.create("main").address
+    scratch = runtime.scratch_areas
+    folder = await scratch.folder_for(address)
+    payload = folder.own / "input.txt"
+    payload.write_text("unfinished work", encoding="utf-8")
+    os.utime(folder.area / ".activity", (1, 1))
+    loop = asyncio.get_running_loop()
+    paused = asyncio.Event()
+    release_sweep = threading.Event()
+    release_run = asyncio.Event()
+    active_folder: asyncio.Future[ScratchFolder] = loop.create_future()
+
+    def pause() -> None:
+        loop.call_soon_threadsafe(paused.set)
+        assert release_sweep.wait(2)
+
+    if phase == "before_retirement":
+        original_root_check = scratch._has_root
+
+        def paused_root_check() -> bool:
+            pause()
+            return original_root_check()
+
+        monkeypatch.setattr(scratch, "_has_root", paused_root_check)
+    else:
+        original_rename = Path.rename
+
+        def paused_rename(path: Path, target: str | os.PathLike[str]) -> Path:
+            renamed = original_rename(path, target)
+            if path == folder.area:
+                pause()
+            return renamed
+
+        monkeypatch.setattr(Path, "rename", paused_rename)
+
+    async def executor(_run: Run) -> None:
+        active_folder.set_result(await scratch.folder_for(address))
+        await release_run.wait()
+
+    sweep = asyncio.create_task(scratch.sweep())
+    run: Run | None = None
+    try:
+        await paused.wait()
+        run = await manager.start(address, executor)
+        release_sweep.set()
+        assert await sweep == 0
+        current = await active_folder
+        assert current.incarnation == folder.incarnation
+        assert payload.read_text(encoding="utf-8") == "unfinished work"
+        assert not any(entry.name.startswith(".trash-") for entry in scratch.root.iterdir())
+    finally:
+        release_sweep.set()
+        release_run.set()
+        await sweep
+        if run is not None:
+            await run.wait()
 
 
 def test_start_bootstraps_main_agent_when_data_dir_is_empty(shared_runtime: Runtime) -> None:

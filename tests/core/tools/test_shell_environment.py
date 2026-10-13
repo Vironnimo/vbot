@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import core.tools.shell_environment as shell_environment
+from core.tools.scratch_areas import ScratchFolder
 from core.tools.shell_environment import (
     RunIdentity,
     command_environment,
@@ -34,13 +35,25 @@ def login_base(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 def test_command_layers_apply_in_order_and_the_run_identity_wins(
-    login_base: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    login_base: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("VBOT_DATA_DIR", "/data/dev")
+    own = tmp_path / "scratch" / "session-1"
+    scratch = ScratchFolder(
+        own=own, area=own.parent, tmp=own / "tmp", recreated=True, incarnation="first"
+    )
+    scratch.tmp.mkdir(parents=True)
     layers = command_environment(
         RunIdentity("agent-1", "session-1", None, update_handoff="token-1"),
-        variables={"PAGER": "more", "VBOT_RUN_AGENT_ID": "someone-else", "MODE": "ci"},
+        variables={
+            "PAGER": "more",
+            "VBOT_RUN_AGENT_ID": "someone-else",
+            "MODE": "ci",
+            "TMP": "elsewhere",
+            "VBOT_SCRATCH_DIR": "elsewhere",
+        },
         credentials={"API_TOKEN": "secret"},
+        scratch=scratch,
     )
     environment = layers.complete()
 
@@ -62,10 +75,17 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
     assert "VBOT_RUN_PROJECT_ID" not in environment
     assert environment["VBOT_UPDATE_HANDOFF"] == "token-1"
     assert "VBOT_SERVER_PORT" not in environment
+    assert environment["VBOT_SCRATCH_DIR"] == str(scratch.own)
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        assert environment[name] == str(scratch.tmp)
+        assert layers.changes[name] == str(scratch.tmp)
+        assert Path(environment[name]).is_dir()
     # The shell starts with the layers every call shares; the call's own come on top.
     other = command_environment(RunIdentity("agent-2", "session-2", "project-2", "token-2"))
     assert layers.base == other.base
     assert layers.base["PAGER"] == "cat"
+    assert "VBOT_SCRATCH_DIR" not in other.complete()
+    assert "TMP" not in other.complete()
     per_call = {"MODE", "API_TOKEN", "VBOT_RUN_AGENT_ID", "VBOT_RUN_PROJECT_ID"}
     assert not (per_call | {"VBOT_RUN_SESSION_ID", "VBOT_UPDATE_HANDOFF"}) & layers.base.keys()
     # Python's UTF-8 mode gives way to the user's own setting.

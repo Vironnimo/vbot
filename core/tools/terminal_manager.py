@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from core.runs import RunExecutionOwner
+from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.tools import terminal_backend
 from core.tools.shell_environment import terminal_environment
@@ -596,6 +597,18 @@ class TerminalManager:
             (session.info() for session in self._sessions.values()),
             key=lambda info: info.started_at,
         )
+
+    def busy_addresses(self) -> set[SessionAddress]:
+        """Sessions whose Agent Terminal is live or waiting for its launch."""
+        owners = {owner for owner in self._pending_spawns.values() if owner is not None}
+        owners.update(
+            session.lifecycle_owner
+            for session in self._sessions.values()
+            if not session.finished and session.lifecycle_owner is not None
+        )
+        return {
+            SessionAddress(owner.project_id, owner.agent_id, owner.session_id) for owner in owners
+        }
 
     def terminal(self, terminal_id: str, owner: TerminalOwner) -> TerminalInfo:
         """Return a Terminal Session attached to the exact vBot Session."""

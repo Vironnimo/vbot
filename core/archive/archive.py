@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from core.runs import ChatRunManager
     from core.sessions import ChatSessionManager
     from core.tools.command_manager import CommandManager
+    from core.tools.scratch_areas import ScratchAreas
     from core.tools.terminal_manager import TerminalManager
 
 _LOGGER = get_logger("archive")
@@ -103,6 +104,7 @@ class ArchiveServices:
     automation: AutomationReferences
     terminals: TerminalManager
     commands: CommandManager
+    scratch_areas: ScratchAreas
     snapshot_barrier: SnapshotBarrier
     agent_references: Callable[[str], Awaitable[Sequence[str]]]
     import_usage: Callable[[], None]
@@ -166,9 +168,14 @@ class ArchiveService:
                 raise ArchiveSubjectInUseError(ARCHIVE_KIND_AGENT, agent_id, references)
             await services.terminals.close_agent_scope(agent_id, None)
             await services.commands.close_agent_scope(agent_id, None)
+            addresses = await services.sessions.run_async(
+                services.sessions.list_addresses, agent_id=agent_id
+            )
+            scratch_roots = await services.scratch_areas.roots_for_archive(addresses)
             outcome = await services.sessions.run_async(
                 _operations.archive_agent, services, agent_id
             )
+            await services.scratch_areas.remove_areas(scratch_roots)
             # The archive has succeeded; what follows only brings caches, listeners
             # and the Recall index in step, so a failure there never hides it.
             try:
@@ -213,11 +220,16 @@ class ArchiveService:
                 )
             await services.terminals.close_project_scope(project_id)
             await services.commands.close_project_scope(project_id)
+            addresses = await services.sessions.run_async(
+                services.sessions.list_addresses, project_id
+            )
+            scratch_roots = await services.scratch_areas.roots_for_archive(addresses)
             outcome = await services.sessions.run_async(
                 lambda: _operations.archive_project(
                     services, project_id, copy_identity_files=copy_identity_files
                 )
             )
+            await services.scratch_areas.remove_areas(scratch_roots)
         try:
             services.invalidate_project(project_id)
         except Exception:
@@ -280,6 +292,9 @@ class ArchiveService:
                     TerminalOwner(member.project_id, member.agent_id, member.session_id)
                 )
                 await services.commands.close_scope(member)
+            # Resolve roots while their live Session metadata is still readable. A
+            # Sub-Agent on its own must never remove its Parent's shared area.
+            scratch_roots = await services.scratch_areas.roots_for_archive(members)
             # Archiving the rows and moving the current pointer is one unit for data snapshots.
             async with services.snapshot_barrier.compound_mutation_async():
                 ref = await sessions.archive(address)
@@ -291,6 +306,7 @@ class ArchiveService:
                         removed_current or address.session_id,
                     )
                     next_session_id = agent.current_session_id or None
+            await services.scratch_areas.remove_areas(scratch_roots)
             # Review forks carry a reflection Run kind, which keeps them out of Recall.
             await services.remove_session_from_recall(
                 address.agent_id, address.session_id, address.project_id

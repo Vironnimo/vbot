@@ -146,6 +146,7 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         SUBAGENT_PARENT_META_KEY,
         SUBAGENT_TAKEN_OVER_AT_META_KEY,
         "reflection_counters",
+        "scratch_announced",
         SESSION_RUN_KINDS_META_KEY,
     }
 )

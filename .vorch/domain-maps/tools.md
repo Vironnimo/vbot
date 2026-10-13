@@ -101,6 +101,8 @@ Tool execution normally consumes the shared 500-slot semaphore (also the default
 
 Read these only when your task matches - not by default.
 
+- Temporary working files shared by a conversation's Sub-Agent tree, their retention, process environment or persisted announcement -> `tools/scratch.md`
+
 - The retired `history` Tool and its restoration boundary -> `tools/history.md`
 - V4A patches, the shared change pipeline and edit engine (matching, recovery, mutation invariants), tolerant patch parsing, or patch-specific results -> `tools/apply_patch.md`
 - The replacement dialect (`edit`, `write`), its activation as followers of `apply_patch`, or the file edit dialect per Model family -> `tools/edit.md`, `tools/write.md`
