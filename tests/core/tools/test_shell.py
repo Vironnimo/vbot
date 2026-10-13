@@ -606,10 +606,15 @@ async def test_running_output_is_the_newest_lines_and_its_log_file_has_every_lin
 )
 @pytest.mark.asyncio
 async def test_output_a_pipe_stage_holds_back_is_explained_while_running_and_after_a_stop(
-    shell: Shell, command: str, stage: str | None
+    shell: Shell, monkeypatch: pytest.MonkeyPatch, command: str, stage: str | None
 ) -> None:
+    monkeypatch.setattr(shell_module, "_CONSOLE_READS_WAIT", True)
     # The command prints nothing before its pipe stage passes its output on.
     running = data(await shell.returned(shell.call({"command": command})))
+    # A holding stage explains the silence: the program is not taken as waiting for
+    # the console, and the log file is not called complete.
+    assert ("console input" in running["next"]) is (stage is None)
+    assert ("complete output" in running["next"]) is (stage is None)
 
     stopped_call = shell.call({"command": command})
     await shell.started(2)

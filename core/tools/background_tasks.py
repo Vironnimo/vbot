@@ -102,6 +102,8 @@ BACKGROUND_TASKS_TOOL_PARAMETERS: JsonObject = {
 
 # The unknown-id error names at most this many of the caller's running tasks.
 _YOURS_SHOWN = 5
+# From this status of one running command on, its result says how often it was checked.
+_CHECKS_NAMED = 3
 # A list shows at most this many Sub-Agents of a tree.
 _SUBAGENT_ROWS_SHOWN = 1_000
 _STOPPED_BY_YOU = "you stopped it."
@@ -144,6 +146,16 @@ class BackgroundTasksTool:
     def __init__(self, commands: CommandManager, subagents: SubAgentTree | None = None) -> None:
         self._commands = commands
         self._subagents = subagents
+        # How often status showed each command still running.
+        self._checks: dict[str, int] = {}
+
+    def _count_check(self, command_id: str) -> int:
+        """Count a status of a running command; forget commands vBot no longer keeps."""
+        for known in [item for item in self._checks if item != command_id]:
+            if self._commands.status(known) != "running":
+                del self._checks[known]
+        self._checks[command_id] = self._checks.get(command_id, 0) + 1
+        return self._checks[command_id]
 
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         names = named_tools(context)
@@ -354,6 +366,7 @@ class BackgroundTasksTool:
         # The call names only the id: the user sees which command it is.
         context.add_display_results([_shown_task(_command_row(report, subagent))])
         if report.ended:
+            self._checks.pop(report.command_id, None)
             if subagent is None:
                 self._acknowledge_when_persisted(context, report.command_id)
             return _ended(report, subagent, names)
@@ -363,7 +376,15 @@ class BackgroundTasksTool:
         output = running_output_text(report)
         if output:
             data["output"] = output
-        if subagent is None:
+        checks = self._count_check(report.command_id)
+        if subagent is None and checks >= _CHECKS_NAMED:
+            # Agents checked one command dozens of times, seconds apart.
+            delivery = (
+                f"You have checked it {checks} times while it runs; checking does not bring its "
+                "result sooner. The result arrives as a new message when it exits: end your turn "
+                "now unless other work is waiting."
+            )
+        elif subagent is None:
             delivery = (
                 "Its result arrives as a new message when it exits; do not sleep or poll for "
                 "that result."

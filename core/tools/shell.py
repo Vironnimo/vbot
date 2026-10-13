@@ -55,6 +55,7 @@ from core.tools._shell_results import (
     duration,
     ended_result,
     format_command_delivery,
+    holding_stage,
     log_sentence,
     named_tools,
     running_output_text,
@@ -794,6 +795,9 @@ def _running_next(
         and idle
         and reason in ("timeout", "default")
         and not report.transcript.total_lines
+        # A stage that holds the output until the end explains the silence, and an
+        # idle program behind it, such as one in a retry back-off, may print later.
+        and holding_stage(report.command) is None
     ):
         # A program that waits for the console never ends, and its result
         # otherwise reads like a slow command's that delivers later.
