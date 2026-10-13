@@ -681,6 +681,15 @@ class TerminalSession:
                             key_unsent="ended",
                         )
                     self._require_live()
+                    if key:
+                        # Output while the program took the text can change
+                        # DECCKM. Encode the key in the mode it reaches now.
+                        (last,) = input_chunks(
+                            data=None,
+                            text=None,
+                            key=key,
+                            application_cursor=self._application_cursor,
+                        )
                     write_error = await self._write_input(last, running)
                     if write_error is None:
                         if self._focus_reporting and last.endswith("\r"):
@@ -689,7 +698,7 @@ class TerminalSession:
                             with contextlib.suppress(EOFError, OSError):
                                 await asyncio.to_thread(self._adapter.write, FOCUS_OUT_REPORT)
                         return self._input_result(
-                            sum(len(chunk) for chunk in chunks),
+                            text_sent + len(last),
                             key,
                             pasted=bracketed_paste,
                             superseded=superseded,
@@ -796,7 +805,9 @@ class TerminalSession:
     async def _write_failure(self) -> TerminalManagerError:
         """The error for input the PTY refused, by whether the program still runs.
 
-        A program that has ended finishes the Session now.
+        Even after the program ended, its last output may still be in flight.
+        The reader owns the natural end and closes the log after draining it;
+        cancelling this input must not cancel that reader.
         """
         try:
             alive = await asyncio.to_thread(self._adapter.is_alive)
@@ -806,7 +817,11 @@ class TerminalSession:
             return TerminalManagerError(
                 f"The input could not be written to terminal {self.terminal_id}"
             )
-        await self._mark_finished()
+        reader = self._reader_task
+        if reader is not None and not reader.done():
+            # Waiting observes completion without propagating cancellation
+            # either way: a kill may cancel the reader, not this input/Run.
+            await asyncio.wait({reader})
         return TerminalClosedError("Terminal Session is no longer running")
 
     async def resize(self, columns: int, rows: int) -> dict[str, Any]:
@@ -1254,6 +1269,7 @@ class TerminalSession:
                     input_offset = self._input_offset
                     if end - replay.offset <= _REPLAY_LOCKED_BYTES:
                         await replay.run(end, resizes, input_offset)
+                        await replay.finish()
                         await self._replace_screen(replay)
                         return True
                 await replay.run(end, resizes, input_offset)
@@ -2137,6 +2153,17 @@ class _LogReplay:
             self._file = self._path.open("rb")
         self._file.seek(offset)
         return self._file.read(size)
+
+    async def finish(self) -> None:
+        """Render any incomplete UTF-8 tail before handing the screen over.
+
+        Piece boundaries keep decoder state; only the final swap ends replay.
+        The raw log keeps these bytes, and the screen shows replacement
+        characters just as it does for undecodable live output.
+        """
+        text = _SURROGATE.sub("\ufffd", self._decoder.decode(b"", final=True))
+        if text:
+            self.update = await self.screen.feed(text)
 
     def close(self) -> None:
         """Close the log; the screen stays open."""

@@ -721,10 +721,12 @@ class _EmulatorScreen(pyte.Screen):
         columns: int,
         lines: int,
         on_scroll: Callable[[Any], None],
+        restore_history: Callable[[int], list[Any]],
         on_clear: Callable[[], None],
         on_clear_history: Callable[[], None],
     ) -> None:
         self._on_scroll = on_scroll
+        self._restore_history = restore_history
         self._on_clear = on_clear
         self._on_clear_history = on_clear_history
         self._primary_state: dict[str, Any] | None = None
@@ -808,7 +810,16 @@ class _EmulatorScreen(pyte.Screen):
         saved = self.savepoints[-1]
         self.savepoints = [saved._replace(cursor=copy.copy(saved.cursor))]
         super().restore_cursor()
+        # pyte always clamps a restored row to the scroll region, even when
+        # origin mode is off and the saved cursor is outside that region.
+        self.cursor.y = saved.cursor.y
+        self.ensure_vbounds()
         self.savepoints = [saved]
+
+    def _shift_saved_cursor(self, rows: int) -> None:
+        """Keep the saved cursor on its line as the screen moves over history."""
+        for saved in self.savepoints:
+            saved.cursor.y += rows
 
     def save_cursor_ansi(self, *_params: int, private: bool = False) -> None:
         """CSI s: save the cursor (CSI ? s saves modes, which is not supported)."""
@@ -978,6 +989,7 @@ class _EmulatorScreen(pyte.Screen):
         # into history; a region lower on the screen discards them.
         if self.cursor.y == bottom and top == 0 and self._primary_state is None:
             self._on_scroll(self.buffer[top])
+            self._shift_saved_cursor(-1)
         super().index()
 
     def scroll_up(self, *params: int) -> None:
@@ -1055,6 +1067,9 @@ class _EmulatorScreen(pyte.Screen):
         private = kwargs.get("private")
         alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
         if alternate and self._primary_state is None:
+            # Unlike 47/1047, 1049 also replaces the saved primary cursor.
+            if 1049 in alternate:
+                self.save_cursor()
             self._primary_state = self._capture_state()
             super().reset()
             self.cursor.attrs = self.default_char
@@ -1131,8 +1146,21 @@ class _EmulatorScreen(pyte.Screen):
                 self.buffer.clear()
                 self.buffer.update(rows)
                 self.cursor.y -= dropped
+                self._shift_saved_cursor(-dropped)
             for y in range(lines, self.lines):
                 self.buffer.pop(y, None)
+        elif keep_history and self.cursor.y == self.lines - 1:
+            # Like xterm, grow above a cursor on the bottom row while older
+            # lines remain; with rows below the cursor, grow below it instead.
+            restored = self._restore_history(lines - self.lines)
+            if restored:
+                count = len(restored)
+                rows = {y + count: line for y, line in self.buffer.items()}
+                self.buffer.clear()
+                self.buffer.update(rows)
+                self.buffer.update(enumerate(restored))
+                self.cursor.y += count
+                self._shift_saved_cursor(count)
         if columns < self.columns:
             for line in self.buffer.values():
                 for x in range(columns, self.columns):
@@ -1157,16 +1185,19 @@ class _HistoryLine(NamedTuple):
     number: int
     # A wrapped row keeps its trailing spaces: its text continues on the next row.
     text: str
+    # Keep immutable cells and their row metadata for a later height increase.
+    # The copied row cannot be changed by the screen after it scrolls away.
+    cells: Any
     wrapped: bool = False
 
 
 class TerminalEmulator:
     """Rendered screen plus bounded history addressed by stable line numbers.
 
-    Line numbers count every line that ever scrolled into history, starting
-    at 0, so a number keeps naming the same line while new output arrives;
-    the current screen starts right after the newest history line. Only the
-    oldest lines beyond the retention bound disappear.
+    Line numbers start at 0 and keep naming the same lines as output arrives
+    or resizing moves them between history and the screen. The current
+    screen starts right after the newest history line; only the oldest
+    lines beyond the retention bound disappear.
     """
 
     def __init__(self, columns: int, rows: int, *, scrollback_lines: int) -> None:
@@ -1180,7 +1211,12 @@ class TerminalEmulator:
         # Where the current chunk first erased the whole primary screen.
         self._cleared_line: int | None = None
         self._screen = _EmulatorScreen(
-            columns, rows, self._remember_line, self._cleared, self._history.clear
+            columns,
+            rows,
+            self._remember_line,
+            self._restore_history,
+            self._cleared,
+            self._history.clear,
         )
         self._guarded = _GuardedScreen(self._screen)
         self._stream = _EmulatorStream(
@@ -1454,10 +1490,20 @@ class TerminalEmulator:
             _HistoryLine(
                 self._next_line,
                 _render_buffer_line(line, self._screen.columns, strip=not continues),
+                copy.copy(line),
                 continues,
             )
         )
         self._next_line += 1
+
+    def _restore_history(self, count: int) -> list[Any]:
+        """Move the newest saved rows back to the screen without renumbering them."""
+        restored = [self._history.pop() for _ in range(min(count, len(self._history)))]
+        if not restored:
+            return []
+        restored.reverse()
+        self._next_line = restored[0].number
+        return [line.cells for line in restored]
 
     def _cleared(self) -> None:
         # Everything drawn on a cleared screen is new: after input, the

@@ -134,6 +134,28 @@ XTERM_SCREENS = [
     # One saved cursor (CSI s, ESC 7), tab stops forward and back, column position.
     pytest.param("ab\x1b[sXYZ\x1b[uQ", 20, "abQYZ", id="save-restore-cursor"),
     pytest.param("a\x1b7b\x1b7c\x1b8d\x1b8e", 20, "abe", id="one-saved-cursor"),
+    pytest.param("\x1b[!p\x1b[2;3r\x1b8X", 20, "X", id="reset-cursor-outside-margins"),
+    pytest.param("abc\x1b7\x1b[2;3r\x1b8X", 20, "abcX", id="saved-cursor-outside-margins"),
+    # 1049 saves the current primary cursor; 47/1047 keep the earlier savepoint,
+    # also after scrolling moved its line above the current cursor.
+    *[
+        pytest.param(
+            f"1\r\n2\r\n3\x1b7\r\n4\x1b[?{mode}hALT\x1b[?{mode}l\x1b8X",
+            20,
+            "2\n3\n4X" if mode == 1049 else "2\n3X\n4",
+            id=f"alternate-{mode}-saved-cursor-after-scroll",
+        )
+        for mode in (47, 1047, 1049)
+    ],
+    *[
+        pytest.param(
+            f"1\x1b7\r\n2\r\n3\x1b[?{mode}hALT\x1b[?{mode}l\x1b8X",
+            20,
+            "1\n2\n3X" if mode == 1049 else "1X\n2\n3",
+            id=f"alternate-{mode}-saved-cursor-without-scroll",
+        )
+        for mode in (47, 1047, 1049)
+    ],
     pytest.param("a\x1b[Ib\x1b[2Ic", 40, "a       b               c", id="tab-forward"),
     pytest.param("\x1b[30Ga\x1b[Zb\x1b[2Zc", 40, " " * 16 + "c       b    a", id="tab-back"),
     pytest.param("abc\x1b[10`X", 20, "abc      X", id="column-position"),
@@ -289,7 +311,8 @@ def test_update_reports_bracketed_paste_and_cursor_key_modes() -> None:
 
 def test_alternate_screen_is_rendered_and_primary_screen_restores_after_resize() -> None:
     emulator = TerminalEmulator(12, 3, scrollback_lines=20)
-    assert emulator.feed("primary").alternate_screen is False
+    assert emulator.feed("old\r\nolder\r\nprimary\r\n").alternate_screen is False
+    assert history(emulator) == "old"
 
     entered = emulator.feed("\x1b[?1049h\x1b[2J\x1b[Hgame\x1b[2;1Hscore: 7")
     assert (entered.alternate_screen, entered.alternate_exited) == (True, False)
@@ -304,7 +327,9 @@ def test_alternate_screen_is_rendered_and_primary_screen_restores_after_resize()
     left = emulator.feed("\x1b[?1049l")
     assert (left.alternate_screen, left.alternate_exited) == (False, True)
     assert (emulator.columns, emulator.rows) == (16, 4)
-    assert emulator.screen_text() == "primary"
+    assert emulator.screen_text() == "old\nolder\nprimary"
+    assert history(emulator) == ""
+    assert emulator.observe().screen_start_line == 0
     assert "primary" in emulator.ansi_snapshot()
 
     # A full reset (RIS) leaves the alternate screen, blank.
@@ -408,21 +433,64 @@ def test_only_scrolling_from_the_top_row_of_the_primary_screen_keeps_history() -
     assert history(emulator) == "one"
 
 
-def test_shrinking_moves_rows_above_the_cursor_into_history() -> None:
-    emulator = TerminalEmulator(20, 5, scrollback_lines=10)
-    emulator.feed("1\r\n2\r\n3\r\n4\r\n5")
+@pytest.mark.parametrize("retained", [1, 10])
+def test_resizing_moves_rows_between_the_screen_and_retained_history(retained: int) -> None:
+    emulator = TerminalEmulator(20, 5, scrollback_lines=retained)
+    emulator.feed("1\r\n\x1b[7m2\x1b[0m\r\n3\r\n4\r\n5\x1b7")
+    original = emulator.observe()
 
     emulator.resize(20, 3)
 
     assert emulator.screen_text() == "3\n4\n5"
-    assert history(emulator) == "1\n2"
+    assert history(emulator) == ("2" if retained == 1 else "1\n2")
     assert emulator.page(start_line=None, limit=10)["screen_start_line"] == 2
+    assert emulator.observe().cursor == (3, 2)
+
+    emulator.resize(20, 5)
+
+    missing = int(retained == 1)
+    restored = emulator.observe()
+    assert restored.screen == (original.screen.removeprefix("1\n") if missing else original.screen)
+    assert (restored.screen_start_line, restored.first_line) == (missing, missing)
+    assert restored.cursor_line == original.cursor_line == 4
+    assert restored.cursor == (5 - missing, 2)
+    assert history(emulator) == ""
+    assert emulator.page(start_line=2, limit=2)["text"] == "3\n4"
+    # Restoring the saved cursor after either resize uses that same absolute line.
+    emulator.feed("\x1b[H\x1b8!")
+    assert emulator.screen_text().endswith("5!")
+
+    # Repeated moves preserve the absolute numbers and do not duplicate history.
+    emulator.resize(20, 3)
+    emulator.resize(20, 5)
+    emulator.feed("\r\n6")
+    assert emulator.page(start_line=missing, limit=10)["text"] == (
+        "2\n3\n4\n5!\n6" if missing else "1\n2\n3\n4\n5!\n6"
+    )
 
     # Blank rows below the cursor go first.
     short = TerminalEmulator(20, 5, scrollback_lines=10)
     short.feed("1\r\n2")
     short.resize(20, 3)
     assert (short.screen_text(), history(short)) == ("1\n2", "")
+    short.resize(20, 5)
+    assert (short.screen_text(), history(short), short.observe().cursor) == ("1\n2", "", (2, 2))
+
+    # Growing below a cursor that moved up must not pull retained rows onto the screen.
+    emulator.feed("\x1b[H")
+    before = emulator.observe()
+    emulator.resize(20, 7)
+    assert emulator.observe().screen == before.screen
+    assert emulator.observe().cursor == before.cursor
+    assert emulator.observe().screen_start_line == before.screen_start_line
+
+    # Restored wrapped rows still form one logical line for pattern matching.
+    wrapped = TerminalEmulator(4, 3, scrollback_lines=10)
+    wrapped.feed("abcdefghij")
+    wrapped.resize(4, 1)
+    wrapped.resize(4, 3)
+    assert wrapped.screen_text() == "abcd\nefgh\nij"
+    assert wrapped.pattern_text(start_line=None)["text"] == "abcdefghij"
 
 
 def test_scroll_up_and_down_move_the_region_and_keep_the_cursor() -> None:

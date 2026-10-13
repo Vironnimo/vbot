@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 
+import core.tools._terminal_session as terminal_session
 from core.storage.temp_files import TemporaryFileManager
 from core.tools._terminal_render_host import TerminalScreen
 from core.tools.terminal_manager import (
@@ -292,6 +293,9 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
     terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
     await _render(terminal_manager, factory, terminal_id, "before\r\n")
     feed = TerminalScreen.feed
+    # Multibyte text crosses replay pieces; only the final handover flushes
+    # an incomplete byte sequence, as the live reader does at EOF.
+    monkeypatch.setattr(terminal_session, "_REPLAY_PIECE_BYTES", 5)
 
     async def broken_feed(_screen: TerminalScreen, _text: str) -> Any:
         raise RuntimeError("renderer broke")
@@ -315,19 +319,30 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
     assert "renderer broke" in cast(dict[str, Any], typed["data"])["note"]
     await terminal_manager.resize_for_operator(terminal_id, columns=100, rows=30)
 
+    # Keep rendering broken until all final bytes reached the log, so they
+    # must be recovered through replay rather than the live feed.
+    factory.adapters[0].emit("after \u20ac\U0001f600\udce2\udc82")
+    snapshot = await terminal_manager.snapshot(terminal_id, OWNER)
+    log = Path(snapshot["log_file"])
+    tail = "after \u20ac\U0001f600".encode() + b"\xe2\x82"
+    await eventually(lambda: log.read_bytes().endswith(tail))
     monkeypatch.setattr(TerminalScreen, "feed", feed)
-    await _render(terminal_manager, factory, terminal_id, "after\r\n")
 
     async def caught_up() -> bool:
         data = cast(dict[str, Any], (await call(terminal_manager, context, status))["data"])
-        return data["screen"].splitlines() == ["before", "missed", "after"] and (
-            "renderer broke" not in data.get("note", "")
-        )
+        return data["screen"].splitlines() == [
+            "before",
+            "missed",
+            "after \u20ac\U0001f600\ufffd\ufffd",
+        ] and ("renderer broke" not in data.get("note", ""))
 
     await eventually(caught_up, attempts=600)
     assert (await terminal_manager.read_for_operator(terminal_id))["bracketed_paste"] is True
     info = terminal_manager.terminal(terminal_id, OWNER)
     assert (info.columns, info.rows) == (100, 30)
+    snapshot = await terminal_manager.snapshot(terminal_id, OWNER)
+    assert snapshot["log_complete"] is True
+    assert log.read_bytes().endswith(tail)
 
 
 @pytest.mark.parametrize(

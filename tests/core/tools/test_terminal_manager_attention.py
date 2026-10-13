@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ import pytest
 import core.tools._terminal_session as terminal_session
 import core.tools._terminal_state as terminal_state
 from core.runs import RunAdmissionBlockedError
+from core.storage.temp_files import TemporaryFileManager
 from core.tools._terminal_activity import PROCESS_SAMPLE_SECONDS
 from core.tools._terminal_render_host import TerminalScreen
 from core.tools.process_tree import RunningProcess
@@ -30,6 +32,7 @@ from tests.core.tools.terminal_helpers import call, make_context
 from tests.core.tools.terminal_manager_helpers import (
     TEST_ACTIVITY_QUIET_SECONDS,
     TEST_IDLE_SECONDS,
+    TEST_START_WAIT_SECONDS,
     AdapterFactory,
     FakeClock,
     FakeTree,
@@ -262,43 +265,138 @@ async def test_notification_revision_authorizes_only_the_delivered_screen(
     assert adapter.writes == writes
 
 
+@pytest.mark.parametrize("writer", ["operator", "agent", "cancelled-agent", "stopped"])
 @pytest.mark.asyncio
 async def test_refused_write_ends_the_terminal_only_once_its_program_ended(
-    delivering_manager: Delivering, tmp_path: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    writer: str,
 ) -> None:
-    manager, factory, trigger = delivering_manager
-    started = await spawn(manager, tmp_path)
-    manager.attach(started.terminal_id, owner(), origin_run_id="attach-run")
-    adapter = factory.adapters[0]
-    adapter.emit("last words\r\n")
-    await eventually(lambda: terminal_info(manager, started.terminal_id).screen_revision > 0)
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        temporary_files=TemporaryFileManager(tmp_path / "temp"),
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+        idle_seconds=0.06,
+        start_wait_seconds=TEST_START_WAIT_SECONDS,
+    )
+    manager.start()
+    try:
+        started = await spawn(manager, tmp_path)
+        manager.attach(started.terminal_id, owner(), origin_run_id="attach-run")
+        adapter = factory.adapters[0]
+        reading = threading.Event()
+        release = threading.Event()
+        failed = threading.Event()
+        read = adapter.read
 
-    def unwritable(text: str) -> None:
-        raise OSError(5, f"Input/output error writing {text!r}")
+        def delayed_read(size: int) -> str:
+            output = read(size)
+            if output == "final words\r\n":
+                reading.set()
+                assert release.wait(5), "test did not release the last output"
+            return output
 
-    # A write the PTY refuses while the program still runs ends nothing.
-    adapter.write = unwritable  # type: ignore[method-assign]
-    with pytest.raises(TerminalManagerError, match="could not be written") as refused:
-        await manager.send_operator_input(started.terminal_id, "early input")
-    assert not isinstance(refused.value, TerminalClosedError)
-    assert terminal_info(manager, started.terminal_id).finished_at is None
-    del adapter.write
+        monkeypatch.setattr(adapter, "read", delayed_read)
+        adapter.emit("last words\r\n")
+        await eventually(lambda: terminal_info(manager, started.terminal_id).screen_revision > 0)
 
-    adapter.write_error = EOFError("Pty is closed")
+        def unwritable(text: str) -> None:
+            raise OSError(5, f"Input/output error writing {text!r}")
 
-    with pytest.raises(TerminalClosedError):
-        await manager.send_operator_input(started.terminal_id, "late input")
+        # A write the PTY refuses while the program still runs ends nothing.
+        adapter.write = unwritable  # type: ignore[method-assign]
+        with pytest.raises(TerminalManagerError, match="could not be written") as refused:
+            await manager.send_operator_input(started.terminal_id, "early input")
+        assert not isinstance(refused.value, TerminalClosedError)
+        assert terminal_info(manager, started.terminal_id).finished_at is None
+        del adapter.write
 
-    closed = terminal_info(manager, started.terminal_id)
-    assert closed.state == "exited"
-    assert closed.attention is not None
-    assert closed.attention.kind == "exited"
-    notice_id = closed.attention.notice_id
-    await eventually(lambda: any(kw["notice_id"] == notice_id for _a, kw in trigger.submissions))
-    exit_message = next(kw for _a, kw in trigger.submissions if kw["notice_id"] == notice_id)
-    assert exit_message["origin_run_id"] == "attach-run"
-    # The exit message carries the last screen.
-    assert exit_message["body"].endswith("\n```text\nlast words\n```")
+        def closed_write(text: str) -> None:
+            failed.set()
+            raise EOFError("Pty is closed")
+
+        monkeypatch.setattr(adapter, "write", closed_write)
+        adapter.emit("final words\r\n")
+        try:
+            await eventually(reading.is_set)
+            adapter.finish(7)
+            draining = asyncio.Event()
+            if writer == "stopped":
+                wait = asyncio.wait
+
+                async def observe_drain(futures: Any, **kwargs: Any) -> Any:
+                    if len(futures) == 1:
+                        draining.set()
+                    return await wait(futures, **kwargs)
+
+                monkeypatch.setattr(terminal_session.asyncio, "wait", observe_drain)
+            sending = asyncio.create_task(
+                manager.send_operator_input(started.terminal_id, "late input")
+                if writer == "operator"
+                else _agent_input(manager, started, data="late input")
+            )
+            await eventually(failed.is_set)
+            assert not sending.done()
+            assert terminal_info(manager, started.terminal_id).finished_at is None
+            assert not adapter.closed
+            if writer == "cancelled-agent":
+                sending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await sending
+            elif writer == "stopped":
+                await draining.wait()
+                wait_for = asyncio.wait_for
+
+                async def stop_drain_timeout(awaitable: Any, timeout: float | None) -> Any:
+                    if timeout == 5:
+                        # Stop exhausted its drain allowance. Cancelling the
+                        # shield leaves terminate responsible for its reader.
+                        awaitable.cancel()
+                        raise TimeoutError
+                    return await wait_for(awaitable, timeout)
+
+                with monkeypatch.context() as stopping:
+                    stopping.setattr(terminal_session.asyncio, "wait_for", stop_drain_timeout)
+                    stopped = await manager.kill(started.terminal_id, owner())
+                assert stopped.stopped
+                assert sending.cancelling() == 0
+        finally:
+            release.set()
+        if writer != "cancelled-agent":
+            with pytest.raises(TerminalClosedError):
+                await sending
+        await eventually(lambda: terminal_info(manager, started.terminal_id).state == "exited")
+
+        closed = terminal_info(manager, started.terminal_id)
+        assert closed.state == "exited"
+        snapshot = await manager.snapshot(started.terminal_id, owner())
+        assert snapshot["exit_code"] == 7
+        assert snapshot["log_complete"] is True
+        if writer == "stopped":
+            # An explicit stop cancels a stuck read; the earlier logged output
+            # stays available, and its waiting input is closed, not cancelled.
+            assert snapshot["stopped"] is True
+            assert Path(snapshot["log_file"]).read_bytes() == b"last words\r\n"
+            return
+        assert closed.attention is not None
+        assert closed.attention.kind == "exited"
+        assert Path(snapshot["log_file"]).read_bytes() == b"last words\r\nfinal words\r\n"
+        notice_id = closed.attention.notice_id
+        await eventually(
+            lambda: any(kw["notice_id"] == notice_id for _a, kw in trigger.submissions)
+        )
+        exit_message = next(kw for _a, kw in trigger.submissions if kw["notice_id"] == notice_id)
+        assert exit_message["origin_run_id"] == ("attach-run" if writer == "operator" else "run-b")
+        # The exit message carries the last screen.
+        assert exit_message["body"].endswith("\n```text\nlast words\nfinal words\n```")
+
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
