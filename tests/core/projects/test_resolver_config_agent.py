@@ -1,5 +1,6 @@
 """Config-Agent Tool and Skill resolution tests."""
 
+import asyncio
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -8,6 +9,7 @@ import pytest
 
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 from core.database import DatabaseUnavailableError
+from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurationError
 from core.projects.resolver import AgentResolver
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess, resolve_tool_access
@@ -62,13 +64,14 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.thinking_effort is None
 
 
+@pytest.mark.parametrize("model", ["openai/gpt-5.2", "openai/unavailable"])
 def test_config_agent_session_overrides_change_only_the_runtime_view(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+    agents: AgentStore, projects: ProjectStore, repo: Path, model: str
 ) -> None:
     _write_agent(
         repo,
         "builder.md",
-        model="openai/gpt-5.2",
+        model=model,
         reasoning_effort="low",
     )
     project = _project(projects, repo)
@@ -79,17 +82,43 @@ def test_config_agent_session_overrides_change_only_the_runtime_view(
         {"model": "openai/gpt-mini", "thinking_effort": "high"},
     )
 
-    overridden = resolver.resolve_agent(project.project_id, "builder", session_id=session.id)
-    configured = resolver.resolve_agent(project.project_id, "builder")
-
-    assert isinstance(overridden, ConfigAgent)
-    assert isinstance(configured, ConfigAgent)
-    assert overridden.model == "openai/gpt-mini"
-    assert overridden.thinking_effort == "high"
-    assert configured.model == "openai/gpt-5.2"
-    assert configured.thinking_effort == "low"
-    assert overridden.tool_access == configured.tool_access
-    assert overridden.body == configured.body
+    for kwargs in (
+        {"session_id": session.id},
+        {"new_session_overrides": AgentOverrides(model="openai/gpt-mini", thinking_effort="high")},
+    ):
+        for overridden in (
+            resolver.resolve_agent(project.project_id, "builder", **kwargs),
+            asyncio.run(resolver.resolve_agent_async(project.project_id, "builder", **kwargs)),
+        ):
+            assert isinstance(overridden, ConfigAgent)
+            assert overridden.model == "openai/gpt-mini"
+            assert overridden.thinking_effort == "high"
+    assert resolver.effective_config(project.project_id, "builder", session_id=session.id)[
+        "model"
+    ] == {
+        "value": "openai/gpt-mini",
+        "source": "session",
+    }
+    if model == "openai/unavailable":
+        with pytest.raises(AgentResolutionError):
+            resolver.resolve_agent(project.project_id, "builder")
+    else:
+        configured = resolver.resolve_agent(project.project_id, "builder")
+        assert isinstance(configured, ConfigAgent)
+        assert isinstance(overridden, ConfigAgent)
+        assert configured.model == model
+        assert configured.thinking_effort == "low"
+        assert overridden.tool_access == configured.tool_access
+        assert overridden.body == configured.body
+    for resolve in (resolver.resolve_agent, resolver.resolve_agent_async):
+        with pytest.raises(ModelConfigurationError):
+            result = resolve(
+                project.project_id,
+                "builder",
+                new_session_overrides=AgentOverrides(model="openai/missing"),
+            )
+            if asyncio.iscoroutine(result):
+                asyncio.run(result)
 
 
 def test_temporary_profile_keeps_its_selection_inside_a_narrower_project(

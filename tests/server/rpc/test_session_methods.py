@@ -26,6 +26,7 @@ from core.utils.timestamps import canonical_timestamp
 from server.events import ServerEventBus
 from server.rpc.errors import RPC_ERROR_DOMAIN
 from tests.core.sessions.history_fixtures import settle_run
+from tests.server.rpc.project_methods_test_support import _make_state, _write_agent
 from tests.server.rpc.session_methods_test_support import FakeSessions, stub_session_state
 from tests.server.rpc_test_support import (
     JsonObject,
@@ -329,6 +330,30 @@ async def test_session_create_stores_its_agent_overrides(tmp_path: Path) -> None
     # The Session's row reports its overrides, so accessors can show them.
     row = await rpc_result(state, "session.get", agent_id="coder", session_id="session-one")
     assert row["session"]["agent_overrides"] == overrides
+
+
+@pytest.mark.asyncio
+async def test_project_session_creation_accepts_a_usable_session_model(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    runtime = state.runtime
+    repo = tmp_path / "repo"
+    _write_agent(repo, "builder.md", model="openai/unavailable")
+    runtime.projects.create("vbot", "vBot", repo)
+    try:
+        result = await rpc_result(
+            state,
+            "session.create",
+            agent_id="builder@vbot",
+            session_id="s1",
+            agent_overrides={"model": "openai/gpt-mini"},
+        )
+        address = SessionAddress("vbot", "builder", "s1")
+        assert result["agent_overrides"] == {"model": "openai/gpt-mini"}
+        assert (
+            runtime.sessions.metadata_value(address, "agent_overrides") == result["agent_overrides"]
+        )
+    finally:
+        runtime.sessions.close()
 
 
 # ---------------------------------------------------------------------------

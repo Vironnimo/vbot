@@ -106,16 +106,17 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
         # One resolver seam validates both sources: identity agents through the
         # store, project agents through the team scan. The session is then created
         # under the matching anchor (identity dir vs. project anchor).
-        agent = await resolver.resolve_agent_async(project_id, agent_id)
+        agent = await resolver.resolve_agent_async(
+            project_id,
+            agent_id,
+            **({"new_session_overrides": AgentOverrides(**overrides)} if overrides else {}),
+        )
         # The Session works in this Project for its whole life: the requested
         # one (it must exist), the Workspace (null), or the Agent's default
         # Project; a Team Agent's Session in its Team's Project.
         working_project_id = await resolver.resolve_working_project_async(
             project_id, agent, requested=requested_project
         )
-        # An unusable Model fails before the Session exists.
-        if overrides and overrides.get("model") is not None:
-            await resolver.require_model_configured_async(overrides["model"])
         session = await chat_sessions.run_async(create_session)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -197,9 +198,10 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     permanent = _optional_bool(params, "permanent", default=False)
     address = _session_address(agent_id, session_id, project_id)
     try:
-        # One resolver seam validates both agent sources, exactly like
-        # session.create, so an unknown agent fails before any file work.
-        await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
+        # Validate the owner, but archiving a conversation needs no runnable Model.
+        await state.runtime.agent_resolver.resolve_agent_async(
+            project_id, agent_id, require_model=False
+        )
         try:
             async with _agent_reference_lock(state):
                 outcome = await state.runtime.archive.archive_session(address)
@@ -337,7 +339,7 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
         resolver = state.runtime.agent_resolver
         agent_policies: dict[tuple[str | None, str], Any] = {}
         for _address, agent_id, project_id in parsed_addresses:
-            agent = resolver.resolve_agent(project_id, agent_id)
+            agent = resolver.resolve_agent(project_id, agent_id, require_model=False)
             agent_policies[(project_id, agent_id)] = getattr(agent, "compaction_policy", None)
         load_global_policy = _global_compaction_policy_loader(state)
         page = state.runtime.chat_sessions.list_summaries_page(

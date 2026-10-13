@@ -249,6 +249,7 @@ class AgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        require_model: bool = True,
     ) -> RuntimeAgent:
         """Resolve one agent to a runnable :class:`RuntimeAgent`.
 
@@ -269,16 +270,27 @@ class AgentResolver:
         ``new_session_overrides`` resolves the Agent as a Session that does not
         exist yet runs it with these overrides (the first Run of a new Session);
         it excludes ``session_id``.
+
+        ``require_model=False`` lets Session administration inspect an existing
+        Agent's configuration even when its default Model chain is exhausted.
+        A Session Model override is always checked and wins before that chain.
         """
         _require_one_override_source(session_id, new_session_overrides)
+        address = None if session_id is None else _session_address(project_id, agent_id, session_id)
+        overrides = (
+            self.session_overrides(address)
+            if address is not None
+            else new_session_overrides or AgentOverrides()
+        )
         if project_id is None:
             agent: RuntimeAgent = self._resolve_identity_agent(agent_id)
         else:
-            agent = self._resolve_config_agent(project_id, agent_id)
-        if session_id is None:
-            return self._apply_overrides(agent, new_session_overrides or AgentOverrides())
-        address = _session_address(project_id, agent_id, session_id)
-        agent = self._apply_overrides(agent, self.session_overrides(address))
+            agent = self._resolve_config_agent(
+                project_id, agent_id, model_override=overrides.model, require_model=require_model
+            )
+        agent = self._apply_overrides(agent, overrides)
+        if address is None:
+            return agent
         key = _skill_binding_key(agent) if project_id is None else None
         if key is not None:
             agent = self._bind_skill_subject(agent, self._session_value(address, key))
@@ -309,6 +321,7 @@ class AgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        require_model: bool = True,
     ) -> RuntimeAgent:
         """Event-Loop-safe :meth:`resolve_agent`.
 
@@ -327,7 +340,11 @@ class AgentResolver:
             overrides = new_session_overrides or AgentOverrides()
         if project_id is not None:
             agent: RuntimeAgent = await _RESOLUTION_WORKERS.run(
-                self._resolve_config_agent, project_id, agent_id
+                self._resolve_config_agent,
+                project_id,
+                agent_id,
+                model_override=overrides.model,
+                require_model=require_model,
             )
         else:
             from core.agents.agents import AgentError
@@ -773,7 +790,13 @@ class AgentResolver:
             raise _identity_resolution_error(error) from error
 
     def _resolve_config_agent(
-        self, project_id: str, agent_id: str, inherit_model: str | None = None
+        self,
+        project_id: str,
+        agent_id: str,
+        inherit_model: str | None = None,
+        *,
+        model_override: str | None = None,
+        require_model: bool = True,
     ) -> ConfigAgent:
         project = self._load_project(project_id)
         team = self._project_team(project)
@@ -790,7 +813,14 @@ class AgentResolver:
         # Read the global tier once and feed it to all three chains, so one resolve
         # never reads the settings file three times (model + temp + thinking).
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
-        if (
+        if model_override is not None:
+            self.require_model_configured(model_override)
+            resolved_model = model_override
+        elif not require_model:
+            resolved_model = str(
+                self._config_model_source(project, scanned, global_defaults)["value"] or ""
+            )
+        elif (
             scanned.model == "inherit"
             and inherit_model
             and not project.overrides.get(agent_id, {}).get("model")

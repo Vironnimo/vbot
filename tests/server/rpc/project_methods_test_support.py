@@ -181,6 +181,7 @@ def _make_state(
         projects=projects,
         model_checker=_openai_configured(),
         global_agent_defaults=lambda: {},
+        sessions=sessions,
     )
     chat_runs = ChatRunManager()
     cron_service = StubJobService(cron_jobs or ())
