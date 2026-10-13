@@ -103,6 +103,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
             )(run, session)
         ),
         usage_recorder=getattr(runtime, "usage_recorder", None),
+        scratch_areas=getattr(runtime, "scratch_areas", None),
         subagent_taken_over=getattr(runtime, "subagent_taken_over", None),
     )
     return ChatLoop(dependencies, **kwargs)

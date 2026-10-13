@@ -57,7 +57,8 @@ Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_
 `TemporaryExecutionGroups.delete_group` requires a closed group and current
 registration, waits for draining, closes the Terminal Sessions and shell commands
 of its live participants (the injected `SessionWorkCloser`), deletes its bound participant Sessions through the Session manager
-under a no-Run guard (`release_temporary_group`, shared with `archive_group`), and
+under a no-Run guard (`release_temporary_group`, shared with `archive_group`), removes
+the Scratch Areas whose root Sessions were removed (`tools/scratch.md`), and
 releases its in-memory group. Repeated deletion is safe;
 other owners and groups are outside its scope (`test_swarm_operations.py`).
 

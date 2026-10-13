@@ -29,6 +29,7 @@ from core.tools._interpreter_host import InterpreterHost
 from core.tools._powershell import POWERSHELL_BOOTSTRAP, powershell_request
 from core.tools.command_manager import CommandManager
 from core.tools.process_tree import ProcessTree, ProcessTreeTracker
+from core.tools.scratch_areas import ScratchFolder
 from core.tools.shell_environment import RunIdentity, command_environment
 from tests.core.tools.command_manager_helpers import (
     OWNER,
@@ -374,7 +375,13 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
         started.append(shell)
         return shell
 
-    layers = command_environment(RunIdentity("agent-a", "session-a", None))
+    first_own, own = tmp_path / "first", tmp_path / "second"
+    for folder in (first_own, own):
+        (folder / "tmp").mkdir(parents=True)
+    scratch = ScratchFolder(
+        own=own, area=tmp_path, tmp=own / "tmp", recreated=True, incarnation="second"
+    )
+    layers = command_environment(RunIdentity("agent-a", "session-a", None), scratch=scratch)
     base = {**layers.base, "VBOT_PROBE_REMOVED": "base"}
     changes = {**layers.changes, "VBOT_PROBE": "ä b", "VBOT_PROBE_REMOVED": None}
     argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_BOOTSTRAP]
@@ -384,8 +391,9 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
     # A native program and PowerShell see the workdir, the call's variables, and
     # an input that ends at once.
     probe = (
-        "import os, sys; print(os.getcwd()); print(os.environ.get('VBOT_PROBE')); "
-        "print('VBOT_PROBE_REMOVED' in os.environ); print(repr(sys.stdin.read()))"
+        "import os, sys, tempfile; print(os.getcwd()); print(os.environ.get('VBOT_PROBE')); "
+        "print('VBOT_PROBE_REMOVED' in os.environ); print(repr(sys.stdin.read())); "
+        "print(os.environ['VBOT_SCRATCH_DIR']); print(tempfile.gettempdir())"
     )
     command = "\n".join(
         [
@@ -402,7 +410,9 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
         launcher=PipeLauncher(warm=True, start=start),
     )
 
-    async def run(text: str, cwd: Path) -> tuple[int, int | None, str]:
+    async def run(
+        text: str, cwd: Path, request_changes: dict[str, str | None]
+    ) -> tuple[int, int | None, str]:
         handle = await manager.launch(
             OWNER,
             argv,
@@ -412,7 +422,7 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
             env=base,
             origin_run_id="run-a",
             formatter=format_report,
-            request=powershell_request(text, str(cwd), changes),
+            request=powershell_request(text, str(cwd), request_changes),
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
         report = manager.report(handle.command_id)
@@ -421,14 +431,24 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
         return handle.pid, report.exit_code, output
 
     try:
-        await run("'first'", tmp_path)
+        await run(
+            "'first'",
+            tmp_path,
+            {
+                **changes,
+                "VBOT_SCRATCH_DIR": str(first_own),
+                "TEMP": str(first_own / "tmp"),
+                "TMP": str(first_own / "tmp"),
+                "TMPDIR": str(first_own / "tmp"),
+            },
+        )
         for _attempt in range(1000):
             if len(started) == 2:
                 break
             await asyncio.sleep(0.01)
         assert len(started) == 2, "the warm shell did not start"
 
-        pid, exit_code, output = await run(command, workdir)
+        pid, exit_code, output = await run(command, workdir, changes)
     finally:
         await manager.aclose()
 
@@ -440,6 +460,8 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
         "ä b",
         "False",
         "''",
+        str(own),
+        str(own / "tmp"),
         str(workdir),
         str(workdir),
         "relative-sentinel",

@@ -85,6 +85,7 @@ if TYPE_CHECKING:
     from core.tools.change_tracker import ChangeTracker
     from core.tools.command_manager import CommandManager
     from core.tools.file_state import FileReadState
+    from core.tools.scratch_areas import ScratchAreas
     from core.tools.tools import ToolRegistry
     from core.usage import UsageRecorder
 
@@ -188,6 +189,7 @@ class ChatLoopDependencies:
     # The shell's commands; created after the Chat Loop.
     get_command_manager: Callable[[], CommandManager | None]
     usage_recorder: UsageRecorder | None = None
+    scratch_areas: ScratchAreas | None = None
     # Called once the user's first message in a Sub-Agent Session is persisted.
     subagent_taken_over: Callable[[SessionAddress], None] | None = None
 

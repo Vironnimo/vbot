@@ -8,6 +8,8 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 
 ## DI Contracts
 
+Runtime constructs `ScratchAreas` after Sessions and the Run manager, injecting Session generation/ancestry lookup and a live busy snapshot from active/queued Runs, unfinished commands and Agent Terminals. Chat, Shell, Terminal and Archive share that owner; the Change Tracker excludes its layout root. Its hourly sweep starts only in normal Event Loop startup and closes after commands/Terminals, before Sessions (`tools/scratch.md`).
+
 Runtime constructs the canonical `UsageRecorder` after the Model registry and
 before request producers. It injects `usage_recorder` into Task services, Chat
 dependencies, Compaction, titles and Statistics; Extension sampling records its

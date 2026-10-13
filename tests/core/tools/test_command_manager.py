@@ -233,6 +233,7 @@ async def test_foreground_output_is_published_until_the_command_moves_to_the_bac
 @pytest.mark.asyncio
 async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harness) -> None:
     command_id, process = await harness.launch()
+    assert harness.manager.busy_addresses() == {OWNER}
     process.write("server started\n")
     process.exit(0, leftovers=[SERVER, WORKER, CONSOLE_HOST])
 
@@ -243,6 +244,7 @@ async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harn
     report = harness.manager.report(command_id)
 
     assert (report.ended, report.finished, report.status) == (True, False, "completed")
+    assert harness.manager.busy_addresses() == {OWNER}
     # The console host of a windowless console is no work of the command.
     assert report.still_running == (SERVER, WORKER)
     # Listed as the shell lists a command that ended with processes still running.
@@ -257,6 +259,7 @@ async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harn
     await harness.advance(1.0)
     report = harness.manager.report(command_id)
     assert (report.finished, report.still_running) == (True, ())
+    assert harness.manager.busy_addresses() == set()
 
 
 @pytest.mark.asyncio
@@ -748,8 +751,9 @@ async def test_capacity_counts_running_commands_and_launches_in_progress(
     first_id, first = await harness.launch()
     await harness.launch()
     harness.launcher.gate = asyncio.Event()
-    pending = asyncio.ensure_future(harness.launch())
+    pending = asyncio.ensure_future(harness.launch(owner=CHILD))
     await turns()
+    assert harness.manager.busy_addresses() == {OWNER, CHILD}
 
     with pytest.raises(CommandCapacityError) as refused:
         await harness.launch()

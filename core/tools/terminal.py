@@ -39,7 +39,8 @@ from core.tools.arguments import (
 )
 from core.tools.contracts import ToolContractError
 from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
-from core.tools.shell_environment import terminal_environment
+from core.tools.scratch_areas import ScratchAreas
+from core.tools.shell_environment import scratch_environment, terminal_environment
 from core.tools.terminal_backend import default_terminal_argv
 from core.tools.terminal_manager import (
     TERMINAL_DEFAULT_COLUMNS,
@@ -280,11 +281,15 @@ def make_terminal_handler(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
     subagents: SubAgentTree | None = None,
+    *,
+    scratch_areas: ScratchAreas | None = None,
 ):
     """Create a terminal Tool handler bound to one Terminal Manager."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await _handle_terminal(terminal_manager, projects, subagents, context, arguments)
+        return await _handle_terminal(
+            terminal_manager, projects, subagents, context, arguments, scratch_areas
+        )
 
     return handler
 
@@ -295,6 +300,7 @@ async def _handle_terminal(
     subagents: SubAgentTree | None,
     context: ToolContext,
     arguments: JsonObject,
+    scratch_areas: ScratchAreas | None,
 ) -> JsonObject:
     action = arguments["action"]
     terminal_id = arguments.get("terminal_id")
@@ -315,7 +321,9 @@ async def _handle_terminal(
 
     try:
         if action == "start":
-            return await _handle_start(terminal_manager, projects, context, arguments)
+            return await _handle_start(
+                terminal_manager, projects, context, arguments, scratch_areas
+            )
         if action == "list":
             return await _handle_list(terminal_manager, subagents, context)
         if action == "attach":
@@ -415,6 +423,7 @@ async def _handle_start(
     projects: ProjectStore,
     context: ToolContext,
     arguments: JsonObject,
+    scratch_areas: ScratchAreas | None,
 ) -> JsonObject:
     notes: list[str] = []
     requested_id = arguments.get("terminal_id")
@@ -497,11 +506,16 @@ async def _handle_start(
         if not isinstance(raw_group, str) or not raw_group.strip():
             raise ToolContractError("terminal was not run: group must be a non-empty name.")
         group_id = terminal_manager.resolve_or_create_agent_group(raw_group.strip()).group_id
+    overlay = (
+        scratch_environment(await scratch_areas.folder_for(_address(owner)))
+        if scratch_areas is not None
+        else None
+    )
     started = await terminal_manager.spawn(
         owner,
         argv,
         cwd=workdir,
-        env=None,
+        env=overlay,
         columns=columns,
         rows=rows,
         origin_run_id=context.run_id,
@@ -1366,6 +1380,7 @@ def register_terminal_tool(
     projects: ProjectStore,
     *,
     subagents: SubAgentTree | None = None,
+    scratch_areas: ScratchAreas | None = None,
 ) -> None:
     """Register the Agent-facing terminal Tool.
 
@@ -1377,7 +1392,7 @@ def register_terminal_tool(
         TERMINAL_TOOL_NAME,
         TERMINAL_TOOL_DESCRIPTION,
         TERMINAL_TOOL_PARAMETERS,
-        make_terminal_handler(terminal_manager, projects, subagents),
+        make_terminal_handler(terminal_manager, projects, subagents, scratch_areas=scratch_areas),
         summary="Drive interactive programs such as REPLs and coding-agent CLIs.",
         family="execution",
         open_input_schema=True,

@@ -63,6 +63,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from core.runs import RunExecutionOwner
+from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -457,6 +458,14 @@ class CommandManager:
             reverse=True,
         )
         return [record.report() for record in records]
+
+    def busy_addresses(self) -> set[SessionAddress]:
+        """Sessions with a pending launch or any command process still running."""
+        owners = {launch.owner for launch in self._pending.values()}
+        owners.update(record.owner for record in self._records.values() if not record.finished)
+        return {
+            SessionAddress(owner.project_id, owner.agent_id, owner.session_id) for owner in owners
+        }
 
     async def wait_finished(self, command_id: str) -> None:
         """Wait until no process of the command runs any longer."""

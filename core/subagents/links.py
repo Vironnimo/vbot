@@ -19,6 +19,7 @@ from core.sessions import (
     SUBAGENT_TAKEN_OVER_AT_META_KEY,
     SessionAddress,
 )
+from core.sessions.errors import SessionNotFoundError
 
 if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
@@ -39,11 +40,21 @@ class SubAgentLink:
     taken_over_at: str | None
 
 
-def read_link(sessions: ChatSessionManager, address: SessionAddress) -> SubAgentLink | None:
-    """Return the Parent link of *address*, or ``None`` for a Session without one."""
+def read_link(
+    sessions: ChatSessionManager, address: SessionAddress, *, strict: bool = False
+) -> SubAgentLink | None:
+    """Return the Parent link, propagating unavailable metadata when ``strict``.
+
+    A missing Session ends the tree in either mode. Callers making destructive
+    decisions must distinguish that absence from a failed metadata read.
+    """
     try:
         metadata = sessions.get_metadata(address)
+    except SessionNotFoundError:
+        return None
     except Exception:
+        if strict:
+            raise
         return None
     return _link_from_metadata(address, metadata)
 
@@ -104,15 +115,17 @@ def taken_over_below(
     return False
 
 
-def ancestors(sessions: ChatSessionManager, address: SessionAddress) -> list[SessionAddress]:
-    """Return the Parent Sessions above *address*, nearest first."""
+def ancestors(
+    sessions: ChatSessionManager, address: SessionAddress, *, strict: bool = False
+) -> list[SessionAddress]:
+    """Return Parents nearest first; ``strict`` refuses an unreadable chain."""
     chain: list[SessionAddress] = []
     seen = {address}
-    link = read_link(sessions, address)
+    link = read_link(sessions, address, strict=strict)
     while link is not None and len(chain) < _MAX_CHAIN_LENGTH and link.parent not in seen:
         chain.append(link.parent)
         seen.add(link.parent)
-        link = read_link(sessions, link.parent)
+        link = read_link(sessions, link.parent, strict=strict)
     return chain
 
 

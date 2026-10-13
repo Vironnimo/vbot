@@ -21,6 +21,7 @@ from core.subagents import SubAgentState, SubAgentStopOutcome
 from core.tools import terminal as terminal_module
 from core.tools import terminal_manager as manager_module
 from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
+from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal import (
     TERMINAL_ACTIONS,
     TERMINAL_TOOL_DESCRIPTION,
@@ -185,11 +186,19 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, factory = manager
     factory.initial_output = "Welcome\r\nready> "
+    scratch_areas = ScratchAreas(
+        tmp_path,
+        identity=lambda address: "generation_" + address.session_id,
+        ancestors=lambda _address: (),
+        busy_sessions=lambda: (),
+    )
     arguments: JsonObject = {"action": "start"}
     if command is not None:
         arguments["command"] = command
 
-    result = await call(terminal_manager, make_context(tmp_path), arguments)
+    result = await call(
+        terminal_manager, make_context(tmp_path), arguments, scratch_areas=scratch_areas
+    )
 
     data = cast(dict[str, Any], result["data"])
     assert data == {
@@ -202,6 +211,22 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
     assert factory.calls[0][0] == [command or "host-shell"]
     assert factory.calls[0][3:] == (24, 80)
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
+    environment = factory.calls[0][2]
+    own = Path(environment["VBOT_SCRATCH_DIR"])
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        assert Path(environment[name]) == own / "tmp"
+        assert Path(environment[name]).is_dir()
+    (own / "tmp").rmdir()
+    again = await call(
+        terminal_manager, make_context(tmp_path), arguments, scratch_areas=scratch_areas
+    )
+    assert again["ok"] is True and (own / "tmp").is_dir()
+    await terminal_manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
+    operator_environment = factory.calls[-1][2]
+    assert "VBOT_SCRATCH_DIR" not in operator_environment
+    assert all(
+        operator_environment.get(name) != str(own / "tmp") for name in ("TEMP", "TMP", "TMPDIR")
+    )
 
 
 @pytest.mark.asyncio

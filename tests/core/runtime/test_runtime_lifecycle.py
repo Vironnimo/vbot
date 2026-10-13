@@ -61,6 +61,7 @@ _STARTED_SERVICES = (
     "update_handoffs",
     "terminal_manager",
     "command_manager",
+    "scratch_areas",
     "skills",
     "chat_sessions",
     "system_prompts",
@@ -102,6 +103,7 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
         "_start_cron_service",
         "_start_provider_usage_service",
         "_start_archive_retention",
+        "_start_scratch_areas",
         "_start_config_backups",
     ):
         monkeypatch.setattr(runtime, name, Mock(side_effect=AssertionError(name)))
@@ -648,10 +650,11 @@ async def test_loop_started_runtime_owns_background_services_until_aclose(
     try:
         terminal_manager = runtime.terminal_manager
         temporary_files = runtime.storage.temporary_files
+        scratch_areas = runtime.scratch_areas
         command_sweeper = runtime.command_manager._sweeper  # noqa: SLF001
         sweepers = [
             manager._sweeper_task  # noqa: SLF001 - lifecycle resource under test.
-            for manager in (terminal_manager, temporary_files)
+            for manager in (terminal_manager, temporary_files, scratch_areas)
         ] + [command_sweeper]
         assert all(task is not None and not task.done() for task in sweepers)
         assert isinstance(runtime.cron_service, CronService)
@@ -681,6 +684,7 @@ async def test_loop_started_runtime_owns_background_services_until_aclose(
     assert terminal_manager._sweeper_task is None  # noqa: SLF001
     assert command_sweeper is not None and command_sweeper.done()
     assert temporary_files._sweeper_task is None  # noqa: SLF001
+    assert scratch_areas._sweeper_task is None  # noqa: SLF001
     assert database.is_closed()
     assert runtime.canonical_databases() == ()
     _assert_not_started(runtime)
@@ -787,6 +791,7 @@ _ASYNC_SHUTDOWN = (
     "commands.aclose",
     "terminals.aclose",
     "keep_awake.close",
+    "scratch_areas.aclose",
     "temporary_files.aclose",
     "channels.close",
     "recall.aclose",
@@ -811,6 +816,7 @@ _SYNC_SHUTDOWN = (
     "commands.close",
     "terminals.stop",
     "keep_awake.close",
+    "scratch_areas.stop",
     "temporary_files.stop",
     "channels.close",
     "recall.close",
@@ -905,6 +911,7 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
         ("_command_manager", "commands"),
         ("_terminal_manager", "terminals"),
         ("_keep_awake", "keep_awake"),
+        ("_scratch_areas", "scratch_areas"),
         ("_recall", "recall"),
         ("_statistics_index", "statistics_index"),
         ("_usage_recorder", "model_usage"),

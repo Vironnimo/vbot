@@ -22,7 +22,11 @@ from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
 from core.tools.command_manager import CommandManager
 from server.events import ServerEventBus
-from tests.server.rpc_test_support_runtime import StubCalendarService, StubJobService
+from tests.server.rpc_test_support_runtime import (
+    StubCalendarService,
+    StubJobService,
+    StubScratchAreas,
+)
 
 OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 
@@ -225,6 +229,7 @@ def _make_state(
             automation=runtime.automation_references,
             terminals=cast(Any, runtime.terminal_manager),
             commands=runtime.command_manager,
+            scratch_areas=cast(Any, StubScratchAreas()),
             snapshot_barrier=barrier,
             agent_references=_no_agent_references,
             # A test makes the usage import fail by replacing ``runtime.import_usage``.

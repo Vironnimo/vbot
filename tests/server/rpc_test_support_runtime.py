@@ -45,6 +45,7 @@ from core.runs import ChatRunManager
 from core.runtime import AgentRenameOutcome, SettingsChangeEffects
 from core.runtime._agent_rename import AgentRenameServices, rename_identity_agent
 from core.runtime.runtime import Runtime
+from core.sessions import SessionAddress
 from core.skills import SkillAuthoringService
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
@@ -330,6 +331,16 @@ class RecordingCompactionService:
         )
 
 
+class StubScratchAreas:
+    """RPC fixtures do not allocate scratch files; archive cleanup has nothing to remove."""
+
+    async def roots_for_archive(self, addresses: Sequence[SessionAddress]) -> tuple[str, ...]:
+        return ()
+
+    async def remove_areas(self, root_ids: Sequence[str]) -> None:
+        pass
+
+
 class StubTerminalManager:
     async def close_scope(self, _owner: Any) -> None:
         return None
@@ -536,6 +547,7 @@ class StubRuntime:
                 automation=self.automation_references,
                 terminals=cast(Any, self.terminal_manager),
                 commands=self.command_manager,
+                scratch_areas=cast(Any, StubScratchAreas()),
                 snapshot_barrier=self.snapshot_barrier,
                 agent_references=self.agent_references,
                 import_usage=lambda: None,

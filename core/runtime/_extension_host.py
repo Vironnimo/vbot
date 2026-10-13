@@ -48,6 +48,7 @@ from core.tools.availability import (
     normalize_tool_access,
 )
 from core.tools.command_manager import CommandManager
+from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import ToolContext, ToolRegistry
 from core.usage import UsageRecorder
@@ -130,6 +131,7 @@ class ExtensionHostFactory:
         resources: Sequence[ExecutionResources],
         terminals: TerminalManager,
         commands: CommandManager,
+        scratch_areas: ScratchAreas,
         get_change_publisher: Callable[[], Callable[[str, str, Sequence[str], int], None] | None],
         get_title_service: Callable[[], SessionTitleService | None],
         logger: LoggerProtocol | None,
@@ -157,6 +159,7 @@ class ExtensionHostFactory:
         self._resources = resources
         self._terminals = terminals
         self._commands = commands
+        self._scratch_areas = scratch_areas
         self._get_change_publisher = get_change_publisher
         self._get_title_service = get_title_service
         self.logger = logger
@@ -197,6 +200,7 @@ class ExtensionHostFactory:
                 identity.name, group_id, source_text
             ),
             close_session_work=self._close_session_work,
+            scratch_areas=self._scratch_areas,
         )
         self._temporary_groups.append(groups)
         state_dir = self._host.data_dir / "extension-data" / identity.name
@@ -248,6 +252,7 @@ class ExtensionHostFactory:
                             group_id,
                             delete=False,
                             close_session_work=self._close_session_work,
+                            scratch_areas=self._scratch_areas,
                             archive_reason="extension_removed",
                         )
                     except RunAdmissionBlockedError:

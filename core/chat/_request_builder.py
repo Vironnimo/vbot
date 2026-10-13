@@ -30,6 +30,7 @@ from core.chat._request_history import (
     _restore_in_run_tool_result_content,
 )
 from core.chat._run_state import RequestBuildInputs, _ModelTarget, _RequestState
+from core.chat._scratch_context import preserve_scratch_note
 from core.chat._tool_epoch import (
     LiveToolCatalog,
     ToolChange,
@@ -116,7 +117,9 @@ def _finalize_compaction_checkpoint(
     session_messages: list[ChatMessage],
 ) -> ChatMessage:
     ordinal = sum(message.role == "compaction_checkpoint" for message in session_messages) + 1
-    return finalize_checkpoint_guidance(checkpoint, ordinal=ordinal)
+    return preserve_scratch_note(
+        finalize_checkpoint_guidance(checkpoint, ordinal=ordinal), session_messages
+    )
 
 
 def _resolved_model_reference(

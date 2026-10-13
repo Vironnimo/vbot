@@ -14,8 +14,8 @@ segment closes and the next write starts a new one from the changed content:
 the change in between is never attributed to the Run. A file's counts are the
 sum of its segments.
 
-Every write counts. Retaining contents is what lets a segment net repeated
-edits; a file too large to retain, or contents beyond the shared memory budget,
+Every write outside Scratch Areas counts. Retaining contents lets a segment net
+repeated edits; a file too large to retain, or contents beyond the shared memory budget,
 are counted right away and their contents dropped, so their next write starts a
 new segment. No git repository or external process is involved.
 """
@@ -65,7 +65,8 @@ class _Segment:
 class ChangeTracker:
     """Runtime-owned registry of the change statistics of running Runs."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, scratch_root: Path | None = None) -> None:
+        self._scratch_root = scratch_root.resolve() if scratch_root is not None else None
         # Per running Run, each written file's segments in write order.
         self._runs: dict[RunKey, dict[str, list[_Segment]]] = {}
         self._retained = 0
@@ -78,6 +79,8 @@ class ChangeTracker:
         (empty for a new file), ``after`` the content it wrote (empty for a
         deletion).
         """
+        if self._scratch_root is not None and resolved.is_relative_to(self._scratch_root):
+            return
         with self._lock:
             files = self._runs.setdefault(run_key, {})
             segments = files.setdefault(str(resolved), [])

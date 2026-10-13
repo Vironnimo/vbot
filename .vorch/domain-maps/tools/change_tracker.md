@@ -12,6 +12,13 @@ the file edit Tools (`apply_patch`, `edit`, `write`). Shell commands (`bash`, `t
 several Sessions working in one directory, a change seen on disk cannot be
 attributed to the Run that caused it.
 
+Writes under the configured Scratch Area root (`artifacts/temp/scratch`) are
+excluded: intermediate files are not work results. Runtime passes the root as
+`ChangeTracker(scratch_root=...)`; `record_write` compares the resolved path by
+path components, so a sibling such as `scratch-results` still counts. A Run
+with only Scratch writes reports no statistics (`None`). Layout and retention
+belong to `tools/scratch.md`.
+
 - **Segments.** Consecutive writes of one file by one Run form a segment that
   counts once, as the minimal line diff from the content before its first write
   to the content after its last (repeated edits of one line count once, a
@@ -25,7 +32,7 @@ attributed to the Run that caused it.
   changed content, so the change in between is never the Run's. A file's
   counts are the sum of its segments, so a Run that edits a line, lets
   something else touch the file, and reverts its edit counts both edits.
-- **Every write counts.** Retained contents are only what lets a segment net
+- **Every non-Scratch write counts.** Retained contents are only what lets a segment net
   repeated edits. A file with more than `MAX_RETAINED_FILE_CHARS` (512 Ki
   characters) on either side, and the oldest segments once all retained
   contents exceed `MAX_RETAINED_CHARS` (64 Mi characters across Runs), are

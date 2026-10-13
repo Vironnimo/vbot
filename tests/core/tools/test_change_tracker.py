@@ -94,6 +94,17 @@ def test_concurrent_runs_editing_one_file_count_only_their_own_lines() -> None:
     assert tracker.take_run_stats(second) == _stats(("shared.txt", 1, 1))
 
 
+def test_scratch_writes_are_excluded_without_excluding_nearby_results(tmp_path: Path) -> None:
+    scratch_root = tmp_path / "scratch"
+    tracker = ChangeTracker(scratch_root=scratch_root)
+    run = _key("session-a")
+    tracker.record_write(run, scratch_root / "root" / "session-a" / "helper.py", "", "x\n")
+    assert tracker.peek_run_stats(run) is None
+    result = tmp_path / "scratch-result.txt"
+    tracker.record_write(run, result, "", "y\n")
+    assert tracker.take_run_stats(run) == _stats((str(result), 1, 0))
+
+
 def test_large_files_and_spent_budgets_still_count_every_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

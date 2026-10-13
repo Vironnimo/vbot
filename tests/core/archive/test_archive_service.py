@@ -62,6 +62,10 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
     agents.reorder(
         ["manager", "coder", "beta"], expected_revision=agents.list_with_order().order_revision
     )
+    first_scratch = await world.scratch_areas.folder_for(
+        SessionAddress(None, "coder", coder.current_session_id)
+    )
+    second_scratch = await world.scratch_areas.folder_for(second)
 
     archived = await world.service.archive_agent("coder")
 
@@ -77,6 +81,7 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
     assert world.changes
     # The commands of its Sessions were stopped without delivery first.
     assert world.commands.closed == [("agent", "coder", None)]
+    assert not first_scratch.area.exists() and not second_scratch.area.exists()
 
     restored = await world.service.restore(archived.entry_id)
 
@@ -88,6 +93,7 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
     assert [agent.id for agent in agents.list_with_order().agents] == ["manager", "coder", "beta"]
     assert sessions.archive_ledger.entry(archived.entry_id) is None
     assert not (world.data_dir / "archive" / "entries" / archived.entry_id).exists()
+    assert not first_scratch.area.exists() and not second_scratch.area.exists()
 
 
 @pytest.mark.asyncio
@@ -229,6 +235,8 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
     world.agents.update("coder", root_project_id="vbot")
     build = world.sessions.create("builder", session_id="build", project_id="vbot").address
     notes = world.sessions.create("coder", session_id="notes", working_project_id="vbot").address
+    build_scratch = await world.scratch_areas.folder_for(build)
+    notes_scratch = await world.scratch_areas.folder_for(notes)
 
     archived = await world.service.archive_project("vbot")
 
@@ -244,6 +252,7 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
     assert repo.is_dir()
     # An Identity Session stays where it works; it cannot run until the Project returns.
     assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == "vbot"
+    assert not build_scratch.area.exists() and notes_scratch.area.exists()
 
     await world.service.restore(archived.entry_id, target_id=target_id)
 
@@ -271,6 +280,9 @@ async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_ent
         participant_id="prt_peer",
         config={},
     )
+    scratch = await world.scratch_areas.folder_for(
+        SessionAddress("vbot", "tmp_participant", "ses_participant")
+    )
 
     with pytest.raises(ChatSessionError, match=r"managed by an Extension \(swarm\)"):
         await world.service.archive_project("vbot")
@@ -281,6 +293,7 @@ async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_ent
     assert not world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
     entries_dir = world.data_dir / "archive" / "entries"
     assert not entries_dir.exists() or not any(entries_dir.iterdir())
+    assert scratch.area.exists()
 
 
 @pytest.mark.asyncio
@@ -293,6 +306,8 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     world.sessions.create("coder", session_id="other")
     world.sessions.set_title(session, "Planning")
     review = (await world.sessions.fork(session, run_kind=RunKind.MEMORY_REFLECTION)).address
+    scratch = await world.scratch_areas.folder_for(session)
+    review_scratch = await world.scratch_areas.folder_for(review)
     if current == "review-fork":
         world.agents.update("coder", current_session_id=review.session_id)
     # A review still in flight keeps its Session from leaving.
@@ -307,6 +322,7 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     assert not world.sessions.exists(session) and not world.sessions.exists(review)
     assert world.commands.closed == [("session", session), ("session", review)]
     assert world.recall_removals == [(None, "coder", session.session_id)]
+    assert not scratch.area.exists() and not review_scratch.area.exists()
     assert (await world.service.show(archived.entry_id)).listing.accepts_target_id
     # Channel routing started a new Session at the archived address meanwhile.
     world.sessions.create("coder", session_id=session.session_id)
@@ -321,6 +337,52 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     assert restored.addresses == (renamed, review)
     assert world.sessions.get_metadata(renamed)["title"] == "Planning"
     assert world.sessions.review_forks(renamed) == (review,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["session", "agent", "project"])
+async def test_archiving_only_a_subagent_keeps_its_area_until_the_root_is_archived(
+    world: ArchiveWorld, tmp_path: Path, kind: str
+) -> None:
+    world.agents.create("parent")
+    world.agents.create("unrelated")
+    parent = world.sessions.create("parent", session_id="same-public-id").address
+    unrelated = world.sessions.create("unrelated", session_id=parent.session_id).address
+    project_id = "workers" if kind == "project" else None
+    if project_id:
+        world.projects.create(project_id, "Workers", _repo(tmp_path))
+    else:
+        world.agents.create("worker")
+    child = world.sessions.create("worker", session_id="child", project_id=project_id).address
+    world.sessions.set_metadata(
+        child,
+        {
+            "subagent_parent": {
+                "id": "sub_child",
+                "agent_id": parent.agent_id,
+                "session_id": parent.session_id,
+                "project_id": parent.project_id,
+            }
+        },
+    )
+    parent_scratch = await world.scratch_areas.folder_for(parent)
+    child_scratch = await world.scratch_areas.folder_for(child)
+    unrelated_scratch = await world.scratch_areas.folder_for(unrelated)
+    assert child_scratch.area == parent_scratch.area
+    assert unrelated_scratch.area != parent_scratch.area
+
+    if kind == "session":
+        await world.service.archive_session(child)
+    elif kind == "agent":
+        await world.service.archive_agent(child.agent_id)
+    else:
+        assert project_id is not None
+        await world.service.archive_project(project_id)
+
+    assert parent_scratch.area.exists() and child_scratch.own.exists()
+    await world.service.archive_session(parent)
+    assert not parent_scratch.area.exists()
+    assert unrelated_scratch.area.exists()
 
 
 async def _newer_agent_payload(world: ArchiveWorld, tmp_path: Path) -> tuple[str, str | None]:

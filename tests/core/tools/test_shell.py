@@ -36,6 +36,7 @@ from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import CommandManager
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process_tree import ProcessTreeFacts, ProgramExit, RunningProcess
+from core.tools.scratch_areas import ScratchAreas
 from core.tools.shell import (
     SHELL_DEFAULT_WAIT_SECONDS,
     SHELL_MAX_WAIT_SECONDS,
@@ -93,6 +94,7 @@ class Shell:
         *,
         update_handoffs: UpdateHandoffs | None = None,
         projects: FakeProjects | None = None,
+        scratch_areas: ScratchAreas | None = None,
     ) -> None:
         self.commands = commands
         self.registry = ToolRegistry()
@@ -102,6 +104,7 @@ class Shell:
             credential_resolver=lambda name: f"value-of-{name}",
             update_handoffs=update_handoffs,
             projects=projects,  # type: ignore[arg-type]
+            scratch_areas=scratch_areas,
         )
         self.cancel_callbacks: list[Callable[[], Any]] = []
         self.background_callbacks: list[Callable[[], bool]] = []
@@ -322,6 +325,30 @@ async def test_an_empty_env_value_reaches_the_command(shell: Shell) -> None:
         # PowerShell on .NET 8 removes a variable it sets to an empty value, so the
         # call starts a shell of its own that starts with the value.
         assert shell.launcher.envs[0]["EMPTY"] == "" and shell.launcher.warm == [False]
+
+
+@pytest.mark.asyncio
+async def test_each_command_launch_ensures_its_sessions_scratch_tmp(tmp_path: Path) -> None:
+    scratch_areas = ScratchAreas(
+        tmp_path,
+        identity=lambda address: "generation_" + address.session_id,
+        ancestors=lambda _address: (),
+        busy_sessions=lambda: (),
+    )
+    async with started_shell(tmp_path, scratch_areas=scratch_areas) as shell:
+        for count in (1, 2):
+            result = data(await shell.call({"command": "build", "run_in_background": True}))
+            assert result["status"] == "running"
+            _command, environment = launched(shell.launcher, count - 1)
+            own = Path(environment["VBOT_SCRATCH_DIR"])
+            for name in ("TEMP", "TMP", "TMPDIR"):
+                assert Path(environment[name]) == own / "tmp"
+                assert Path(environment[name]).is_dir()
+            if sys.platform == "win32":
+                assert "VBOT_SCRATCH_DIR" not in shell.launcher.envs[-1]
+            # Removing it between calls must not make tempfile fall back to the host temp.
+            (own / "tmp").rmdir()
+            (await shell.started(count)).exit(0)
 
 
 @pytest.mark.parametrize("terminal", [True, False])

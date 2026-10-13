@@ -29,6 +29,7 @@ from typing import Any
 
 from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
+from core.sessions import SessionAddress
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import POWERSHELL_BOOTSTRAP, powershell_request
 from core.tools._shell_arguments import (
@@ -78,6 +79,7 @@ from core.tools.command_manager import (
 )
 from core.tools.contracts import ToolContractError
 from core.tools.model_names import SHELL_MODEL_NAME
+from core.tools.scratch_areas import ScratchAreas
 from core.tools.shell_environment import (
     CommandEnvironment,
     RunIdentity,
@@ -564,11 +566,13 @@ class ShellTool:
         credential_resolver: CredentialResolver | None = None,
         update_handoffs: UpdateHandoffs | None = None,
         projects: ProjectStore | None = None,
+        scratch_areas: ScratchAreas | None = None,
     ) -> None:
         self._commands = command_manager
         self._resolve_credential = credential_resolver or (lambda _name: "")
         self._update_handoffs = update_handoffs
         self._projects = projects
+        self._scratch_areas = scratch_areas
         # Tasks that outlive their call: releasing handoff tokens, stopping commands.
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -601,6 +605,13 @@ class ShellTool:
         names: ToolNames,
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
+        scratch = (
+            await self._scratch_areas.folder_for(
+                SessionAddress(context.project_id, context.agent_id, context.session_id)
+            )
+            if self._scratch_areas is not None
+            else None
+        )
 
         def prepare() -> _ShellStart:
             environment = command_environment(
@@ -612,6 +623,7 @@ class ShellTool:
                 ),
                 variables=call.variables,
                 credentials=credentials,
+                scratch=scratch,
             )
             # PATH lookup probes the filesystem and uses this call's fresh environment.
             return _shell_start(call, environment)
@@ -869,6 +881,7 @@ def register_shell_tool(
     prompt_blocks: ToolPromptBlockRegistry | None = None,
     update_handoffs: UpdateHandoffs | None = None,
     projects: ProjectStore | None = None,
+    scratch_areas: ScratchAreas | None = None,
 ) -> ShellTool:
     """Register the shell Tool with a vBot Tool registry.
 
@@ -879,6 +892,7 @@ def register_shell_tool(
         credential_resolver=credential_resolver,
         update_handoffs=update_handoffs,
         projects=projects,
+        scratch_areas=scratch_areas,
     )
     registry.register(
         SHELL_TOOL_NAME,

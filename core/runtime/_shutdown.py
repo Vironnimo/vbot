@@ -179,6 +179,8 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("page_browser", page_browser.close, page_browser.aclose)
     if (keep_awake := runtime._keep_awake) is not None:
         yield _Step("keep_awake", keep_awake.close, keep_awake.close)
+    if (scratch := runtime._scratch_areas) is not None:
+        yield _Step("scratch_areas", scratch.stop, scratch.aclose)
     if (storage := runtime._storage) is not None:
         temporary_files = storage.temporary_files
         yield _Step("temporary_files", temporary_files.stop, temporary_files.aclose)
