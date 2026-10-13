@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,14 +11,18 @@ import pytest
 
 import core.tools._terminal_launch as terminal_launch
 import core.tools.terminal_manager as terminal_module
+from core.storage.temp_files import TemporaryFileManager
 from core.tools._terminal_launch import shell_launch
 from core.tools.terminal_manager import (
     TerminalLaunchError,
     TerminalManager,
+    TerminalProgramNotRunningError,
+    TerminalRenderHost,
     TerminalStaleScreenError,
 )
 from tests.core.tools.terminal_manager_helpers import (
     TEST_ACTIVITY_QUIET_SECONDS,
+    TEST_IDLE_SECONDS,
     AdapterFactory,
     FakeClock,
     PendingTriggerService,
@@ -178,6 +183,304 @@ async def test_a_program_asking_for_focus_reports_is_told_its_user_is_away(
     await send("go", "enter")
     await send("draft")
     assert adapter.writes == ["\x1b[O", "go", "\r", "\x1b[O", "draft"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["agent-data", "agent-text-key", "operator"])
+async def test_output_and_queries_keep_flowing_while_input_waits_for_the_program(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    clock = FakeClock()
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        temporary_files=TemporaryFileManager(tmp_path / "temp"),
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        idle_seconds=TEST_IDLE_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    manager.start()
+    release = threading.Event()
+    sending = None
+    reply = None
+    try:
+        started = await spawn(manager, tmp_path)
+        adapter = factory.adapters[0]
+        entered = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        write = adapter.write
+        writing: list[str] = []
+
+        def blocked_write(text: str) -> None:
+            writing.append(text)
+            if text == "large input":
+                loop.call_soon_threadsafe(entered.set)
+                assert release.wait(5), "test did not release the blocked input"
+            write(text)
+
+        monkeypatch.setattr(adapter, "write", blocked_write)
+        sending = asyncio.create_task(
+            manager.send_operator_input(started.terminal_id, "large input")
+            if route == "operator"
+            else manager.send_input(
+                started.terminal_id,
+                owner(),
+                data="large input" if route == "agent-data" else None,
+                text="large input" if route == "agent-text-key" else None,
+                key="enter" if route == "agent-text-key" else None,
+                expected_screen_revision=None,
+                origin_run_id="run-a",
+            )
+        )
+        async with asyncio.timeout(2):
+            await entered.wait()
+            # A query must queue its answer without blocking later reads, even
+            # when the program cannot accept more input until it has printed.
+            adapter.emit("\x1b[6nFIRST\r\n")
+            adapter.emit("SECOND\x07")
+
+            async def drawn() -> bool:
+                snapshot = await manager.snapshot(started.terminal_id, owner())
+                return bool(snapshot["screen"] == "FIRST\nSECOND")
+
+            await eventually(drawn)
+        snapshot = await manager.snapshot(started.terminal_id, owner())
+        assert snapshot["log_complete"] is True
+        assert Path(snapshot["log_file"]).read_bytes() == b"\x1b[6nFIRST\r\nSECOND\x07"
+        assert writing == ["large input"]
+        assert adapter.writes == []
+
+        reply = asyncio.create_task(
+            manager.wait_for_reply(started.terminal_id, owner(), seconds=100, after_quiet=0)
+        )
+        await eventually(lambda: clock.sleeping)
+        await clock.advance(TEST_IDLE_SECONDS + TEST_ACTIVITY_QUIET_SECONDS)
+        # Give the due timer and reply waiter their loop turns. Time alone,
+        # even a declared end in the output, cannot finish pending input.
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert terminal_info(manager, started.terminal_id).state == "working"
+        assert not reply.done()
+        assert trigger.submissions == []
+
+        release.set()
+        async with asyncio.timeout(2):
+            await eventually(lambda: len(adapter.writes) >= 2)
+            if route == "agent-text-key":
+                # Echo pacing starts after the physical text write completes.
+                for _ in range(10):
+                    await asyncio.sleep(0)
+                await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 2)
+            await sending
+            await eventually(lambda: len(adapter.writes) == (3 if route == "agent-text-key" else 2))
+        assert adapter.writes == ["large input", "\x1b[1;1R"] + (
+            ["\r"] if route == "agent-text-key" else []
+        )
+        # Output advanced the activity generation while writing blocked.
+        # Completion rearms that current generation, without further output.
+        await eventually(lambda: clock.sleeping)
+        await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+        async with asyncio.timeout(2):
+            assert await reply == "quiet"
+            await eventually(lambda: terminal_info(manager, started.terminal_id).state == "ready")
+    finally:
+        release.set()
+        for task in (sending, reply):
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "following", ["agent", "operator", "agent-stale", "operator-stale", "operator-program-ended"]
+)
+async def test_cancelled_input_keeps_its_physical_write_before_later_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    following: str,
+) -> None:
+    factory = AdapterFactory()
+    clock = FakeClock()
+    program_running = True
+    probes: list[tuple[int, str]] = []
+
+    def probe(pid: int, program: str) -> bool:
+        probes.append((pid, program))
+        return program_running
+
+    manager = TerminalManager(
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        program_probe=probe,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    manager.start()
+    started = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    release = threading.Event()
+    entered = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    write = adapter.write
+    writing: list[str] = []
+
+    def blocked_write(text: str) -> None:
+        writing.append(text)
+        if text == "first":
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "test did not release the cancelled input"
+        write(text)
+
+    monkeypatch.setattr(adapter, "write", blocked_write)
+    first = asyncio.create_task(
+        manager.send_input(
+            started.terminal_id,
+            owner(),
+            text="first",
+            key="enter",
+            expected_screen_revision=None,
+            origin_run_id="run-a",
+        )
+    )
+    second = None
+    try:
+        async with asyncio.timeout(2):
+            await entered.wait()
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        revision = terminal_info(manager, started.terminal_id).screen_revision
+        attempted = asyncio.Event()
+
+        async def next_input() -> None:
+            attempted.set()
+            expected = revision if following.endswith("-stale") else None
+            if following.startswith("operator"):
+                await manager.send_operator_input(
+                    started.terminal_id,
+                    "second",
+                    expected_screen_revision=expected,
+                    expected_program="fake-tui" if following.endswith("-ended") else None,
+                )
+            else:
+                await manager.send_input(
+                    started.terminal_id,
+                    owner(),
+                    data="second",
+                    text=None,
+                    key=None,
+                    expected_screen_revision=expected,
+                    origin_run_id="run-b",
+                )
+
+        second = asyncio.create_task(next_input())
+        await attempted.wait()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert writing == ["first"]
+        assert not second.done()
+        assert terminal_info(manager, started.terminal_id).screen_revision == revision
+        assert probes == []
+        if "-" in following:
+            # These guards must observe what changed while earlier input was
+            # still in flight, not approve against the state before waiting.
+            adapter.emit("changed")
+            await eventually(
+                lambda: terminal_info(manager, started.terminal_id).screen_revision > revision
+            )
+            program_running = False
+        release.set()
+        async with asyncio.timeout(2):
+            if following.endswith("-stale"):
+                with pytest.raises(TerminalStaleScreenError):
+                    await second
+            elif following.endswith("-ended"):
+                with pytest.raises(TerminalProgramNotRunningError):
+                    await second
+                assert probes == [(adapter.pid, "fake-tui")]
+            else:
+                await second
+        assert writing == adapter.writes == (["first"] if "-" in following else ["first", "second"])
+    finally:
+        release.set()
+        for task in (first, second):
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stopping_releases_input_and_shutdown_awaits_the_writer(
+    clocked_manager: Clocked, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, factory, _trigger, _clock = clocked_manager
+    started = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    entered = asyncio.Event()
+    transport_closed = threading.Event()
+    thread_finishing = asyncio.Event()
+    finish_thread = threading.Event()
+    exited = threading.Event()
+    shutdown_started = asyncio.Event()
+    shutting_down = False
+    loop = asyncio.get_running_loop()
+    close = adapter.close
+
+    def blocked_write(_text: str) -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert transport_closed.wait(5), "stop did not close the transport"
+        loop.call_soon_threadsafe(thread_finishing.set)
+        assert finish_thread.wait(5), "test did not release the finishing writer"
+        exited.set()
+        raise EOFError("closed")
+
+    def close_transport() -> None:
+        close()
+        transport_closed.set()
+        if shutting_down:
+            loop.call_soon_threadsafe(shutdown_started.set)
+
+    monkeypatch.setattr(adapter, "write", blocked_write)
+    monkeypatch.setattr(adapter, "close", close_transport)
+    sending = asyncio.create_task(manager.send_operator_input(started.terminal_id, "blocked"))
+    closing = None
+    try:
+        async with asyncio.timeout(2):
+            await entered.wait()
+        sending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await sending
+        async with asyncio.timeout(2):
+            stopped = await manager.kill(started.terminal_id, owner())
+            await thread_finishing.wait()
+        assert stopped.stopped
+        assert not exited.is_set()
+
+        shutting_down = True
+        closing = asyncio.create_task(manager.aclose())
+        async with asyncio.timeout(2):
+            await shutdown_started.wait()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert not closing.done()
+        finish_thread.set()
+        async with asyncio.timeout(2):
+            await closing
+        assert exited.is_set()
+    finally:
+        transport_closed.set()
+        finish_thread.set()
+        sending.cancel()
+        await asyncio.gather(sending, return_exceptions=True)
+        if closing is not None:
+            await closing
 
 
 @pytest.mark.asyncio

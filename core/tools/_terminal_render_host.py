@@ -15,6 +15,7 @@ from core.tools import terminal_emulator
 from core.tools.terminal_emulator import EmulatorUpdate, ScreenObservation, TerminalEmulator
 
 from ._interpreter_host import DEFAULT_WORKERS, HostedObject, InterpreterHost
+from ._terminal_state import TERMINAL_MAX_ROWS
 
 
 class TerminalScreen:
@@ -34,6 +35,8 @@ class TerminalScreen:
         return update
 
     async def resize(self, columns: int, rows: int) -> None:
+        if rows > TERMINAL_MAX_ROWS:
+            raise ValueError(f"rows must not exceed {TERMINAL_MAX_ROWS}")
         self.columns = columns
         self.rows = rows
         await self._emulator.call("resize", columns, rows)
@@ -82,7 +85,11 @@ class TerminalRenderHost:
     def open_screen(self, columns: int, rows: int, *, scrollback_lines: int) -> TerminalScreen:
         """Open a screen; raises RuntimeError once the host is closed."""
         emulator = self._host.open(
-            TerminalEmulator, columns, rows, scrollback_lines=scrollback_lines
+            TerminalEmulator,
+            columns,
+            rows,
+            scrollback_lines=scrollback_lines,
+            max_rows=TERMINAL_MAX_ROWS,
         )
         return TerminalScreen(emulator, columns, rows)
 
