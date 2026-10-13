@@ -275,11 +275,7 @@ def _excerpts(candidates: list[JsonObject], path: str | None = None) -> list[str
             f'offset="{line}:{character}", limit={end - line})'
             for line, character, end in continuations
         ]
-        rendered.append(
-            f"Excerpt truncated. If {read} is available, continue with "
-            + "; ".join(calls)
-            + "; otherwise use another file reader."
-        )
+        rendered.append("Excerpt truncated. Continue with " + "; ".join(calls) + ".")
     elif continuations or any(
         candidate.get("truncated") and not candidate.get("continuations")
         for candidate in candidates
