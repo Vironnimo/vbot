@@ -274,6 +274,59 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
     assert adapter.writes[-1] == "first\r  second\rthird"
     assert typed_lines["data"]["pasted"] is False
 
+    # Cursor keys send what a terminal sends in the cursor-key mode the program set.
+    await render("\x1b[?1h")
+    for key in ("up", "home", "page_up"):
+        await send(key=key)
+    await render("\x1b[?1l")
+    await send(key="up")
+    assert adapter.writes[-4:] == ["\x1bOA", "\x1bOH", "\x1b[5~", "\x1b[A"]
+
+
+@pytest.mark.parametrize("cause", ["ended", "refused"])
+@pytest.mark.asyncio
+async def test_text_typed_before_a_key_that_was_not_sent_is_reported_as_typed(
+    terminal: Terminal,
+    manager: tuple[TerminalManager, AdapterFactory],
+    monkeypatch: pytest.MonkeyPatch,
+    cause: str,
+) -> None:
+    """A program can act on the text alone, as on "q" for quit: the result says
+    the text was typed, so the Agent does not repeat it."""
+    terminal_id = await terminal.start()
+    adapter = manager[1].adapters[0]
+    write = adapter.write
+
+    def typing(text: str) -> None:
+        if text == "\r":
+            if cause == "refused":
+                raise OSError(5, "Input/output error")
+            raise EOFError("Pty is closed")
+        write(text)
+        if cause == "ended":
+            adapter.finish(0)
+
+    monkeypatch.setattr(adapter, "write", typing)
+
+    result = await terminal(
+        {"action": "input", "terminal_id": terminal_id, "text": "q", "key": "enter"}
+    )
+
+    assert result["ok"] is True, result
+    assert adapter.writes == ["q"]
+    if cause == "ended":
+        assert result["data"]["state"] == "exited"
+        assert result["data"]["note"] == (
+            'text was typed, but key "enter" was not sent: the program had ended.'
+        )
+    else:
+        assert result["data"]["state"] == "running"
+        assert result["data"]["note"] == (
+            'text was typed, but the terminal refused key "enter". To press it, call terminal '
+            + json.dumps({"action": "input", "terminal_id": terminal_id, "key": "enter"})
+            + "."
+        )
+
 
 @pytest.mark.parametrize(
     ("fields", "writes"),

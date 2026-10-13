@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Literal
 
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
@@ -181,6 +181,8 @@ class TerminalSession:
         )
         self._title = ""
         self._bracketed_paste = False
+        # The program set application cursor mode: cursor keys send SS3.
+        self._application_cursor = False
         # The program asked for focus reports; it is told the focus is lost.
         self._focus_reporting = False
         self._alternate_screen = False
@@ -611,8 +613,12 @@ class TerminalSession:
 
         A key typed after text follows once the program took the text
         (``_await_text_taken``); other input waits until both are written.
+        Text the program got is reported even when its key was not sent
+        (``key_unsent``: the program had ended, or the PTY refused the key),
+        so the Agent does not type it again.
         """
         write_error: BaseException | None = None
+        text_sent = 0
         async with self._input_lock:
             async with self._lock:
                 self._require_live()
@@ -621,7 +627,11 @@ class TerminalSession:
                     text is not None and ("\n" in text or "\r" in text) and self._bracketed_paste
                 )
                 chunks = input_chunks(
-                    data=data, text=text, key=key, bracketed_paste=bracketed_paste
+                    data=data,
+                    text=text,
+                    key=key,
+                    bracketed_paste=bracketed_paste,
+                    application_cursor=self._application_cursor,
                 )
                 if not chunks:
                     # An empty write changes no activity or observation.
@@ -640,10 +650,21 @@ class TerminalSession:
                 typed_at = self._services.monotonic()
                 if typed:
                     write_error = await self._write_input(typed[0], running)
-            if typed and write_error is None:
+                    if write_error is None:
+                        text_sent = len(typed[0])
+            if text_sent:
                 await self._await_text_taken(typed_at)
             if write_error is None:
                 async with self._lock:
+                    if text_sent and (self.finished or self.finished_at is not None):
+                        # The program ended on the text, as on "q" for quit.
+                        return self._input_result(
+                            text_sent,
+                            key,
+                            pasted=bracketed_paste,
+                            superseded=superseded,
+                            key_unsent="ended",
+                        )
                     self._require_live()
                     write_error = await self._write_input(last, running)
                     if write_error is None:
@@ -658,7 +679,16 @@ class TerminalSession:
                             pasted=bracketed_paste,
                             superseded=superseded,
                         )
-        raise await self._write_failure() from write_error
+        failure = await self._write_failure()
+        if text_sent:
+            return self._input_result(
+                text_sent,
+                key,
+                pasted=bracketed_paste,
+                superseded=superseded,
+                key_unsent="ended" if isinstance(failure, TerminalClosedError) else "refused",
+            )
+        raise failure from write_error
 
     async def _write_input(
         self, chunk: str, running: frozenset[int] | None
@@ -677,6 +707,9 @@ class TerminalSession:
         try:
             await asyncio.to_thread(self._adapter.write, chunk)
         except (EOFError, OSError) as error:
+            # The cycle the input opened still settles: a reply wait after
+            # text that was sent ends at its quiet boundary.
+            self._restart_quiet(restart)
             return error
         self._restart_quiet(restart)
         self._output_event.set()
@@ -1252,6 +1285,7 @@ class TerminalSession:
         )
         self._title = update.title
         self._bracketed_paste = update.bracketed_paste
+        self._application_cursor = update.application_cursor
         self._focus_reporting = update.focus_reporting
         self._alternate_screen = update.alternate_screen
         if update.alternate_exited:
@@ -1677,12 +1711,16 @@ class TerminalSession:
         *,
         pasted: bool,
         superseded: int | None,
+        key_unsent: Literal["ended", "refused"] | None = None,
     ) -> dict[str, Any]:
         return {
             "terminal_id": self.terminal_id,
             "state": self.state,
             "characters_sent": characters,
             "key": key,
+            # Why the key after typed text was not sent: the program had
+            # ended, or the PTY refused it while the program runs.
+            "key_unsent": key_unsent,
             # Multiline text went to the program as one bracketed paste.
             "pasted": pasted,
             "superseded_attention_revision": superseded,

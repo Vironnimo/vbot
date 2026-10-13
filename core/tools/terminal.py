@@ -903,6 +903,18 @@ async def _handle_input(
         else:
             unsent = "text was typed"
         notes.insert(0, f"{unsent} but not submitted. To submit it, call terminal {submit}.")
+    key_unsent = sent.get("key_unsent")
+    if key_unsent == "ended":
+        # The program ended on the text, as on "q" for quit: typing it again
+        # would repeat what it did.
+        notes.insert(0, f'text was typed, but key "{key}" was not sent: the program had ended.')
+    elif key_unsent == "refused":
+        press = json.dumps({"action": "input", "terminal_id": terminal_id, "key": key})
+        notes.insert(
+            0,
+            f'text was typed, but the terminal refused key "{key}". To press it, call '
+            f"terminal {press}.",
+        )
     matched: list[str] = []
     try:
         if pattern is not None:
