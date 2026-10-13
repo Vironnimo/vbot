@@ -12,13 +12,17 @@ from resources.extensions.swarm.agent_text import (
     BOARD_NEW,
     BOARD_NOTHING_NEW,
     BOARD_OLDER_CUT,
+    BOARD_OTHER_TOOL,
+    BOARD_OUTSIDE,
     BOARD_PAGE_NEWEST,
     BOARD_PENDING_AUTOMATIC,
     BOARD_WAIT,
     CURSOR_AS_BEFORE,
-    MENTION_EVERYONE,
+    MENTION_NO_ONE,
+    MENTION_USER,
     POST_DUPLICATE,
     POST_SEEN,
+    POST_SEEN_OPENING,
     REFERENCE_MARKUP,
 )
 from tests.resources.extensions.swarm.swarm_test_support import (
@@ -200,7 +204,7 @@ async def test_post_stored_while_the_registration_retires_is_reported_as_posted(
 async def test_invalid_board_calls_have_no_effect(board):
     for arguments in [
         {},
-        {"action": "other"},
+        {"action": "do it"},
         {"action": "list", "limit": True},
         {"action": "list", "limit": 0},
         {"action": "list", "swarm_id": "foreign"},
@@ -471,6 +475,8 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
         # A file path names the file the call meant for another Tool.
         ({"action": "read", "parameters": {"limit": 200, "path": "verify.py"}}, '"verify.py"'),
         ({"recipient_name": "swarm_wiki", "text": "x"}, "recipient_name"),
+        # An action that names another Tool points to calling that Tool directly.
+        ({"action": "search_files"}, BOARD_OTHER_TOOL.format(action="search_files")),
     ]:
         result, _ = await dispatch(board, arguments)
         assert result["error"]["code"] == "invalid_arguments", result
@@ -499,12 +505,38 @@ async def test_board_addresses_participants_its_text_names_after_at_or_answers(b
         board, {"text": f"{one} fixed it, {two} and {ids[1]} confirmed; see x@{one} or @ {two}"}
     )
     assert mentioned["data"]["delivery"] == "Queued for 2 participants."
-    # "@all" addresses no one, and the author learns so; "x@all" is no mention at all.
-    everyone, _ = await dispatch(board, {"text": "@all, @Everyone and @ALL: status?"})
+    # "@all", "@User" and "@" before a word that names no participant address no one, and
+    # the author learns what readers receive instead; "x@all" and code are no mention at all.
+    everyone, _ = await dispatch(
+        board, {"text": f"@all, @Everyone and @ALL: status? cc @User @{one}s, see `@Override`"}
+    )
     assert everyone["data"]["delivery"] == "Queued for 2 participants."
-    assert everyone["data"]["note"] == MENTION_EVERYONE.format(mentions="@all and @Everyone")
-    address, _ = await dispatch(board, {"text": "mail ops x@all.example"})
-    assert "note" not in address["data"]
+    assert everyone["data"]["note"] == " ".join(
+        (
+            MENTION_NO_ONE["main"].format(mentions=f"@all, @Everyone and @{one}s"),
+            MENTION_USER.format(mentions="@User"),
+        )
+    )
+    long, _ = await dispatch(board, {"text": "@team " + "word " * 300})
+    assert long["data"]["note"] == MENTION_NO_ONE["opening_many"].format(mentions="@team", count=2)
+    for unaddressed in ("mail ops x@all.example", "see @override and `@All`"):
+        address, _ = await dispatch(board, {"text": unaddressed})
+        assert "note" not in address["data"]
+    # Outside the main discussion, the result says who does not receive a post and names
+    # the non-members its text names without "@".
+    created, _ = await dispatch(board, {"title": "Schema", "text": f"{two} owns this, @{one}?"})
+    assert created["data"]["delivery"] == BOARD_OUTSIDE["one_named"].format(names=two)
+    side, _ = await dispatch(
+        board, {"text": f"decided with {one} and {two}", "discussion_id": "d2"}
+    )
+    assert side["data"]["delivery"] == BOARD_OUTSIDE["many_named"].format(
+        count=2, names=f"{one} and {two}"
+    )
+    await dispatch(board, {"action": "join", "discussion_id": "d2"}, peer=1)
+    joined, _ = await dispatch(board, {"text": "plain", "discussion_id": "d2"})
+    assert joined["data"]["delivery"] == " ".join(
+        ("Queued for 1 participant.", BOARD_OUTSIDE["one"])
+    )
     answer, _ = await dispatch(
         board, {"text": "done", "reply_to": named["data"]["post_id"]}, peer=2
     )
@@ -788,8 +820,8 @@ async def test_board_results_read_as_plain_text(board):
         '{"action": "read", "discussion_id": "d1", "before": "#2", "limit": 1}\n\n'
         f"[#2] {_name(board, 1)}:\nsecond"
     )
-    # A page shows a post the reader has seen as the call that reads it, or as its
-    # opening when it is long; a post new to the reader shows whole.
+    # A page shows a post the reader has seen, also a long one, as the call that reads it;
+    # a post new to the reader shows whole.
     long = " ".join(["word"] * 300)
     await dispatch(board, {"text": long}, peer=1)
     page, _ = await dispatch(board, {"action": "read"}, peer=1)
@@ -798,8 +830,30 @@ async def test_board_results_read_as_plain_text(board):
     assert second == f"[#2] {_name(board, 1)}:\n" + POST_SEEN.format(
         count=len("second"), call='{"action": "read", "message_id": "#2"}'
     )
-    assert third.startswith(f"[#3] {_name(board, 1)}:\nword word")
-    assert third.endswith('{"action": "read", "message_id": "#3"}]') and len(third) < len(long)
+    assert third == f"[#3] {_name(board, 1)}:\n" + POST_SEEN.format(
+        count=len(long), call='{"action": "read", "message_id": "#3"}'
+    )
+    # A long main-discussion post delivered to the reader may have shown only its opening.
+    unread, context = await dispatch(board, {"action": "read", "limit": 1}, peer=2)
+    assert unread["data"]["content"].endswith(long)
+    receipt_id, content_hash, effect = context._delivery_receipts[0]
+    await persist_carriers(
+        board.sessions,
+        board.bindings[2].address,
+        generation_id=board.bindings[2].generation_id,
+        owner_name="swarm",
+        messages=[
+            ChatMessage.tool(
+                tool_call_id=context.tool_call_id, name="swarm_board", content=json.dumps(unread)
+            )
+        ],
+        receipts=[(0, receipt_id, content_hash, effect, "tool")],
+    )
+    assert await board.store.reconcile_delivery(receipt_id)
+    again, _ = await dispatch(board, {"action": "read", "limit": 1}, peer=2)
+    assert again["data"]["content"] == f"[#3] {_name(board, 1)}:\n" + POST_SEEN_OPENING.format(
+        count=len(long), call='{"action": "read", "message_id": "#3"}'
+    )
 
 
 @pytest.mark.asyncio

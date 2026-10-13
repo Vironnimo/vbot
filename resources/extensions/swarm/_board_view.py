@@ -297,15 +297,16 @@ def seen(post: Json, reader_id: str) -> bool:
 def page_body(post: Json, reader_id: str) -> str:
     """The text a read page shows for ``post``.
 
-    A post the reader has seen shows its opening when it is long, or only the call
-    that reads it; every other post shows whole, so a page repeats little.
+    A post the reader has seen shows only its length and the call that reads it,
+    also when it is long: a delivery already showed at least its opening. Every
+    other post shows whole, so a page repeats little.
     """
 
     if not seen(post, reader_id):
         return str(post["text"])
-    if len(post["text"]) > text.FULL_POST_CHARS:
-        return _opening_body(post)
-    return text.POST_SEEN.format(count=len(post["text"]), call=_read_call(post))
+    own = post["author"]["kind"] == "participant" and post["author"]["id"] == reader_id
+    template = text.POST_SEEN_OPENING if shortened(post) and not own else text.POST_SEEN
+    return template.format(count=len(post["text"]), call=_read_call(post))
 
 
 def page_chars(post: Json, reader_id: str) -> int:
@@ -561,16 +562,20 @@ def queued_text(
     *,
     opening: int,
     stopped: Sequence[str] = (),
+    outside: int = 0,
+    named_outside: Sequence[str] = (),
 ) -> str:
     """Say who receives a new post, who receives it in full, and who only its opening.
 
     ``stopped`` names addressed participants whose work ended, who see the post
-    only once the user resumes them.
+    only once the user resumes them. ``outside`` counts the participants a post
+    outside the main discussion does not reach; ``named_outside`` names those of
+    them its text names without "@".
     """
 
     count = sum(routes.values())
     if not count:
-        return text.BOARD_QUEUED_NONE
+        return outside_text(outside, named_outside) or text.BOARD_QUEUED_NONE
     participants = text.BOARD_PARTICIPANTS["one" if count == 1 else "many"].format(count=count)
     parts = [text.BOARD_QUEUED.format(participants=participants)]
     if addressed:
@@ -583,22 +588,69 @@ def queued_text(
         )
     if opening:
         parts.append(text.BOARD_OPENING["one" if opening == 1 else "many"].format(count=opening))
+    outside_sentence = outside_text(outside, named_outside)
+    if outside_sentence:
+        parts.append(outside_sentence)
     return " ".join(parts)
 
 
-# "@all" and its synonyms address no one; only "@" before a participant's name does.
-_EVERYONE_MENTION = re.compile(rf"(?<!\w)@({'|'.join(sorted(_EVERYONE))})(?!\w)", re.IGNORECASE)
+def outside_text(count: int, named: Sequence[str]) -> str:
+    """Say how many participants a post outside the main discussion does not reach."""
+
+    if not count:
+        return ""
+    names = spoken_list(named)
+    if count == 1:
+        return text.BOARD_OUTSIDE["one_named" if named else "one"].format(names=names)
+    return text.BOARD_OUTSIDE["many_named" if named else "many"].format(count=count, names=names)
 
 
-def everyone_mentions(value: str, roster: Roster) -> list[str]:
-    """Return the "@all"-style words in a post's text that name no participant, as written."""
+def plain_mentions(value: str, names: Mapping[str, str]) -> list[str]:
+    """Return the participants ``value`` names without "@" before the name, in roster order."""
 
-    names = {spelling(name) for name in roster.names.values()}
-    found: dict[str, str] = {}
-    for match in _EVERYONE_MENTION.finditer(value):
-        if spelling(match.group(1)) not in names:
-            found.setdefault(match.group(0).casefold(), match.group(0))
-    return list(found.values())
+    return [
+        participant_id
+        for participant_id, name in names.items()
+        if re.search(rf"(?<![\w@]){re.escape(name)}(?!\w)", value)
+    ]
+
+
+# "@" before a word, outside code, which may address a participant.
+_AT_WORD = re.compile(r"(?<!\w)@(\w+)")
+_CODE = re.compile(r"```.*?(?:```|$)|`[^`\n]*`", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class Unaddressed:
+    """Words after "@" in a post's text that address no participant, as written.
+
+    ``others`` holds "@all" and its synonyms and capitalized words that name no
+    participant (such as a name with a suffix); ``user`` holds words meaning the
+    user. Lowercase words such as code decorators are left out.
+    """
+
+    others: list[str]
+    user: list[str]
+
+
+def unaddressed_mentions(value: str, roster: Roster) -> Unaddressed:
+    """Find the "@" words of a post's text that address no participant."""
+
+    known = {spelling(name) for name in roster.names.values()} | {
+        spelling(participant_id) for participant_id in roster.names
+    }
+    others: dict[str, str] = {}
+    user: dict[str, str] = {}
+    for match in _AT_WORD.finditer(_CODE.sub(" ", value)):
+        word = match.group(1)
+        key = spelling(word)
+        if key in known:
+            continue
+        if key in _EVERYONE or (word[:1].isupper() and key not in _USER):
+            others.setdefault(word.casefold(), match.group(0))
+        elif key in _USER:
+            user.setdefault(word.casefold(), match.group(0))
+    return Unaddressed(list(others.values()), list(user.values()))
 
 
 def with_notes(data: Json, notes: Sequence[str]) -> Json:
@@ -610,6 +662,7 @@ def with_notes(data: Json, notes: Sequence[str]) -> Json:
 __all__ = [
     "PAGE_LIMIT",
     "Recipients",
+    "Unaddressed",
     "Roster",
     "automatic_delivery",
     "call_text",
@@ -619,13 +672,14 @@ __all__ = [
     "delivered_chars",
     "delivery_text",
     "discussions_text",
-    "everyone_mentions",
     "excerpt",
     "messages_text",
     "news_text",
+    "outside_text",
     "page_body",
     "page_chars",
     "page_text",
+    "plain_mentions",
     "post_block",
     "post_discussion_label",
     "post_suggestion",
@@ -634,6 +688,7 @@ __all__ = [
     "seen",
     "shortened",
     "status_data",
+    "unaddressed_mentions",
     "unknown_recipients_message",
     "wake_text",
     "with_notes",
