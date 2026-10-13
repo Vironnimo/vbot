@@ -515,7 +515,8 @@ def test_edited_files_are_syntax_checked_without_blaming_earlier_errors(
         assert caret.index("^") == numbered[1].index("(")
 
 
-def test_current_content_stamps_stats_and_notes_an_external_change(tmp_path):
+@pytest.mark.parametrize("written", [True, False], ids=["merged", "left-as-it-was"])
+def test_current_content_stamps_stats_and_notes_an_external_change(tmp_path, written):
     path = tmp_path / "file.py"
     path.write_bytes(b"value = 1\n")
     state = FileReadState()
@@ -523,15 +524,25 @@ def test_current_content_stamps_stats_and_notes_an_external_change(tmp_path):
     path.write_bytes(b"external = True\nvalue = 1\n")
     tracker = ChangeTracker()
     ctx = context(tmp_path, change_tracker=tracker)
-    result = apply(tmp_path, update("@@\n-value = 1\n+value = 2", "file.py"), state=state, ctx=ctx)
+    new = "value = 2" if written else "value = 1"
+    result = apply(tmp_path, update(f"@@\n-value = 1\n+{new}", "file.py"), state=state, ctx=ctx)
     assert result["ok"]
-    assert "Note: file.py changed after this Session last read it" in text(result)
-    assert state.check_stale("session-test", path) is None
-    stats = tracker.peek_run_stats(
-        (SessionAddress(ctx.project_id, ctx.agent_id, ctx.session_id), ctx.run_id)
-    )
-    assert stats["added"] == 1 and stats["removed"] == 1
-    assert path.read_bytes() == b"external = True\nvalue = 2\n"
+    after = f"external = True\n{new}\n".encode()
+    assert path.read_bytes() == after
+    if written:
+        assert "Note: file.py changed after this Session last read it" in text(result)
+        stats = tracker.peek_run_stats(
+            (SessionAddress(ctx.project_id, ctx.agent_id, ctx.session_id), ctx.run_id)
+        )
+        assert stats["added"] == 1 and stats["removed"] == 1
+    # The Session has still not read the external line: replacing the whole file
+    # waits for a read (Swarm run 2026-10-13), as before the change.
+    add = "*** Begin Patch\n*** Add File: file.py\n+x = 0\n*** End Patch"
+    refused = apply(tmp_path, add, state=state)
+    assert refused["error"]["code"] == "file_modified_since_read"
+    assert path.read_bytes() == after
+    # The refusal shows the current content, which counts as read.
+    assert apply(tmp_path, add, state=state)["ok"]
 
 
 @pytest.mark.parametrize("scope_change", [{"project_id": "project"}, {"agent_id": "other-agent"}])

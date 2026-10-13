@@ -79,6 +79,9 @@ _STALE_FAILURE = "{path} changed after this Session last read it; read it again 
 _MISMATCH_CODES = frozenset(
     {"text_not_found", "context_not_found", "ambiguous_match", "ambiguous_context"}
 )
+# The file holds changes of another writer this Session has not read: changed
+# since its read, or merged over by one of its changes since (``record_change``).
+_UNREAD_CHANGES = frozenset({StaleReason.MODIFIED, StaleReason.UNSEEN})
 # A guard failure shows the whole current file when it is this small.
 _GUARD_CONTENT_MAX_BYTES = 16 * 1024
 _GUARD_CONTENT_MAX_LINES = 400
@@ -359,11 +362,13 @@ def _commit(
             return completed, _error_data(_PatchError("file_changed", path=path), batch)
         pending[path] = expected[path] = batch.after[path] = batch.observed[path] = actual
         if actual.payload is not None:
-            state.record_read(context.session_id, path)
+            state.record_change(context.session_id, path, merged=stale)
     for path in before:
         batch.observed[path] = pending[path]
         if path not in changed and pending[path].payload is not None:
-            state.record_read(context.session_id, path)
+            # A file left as it was shows the Session no more than it had read.
+            unread = state.check_stale(context.session_id, path) is StaleReason.MODIFIED
+            state.record_change(context.session_id, path, merged=unread)
     return completed, None
 
 
@@ -468,7 +473,7 @@ def _skipped_changes(
     """
     skipped = [_error_data(error, batch) for error in failures]
     mismatch = next((data for data in skipped if data["code"] in _MISMATCH_CODES), None)
-    if mismatch and state.check_stale(context.session_id, source) is StaleReason.MODIFIED:
+    if mismatch and state.check_stale(context.session_id, source) in _UNREAD_CHANGES:
         mismatch["message"] += " " + _STALE_FAILURE.format(path=batch.shown(source))
     return skipped
 
@@ -591,7 +596,7 @@ def _run_step(
         if (
             isinstance(error, _PatchError)
             and error.code in _MISMATCH_CODES
-            and state.check_stale(context.session_id, source) is StaleReason.MODIFIED
+            and state.check_stale(context.session_id, source) in _UNREAD_CHANGES
         ):
             outcome["error"]["message"] += " " + _STALE_FAILURE.format(path=batch.shown(source))
     if outcome["status"] == "failed":
