@@ -100,6 +100,15 @@ _PRINTED_ERROR_TEXT = "; ".join(
         ),
         # A later statement's success decides.
         (f"& '{sys.executable}' -c 'raise SystemExit(5)'\n'after'", 0, ("after",)),
+        # A call reports its last statement's native exit code, as bash reports a
+        # function's status, through functions, script blocks and scripts; a later
+        # statement inside the call decides instead.
+        (
+            "Set-Content fail.ps1 'cmd /c exit 6'\nfunction f { & { & .\\fail.ps1 } }\nf",
+            6,
+            (),
+        ),
+        ("function f { cmd /c exit 5; 'after-call' }\nf", 0, ("after-call",)),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, ("requires-sentinel",)),
         # PowerShell's messages are English whatever the display language; numbers
@@ -189,6 +198,8 @@ _PRINTED_ERROR_TEXT = "; ".join(
     ids=[
         "param-block-native-exit",
         "later-statement",
+        "called-native-exit",
+        "called-later-statement",
         "requires",
         "english-messages-own-numbers",
         "parse-error",

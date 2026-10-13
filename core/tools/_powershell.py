@@ -59,8 +59,11 @@ command's own line numbers.
 
 Exit status. ``pwsh -Command`` exits with 1 whenever the last statement failed,
 so a native program's own exit code is lost. A closing statement at the end of
-the command's last block records that code instead, as ``bash -c`` reports it,
-and otherwise 0 or 1 by the last statement's success; an ``exit`` in the command
+the command's last block records the last statement's status as ``bash -c``
+reports it: a failed statement reports the last native program's code, else 1;
+a successful one 0, unless it calls a function, script block or script whose
+last statement runs a native program, which reports that program's code as bash
+reports a function's status (``STATUS_FUNCTION``). An ``exit`` in the command
 ends the shell with its own code. The statement is the only text added to the
 command: PowerShell keeps the last statement's success (``$?``) only within the
 command's statement list, so no statement outside it can read that success. It
@@ -104,16 +107,95 @@ OUTPUT_WIDTH_STATEMENT = (
     "$ui.BufferSize = [System.Management.Automation.Host.Size]::new("
     f"{OUTPUT_COLUMNS}, $ui.BufferSize.Height) }} }} catch {{}} }}"
 )
-# Read $? before any bookkeeping changes it or $LASTEXITCODE. The statement only
+# Pass $? before any bookkeeping changes it or $LASTEXITCODE. The statement only
 # records the code; the bootstrap exits after the command's output is formatted.
 # Explicit exit statements bypass this epilogue, preserving the caller's control
-# flow. Get-Variable reads LASTEXITCODE even when it was never set under
-# Set-StrictMode.
-EXIT_STATUS_STATEMENT = (
-    "$global:__vbotExitCode = if ($?) { 0 } else { "
-    "$__vbotLastCode = Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Ignore; "
-    "if ($__vbotLastCode) { $__vbotLastCode } else { 1 } }"
-)
+# flow.
+EXIT_STATUS_STATEMENT = "$global:__vbotExitCode = __vbotStatus $?"
+# The status of the command's last statement, as bash -c reports it (see the
+# module docstring). A failed statement reports the last native program's code,
+# else 1. A successful one reports 0, unless it is a call of a function, filter,
+# script block or script (also through an alias or as an assignment's value) whose
+# body's last statement runs a native program: PowerShell's $? is true after such a
+# call whatever the program's code, and bash reports a function's status as that of
+# its last command. A body's last statement that is such a call again is followed
+# (at most 10 deep); one that runs a native program, alone or in a pipeline or
+# assignment, reports $LASTEXITCODE; anything else (a cmdlet, an expression, an if,
+# foreach or try statement, a call that cannot be resolved) reports 0. It runs after
+# the command's last statement and only reads: the command observes nothing of it,
+# and it never throws into a trap of the command. Get-Variable reads LASTEXITCODE
+# even when it was never set under Set-StrictMode; the variables carry the prefix,
+# so none hides one of the command's from the lookup of `& $name`.
+STATUS_FUNCTION = r"""function __vbotStatus($__vbotSucceeded) {
+    $__vbotCode = Get-Variable -Name LASTEXITCODE -ValueOnly -ErrorAction Ignore
+    if (-not $__vbotSucceeded) {
+        if ($__vbotCode) { return $__vbotCode }
+        return 1
+    }
+    if (-not $__vbotCode) { return 0 }
+    try {
+        $__vbotA = 'System.Management.Automation.Language.'
+        $__vbotFind = {
+            param($__vbotElement)
+            if ($__vbotElement -isnot "${__vbotA}CommandAst") { return }
+            $__vbotTarget = $__vbotElement.CommandElements[0]
+            $__vbotTarget = if ($__vbotTarget -is "${__vbotA}ScriptBlockExpressionAst") {
+                $__vbotTarget.ScriptBlock
+            } elseif ($__vbotTarget -is "${__vbotA}VariableExpressionAst") {
+                $__vbotName = $__vbotTarget.VariablePath.UserPath
+                Get-Variable -Name $__vbotName -ValueOnly -ErrorAction Ignore
+            } else {
+                $__vbotElement.GetCommandName()
+            }
+            if ($__vbotTarget -is [string]) {
+                $__vbotTarget = $ExecutionContext.InvokeCommand.GetCommand($__vbotTarget, 'All')
+            }
+            while ($__vbotTarget -is [System.Management.Automation.AliasInfo]) {
+                $__vbotTarget = $__vbotTarget.ResolvedCommand
+            }
+            if ($__vbotTarget -is [System.Management.Automation.FunctionInfo] -or
+                $__vbotTarget -is [System.Management.Automation.ExternalScriptInfo]) {
+                $__vbotTarget = $__vbotTarget.ScriptBlock
+            }
+            if ($__vbotTarget -is [scriptblock]) { $__vbotTarget = $__vbotTarget.Ast }
+            if ($__vbotTarget -is "${__vbotA}FunctionDefinitionAst") {
+                $__vbotTarget = $__vbotTarget.Body
+            }
+            $__vbotTarget
+        }
+        $__vbotStatements = ${function:__vbotBody}.Ast.EndBlock.Statements
+        $__vbotStatement = if ($__vbotStatements.Count -gt 1) {
+            $__vbotStatements[$__vbotStatements.Count - 2]
+        }
+        for ($__vbotDepth = 0; $__vbotStatement -and $__vbotDepth -le 10; $__vbotDepth++) {
+            if ($__vbotStatement -is "${__vbotA}AssignmentStatementAst") {
+                $__vbotStatement = $__vbotStatement.Right
+            }
+            if ($__vbotStatement -isnot "${__vbotA}PipelineAst") { break }
+            $__vbotElements = $__vbotStatement.PipelineElements
+            $__vbotStatement = $null
+            foreach ($__vbotElement in $__vbotElements) {
+                $__vbotTarget = & $__vbotFind $__vbotElement
+                if ($__vbotTarget -is [System.Management.Automation.ApplicationInfo]) {
+                    if ($__vbotDepth) { return $__vbotCode }
+                } elseif ($__vbotElements.Count -eq 1 -and
+                    $__vbotTarget -is "${__vbotA}ScriptBlockAst") {
+                    $__vbotBlocks = $__vbotTarget.EndBlock, $__vbotTarget.ProcessBlock,
+                        $__vbotTarget.BeginBlock
+                    foreach ($__vbotBlock in $__vbotBlocks) {
+                        if ($__vbotBlock -and $__vbotBlock.Statements.Count) {
+                            $__vbotStatement = $__vbotBlock.Statements[-1]
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
+    0
+}
+"""
+STATUS_FUNCTION = re.sub(r"(?m)^[ \t]+", "", STATUS_FUNCTION)
 SETUP_STATEMENT = "; ".join(
     (UTF8_CONSOLE_STATEMENT, UI_CULTURE_STATEMENT, PLAIN_TEXT_STATEMENT, OUTPUT_WIDTH_STATEMENT)
 )
@@ -237,6 +319,7 @@ def _escaped(text: str) -> str:
 # the request runs before the command is known.
 POWERSHELL_BOOTSTRAP = (
     f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n"
+    + STATUS_FUNCTION
     + WARM_UP_STATEMENTS
     + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE)).replace(
         "{unavailable}", str(WORKDIR_UNAVAILABLE_EXIT_CODE)
