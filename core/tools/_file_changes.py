@@ -82,6 +82,17 @@ _MISMATCH_CODES = frozenset(
 # The file holds changes of another writer this Session has not read: changed
 # since its read, or merged over by one of its changes since (``record_change``).
 _UNREAD_CHANGES = frozenset({StaleReason.MODIFIED, StaleReason.UNSEEN})
+# An old_string not in the edited file is looked for in this many files the
+# Session read or changed most recently, each read up to this size, and at most
+# this many of the files that hold it are named. A shorter old_string occurs in
+# unrelated files too often to say anything about the call.
+_ELSEWHERE_FILES = 20
+_ELSEWHERE_MAX_BYTES = 1024 * 1024
+_ELSEWHERE_SHOWN = 3
+_ELSEWHERE_MIN_CHARACTERS = 20
+_ELSEWHERE = (
+    "old_string occurs in {files}, which this Session read or changed; this call is for {path}."
+)
 # A guard failure shows the whole current file when it is this small.
 _GUARD_CONTENT_MAX_BYTES = 16 * 1024
 _GUARD_CONTENT_MAX_LINES = 400
@@ -460,18 +471,71 @@ def _guard_failure(
     }
 
 
+def _elsewhere(
+    context: ToolContext,
+    state: FileReadState,
+    batch: ChangeBatch,
+    source: Path,
+    error: _PatchError,
+    operations: list[_Operation],
+) -> str | None:
+    """Name the Session's other recent files that hold a missing ``old_string`` as sent.
+
+    An edit meant for another file the Session works on fails as not found;
+    naming that file says why. The change is never applied there.
+    """
+    if error.code != "text_not_found":
+        return None
+    label = error.values.get("label", "")
+    hunks = [
+        hunk
+        for operation in operations
+        for hunk in operation.hunks
+        if hunk.label == label and hunk.replacement is not None
+    ]
+    if len(hunks) != 1 or hunks[0].replacement is None:
+        return None
+    old = hunks[0].replacement.old.replace("\r\n", "\n")
+    if len("".join(old.split())) < _ELSEWHERE_MIN_CHARACTERS:
+        return None
+    holding: list[str] = []
+    for path in state.recent_files(context.session_id, _ELSEWHERE_FILES + 1):
+        if path == source:
+            continue
+        try:
+            if path.stat().st_size > _ELSEWHERE_MAX_BYTES:
+                continue
+            text = path.read_bytes().decode("utf-8")
+        except OSError, UnicodeDecodeError:
+            continue
+        if old in text.replace("\r\n", "\n"):
+            holding.append(batch.shown(path))
+    if not holding:
+        return None
+    files = ", ".join(holding[:_ELSEWHERE_SHOWN])
+    if len(holding) > _ELSEWHERE_SHOWN:
+        files += f" and {len(holding) - _ELSEWHERE_SHOWN} more"
+    return _ELSEWHERE.format(files=files, path=batch.shown(source))
+
+
 def _skipped_changes(
     context: ToolContext,
     state: FileReadState,
     batch: ChangeBatch,
     source: Path,
     failures: list[_PatchError],
+    operations: list[_Operation],
 ) -> list[JsonObject]:
     """Describe the text changes a one-write step skipped, in order.
 
-    The first mismatch says once that the file changed since its read.
+    The first mismatch says once that the file changed since its read; an
+    ``old_string`` found only in other files of the Session names them.
     """
     skipped = [_error_data(error, batch) for error in failures]
+    for error, data in zip(failures, skipped, strict=True):
+        elsewhere = _elsewhere(context, state, batch, source, error, operations)
+        if elsewhere:
+            data["message"] += " " + elsewhere
     mismatch = next((data for data in skipped if data["code"] in _MISMATCH_CODES), None)
     if mismatch and state.check_stale(context.session_id, source) in _UNREAD_CHANGES:
         mismatch["message"] += " " + _STALE_FAILURE.format(path=batch.shown(source))
@@ -533,7 +597,7 @@ def _run_step(
             pending, warnings = _plan(
                 operations, paths, before, change_ends, failures, unchanged if one_write else None
             )
-            skipped = _skipped_changes(context, state, batch, source, failures or [])
+            skipped = _skipped_changes(context, state, batch, source, failures or [], operations)
             if unchanged:
                 outcome["unchanged"] = unchanged
             if skipped and pending == before:
@@ -593,6 +657,10 @@ def _run_step(
             and error.code == "text_not_found"
         ):
             outcome["error"]["message"] += " " + _PRECISE_RECOVERY
+        if isinstance(error, _PatchError):
+            elsewhere = _elsewhere(context, state, batch, source, error, operations)
+            if elsewhere:
+                outcome["error"]["message"] += " " + elsewhere
         if (
             isinstance(error, _PatchError)
             and error.code in _MISMATCH_CODES

@@ -153,6 +153,18 @@ class FileReadState:
                 del self._stamps[oldest]
                 self._unseen.discard(oldest)
 
+    def recent_files(self, session_id: str, limit: int) -> list[Path]:
+        """Return up to ``limit`` files the Session read or changed, most recent first."""
+        with self._stamps_lock:
+            keys = list(self._stamps)
+        recent: list[Path] = []
+        for owner, path in reversed(keys):
+            if owner == session_id:
+                recent.append(Path(path))
+                if len(recent) == limit:
+                    break
+        return recent
+
     def check_stale(self, session_id: str, resolved: Path) -> StaleReason | None:
         """Return why a mutation on ``resolved`` is stale, or ``None`` if safe.
 

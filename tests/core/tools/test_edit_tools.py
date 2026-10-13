@@ -527,6 +527,41 @@ async def test_old_string_with_line_breaks_in_other_places_than_the_file(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("old", "seen", "named"),
+    [
+        # Swarm run 2026-10-13: an edit meant for another file the Agent worked on.
+        pytest.param("def load(rows):\n    return rows", True, True, id="read-elsewhere"),
+        # Nearby: a file the Session never read, or text too short to tell a file.
+        pytest.param("def load(rows):\n    return rows", False, False, id="not-read"),
+        pytest.param("return rows", True, False, id="short"),
+    ],
+)
+async def test_an_old_string_from_another_file_of_the_session_names_that_file(
+    tmp_path, old, seen, named
+) -> None:
+    (tmp_path / "a.py").write_bytes(b"x = 1\n")
+    other = tmp_path / "b.py"
+    other.write_bytes(b"def load(rows):\n    return rows\n")
+    state = FileReadState()
+    if seen:
+        state.record_read("session-test", other)
+
+    result = await call(
+        tmp_path,
+        {"path": "a.py", "edits": [{"old_string": old, "new_string": "pass"}]},
+        tools=registry(state),
+        name="edit",
+    )
+
+    assert result["error"]["code"] == "text_not_found"
+    assert ("b.py" in text(result)) is named
+    # The edit is never applied to the other file.
+    assert (tmp_path / "a.py").read_bytes() == b"x = 1\n"
+    assert other.read_bytes() == b"def load(rows):\n    return rows\n"
+
+
+@pytest.mark.asyncio
 async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> None:
     (tmp_path / "empty.txt").write_bytes(b"")
     created = await call(

@@ -356,7 +356,13 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   `new_string`, as after a deletion). An `old_string` replacement whose change
   the file already holds, by the evidence `tools/edit.md` -> Results names,
   changes nothing instead of failing (`_new_text_in_place`; an `apply_patch`
-  step then reports `already contains this change`). Without candidates the text names
+  step then reports `already contains this change`). An `old_string` of at
+  least 20 non-whitespace characters that is not in the file but stands as
+  sent (line endings aside) in one of the 20 files the Session read or changed
+  most recently (`FileReadState.recent_files`, each up to 1 MB) gets
+  `old_string occurs in X, which this Session read or changed; this call is for
+  Y.` after the not-found sentence (`_file_changes._elsewhere`, at most 3 files
+  named); the change is never applied there. Without candidates the text names
   the `read` call. A first difference for a one-line copy is shown at the closest
   candidate's line; longer copies are aligned by the lines the file holds.
   An `old_string` whose words are all at exactly one place of the file, with
