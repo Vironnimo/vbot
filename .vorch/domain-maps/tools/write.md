@@ -56,3 +56,4 @@ definitions` estimate).
 | `path`: no text | The name says the role; both path forms are accepted (review 2026-10-10). |
 | `content`: `Complete file content.` | Says the value is the whole file, so an Agent does not send a fragment or a diff. |
 | `write replaces the whole file and has no old_string. To replace text inside a file, call edit with path and edits.` | Edit-shaped calls sent to `write` name the Tool that takes them instead of failing on unknown parameters. |
+| `write has no page_id: it writes the file given as path.` plus the `swarm_wiki` change call | Shared with `edit` (`edit.md` -> Agent-facing text). |

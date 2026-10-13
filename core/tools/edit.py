@@ -30,6 +30,7 @@ from core.tools._file_changes import cancelled_paths, change_batch, file_reports
 from core.tools._patch_report import EQUAL_TEXT, failure_text, patch_result
 from core.tools._patch_requests import APPLY_PATCH_TOOL_NAME, content_operation
 from core.tools._patch_syntax import _Hunk, _Operation, _Replacement, _same_path
+from core.tools._swarm_references import wiki_change_call
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import (
@@ -146,6 +147,8 @@ _WRITE_TEMPLATES = {
     "partial_change": f"call {model_tool_name(EDIT_TOOL_NAME)} to change only part of it",
 }
 _NO_PATH = "The call names no file. Add path, relative to the working directory or absolute."
+# A call that names a Swarm Wiki page as page_id and no path; the handler refuses it.
+_PAGE_ID = "page_id"
 
 
 def edit_dialect(family: str) -> EditDialect:
@@ -299,6 +302,10 @@ def normalize_edit_arguments(arguments: Any) -> Any:
             raise ValueError("\n".join(refusals))
         normalized["edits"] = items
     if "path" not in normalized:
+        page = _wiki_page(normalized)
+        if page is not None:
+            # The path and edits only satisfy the contract: the handler refuses first.
+            return {_PAGE_ID: page, "path": ".", "edits": []}
         raise ValueError("\n".join([_NO_PATH, *refusals]))
     if not edits and set(normalized) <= {"path", "edits"}:
         raise ValueError(
@@ -510,6 +517,10 @@ def normalize_write_arguments(arguments: Any) -> Any:
             f"a file, call {edit} with path and edits."
         )
     if "path" not in normalized:
+        page = _wiki_page(normalized)
+        if page is not None:
+            # The path and content only satisfy the contract: the handler refuses first.
+            return {_PAGE_ID: page, "path": ".", "content": ""}
         raise ValueError(_NO_PATH)
     if "content" not in normalized:
         raise ValueError(
@@ -517,6 +528,26 @@ def normalize_write_arguments(arguments: Any) -> Any:
             'text of the file ("" empties it).'
         )
     return normalized
+
+
+def _wiki_page(arguments: dict[str, Any]) -> str | None:
+    """Return the page a call without path names as ``page_id``, if it names one."""
+    pages = [
+        value
+        for key, value in arguments.items()
+        if spelling(key) == spelling(_PAGE_ID) and isinstance(value, str) and value.strip()
+    ]
+    return pages[0] if len(pages) == 1 else None
+
+
+def _page_id_refusal(context: ToolContext, tool: str, page: Any) -> JsonObject:
+    """Refuse a change of ``page_id``, naming the swarm_wiki call when it is offered."""
+    action = "changes the file" if tool == EDIT_TOOL_NAME else "writes the file"
+    message = (
+        f"No file was changed.\n{model_tool_name(tool)} has no page_id: it {action} given as path."
+    )
+    call = wiki_change_call(page, context.offers)
+    return tool_failure("invalid_arguments", f"{message} {call}" if call else message)
 
 
 def _refusing(normalizer: Any) -> Any:
@@ -760,6 +791,8 @@ def _execute_write(context: ToolContext, arguments: JsonObject, state: FileReadS
 
 def make_edit_handler(file_state: FileReadState) -> ToolHandler:
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if _PAGE_ID in arguments:
+            return _page_id_refusal(context, EDIT_TOOL_NAME, arguments[_PAGE_ID])
         return _execute_edit(context, arguments, file_state)
 
     return handler
@@ -767,6 +800,8 @@ def make_edit_handler(file_state: FileReadState) -> ToolHandler:
 
 def make_write_handler(file_state: FileReadState) -> ToolHandler:
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if _PAGE_ID in arguments:
+            return _page_id_refusal(context, WRITE_TOOL_NAME, arguments[_PAGE_ID])
         return _execute_write(context, arguments, file_state)
 
     return handler
@@ -843,6 +878,7 @@ def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) ->
             activation_source=APPLY_PATCH_TOOL_NAME,
             open_input_schema=True,
             argument_normalizer=_refusing(normalizer),
+            unadvertised_parameters={_PAGE_ID: {}},
             result_schema=_RESULT_SCHEMA,
             display=ToolDisplay(parts_builder=parts, hidden_argument_keys=hidden, details=True),
         )
