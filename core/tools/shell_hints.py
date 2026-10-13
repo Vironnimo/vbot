@@ -10,9 +10,10 @@ names the next action.
 Design rules (keep them when adding a pattern):
 
 * Only non-zero exit codes get a hint, except for a command that did not run as
-  written, which the command text shows: a typographic quote or a \\" that ended
-  a PowerShell string, or a program that failed in a pipeline with a
-  Select-Object -First stage.
+  written: a typographic quote or a \\" that ended a PowerShell string, a
+  command PowerShell did not recognize behind exit code 0 (its recorded-error
+  note), or a program that failed in a pipeline with a Select-Object -First
+  stage; and a command that sleeps to read a background command's log.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
@@ -42,6 +43,7 @@ from itertools import islice
 from pathlib import Path
 
 from core.tools._path_suggestions import similar_entries
+from core.tools._powershell import POWERSHELL_ERROR_NOTE
 
 # The shell Tool runs commands in PowerShell on Windows and in bash elsewhere.
 _POWERSHELL = sys.platform == "win32"
@@ -384,6 +386,13 @@ _DOUBLED_QUOTE = re.compile(r"''\w")
 _BASH_SYNTAX = re.compile(
     r"(?:^|[;&|])[ \t]*+(?:(?:then|fi|done)\b|do\b(?![ \t]*+\{)|\[\[?[ \t])", re.M
 )
+# PowerShell's parser refuses a here-string written on one line, such as
+# @'import re ... '@, or one whose closing '@ does not start its line.
+_HERE_STRING_LAYOUT = re.compile(
+    r"No characters are allowed after a here-string header"
+    r"|White space is not allowed before the string terminator"
+    r"|The string is missing the terminator: [\"']@"
+)
 # PowerShell's parser refuses bash's `program < file`.
 _INPUT_REDIRECTION = re.compile(rf"[{_QUOTES}]<[{_QUOTES}] operator is reserved for future use")
 # A { } block passed to a native program, as when \" ended a python -c "..." string
@@ -461,6 +470,11 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
                 "PowerShell has no heredoc (<<). Pipe a here-string instead: @' on its own "
                 "line, the text, then '@ at the start of a line, followed by `| python -` or "
                 "`| Set-Content file`."
+            )
+        if _HERE_STRING_LAYOUT.search(output):
+            return (
+                "A here-string's @' must end its line, and its '@ must start a line, with "
+                "nothing before it: @' on its own line, the text, then '@ at the start of a line."
             )
         if _INPUT_REDIRECTION.search(output):
             return (
@@ -582,12 +596,15 @@ class _PowerShellCode:
     ' or " that a typographic quote of the same kind ended: (opening offset,
     closing offset). ``escaped_end`` is the offset of the first " that ended a
     double-quoted string after a backslash, written as an escape: a word, a
-    string or a block follows it directly.
+    string or a block follows it directly. ``flat`` is ``text`` with the line
+    breaks inside strings and here-strings blanked too, so every line break left
+    in it ends a statement or continues one in code.
     """
 
     text: str
     early_end: tuple[int, int] | None
     escaped_end: int | None = None
+    flat: str = ""
 
 
 def _powershell_code(command: str) -> _PowerShellCode:
@@ -599,12 +616,14 @@ def _powershell_code(command: str) -> _PowerShellCode:
     a quote of that kind (``it’s`` ends ``'it’s'`` early).
     """
     code = list(command)
+    flat = list(command)
     early_end: tuple[int, int] | None = None
     escaped_end: int | None = None
     end = len(command)
 
     def blank(start: int, stop: int) -> None:
         for index in range(start, min(stop, end)):
+            flat[index] = " "
             if code[index] not in "\r\n":
                 code[index] = " "
 
@@ -666,7 +685,7 @@ def _powershell_code(command: str) -> _PowerShellCode:
             ):
                 escaped_end = stop
             position = stop + 1
-    return _PowerShellCode("".join(code), early_end, escaped_end)
+    return _PowerShellCode("".join(code), early_end, escaped_end, "".join(flat))
 
 
 _STRING_SHOWN_CHARS = 40
@@ -774,6 +793,16 @@ _CLOSED_OUTPUT = re.compile(
     re.M,
 )
 _STAGE_SHOWN_CHARS = 60
+_LAST_EXIT_CODE = re.compile(r"\$LASTEXITCODE\b", re.I)
+# A line that says why a program failed: an exception (Python, Node, .NET), an
+# error or fatal message, possibly after the program's name (argparse's
+# "prog: error: ..."), or unittest's FAIL/ERROR lines.
+_ERROR_LINE = re.compile(
+    r"^[ \t]*+(?:[\w.]*(?:Error|Exception)(?::|$)"
+    r"|(?:[\w.-]++:[ \t]*+)?(?:error|fatal|ERROR|FATAL|Error)\b[:!]?[ \t]"
+    r"|FAIL(?:ED)?\b|npm ERR!)",
+    re.M,
+)
 
 
 def _working_program(word: str) -> str | None:
@@ -880,18 +909,180 @@ def _hint_first_stage(
                 "without that stage (long output keeps its first and last lines), or add "
                 "-Wait to Select-Object."
             )
-        if not _MERGED_ERRORS.search(code, start, stage.start()):
+        parts: list[str] = []
+        # Its errors went into the stage, and the output shows no line saying why.
+        if _MERGED_ERRORS.search(code, start, stage.start()) and not _ERROR_LINE.search(window):
+            parts.append(
+                f"Its output, errors included (2>&1), went through `{written}`, which passes on "
+                f"only the first {counted} and then closes that output: the lines that say why "
+                f"{program} failed can be missing, or {program} failed writing after the close. "
+                "To see why it failed, run it again without that stage (long output keeps its "
+                "first and last lines)."
+            )
+        if _LAST_EXIT_CODE.search(command, stage.end()):
+            # PowerShell moved on without waiting for the program's exit; the
+            # variable is read in the command itself or in an expandable string.
+            parts.append(
+                f"`{written}` stopped waiting for {program} once {counted} had passed it, so "
+                f"$LASTEXITCODE after it does not hold {program}'s exit code."
+            )
+        if not parts:
             continue
         listed = codes[0] if len(codes) == 1 else f"{', '.join(codes[:-1])} and {codes[-1]}"
         return (
-            f"{program} exited with code{'s' if len(codes) > 1 else ''} {listed}{zero}. Its "
-            f"output, errors included (2>&1), went through `{written}`, which passes on "
-            f"only the first {counted} and then closes that output: the lines that say why "
-            f"{program} failed can be missing, or {program} failed writing after the close. "
-            "To see why it failed, run it again without that stage (long output keeps its "
-            "first and last lines)."
+            f"{program} exited with code{'s' if len(codes) > 1 else ''} {listed}{zero}. "
+            + " ".join(parts)
         )
     return None
+
+
+def _top_level_statements(flat: str) -> list[tuple[int, int]]:
+    """The (start, end) of each statement outside brackets in *flat* code."""
+    statements: list[tuple[int, int]] = []
+    depth = 0
+    start = 0
+    for index, char in enumerate(flat):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char in ";\n" and not depth:
+            if flat[start:index].strip():
+                statements.append((start, index))
+            start = index + 1
+    if flat[start:].strip():
+        statements.append((start, len(flat)))
+    return statements
+
+
+def _top_level_split(flat: str, start: int, end: int, separator: re.Pattern[str]) -> list[int]:
+    """Where *separator* occurs between *start* and *end*, outside brackets."""
+    found: list[int] = []
+    depth = 0
+    index = start
+    while index < end:
+        char = flat[index]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif not depth and (match := separator.match(flat, index, end)):
+            found.append(index)
+            index = match.end()
+            continue
+        index += 1
+    return found
+
+
+_CHAIN = re.compile(r"&&|\|\|")
+_PIPE = re.compile(r"\|(?!\|)")
+
+
+def _program_name(command: str, code: str, start: int, end: int) -> str | None:
+    """The program a pipeline between *start* and *end* starts with, lowercase without .exe."""
+    first = _PIPELINE_PROGRAM.match(code, start, end)
+    if first is None:
+        return None
+    name = re.split(r"[/\\]", command[first.start(1) : first.end(1)].strip("'\""))[-1].lower()
+    return name.removesuffix(".exe") or None
+
+
+def _hint_skipped_after_pipeline(
+    command: str, exit_code: int | None, failed_programs: Sequence[str]
+) -> str | None:
+    """Name what `&&` skipped after a pipeline whose program failed.
+
+    In bash, ``checker | head -n 6 && next`` runs ``next`` after head's
+    success. In PowerShell a pipeline fails when a program in it fails, so
+    ``&&`` skipped ``next``, and the result showed only the checker's lines.
+    Read for the command's last statement, whose outcome is the exit code; a
+    Select-Object -First stage that stops the pipeline early lets it succeed.
+    """
+    if not _POWERSHELL or not exit_code or "&&" not in command or not failed_programs:
+        return None
+    parsed = _powershell_code(command)
+    code, flat = parsed.text, parsed.flat
+    statements = _top_level_statements(flat)
+    if not statements:
+        return None
+    start, end = statements[-1]
+    operators = _top_level_split(flat, start, end, _CHAIN)
+    if not operators or any(flat.startswith("||", at) for at in operators):
+        return None
+    bounds = [start, *(at + 2 for at in operators)]
+    ends = [*operators, end]
+    for number, (left, right) in enumerate(zip(bounds[:-1], ends[:-1], strict=True)):
+        pipes = _top_level_split(flat, left, right, _PIPE)
+        if not pipes:
+            continue
+        stops_early = any(
+            _FIRST_COUNT.search(stage["arguments"]) and not _WAIT.search(stage["arguments"])
+            for stage in _FIRST_STAGE.finditer(code, left, right)
+        )
+        program = _program_name(command, code, left, pipes[0])
+        if stops_early or program is None:
+            continue
+        codes = _exit_codes(failed_programs, program)
+        if str(exit_code) not in codes:
+            continue
+        runs = sum(
+            entry.partition(" exited with code ")[0].lower().removesuffix(".exe") == program
+            for entry in failed_programs
+        )
+        if runs > 1:
+            # Another run of the program failed too, maybe the part after &&.
+            return None
+        pipeline = _stage_text(command, code, left, right)
+        skipped = _stage_text(command, code, bounds[number + 1], ends[number + 1])
+        more = " and what follows it" if number + 2 < len(bounds) else ""
+        return (
+            f"In PowerShell, a pipeline fails when a program in it fails: {program} exited with "
+            f"code {exit_code} in `{pipeline}`, so && did not run `{skipped}`{more}. To run it "
+            "whatever that exit code, put it after ; instead of &&."
+        )
+    return None
+
+
+# A shell command that waits, then reads the log file of a vBot background command.
+_SLEEP = re.compile(r"(?<![\w-])(?:Start-Sleep|sleep)(?![\w-])", re.I)
+_COMMAND_LOG = re.compile(r"[/\\]commands[/\\]tmp_[0-9a-z]{12}\.log", re.I)
+
+
+def _hint_waiting_for_background(command: str) -> str | None:
+    """Answer a command that sleeps to read a background command's log.
+
+    Agents waited in loops of ``Start-Sleep 90; Get-Content <log> -Tail 3``
+    for a background command whose result arrives as a message anyway.
+    """
+    if not _SLEEP.search(command) or not _COMMAND_LOG.search(command):
+        return None
+    return (
+        "This command waited, then read a background command's log file. That command's "
+        "result arrives as a new message when it exits: instead of waiting for it in a "
+        "command, continue other work or end your turn."
+    )
+
+
+def _hint_hidden_failure(command: str, output: str, offers: Callable[[str], bool]) -> str | None:
+    """Name a statement PowerShell could not run behind exit code 0.
+
+    ``checker 2>&1 | grep ...; python -c ...`` exited with 0 from its last
+    statement: grep is not recognized, so the checker never ran, and only the
+    recorded-error note said that something failed.
+    """
+    if not _POWERSHELL or POWERSHELL_ERROR_NOTE not in output:
+        return None
+    window = _scan_window(output)
+    missing = _POWERSHELL_NOT_RECOGNIZED.search(window)
+    if missing is None:
+        return None
+    hint = _hint_powershell_command_not_found(_Failure(command, window, None, offers))
+    if hint is None:
+        return None
+    return (
+        f"{hint} The statement with `{missing[1]}` did not run, although the command exited "
+        "with code 0."
+    )
 
 
 # A word of the command, between blanks, quotes, parentheses and separators.
@@ -907,21 +1098,17 @@ def _hint_native_glob(failure: _Failure) -> str | None:
     wildcards only for its own cmdlets, so ``python -m py_compile minidb/*.py``
     failed with ``[Errno 22] Invalid argument: 'minidb/*.py'``. A program that
     reports the word as written was given it; a cmdlet reports the resolved path.
-    A quoted word was meant for the program, and git matches pathspecs itself.
+    Quoted text was meant for the program as written, such as the regular
+    expression ``"Melting point : .*"``, and git matches pathspecs itself.
     """
     command, output = failure.command, failure.output
     if not _POWERSHELL or "ParserError" in output or "did not match any file" in output:
         return None
     words: dict[str, None] = {}
-    for match in _COMMAND_WORD.finditer(command):
+    # Strings, here-strings and comments are blanked: no word comes from inside them.
+    for match in _COMMAND_WORD.finditer(_powershell_code(command).text):
         word = match[0]
-        quoted = match.start() > 0 and command[match.start() - 1] in "'\""
-        if (
-            "*" in word
-            and not quoted
-            and not word.startswith("-")
-            and any(mark in word for mark in "/\\.")
-        ):
+        if "*" in word and not word.startswith("-") and any(mark in word for mark in "/\\."):
             words[word] = None
             if len(words) == _NATIVE_GLOB_WORDS:
                 break
@@ -1521,9 +1708,12 @@ def annotate_failure(
 
     A command that did not run as written gets a hint whatever its exit code,
     since a later statement's success can hide its failure: a typographic quote
-    or a \\" ended a string early (first, since every error follows from it), or
-    a program failed in a pipeline with a Select-Object -First stage (last).
-    Otherwise exit code 0 or None stays unannotated.
+    or a \\" ended a string early (first, since every error follows from it), a
+    command PowerShell did not recognize behind exit code 0, or a program failed
+    in a pipeline with a Select-Object -First stage. A non-zero exit code can
+    come from a pipeline whose failed program made && skip the rest. Last, a
+    command that sleeps to read a background command's log is told that the
+    result arrives as a message. Otherwise exit code 0 or None stays unannotated.
     """
     command = command or ""
     output = output or ""
@@ -1535,14 +1725,28 @@ def annotate_failure(
         quote = None
     if quote:
         return quote
-    hint = _failure_hint(command, exit_code, output, workdir, offers) if exit_code else None
+    if exit_code:
+        hint = _failure_hint(command, exit_code, output, workdir, offers)
+    else:
+        try:
+            hint = _hint_hidden_failure(command, output, offers)
+        except Exception:
+            hint = None
     if hint:
         return hint
     lines = len(output.splitlines()) if output_lines is None else output_lines
-    try:
-        return _hint_first_stage(command, exit_code, output, lines, failed_programs)
-    except Exception:
-        return None
+    for late in (
+        lambda: _hint_skipped_after_pipeline(command, exit_code, failed_programs),
+        lambda: _hint_first_stage(command, exit_code, output, lines, failed_programs),
+        lambda: _hint_waiting_for_background(command),
+    ):
+        try:
+            hint = late()
+        except Exception:
+            hint = None
+        if hint:
+            return hint
+    return None
 
 
 def _scan_window(output: str) -> str:

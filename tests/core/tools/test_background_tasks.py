@@ -337,6 +337,10 @@ async def test_status_shows_a_running_command_with_its_newest_output(
     # Looking changes nothing.
     report = tasks.commands.manager.report(command_id)
     assert (report.ended, report.delivers_result, process.tree.terminations) == (False, True, 0)
+    # From the third look on, the Session waiting for the result is told how often it looked.
+    again = [data(await tasks.call({"action": "status", "id": command_id})) for _ in range(2)]
+    assert "2 times" not in again[0]["next"]
+    assert ("3 times" in again[1]["next"]) is own
 
 
 @pytest.mark.parametrize("owner", [OWNER, CHILD], ids=["own", "subagent"])
@@ -566,6 +570,23 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
         assert (report.stop_reason, submission["session_id"]) == ("parent", CHILD.session_id)
         assert "sub_child" in stopped["notes"][0]
         await _later_reads_speak_to_their_reader(tasks, command_id, stopped)
+
+
+@pytest.mark.asyncio
+async def test_a_stop_does_not_call_the_log_complete_when_a_pipe_stage_held_output(
+    tasks: Tasks,
+) -> None:
+    stage = "Select-Object -Last 25"
+    command_id, process = await tasks.background(command=f"python -m unittest 2>&1 | {stage}")
+
+    stopped = data(await tasks.call({"action": "stop", "id": command_id}))
+    await tasks.commands.finish(command_id)
+
+    # The lines the stage held never reached vBot: the result names the stage, and
+    # the log file it names holds only what arrived.
+    assert stage in stopped["output"].splitlines()[-1]
+    output_file(stopped["next"])
+    assert "complete" not in stopped["next"]
 
 
 async def _later_reads_speak_to_their_reader(

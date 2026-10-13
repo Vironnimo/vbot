@@ -117,6 +117,9 @@ def log_sentence(report: CommandReport) -> str:
     # bare log_file field held.
     if report.transcript.processing_failed:
         return f" The output vBot processed is in {model_path(report.log_path)}."
+    if holding_stage(report.command) is not None:
+        # The held-output line says when the stage's output arrives.
+        return f" The command's output is written to {model_path(report.log_path)}."
     return f" The command's complete output is written live to {model_path(report.log_path)}."
 
 
@@ -311,13 +314,19 @@ def command_output_text(report: CommandReport) -> str:
     unprocessed = _unprocessed(report)
     if unprocessed is not None:
         lines.append(unprocessed)
-    stage = _holding_stage(report.command) if report.stop_reason is not None else None
+    stage = _held_when_stopped(report)
     if stage is not None:
         lines.append(
-            f"[Output piped into {stage} appears only once the command before the pipe has "
-            "finished; to see output as it arrives, run the command without that pipe.]"
+            f"[{stage} held the output piped into it until the command before the pipe "
+            "finished, so the stop lost that output; to see output as it arrives, run the "
+            "command without that pipe.]"
         )
     return "\n".join(lines)
+
+
+def _held_when_stopped(report: CommandReport) -> str | None:
+    """The stage whose held output a stop lost, or None."""
+    return holding_stage(report.command) if report.stop_reason is not None else None
 
 
 def running_output_text(report: CommandReport) -> str:
@@ -334,7 +343,7 @@ def running_output_text(report: CommandReport) -> str:
     unprocessed = _unprocessed(report)
     if unprocessed is not None:
         kept.append(unprocessed)
-    stage = _holding_stage(report.command)
+    stage = holding_stage(report.command)
     if stage is not None:
         log = " and in the log file" if report.log_path is not None else ""
         kept.append(
@@ -382,7 +391,7 @@ def _chars(lines: list[str]) -> int:
     return sum(len(line) + 1 for line in lines)
 
 
-def _holding_stage(command: str) -> str | None:
+def holding_stage(command: str) -> str | None:
     """The last pipeline stage of *command* that holds its input until it ends.
 
     Agents piped test runs into ``Select-Object -Last 25``: running in the
@@ -413,11 +422,13 @@ def _kept_output(report: CommandReport) -> str | None:
     path = report.log_path
     if path is None:
         return None
-    content = (
-        "the output it processed"
-        if report.transcript.processing_failed
-        else "this command's complete output"
-    )
+    if report.transcript.processing_failed:
+        content = "the output it processed"
+    elif _held_when_stopped(report) is not None:
+        # The lines the stage held never reached vBot.
+        content = "the output that reached it"
+    else:
+        content = "this command's complete output"
     return f"vBot kept {content} in {model_path(path)} for you to read"
 
 
@@ -565,6 +576,7 @@ __all__ = [
     "failed_programs",
     "failure_hint",
     "format_command_delivery",
+    "holding_stage",
     "stop_call",
     "leftovers_stop",
     "log_sentence",
