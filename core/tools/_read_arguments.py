@@ -167,7 +167,7 @@ def normalize_read_arguments(arguments: Any) -> Any:
         _repair_contract(),
         arguments,
         field_aliases=_FIELD_ALIASES,
-        empty_as_omitted=("offset", "limit", "pattern", "context", "ignore_case"),
+        empty_as_omitted=("offset", "limit", "pattern", "context", "ignore_case", "encoding"),
     )
     if not isinstance(normalized, dict):
         return normalized

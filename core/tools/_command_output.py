@@ -23,14 +23,14 @@ workers.
 from __future__ import annotations
 
 import asyncio
-import codecs
 import contextlib
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from . import _command_cleaning
+from . import _command_cleaning, _command_decoding
 from ._command_cleaning import OutputCleaner, OutputLines
+from ._command_decoding import CommandOutputDecoder, DecoderState
 from ._command_types import (
     COMMAND_HEAD_CHARS,
     COMMAND_RECENT_LINES,
@@ -43,7 +43,9 @@ from ._interpreter_host import DEFAULT_WORKERS, HostedObject, InterpreterHost
 
 def command_output_host(*, workers: int = DEFAULT_WORKERS) -> InterpreterHost:
     """A host that cleans commands' output on subinterpreter workers."""
-    return InterpreterHost((_command_cleaning,), name="command output", workers=workers)
+    return InterpreterHost(
+        (_command_decoding, _command_cleaning), name="command output", workers=workers
+    )
 
 
 class CommandLog:
@@ -140,8 +142,8 @@ class CommandOutput:
         self._log = log
         self._lines = OutputLines(head_chars=COMMAND_HEAD_CHARS, tail_chars=COMMAND_TAIL_CHARS)
         self._uncleaned: _Uncleaned | None = None
-        # What the cleaner's decoder holds of a character after the last update.
-        self._undecoded = b""
+        # The interpretation and pending bytes after the last acknowledged update.
+        self._decoder_state: DecoderState | None = None
         self._ended = False
         self._closed = False
 
@@ -181,11 +183,11 @@ class CommandOutput:
         try:
             update = await self._cleaner.call("feed", data)
         except Exception:
-            self._uncleaned = _Uncleaned(self._lines, self._undecoded)
+            self._uncleaned = _Uncleaned(self._lines, self._decoder_state)
             self._uncleaned.feed(data)
             raise
         self._lines.apply(update)
-        self._undecoded = update.undecoded
+        self._decoder_state = update.decoder_state
 
     async def end(self) -> None:
         """The output ended: complete the line still being written.
@@ -199,7 +201,7 @@ class CommandOutput:
             try:
                 update = await self._cleaner.call("end")
             except Exception:
-                self._uncleaned = _Uncleaned(self._lines, self._undecoded)
+                self._uncleaned = _Uncleaned(self._lines, self._decoder_state)
                 self._uncleaned.end()
                 raise
             self._lines.apply(update)
@@ -245,20 +247,21 @@ class CommandOutput:
 class _Uncleaned:
     """Output after cleaning failed: decoded and split into lines, not cleaned.
 
-    Decoding goes on from *undecoded*, the first bytes of a character the
-    cleaner's decoder held, so a character split across the failure stays whole.
+    Decoding goes on from the cleaner's last acknowledged state, including its
+    encoding and undecided bytes, so a character split across the failure stays whole.
     """
 
-    def __init__(self, lines: OutputLines, undecoded: bytes) -> None:
-        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        self._decoder.setstate((undecoded, 0))
+    def __init__(self, lines: OutputLines, decoder_state: DecoderState | None) -> None:
+        self._decoder = CommandOutputDecoder(track_lines=False)
+        if decoder_state is not None:
+            self._decoder.setstate(decoder_state)
         self._lines = lines
 
     def feed(self, data: bytes) -> None:
-        self._add(self._decoder.decode(data))
+        self._add(self._decoder.decode(data).decode("utf-8"))
 
     def end(self) -> None:
-        self._add(self._decoder.decode(b"", final=True))
+        self._add(self._decoder.decode(b"", final=True).decode("utf-8"))
         self._lines.end()
 
     def _add(self, text: str) -> None:

@@ -5,8 +5,9 @@ on a subinterpreter worker (``_interpreter_host``), off the Event Loop, and
 follows its lines on the Event Loop (``OutputLines``).
 
 The command writes bytes to one pipe (stdout and stderr together). They are
-decoded as UTF-8 incrementally (invalid bytes become U+FFFD) and cleaned the way
-a terminal would show their final state, without any terminal behind them:
+decoded incrementally with the same UTF-8/UTF-16 interpretation as the raw log's
+``read`` view, and cleaned the way a terminal would show their final state,
+without any terminal behind them:
 
 - Escape sequences are removed: CSI, two-character sequences, and the control
   strings OSC, DCS, SOS, PM and APC (titles, hyperlinks), each started by ESC.
@@ -34,12 +35,13 @@ or one endless line, holds a fixed amount of memory.
 
 from __future__ import annotations
 
-import codecs
 import itertools
 import re
 from collections import deque
 from collections.abc import Sequence
 from typing import NamedTuple
+
+from ._command_decoding import CommandOutputDecoder, DecoderState
 
 # Characters that start a terminal control, or are dropped (C1), in decoded text.
 _TEXT_CONTROL = re.compile(r"[\x1b\x80-\x9f]")
@@ -71,9 +73,9 @@ class OutputUpdate(NamedTuple):
     # The line still being written, if any: its end, its start unless the end
     # holds all of it (then empty), and its length.
     current_line: tuple[str, str, int] | None
-    # The first bytes of a character the decoder holds until the rest arrives,
-    # so decoding can go on from them when cleaning fails.
-    undecoded: bytes = b""
+    # The interpretation and pending bytes after the last successful update,
+    # so decoding can continue unchanged when the cleaner fails.
+    decoder_state: DecoderState | None = None
 
 
 class TailLines:
@@ -366,8 +368,8 @@ class OutputLines:
 
     # Following
 
-    def take_update(self, undecoded: bytes = b"") -> OutputUpdate:
-        """The changes since the last call; *undecoded* as the decoder holds it."""
+    def take_update(self, decoder_state: DecoderState | None = None) -> OutputUpdate:
+        """The changes since the last call, with the decoder's current state."""
         tail_added, tail_cut, tail_restart = self._tail.take_added()
         update = OutputUpdate(
             tuple(self._head_added),
@@ -378,7 +380,7 @@ class OutputLines:
             tail_restart,
             self._total,
             self._current(),
-            undecoded,
+            decoder_state,
         )
         self._head_added.clear()
         self._first_added = False
@@ -458,7 +460,7 @@ class OutputCleaner:
         """Add output bytes."""
         if data and not self._ended:
             self._apply(self._filter.decode(data))
-        return self._lines.take_update(self._filter.undecoded())
+        return self._lines.take_update(self._filter.decoder_state())
 
     def end(self) -> OutputUpdate:
         """The output ended: decode what is left and complete the current line."""
@@ -507,21 +509,20 @@ class OutputCleaner:
 
 
 class _EscapeFilter:
-    """Incremental UTF-8 decoding with terminal controls removed (bounded state)."""
+    """Incremental command decoding with terminal controls removed (bounded state)."""
 
     def __init__(self) -> None:
-        self._utf8 = codecs.getincrementaldecoder("utf-8")("replace")
+        self._decoder = CommandOutputDecoder(track_lines=False)
         self._state = "text"
         self._osc = False
         self._length = 0
 
-    def undecoded(self) -> bytes:
-        """The first bytes of a character still waiting for the rest (at most 3)."""
-        pending: bytes = self._utf8.getstate()[0]
-        return pending
+    def decoder_state(self) -> DecoderState:
+        """The decoding state acknowledged by this cleaner update."""
+        return self._decoder.getstate()
 
     def decode(self, data: bytes, *, final: bool = False) -> str:
-        text = self._utf8.decode(data, final=final)
+        text = self._decoder.decode(data, final=final).decode("utf-8")
         output: list[str] = []
         index = 0
         while index < len(text):

@@ -102,6 +102,19 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
             ["GrÃ¼Ãe und mehr", "abcd"],
         ),
         ([b"no line break"], ["no line break"]),
+        (["Grüße\n".encode("utf-16-le")], ["Grüße"]),
+        (
+            [bytes((byte,)) for byte in b"\xff\xfe" + "Grüße 東京 😀\n".encode("utf-16-le")],
+            ["Grüße 東京 😀"],
+        ),
+        (
+            [bytes((byte,)) for byte in b"\xfe\xff" + "東京 😀\n".encode("utf-16-be")],
+            ["東京 😀"],
+        ),
+        (
+            [b"before\n", b"\xff\xfe" + "Grüße 東京 😀\n".encode("utf-16-le"), b"after\n"],
+            ["before", "Grüße 東京 😀", "after"],
+        ),
     ],
     ids=[
         "escapes",
@@ -112,6 +125,10 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         "data-escape",
         "c1-code-points",
         "last-line",
+        "utf-16-le-unmarked",
+        "utf-16-le-split",
+        "utf-16-be-split",
+        "mixed-encodings",
     ],
 )
 async def test_output_is_clean_text(
@@ -133,14 +150,20 @@ async def test_output_is_clean_text(
 
 
 @pytest.mark.asyncio
-async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(harness: Harness) -> None:
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le", "utf-16-be"])
+async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(
+    harness: Harness, encoding: str
+) -> None:
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
     assert log_path is not None and log_path.parent.name == COMMAND_TEMPORARY_CATEGORY
+    mark = {"utf-8": b"", "utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff"}[encoding]
     chunks = [
-        b"\x1b[31mred\x1b[0m\r\n",
+        mark + "PARTIAL-".encode(encoding),
+        "\r\x1b[31mred\x1b[0m\r\n".encode(encoding),
+        "second\n".encode(encoding),
         b"progress 10%\rprogress 100%\n",
-        b"abd\x08c \xff\xfe ",
+        b"abd\x08c \xff \x80 ",
         "ä".encode()[:1],
         "ä".encode()[1:] + b" partial",
     ]
@@ -149,33 +172,54 @@ async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(harness: 
     await turns()
     # Written as it arrives, before the command ends.
     assert log_path.read_bytes() == chunks[0]
-    for chunk in chunks[1:]:
+    assert harness.manager.report(command_id).transcript.head == ("PARTIAL-",)
+    for chunk in chunks[1:3]:
+        process.write(chunk)
+    await turns()
+    # A short second UTF-16 line is visible immediately too, not held back
+    # until the command ends while looking for a possible encoding change.
+    assert harness.manager.report(command_id).transcript.head == ("red", "second")
+    assert log_path.read_bytes() == b"".join(chunks[:3])
+    for chunk in chunks[3:]:
         process.write(chunk)
     process.exit(0)
     report = await harness.finish(command_id)
 
     assert log_path.read_bytes() == b"".join(chunks)
     assert report.log_path == log_path
-    assert report.transcript.head == ("red", "progress 100%", "abc �� ä partial")
+    assert report.transcript.head == ("red", "second", "progress 100%", "abc � � ä partial")
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le", "utf-16-be"])
+@pytest.mark.parametrize("advanced", [False, True], ids=["before-update", "after-update"])
 async def test_output_that_cannot_be_cleaned_is_kept_uncleaned_and_logged_whole(
-    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    harness: Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    encoding: str,
+    advanced: bool,
 ) -> None:
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
-    # The first chunk ends inside a character: its first byte waits in the cleaner.
-    first = b"\x1b[1mcollected\x1b[0m 3 items\nGr" + "ü".encode()[:1]
+    # The first chunk ends inside a character in the current encoding. Both
+    # the encoding choice and its unfinished character must survive failure.
+    mark = {"utf-8": b"", "utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff"}[encoding]
+    first = mark + "\x1b[1mcollected\x1b[0m 3 items\nGr".encode(encoding) + "ü".encode(encoding)[:1]
     process.write(first)
     await turns()
+    feed = OutputCleaner.feed
 
     def broken(cleaner: OutputCleaner, data: bytes) -> OutputUpdate:
+        if advanced:
+            # A worker can fail after applying the chunk but before its
+            # update arrived; only the last acknowledged state counts.
+            feed(cleaner, data)
         raise ValueError("cleaner bug")
 
     monkeypatch.setattr(OutputCleaner, "feed", broken)
     later = [
-        "ü".encode()[1:] + b"n\n",
+        "ü".encode(encoding)[1:] + "n\n".encode(encoding),
         b"\x1b[32mpassed\x1b[0m 1\r\n",
         b"passed 2\n",
         b"passed 3",

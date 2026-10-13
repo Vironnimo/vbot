@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import codecs
+import io
 import json
 import os
 from dataclasses import dataclass, replace
@@ -98,6 +100,13 @@ READ_TOOL_PARAMETERS: JsonObject = {
             "minimum": 1,
             "description": "Maximum number of lines to show. Omit to show up to 2000 lines.",
         },
+        "encoding": {
+            "type": "string",
+            "description": (
+                "Read as text in this encoding, such as utf-8 or utf-16. Omit to detect "
+                "command-log encodings and use UTF-8 for other text files."
+            ),
+        },
     },
     "required": ["path"],
 }
@@ -173,6 +182,21 @@ def make_read_handler(
         raise ValueError("speech_max_size_bytes must be a positive integer")
 
     def prepare_read(context: ToolContext, arguments: JsonObject) -> JsonObject | _PreparedAudio:
+        encoding = arguments.get("encoding")
+        if encoding is not None:
+            try:
+                # TextIOWrapper accepts only byte-to-text codecs. Validate against
+                # an empty in-memory stream before opening the requested path.
+                with io.TextIOWrapper(io.BytesIO(), encoding=encoding):
+                    pass
+                encoding = codecs.lookup(encoding).name
+            except LookupError, ValueError:
+                return tool_failure(
+                    "invalid_arguments",
+                    f"Unknown text encoding {arguments['encoding']!r}. "
+                    'Use a text encoding such as "utf-8", "utf-16", "utf-16-le" or "utf-16-be".',
+                )
+            arguments = {**arguments, "encoding": encoding}
         try:
             resolved = context.resolve_path(arguments["path"])
         except RuntimeError as error:
@@ -231,6 +255,13 @@ def make_read_handler(
                     content = render_text_path(resolved, arguments, command_log=command_log)
                     if not content:
                         return tool_success({"content": f"[{label} is empty.]"})
+            except UnicodeError:
+                return tool_failure(
+                    "invalid_arguments",
+                    f"Could not decode {label} using encoding={arguments.get('encoding')!r}. "
+                    "Pass the file's text encoding, including its byte order "
+                    '(such as "utf-16-le") when it has no byte order mark.',
+                )
             except ValueError as error:
                 return tool_failure("invalid_arguments", str(error))
             except OSError as error:
@@ -239,6 +270,8 @@ def make_read_handler(
 
         # A command's log holds what its programs wrote: text, whatever its first
         # bytes look like, also when they start like an image or a PDF.
+        if arguments.get("encoding") is not None:
+            return read_text(command_log=False)
         if _is_command_log(context, resolved):
             return read_text(command_log=True)
 
