@@ -459,7 +459,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   whose words (non-whitespace runs) are all the file's, in order, with line
   breaks in other places: between words a space and a line break with any
   indentation stand for each other, a blank line must be in the file too, a
-  leading or trailing line break must start or end a file line, at least one
+  leading or trailing line break must start or end a file line, leading
+  indentation alone stands for the start of a line or a space or tab inside one
+  (Swarm 2026-10-13: an indented copy of a passage in a one-line JSON file; a
+  start after indentation counts once, from the line's start), at least one
   break must fall elsewhere, and the old text needs 4 words. It never serves an
   edit that changes only whitespace, since such an edit is about the breaks the
   old text misstates. It is ambiguous like the others; the replacement is

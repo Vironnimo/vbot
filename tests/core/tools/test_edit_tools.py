@@ -142,6 +142,7 @@ WRAPPED = (
 REWRAPPED_SIGNATURE = (
     "def spawn(db, api, *, fault=None, pace=1.0, exit_code=70,\n          start=None):"
 )
+ONE_LINE_JSON = '{"note": "Marked as estimated.", "status": "predicted", "unit": "kg/m3", "v": 6}\n'
 
 
 @pytest.mark.asyncio
@@ -392,6 +393,18 @@ async def test_reports_quote_text_as_the_file_has_it(tmp_path, line, edit, shown
             "# Notes\n\n- Rendering is exact.\n- Next\n",
             id="prose",
         ),
+        # Swarm run 2026-10-13: an indented copy of a passage inside a line.
+        pytest.param(
+            ONE_LINE_JSON,
+            (
+                '    "status": "predicted",\n    "unit": "kg/m3",',
+                '    "status": "predicted",\n    "reason": "estimated",\n    "unit": "kg/m3",',
+            ),
+            ONE_LINE_JSON.replace(
+                ' "unit": "kg/m3",', '\n"reason": "estimated",\n"unit": "kg/m3",'
+            ),
+            id="inside-a-line",
+        ),
         pytest.param(
             WRAPPED.replace("\n", "\r\n"),
             (REWRAPPED_SIGNATURE, REWRAPPED_SIGNATURE.replace("None):", "None, rows=1):")),
@@ -424,6 +437,13 @@ async def test_reports_quote_text_as_the_file_has_it(tmp_path, line, edit, shown
             ("\n    print(total)\n    return total", "\n    print(total)\n    return total + 1"),
             ("text_not_found", {"7-8", "7"}),
             id="starts-a-line",
+        ),
+        # Inside a line, indentation stands for a space or tab before the passage.
+        pytest.param(
+            ONE_LINE_JSON.replace(' "status"', '"status"'),
+            ('    "status": "predicted",\n    "unit": "kg/m3",', '    "status": "measured",'),
+            ("text_not_found", {"1"}),
+            id="inside-a-line-without-space",
         ),
         # Too few words to tell the place.
         pytest.param(
