@@ -220,7 +220,7 @@ async def test_a_log_file_that_cannot_be_written_is_no_longer_named(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("output", ["lines", "one-line"])
+@pytest.mark.parametrize("output", ["lines", "one-line", "erased-long-line"])
 async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
     harness: Harness, output: str
 ) -> None:
@@ -231,8 +231,16 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
     else:
         lines = ["".join(chr(ord("a") + number % 26) for number in range(200_000))]
         text = lines[0]
-    for start in range(0, len(text), 16_384):
-        process.write(text[start : start + 16_384])
+    chunks = [text[start : start + 16_384] for start in range(0, len(text), 16_384)]
+    if output == "erased-long-line":
+        # A backspace right after the line in progress was shortened to its end
+        # leaves that end shorter than the tail's limit; the lines after it, also
+        # those that arrive later, still replace it.
+        line = text[:80_000]
+        lines = [line[:-1], "", "after 1", "after 2"]
+        chunks = [line[:40_000], line[40_000:] + "\x08\n\n", "after 1\nafter 2\n"]
+    for chunk in chunks:
+        process.write(chunk)
         await turns()
     process.exit(0)
 
@@ -247,13 +255,18 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
         assert transcript.tail == tuple(lines[-tail:])
         assert (transcript.head_cut, transcript.tail_cut) == (0, 0)
         assert transcript.omitted_lines == len(lines) - head - tail
-    else:
+    elif output == "one-line":
         # A line too long for both: its start and its end.
         (line,) = lines
         assert transcript.head == (line[:COMMAND_HEAD_CHARS],)
         assert transcript.tail == (line[-COMMAND_TAIL_CHARS:],)
         assert transcript.head_cut == len(line) - COMMAND_HEAD_CHARS
         assert transcript.tail_cut == len(line) - COMMAND_TAIL_CHARS
+        assert transcript.omitted_lines == 0
+    else:
+        assert transcript.head == (lines[0][:COMMAND_HEAD_CHARS],)
+        assert transcript.head_cut == len(lines[0]) - COMMAND_HEAD_CHARS
+        assert (transcript.tail, transcript.tail_cut) == (tuple(lines[1:]), 0)
         assert transcript.omitted_lines == 0
 
 

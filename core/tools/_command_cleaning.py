@@ -123,6 +123,7 @@ class TailLines:
             self.cut = length - len(end)
             self._added = 1
             return
+        self._drop_cut()
         self._lines.append(line)
         self._used += len(line) + 1
         self._added += 1
@@ -149,6 +150,7 @@ class TailLines:
             self.cut = 0
             self._added = 0
             self._restart = True
+        self._drop_cut()
         self._lines.extend(itertools.islice(lines, start, None))
         self._used += used
         self._added += len(lines) - start
@@ -176,12 +178,31 @@ class TailLines:
             self._lines.append(added[0])
             self._used = len(added[0]) + 1
             self.cut = cut
-        else:
+        elif added:
+            self._drop_cut()
             self._lines.extend(added)
             self._used += sum(len(line) + 1 for line in added)
             self._trim()
         self._added = 0
         self._restart = False
+
+    def _drop_cut(self) -> None:
+        """Drop a cut line before a later line is added.
+
+        A cut line is the end of a line longer than the limit, so it never stays
+        beside another line. Its kept end can be shorter than the limit (a
+        backspace erased from it), so the trim alone would keep it.
+        """
+        if not self.cut:
+            return
+        # The cut line is the only line.
+        if len(self._lines) == self._added:
+            # A line added since take_added goes: a follower cannot drop it.
+            self._added -= 1
+            self._restart = True
+        self._lines.clear()
+        self._used = 0
+        self.cut = 0
 
     def _trim(self) -> None:
         while self._used - 1 > self._limit:
