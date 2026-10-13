@@ -1,7 +1,8 @@
-"""A command's output bytes cleaned into lines, and its live log file.
+"""A command's output cleaned into lines, kept bounded in memory.
 
 Standard library only: ``CommandOutput`` runs an ``OutputCleaner`` per command
-on a subinterpreter worker (``_interpreter_host``), off the Event Loop.
+on a subinterpreter worker (``_interpreter_host``), off the Event Loop, and
+follows its lines on the Event Loop (``OutputLines``).
 
 The command writes bytes to one pipe (stdout and stderr together). They are
 decoded as UTF-8 incrementally (invalid bytes become U+FFFD) and cleaned the way
@@ -20,20 +21,21 @@ a terminal would show their final state, without any terminal behind them:
 - A backspace erases the character before it on the current line.
 - Other C0 controls and DEL are removed; tabs stay.
 
-Completed lines go to the log file, which keeps every line whole, and to the
-transcript, which keeps the first lines and the newest ones, each cut to a
-maximum length. The line still being written shows at the end of the log file
-at each flush and is replaced as it changes; a very long line is written to the
-file in parts while only its beginning stays in memory.
+Only the transcript is cleaned: the log file has the bytes as the command wrote
+them (``_command_output``). The lines are bounded (``OutputLines``): the first
+ones within one character budget, the newest ones within another, and the start
+and the end of the line still being written, so a command that prints gigabytes,
+or one endless line, holds a fixed amount of memory.
 """
 
 from __future__ import annotations
 
 import codecs
-import contextlib
+import itertools
 import re
 from collections import deque
-from typing import BinaryIO, NamedTuple
+from collections.abc import Sequence
+from typing import NamedTuple
 
 # Characters that may start or be part of a terminal control in decoded text.
 _TEXT_CONTROL = re.compile(r"[\x1b\x80-\x9f]")
@@ -49,96 +51,398 @@ _VISIBLE_ESCAPE = "\\x1b"
 
 
 class OutputUpdate(NamedTuple):
-    """How a call changed the transcript."""
+    """How a call changed the cleaner's ``OutputLines``, for ``OutputLines.apply``."""
 
-    # Lines completed since the last call that belong to the first lines.
+    # Lines that entered the head, and whether the head takes no more.
     head_added: tuple[str, ...]
-    # The newest of the other lines completed since the last call, at most
-    # as many as the cleaner keeps.
-    recent_added: tuple[str, ...]
+    head_closed: bool
+    # The start and the length of a first line too long for the head, once known.
+    first_line: tuple[str, int] | None
+    # What the tail added (``TailLines.take_added``).
+    tail_added: tuple[str, ...]
+    tail_cut: int
+    tail_restart: bool
     # Completed lines in all.
     total_lines: int
-    # The line still being written, if any.
-    current_line: str | None
-    # The log file has changes a flush would write.
-    log_pending: bool
+    # The line still being written, if any: its end, its start unless the end
+    # holds all of it (then empty), and its length.
+    current_line: tuple[str, str, int] | None
+
+
+class TailLines:
+    """The newest whole lines within *limit* characters, lines joined by line breaks.
+
+    A line longer than *limit* replaces them all with its last *limit*
+    characters; ``cut`` counts the characters before them. What was added
+    since the last ``take_added`` lets another ``TailLines`` follow this one.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._lines: deque[str] = deque()
+        # The lines' characters plus one line break each.
+        self._used = 0
+        self.cut = 0
+        # The newest this many lines were added since ``take_added``; a line
+        # added since then was dropped again, or lines were left out (restart).
+        self._added = 0
+        self._restart = False
+
+    def __len__(self) -> int:
+        return len(self._lines)
+
+    @property
+    def lines(self) -> tuple[str, ...]:
+        return tuple(self._lines)
+
+    def newest(self, count: int) -> list[str]:
+        """The newest *count* lines, oldest first."""
+        newest = list(itertools.islice(reversed(self._lines), max(0, count)))
+        newest.reverse()
+        return newest
+
+    def copy(self) -> TailLines:
+        copy = TailLines(self._limit)
+        copy._lines = self._lines.copy()
+        copy._used = self._used
+        copy.cut = self.cut
+        return copy
+
+    def add(self, line: str, chars: int | None = None) -> None:
+        """Add a line; *chars* is its length when *line* holds only its end."""
+        length = len(line) if chars is None else chars
+        if length > self._limit:
+            end = line[-self._limit :]
+            self._lines.clear()
+            self._lines.append(end)
+            self._used = len(end) + 1
+            self.cut = length - len(end)
+            self._added = 1
+            return
+        self._lines.append(line)
+        self._used += len(line) + 1
+        self._added += 1
+        self._trim()
+
+    def extend(self, lines: Sequence[str]) -> None:
+        """Add whole *lines*, keeping only the newest of them that can stay."""
+        start = len(lines)
+        used = 0
+        while start:
+            size = len(lines[start - 1]) + 1
+            if used + size - 1 > self._limit:
+                break
+            used += size
+            start -= 1
+        if start == len(lines):
+            if lines:
+                self.add(lines[-1])
+            return
+        if start:
+            # Lines between the older ones and these were left out.
+            self._lines.clear()
+            self._used = 0
+            self.cut = 0
+            self._added = 0
+            self._restart = True
+        self._lines.extend(itertools.islice(lines, start, None))
+        self._used += used
+        self._added += len(lines) - start
+        self._trim()
+
+    def take_added(self) -> tuple[tuple[str, ...], int, bool]:
+        """What changed since the last call, for ``apply``: the lines added,
+        the characters cut before the first of them, and whether the lines
+        before them are gone."""
+        count = min(self._added, len(self._lines))
+        added = tuple(self.newest(count))
+        cut = self.cut if count and count == len(self._lines) else 0
+        restart = self._restart
+        self._added = 0
+        self._restart = False
+        return added, cut, restart
+
+    def apply(self, added: Sequence[str], cut: int, restart: bool) -> None:
+        """Follow another ``TailLines`` of the same limit by its ``take_added``."""
+        if restart or cut:
+            self._lines.clear()
+            self._used = 0
+            self.cut = 0
+        if cut:
+            self._lines.append(added[0])
+            self._used = len(added[0]) + 1
+            self.cut = cut
+        else:
+            self._lines.extend(added)
+            self._used += sum(len(line) + 1 for line in added)
+            self._trim()
+        self._added = 0
+        self._restart = False
+
+    def _trim(self) -> None:
+        while self._used - 1 > self._limit:
+            if len(self._lines) == self._added:
+                # A line added since take_added goes: a follower cannot drop it.
+                self._added -= 1
+                self._restart = True
+            self._used -= len(self._lines.popleft()) + 1
+            self.cut = 0
+
+
+class OutputLines:
+    """A command's output lines, bounded: the first ones, the newest ones, the count.
+
+    The head keeps the first whole lines while they fit in *head_chars*
+    characters, lines joined by line breaks; a first line longer than that
+    keeps its start instead. The tail keeps the newest whole lines after the
+    head within *tail_chars* (``TailLines``). The line still being written
+    keeps its start and its end.
+
+    The cleaner's lines report each change (``take_update``); the lines on the
+    Event Loop follow them (``apply``), and go on by themselves when cleaning
+    fails.
+    """
+
+    def __init__(self, *, head_chars: int, tail_chars: int) -> None:
+        self._head_chars = head_chars
+        self._tail_chars = tail_chars
+        self._head: list[str] = []
+        # The head's characters plus one line break each.
+        self._head_used = 0
+        self._head_closed = False
+        self._first: tuple[str, int] | None = None
+        self._tail = TailLines(tail_chars)
+        self._total = 0
+        # The line still being written: its text in _parts, or for a long line
+        # its end there and its start in _start.
+        self._parts: list[str] = []
+        self._parts_chars = 0
+        self._chars = 0
+        self._start: str | None = None
+        # Changes since the last ``take_update``.
+        self._head_added: list[str] = []
+        self._first_added = False
+
+    # The line still being written
+
+    def append(self, text: str) -> None:
+        """Add *text* to the current line."""
+        self._parts.append(text)
+        self._parts_chars += len(text)
+        self._chars += len(text)
+        if self._parts_chars > 2 * self._tail_chars:
+            self._shorten()
+
+    def erase(self) -> None:
+        """Erase the last character of the current line."""
+        if not self._chars:
+            return
+        while self._parts and not self._parts[-1]:
+            self._parts.pop()
+        if self._parts:
+            self._parts[-1] = self._parts[-1][:-1]
+            self._parts_chars -= 1
+        self._chars -= 1
+
+    def clear_line(self) -> None:
+        """Empty the current line."""
+        self._parts.clear()
+        self._parts_chars = 0
+        self._chars = 0
+        self._start = None
+
+    def complete(self) -> None:
+        """Complete the current line, also an empty one."""
+        text = "".join(self._parts)
+        chars = self._chars
+        start = self._start
+        self.clear_line()
+        self._add(text, chars, start)
+
+    def end(self) -> None:
+        """The output ended: complete the current line unless it is empty."""
+        if self._chars:
+            self.complete()
+
+    def add_text(self, text: str) -> None:
+        """Add text whose only control is the line feed."""
+        lines = text.split("\n")
+        if lines[0]:
+            self.append(lines[0])
+        if len(lines) == 1:
+            return
+        self.complete()
+        if len(lines) > 2:
+            self._add_lines(lines[1:-1])
+        if lines[-1]:
+            self.append(lines[-1])
+
+    def _shorten(self) -> None:
+        """Keep only the start and the end of a long current line."""
+        text = "".join(self._parts)
+        if self._start is None:
+            self._start = text[: self._head_chars]
+        end = text[-self._tail_chars :]
+        self._parts = [end]
+        self._parts_chars = len(end)
+
+    def _current(self) -> tuple[str, str, int] | None:
+        """The current line as ``OutputUpdate.current_line``."""
+        if not self._chars:
+            return None
+        if len(self._parts) > 1:
+            self._parts[:] = ["".join(self._parts)]
+        text = self._parts[0] if self._parts else ""
+        end = text[-self._tail_chars :]
+        if self._chars == len(end):
+            return end, "", self._chars
+        start = self._start if self._start is not None else text[: self._head_chars]
+        return end, start, self._chars
+
+    # Completed lines
+
+    def _add(self, text: str, chars: int, start: str | None) -> None:
+        """Add a completed line: its text, or for a long line its end and start."""
+        self._total += 1
+        if not self._head_closed:
+            if self._head_used + chars <= self._head_chars:
+                self._head.append(text)
+                self._head_used += chars + 1
+                self._head_added.append(text)
+                return
+            self._head_closed = True
+            if not self._head:
+                self._first = (text[: self._head_chars] if start is None else start, chars)
+                self._first_added = True
+        self._tail.add(text, chars)
+
+    def _add_lines(self, lines: list[str]) -> None:
+        """Add whole completed lines at once."""
+        index = 0
+        while index < len(lines) and not self._head_closed:
+            line = lines[index]
+            self._add(line, len(line), None)
+            index += 1
+        if index < len(lines):
+            self._total += len(lines) - index
+            self._tail.extend(lines[index:] if index else lines)
+
+    # Following
+
+    def take_update(self) -> OutputUpdate:
+        """The changes since the last call."""
+        tail_added, tail_cut, tail_restart = self._tail.take_added()
+        update = OutputUpdate(
+            tuple(self._head_added),
+            self._head_closed,
+            self._first if self._first_added else None,
+            tail_added,
+            tail_cut,
+            tail_restart,
+            self._total,
+            self._current(),
+        )
+        self._head_added.clear()
+        self._first_added = False
+        return update
+
+    def apply(self, update: OutputUpdate) -> None:
+        """Follow the lines that returned *update*."""
+        for line in update.head_added:
+            self._head.append(line)
+            self._head_used += len(line) + 1
+        self._head_closed = update.head_closed
+        if update.first_line is not None:
+            self._first = update.first_line
+        self._tail.apply(update.tail_added, update.tail_cut, update.tail_restart)
+        self._total = update.total_lines
+        self.clear_line()
+        if update.current_line is not None:
+            end, start, chars = update.current_line
+            self._parts = [end]
+            self._parts_chars = len(end)
+            self._chars = chars
+            self._start = start if chars > len(end) else None
+
+    # Reading
+
+    def snapshot(self) -> tuple[tuple[str, ...], int, tuple[str, ...], int, int]:
+        """``head``, ``head_cut``, ``tail``, ``tail_cut`` and ``total_lines`` of
+        ``CommandTranscript``; the current line is the last line."""
+        head = self._head
+        first = self._first
+        tail = self._tail
+        total = self._total
+        current = self._current()
+        if current is not None:
+            end, start, chars = current
+            total += 1
+            if not self._head_closed and self._head_used + chars <= self._head_chars:
+                head = [*head, end]
+            else:
+                if not self._head_closed and not head:
+                    first = (start or end[: self._head_chars], chars)
+                tail = tail.copy()
+                tail.add(end, chars)
+        if not head and first is not None:
+            start, chars = first
+            return (start,), chars - len(start), tail.lines, tail.cut, total
+        return tuple(head), 0, tail.lines, tail.cut, total
+
+    def latest(self, count: int) -> str:
+        """The newest *count* lines as text, the current line included."""
+        if count <= 0:
+            return ""
+        lines = self._tail.newest(count)
+        current = self._current()
+        if current is not None:
+            lines.append(current[0])
+        missing = count - len(lines)
+        if missing > 0 and self._total == len(self._head) + len(self._tail) and not self._tail.cut:
+            lines = self._head[-missing:] + lines
+        return "\n".join(lines[-count:])
 
 
 class OutputCleaner:
-    """Cleans one command's output into lines; writes every line to the log file.
+    """Cleans one command's output into ``OutputLines``.
 
-    *log_fd* is an open, writable file descriptor the cleaner owns from now on,
-    or None. The transcript keeps the first *head_lines* lines and reports the
-    newest *kept_lines* others, each cut to *line_max_chars* characters. Writes
-    to the log file are buffered and reach the file at ``flush_log``; a failing
-    write closes the file, and the transcript goes on without it.
+    Each call returns how the lines changed (``OutputUpdate``).
     """
 
-    def __init__(
-        self, log_fd: int | None, *, head_lines: int, kept_lines: int, line_max_chars: int
-    ) -> None:
+    def __init__(self, *, head_chars: int, tail_chars: int) -> None:
         self._filter = _EscapeFilter()
-        self._head_lines = head_lines
-        self._kept_lines = kept_lines
-        self._line_max_chars = line_max_chars
-        self._head_count = 0
-        self._total_lines = 0
-        # Lines completed since the last update.
-        self._head_added: list[str] = []
-        self._recent_added: deque[str] = deque(maxlen=kept_lines)
-        # The current line: text not yet in the file, and, once part of a long
-        # line went to the file, that part's length and the line's beginning.
-        self._partial: list[str] = []
-        self._partial_chars = 0
-        self._spilled_chars = 0
-        self._spilled_prefix = ""
+        self._lines = OutputLines(head_chars=head_chars, tail_chars=tail_chars)
         # A lone CR was seen: the next text replaces the current line.
         self._restart = False
-        self._file: BinaryIO | None = None if log_fd is None else open(log_fd, "wb")  # noqa: SIM115
-        # Bytes of final content: completed lines and the spilled part of the
-        # current line. The current line begins at ``_line_start``; ``_shown``
-        # bytes after the final content show its unwritten rest.
-        self._final_bytes = 0
-        self._line_start = 0
-        self._shown = 0
-        self._log_dirty = False
         self._ended = False
 
-    # Feeding
-
     def feed(self, data: bytes) -> OutputUpdate:
-        """Add output bytes; complete lines enter the transcript and the log file."""
+        """Add output bytes."""
         if data and not self._ended:
             self._apply(self._filter.decode(data))
-        return self._update()
+        return self._lines.take_update()
 
     def end(self) -> OutputUpdate:
         """The output ended: decode what is left and complete the current line."""
         if not self._ended:
             self._ended = True
             self._apply(self._filter.decode(b"", final=True))
-            if self._partial_chars or self._spilled_chars:
-                self._complete_line()
-        return self._update()
-
-    def _update(self) -> OutputUpdate:
-        update = OutputUpdate(
-            tuple(self._head_added),
-            tuple(self._recent_added),
-            self._total_lines,
-            self._current_line(),
-            self._log_dirty and self._file is not None,
-        )
-        self._head_added.clear()
-        self._recent_added.clear()
-        return update
+            self._lines.end()
+        return self._lines.take_update()
 
     def _apply(self, text: str) -> None:
+        if not text:
+            return
         if "\r\n" in text:
             # A line ends the same either way: the CR only restarts the line.
             text = text.replace("\r\n", "\n")
         if _LINE_CONTROL_BUT_LF.search(text) is None:
-            self._apply_lines(text)
+            if self._restart:
+                self._restart = False
+                # A line break keeps the line's text; other text replaces it.
+                if not text.startswith("\n"):
+                    self._lines.clear_line()
+            self._lines.add_text(text)
             return
         position = 0
         for match in _LINE_CONTROL.finditer(text):
@@ -146,167 +450,22 @@ class OutputCleaner:
                 self._append(text[position : match.start()])
             control = match.group()
             if control == "\n":
-                self._complete_line()
+                self._restart = False
+                self._lines.complete()
             elif control == "\r":
                 self._restart = True
-            elif control == "\b":
-                self._erase()
+            elif control == "\b" and not self._restart:
+                # After a lone CR the cursor is at the line's start: nothing to erase.
+                self._lines.erase()
             position = match.end()
         if position < len(text):
             self._append(text[position:])
 
-    def _apply_lines(self, text: str) -> None:
-        """Apply text whose only control is the line feed, the lines at once."""
-        lines = text.split("\n")
-        if lines[0]:
-            self._append(lines[0])
-        if len(lines) == 1:
-            return
-        self._complete_line()
-        complete = lines[1:-1]
-        if complete:
-            self._write_final("\n".join(complete) + "\n")
-            self._line_start = self._final_bytes
-            self._remember_lines(complete)
-        if lines[-1]:
-            self._append(lines[-1])
-
     def _append(self, text: str) -> None:
         if self._restart:
             self._restart = False
-            self._clear_line()
-        self._partial.append(text)
-        self._partial_chars += len(text)
-        self._log_dirty = True
-        if self._partial_chars > self._line_max_chars:
-            self._spill()
-
-    def _erase(self) -> None:
-        # After a lone CR the cursor is at the line's start: nothing to erase.
-        # Text already written to the file stays.
-        if self._restart or not self._partial_chars:
-            return
-        while self._partial and not self._partial[-1]:
-            self._partial.pop()
-        self._partial[-1] = self._partial[-1][:-1]
-        self._partial_chars -= 1
-        self._log_dirty = True
-
-    def _clear_line(self) -> None:
-        self._partial.clear()
-        self._partial_chars = 0
-        if self._spilled_chars:
-            self._spilled_chars = 0
-            self._spilled_prefix = ""
-            self._truncate_log(self._line_start)
-        self._log_dirty = True
-
-    def _spill(self) -> None:
-        """Write the long current line's text so far to the file; keep its beginning."""
-        text = "".join(self._partial)
-        if not self._spilled_chars:
-            self._spilled_prefix = text[: self._line_max_chars]
-        self._spilled_chars += len(text)
-        self._partial.clear()
-        self._partial_chars = 0
-        self._write_final(text)
-
-    def _complete_line(self) -> None:
-        text = "".join(self._partial)
-        line = self._spilled_prefix if self._spilled_chars else text
-        self._write_final(text + "\n")
-        self._partial.clear()
-        self._partial_chars = 0
-        self._spilled_chars = 0
-        self._spilled_prefix = ""
-        self._restart = False
-        self._line_start = self._final_bytes
-        self._remember(line[: self._line_max_chars])
-
-    def _remember(self, line: str) -> None:
-        if self._head_count < self._head_lines:
-            self._head_added.append(line)
-            self._head_count += 1
-        else:
-            self._recent_added.append(line)
-        self._total_lines += 1
-
-    def _remember_lines(self, lines: list[str]) -> None:
-        """``_remember`` for many lines; only those the transcript can keep are cut."""
-        count = len(lines)
-        room = self._head_lines - self._head_count
-        if room > 0:
-            head = [line[: self._line_max_chars] for line in lines[:room]]
-            self._head_added.extend(head)
-            self._head_count += len(head)
-            lines = lines[room:]
-        if lines:
-            self._recent_added.extend(
-                line[: self._line_max_chars] for line in lines[-self._kept_lines :]
-            )
-        self._total_lines += count
-
-    def _current_line(self) -> str | None:
-        if self._spilled_chars:
-            return self._spilled_prefix
-        if not self._partial_chars:
-            return None
-        text = "".join(self._partial)
-        self._partial[:] = [text]
-        return text[: self._line_max_chars]
-
-    # Log file
-
-    def flush_log(self) -> None:
-        """Flush the log file and show the current line at its end."""
-        if self._file is None or not self._log_dirty:
-            return
-        self._log_dirty = False
-        data = "".join(self._partial).encode("utf-8", "replace")
-        try:
-            if data or self._shown:
-                self._file.seek(self._final_bytes)
-                self._file.write(data)
-                self._file.truncate()
-                self._shown = len(data)
-            self._file.flush()
-        except OSError:
-            self._close_file()
-
-    def close_log(self) -> None:
-        """Flush and close the log file."""
-        self.flush_log()
-        self._close_file()
-
-    def _write_final(self, text: str) -> None:
-        data = text.encode("utf-8", "replace")
-        self._log_dirty = True
-        if self._file is not None:
-            try:
-                if self._shown:
-                    self._file.seek(self._final_bytes)
-                    self._file.truncate()
-                    self._shown = 0
-                self._file.write(data)
-            except OSError:
-                self._close_file()
-        self._final_bytes += len(data)
-
-    def _truncate_log(self, offset: int) -> None:
-        self._final_bytes = offset
-        if self._file is not None:
-            try:
-                self._file.seek(offset)
-                self._file.truncate()
-                self._shown = 0
-            except OSError:
-                self._close_file()
-
-    def _close_file(self) -> None:
-        if self._file is not None:
-            with contextlib.suppress(OSError):
-                self._file.close()
-            self._file = None
+            self._lines.clear_line()
+        self._lines.append(text)
 
 
 class _EscapeFilter:
@@ -397,4 +556,4 @@ class _EscapeFilter:
         self._length = 0
 
 
-__all__ = ["OutputCleaner", "OutputUpdate"]
+__all__ = ["OutputCleaner", "OutputLines", "OutputUpdate", "TailLines"]

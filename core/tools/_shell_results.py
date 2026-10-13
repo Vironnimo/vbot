@@ -21,7 +21,13 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from core.tools._background_tasks_arguments import BACKGROUND_TASKS_TOOL_NAME
-from core.tools.command_manager import CommandReport, StopReason
+from core.tools.command_manager import (
+    COMMAND_HEAD_CHARS,
+    COMMAND_TAIL_CHARS,
+    CommandReport,
+    CommandTranscript,
+    StopReason,
+)
 from core.tools.model_names import BASH_TOOL_NAME
 from core.tools.process_tree import RunningProcess
 from core.tools.shell_hints import HINT_TOOL_NAMES, annotate_failure
@@ -37,13 +43,11 @@ ToolNames = Callable[[str], bool]
 _CALLABLE_TOOLS = frozenset({BACKGROUND_TASKS_TOOL_NAME, TERMINAL_TOOL_NAME})
 _WINDOWS = sys.platform == "win32"
 
-# The output text of one result: head and tail around an omitted middle.
-SHELL_OUTPUT_HEAD_CHARS = 4_000
-SHELL_OUTPUT_TAIL_CHARS = 8_000
-SHELL_OUTPUT_LINE_CHARS = 2_000
-# Output over the budget by at most this much is shown whole: a marker for a few
-# lines saves less than the read of the log file it invites.
-SHELL_OUTPUT_OMIT_MIN_CHARS = 1_000
+# An ended command's output is shown whole up to SHELL_OUTPUT_CHARS characters.
+# Longer output shows its first lines within SHELL_OUTPUT_HEAD_CHARS and its last
+# lines within the rest, around a marker; the transcript keeps what this needs.
+SHELL_OUTPUT_CHARS = COMMAND_TAIL_CHARS
+SHELL_OUTPUT_HEAD_CHARS = COMMAND_HEAD_CHARS
 # A running command's result shows only its newest output; its log file has all of it.
 SHELL_RUNNING_OUTPUT_LINES = 20
 SHELL_RUNNING_OUTPUT_CHARS = 4_000
@@ -109,15 +113,22 @@ def duration(seconds: float) -> str:
     return " ".join(parts)
 
 
-def log_sentence(report: CommandReport) -> str:
-    """Where a running command's complete output is, as a sentence after a space."""
-    if report.log_path is None:
-        return ""
-    # A running result shows only the newest output; Agents did not know what a
-    # bare log_file field held.
-    if report.transcript.processing_failed:
-        return f" The output vBot processed is in {model_path(report.log_path)}."
-    return f" The command's complete output is written live to {model_path(report.log_path)}."
+def running_output_note(report: CommandReport) -> str:
+    """Where a running command's complete output is, and when output piped into a
+    stage that holds it appears, as sentences after a space."""
+    note = ""
+    if report.log_path is not None:
+        # A running result shows only the newest output; Agents did not know what a
+        # bare log_file field held.
+        path = model_path(report.log_path)
+        note = f" The command's complete raw output is written live to {path}."
+    stage = _holding_stage(report.command)
+    if stage is not None:
+        note += (
+            f" Output piped into {stage} appears only once the command before the pipe has "
+            "finished."
+        )
+    return note
 
 
 def output_location(report: CommandReport, output: str) -> str | None:
@@ -269,11 +280,18 @@ def failed_programs(report: CommandReport) -> tuple[str, ...]:
 def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | None:
     """A hint for a command that failed or did not run as written.
 
-    A stop by vBot explains itself and gets none. The line count is the
-    command's own, since a long *output* keeps only its first and last lines.
+    A stop by vBot explains itself; its hint only says why output piped into
+    a stage that holds it is missing. The line count is the command's own,
+    since a long *output* keeps only its first and last lines.
     """
     if report.stop_reason is not None:
-        return None
+        stage = _holding_stage(report.command)
+        if stage is None:
+            return None
+        return (
+            f"Output piped into {stage} appears only once the command before the pipe has "
+            "finished; to see output as it arrives, run the command without that pipe."
+        )
     return annotate_failure(
         report.command,
         report.exit_code,
@@ -289,97 +307,95 @@ def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | 
 
 
 def command_output_text(report: CommandReport) -> str:
-    """The output for a result: head and tail within the character budget.
+    """The output for a result: whole up to ``SHELL_OUTPUT_CHARS`` characters.
 
-    A marker names the file with the complete output where anything is left out.
+    Longer output keeps its first lines within ``SHELL_OUTPUT_HEAD_CHARS`` and
+    its last lines within the rest, with one marker line between them that says
+    what was left out and names the file with all of it. A line longer than its
+    part's room is cut inside it: the head keeps its start, the tail its end.
     """
     transcript = report.transcript
-    where = _full_output(report)
-    head = [_shortened(line, where) for line in transcript.head]
-    tail = [_shortened(line, where) for line in transcript.tail]
-    omitted = transcript.omitted_lines
-    if not omitted:
-        # One run of lines: where the transcript's head ends means nothing here.
-        head, tail = [], head + tail
-    head, tail, dropped = _head_and_tail(head, tail)
-    omitted += dropped
-    lines = list(head)
-    if omitted:
-        noun = "line" if omitted == 1 else "lines"
-        lines.append(f"[... {omitted:,} {noun} omitted{where} ...]")
-    lines.extend(tail)
-    unprocessed = _unprocessed(report)
-    if unprocessed is not None:
-        lines.append(unprocessed)
-    stage = _holding_stage(report.command) if report.stop_reason is not None else None
-    if stage is not None:
-        lines.append(
-            f"[Output piped into {stage} appears only once the command before the pipe has "
-            "finished; to see output as it arrives, run the command without that pipe.]"
-        )
-    return "\n".join(lines)
+    whole = _whole_lines(transcript)
+    if whole is not None and _text_chars(whole) <= SHELL_OUTPUT_CHARS:
+        return "\n".join(whole)
+    head = list(transcript.head)
+    # The marker stands between head and tail, so no line break counts there.
+    room = SHELL_OUTPUT_CHARS - _text_chars(head)
+    tail, tail_cut = _last_lines(transcript.tail, transcript.tail_cut, room)
+    if transcript.head_cut and transcript.total_lines == 1:
+        # One line: the head has its start, the tail its end.
+        omitted, cut = 0, tail_cut - len(head[0])
+    else:
+        omitted = transcript.total_lines - len(head) - len(tail)
+        cut = transcript.head_cut + tail_cut
+    marker = f"[... {_omission(omitted, cut)} omitted{_full_output(report)} ...]"
+    return "\n".join([*head, marker, *tail])
 
 
 def running_output_text(report: CommandReport) -> str:
-    """The newest output of a running command: whole lines within the running limits."""
+    """The newest output of a running command: its last lines within the running
+    limits, after a marker for what came before."""
     transcript = report.transcript
-    lines = [*transcript.head, *transcript.tail]
-    where = _full_output(report)
-    newest = [_shortened(line, where) for line in lines[-SHELL_RUNNING_OUTPUT_LINES:]]
-    kept, _ = _within(newest, SHELL_RUNNING_OUTPUT_CHARS, keep="end")
-    omitted = transcript.total_lines - len(kept)
-    if omitted:
-        noun = "line" if omitted == 1 else "lines"
-        kept.insert(0, f"[... {omitted:,} earlier {noun} omitted{where} ...]")
-    unprocessed = _unprocessed(report)
-    if unprocessed is not None:
-        kept.append(unprocessed)
-    stage = _holding_stage(report.command)
-    if stage is not None:
-        log = " and in the log file" if report.log_path is not None else ""
-        kept.append(
-            f"[Output piped into {stage} appears here{log} only once the command before the "
-            "pipe has finished.]"
-        )
+    whole = _whole_lines(transcript)
+    lines = whole if whole is not None else list(transcript.tail)
+    first_cut = 0 if whole is not None else transcript.tail_cut
+    if len(lines) > SHELL_RUNNING_OUTPUT_LINES:
+        lines, first_cut = lines[-SHELL_RUNNING_OUTPUT_LINES:], 0
+    kept, cut = _last_lines(lines, first_cut, SHELL_RUNNING_OUTPUT_CHARS)
+    earlier = transcript.total_lines - len(kept)
+    if earlier or cut:
+        omission = _omission(earlier, cut, earlier=True)
+        kept.insert(0, f"[... {omission} omitted{_full_output(report)} ...]")
     return "\n".join(kept)
 
 
-def _unprocessed(report: CommandReport) -> str | None:
-    """The marker after the last line when vBot could not process the rest."""
-    if not report.transcript.processing_failed:
+def _whole_lines(transcript: CommandTranscript) -> list[str] | None:
+    """Every line of the output, when the transcript holds all of them whole."""
+    if transcript.tail_cut:
         return None
-    log = " and from the log file" if report.log_path is not None else ""
-    return (
-        f"[vBot could not process the output after this point; it is missing here{log}. "
-        "If you need it, run the command again with its output redirected to a file.]"
-    )
+    # A head cut short holds the start of a line the tail can hold whole.
+    lines = [*transcript.tail] if transcript.head_cut else [*transcript.head, *transcript.tail]
+    return lines if len(lines) == transcript.total_lines else None
 
 
-def _head_and_tail(head: list[str], tail: list[str]) -> tuple[list[str], list[str], int]:
-    """*head* and *tail* within the output budget, and the number of lines left out.
+def _last_lines(lines: Sequence[str], first_cut: int, room: int) -> tuple[list[str], int]:
+    """The last whole *lines* within *room* characters, and the characters cut.
 
-    *head* lines are kept from the start, *tail* lines from the end; with an
-    empty *head*, both ends of *tail* are kept. Each end gets at least its own
-    budget and the room the other end does not need. Output is left out only
-    where that saves more than ``SHELL_OUTPUT_OMIT_MIN_CHARS``.
+    When the last line alone is longer, its end. The first of *lines* is
+    *first_cut* characters short already.
     """
-    budget = SHELL_OUTPUT_HEAD_CHARS + SHELL_OUTPUT_TAIL_CHARS
-    if _chars(head) + _chars(tail) <= budget + SHELL_OUTPUT_OMIT_MIN_CHARS:
-        return head, tail, 0
-    if not head:
-        kept_head, _ = _within(tail, SHELL_OUTPUT_HEAD_CHARS, keep="start")
-        rest = tail[len(kept_head) :]
-        kept_tail, _ = _within(rest, budget - _chars(kept_head), keep="end")
-        return kept_head, kept_tail, len(rest) - len(kept_tail)
-    head_budget = max(SHELL_OUTPUT_HEAD_CHARS, budget - _chars(tail))
-    kept_head, dropped_head = _within(head, head_budget, keep="start")
-    kept_tail, dropped_tail = _within(tail, budget - _chars(kept_head), keep="end")
-    return kept_head, kept_tail, dropped_head + dropped_tail
+    if not lines:
+        return [], 0
+    start = len(lines)
+    used = -1
+    while start > 0 and not (start == 1 and first_cut):
+        used += len(lines[start - 1]) + 1
+        if used > room:
+            break
+        start -= 1
+    if start < len(lines):
+        return list(lines[start:]), 0
+    last = lines[-1]
+    end = last[len(last) - room :] if len(last) > room else last
+    full = len(last) + (first_cut if len(lines) == 1 else 0)
+    return [end], full - len(end)
 
 
-def _chars(lines: list[str]) -> int:
-    """The characters *lines* take in the output, line breaks included."""
-    return sum(len(line) + 1 for line in lines)
+def _text_chars(lines: Sequence[str]) -> int:
+    """The characters *lines* take as text, joined by line breaks."""
+    return sum(len(line) for line in lines) + max(0, len(lines) - 1)
+
+
+def _omission(lines: int, chars: int, *, earlier: bool = False) -> str:
+    """What a marker stands for: ``3 lines``, ``3 lines and 2,000 characters``."""
+    parts = []
+    if lines:
+        parts.append(f"{lines:,} {'line' if lines == 1 else 'lines'}")
+    if chars:
+        parts.append(f"{chars:,} {'character' if chars == 1 else 'characters'}")
+    if earlier:
+        parts[0] = parts[0].replace(" ", " earlier ", 1)
+    return " and ".join(parts)
 
 
 def _holding_stage(command: str) -> str | None:
@@ -408,39 +424,12 @@ def _kept_output(report: CommandReport) -> str | None:
 
     Agents whose task forbade reading outside their working directory took the
     file for someone else's and ran the whole command again instead of reading
-    it. The file holds everything, or what came before a cleaning failure.
+    it. The file holds every byte the command wrote, escape sequences included.
     """
     path = report.log_path
     if path is None:
         return None
-    content = (
-        "the output it processed"
-        if report.transcript.processing_failed
-        else "this command's complete output"
-    )
-    return f"vBot kept {content} in {model_path(path)} for you to read"
-
-
-def _shortened(line: str, where: str) -> str:
-    """*line* cut to the line budget; *where* names the complete output."""
-    if len(line) <= SHELL_OUTPUT_LINE_CHARS:
-        return line
-    rest = len(line) - SHELL_OUTPUT_LINE_CHARS
-    return f"{line[:SHELL_OUTPUT_LINE_CHARS]}[... {rest:,} more characters{where}]"
-
-
-def _within(lines: list[str], budget: int, *, keep: str) -> tuple[list[str], int]:
-    """Keep whole lines from one end while they fit *budget* characters."""
-    ordered = lines if keep == "start" else list(reversed(lines))
-    kept: list[str] = []
-    used = 0
-    for line in ordered:
-        if used + len(line) + 1 > budget and kept:
-            break
-        kept.append(line)
-        used += len(line) + 1
-    dropped = len(lines) - len(kept)
-    return (kept if keep == "start" else list(reversed(kept))), dropped
+    return f"vBot kept this command's complete raw output in {model_path(path)} for you to read"
 
 
 # Delivery
@@ -567,11 +556,11 @@ __all__ = [
     "format_command_delivery",
     "stop_call",
     "leftovers_stop",
-    "log_sentence",
     "named_tools",
     "output_location",
     "process_text",
     "processes_text",
+    "running_output_note",
     "running_output_text",
     "stop_with",
     "stopped_because",

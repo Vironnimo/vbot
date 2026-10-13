@@ -1,39 +1,43 @@
-"""A command's output on the Event Loop: its transcript, newest lines and log file.
+"""A command's output on the Event Loop: its log file, transcript and newest lines.
+
+Every byte the command writes is appended to its log file unchanged, as it
+arrives (``CommandLog``). Writes run through the blocking runner, off the Event
+Loop, one at a time in the order of the output.
 
 Cleaning the output costs CPU time in proportion to what the command prints
 (``_command_cleaning``). Each command's ``OutputCleaner`` therefore runs on a
 worker of the manager's output host, a subinterpreter with its own GIL
-(``_interpreter_host``), which also writes the log file. ``CommandOutput``
-hands the cleaner one chunk at a time and keeps what each call returns: the
-first lines, the newest ones, the line count and the line still being written.
-The transcript and the newest lines are read from that state, without waiting
-for the worker.
+(``_interpreter_host``). ``CommandOutput`` hands the cleaner one chunk at a
+time and follows its bounded lines (``OutputLines``): the first lines, the
+newest ones, the line count and the line still being written. The transcript
+and the newest lines are read from them, without waiting for the worker. When
+cleaning fails, the lines go on with the output decoded but not cleaned.
 
 Commands share their host's workers; the reader of a command reads the next
-chunk only once the previous one is cleaned, so a command that prints heavily
-has one chunk at a time in its worker's queue and delays another command by at
-most that chunk. Terminal screens render on their own host's workers.
+chunk only once the previous one is written and cleaned, so a command that
+prints heavily has one chunk at a time in its worker's queue and delays another
+command by at most that chunk. Terminal screens render on their own host's
+workers.
 """
 
 from __future__ import annotations
 
+import asyncio
+import codecs
 import contextlib
-from collections import deque
+import os
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from . import _command_cleaning
-from ._command_cleaning import OutputCleaner, OutputUpdate
+from ._command_cleaning import OutputCleaner, OutputLines
 from ._command_types import (
-    COMMAND_HEAD_LINES,
-    COMMAND_MEMORY_LINE_MAX_CHARS,
+    COMMAND_HEAD_CHARS,
     COMMAND_RECENT_LINES,
-    COMMAND_TAIL_LINES,
-    COMMAND_TAIL_SPARE_LINES,
+    COMMAND_TAIL_CHARS,
     CommandTranscript,
 )
 from ._interpreter_host import DEFAULT_WORKERS, HostedObject, InterpreterHost
-
-# Lines after the head; enough for the transcript tail and the newest lines.
-_KEPT_LINES = max(COMMAND_RECENT_LINES, COMMAND_TAIL_LINES + COMMAND_TAIL_SPARE_LINES)
 
 
 def command_output_host(*, workers: int = DEFAULT_WORKERS) -> InterpreterHost:
@@ -41,139 +45,196 @@ def command_output_host(*, workers: int = DEFAULT_WORKERS) -> InterpreterHost:
     return InterpreterHost((_command_cleaning,), name="command output", workers=workers)
 
 
-class CommandOutput:
-    """The clean output of one command: transcript, newest lines and log file.
+class CommandLog:
+    """A command's log file: every output byte, appended unchanged as it arrives.
 
-    Used from the Event Loop. ``feed``, ``end`` and ``flush_log`` apply in the
-    order they are called. Once cleaning fails, later output is discarded and
-    the transcript says so.
+    Owns the file descriptor *fd*; writes run through *run_blocking*, off the
+    Event Loop. A failing write closes the file (``error``), and the output
+    goes on without it.
     """
 
-    def __init__(self, cleaner: HostedObject) -> None:
+    def __init__(self, fd: int, run_blocking: Callable[..., Awaitable[Any]]) -> None:
+        self._fd: int | None = fd
+        self._run_blocking = run_blocking
+        self._writing: asyncio.Task[None] | None = None
+        self._closing = False
+        self.error: BaseException | None = None
+
+    async def write(self, data: bytes) -> None:
+        """Append *data*; returns once it is written or writing failed."""
+        fd = self._fd
+        if fd is None or self._closing:
+            return
+        writing = asyncio.create_task(self._write(fd, data))
+        self._writing = writing
+        writing.add_done_callback(self._written)
+        # A cancelled caller leaves the write running; the file closes after it.
+        with contextlib.suppress(Exception):
+            await asyncio.shield(writing)
+
+    def pending(self) -> list[asyncio.Task[None]]:
+        """The write in progress, if any."""
+        writing = self._writing
+        return [writing] if writing is not None and not writing.done() else []
+
+    def close(self) -> None:
+        """Close the file once the write in progress, if any, ended; does not wait."""
+        self._closing = True
+        if self._writing is None or self._writing.done():
+            self._close_file()
+
+    async def _write(self, fd: int, data: bytes) -> None:
+        await self._run_blocking(_write_all, fd, data)
+
+    def _written(self, writing: asyncio.Task[None]) -> None:
+        error = None if writing.cancelled() else writing.exception()
+        if error is not None and self.error is None:
+            self.error = error
+            self._close_file()
+        elif self._closing:
+            self._close_file()
+
+    def _close_file(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+class CommandOutput:
+    """One command's output: its log file, transcript and newest lines.
+
+    Used from the Event Loop. ``feed`` and ``end`` apply in the order they are
+    called. Once cleaning fails, the transcript goes on with the output
+    decoded but not cleaned.
+    """
+
+    def __init__(self, cleaner: HostedObject, log: CommandLog | None) -> None:
         self._cleaner = cleaner
-        self._head: list[str] = []
-        self._recent: deque[str] = deque(maxlen=_KEPT_LINES)
-        self._total_lines = 0
-        self._current: str | None = None
-        self._log_pending = False
+        self._log = log
+        self._lines = OutputLines(head_chars=COMMAND_HEAD_CHARS, tail_chars=COMMAND_TAIL_CHARS)
+        self._uncleaned: _Uncleaned | None = None
         self._ended = False
-        self._failed = False
         self._closed = False
 
     @classmethod
-    def open(cls, host: InterpreterHost, log_fd: int | None) -> CommandOutput:
-        """Clean a command's output on *host*, writing every line to *log_fd*.
+    def open(
+        cls,
+        host: InterpreterHost,
+        log_fd: int | None,
+        run_blocking: Callable[..., Awaitable[Any]],
+    ) -> CommandOutput:
+        """Clean a command's output on *host*; append its bytes to *log_fd*.
 
-        The output owns the file descriptor from now on. Raises RuntimeError
-        when the host is closed; the descriptor stays the caller's then.
+        The output owns the file descriptor from now on and writes it through
+        *run_blocking*. Raises RuntimeError when the host is closed; the
+        descriptor stays the caller's then.
         """
-        return cls(
-            host.open(
-                OutputCleaner,
-                log_fd,
-                head_lines=COMMAND_HEAD_LINES,
-                kept_lines=_KEPT_LINES,
-                line_max_chars=COMMAND_MEMORY_LINE_MAX_CHARS,
-            )
+        cleaner = host.open(
+            OutputCleaner, head_chars=COMMAND_HEAD_CHARS, tail_chars=COMMAND_TAIL_CHARS
         )
+        return cls(cleaner, None if log_fd is None else CommandLog(log_fd, run_blocking))
 
     # Feeding
 
     async def feed(self, data: bytes) -> None:
-        """Clean output bytes; returns once their lines are in the transcript.
+        """Append output bytes to the log file, then clean them into the transcript.
 
-        Raises when cleaning fails; from then on the output is ``failed``.
+        Raises when cleaning fails; these bytes and all later ones enter the
+        transcript uncleaned.
         """
-        if not data or self._ended or self._failed:
+        if not data or self._ended:
+            return
+        if self._log is not None:
+            await self._log.write(data)
+        if self._uncleaned is not None:
+            self._uncleaned.feed(data)
             return
         try:
             update = await self._cleaner.call("feed", data)
         except Exception:
-            self._failed = True
+            self._uncleaned = _Uncleaned(self._lines)
+            self._uncleaned.feed(data)
             raise
-        self._apply(update)
+        self._lines.apply(update)
 
     async def end(self) -> None:
-        """The output ended: complete the line still being written."""
+        """The output ended: complete the line still being written.
+
+        Raises when cleaning fails; the line is completed as it was.
+        """
         if self._ended:
             return
         self._ended = True
-        if not self._failed:
-            self._apply(await self._cleaner.call("end"))
+        if self._uncleaned is None:
+            try:
+                update = await self._cleaner.call("end")
+            except Exception:
+                self._uncleaned = _Uncleaned(self._lines)
+                self._uncleaned.end()
+                raise
+            self._lines.apply(update)
+            return
+        self._uncleaned.end()
 
     @property
-    def failed(self) -> bool:
-        """Cleaning failed: later output is discarded, and the transcript and
-        the log file end where cleaning stopped."""
-        return self._failed
-
-    def _apply(self, update: OutputUpdate) -> None:
-        self._head.extend(update.head_added)
-        self._recent.extend(update.recent_added)
-        self._total_lines = update.total_lines
-        self._current = update.current_line
-        self._log_pending = update.log_pending
+    def log_error(self) -> BaseException | None:
+        """Why writing the log file failed; None while it works, and without one."""
+        return None if self._log is None else self._log.error
 
     # Reading
 
     def transcript(self) -> CommandTranscript:
-        """The head and tail of the output; the line still being written is the last."""
-        after = list(self._recent)
-        total = self._total_lines
-        if self._current is not None:
-            after.append(self._current)
-            total += 1
-        after_head = total - len(self._head)
-        # The tail keeps its spare lines only while no line is left out.
-        if after_head <= COMMAND_TAIL_LINES + COMMAND_TAIL_SPARE_LINES:
-            tail = after[len(after) - after_head :] if after_head else []
-        else:
-            tail = after[-COMMAND_TAIL_LINES:]
+        """The first and the last lines; the line still being written is the last."""
+        head, head_cut, tail, tail_cut, total = self._lines.snapshot()
         return CommandTranscript(
-            head=tuple(self._head),
-            tail=tuple(tail),
-            omitted_lines=total - len(self._head) - len(tail),
-            total_lines=total,
-            processing_failed=self._failed,
+            head=head, tail=tail, total_lines=total, head_cut=head_cut, tail_cut=tail_cut
         )
 
     def latest(self, lines: int) -> str:
         """The newest *lines* lines (at most ``COMMAND_RECENT_LINES``) as text."""
-        count = max(0, min(lines, COMMAND_RECENT_LINES))
-        if not count:
-            return ""
-        newest = list(self._recent)
-        if self._total_lines - len(self._head) <= len(newest):
-            newest = [*self._head, *newest]
-        if self._current is not None:
-            newest.append(self._current)
-        return "\n".join(newest[-count:])
+        return self._lines.latest(min(lines, COMMAND_RECENT_LINES))
 
-    # Log file
+    # Closing
 
-    @property
-    def log_pending(self) -> bool:
-        """Output reached the log file's buffer or changed its current line since
-        the last flush."""
-        return self._log_pending and not self._closed and not self._failed
-
-    async def flush_log(self) -> None:
-        """Flush the log file and show the current line at its end."""
-        if self._closed or self._failed:
-            return
-        self._log_pending = False
-        await self._cleaner.call("flush_log")
+    def pending_tasks(self) -> list[asyncio.Task[None]]:
+        """The log write in progress, if any."""
+        return [] if self._log is None else self._log.pending()
 
     def close(self) -> None:
-        """Flush and close the log file and release the cleaner, after the calls
-        made before; does not wait."""
+        """Release the cleaner, and close the log file once its write in
+        progress ended; does not wait."""
         if self._closed:
             return
         self._closed = True
-        # A stopped host closed the file with its interpreter.
-        with contextlib.suppress(RuntimeError):
-            self._cleaner.call_nowait("close_log")
         self._cleaner.close()
+        if self._log is not None:
+            self._log.close()
 
 
-__all__ = ["CommandOutput", "command_output_host"]
+class _Uncleaned:
+    """Output after cleaning failed: decoded and split into lines, not cleaned."""
+
+    def __init__(self, lines: OutputLines) -> None:
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._lines = lines
+
+    def feed(self, data: bytes) -> None:
+        self._add(self._decoder.decode(data))
+
+    def end(self) -> None:
+        self._add(self._decoder.decode(b"", final=True))
+        self._lines.end()
+
+    def _add(self, text: str) -> None:
+        if text:
+            self._lines.add_text(text.replace("\r\n", "\n"))
+
+
+__all__ = ["CommandLog", "CommandOutput", "command_output_host"]

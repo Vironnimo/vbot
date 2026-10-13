@@ -30,7 +30,6 @@ import pytest_asyncio
 from core.projects import ProjectNotFoundError
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import shell as shell_module
-from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools._command_launch import PipeLauncher
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import CommandManager
@@ -202,7 +201,7 @@ def stop_calls(text: str) -> list[JsonObject]:
     return [json.loads(call) for call in _STOP_CALL.findall(text)]
 
 
-_LOG_SENTENCE = re.compile(r"The command's complete output is written live to (\S+)\.(?=\s|$)")
+_LOG_SENTENCE = re.compile(r"The command's complete raw output is written live to (\S+)\.(?=\s|$)")
 
 
 def log_file(text: str) -> str:
@@ -379,73 +378,58 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
     assert all(thread != loop_thread for thread in prepared)
 
 
-@pytest.mark.asyncio
-async def test_long_output_keeps_head_and_tail_and_points_to_the_log_file(shell: Shell) -> None:
-    call = shell.call({"command": "test"})
-    process = await shell.started()
-    process.write("".join(f"line {number}\n" for number in range(500)))
-    process.exit(0)
-
-    result = data(await shell.returned(call))
-    lines = result["output"].splitlines()
-    assert (lines[0], lines[-1]) == ("line 0", "line 499")
-    # The marker counts the omitted lines and names the file with the complete output.
-    omitted = next(line for line in lines if line.startswith("[... "))
-    assert omitted.startswith("[... 380 lines omitted"), omitted
-    log = Path(named_log(omitted)).read_text(encoding="utf-8").splitlines()
-    assert len(log) == 500
+def _numbered(count: int) -> list[str]:
+    return [f"line {number:04d}" for number in range(count)]
 
 
-@pytest.mark.asyncio
-async def test_output_vbot_could_not_process_is_marked_as_missing(
-    shell: Shell, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    call = shell.call({"command": "test"})
-    process = await shell.started()
-    process.write("".join(f"line {number}\n" for number in range(200)))
-    await turns()
-
-    def broken(cleaner: OutputCleaner, data: bytes) -> OutputUpdate:
-        raise ValueError("cleaner bug")
-
-    monkeypatch.setattr(OutputCleaner, "feed", broken)
-    process.write("lost line\n")
-    await turns()
-    process.exit(0)
-
-    output = data(await shell.returned(call))["output"]
-    lines = output.splitlines()
-    # A marker follows the last processed line, and nothing calls the log complete.
-    assert lines[-2] == "line 199" and lines[-1].startswith("[") and "lost line" not in output
-    assert "complete output" not in output
-    omitted = next(line for line in lines if line.startswith("[... "))
-    assert Path(named_log(omitted)).read_text(encoding="utf-8").splitlines()[-1] == "line 199"
+def _letters(count: int) -> str:
+    return "".join(chr(ord("a") + number % 26) for number in range(count))
 
 
 @pytest.mark.parametrize(
-    ("total", "omitted"),
-    # 500-character lines: 24 are a little over the 12,000-character budget and stay
-    # whole; of 30, the first 7 and the last 16 fill the budget.
-    [(24, 0), (30, 7)],
+    ("lines", "head", "tail", "omission"),
+    [
+        # 29,999 characters stay whole.
+        (["x" * 99] * 300, 300, 0, None),
+        # Whole lines: the first within 2,000 characters, the last within the rest.
+        (_numbered(5_000), 200, 2_800, "2,000 lines"),
+        # A last line longer than the tail's room keeps its end.
+        (["start", "y" * 25_000 + "z" * 25_000], 1, 1, "20,005 characters"),
+        # A line longer than both parts keeps its start and its end.
+        ([_letters(100_000)], 1, 1, "70,000 characters"),
+        (["s" * 5_000, *_numbered(4_000)], 1, 2_800, "1,200 lines and 3,000 characters"),
+    ],
+    ids=["whole", "lines", "long-last-line", "one-line", "long-first-line"],
 )
 @pytest.mark.asyncio
-async def test_long_lines_keep_both_ends_of_the_output_within_its_budget(
-    shell: Shell, total: int, omitted: int
+async def test_long_output_keeps_its_first_and_last_characters_and_names_the_log_file(
+    shell: Shell, lines: list[str], head: int, tail: int, omission: str | None
 ) -> None:
-    lines = [f"{number:03d} " + "x" * 496 for number in range(total)]
+    text = "".join(f"{line}\n" for line in lines)
     call = shell.call({"command": "test"})
     process = await shell.started()
-    process.write("".join(f"{line}\n" for line in lines))
+    process.write(text)
     process.exit(0)
 
-    output = data(await shell.returned(call))["output"].splitlines()
-    if not omitted:
+    output = data(await shell.returned(call))["output"].split("\n")
+    if omission is None:
         assert output == lines
         return
-    # The output's end, where errors and summaries are, stays in view.
-    marker = output[7]
-    assert re.fullmatch(rf"\[\.\.\. {omitted} lines omitted; .*\]", marker), marker
-    assert output[:7] + output[8:] == lines[:7] + lines[-16:]
+    shown_head, marker, shown_tail = output[:head], output[head], output[head + 1 :]
+    # One marker says what was left out and names the file with all of it.
+    assert re.fullmatch(rf"\[\.\.\. {omission} omitted; .*\]", marker), marker
+    assert Path(named_log(marker)).read_bytes() == text.encode()
+    assert len("\n".join(shown_head)) + len("\n".join(shown_tail)) <= 30_000
+    assert len(shown_tail) == tail
+    if head == 1 and len(lines[0]) > 2_000:
+        assert shown_head == [lines[0][:2_000]]
+    else:
+        assert shown_head == lines[:head]
+    if len(shown_tail) == 1 and len(lines[-1]) > len(shown_tail[0]):
+        # The output's end, where errors and summaries are, stays in view.
+        assert lines[-1].endswith(shown_tail[0])
+    else:
+        assert shown_tail == lines[-tail:]
 
 
 # --- The wait and the background ---------------------------------------------
@@ -527,7 +511,7 @@ async def test_a_command_still_running_when_the_wait_passes_continues_and_delive
 
 @pytest.mark.parametrize(
     ("tools", "lines"),
-    [(COMPANIONS, 3), (("terminal",), 500)],
+    [(COMPANIONS, 3), (("terminal",), 5_000)],
     ids=["background_tasks-short-output", "without-background_tasks-long-output"],
 )
 @pytest.mark.asyncio
@@ -619,11 +603,14 @@ async def test_output_a_pipe_stage_holds_back_is_explained_while_running_and_aft
     await stopping
 
     assert (running["status"], stopped["status"]) == ("running", "stopped")
-    for result in (running, stopped):
-        # Only a stage that holds output back is named, after the output.
-        assert ("output" in result) is (stage is not None)
-        if stage is not None:
-            assert stage in result["output"].splitlines()[-1]
+    # The output is the command's alone; only a stage that holds output back is
+    # named, in what the Agent does next.
+    assert "output" not in running and "output" not in stopped
+    for text in (running["next"], stopped.get("hint", "")):
+        if stage is None:
+            assert "piped into" not in text
+        else:
+            assert f"Output piped into {stage} appears only once" in text, text
 
 
 @pytest.mark.parametrize("request_kind", ["stop", "background", "turn-cancelled"])
