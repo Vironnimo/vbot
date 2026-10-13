@@ -58,7 +58,7 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     assert parameters["type"] == "object"
     assert parameters["required"] == ["path"]
     assert "additionalProperties" not in parameters
-    assert set(parameters["properties"]) == {"path", "offset", "limit"}
+    assert set(parameters["properties"]) == {"path", "offset", "limit", "encoding"}
     assert parameters["properties"]["offset"]["type"] == "integer"
     assert "description" not in parameters["properties"]
 
@@ -385,6 +385,34 @@ _WSL_LIST = "Windows Subsystem für Linux-Distributionen:\r\nUbuntu (Standard)\r
         (b"ok\nUbuntu\n", "ok\nUbuntu\n", None, False),
         # Output that starts like an image still reads as the text it is.
         (b"\x89PNG\r\nUbuntu\r\n", "\ufffdPNG\r\nUbuntu\r\n", None, False),
+        *[
+            pytest.param(
+                ("\ufeff" + source).encode(encoding),
+                source,
+                "1" if "\n" not in source.rstrip("\n") else "1-2",
+                False,
+                id=f"{encoding}-{kind}",
+            )
+            for encoding in ("utf-16-le", "utf-16-be")
+            for kind, source in (
+                ("cjk", "你好\n"),
+                ("no-final-lf", "你好"),
+                ("later-cjk", "Ubuntu\n你好\n"),
+                ("lf-cr-bytes", "Ubuntu\n上不\u0a4e\u0d4e\n"),
+                ("surrogate", "Ubuntu\n😀\n"),
+                ("long-cjk", "Ubuntu\n" + "你好" * 300 + "\n"),
+            )
+        ],
+        # Real Linux child-process bytes: both byte orders between UTF-8 runs.
+        pytest.param(
+            bytes.fromhex(
+                "6865616420ceb10afffe2d4e87650a00666f6f7465720afeff03a94e2d000ac3a4e282acf09f98800a"
+            ),
+            "head α\n中文\nfooter\nΩ中\nä€😀\n",
+            "2 and 4",
+            False,
+            id="mixed-byte-orders",
+        ),
     ],
     ids=[
         "utf16le",
@@ -394,6 +422,7 @@ _WSL_LIST = "Windows Subsystem für Linux-Distributionen:\r\nUbuntu (Standard)\r
         "utf8_before_nul",
         "utf8",
         "starts_like_png",
+        *[None] * 13,
     ],
 )
 async def test_a_command_log_reads_as_the_text_its_programs_wrote(
@@ -414,15 +443,24 @@ async def test_a_command_log_reads_as_the_text_its_programs_wrote(
     # Small odd chunks split characters and line ends between reads.
     monkeypatch.setattr(read_text_module, "_DECODING_CHUNK_BYTES", 3)
     lines = text.splitlines()
-    ubuntu = next(number for number, line in enumerate(lines, 1) if line.startswith("Ubuntu"))
+    selected = next(
+        (number for number, line in enumerate(lines, 1) if line.startswith("Ubuntu")), 1
+    )
+    utf16_numbers: set[int] = set()
+    for match in re.finditer(r"(\d+)(?:-(\d+))?", utf16_lines or ""):
+        utf16_numbers.update(range(int(match[1]), int(match[2] or match[1]) + 1))
 
     whole = content(await read(workspace, {"path": str(log)}))
     last = content(await read(workspace, {"path": str(log), "offset": -1}))
-    found = content(await read(workspace, {"path": str(log), "pattern": "Ubuntu"}))
+    found = content(
+        await read(workspace, {"path": str(log), "pattern": re.escape(lines[selected - 1])})
+    )
 
     # A NUL byte makes no command log binary; the result names the lines decoded
     # as UTF-16 and those whose NUL bytes are left out, among the lines it shows.
     numbered = "".join(f"{number}| {line}\n" for number, line in enumerate(lines, 1))
+    if not text.endswith(("\n", "\r")):
+        numbered = numbered.removesuffix("\n")
     if utf16_lines or nul:
         note, rest = whole.split("\n", 1)
         assert (f" {utf16_lines} " in note and "UTF-16" in note) == bool(utf16_lines)
@@ -431,10 +469,93 @@ async def test_a_command_log_reads_as_the_text_its_programs_wrote(
     else:
         assert whole == numbered
     assert last.splitlines()[-1] == f"{len(lines)}| {lines[-1]}"
-    assert ("UTF-16" in last) == (utf16_lines == "1-3")
+    assert ("decoded as UTF-16" in last) == (len(lines) in utf16_numbers)
     # A search sees the text a read shows.
-    assert f"\n{ubuntu}| {lines[ubuntu - 1]}" in found
-    assert ("UTF-16" in found) == bool(utf16_lines)
+    assert f"\n{selected}| {lines[selected - 1]}" in found
+    assert ("decoded as UTF-16" in found) == (selected in utf16_numbers)
+    assert log.read_bytes() == raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-16-be", "utf-8", "cp1252"])
+async def test_an_explicit_encoding_applies_to_the_whole_file(
+    tmp_path: Path, encoding: str
+) -> None:
+    # A LF/CR byte in a UTF-16 code unit is not a line break. These long rows
+    # intentionally pass the automatic decoder's bounded inference window.
+    source = (
+        "first\r\n你好上不\u0a4e\u0d4e" + "你好" * 180 + "😀\nlast\x00line"
+        if encoding != "cp1252"
+        else "first\r\nGröße €\nlast\x00line"
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    logs = make_context(workspace).data_root / "artifacts" / "temp" / "commands"
+    logs.mkdir(parents=True)
+    raw = source.encode(encoding)
+    expected = read_module.render_text_file(source.encode())
+    # The same explicit choice works for command logs and ordinary binary-looking files.
+    for path in (logs / "output.log", tmp_path / "output.bin"):
+        path.write_bytes(raw)
+        arguments = {"path": str(path), "encoding": encoding}
+        assert content(await read(workspace, arguments)) == expected
+        assert content(await read(workspace, {**arguments, "offset": -1})) == "3| last\x00line"
+        found = content(await read(workspace, {**arguments, "pattern": "last"}))
+        assert "\n3| last\x00line" in found
+        # The line:character range fallback must keep the chosen decoder too.
+        fallback = content(await read(workspace, {**arguments, "offset": "1:20"}))
+        assert fallback.endswith(expected)
+        assert path.read_bytes() == raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["not-an-encoding", "base64", "rot13", "utf-8\x00"])
+async def test_an_invalid_text_encoding_is_rejected_before_opening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, encoding: str
+) -> None:
+    tmp_path.joinpath("notes.txt").write_bytes(b"hello\n")
+
+    def unexpected_open(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("invalid encoding opened the file")
+
+    monkeypatch.setattr(Path, "open", unexpected_open)
+    result = await read(tmp_path, {"path": "notes.txt", "encoding": encoding})
+    assert result["ok"] is False
+    message = failure(result, "invalid_arguments")
+    assert "encoding" in message and "utf-8" in message
+
+
+@pytest.mark.asyncio
+async def test_an_inferred_encoding_change_is_named_only_for_the_lines_shown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    logs = make_context(workspace).data_root / "artifacts" / "temp" / "commands"
+    logs.mkdir(parents=True)
+    path = logs / "output.log"
+    # The same bytes can be pure UTF-16 with a CJK suffix, or mixed program output.
+    prefix = "Ubuntu\n"
+    raw = ("\ufeff" + prefix).encode("utf-16-le") + b"done\nmore\n"
+    path.write_bytes(raw)
+    monkeypatch.setattr(read_text_module, "_DECODING_CHUNK_BYTES", 1)
+    for window in ({}, {"offset": -1}, {"pattern": "more"}):
+        shown = content(await read(workspace, {"path": str(path), **window}))
+        assert "inferred" in shown and 'encoding="utf-16"' in shown
+        assert "3| more" in shown
+    first = content(await read(workspace, {"path": str(path), "limit": 1}))
+    assert "inferred" not in first
+    explicit = content(await read(workspace, {"path": str(path), "encoding": "utf-16"}))
+    assert explicit == read_module.render_text_file(raw.decode("utf-16").encode())
+
+    # An unterminated UTF-8 suffix is ambiguous: without a complete line, the
+    # automatic decoder keeps the BOM. An explicit choice still exposes either reading.
+    path.write_bytes(("\ufeff" + prefix).encode("utf-16-le") + b"done")
+    automatic = content(await read(workspace, {"path": str(path)}))
+    assert automatic.endswith("2| " + b"done".decode("utf-16-le")) and "inferred" not in automatic
+    assert content(await read(workspace, {"path": str(path), "encoding": "utf-8"})).endswith(
+        "\x00done"
+    )
 
 
 _LONG = "".join(f"line{i}\n" for i in range(1, 2002))
@@ -455,6 +576,7 @@ _LONG = "".join(f"line{i}\n" for i in range(1, 2002))
             {"offset": 5},
             "[Offset 5 is beyond end of file (2 lines). Nothing to show.]",
         ),
+        ("one\n", {"offset": 2}, None),
         # Without a limit, a read stops after 2000 lines.
         (
             _LONG,
@@ -463,24 +585,33 @@ _LONG = "".join(f"line{i}\n" for i in range(1, 2002))
             + "[Showing lines 1-2000 of 2001. Use offset=2001 to continue.]",
         ),
     ],
-    ids=["offset_and_limit", "past_the_end", "default_limit"],
+    ids=["offset_and_limit", "past_the_end", "one_line_past_the_end", "default_limit"],
 )
 async def test_line_windows_name_the_call_that_continues_them(
-    tmp_path: Path, raw: str, window: dict[str, int], expected: str
+    tmp_path: Path, raw: str, window: dict[str, int], expected: str | None
 ) -> None:
     tmp_path.joinpath("notes.txt").write_bytes(raw.encode())
 
     result = await read(tmp_path, {"path": "notes.txt", **window})
 
-    assert content(result) == expected
+    if expected is None:
+        # Both the file path and attachment renderer name a single line correctly.
+        for shown in (content(result), read_module.render_text_file(raw.encode(), offset=2)):
+            assert "1 line)" in shown and "1 lines" not in shown
+    else:
+        assert content(result) == expected
 
 
 @pytest.mark.asyncio
-async def test_a_line_cut_at_the_byte_limit_continues_at_its_character(tmp_path: Path) -> None:
-    source = "x" * 60_000 + "\nsecond\n"
-    tmp_path.joinpath("minified.txt").write_bytes(source.encode("utf-8"))
+@pytest.mark.parametrize("encoding", [None, "utf-16", "utf-16-be"])
+async def test_a_line_cut_at_the_byte_limit_continues_at_its_character(
+    tmp_path: Path, encoding: str | None
+) -> None:
+    source = ("x" if encoding is None else "上😀") * 60_000 + "\nsecond\n"
+    tmp_path.joinpath("minified.txt").write_bytes(source.encode(encoding or "utf-8"))
+    arguments = {"path": "minified.txt", **({"encoding": encoding} if encoding else {})}
 
-    first = content(await read(tmp_path, {"path": "minified.txt"}))
+    first = content(await read(tmp_path, arguments))
     match = re.search(r'Use offset="(1:\d+)" to continue', first)
     assert match is not None
     offset = match.group(1)
@@ -489,9 +620,22 @@ async def test_a_line_cut_at_the_byte_limit_continues_at_its_character(tmp_path:
     assert "Output truncated at 50 KB" in first
     assert first.split("\n\n[", maxsplit=1)[0] == f"1| {source[: character - 1]}"
 
-    continued = content(await read(tmp_path, {"path": "minified.txt", "offset": offset}))
-
-    assert continued == f"{offset}| {source[character - 1 : source.index(chr(10))]}\n2| second\n"
+    # Follow every character continuation, including several pages of non-ASCII text.
+    pieces = [source[: character - 1]]
+    while True:
+        continued = content(await read(tmp_path, {**arguments, "offset": offset}))
+        next_match = re.search(r'Use offset="(1:\d+)" to continue', continued)
+        if next_match is None:
+            rest = source[character - 1 : source.index(chr(10))]
+            assert continued == f"{offset}| {rest}\n2| second\n"
+            pieces.append(rest)
+            break
+        next_character = int(next_match[1].split(":")[1])
+        part = continued.split("\n\n[", maxsplit=1)[0].removeprefix(f"{offset}| ")
+        assert part == source[character - 1 : next_character - 1]
+        pieces.append(part)
+        offset, character = next_match[1], next_character
+    assert "".join(pieces) == source[: source.index(chr(10))]
 
 
 @pytest.mark.asyncio
@@ -575,6 +719,18 @@ async def test_an_image_passes_its_pixels_in_memory_without_creating_files(tmp_p
     assert context.presentation_media == [
         {"path": str(tmp_path / "diagram.png"), "kind": "image", "filename": "diagram.png"}
     ]
+    # An explicit encoding requests the bytes as text instead of image routing.
+    text_context = make_context(tmp_path)
+    shown = content(
+        await read(
+            tmp_path,
+            {"path": "diagram.png", "encoding": "utf-8"},
+            context=text_context,
+            store=store,
+        )
+    )
+    assert shown == read_module.render_text_file(_PNG)
+    assert not text_context.result_media and not text_context.presentation_media
 
 
 @pytest.mark.asyncio
@@ -614,8 +770,21 @@ async def test_audio_is_transcribed(tmp_path: Path) -> None:
             "attachment_error",
             "exceeds limit",
         ),
+        (
+            "notes.txt",
+            b"hello\n",
+            {"arguments": {"encoding": "utf-16"}},
+            "invalid_arguments",
+            "byte order",
+        ),
     ],
-    ids=["audio_too_large", "speech_error", "empty_transcription", "image_too_large"],
+    ids=[
+        "audio_too_large",
+        "speech_error",
+        "empty_transcription",
+        "image_too_large",
+        "missing_bom",
+    ],
 )
 async def test_failed_read_does_not_stamp_the_file(
     tmp_path: Path, name: str, raw: bytes, services: dict[str, Any], code: str, message: str
@@ -624,8 +793,9 @@ async def test_failed_read_does_not_stamp_the_file(
     target.write_bytes(raw)
     file_state = FileReadState()
     services = {"speech": FakeSpeech(), **services}
+    arguments = {"path": name, **services.pop("arguments", {})}
 
-    result = await read(tmp_path, {"path": name}, file_state=file_state, **services)
+    result = await read(tmp_path, arguments, file_state=file_state, **services)
 
     assert message in failure(result, code)
     assert file_state.check_stale("session-1", target.resolve()) is StaleReason.NEVER_READ

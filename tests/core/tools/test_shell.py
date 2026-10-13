@@ -250,11 +250,12 @@ def launched(launcher: FakeLauncher, index: int = 0) -> tuple[str, dict[str, str
 
 def not_run_code(launcher: FakeLauncher, reason: NotRunReason, index: int = 0) -> int:
     """The exit code by which PowerShell says it ran nothing of a launch's request:
-    the request's first line, or the code after it for a workdir it cannot enter."""
+    the request's first line plus the reason's offset in the request protocol."""
     request = launcher.requests[index]
     assert request is not None
     code = int(request.split(b"\n", 1)[0])
-    return code if reason == "request_unreadable" else code + 1
+    offsets = {"request_unreadable": 0, "workdir_unavailable": 1, "language_mode_unavailable": 2}
+    return code + offsets[reason]
 
 
 # The bootstrap that reports a command it ran nothing of is PowerShell's.
@@ -921,8 +922,9 @@ async def test_a_shell_that_cannot_start_names_the_state_instead_of_the_raw_erro
         ("workdir_unavailable", False, False, "pass that directory as workdir"),
         # The directory was removed after the call was checked.
         ("workdir_unavailable", True, False, "is no longer an existing directory"),
+        ("language_mode_unavailable", False, False, "PowerShell's language mode prevents"),
     ],
-    ids=["request-unreadable", "workdir-unavailable", "workdir-removed"],
+    ids=["request-unreadable", "workdir-unavailable", "workdir-removed", "language-mode"],
 )
 @pytest.mark.asyncio
 async def test_a_shell_that_ran_nothing_fails_the_call(

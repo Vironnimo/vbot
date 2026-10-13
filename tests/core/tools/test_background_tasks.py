@@ -635,10 +635,21 @@ async def test_a_stop_does_not_call_the_log_complete_when_a_pipe_stage_held_outp
         assert "next" not in stopped
 
 
-@pytest.mark.parametrize("kept", [6, 0], ids=["its-start", "nothing"])
+@pytest.mark.parametrize(
+    ("prefix", "kept", "stop"),
+    [
+        (b"first\n", 6, False),
+        (b"first\rsecond\rthird\r", 19, False),
+        ("ü".encode(), 2, False),
+        (b"x", 1, False),
+        (b"", 0, False),
+        (b"first\n", 6, True),
+    ],
+    ids=["lf", "cr-only", "utf-8", "one-byte", "nothing", "stopped"],
+)
 @pytest.mark.asyncio
 async def test_a_log_file_vbot_could_not_write_is_never_called_complete(
-    tasks: Tasks, monkeypatch: pytest.MonkeyPatch, kept: int
+    tasks: Tasks, monkeypatch: pytest.MonkeyPatch, prefix: bytes, kept: int, stop: bool
 ) -> None:
     full = OSError(errno.ENOSPC, "No space left on device")
     room = [kept]
@@ -653,7 +664,7 @@ async def test_a_log_file_vbot_could_not_write_is_never_called_complete(
     command_id, process = await tasks.background()
     path = tasks.commands.manager.report(command_id).log_path
     assert path is not None
-    process.write("first\n" + "".join(f"line {number}\n" for number in range(5_000)))
+    process.write(prefix + "".join(f"line {number}\n" for number in range(5_000)).encode())
     await tasks.commands.advance(5, step=1)
 
     def explained(text: str, *, named: bool = True) -> None:
@@ -661,6 +672,12 @@ async def test_a_log_file_vbot_could_not_write_is_never_called_complete(
         assert text.count(os_error_reason(full)) == 1, text
         assert "complete" not in text, text
         assert (path.name in text) is (named and kept > 0), text
+        if kept:
+            assert f"{kept:,} byte" in text, text
+
+    def safe_repeat(text: str) -> None:
+        # Losing the log never makes an already executed effect safe to repeat.
+        assert "only if" in text and "effects" in text and "safe" in text, text
 
     listed = data(await tasks.call({"action": "list"}))["tasks"]
     [row] = [task for task in listed if task["type"] == "command"]
@@ -669,11 +686,23 @@ async def test_a_log_file_vbot_could_not_write_is_never_called_complete(
     running = data(await tasks.call({"action": "status", "id": command_id, "filter": "error"}))
     explained(running["next"])
     explained(" ".join(running["notes"]))
-    process.exit(1)
+    safe_repeat(running["next"])
+    assert "interrupting" in running["next"]
+    assert process.tree.terminations == 0
+    if stop:
+        stopped = data(await tasks.call({"action": "stop", "id": command_id}))
+        explained(json.dumps(stopped))
+        safe_repeat(json.dumps(stopped))
+    else:
+        process.exit(1)
     report = await tasks.commands.finish(command_id)
-    explained(json.dumps(data(await tasks.call({"action": "status", "id": command_id}))))
-    explained(format_command_delivery(report))
-    assert path.read_bytes() == b"first\n"[:kept]
+    ended = json.dumps(data(await tasks.call({"action": "status", "id": command_id})))
+    delivery = format_command_delivery(report)
+    explained(ended)
+    explained(delivery)
+    safe_repeat(ended)
+    safe_repeat(delivery)
+    assert path.read_bytes() == prefix[:kept]
 
 
 async def _later_reads_speak_to_their_reader(
