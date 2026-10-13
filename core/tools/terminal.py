@@ -39,7 +39,7 @@ from core.tools.arguments import (
 )
 from core.tools.contracts import ToolContractError
 from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
-from core.tools.scratch_areas import ScratchAreas
+from core.tools.scratch_areas import ScratchAreas, ScratchUnavailableError
 from core.tools.shell_environment import scratch_environment, terminal_environment
 from core.tools.terminal_backend import default_terminal_argv
 from core.tools.terminal_manager import (
@@ -506,11 +506,16 @@ async def _handle_start(
         if not isinstance(raw_group, str) or not raw_group.strip():
             raise ToolContractError("terminal was not run: group must be a non-empty name.")
         group_id = terminal_manager.resolve_or_create_agent_group(raw_group.strip()).group_id
-    overlay = (
-        scratch_environment(await scratch_areas.folder_for(_address(owner)))
-        if scratch_areas is not None
-        else None
-    )
+    overlay = None
+    if scratch_areas is not None:
+        try:
+            folder = await scratch_areas.folder_for(_address(owner))
+        except ScratchUnavailableError:
+            # The owner logged the failure; an optional Scratch folder must not
+            # prevent the Agent's program from starting.
+            pass
+        else:
+            overlay = scratch_environment(folder)
     started = await terminal_manager.spawn(
         owner,
         argv,

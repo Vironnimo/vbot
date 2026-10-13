@@ -985,7 +985,11 @@ def _build_scratch_areas(runtime: Runtime) -> ScratchAreas:
         ancestors=partial(ancestors, sessions, strict=True),
         busy_sessions=busy_sessions,
     )
-    runs.add_run_started_callback(lambda _run: scratch.record_run_start())
+    runs.add_run_started_callback(
+        lambda run: scratch.record_run_start(
+            SessionAddress(run.project_id, run.agent_id, run.session_id)
+        )
+    )
     return scratch
 
 

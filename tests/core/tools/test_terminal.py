@@ -22,6 +22,7 @@ from core.tools import terminal as terminal_module
 from core.tools import terminal_manager as manager_module
 from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
 from core.tools.scratch_areas import ScratchAreas
+from core.tools.shell_environment import terminal_environment
 from core.tools.terminal import (
     TERMINAL_ACTIONS,
     TERMINAL_TOOL_DESCRIPTION,
@@ -177,21 +178,31 @@ def test_definition_fits_the_offered_tools(shell_offered: bool, expected: str) -
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("command", [None, "fake-tui"], ids=["default-shell", "command"])
+@pytest.mark.parametrize("scratch_available", [True, False])
 async def test_start_returns_the_first_screen_once_startup_output_settles(
     manager: tuple[TerminalManager, AdapterFactory],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     command: str | None,
+    scratch_available: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, factory = manager
     factory.initial_output = "Welcome\r\nready> "
+
+    def identity(address: SessionAddress) -> str:
+        if not scratch_available:
+            raise PermissionError("private Scratch lookup details")
+        return "generation_" + address.session_id
+
     scratch_areas = ScratchAreas(
         tmp_path,
-        identity=lambda address: "generation_" + address.session_id,
+        identity=identity,
         ancestors=lambda _address: (),
         busy_sessions=lambda: (),
     )
+    ordinary_environment = terminal_environment()
     arguments: JsonObject = {"action": "start"}
     if command is not None:
         arguments["command"] = command
@@ -212,21 +223,33 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
     assert factory.calls[0][3:] == (24, 80)
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
     environment = factory.calls[0][2]
-    own = Path(environment["VBOT_SCRATCH_DIR"])
-    for name in ("TEMP", "TMP", "TMPDIR"):
-        assert Path(environment[name]) == own / "tmp"
-        assert Path(environment[name]).is_dir()
-    (own / "tmp").rmdir()
+    own = None
+    if scratch_available:
+        own = Path(environment["VBOT_SCRATCH_DIR"])
+        for name in ("TEMP", "TMP", "TMPDIR"):
+            assert Path(environment[name]) == own / "tmp"
+            assert Path(environment[name]).is_dir()
+        (own / "tmp").rmdir()
+    else:
+        assert "VBOT_SCRATCH_DIR" not in environment
+        for name in ("TEMP", "TMP", "TMPDIR"):
+            assert environment.get(name) == ordinary_environment.get(name)
     again = await call(
         terminal_manager, make_context(tmp_path), arguments, scratch_areas=scratch_areas
     )
-    assert again["ok"] is True and (own / "tmp").is_dir()
+    assert again["ok"] is True
+    if own is not None:
+        assert (own / "tmp").is_dir()
     await terminal_manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
     operator_environment = factory.calls[-1][2]
     assert "VBOT_SCRATCH_DIR" not in operator_environment
-    assert all(
-        operator_environment.get(name) != str(own / "tmp") for name in ("TEMP", "TMP", "TMPDIR")
-    )
+    if own is not None:
+        assert all(
+            operator_environment.get(name) != str(own / "tmp") for name in ("TEMP", "TMP", "TMPDIR")
+        )
+    if not scratch_available:
+        assert sum(record.levelname == "WARNING" for record in caplog.records) == 1
+        assert "private Scratch lookup details" not in caplog.text
 
 
 @pytest.mark.asyncio

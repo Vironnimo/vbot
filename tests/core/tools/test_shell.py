@@ -28,6 +28,7 @@ import pytest
 import pytest_asyncio
 
 from core.projects import ProjectNotFoundError
+from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import shell as shell_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
@@ -48,7 +49,7 @@ from core.tools.shell import (
     register_shell_tool,
     shell_detail_blocks,
 )
-from core.tools.shell_environment import CommandEnvironment
+from core.tools.shell_environment import CommandEnvironment, terminal_environment
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_success
 from core.tools.update_handoff import (
     UpdateHandoffs,
@@ -328,27 +329,44 @@ async def test_an_empty_env_value_reaches_the_command(shell: Shell) -> None:
 
 
 @pytest.mark.asyncio
-async def test_each_command_launch_ensures_its_sessions_scratch_tmp(tmp_path: Path) -> None:
+@pytest.mark.parametrize("scratch_available", [True, False])
+async def test_each_command_launch_ensures_its_sessions_scratch_tmp(
+    tmp_path: Path, scratch_available: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    def identity(address: SessionAddress) -> str:
+        if not scratch_available:
+            raise RuntimeError("private Scratch lookup details")
+        return "generation_" + address.session_id
+
     scratch_areas = ScratchAreas(
         tmp_path,
-        identity=lambda address: "generation_" + address.session_id,
+        identity=identity,
         ancestors=lambda _address: (),
         busy_sessions=lambda: (),
     )
+    ordinary_environment = terminal_environment()
     async with started_shell(tmp_path, scratch_areas=scratch_areas) as shell:
         for count in (1, 2):
             result = data(await shell.call({"command": "build", "run_in_background": True}))
             assert result["status"] == "running"
             _command, environment = launched(shell.launcher, count - 1)
-            own = Path(environment["VBOT_SCRATCH_DIR"])
-            for name in ("TEMP", "TMP", "TMPDIR"):
-                assert Path(environment[name]) == own / "tmp"
-                assert Path(environment[name]).is_dir()
+            if scratch_available:
+                own = Path(environment["VBOT_SCRATCH_DIR"])
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    assert Path(environment[name]) == own / "tmp"
+                    assert Path(environment[name]).is_dir()
+                # Removing it between calls must not make tempfile use the host temp.
+                (own / "tmp").rmdir()
+            else:
+                assert "VBOT_SCRATCH_DIR" not in environment
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    assert environment.get(name) == ordinary_environment.get(name)
             if sys.platform == "win32":
                 assert "VBOT_SCRATCH_DIR" not in shell.launcher.envs[-1]
-            # Removing it between calls must not make tempfile fall back to the host temp.
-            (own / "tmp").rmdir()
             (await shell.started(count)).exit(0)
+    if not scratch_available:
+        assert sum(record.levelname == "WARNING" for record in caplog.records) == 1
+        assert "private Scratch lookup details" not in caplog.text
 
 
 @pytest.mark.parametrize("terminal", [True, False])

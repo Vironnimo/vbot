@@ -71,7 +71,9 @@ from core.sessions import (
     SessionAddress,
     editable_session_message_index,
 )
+from core.tools.scratch_areas import ScratchUnavailableError
 from core.utils.errors import ConfigError, ProviderError, VBotError
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -104,6 +106,7 @@ class RunExecution:
         session_title_service: SessionTitleNotifier | None,
     ) -> None:
         self._dependencies = dependencies
+        self._scratch_failures = LoggedConditions()
         self._requests = requests
         self._progression = progression
         self._compaction_runs = compaction_runs
@@ -407,7 +410,34 @@ class RunExecution:
                         context.session_snapshot.active_messages
                     ),
                 )
-                await self._announce_scratch(context)
+                try:
+                    checked_scratch = await self._announce_scratch(context)
+                except ScratchUnavailableError:
+                    # Scratch's owner logged why the folder is unavailable.
+                    # The valid request built above remains ready to run.
+                    pass
+                except RunInterruptedError:
+                    raise
+                except Exception as error:
+                    # Announcement persistence and rebuilding are optional too;
+                    # no Scratch failure can mask the Agent's requested work.
+                    if self._scratch_failures.started(session_address, type(error).__name__):
+                        _LOGGER.warning(
+                            "Skipped Scratch announcement "
+                            "(agent=%s session=%s project=%s error=%s)",
+                            session_address.agent_id,
+                            session_address.session_id,
+                            session_address.project_id,
+                            type(error).__name__,
+                        )
+                else:
+                    if checked_scratch and self._scratch_failures.ended(session_address):
+                        _LOGGER.info(
+                            "Scratch announcement recovered (agent=%s session=%s project=%s)",
+                            session_address.agent_id,
+                            session_address.session_id,
+                            session_address.project_id,
+                        )
             except ImageBudgetExceededError as exc:
                 _run_succeeded = False
                 await _persist_run_error(run, session, exc)
@@ -556,12 +586,12 @@ class RunExecution:
 
             await _close_adapter(target.adapter)
 
-    async def _announce_scratch(self, context: _RunExecutionContext) -> None:
+    async def _announce_scratch(self, context: _RunExecutionContext) -> bool:
         """Tell a file-capable Run about its folder before its first Model request."""
         scratch = self._dependencies.scratch_areas
         state = context.request_state
         if scratch is None or state is None or context.run.run_kind not in SCRATCH_RUN_KINDS:
-            return
+            return False
         catalog = await self._requests.live_tool_catalog(
             context,
             known=state.allowed_tool_names,
@@ -574,7 +604,7 @@ class RunExecution:
         if denial is not None:
             tool_names = {name for name in tool_names if denial(name) is None}
         if not uses_scratch(context.run.run_kind, tool_names):
-            return
+            return False
         session = context.session
         folder = await scratch.folder_for(session.address)
         sessions = self._dependencies.sessions
@@ -596,7 +626,7 @@ class RunExecution:
                 prior.get("note_id"),
             )
             if prior and not cleared and visible:
-                return
+                return True
             note = scratch_note(
                 folder, cleared=cleared, process_tools=bool(tool_names & {"bash", "terminal"})
             )
@@ -622,6 +652,7 @@ class RunExecution:
             ).with_session_messages(context.session_snapshot.active_messages),
             live_messages=state.messages,
         )
+        return True
 
     async def _advance_fallback_chain(
         self,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,9 +14,10 @@ import pytest
 from core.chat import ChatMessage
 from core.chat._message_history import effective_compaction_messages
 from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY, SCRATCH_NOTE_PREFIX
-from core.runs import RunKind
-from core.sessions import SessionAddress
+from core.runs import RunCancelledError, RunInterruptedError, RunKind, RunStatus
+from core.sessions import ChatSession, SessionAddress
 from core.tools import ToolRegistry, tool_success
+from core.tools.scratch_areas import ScratchAreas
 from tests.core.chat.chat_loop_compaction_test_support import auto_compact, compaction_runtime
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -100,6 +103,98 @@ async def test_scratch_announces_once_and_forks_announce_their_own_folder(tmp_pa
     assert isinstance(fork_note.content, str)
     assert fork.id in fork_note.content
     assert fork_note.id != note.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["folder", "persistence", "request_rebuild"])
+async def test_optional_scratch_failure_keeps_the_run_working_and_recovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_stage: str,
+) -> None:
+    runtime = _runtime(tmp_path)
+    session = runtime.chat_sessions.create("coder", session_id="source")
+    unavailable = False
+    generation = "initial"
+
+    def identity(_address: SessionAddress) -> str:
+        if unavailable and failure_stage == "folder":
+            raise RuntimeError("private Scratch failure details")
+        return generation
+
+    runtime.scratch_areas = ScratchAreas(
+        tmp_path, identity=identity, ancestors=lambda _: (), busy_sessions=lambda: ()
+    )
+    loop = build_chat_loop(runtime)
+    append = ChatSession.append_many_async
+    rebuild = loop._requests.rebuild_live_request_state
+
+    async def append_notes(current: ChatSession, messages: list[ChatMessage], **kwargs: Any) -> Any:
+        if unavailable and failure_stage == "persistence" and _notes(messages):
+            raise RuntimeError("private Scratch failure details")
+        return await append(current, messages, **kwargs)
+
+    async def rebuild_request(*args: Any, **kwargs: Any) -> Any:
+        if unavailable and failure_stage == "request_rebuild":
+            raise RuntimeError("private Scratch failure details")
+        return await rebuild(*args, **kwargs)
+
+    monkeypatch.setattr(ChatSession, "append_many_async", append_notes)
+    monkeypatch.setattr(loop._requests, "rebuild_live_request_state", rebuild_request)
+    caplog.set_level(logging.INFO, logger="vbot")
+    run = await loop.start_run("coder", "First task", session_id=session.id)
+    await run.wait()
+    initial = runtime.chat_sessions.metadata_value(session.address, SCRATCH_ANNOUNCED_META_KEY)
+    caplog.clear()
+
+    generation = "replacement"
+    unavailable = True
+    run = await loop.start_run("coder", "Continue the task", session_id=session.id)
+    await run.wait()
+    assert run.status is RunStatus.COMPLETED
+    assert len(runtime.adapter.requests) == 2
+    assert session.find_run_summary(run_id=run.id).status == "completed"
+    if failure_stage != "request_rebuild":
+        assert (
+            runtime.chat_sessions.metadata_value(session.address, SCRATCH_ANNOUNCED_META_KEY)
+            == initial
+        )
+    assert sum(record.levelno == logging.WARNING for record in caplog.records) == 1
+    assert "private Scratch failure details" not in caplog.text
+
+    unavailable = False
+    run = await loop.start_run("coder", "Finish the task", session_id=session.id)
+    await run.wait()
+    assert run.status is RunStatus.COMPLETED
+    record = runtime.chat_sessions.metadata_value(session.address, SCRATCH_ANNOUNCED_META_KEY)
+    notes = _notes(session.load_active())
+    assert len(notes) == 2
+    assert record["note_id"] == notes[-1].id
+    assert record["own"] != initial["own"]
+    assert Path(record["own"]).is_dir()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_optional_scratch_does_not_swallow_run_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupted: bool
+) -> None:
+    runtime = _runtime(tmp_path)
+    session = runtime.chat_sessions.create("coder", session_id="source")
+
+    async def cancel(_address: SessionAddress) -> None:
+        if interrupted:
+            raise RunInterruptedError("fixture-interruption")
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(runtime.scratch_areas, "folder_for", cancel)
+    run = await build_chat_loop(runtime).start_run("coder", "Work", session_id=session.id)
+    with pytest.raises(RunInterruptedError if interrupted else RunCancelledError):
+        await run.wait()
+    assert run.status is (RunStatus.INTERRUPTED if interrupted else RunStatus.CANCELLED)
+    assert not runtime.adapter.requests
+    assert not _notes(session.load())
 
 
 @pytest.mark.asyncio
