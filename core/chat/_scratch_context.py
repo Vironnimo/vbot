@@ -45,7 +45,9 @@ def scratch_note(folder: ScratchFolder, *, cleared: bool, process_tools: bool) -
         f"Scratch Area: {folder.area.as_posix()}. "
         "Other folders in this area belong to this conversation's Parent or Sub-Agents. "
         "Within this area, write only in your own folder; read the others when useful. "
-        "When delegating, pass input paths and have each Sub-Agent report its result paths.\n"
+        "When delegating, put the inputs in your own folder and pass their paths; "
+        "let each Sub-Agent keep its intermediate files in its own Scratch folder "
+        "and report its result paths.\n"
     )
     if process_tools:
         content += (
