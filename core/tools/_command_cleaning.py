@@ -9,12 +9,16 @@ decoded as UTF-8 incrementally (invalid bytes become U+FFFD) and cleaned the way
 a terminal would show their final state, without any terminal behind them:
 
 - Escape sequences are removed: CSI, two-character sequences, and the control
-  strings OSC, DCS, SOS, PM and APC (titles, hyperlinks), also in their C1
-  forms. Parsing is bounded, so an unterminated sequence cannot hide output: a
-  line break or a character that cannot continue a sequence ends it. An ESC
-  that cannot start a control, before a lowercase letter, a control character
-  or non-ASCII text, is data and shows as the text ``\\x1b``: PowerShell writes
-  one for ```e`` in a double-quoted string, as in a Markdown span ```expected```.
+  strings OSC, DCS, SOS, PM and APC (titles, hyperlinks), each started by ESC.
+  Parsing is bounded, so an unterminated sequence cannot hide output: a line
+  break or a character that cannot continue a sequence ends it. An ESC that
+  cannot start a control, before a lowercase letter, a control character or
+  non-ASCII text, is data and shows as the text ``\\x1b``: PowerShell writes one
+  for ```e`` in a double-quoted string, as in a Markdown span ```expected```.
+- The C1 code points U+0080-U+009F are removed one by one and never start a
+  sequence: a UTF-8 terminal does not interpret them, and they occur as text,
+  such as UTF-8 decoded as Latin-1 (``Ã\\x9f`` for ``ß``), whose rest of the line
+  a C1 sequence start would swallow.
 - ``\\r\\n`` ends a line like ``\\n``. A lone ``\\r`` restarts the current line: the
   next text replaces it, so a redrawn progress line keeps its final state, and a
   line that ends with ``\\r`` keeps its text.
@@ -37,7 +41,7 @@ from collections import deque
 from collections.abc import Sequence
 from typing import NamedTuple
 
-# Characters that may start or be part of a terminal control in decoded text.
+# Characters that start a terminal control, or are dropped (C1), in decoded text.
 _TEXT_CONTROL = re.compile(r"[\x1b\x80-\x9f]")
 # Characters that act on the current line, or are dropped: C0 except tab, and DEL.
 _LINE_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
@@ -111,7 +115,7 @@ class TailLines:
     def add(self, line: str, chars: int | None = None) -> None:
         """Add a line; *chars* is its length when *line* holds only its end."""
         length = len(line) if chars is None else chars
-        if length > self._limit:
+        if length > self._limit or length > len(line):
             end = line[-self._limit :]
             self._lines.clear()
             self._lines.append(end)
@@ -119,6 +123,7 @@ class TailLines:
             self.cut = length - len(end)
             self._added = 1
             return
+        self._drop_cut()
         self._lines.append(line)
         self._used += len(line) + 1
         self._added += 1
@@ -145,6 +150,7 @@ class TailLines:
             self.cut = 0
             self._added = 0
             self._restart = True
+        self._drop_cut()
         self._lines.extend(itertools.islice(lines, start, None))
         self._used += used
         self._added += len(lines) - start
@@ -172,12 +178,31 @@ class TailLines:
             self._lines.append(added[0])
             self._used = len(added[0]) + 1
             self.cut = cut
-        else:
+        elif added:
+            self._drop_cut()
             self._lines.extend(added)
             self._used += sum(len(line) + 1 for line in added)
             self._trim()
         self._added = 0
         self._restart = False
+
+    def _drop_cut(self) -> None:
+        """Drop a cut line before a later line is added.
+
+        A cut line is the end of a line longer than the limit, so it never stays
+        beside another line. Its kept end can be shorter than the limit (a
+        backspace erased from it), so the trim alone would keep it.
+        """
+        if not self.cut:
+            return
+        # The cut line is the only line.
+        if len(self._lines) == self._added:
+            # A line added since take_added goes: a follower cannot drop it.
+            self._added -= 1
+            self._restart = True
+        self._lines.clear()
+        self._used = 0
+        self.cut = 0
 
     def _trim(self) -> None:
         while self._used - 1 > self._limit:
@@ -243,6 +268,11 @@ class OutputLines:
             self._parts[-1] = self._parts[-1][:-1]
             self._parts_chars -= 1
         self._chars -= 1
+        if not self._parts_chars and self._start is not None and self._chars <= len(self._start):
+            # The kept end is erased and what is left of the line is its kept start.
+            self._parts = [self._start[: self._chars]]
+            self._parts_chars = self._chars
+            self._start = None
 
     def clear_line(self) -> None:
         """Empty the current line."""
@@ -278,10 +308,14 @@ class OutputLines:
             self.append(lines[-1])
 
     def _shorten(self) -> None:
-        """Keep only the start and the end of a long current line."""
+        """Keep only the start and the end of a long current line.
+
+        The start is as long as the end, so a line erased to the length a whole
+        line can have is whole again (``erase``).
+        """
         text = "".join(self._parts)
         if self._start is None:
-            self._start = text[: self._head_chars]
+            self._start = text[: max(self._head_chars, self._tail_chars)]
         end = text[-self._tail_chars :]
         self._parts = [end]
         self._parts_chars = len(end)
@@ -296,7 +330,7 @@ class OutputLines:
         end = text[-self._tail_chars :]
         if self._chars == len(end):
             return end, "", self._chars
-        start = self._start if self._start is not None else text[: self._head_chars]
+        start = (self._start if self._start is not None else text)[: self._head_chars]
         return end, start, self._chars
 
     # Completed lines
@@ -312,7 +346,7 @@ class OutputLines:
                 return
             self._head_closed = True
             if not self._head:
-                self._first = (text[: self._head_chars] if start is None else start, chars)
+                self._first = ((text if start is None else start)[: self._head_chars], chars)
                 self._first_added = True
         self._tail.add(text, chars)
 
@@ -543,11 +577,7 @@ class _EscapeFilter:
             return True
         if char == "\x1b":
             self._start("escape")
-        elif char == "\x9b":
-            self._start("csi")
-        elif char in "\x90\x98\x9d\x9e\x9f":
-            self._start("string", osc=char == "\x9d")
-        # Other C1 controls are dropped.
+        # C1 code points are dropped.
         return True
 
     def _start(self, state: str, *, osc: bool = False) -> None:

@@ -95,6 +95,12 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         (["ä".encode()[:1], "ä".encode()[1:] + b" \xff ok\n"], ["ä � ok"]),
         # PowerShell writes a bare ESC for `e in a double-quoted string.
         ([b"literal \x1bexpected\n"], ["literal \\x1bexpected"]),
+        # C1 code points are text to a UTF-8 terminal: each is dropped, none
+        # starts a sequence that hides the rest of the line.
+        (
+            ["Grüße und mehr\n".encode().decode("latin-1").encode(), "a\x85b\x9bc\x90d\n".encode()],
+            ["GrÃ¼Ãe und mehr", "abcd"],
+        ),
         ([b"no line break"], ["no line break"]),
     ],
     ids=[
@@ -104,6 +110,7 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         "backspace",
         "utf-8",
         "data-escape",
+        "c1-code-points",
         "last-line",
     ],
 )
@@ -213,7 +220,7 @@ async def test_a_log_file_that_cannot_be_written_is_no_longer_named(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("output", ["lines", "one-line"])
+@pytest.mark.parametrize("output", ["lines", "one-line", "erased-long-line", "erased-line-end"])
 async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
     harness: Harness, output: str
 ) -> None:
@@ -224,8 +231,22 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
     else:
         lines = ["".join(chr(ord("a") + number % 26) for number in range(200_000))]
         text = lines[0]
-    for start in range(0, len(text), 16_384):
-        process.write(text[start : start + 16_384])
+    chunks = [text[start : start + 16_384] for start in range(0, len(text), 16_384)]
+    if output == "erased-long-line":
+        # A backspace right after the line in progress was shortened to its end
+        # leaves that end shorter than the tail's limit; the lines after it, also
+        # those that arrive later, still replace it.
+        line = text[:80_000]
+        lines = [line[:-1], "", "after 1", "after 2"]
+        chunks = [line[:40_000], line[40_000:] + "\x08\n\n", "after 1\nafter 2\n"]
+    elif output == "erased-line-end":
+        # Backspaces that erase more than the kept end of a long line leave a
+        # line as long as a whole line can be: all of it is kept.
+        line = text[:70_000]
+        lines = [line[:29_000]]
+        chunks = [line[:40_000], line[40_000:], "\x08" * 41_000]
+    for chunk in chunks:
+        process.write(chunk)
         await turns()
     process.exit(0)
 
@@ -240,13 +261,20 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
         assert transcript.tail == tuple(lines[-tail:])
         assert (transcript.head_cut, transcript.tail_cut) == (0, 0)
         assert transcript.omitted_lines == len(lines) - head - tail
-    else:
+    elif output == "one-line":
         # A line too long for both: its start and its end.
         (line,) = lines
         assert transcript.head == (line[:COMMAND_HEAD_CHARS],)
         assert transcript.tail == (line[-COMMAND_TAIL_CHARS:],)
         assert transcript.head_cut == len(line) - COMMAND_HEAD_CHARS
         assert transcript.tail_cut == len(line) - COMMAND_TAIL_CHARS
+        assert transcript.omitted_lines == 0
+    else:
+        # A long line erased again keeps its start, and the lines after it.
+        assert transcript.head == (lines[0][:COMMAND_HEAD_CHARS],)
+        assert transcript.head_cut == len(lines[0]) - COMMAND_HEAD_CHARS
+        kept = lines if output == "erased-line-end" else lines[1:]
+        assert (transcript.tail, transcript.tail_cut) == (tuple(kept), 0)
         assert transcript.omitted_lines == 0
 
 

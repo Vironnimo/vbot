@@ -12,10 +12,11 @@ shell can be started before its command is known and serve it at once
 (``_command_launch``); a shell serves one command and exits with it. The
 bootstrap prints nothing of its own: the output is the command's.
 
-Request. ASCII lines, each field Base64 of its UTF-8 text: the workdir, the
-command, one line per environment change (the name, then a space and the value;
-the name alone removes the variable), and ``.`` as the last line, so a request
-that ended early is never taken for a complete one. PowerShell hands stdin to
+Request. ASCII lines: the request's not-run code (below) in nine decimal
+digits, then each field as Base64 of its UTF-8 text: the workdir, the command,
+one line per environment change (the name, then a space and the value; the name
+alone removes the variable), and ``.`` as the last line, so a request that
+ended early is never taken for a complete one. PowerShell hands stdin to
 the command as ``$input`` lines, and its own reader holds the input: a direct
 read of the console input stream races with it, ``$input`` does not. A trailing
 empty line does not reach ``$input``, which the closing ``.`` makes harmless.
@@ -27,12 +28,19 @@ to where it waited, so the command finds the location history and drive
 locations of a shell started in its workdir: ``cd -`` returns to the location
 PowerShell opened at, and the drive where the shell waited is at its root.
 
-Nothing ran. A request the bootstrap cannot read ends the shell with
-``REQUEST_UNREADABLE_EXIT_CODE``, a workdir it cannot enter with
-``WORKDIR_UNAVAILABLE_EXIT_CODE``, before the command runs and without output.
-The shell Tool reports either as a failure of the call, not as the command's
-result. No program is expected to exit with these codes, and the shell Tool also
-requires that nothing was printed and no program failed.
+Nothing ran. vBot draws a random code for each request (``PowerShellRequest``).
+A request the bootstrap cannot read ends the shell with that code, a workdir it
+cannot enter with the code after it, before the command runs and without
+output; the shell Tool reports either as a failure of the call, not as the
+command's result (``CommandReport.not_run``). The command cannot know the code:
+it travels only in the request, which the bootstrap has read from stdin before
+the command runs, and in bootstrap variables removed by then. Only a command
+that exits with such a code anyway, by a chance of one in 900 million, is
+reported as not run although it ran. A fixed code was no proof: a command that
+ran, printed nothing and exited with it read as one that never ran (shell
+review 2026-10-13). A request too short to carry its code ends the shell with
+``REQUEST_UNREADABLE_EXIT_CODE``, reported as an exit code like any other: vBot
+writes every request whole, so only a shell whose input was cut meets it.
 
 Console encodings. Native programs write and read bytes in the console's code
 pages, which default to a legacy OEM page that cannot represent most non-ASCII
@@ -49,7 +57,8 @@ keeps up to 199 characters.
 English messages. PowerShell's own messages follow the Windows display language.
 The setup switches them to en-US, so Agents and the failure hints read one
 wording. Numbers and dates keep the user's regional format, as in the user's
-own shell; native programs keep the user's settings.
+own shell; native programs keep the user's settings. ``powershell_culture``
+says which format that is, for the shell Tool's description.
 
 Parsing after the setup. The command arrives as data and is parsed after the
 setup by PowerShell's own parser: ``using`` statements, ``#requires``, a
@@ -58,18 +67,30 @@ as PowerShell's own ParserError in English, and error positions are the
 command's own line numbers.
 
 Exit status. ``pwsh -Command`` exits with 1 whenever the last statement failed,
-so a native program's own exit code is lost. A closing statement at the end of
-the command's last block records that code instead, as ``bash -c`` reports it,
-and otherwise 0 or 1 by the last statement's success; an ``exit`` in the command
-ends the shell with its own code. The statement is the only text added to the
-command: PowerShell keeps the last statement's success (``$?``) only within the
-command's statement list, so no statement outside it can read that success. It
-follows the command's last line, so no line of the command moves.
+so a native program's own exit code is lost. vBot reports the last statement's
+status as ``bash -c`` reports it: a failed statement reports the last native
+program's code, else 1; a successful one 0, unless it calls a function, script
+block or script whose last statement runs a native program, which reports that
+program's code as bash reports a function's status (``STATUS_FUNCTION``). A
+closing statement at the end of the last block that runs, the command's clean
+block if it has one, else its end block, records it. It is the only text added
+to the command and follows the block's last line, so no line or column of the
+command moves; a block that another named block follows in the text gets none.
+A command without it, or one that returns before it with a top-level ``return``,
+reports the success its last statement left (``$?``), which the last element of
+the pipeline the command runs in reads (``__vbotReturned``), without the look
+into a called function. An ``exit`` in the command ends the shell with
+its own code. A ``break`` or ``continue`` outside a loop ends the command with
+0, where plain pwsh reports the last statement's success.
 
-Output. The command's output goes to PowerShell's Out-Default as one pipeline,
-as ``pwsh -Command`` formats a script's output, and the bootstrap exits with the
-recorded code after that pipeline ended. As in ``pwsh -Command``, an ``exit`` in
-the command discards objects the table formatter still holds.
+Output. The command's output and its errors go to PowerShell's Out-Default as
+one pipeline (``2>&1``), as ``pwsh -Command`` merges them, so an error shows
+between the rows the formatter printed before it and those after it. Native
+programs' stderr is not captured by that merge and passes as bytes. A clean
+block runs after Out-Default ended, so its output and errors are dropped, as in
+plain pwsh. The bootstrap exits with the recorded code after that
+pipeline ended. As in ``pwsh -Command``, an ``exit`` in the command discards
+objects the table formatter still holds.
 
 Hidden bookkeeping. The command sees none of the bootstrap's variables; it runs
 as a function's dot-sourced body, and ``$Error`` is empty when it starts, as in
@@ -79,8 +100,15 @@ a new shell. Only the bootstrap's ``__vbot`` functions remain visible.
 from __future__ import annotations
 
 import base64
+import functools
 import re
+import secrets
+import sys
 from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any, cast
+
+from core.tools._command_types import NotRunReason
 
 # Without a byte order mark: a console encoding with one would write it first.
 UTF8_CONSOLE_STATEMENT = (
@@ -101,23 +129,120 @@ OUTPUT_WIDTH_STATEMENT = (
     "$ui.BufferSize = [System.Management.Automation.Host.Size]::new("
     f"{OUTPUT_COLUMNS}, $ui.BufferSize.Height) }} }} catch {{}} }}"
 )
-# Read $? before any bookkeeping changes it or $LASTEXITCODE. The statement only
+# Pass $? before any bookkeeping changes it or $LASTEXITCODE. The statement only
 # records the code; the bootstrap exits after the command's output is formatted.
 # Explicit exit statements bypass this epilogue, preserving the caller's control
-# flow. Get-Variable reads LASTEXITCODE even when it was never set under
-# Set-StrictMode.
-EXIT_STATUS_STATEMENT = (
-    "$global:__vbotExitCode = if ($?) { 0 } else { "
-    "$__vbotLastCode = Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Ignore; "
-    "if ($__vbotLastCode) { $__vbotLastCode } else { 1 } }"
-)
+# flow.
+EXIT_STATUS_STATEMENT = "$global:__vbotExitCode = __vbotStatus $?"
+# The status of the command's last statement, the one before the exit status
+# statement, as bash -c reports it (see the module docstring). A command that
+# returned before that statement gets its status from __vbotReturned instead, the
+# last element of its pipeline, whose end block runs before any other statement
+# can change $?. A failed statement reports the last native program's code,
+# else 1. A successful one reports 0, unless it is a call of a function, filter,
+# script block or script (also through an alias or as an assignment's value) whose
+# body's last statement runs a native program: PowerShell's $? is true after such a
+# call whatever the program's code, and bash reports a function's status as that of
+# its last command. A body's last statement that is such a call again is followed
+# (at most 10 deep); one that runs a native program, alone or in a pipeline or
+# assignment, reports $LASTEXITCODE; anything else (a cmdlet, an expression, an if,
+# foreach or try statement, a call that cannot be resolved) reports 0. It runs after
+# the command's last statement and only reads: the command observes nothing of it,
+# and it never throws into a trap of the command. Get-Variable reads LASTEXITCODE
+# even when it was never set under Set-StrictMode; the variables carry the prefix,
+# so none hides one of the command's from the lookup of `& $name`.
+STATUS_FUNCTION = r"""function __vbotStatus($__vbotSucceeded) {
+    $__vbotCode = Get-Variable -Name LASTEXITCODE -ValueOnly -ErrorAction Ignore
+    if (-not $__vbotSucceeded) {
+        if ($__vbotCode) { return $__vbotCode }
+        return 1
+    }
+    if (-not $__vbotCode) { return 0 }
+    try {
+        $__vbotA = 'System.Management.Automation.Language.'
+        $__vbotFind = {
+            param($__vbotElement)
+            if ($__vbotElement -isnot "${__vbotA}CommandAst") { return }
+            $__vbotTarget = $__vbotElement.CommandElements[0]
+            $__vbotTarget = if ($__vbotTarget -is "${__vbotA}ScriptBlockExpressionAst") {
+                $__vbotTarget.ScriptBlock
+            } elseif ($__vbotTarget -is "${__vbotA}VariableExpressionAst") {
+                $__vbotName = $__vbotTarget.VariablePath.UserPath
+                Get-Variable -Name $__vbotName -ValueOnly -ErrorAction Ignore
+            } else {
+                $__vbotElement.GetCommandName()
+            }
+            if ($__vbotTarget -is [string]) {
+                $__vbotTarget = $ExecutionContext.InvokeCommand.GetCommand($__vbotTarget, 'All')
+            }
+            while ($__vbotTarget -is [System.Management.Automation.AliasInfo]) {
+                $__vbotTarget = $__vbotTarget.ResolvedCommand
+            }
+            if ($__vbotTarget -is [System.Management.Automation.FunctionInfo] -or
+                $__vbotTarget -is [System.Management.Automation.ExternalScriptInfo]) {
+                $__vbotTarget = $__vbotTarget.ScriptBlock
+            }
+            if ($__vbotTarget -is [scriptblock]) { $__vbotTarget = $__vbotTarget.Ast }
+            if ($__vbotTarget -is "${__vbotA}FunctionDefinitionAst") {
+                $__vbotTarget = $__vbotTarget.Body
+            }
+            $__vbotTarget
+        }
+        $__vbotAst = ${function:__vbotBody}.Ast
+        $__vbotBlock = $__vbotAst.PSObject.Properties['CleanBlock']
+        $__vbotBlock = if ($__vbotBlock -and $__vbotBlock.Value) {
+            $__vbotBlock.Value
+        } else { $__vbotAst.EndBlock }
+        $__vbotStatements = $__vbotBlock.Statements
+        $__vbotStatement = if ($__vbotStatements.Count -gt 1) {
+            $__vbotStatements[$__vbotStatements.Count - 2]
+        }
+        for ($__vbotDepth = 0; $__vbotStatement -and $__vbotDepth -le 10; $__vbotDepth++) {
+            if ($__vbotStatement -is "${__vbotA}AssignmentStatementAst") {
+                $__vbotStatement = $__vbotStatement.Right
+            }
+            if ($__vbotStatement -isnot "${__vbotA}PipelineAst") { break }
+            $__vbotElements = $__vbotStatement.PipelineElements
+            $__vbotStatement = $null
+            foreach ($__vbotElement in $__vbotElements) {
+                $__vbotTarget = & $__vbotFind $__vbotElement
+                if ($__vbotTarget -is [System.Management.Automation.ApplicationInfo]) {
+                    if ($__vbotDepth) { return $__vbotCode }
+                } elseif ($__vbotElements.Count -eq 1 -and
+                    $__vbotTarget -is "${__vbotA}ScriptBlockAst") {
+                    $__vbotBlocks = $__vbotTarget.EndBlock, $__vbotTarget.ProcessBlock,
+                        $__vbotTarget.BeginBlock
+                    foreach ($__vbotBlock in $__vbotBlocks) {
+                        if ($__vbotBlock -and $__vbotBlock.Statements.Count) {
+                            $__vbotStatement = $__vbotBlock.Statements[-1]
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
+    0
+}
+function __vbotReturned {
+    end {
+        $__vbotSucceeded = $?
+        if (-not (Get-Variable -Name __vbotExitCode -Scope Global -ErrorAction Ignore)) {
+            $global:__vbotExitCode = if ($__vbotSucceeded) { 0 } else { __vbotStatus $false }
+        }
+    }
+}
+"""
+STATUS_FUNCTION = re.sub(r"(?m)^[ \t]+", "", STATUS_FUNCTION)
 SETUP_STATEMENT = "; ".join(
     (UTF8_CONSOLE_STATEMENT, UI_CULTURE_STATEMENT, PLAIN_TEXT_STATEMENT, OUTPUT_WIDTH_STATEMENT)
 )
-# The bootstrap's exit codes when the command did not run, without output: "VB"
-# in the high bytes, which no program is expected to use (see the module docstring).
+# The bootstrap's exit code for a request too short to carry its not-run code:
+# "VB" in the high bytes. A command can exit with it too, so it proves nothing.
 REQUEST_UNREADABLE_EXIT_CODE = 0x56420001
-WORKDIR_UNAVAILABLE_EXIT_CODE = 0x56420002
+# A request's not-run code has nine decimal digits; the code after it has too.
+_NOT_RUN_CODE_FIRST = 100_000_000
+_NOT_RUN_CODES = 899_999_998
 # A shell started ahead of its command waits in Windows' system directory
 # (``_command_launch``). While it waits it pays the first use of what follows:
 # type lookups, the parser, PowerShell's utility and file cmdlets, formatting, an
@@ -136,7 +261,7 @@ if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
             'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management')
         $null = [pscustomobject]@{ Name = 1 } | Out-String
         ${function:__vbotBody} = [scriptblock]::Create('')
-        . __vbotInvoke | Out-Default
+        . __vbotInvoke
         Remove-Variable -Name __vbotWarm* -Scope Global
         Set-Location - -ErrorAction Stop
         Set-Location -LiteralPath ([Environment]::CurrentDirectory) -ErrorAction Stop
@@ -150,13 +275,16 @@ WARM_UP_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", WARM_UP_STATEMENTS)
 # A shell that waited elsewhere first undoes its move there, back to where
 # PowerShell opened, so the move to the workdir leaves the location history of a
 # shell started in it; the drive it waited on returns to its root. Either failure
-# exits with its code and prints nothing.
+# exits with the request's not-run code, or the code after it, and prints nothing.
 REQUEST_STATEMENTS = r"""$__vbotRequest = @($input)
+$__vbotNotRun = {unreadable}
 try {
-    if ($__vbotRequest.Count -lt 3 -or $__vbotRequest[-1] -ne '.') { throw 'ended early' }
-    $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[0]))
-    $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
-    for ($__vbotIndex = 2; $__vbotIndex -lt $__vbotRequest.Count - 1; $__vbotIndex++) {
+    if ($__vbotRequest[0] -notmatch '^[0-9]{9}$') { throw 'no not-run code' }
+    $__vbotNotRun = [int]$__vbotRequest[0]
+    if ($__vbotRequest.Count -lt 4 -or $__vbotRequest[-1] -ne '.') { throw 'ended early' }
+    $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
+    $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[2]))
+    for ($__vbotIndex = 3; $__vbotIndex -lt $__vbotRequest.Count - 1; $__vbotIndex++) {
         $__vbotPair = $__vbotRequest[$__vbotIndex].Split(' ')
         $__vbotValue = if ($__vbotPair.Count -gt 1) {
             $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotPair[1]))
@@ -165,7 +293,7 @@ try {
             $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotPair[0])), $__vbotValue)
     }
 } catch {
-    exit {unreadable}
+    exit $__vbotNotRun
 }
 if ($PWD.ProviderPath -ne $__vbotWorkdir) {
     try {
@@ -175,27 +303,34 @@ if ($PWD.ProviderPath -ne $__vbotWorkdir) {
         [Environment]::CurrentDirectory = $__vbotWorkdir
         if ($__vbotDrive -and $PWD.Drive -ne $__vbotDrive) { $__vbotDrive.CurrentLocation = '' }
     } catch {
-        exit {unavailable}
+        exit ($__vbotNotRun + 1)
     }
 }
 """
 REQUEST_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REQUEST_STATEMENTS)
 # Parse the command after the setup; a syntax error is thrown as PowerShell reports
-# its own. The exit status runs at the end of the last block: the unnamed body, a
-# named end block, or an end block added after begin or process blocks. The
-# command runs without the bootstrap's variables and with an empty $Error; the
-# exit status statement sets the only variable, and a command that returns before
-# reaching it exits with 0.
+# its own. The exit status runs at the end of the last block that runs: a clean
+# block, else the unnamed body, a named end block, or an end block added after
+# begin or process blocks. A named block that another named block follows in the
+# text gets none, since the lines after it would move; __vbotReturned reads the
+# status then. The command runs without the bootstrap's variables and with an
+# empty $Error; the exit status sets the only variable, and a command that ends
+# without it, through break or continue outside a loop, exits with 0.
 RUN_STATEMENTS = r"""$__vbotParseErrors = $null
 $__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
     $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
 if ($__vbotParseErrors) {
     throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
 }
-$__vbotEnd = $__vbotAst.EndBlock
+$__vbotLast = $__vbotAst.CleanBlock
+if (-not $__vbotLast) { $__vbotLast = $__vbotAst.EndBlock }
+$__vbotLater = @($__vbotAst.DynamicParamBlock, $__vbotAst.BeginBlock, $__vbotAst.ProcessBlock,
+    $__vbotAst.EndBlock).Where({ $_ -and $_.Extent.StartOffset -gt $__vbotLast.Extent.StartOffset })
 $__vbotExitStatus = '{exit_status}'
-$__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
-    $__vbotCommand.Insert($__vbotEnd.Extent.EndOffset - 1, "`n`n$__vbotExitStatus`n")
+$__vbotCommand = if ($__vbotLast -and -not $__vbotLast.Unnamed) {
+    if ($__vbotLater) { $__vbotCommand } else {
+        $__vbotCommand.Insert($__vbotLast.Extent.EndOffset - 1, "`n`n$__vbotExitStatus`n")
+    }
 } elseif ($__vbotAst.BeginBlock -or $__vbotAst.ProcessBlock -or $__vbotAst.DynamicParamBlock) {
     "$__vbotCommand`nend {`n$__vbotExitStatus`n}"
 } else {
@@ -204,7 +339,7 @@ $__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
 ${function:__vbotBody} = [scriptblock]::Create($__vbotCommand)
 Remove-Variable -Name __vbot* -Scope Global
 $Error.Clear()
-. __vbotInvoke | Out-Default
+. __vbotInvoke
 $__vbotExitCode = Get-Variable -Name __vbotExitCode -Scope Global -ValueOnly -ErrorAction Ignore
 if (-not $__vbotExitCode) { exit 0 }
 exit $__vbotExitCode
@@ -214,8 +349,12 @@ RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS)
 # which PowerShell shows only beyond the first line, so no bootstrap line appears in
 # the command's errors. Dot-sourcing the function and its body keeps the command's
 # own scope; the body is the command's script block, not a function of its own,
-# whose name its errors would show.
-INVOKE_STATEMENT = "function __vbotInvoke { . ${function:__vbotBody} }"
+# whose name its errors would show. Its errors merge into Out-Default's input, as
+# pwsh -Command merges a script's; __vbotReturned reads the status of a command
+# that returned early.
+INVOKE_STATEMENT = (
+    "function __vbotInvoke { . ${function:__vbotBody} 2>&1 | Out-Default | __vbotReturned }"
+)
 _QUOTE = re.compile("(['‘’‚‛])")
 
 
@@ -234,29 +373,123 @@ def _escaped(text: str) -> str:
 # the request runs before the command is known.
 POWERSHELL_BOOTSTRAP = (
     f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n"
+    + STATUS_FUNCTION
     + WARM_UP_STATEMENTS
-    + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE)).replace(
-        "{unavailable}", str(WORKDIR_UNAVAILABLE_EXIT_CODE)
-    )
+    + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
     + RUN_STATEMENTS.replace("{exit_status}", _escaped(EXIT_STATUS_STATEMENT))
 )
 
 
-def powershell_request(command: str, workdir: str, changes: Mapping[str, str | None]) -> bytes:
+@dataclass(frozen=True, slots=True)
+class PowerShellRequest:
+    """What ``POWERSHELL_BOOTSTRAP`` reads from stdin, and how it says it ran nothing."""
+
+    data: bytes
+    # The exit codes the bootstrap ends with, without output, when it runs nothing
+    # of the command, and why (``CommandManager.launch``). Drawn for this request.
+    not_run_codes: Mapping[int, NotRunReason]
+
+
+def powershell_request(
+    command: str, workdir: str, changes: Mapping[str, str | None]
+) -> PowerShellRequest:
     """Return the request ``POWERSHELL_BOOTSTRAP`` reads: run *command* in *workdir*.
 
     *changes* is the call's layer of the environment over the shell's start
     environment: a value sets the variable, None removes it.
     """
-    lines = [_base64(workdir), _base64(command)]
+    code = _NOT_RUN_CODE_FIRST + secrets.randbelow(_NOT_RUN_CODES)
+    lines = [str(code), _base64(workdir), _base64(command)]
     for name, value in changes.items():
         lines.append(_base64(name) if value is None else f"{_base64(name)} {_base64(value)}")
     lines.append(".")
-    return "\n".join(lines).encode("ascii") + b"\n"
+    return PowerShellRequest(
+        "\n".join(lines).encode("ascii") + b"\n",
+        {code: "request_unreadable", code + 1: "workdir_unavailable"},
+    )
 
 
 def _base64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8", "surrogatepass")).decode("ascii")
+
+
+@dataclass(frozen=True, slots=True)
+class PowerShellCulture:
+    """The format PowerShell prints and parses numbers and dates in for this user."""
+
+    # Such as de-DE; empty for the invariant culture.
+    name: str
+    # 3.14 as PowerShell prints it, such as 3,14.
+    number: str
+    # 13 October 2026 as PowerShell's short date, such as 13.10.2026.
+    date: str
+
+
+@functools.cache
+def powershell_culture() -> PowerShellCulture | None:
+    """Return the culture of every PowerShell the shell Tool starts; None when unknown.
+
+    pwsh takes it from the user's Windows regional format, with the changes the
+    user made to it (``CultureInfo.UseUserOverride``), and the bootstrap leaves
+    it alone. Windows reports the same for the user's default locale, so it is
+    read here without starting a shell, once per process.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        return _windows_culture()
+    except OSError:
+        return None
+
+
+# Windows NLS: LOCALE_SDECIMAL, DATE_SHORTDATE and LOCALE_NAME_MAX_LENGTH.
+_DECIMAL_SEPARATOR = 0x0E
+_SHORT_DATE = 0x01
+_LOCALE_NAME_LENGTH = 85
+
+
+def _windows_culture() -> PowerShellCulture | None:
+    import ctypes
+    from ctypes import wintypes
+
+    class SystemTime(ctypes.Structure):
+        _fields_ = [
+            (field, wintypes.WORD)
+            for field in ("year", "month", "weekday", "day", "hour", "minute", "second", "ms")
+        ]
+
+    # Windows-only ctypes members, typed loosely so other platforms type-check.
+    kernel32 = cast(Any, ctypes).WinDLL("kernel32", use_last_error=True)
+    kernel32.GetUserDefaultLocaleName.argtypes = (wintypes.LPWSTR, ctypes.c_int)
+    kernel32.GetLocaleInfoEx.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.c_int,
+    )
+    kernel32.GetDateFormatEx.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(SystemTime),
+        wintypes.LPCWSTR,
+        wintypes.LPWSTR,
+        ctypes.c_int,
+        wintypes.LPCWSTR,
+    )
+    text = ctypes.create_unicode_buffer(_LOCALE_NAME_LENGTH)
+    if not kernel32.GetUserDefaultLocaleName(text, len(text)):
+        return None
+    name = text.value
+    # None names the user's default locale, with the user's changes to it.
+    if not kernel32.GetLocaleInfoEx(None, _DECIMAL_SEPARATOR, text, len(text)):
+        return None
+    number = f"3{text.value}14"
+    day = SystemTime(2026, 10, 2, 13, 0, 0, 0, 0)
+    if not kernel32.GetDateFormatEx(
+        None, _SHORT_DATE, ctypes.byref(day), None, text, len(text), None
+    ):
+        return None
+    return PowerShellCulture(name, number, text.value)
 
 
 __all__ = [
@@ -269,7 +502,9 @@ __all__ = [
     "SETUP_STATEMENT",
     "UI_CULTURE_STATEMENT",
     "UTF8_CONSOLE_STATEMENT",
-    "WORKDIR_UNAVAILABLE_EXIT_CODE",
+    "PowerShellCulture",
+    "PowerShellRequest",
+    "powershell_culture",
     "powershell_literal",
     "powershell_request",
 ]

@@ -200,6 +200,32 @@ def _sed_hint(failure: _Failure) -> str:
     return f"`sed` does not exist in PowerShell: {change}, and {lines}."
 
 
+# Long output keeps its first and last lines on its own, so the hints for head and
+# tail point there instead of to a trim stage, which holds or cuts the output.
+_UNTRIMMED_OUTPUT = (
+    "Run the command without it: long output keeps its first and last lines, and the "
+    "result names a file with all of it."
+)
+
+
+def _head_hint(failure: _Failure) -> str:
+    lines = (
+        f"Read the first lines of a file with {_READ_TOOL} and limit."
+        if failure.offers(_READ_TOOL)
+        else "Print the first lines of a file with `Get-Content path -TotalCount 10`."
+    )
+    return f"`head` does not exist in PowerShell. {_UNTRIMMED_OUTPUT} {lines}"
+
+
+def _tail_hint(failure: _Failure) -> str:
+    lines = (
+        f"Read the last lines of a file with {_READ_TOOL} and a negative offset, such as -20."
+        if failure.offers(_READ_TOOL)
+        else "Print the last lines of a file with `Get-Content path -Tail 20`."
+    )
+    return f"`tail` does not exist in PowerShell. {_UNTRIMMED_OUTPUT} {lines}"
+
+
 # PowerShell equivalents for bash commands Agents reach for on a Windows host.
 _POWERSHELL_EQUIVALENTS: dict[str, str | Callable[[_Failure], str]] = {
     "grep": _grep_hint,
@@ -210,14 +236,8 @@ _POWERSHELL_EQUIVALENTS: dict[str, str | Callable[[_Failure], str]] = {
         "`awk` does not exist in PowerShell: split fields with "
         "`ForEach-Object { ($_ -split '\\s+')[1] }`."
     ),
-    "head": (
-        "`head` does not exist in PowerShell: use `Select-Object -First 10` for command output "
-        "and `Get-Content path -TotalCount 10` for a file."
-    ),
-    "tail": (
-        "`tail` does not exist in PowerShell: use `Select-Object -Last 10` for command output "
-        "and `Get-Content path -Tail 10` for a file."
-    ),
+    "head": _head_hint,
+    "tail": _tail_hint,
     "wc": (
         "`wc` does not exist in PowerShell: count lines with `(Get-Content path).Count` or "
         "`(command | Measure-Object).Count`, and words or characters with "
@@ -1274,7 +1294,7 @@ def _hint_hidden_failure(
                 f"{hint} The statement with `{missing[1]}` did not run, although the command "
                 "exited with code 0."
             )
-    if _DEV_NULL.search(command) and _DEV_NULL_PATH.search(window):
+    if _DEV_NULL.search(command) and _DEV_NULL_RESOLVED.search(window):
         return (
             f"{_DEV_NULL_HINT} The statement with /dev/null did not run, although the command "
             "exited with code 0."
@@ -1326,10 +1346,19 @@ def _hint_native_glob(failure: _Failure) -> str | None:
 
 
 # Windows has no /dev/null: PowerShell resolves it as \dev\null on the current
-# drive, so a redirection or a cmdlet reports the missing C:\dev\null, and a
-# program reports /dev/null as it was given.
+# drive, so a redirection or a cmdlet reports the missing C:\dev\null, quoted in
+# its path error, and a program reports /dev/null as it was given, as a missing
+# file. Output that merely names /dev/null is no failure about it: a diff
+# header for an added file reads `--- /dev/null`.
 _DEV_NULL = re.compile(r"[/\\]dev[/\\]null", re.IGNORECASE)
-_DEV_NULL_PATH = re.compile(r"\b[A-Za-z]:\\dev\\null\b", re.IGNORECASE)
+_DEV_NULL_RESOLVED = re.compile(
+    r"\b[A-Za-z]:\\dev\\null\b|['\"][^'\"\r\n]*\\dev\\null['\"]", re.IGNORECASE
+)
+_DEV_NULL_MISSING = re.compile(
+    r"No such file or directory\W+[/\\]dev[/\\]null\b"
+    r"|[/\\]dev[/\\]null\W+No such file or directory",
+    re.IGNORECASE,
+)
 _DEV_NULL_HINT = (
     "Windows has no /dev/null: PowerShell and programs read it as the path \\dev\\null on the "
     "current drive. Discard output with `2>$null`, `*>$null` or `| Out-Null`, and give a "
@@ -1340,7 +1369,10 @@ _DEV_NULL_HINT = (
 def _hint_dev_null(failure: _Failure) -> str | None:
     if not _POWERSHELL or not _DEV_NULL.search(failure.command):
         return None
-    return _DEV_NULL_HINT if _DEV_NULL.search(failure.output) else None
+    output = failure.output
+    if _DEV_NULL_RESOLVED.search(output) or _DEV_NULL_MISSING.search(output):
+        return _DEV_NULL_HINT
+    return None
 
 
 _MISSING_MODULE = re.compile(

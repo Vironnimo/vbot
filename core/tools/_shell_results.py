@@ -2,11 +2,11 @@
 
 The shell Tool and ``background_tasks`` describe a ``CommandReport`` the same
 way: the ended result with its output, exit code and the facts the exit code
-hides, a running command's newest output, why vBot stopped it, the processes it
-left running and the exact call that stops them. A command that outlives its
-call delivers its result as a new message (``format_command_delivery``);
-``background_command_statuses`` folds stored results and deliveries into the
-status of each background command.
+hides, a running command's newest output, why vBot stopped it, why the shell ran
+nothing of it, the processes it left running and the exact call that stops them.
+A command that outlives its call delivers its result as a new message
+(``format_command_delivery``); ``background_command_statuses`` folds stored
+results and deliveries into the status of each background command.
 
 Texts name another Tool only when *names* (``ToolNames``) says so; a delivery
 outlives its call and gets a snapshot of the Tools named at the command's start.
@@ -53,6 +53,7 @@ SHELL_RUNNING_OUTPUT_LINES = 20
 SHELL_RUNNING_OUTPUT_CHARS = 4_000
 # A delivery shows the command up to this many characters.
 _DELIVERY_COMMAND_CHARS = 1_000
+RUN_AGAIN = "Run the command again; if it fails the same way, tell the user."
 # A pipeline stage that passes nothing on before its input ends: the last lines,
 # a sort, a count or a group, or one string of everything. Output piped into it
 # appears only once the command before the pipe has finished.
@@ -222,6 +223,32 @@ def stopped_because(
     return _STOP_TEXTS[reason]
 
 
+def not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
+    """Why the shell ran nothing of an ended command and what to do, and whether a
+    retry can help; None when the command ran.
+
+    Only the shell's own report counts (``CommandReport.not_run``): an exit code
+    alone, such as a reserved one, can be the command's.
+    """
+    if report.not_run == "request_unreadable":
+        return f"vBot could not pass the command to the shell. {RUN_AGAIN}", True
+    if report.not_run != "workdir_unavailable":
+        return None
+    path = model_path(report.workdir)
+    if not report.workdir.is_dir():
+        # The directory was removed after the call was checked.
+        return (
+            f"the workdir {path} is no longer an existing directory. Pass an existing "
+            "directory as workdir.",
+            False,
+        )
+    return (
+        f"vBot could not enter the workdir {path}. If the command can run in another "
+        "directory, pass that directory as workdir; otherwise tell the user.",
+        False,
+    )
+
+
 # Results
 
 
@@ -230,12 +257,16 @@ def ended_result(
 ) -> JsonObject:
     """The result data of an ended command, fields in order and omitted when empty.
 
-    ``status`` (``exited`` or ``stopped``), ``exit_code`` (of a command that
-    exited by itself), ``stopped_because``, ``output``, ``failed_programs``,
-    ``hint``, and for processes it left running ``command_id``,
-    ``still_running`` and ``next``. *subagent* is the Sub-Agent whose Session
-    ran the command when an Agent above it reads the result.
+    ``status`` (``exited``, ``stopped`` or ``not_run``), ``exit_code`` (of a
+    command that exited by itself), ``stopped_because``, ``not_run_because``,
+    ``output``, ``failed_programs``, ``hint``, and for processes it left running
+    ``command_id``, ``still_running`` and ``next``. *subagent* is the Sub-Agent
+    whose Session ran the command when an Agent above it reads the result.
     """
+    not_run = not_run_problem(report)
+    if not_run is not None:
+        # The shell's exit code is its own and nothing of the command ran.
+        return {"status": "not_run", "not_run_because": not_run[0]}
     if report.stop_reason is not None:
         # The exit code of a stopped command is vBot's kill, not the program's.
         data: JsonObject = {
@@ -339,7 +370,11 @@ def command_output_text(report: CommandReport) -> str:
 
 def running_output_text(report: CommandReport) -> str:
     """The newest output of a running command: its last lines within the running
-    limits, after a marker for what came before."""
+    limits, after a marker for what came before.
+
+    The marker only counts: the result's ``next`` names the log file
+    (``running_output_note``), and a marker naming it too said it twice.
+    """
     transcript = report.transcript
     whole = _whole_lines(transcript)
     lines = whole if whole is not None else list(transcript.tail)
@@ -349,8 +384,7 @@ def running_output_text(report: CommandReport) -> str:
     kept, cut = _last_lines(lines, first_cut, SHELL_RUNNING_OUTPUT_CHARS)
     earlier = transcript.total_lines - len(kept)
     if earlier or cut:
-        omission = _omission(earlier, cut, earlier=True)
-        kept.insert(0, f"[... {omission} omitted{_full_output(report)} ...]")
+        kept.insert(0, f"[... {_omission(earlier, cut, earlier=True)} omitted ...]")
     return "\n".join(kept)
 
 
@@ -432,10 +466,12 @@ def _kept_output(report: CommandReport) -> str | None:
     it. The file holds every byte the command wrote, escape sequences included.
     """
     path = report.log_path
-    if path is None:
+    if path is None or report.not_run is not None:
         return None
     if report.stop_reason is not None and holding_stage(report.command) is not None:
-        # The lines the stage held never reached vBot.
+        # The lines the stage held never reached vBot; a file of nothing is no copy.
+        if not report.transcript.total_lines:
+            return None
         return f"vBot kept the raw output that reached it in {model_path(path)} for you to read"
     return f"vBot kept this command's complete raw output in {model_path(path)} for you to read"
 
@@ -446,8 +482,15 @@ def _kept_output(report: CommandReport) -> str | None:
 def format_command_delivery(report: CommandReport, *, names: ToolNames = _names_nothing) -> str:
     """The message that delivers a background command's result when it ends.
 
-    *names* tells which Tools the message can name.
+    *names* tells which Tools the message can name. A command the shell ran
+    nothing of gets one line that says why.
     """
+    not_run = not_run_problem(report)
+    if not_run is not None:
+        return (
+            f"{COMMAND_STATUS_NOTE_MARKER}{report.command_id} ({report.label}) did not run: "
+            f"{not_run[0]}"
+        )
     ran = duration(report.elapsed_seconds)
     if report.stop_reason is not None:
         status = f"was stopped after {ran}: {stopped_because(report, delivery=True)}"
@@ -544,6 +587,8 @@ def _fold_result(statuses: JsonObject, content: str) -> None:
         statuses.setdefault(command_id, "running")
     elif status == "stopped":
         statuses[command_id] = "stopped"
+    elif status == "not_run":
+        statuses[command_id] = "failed"
     elif status == "exited":
         statuses[command_id] = "completed" if data.get("exit_code") == 0 else "failed"
 
@@ -554,6 +599,7 @@ __all__ = [
     "COMMAND_STATUS_TOOL_NAMES",
     "SHELL_TOOL_NAME",
     "TERMINAL_TOOL_NAME",
+    "RUN_AGAIN",
     "ToolNames",
     "background_command_statuses",
     "command_output_text",
@@ -567,6 +613,7 @@ __all__ = [
     "stop_call",
     "leftovers_stop",
     "named_tools",
+    "not_run_problem",
     "output_location",
     "process_text",
     "processes_text",

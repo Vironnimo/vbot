@@ -33,9 +33,13 @@ from core.storage.temp_files import TemporaryFileManager
 from core.tools import shell as shell_module
 from core.tools import shell_hints
 from core.tools._command_launch import PipeLauncher
-from core.tools._powershell import REQUEST_UNREADABLE_EXIT_CODE, WORKDIR_UNAVAILABLE_EXIT_CODE
+from core.tools._powershell import (
+    REQUEST_UNREADABLE_EXIT_CODE,
+    PowerShellCulture,
+    powershell_culture,
+)
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
-from core.tools.command_manager import CommandManager
+from core.tools.command_manager import CommandManager, NotRunReason
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process_tree import ProcessTreeFacts, ProgramExit, RunningProcess
 from core.tools.scratch_areas import ScratchAreas
@@ -235,13 +239,26 @@ def launched(launcher: FakeLauncher, index: int = 0) -> tuple[str, dict[str, str
     def text(field: str) -> str:
         return base64.b64decode(field).decode("utf-8")
 
-    for line in lines[2:-1]:
+    for line in lines[3:-1]:
         name, separator, value = line.partition(" ")
         if separator:
             environment[text(name)] = text(value)
         else:
             environment.pop(text(name), None)
-    return text(lines[1]), environment
+    return text(lines[2]), environment
+
+
+def not_run_code(launcher: FakeLauncher, reason: NotRunReason, index: int = 0) -> int:
+    """The exit code by which PowerShell says it ran nothing of a launch's request:
+    the request's first line, or the code after it for a workdir it cannot enter."""
+    request = launcher.requests[index]
+    assert request is not None
+    code = int(request.split(b"\n", 1)[0])
+    return code if reason == "request_unreadable" else code + 1
+
+
+# The bootstrap that reports a command it ran nothing of is PowerShell's.
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="PowerShell's bootstrap")
 
 
 # Command log files: tmp_<id>.log in Storage.
@@ -618,7 +635,8 @@ async def test_running_output_is_the_newest_lines_and_its_log_file_has_every_lin
     assert result["status"] == "running"
     path = log_file(result["next"])
     marker, *newest = result["output"].splitlines()
-    assert marker.startswith("[... 130 earlier lines omitted") and path in marker, marker
+    # next names the log file, the marker only counts.
+    assert marker == "[... 130 earlier lines omitted ...]"
     assert newest == lines[-20:]
     assert Path(path).read_text(encoding="utf-8").splitlines() == lines
     # The user watched the output arrive while the call waited.
@@ -895,27 +913,29 @@ async def test_a_shell_that_cannot_start_names_the_state_instead_of_the_raw_erro
     assert stop_calls(message) == ([{"action": "list"}] if error.errno == errno.ENOMEM else [])
 
 
+@windows_only
 @pytest.mark.parametrize(
-    ("exit_code", "removed", "retryable", "fragment"),
+    ("reason", "removed", "retryable", "fragment"),
     [
-        (REQUEST_UNREADABLE_EXIT_CODE, False, True, "could not pass the command to the shell"),
-        (WORKDIR_UNAVAILABLE_EXIT_CODE, False, False, "pass that directory as workdir"),
+        ("request_unreadable", False, True, "could not pass the command to the shell"),
+        ("workdir_unavailable", False, False, "pass that directory as workdir"),
         # The directory was removed after the call was checked.
-        (WORKDIR_UNAVAILABLE_EXIT_CODE, True, False, "is not an existing directory"),
+        ("workdir_unavailable", True, False, "is no longer an existing directory"),
     ],
     ids=["request-unreadable", "workdir-unavailable", "workdir-removed"],
 )
 @pytest.mark.asyncio
 async def test_a_shell_that_ran_nothing_fails_the_call(
-    shell: Shell, exit_code: int, removed: bool, retryable: bool, fragment: str
+    shell: Shell, reason: NotRunReason, removed: bool, retryable: bool, fragment: str
 ) -> None:
-    # PowerShell's bootstrap exits with a code of its own and prints nothing.
+    # PowerShell's bootstrap exits with the request's own code and prints nothing.
     workdir = shell.commands.cwd / "build"
     workdir.mkdir()
     call = shell.call({"command": "make", "workdir": "build"})
     process = await shell.started()
     if removed:
         workdir.rmdir()
+    exit_code = not_run_code(shell.launcher, reason)
     process.exit(exit_code)
 
     failure = (await shell.returned(call))["error"]
@@ -924,34 +944,40 @@ async def test_a_shell_that_ran_nothing_fails_the_call(
     assert message.startswith(f"{SHELL_MODEL_NAME} was not run: ")
     assert fragment in message
     assert str(exit_code) not in message
-    if exit_code == WORKDIR_UNAVAILABLE_EXIT_CODE:
+    if reason == "workdir_unavailable":
         assert model_path(workdir) in message
 
 
+@windows_only
 @pytest.mark.asyncio
 async def test_a_background_command_that_ran_nothing_delivers_why(shell: Shell) -> None:
     command_id = data(await shell.call({"command": "serve", "run_in_background": True}))[
         "command_id"
     ]
-    (await shell.started()).exit(REQUEST_UNREADABLE_EXIT_CODE)
+    exit_code = not_run_code(shell.launcher, "request_unreadable")
+    (await shell.started()).exit(exit_code)
     await shell.commands.finish(command_id)
 
     body = shell.sink.bodies[0]
     assert body.startswith(f"The background command {command_id} (serve) did not run: ")
-    assert str(REQUEST_UNREADABLE_EXIT_CODE) not in body
+    assert str(exit_code) not in body
     assert background_command_statuses([note(body)]) == {command_id: "failed"}
 
 
 @pytest.mark.asyncio
-async def test_a_command_that_printed_owns_its_exit_code(shell: Shell) -> None:
-    # Only a shell that printed nothing and ran no program can have run nothing.
-    call = shell.call({"command": "tool"})
-    process = await shell.started()
-    process.write("ran\n")
-    process.exit(REQUEST_UNREADABLE_EXIT_CODE)
-
-    result = data(await shell.returned(call))
-    assert (result["exit_code"], result["output"]) == (REQUEST_UNREADABLE_EXIT_CODE, "ran")
+async def test_a_command_owns_every_exit_code_but_its_requests_own(shell: Shell) -> None:
+    # A command that ran, printed nothing and exited with the bootstrap's fixed code,
+    # or with another request's code, ran: only the code drawn for its request says
+    # that PowerShell ran nothing.
+    first = shell.call({"command": "tool"})
+    (await shell.started()).exit(REQUEST_UNREADABLE_EXIT_CODE)
+    assert data(await shell.returned(first))["exit_code"] == REQUEST_UNREADABLE_EXIT_CODE
+    if sys.platform != "win32":
+        return
+    second = shell.call({"command": "tool"})
+    other = not_run_code(shell.launcher, "request_unreadable", index=0)
+    (await shell.started(2)).exit(other)
+    assert data(await shell.returned(second))["exit_code"] == other
 
 
 @pytest.mark.parametrize("companion", [True, False])
@@ -1073,13 +1099,21 @@ async def test_statuses_of_background_commands_fold_from_results_and_deliveries(
         json.dumps(tool_success({"status": "stopped", "command_id": "cmd_z"})),
         BACKGROUND_TASKS_TOOL_NAME,
     )
+    not_run = record(
+        "tool",
+        json.dumps(tool_success({"status": "not_run", "command_id": "cmd_w"})),
+        BACKGROUND_TASKS_TOOL_NAME,
+    )
 
     assert background_command_statuses([result]) == {command_id: "running"}
-    assert background_command_statuses([result, delivery, stopped, unknown, stopped_by_agent]) == {
+    assert background_command_statuses(
+        [result, delivery, stopped, unknown, stopped_by_agent, not_run]
+    ) == {
         command_id: "failed",
         stopped_id: "stopped",
         "cmd_y": "failed",
         "cmd_z": "stopped",
+        "cmd_w": "failed",
     }
     assert shell.manager.status(command_id) == "failed"
     assert shell.manager.status("cmd_unknown") is None
@@ -1094,6 +1128,29 @@ def test_definition_states_the_host_shell_and_its_detached_start() -> None:
     assert f"instead of {'Start-Process' if windows else 'nohup'} or a trailing &." in background
     # The handler caps the wait; the schema names no maximum.
     assert "maximum" not in SHELL_TOOL_PARAMETERS["properties"]["timeout"]
+
+
+@pytest.mark.parametrize(
+    ("culture", "named"),
+    [
+        (PowerShellCulture("de-DE", "3,14", "13.10.2026"), True),
+        # The formats Models assume, and a culture vBot could not read, go unnamed.
+        (PowerShellCulture("en-US", "3.14", "10/13/2026"), False),
+        (PowerShellCulture("", "3.14", "10/13/2026"), False),
+        (None, False),
+    ],
+)
+def test_the_definition_names_the_users_number_and_date_format(
+    culture: PowerShellCulture | None, named: bool
+) -> None:
+    # The definition is fixed when the module loads; the sentence comes from this culture.
+    sentence = shell_module._culture_sentence(culture)
+
+    assert bool(sentence) is named
+    if culture is not None and named:
+        for text in (culture.name, culture.number, culture.date):
+            assert text in sentence
+    assert shell_module._culture_sentence(powershell_culture()) in SHELL_TOOL_DESCRIPTION
 
 
 # --- Real shells -------------------------------------------------------------------

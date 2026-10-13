@@ -55,6 +55,9 @@ COMMAND_STOP_GRACE_SECONDS = 3.0
 
 StopReason = Literal["agent", "parent", "user", "run_cancelled", "shutdown", "scope"]
 CommandStatus = Literal["running", "completed", "failed", "stopped"]
+# Why the shell ran nothing of a command: it could not read the request that
+# carries the command, or could not enter its workdir (``CommandManager.launch``).
+NotRunReason = Literal["request_unreadable", "workdir_unavailable"]
 # ``idle``: the wait passed while the command's processes were quiet over its end.
 CommandWaitOutcome = Literal["ended", "deadline", "idle"]
 # The label of a command in lists and deliveries is cut to this many characters.
@@ -138,6 +141,9 @@ class CommandReport:
     delivers_result: bool
     # From the start until the command ended, or until the report was taken.
     elapsed_seconds: float
+    # Why the shell ran nothing of the command, once it exited with a code the
+    # launch named for that; None when the command ran or may have.
+    not_run: NotRunReason | None = None
 
     @property
     def status(self) -> CommandStatus:
@@ -340,6 +346,7 @@ __all__ = [
     "CommandTranscript",
     "CommandWaitOutcome",
     "CompletionSink",
+    "NotRunReason",
     "OutputCallback",
     "StopReason",
 ]

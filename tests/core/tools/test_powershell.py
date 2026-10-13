@@ -23,10 +23,11 @@ from core.tools._powershell import (
     OUTPUT_COLUMNS,
     POWERSHELL_BOOTSTRAP,
     REQUEST_UNREADABLE_EXIT_CODE,
-    WORKDIR_UNAVAILABLE_EXIT_CODE,
+    PowerShellCulture,
+    powershell_culture,
     powershell_request,
 )
-from core.tools.command_manager import CommandManager
+from core.tools.command_manager import CommandManager, CommandReport, NotRunReason
 from core.tools.shell_environment import RunIdentity, command_environment
 
 pytestmark = pytest.mark.skipif(
@@ -34,19 +35,29 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def _run(
+async def _run(cwd: Path, command: str, *, prefix: str = "") -> tuple[int | None, str]:
+    """Run *command* as the shell Tool does; return its exit code and output.
+
+    *prefix* runs before the bootstrap.
+    """
+    report = await _report(cwd, command, prefix=prefix)
+    transcript = report.transcript
+    assert transcript.omitted_lines == 0
+    return report.exit_code, "".join(f"{line}\n" for line in (*transcript.head, *transcript.tail))
+
+
+async def _report(
     cwd: Path,
     command: str,
     *,
     prefix: str = "",
     workdir: Path | None = None,
     sent: Callable[[bytes], bytes] | None = None,
-) -> tuple[int | None, str]:
-    """Run *command* as the shell Tool does; return its exit code and output.
+) -> CommandReport:
+    """Run *command* as the shell Tool does; return the report of its end.
 
-    *prefix* runs before the bootstrap. *workdir* is the request's workdir instead
-    of *cwd*, the shell's start directory; *sent* turns the request into what
-    reaches the shell.
+    *workdir* is the request's workdir instead of *cwd*, the shell's start
+    directory; *sent* turns the request into what reaches the shell.
     """
     layers = command_environment(RunIdentity("agent-a", "session-a", None))
     pwsh = shutil.which("pwsh")
@@ -63,18 +74,20 @@ async def _run(
             env=layers.base,
             origin_run_id="run-a",
             formatter=str,
-            request=request if sent is None else sent(request),
+            request=request.data if sent is None else sent(request.data),
+            not_run_codes=request.not_run_codes,
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
-        report = manager.report(handle.command_id)
+        return manager.report(handle.command_id)
     finally:
         await manager.aclose()
-    transcript = report.transcript
-    assert transcript.omitted_lines == 0
-    return report.exit_code, "".join(f"{line}\n" for line in (*transcript.head, *transcript.tail))
 
 
 # --- Exit status, errors and text --------------------------------------------
+
+
+# The user's format, which the shell Tool's description names; read without a shell.
+_CULTURE = powershell_culture() or PowerShellCulture("unread", "unread", "unread")
 
 
 _PRINTED_ERROR_TEXT = "; ".join(
@@ -100,17 +113,28 @@ _PRINTED_ERROR_TEXT = "; ".join(
         ),
         # A later statement's success decides.
         (f"& '{sys.executable}' -c 'raise SystemExit(5)'\n'after'", 0, ("after",)),
+        # A call reports its last statement's native exit code, as bash reports a
+        # function's status, through functions, script blocks and scripts; a later
+        # statement inside the call decides instead.
+        (
+            "Set-Content fail.ps1 'cmd /c exit 6'\nfunction f { & { & .\\fail.ps1 } }\nf",
+            6,
+            (),
+        ),
+        ("function f { cmd /c exit 5; 'after-call' }\nf", 0, ("after-call",)),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, ("requires-sentinel",)),
         # PowerShell's messages are English whatever the display language; numbers
-        # keep the user's own regional format.
+        # and dates keep the user's own regional format, the one vBot read.
         (
-            "$own = [cultureinfo]::new((Get-Culture).Name, $true)\n"
-            "'{0} {1}' -f (Get-UICulture).Name, ('{0:N1}' -f 1234.5 -ceq "
-            "(1234.5).ToString('N1', $own))\n"
-            "Get-Item does-not-exist",
+            "(Get-UICulture).Name\n(Get-Culture).Name\n3.14\n"
+            "[datetime]::new(2026, 10, 13).ToString('d')\nGet-Item does-not-exist",
             1,
-            ("en-US True", "Cannot find path", "does-not-exist"),
+            (
+                f"en-US\n{_CULTURE.name}\n{_CULTURE.number}\n{_CULTURE.date}\n",
+                "Cannot find path",
+                "does-not-exist",
+            ),
         ),
         # A syntax error names the command's own line, in UTF-8, and runs nothing.
         (
@@ -131,6 +155,13 @@ _PRINTED_ERROR_TEXT = "; ".join(
         # An error behind a successful end shows as PowerShell printed it, and a
         # silenced one stays silent, also when it fails the last statement.
         ("Get-Item shown-sentinel\n'finished'", 0, ("shown-sentinel", "finished")),
+        # An error shows between the rows printed before and after it.
+        (
+            "1..3 | ForEach-Object { if ($_ -eq 2) { Write-Error 'between-sentinel' } "
+            'else { [pscustomobject]@{ N = "row-$_" } } }',
+            0,
+            ("row-1\nWrite-Error: between-sentinel\nrow-3",),
+        ),
         (
             "Get-ChildItem silenced-sentinel -ErrorAction SilentlyContinue | Select-Object Name",
             1,
@@ -163,6 +194,14 @@ _PRINTED_ERROR_TEXT = "; ".join(
             ("begin-sentinel\nend-sentinel",),
         ),
         ("begin { 'begin-sentinel' } process { cmd /c exit 3 }", 3, ("begin-sentinel",)),
+        # A clean block runs last and decides; its errors are dropped as in plain pwsh.
+        (
+            "end { 'end-sentinel' } clean { Write-Error 'silenced-sentinel' }",
+            1,
+            ("end-sentinel",),
+        ),
+        # A top-level return before the end keeps the last statement's status.
+        ("return (Write-Error 'return-sentinel')\n'not-run'", 1, ("Write-Error: return-sentinel",)),
         # Objects the table formatter holds still print before the exit; a native
         # program has no terminal, for input or output.
         (
@@ -182,17 +221,22 @@ _PRINTED_ERROR_TEXT = "; ".join(
     ids=[
         "param-block-native-exit",
         "later-statement",
+        "called-native-exit",
+        "called-later-statement",
         "requires",
-        "english-messages-own-numbers",
+        "english-messages-own-culture",
         "parse-error",
         "unknown-pipeline-command",
         "shown-error",
+        "error-between-rows",
         "silenced-last-statement",
         "silenced-then-native-exit",
         "exit-0",
         "printed-text-and-quotes",
         "named-blocks",
         "named-blocks-exit",
+        "clean-block",
+        "top-level-return",
         "formatted-objects-and-native-program-without-tty",
         "wide-table",
     ],
@@ -231,7 +275,7 @@ def _without_terminator(request: bytes) -> bytes:
 
 def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:
     def cut(request: bytes) -> bytes:
-        command = request.splitlines()[1]
+        command = request.splitlines()[2]
         return request[: request.index(command) + characters]
 
     return cut
@@ -239,31 +283,54 @@ def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("sent", "workdir", "exit_code"),
+    ("sent", "workdir", "not_run"),
     [
-        (_without_terminator, None, REQUEST_UNREADABLE_EXIT_CODE),
-        (_cut_in_command(6), None, REQUEST_UNREADABLE_EXIT_CODE),
+        (_without_terminator, None, "request_unreadable"),
+        (_cut_in_command(6), None, "request_unreadable"),
         # Base64 that decodes, cut where a quantum ends.
-        (_cut_in_command(8), None, REQUEST_UNREADABLE_EXIT_CODE),
-        (lambda _request: b"", None, REQUEST_UNREADABLE_EXIT_CODE),
+        (_cut_in_command(8), None, "request_unreadable"),
         # A shell that waited elsewhere enters a workdir removed since the call was checked.
-        (None, "gone", WORKDIR_UNAVAILABLE_EXIT_CODE),
+        (None, "gone", "workdir_unavailable"),
     ],
-    ids=["no-terminator", "cut-in-command", "cut-at-base64-boundary", "empty", "workdir-gone"],
+    ids=["no-terminator", "cut-in-command", "cut-at-base64-boundary", "workdir-gone"],
 )
-async def test_a_request_the_shell_cannot_read_or_enter_runs_nothing_and_prints_nothing(
-    tmp_path: Path, sent: Callable[[bytes], bytes] | None, workdir: str | None, exit_code: int
+async def test_a_request_the_shell_cannot_read_or_enter_runs_nothing_and_says_so(
+    tmp_path: Path,
+    sent: Callable[[bytes], bytes] | None,
+    workdir: str | None,
+    not_run: NotRunReason,
 ) -> None:
     marker = tmp_path / "ran.txt"
     command = f"New-Item -ItemType File -Path '{marker}'"
 
-    code, output = await _run(
+    report = await _report(
         tmp_path, command, workdir=tmp_path / workdir if workdir else None, sent=sent
     )
 
-    assert code == exit_code, output
-    assert output == ""
+    assert report.not_run == not_run
+    assert report.transcript.total_lines == 0
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent", [None, lambda _request: b""], ids=["command-exits-with-it", "request-without-code"]
+)
+async def test_an_exit_code_alone_never_says_that_nothing_ran(
+    tmp_path: Path, sent: Callable[[bytes], bytes] | None
+) -> None:
+    # Only the code drawn for the request says so: a command that ran can exit with
+    # any other, also with the code a request too short to carry its own ends with.
+    marker = tmp_path / "ran.txt"
+    command = (
+        f"$null = New-Item -ItemType File -Path '{marker}'; exit {REQUEST_UNREADABLE_EXIT_CODE}"
+    )
+
+    report = await _report(tmp_path, command, sent=sent)
+
+    assert (report.exit_code, report.not_run) == (REQUEST_UNREADABLE_EXIT_CODE, None)
+    assert report.transcript.total_lines == 0
+    assert marker.exists() is (sent is None)
 
 
 @pytest.mark.asyncio
@@ -296,12 +363,17 @@ async def test_output_keeps_non_ascii_text(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_native_output_keeps_its_bytes_and_timing(tmp_path: Path) -> None:
-    """No decoding or newline buffering, also through an alias or a function."""
+    """No decoding or newline buffering, also through an alias or a function.
+
+    stderr passes as bytes too: merging the command's errors into its output
+    does not capture a native program's stderr.
+    """
     pwsh = shutil.which("pwsh")
     assert pwsh is not None
     gate = tmp_path / "continue"
     source = (
         "import pathlib,sys,time; "
+        "sys.stderr.buffer.write(bytes([67,13,68,254])); sys.stderr.buffer.flush(); "
         "sys.stdout.buffer.write(bytes([65,13,66,255])); sys.stdout.buffer.flush(); "
         f"gate=pathlib.Path({str(gate)!r}); "
         "deadline=time.monotonic()+8; "
@@ -328,7 +400,7 @@ async def test_native_output_keeps_its_bytes_and_timing(tmp_path: Path) -> None:
     )
     assert process.stdin is not None and process.stdout is not None
     try:
-        process.stdin.write(powershell_request(command, str(tmp_path), {}))
+        process.stdin.write(powershell_request(command, str(tmp_path), {}).data)
         await process.stdin.drain()
         process.stdin.close()
         # The producer waits for the test: bytes must arrive before it exits or
@@ -338,7 +410,7 @@ async def test_native_output_keeps_its_bytes_and_timing(tmp_path: Path) -> None:
         gate.touch()
         output, errors = await asyncio.wait_for(process.communicate(), timeout=5)
         assert process.returncode == 0, errors
-        assert not errors
+        assert errors == b"C\rD\xfe" * 3
         assert prefix + output == b"A\rB\xff" * 3
     finally:
         if process.returncode is None:

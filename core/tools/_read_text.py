@@ -2,10 +2,15 @@
 
 Text attachments use the same renderer as the ``read`` Tool, so a file accepted
 through a channel has exactly the same limits and continuation hints.
+
+Local files read as UTF-8 with replacement characters. A command's log holds
+the bytes its programs wrote, and on Windows some write UTF-16, so ``read``
+can choose another ``TextDecoding`` for it.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -13,6 +18,7 @@ from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO, Any, Literal, override
 
 from core.tools.arguments import (
     LINE_NUMBER_GUTTER_SEPARATOR,
@@ -37,6 +43,71 @@ _MATCH_LINE_CHARACTERS = 2000
 # How a cut-off window names its next call; ``{offset}`` becomes the offset to
 # send, such as ``813`` or ``"813:5"``.
 READ_CONTINUATION = "Use offset={offset} to continue."
+
+# How a local file's bytes become text (``open_text``): UTF-8; UTF-16 after its
+# byte order mark; or UTF-8 holding UTF-16LE text (``_Utf16LeAsUtf8``).
+TextDecoding = Literal["utf-8", "utf-16", "utf-8+utf-16le"]
+_DECODING_CHUNK_BYTES = 64 * 1024
+# A UTF-16LE character U+0080-U+00FF: its byte, then a NUL.
+_UTF16LE_LATIN1 = re.compile(rb"[\x80-\xff]\x00")
+
+
+def open_text(resolved: Path, decoding: TextDecoding = "utf-8") -> IO[str]:
+    """Open *resolved* as text in *decoding*: invalid bytes read as U+FFFD, line ends stay."""
+    if decoding == "utf-8+utf-16le":
+        raw = io.BufferedReader(
+            _Utf16LeAsUtf8(resolved.open("rb", buffering=0)), _DECODING_CHUNK_BYTES
+        )
+        return io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
+    return resolved.open("r", encoding=decoding, errors="replace", newline="")
+
+
+class _Utf16LeAsUtf8(io.RawIOBase):
+    """A file's bytes as UTF-8, with the UTF-16LE text written into it decoded.
+
+    On Windows some programs, such as wsl.exe, write UTF-16LE to a pipe, between
+    the UTF-8 the command's other output is in, so a command's log holds both, at
+    any byte offset. A byte followed by a NUL is the UTF-16LE character it makes,
+    U+0001-U+00FF, which covers ASCII and Western European text; other NUL bytes
+    are left out. UTF-16LE text beyond U+00FF is not decoded without a byte order
+    mark (``TextDecoding`` "utf-16").
+    """
+
+    def __init__(self, raw: IO[bytes]) -> None:
+        super().__init__()
+        self._raw = raw
+        self._pending = b""
+        # A last byte a NUL at the start of the next chunk makes a character.
+        self._held = b""
+
+    @override
+    def readable(self) -> bool:
+        return True
+
+    @override
+    def readinto(self, buffer: Any) -> int:
+        while not self._pending:
+            data = self._raw.read(_DECODING_CHUNK_BYTES)
+            if not data:
+                self._pending, self._held = self._held, b""
+                break
+            data, self._held = self._held + data, b""
+            if data[-1] >= 0x80:
+                data, self._held = data[:-1], data[-1:]
+            if b"\x00" in data:
+                data = _UTF16LE_LATIN1.sub(lambda unit: chr(unit[0][0]).encode(), data)
+                data = data.replace(b"\x00", b"")
+            self._pending = data
+        view = memoryview(buffer).cast("B")
+        count = min(len(view), len(self._pending))
+        view[:count] = self._pending[:count]
+        self._pending = self._pending[count:]
+        return count
+
+    @override
+    def close(self) -> None:
+        self._raw.close()
+        super().close()
 
 
 @dataclass(frozen=True)
@@ -371,14 +442,16 @@ def _split_stream_fragments(
     return fragments, held_carriage_return
 
 
-def render_text_path(resolved: Path, arguments: JsonObject) -> str:
+def render_text_path(
+    resolved: Path, arguments: JsonObject, *, decoding: TextDecoding = "utf-8"
+) -> str:
     """Render a local text file with bounded memory and early truncation."""
     position = read_position(arguments)
     limit = optional_int(arguments.get("limit"), field_name="limit", minimum=1)
     max_lines = limit or DEFAULT_LINE_LIMIT
     known_total: int | None = None
     if position.line < 0:
-        known_total = count_lines(resolved)
+        known_total = count_lines(resolved, decoding=decoding)
         if not known_total:
             return ""
         position = ReadPosition(_start_line(position.line, known_total))
@@ -470,7 +543,7 @@ def render_text_path(resolved: Path, arguments: JsonObject) -> str:
         current_selected_line_started = False
         return True
 
-    with resolved.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+    with open_text(resolved, decoding) as handle:
         while not (line_limited or byte_limited or character_offset_beyond_end):
             chunk = handle.read(_TEXT_STREAM_CHUNK_CHARACTERS)
             if not chunk:
@@ -497,7 +570,9 @@ def render_text_path(resolved: Path, arguments: JsonObject) -> str:
         if isinstance(fallback, str):
             return fallback
         note, line, count = fallback
-        return note + render_text_path(resolved, {"offset": line, "limit": count})
+        return note + render_text_path(
+            resolved, {"offset": line, "limit": count}, decoding=decoding
+        )
 
     reached_eof = not (line_limited or byte_limited or character_offset_beyond_end)
     total_lines = (
@@ -517,7 +592,7 @@ def render_text_path(resolved: Path, arguments: JsonObject) -> str:
     if not (line_limited or byte_limited):
         return output
     if known_total is None:
-        known_total = count_lines(resolved, max_bytes=_LINE_COUNT_MAX_BYTES)
+        known_total = count_lines(resolved, max_bytes=_LINE_COUNT_MAX_BYTES, decoding=decoding)
     return finalize_limited_text(
         rendered_lines,
         start_line=position.line,
@@ -528,16 +603,25 @@ def render_text_path(resolved: Path, arguments: JsonObject) -> str:
     )
 
 
-def count_lines(resolved: Path, *, max_bytes: int | None = None) -> int | None:
+def count_lines(
+    resolved: Path, *, max_bytes: int | None = None, decoding: TextDecoding = "utf-8"
+) -> int | None:
     """Count lines the way the renderer splits them, or None past ``max_bytes``.
 
     Breaks are LF, CRLF and a lone CR. A final line without a break still counts.
     """
+    if decoding == "utf-16":
+        return _count_text_lines(resolved, max_bytes, decoding)
     count = 0
     size = 0
     first = b""
     last = b""
-    with resolved.open("rb") as handle:
+    handle: io.RawIOBase | IO[bytes] = (
+        _Utf16LeAsUtf8(resolved.open("rb", buffering=0))
+        if decoding == "utf-8+utf-16le"
+        else resolved.open("rb")
+    )
+    with handle:
         while chunk := handle.read(_COUNT_CHUNK_BYTES):
             if not size:
                 first = chunk[: len(UTF8_BOM_BYTES)]
@@ -551,6 +635,25 @@ def count_lines(resolved: Path, *, max_bytes: int | None = None) -> int | None:
     if size == len(UTF8_BOM_BYTES) and first == UTF8_BOM_BYTES:
         return 0
     if size and last not in (b"\n", b"\r"):
+        count += 1
+    return count
+
+
+def _count_text_lines(resolved: Path, max_bytes: int | None, decoding: TextDecoding) -> int | None:
+    """``count_lines`` over decoded text, for a decoding whose line breaks are not bytes."""
+    if max_bytes is not None and resolved.stat().st_size > max_bytes:
+        return None
+    count = 0
+    last = ""
+    with open_text(resolved, decoding) as text:
+        while chunk := text.read(_TEXT_STREAM_CHUNK_CHARACTERS):
+            if not last:
+                chunk = chunk.removeprefix("\ufeff")
+            count += chunk.count("\n") + chunk.count("\r") - chunk.count("\r\n")
+            if last == "\r" and chunk.startswith("\n"):
+                count -= 1
+            last = chunk[-1:] or last
+    if last and last not in ("\n", "\r"):
         count += 1
     return count
 

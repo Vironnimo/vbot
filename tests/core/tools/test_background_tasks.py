@@ -30,7 +30,7 @@ from core.tools.background_tasks import (
     BACKGROUND_TASKS_TOOL_NAME,
     register_background_tasks_tool,
 )
-from core.tools.command_manager import CommandManager
+from core.tools.command_manager import CommandManager, NotRunReason
 from core.tools.model_names import called_tool_name
 from core.tools.process_tree import RunningProcess
 from core.tools.shell import SHELL_TOOL_NAME, register_shell_tool
@@ -152,11 +152,15 @@ class Tasks:
         return details
 
     async def background(
-        self, *, owner: SessionAddress = OWNER, command: str = "serve"
+        self,
+        *,
+        owner: SessionAddress = OWNER,
+        command: str = "serve",
+        not_run_codes: dict[int, NotRunReason] | None = None,
     ) -> tuple[str, FakeProcess]:
         """A command of *owner* that continues in the background and delivers its result."""
         command_id, process = await self.commands.launch(
-            owner=owner, command=command, formatter=format_report
+            owner=owner, command=command, formatter=format_report, not_run_codes=not_run_codes
         )
         self.commands.manager.to_background(command_id, deliver=True)
         # Each command starts a second after the one before.
@@ -368,6 +372,33 @@ async def test_status_of_an_ended_command_acknowledges_only_this_sessions_delive
     assert tasks.commands.sink.cancellations == ([f"command:{command_id}"] if own else [])
 
 
+@pytest.mark.asyncio
+async def test_a_command_the_shell_ran_nothing_of_says_why_in_list_and_status(
+    tasks: Tasks,
+) -> None:
+    # The shell exits with a code its launch named for running nothing.
+    command_id, process = await tasks.background(not_run_codes={123456789: "request_unreadable"})
+    process.exit(123456789)
+    await tasks.commands.finish(command_id)
+
+    listed = data(await tasks.call({"action": "list"}))["tasks"]
+    [row] = [task for task in listed if task["type"] == "command"]
+    result = await tasks.call({"action": "status", "id": command_id})
+    status = data(result)
+    tasks.persist()
+
+    # No exit code, output or log file of the command's own.
+    assert (row["status"], "exit_code" in row, "log" in row) == ("not_run", False, False)
+    assert list(status) == ["status", "command_id", "not_run_because"]
+    assert status["status"] == "not_run"
+    assert "123456789" not in status["not_run_because"]
+    # The status said why: the delivery that says it is withdrawn.
+    assert tasks.commands.sink.cancellations == [f"command:{command_id}"]
+    assert {"type": "notice", "level": "warning", "text": "The command did not run."} in (
+        tasks.shown({"action": "status", "id": command_id}, result)
+    )
+
+
 _SUBAGENT_ID = re.compile(r"\bsub_[a-z0-9]+")
 
 
@@ -575,22 +606,29 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
         await _later_reads_speak_to_their_reader(tasks, command_id, stopped)
 
 
+@pytest.mark.parametrize("before", ["", "collecting\n"], ids=["nothing", "a statement"])
 @pytest.mark.asyncio
 async def test_a_stop_does_not_call_the_log_complete_when_a_pipe_stage_held_output(
-    tasks: Tasks,
+    tasks: Tasks, before: str
 ) -> None:
     stage = "Select-Object -Last 25"
-    command_id, process = await tasks.background(command=f"python -m unittest 2>&1 | {stage}")
+    command_id, process = await tasks.background(
+        command=f"Write-Output collecting; python -m unittest 2>&1 | {stage}"
+    )
+    process.write(before)
 
     stopped = data(await tasks.call({"action": "stop", "id": command_id}))
     await tasks.commands.finish(command_id)
 
     # The lines the stage held never reached vBot: the hint names the stage, and
-    # the log file the result names holds only what arrived.
-    assert "output" not in stopped
+    # the log file the result names holds only what arrived, if anything did.
     assert stage in stopped["hint"]
-    output_file(stopped["next"])
-    assert "complete" not in stopped["next"]
+    assert stopped.get("output") == (before.strip() or None)
+    if before:
+        output_file(stopped["next"])
+        assert "complete" not in stopped["next"]
+    else:
+        assert "next" not in stopped
 
 
 async def _later_reads_speak_to_their_reader(

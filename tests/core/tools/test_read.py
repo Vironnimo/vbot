@@ -350,6 +350,62 @@ async def test_streaming_text_matches_byte_renderer_across_chunked_line_endings(
     assert content(result) == read_module.render_text_file(raw)
 
 
+# wsl.exe -l on a German Windows, as it writes it to a pipe: UTF-16LE, no byte order mark.
+_WSL_LIST = "Windows Subsystem für Linux-Distributionen:\r\nUbuntu (Standard)\r\ndocker-desktop\r\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "text", "decoded"),
+    [
+        (_WSL_LIST.encode("utf-16-le"), _WSL_LIST, True),
+        # Between the command's own UTF-8 output, at an odd byte offset.
+        (
+            "start ä\r\n".encode() + _WSL_LIST.encode("utf-16-le") + b"end\r\n",
+            f"start ä\r\n{_WSL_LIST}end\r\n",
+            True,
+        ),
+        # Text beyond U+00FF decodes after a byte order mark.
+        (
+            "\ufeffДистрибутивы:\r\nUbuntu\r\n".encode("utf-16-le"),
+            "Дистрибутивы:\r\nUbuntu\r\n",
+            True,
+        ),
+        (b"ok\nUbuntu\n", "ok\nUbuntu\n", False),
+    ],
+    ids=["utf16le", "between_utf8", "utf16_with_bom", "utf8"],
+)
+async def test_a_command_log_reads_as_the_text_its_programs_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw: bytes, text: str, decoded: bool
+) -> None:
+    # The data directory is beside the workspace.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    logs = make_context(workspace).data_root / "artifacts" / "temp" / "commands"
+    logs.mkdir(parents=True)
+    log = logs / "tmp_0123456789ab.log"
+    log.write_bytes(raw)
+    # Small odd chunks split characters and line ends between reads.
+    monkeypatch.setattr(read_text_module, "_DECODING_CHUNK_BYTES", 3)
+    lines = text.splitlines()
+    ubuntu = next(number for number, line in enumerate(lines, 1) if line.startswith("Ubuntu"))
+
+    whole = content(await read(workspace, {"path": str(log)}))
+    last = content(await read(workspace, {"path": str(log), "offset": -1}))
+    found = content(await read(workspace, {"path": str(log), "pattern": "Ubuntu"}))
+
+    # A NUL byte makes no command log binary; the result says what was decoded.
+    numbered = "".join(f"{number}| {line}\n" for number, line in enumerate(lines, 1))
+    if decoded:
+        note, rest = whole.split("\n", 1)
+        assert "UTF-16" in note
+        assert rest == numbered
+    else:
+        assert whole == numbered
+    assert last.splitlines()[-1] == f"{len(lines)}| {lines[-1]}"
+    assert f"\n{ubuntu}| {lines[ubuntu - 1]}" in found
+
+
 _LONG = "".join(f"line{i}\n" for i in range(1, 2002))
 
 
@@ -453,9 +509,11 @@ async def test_read_stamp_predates_bytes_so_a_concurrent_write_forces_reread(
     file_state = FileReadState()
     render = read_module.render_text_path
 
-    def render_after_external_write(resolved: Path, arguments: dict[str, Any]) -> str:
+    def render_after_external_write(
+        resolved: Path, arguments: dict[str, Any], **options: Any
+    ) -> str:
         target.write_bytes(b"written during the read\n")
-        return render(resolved, arguments)
+        return render(resolved, arguments, **options)
 
     monkeypatch.setattr(read_module, "render_text_path", render_after_external_write)
 

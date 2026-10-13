@@ -673,6 +673,9 @@ def _command_row(report: CommandReport, subagent: str | None) -> JsonObject:
         row["subagent"] = subagent
     if not report.ended:
         row["status"] = "running"
+    elif report.not_run is not None:
+        # The shell ran nothing of it; status says why.
+        row["status"] = "not_run"
     elif report.stop_reason is not None:
         # Its exit code is vBot's kill, not the command's.
         row["status"] = "stopped"
@@ -684,7 +687,7 @@ def _command_row(report: CommandReport, subagent: str | None) -> JsonObject:
         # The shell exited, but processes it started run on until stopped.
         row["still_running"] = [process_text(process) for process in report.still_running]
     row["runtime"] = duration(report.elapsed_seconds)
-    if report.log_path is not None:
+    if report.log_path is not None and report.not_run is None:
         row["log"] = model_path(report.log_path)
     return row
 
@@ -835,6 +838,8 @@ def background_tasks_detail_blocks(
     blocks = [display_text("output", source="result", path=("data", "output"))]
     if data.get("status") == "running":
         blocks.append(display_notice("info", "The command keeps running in the background."))
+    if data.get("status") == "not_run":
+        blocks.append(display_notice("warning", "The command did not run."))
     exit_code = data.get("exit_code")
     if (
         data.get("status") == "exited"

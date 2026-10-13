@@ -34,8 +34,9 @@ from core.sessions import SessionAddress
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
     POWERSHELL_BOOTSTRAP,
-    REQUEST_UNREADABLE_EXIT_CODE,
-    WORKDIR_UNAVAILABLE_EXIT_CODE,
+    PowerShellCulture,
+    PowerShellRequest,
+    powershell_culture,
     powershell_request,
 )
 from core.tools._shell_arguments import (
@@ -53,6 +54,7 @@ from core.tools._shell_results import (
     BACKGROUND_TASKS_TOOL_NAME,
     COMMAND_STATUS_NOTE_MARKER,
     COMMAND_STATUS_TOOL_NAMES,
+    RUN_AGAIN,
     SHELL_TOOL_NAME,
     TERMINAL_TOOL_NAME,
     ToolNames,
@@ -64,6 +66,7 @@ from core.tools._shell_results import (
     format_command_delivery,
     holding_stage,
     named_tools,
+    not_run_problem,
     running_output_note,
     running_output_text,
     stop_with,
@@ -131,7 +134,7 @@ if sys.platform == "win32":
     # How Agents start a program in the background without the Tool.
     _DETACHED_START = "Start-Process or a trailing &"
     # How Agents cut a command's output themselves.
-    _TRIMMING = "Select-Object -First or -Last"
+    _TRIMMING = "Select-Object -First or -Last, or with head and tail, which PowerShell lacks"
 else:
     _OPENING = (
         "Run a bash command in a new process and return its output and exit code. Use bash syntax."
@@ -139,13 +142,25 @@ else:
     _DETACHED_START = "nohup or a trailing &"
     _TRIMMING = "head or tail"
 
+
+def _culture_sentence(culture: PowerShellCulture | None) -> str:
+    """Name the user's format for numbers and dates where it is not the one Models assume."""
+    if culture is None or culture.name in ("", "en-US"):
+        return ""
+    return (
+        f" PowerShell prints and parses numbers and dates in the user's {culture.name} format, "
+        f"such as {culture.number} and {culture.date}."
+    )
+
+
 # The same for every Tool set: what happens to a long command, and the calls
-# that follow it up, the results say when it happens.
+# that follow it up, the results say when it happens. The culture is read once
+# per process, so the definition stays the same for the Provider's cache.
 SHELL_TOOL_DESCRIPTION = (
-    f"{_OPENING} Long output keeps its first and last lines, and the result names a file "
-    f"with all of it, so there is no need to trim it with {_TRIMMING}. Calls in one message "
-    "run at the same time; chain dependent commands in one call. When another tool covers the "
-    "task, use it instead of a shell command."
+    f"{_OPENING}{_culture_sentence(powershell_culture())} Long output keeps its first and last "
+    f"lines, and the result names a file with all of it, so there is no need to trim it with "
+    f"{_TRIMMING}. Calls in one message run at the same time; chain dependent commands in one "
+    "call. When another tool covers the task, use it instead of a shell command."
 )
 
 _COMMAND_PARAMETER: JsonObject = {"type": "string", "minLength": 1}
@@ -243,8 +258,6 @@ class _ShellCall:
     command: str
     description: str | None
     workdir: Path
-    # The call named the workdir, rather than taking the working directory.
-    workdir_given: bool
     # How long the call waits; *timeout_given* when the Agent chose it.
     wait_seconds: float
     timeout_given: bool
@@ -319,7 +332,6 @@ _NO_RESOURCES_ERRNOS = frozenset({errno.ENOMEM, errno.EAGAIN, errno.EMFILE, errn
 _NO_RESOURCES_WINERRORS = frozenset({4, 8, 14, 1450, 1455})
 _DISK_FULL_ERRNOS = frozenset({errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)})
 _DISK_FULL_WINERRORS = frozenset({39, 112})
-_RETRY = "Run the command again; if it fails the same way, tell the user."
 
 
 def _launch_problem(error: Exception, call: _ShellCall, names: ToolNames) -> tuple[str, bool]:
@@ -332,7 +344,7 @@ def _launch_problem(error: Exception, call: _ShellCall, names: ToolNames) -> tup
     # A launch error is the shell process's; any other is the output file's.
     process = isinstance(error, CommandLaunchError)
     if os_error is None:
-        return f"vBot could not start the shell. {_RETRY} vBot's log has the details.", True
+        return f"vBot could not start the shell. {RUN_AGAIN} vBot's log has the details.", True
     winerror = getattr(os_error, "winerror", None)
     if os_error.errno in _NO_RESOURCES_ERRNOS or winerror in _NO_RESOURCES_WINERRORS:
         problem = "the system is out of memory or process resources, so the shell could not start."
@@ -343,7 +355,7 @@ def _launch_problem(error: Exception, call: _ShellCall, names: ToolNames) -> tup
                 "if it fails the same way, tell the user.",
                 True,
             )
-        return f"{problem} {_RETRY}", True
+        return f"{problem} {RUN_AGAIN}", True
     if os_error.errno in _DISK_FULL_ERRNOS or winerror in _DISK_FULL_WINERRORS:
         return (
             "the disk is full, so vBot could not write the command's output. Tell the user that "
@@ -369,7 +381,7 @@ def _launch_problem(error: Exception, call: _ShellCall, names: ToolNames) -> tup
         problem = f"the operating system could not start the shell{detail}."
     else:
         problem = f"vBot could not create the file for the command's output{detail}."
-    return f"{problem} {_RETRY}", True
+    return f"{problem} {RUN_AGAIN}", True
 
 
 def _os_error(error: BaseException) -> OSError | None:
@@ -449,7 +461,6 @@ def _parse_call(
         command=command,
         description=description.strip() if description and description.strip() else None,
         workdir=workdir,
-        workdir_given=workdir != context.effective_cwd,
         wait_seconds=wait_seconds,
         timeout_given=timeout_given,
         background=background,
@@ -502,7 +513,7 @@ class _ShellStart:
     argv: list[str]
     env: dict[str, str]
     # What PowerShell reads from stdin before the command runs (Windows only).
-    request: bytes | None = None
+    request: PowerShellRequest | None = None
     # Whether a shell started before the call can serve it (``CommandManager.launch``).
     warm: bool = True
 
@@ -659,11 +670,12 @@ class ShellTool:
                 env=start.env,
                 origin_run_id=context.run_id,
                 # The delivery names only Tools named now; it outlives this context.
-                formatter=partial(_delivery, call, names=delivery_names(names)),
+                formatter=partial(format_command_delivery, names=delivery_names(names)),
                 execution_owner=context.execution_owner,
                 on_output=progress,
-                request=start.request,
+                request=start.request.data if start.request is not None else None,
                 warm=start.warm,
+                not_run_codes=start.request.not_run_codes if start.request is not None else None,
             )
         except (OSError, CommandManagerError) as error:
             started.cancel()
@@ -770,7 +782,7 @@ def _result(
     """The Tool result of one call; *reason* says why a running command was
     returned, *idle* that its processes were idle when the wait passed."""
     if report.ended:
-        not_run = _not_run_problem(call, report)
+        not_run = not_run_problem(report)
         if not_run is not None:
             problem, retryable = not_run
             return tool_failure(
@@ -790,51 +802,6 @@ def _result(
     if call.notes:
         data["notes"] = list(call.notes)
     return tool_success(data)
-
-
-def _not_run_problem(call: _ShellCall, report: CommandReport) -> tuple[str, bool] | None:
-    """Why PowerShell ran nothing of an ended command, and whether a retry can help.
-
-    The bootstrap exits with a code of its own and prints nothing when it cannot
-    read the request or enter the workdir (``_powershell``). None when the
-    command ran, or may have: it printed, a program failed, or vBot stopped it.
-    """
-    if (
-        report.exit_code not in (REQUEST_UNREADABLE_EXIT_CODE, WORKDIR_UNAVAILABLE_EXIT_CODE)
-        or not report.ended
-        or report.stop_reason is not None
-        or report.transcript.total_lines
-        or report.failed_programs
-        or report.still_running
-    ):
-        return None
-    if report.exit_code == REQUEST_UNREADABLE_EXIT_CODE:
-        _LOGGER.warning(
-            "Shell command %s did not run: PowerShell could not read it", report.command_id
-        )
-        return f"vBot could not pass the command to the shell. {_RETRY}", True
-    _LOGGER.warning(
-        "Shell command %s did not run: PowerShell could not enter %s",
-        report.command_id,
-        call.workdir,
-    )
-    if not call.workdir.is_dir():
-        # The directory was removed after the call was checked.
-        return _missing_workdir(call.workdir, given=call.workdir_given), False
-    return (
-        f"vBot could not enter the workdir {model_path(call.workdir)}. If the command can run in "
-        "another directory, pass that directory as workdir; otherwise tell the user.",
-        False,
-    )
-
-
-def _delivery(call: _ShellCall, report: CommandReport, *, names: ToolNames) -> str:
-    """The message that delivers a background command's result; one that ran nothing says why."""
-    not_run = _not_run_problem(call, report)
-    if not_run is None:
-        return format_command_delivery(report, names=names)
-    status = f"did not run: {not_run[0]}"
-    return f"{COMMAND_STATUS_NOTE_MARKER}{report.command_id} ({report.label}) {status}"
 
 
 def _running_next(
