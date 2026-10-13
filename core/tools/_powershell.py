@@ -3,8 +3,8 @@
 The shell Tool runs every Windows command in its own ``pwsh -NoProfile
 -NonInteractive -Command <bootstrap>`` on pipes, without a terminal:
 ``Read-Host``, ``Get-Credential`` and confirmation prompts fail at once instead
-of waiting. The bootstrap is fixed text (``POWERSHELL_BOOTSTRAP``). It sets up
-the console, then reads one request from stdin until the input ends
+of waiting. ``powershell_bootstrap`` builds fixed text for the server user's
+host-assembly cache. It sets up the console, then reads one request until stdin ends
 (``powershell_request``): the command, its workdir and the call's layer of the
 environment. It applies the request and runs the command as written; the
 command itself finds its input at its end. Because the request comes last, a
@@ -121,9 +121,11 @@ import secrets
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from core.tools._command_types import NotRunReason
+from core.tools._powershell_host import host_statement
 
 # Without a byte order mark: a console encoding with one would write it first.
 UTF8_CONSOLE_STATEMENT = (
@@ -144,91 +146,6 @@ OUTPUT_WIDTH_STATEMENT = (
     "$ui.BufferSize = [System.Management.Automation.Host.Size]::new("
     f"{OUTPUT_COLUMNS}, $ui.BufferSize.Height) }} }} catch {{}} }}"
 )
-# The outer ConsoleHost remains the owner of its UI and console modes. The host
-# delegates those operations while observing native starts/completions and exit
-# requests. Nested prompts evaluate in the command's runspace and return at EOF;
-# the original host's input loop would wait on the outer runspace and deadlock.
-HOST_STATEMENT = r"""Add-Type @"
-using System;
-using System.Collections;
-using System.Globalization;
-using System.Linq;
-using System.Management.Automation;
-using System.Management.Automation.Host;
-using System.Management.Automation.Runspaces;
-public sealed class VBotPowerShellHost : PSHost, IHostSupportsInteractiveSession {
-    readonly PSHost inner;
-    bool promptInputEnded;
-    public int? ExitCode;
-    public PSVariableIntrinsics Variables;
-    public Runspace CommandRunspace;
-    public IList Errors;
-    public object[] Record;
-    public object NativeExit;
-    public VBotPowerShellHost(PSHost inner) { this.inner = inner; }
-    public override string Name => inner.Name;
-    public override Version Version => inner.Version;
-    public override Guid InstanceId => inner.InstanceId;
-    public override PSHostUserInterface UI => inner.UI;
-    public override CultureInfo CurrentCulture => inner.CurrentCulture;
-    public override CultureInfo CurrentUICulture => inner.CurrentUICulture;
-    public override PSObject PrivateData => inner.PrivateData;
-    public override void SetShouldExit(int code) {
-        ExitCode = code;
-        inner.SetShouldExit(code);
-    }
-    public override void EnterNestedPrompt() {
-        // The request consumed stdin to EOF. ConsoleHost would evaluate one
-        // prompt and return. Its own runspace is waiting for this one, so the
-        // prompt must run here; delegating its input loop would deadlock.
-        if (ExitCode.HasValue || promptInputEnded) return;
-        if (UI.RawUI.CursorPosition.X != 0) UI.WriteLine();
-        string prompt = null;
-        try {
-            using (var pipeline = CommandRunspace.CreateNestedPipeline("prompt", false)) {
-                var output = pipeline.Invoke();
-                if (output.Count != 0) prompt = output[0]?.BaseObject?.ToString();
-            }
-        }
-        catch { } // ConsoleHost falls back when prompt evaluation fails.
-        UI.Write(string.IsNullOrEmpty(prompt) ? "PS>" : prompt);
-        promptInputEnded = true;
-    }
-    public override void ExitNestedPrompt() => inner.ExitNestedPrompt();
-    public override void NotifyBeginApplication() {
-        inner.NotifyBeginApplication();
-        RecordCommand();
-    }
-    public override void NotifyEndApplication() {
-        try { NativeExit = Variables.GetValue("global:LASTEXITCODE"); }
-        catch { Record = null; NativeExit = null; }
-        finally { inner.NotifyEndApplication(); }
-    }
-    public void RecordCommand() {
-        try {
-            var frames = CommandRunspace.Debugger.GetCallStack().ToArray();
-            Record = frames.Length == 0 ? null : new object[] { frames, frames[0].Position,
-                Variables.GetValue("global:LASTEXITCODE"), Errors.Count == 0 ? null : Errors[0] };
-        }
-        catch { Record = null; NativeExit = null; }
-    }
-    public EventHandler<CommandLookupEventArgs> LookupHook => OnCommandLookup;
-    void OnCommandLookup(object sender, CommandLookupEventArgs lookup) {
-        try {
-            var command = lookup.Command;
-            if (command is AliasInfo alias) command = alias.ResolvedCommand;
-            if (command is ExternalScriptInfo) RecordCommand();
-        }
-        catch { Record = null; NativeExit = null; }
-    }
-    public bool IsRunspacePushed => ((IHostSupportsInteractiveSession)inner).IsRunspacePushed;
-    public Runspace Runspace => ((IHostSupportsInteractiveSession)inner).Runspace;
-    public void PushRunspace(Runspace runspace) =>
-        ((IHostSupportsInteractiveSession)inner).PushRunspace(runspace);
-    public void PopRunspace() => ((IHostSupportsInteractiveSession)inner).PopRunspace();
-}
-"@
-"""
 # The runner. The command runs unchanged as its own script (AddScript without a
 # local scope) in a fresh runspace, followed by Out-Default and a status reader.
 # The original ConsoleHost is delegated through the public PSHost interface;
@@ -644,21 +561,29 @@ def _escaped(text: str) -> str:
     return _QUOTE.sub(r"\1\1", text)
 
 
-# Everything before the request runs before the command is known.
-POWERSHELL_BOOTSTRAP = (
-    LANGUAGE_MODE_STATEMENT.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
-    + f"{SETUP_STATEMENT}\n"
-    + HOST_STATEMENT
-    + RUNNER_STATEMENTS
-    + WARM_UP_STATEMENTS
-    + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
-    + RUN_STATEMENTS
-)
+def powershell_bootstrap(cache_dir: Path | None = None) -> str:
+    """Prepare one shell, reusing a host compiled for its exact PowerShell runtime.
+
+    The cache belongs to the server's user, resolved before command environment
+    changes. The bootstrap stays identical across calls so warm shells can serve
+    them. An explicit directory isolates probes and tests.
+    """
+    if cache_dir is None:
+        cache_dir = Path.home() / ".cache" / "vbot-powershell-host"
+    return (
+        LANGUAGE_MODE_STATEMENT.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
+        + f"{SETUP_STATEMENT}\n"
+        + host_statement(powershell_literal(str(cache_dir.absolute())))
+        + RUNNER_STATEMENTS
+        + WARM_UP_STATEMENTS
+        + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
+        + RUN_STATEMENTS
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class PowerShellRequest:
-    """What ``POWERSHELL_BOOTSTRAP`` reads from stdin, and how it says it ran nothing."""
+    """What ``powershell_bootstrap`` reads from stdin, and how it says it ran nothing."""
 
     data: bytes
     # The exit codes the bootstrap ends with, without output, when it runs nothing
@@ -669,7 +594,7 @@ class PowerShellRequest:
 def powershell_request(
     command: str, workdir: str, changes: Mapping[str, str | None]
 ) -> PowerShellRequest:
-    """Return the request ``POWERSHELL_BOOTSTRAP`` reads: run *command* in *workdir*.
+    """Return the request ``powershell_bootstrap`` reads: run *command* in *workdir*.
 
     *changes* is the call's layer of the environment over the shell's start
     environment: a value sets the variable, None removes it.
@@ -776,13 +701,13 @@ __all__ = [
     "OUTPUT_COLUMNS",
     "OUTPUT_WIDTH_STATEMENT",
     "PLAIN_TEXT_STATEMENT",
-    "POWERSHELL_BOOTSTRAP",
     "REQUEST_UNREADABLE_EXIT_CODE",
     "SETUP_STATEMENT",
     "UI_CULTURE_STATEMENT",
     "UTF8_CONSOLE_STATEMENT",
     "PowerShellCulture",
     "PowerShellRequest",
+    "powershell_bootstrap",
     "powershell_culture",
     "powershell_literal",
     "powershell_request",

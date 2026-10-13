@@ -33,9 +33,9 @@ from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.sessions import SessionAddress
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
-    POWERSHELL_BOOTSTRAP,
     PowerShellCulture,
     PowerShellRequest,
+    powershell_bootstrap,
     powershell_culture,
     powershell_request,
 )
@@ -537,7 +537,7 @@ def _shell_start(call: _ShellCall, environment: CommandEnvironment) -> _ShellSta
             raise _cannot_start(
                 "PowerShell 7 (pwsh) is not installed on this host. Ask the user to install it."
             )
-        argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_BOOTSTRAP]
+        argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", powershell_bootstrap()]
         if "" in environment.changes.values():
             request = powershell_request(call.command, str(call.workdir), {})
             return _ShellStart(argv, complete, request, warm=False)
