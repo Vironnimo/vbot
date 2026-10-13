@@ -215,7 +215,10 @@ async def test_list_shows_the_subagents_then_the_commands_of_this_session_and_it
     tasks: Tasks,
 ) -> None:
     running, running_process = await tasks.background(command="serve")
-    ended, ended_process = await tasks.background(command="build")
+    # A command on several lines is labelled on one line.
+    ended, ended_process = await tasks.background(
+        command='python -c "\nimport build\n\nbuild.main()"'
+    )
     # The shell exits; a process it started runs on.
     ended_process.exit(1, leftovers=[SERVER])
     child, _ = await tasks.background(owner=CHILD, command="watch")
@@ -266,7 +269,7 @@ async def test_list_shows_the_subagents_then_the_commands_of_this_session_and_it
         assert Path(row["log"]).is_file()
     assert [(row["command"], row["status"], row.get("subagent")) for row in rows] == [
         ("watch", "running", "sub_child"),
-        ("build", "exited", None),
+        ('python -c " import build build.main()"', "exited", None),
         ("serve", "running", None),
     ]
     assert (rows[1]["exit_code"], rows[1]["still_running"]) == (1, ["server.exe (pid 5001)"])
@@ -282,7 +285,7 @@ async def test_list_shows_the_subagents_then_the_commands_of_this_session_and_it
         "Review docs",
         "Check links",
         "watch",
-        "build",
+        'python -c " import build build.main()"',
         "serve",
     ]
 
