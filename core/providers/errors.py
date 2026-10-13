@@ -150,8 +150,8 @@ class CatalogEntrySkipped(VBotError):  # noqa: N818
 # Provider in-band error objects (SSE error chunks, structured HTTP error
 # bodies) carry optional structured fields across the OpenAI-compatible and
 # Responses-shaped wires: ``message``, a string or numeric ``code``,
-# ``metadata.error_type`` / top-level ``error_type`` (the typed vocabulary
-# below), and an ``availability`` object whose documented ``retryable`` /
+# ``metadata.error_type`` / top-level ``error_type`` / ``type`` (the typed
+# vocabulary below), and an ``availability`` object whose documented ``retryable`` /
 # ``retry_after`` pair is the router's own recovery hint. Messages-compatible
 # streams send ``{"type": "error", "error": {"type": ...}}`` after HTTP 200;
 # their documented ``error.type`` values share the same vocabulary
@@ -243,8 +243,8 @@ def classify_in_band_provider_error(
     """Map one provider in-band error object into vBot's shared error taxonomy.
 
     Reads the documented structured fields — the typed ``error_type``
-    (top-level or under ``metadata``), a string or numeric ``code``, and the
-    router's ``availability.retryable`` / ``availability.retry_after`` hints —
+    (top-level or under ``metadata``), a string or numeric ``code``, a fallback
+    ``type``, and the router's ``availability.retryable`` / ``availability.retry_after`` hints —
     instead of treating every in-band error as fatal. With
     ``lenient_unknown=True`` (multi-upstream routers such as OpenRouter), an
     error carrying no known classification becomes retryable: routing can serve
@@ -270,6 +270,8 @@ def classify_in_band_provider_error(
     classifier = _first_non_empty_string(metadata.get("error_type"), error.get("error_type"))
     if classifier is None and isinstance(code, str) and code:
         classifier = code
+    if classifier is None:
+        classifier = _first_non_empty_string(error.get("type"))
     numeric_code = code if isinstance(code, int) and not isinstance(code, bool) else None
 
     availability = error.get("availability")
