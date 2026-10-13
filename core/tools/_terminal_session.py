@@ -179,6 +179,10 @@ class TerminalSession:
         self._lock = asyncio.Lock()
         # Serializes input, so nothing types between a text and the key after it.
         self._input_lock = asyncio.Lock()
+        # Physical writes stay ordered even if their caller is cancelled.
+        # Reading output must never wait for a blocked PTY write.
+        self._writer_task: asyncio.Task[BaseException | None] | None = None
+        self._input_writes = 0
         self._observer = observer
         self._activity = TerminalActivity(
             repaint_window=TERMINAL_REPAINT_WINDOW_SECONDS,
@@ -386,6 +390,7 @@ class TerminalSession:
                 self._sample_task,
                 self._delivery_task,
                 self._redraw_task,
+                self._writer_task,
             )
             if task is not None and not task.done()
         ]
@@ -635,7 +640,7 @@ class TerminalSession:
         write_error: BaseException | None = None
         text_sent = 0
         async with self._input_lock:
-            async with self._lock:
+            async with self._input_state():
                 self._require_live()
                 self._check_revision(expected_screen_revision)
                 bracketed_paste = (
@@ -662,13 +667,14 @@ class TerminalSession:
                 await self._mark_input()
                 running = await self._running_before_input()
                 *typed, last = chunks
-                typed_at = self._services.monotonic()
                 if typed:
-                    write_error = await self._write_input(typed[0], running)
-                    if write_error is None:
-                        text_sent = len(typed[0])
+                    writing = self._queue_input(typed[0], running, notify=True)
+            if typed:
+                write_error = await asyncio.shield(writing)
+                if write_error is None:
+                    text_sent = len(typed[0])
             if text_sent:
-                await self._await_text_taken(typed_at)
+                await self._await_text_taken(self._services.monotonic())
             if write_error is None:
                 async with self._lock:
                     if text_sent and (self.finished or self.finished_at is not None):
@@ -681,22 +687,27 @@ class TerminalSession:
                             key_unsent="ended",
                         )
                     self._require_live()
-                    if key:
-                        # Output while the program took the text can change
-                        # DECCKM. Encode the key in the mode it reaches now.
+
+                    def current_key() -> str:
+                        # The queue may wait behind a previous write whose
+                        # caller was cancelled. Use the mode at its own turn.
+                        nonlocal last
                         (last,) = input_chunks(
                             data=None,
                             text=None,
                             key=key,
                             application_cursor=self._application_cursor,
                         )
-                    write_error = await self._write_input(last, running)
-                    if write_error is None:
+                        return last
+
+                    writing = self._queue_input(current_key if key else last, running, notify=True)
+                write_error = await asyncio.shield(writing)
+                if write_error is None:
+                    async with self._lock:
                         if self._focus_reporting and last.endswith("\r"):
                             # The program that works on the submitted input,
                             # possibly one it starts, learns that its user is away.
-                            with contextlib.suppress(EOFError, OSError):
-                                await asyncio.to_thread(self._adapter.write, FOCUS_OUT_REPORT)
+                            self._queue_write(FOCUS_OUT_REPORT)
                         return self._input_result(
                             text_sent + len(last),
                             key,
@@ -714,33 +725,97 @@ class TerminalSession:
             )
         raise failure from write_error
 
-    async def _write_input(
-        self, chunk: str, running: frozenset[int] | None
-    ) -> BaseException | None:
-        """Write one chunk of Agent input, which starts a cycle; the lock is held.
+    @contextlib.asynccontextmanager
+    async def _input_state(self) -> AsyncGenerator[None]:
+        """Lock input preparation after earlier physical writes have finished.
 
-        *running* are the processes that ran before the input. Returns the
-        error when the PTY refused the chunk.
+        In particular, a cancelled caller can leave its write running. Wait
+        without holding the state lock, then check revision/program guards
+        against the screen and program that the new input will reach.
+        """
+        while True:
+            await self._lock.acquire()
+            writing = self._writer_task
+            if writing is None or writing.done():
+                break
+            self._lock.release()
+            await asyncio.wait({writing})
+        try:
+            yield
+        finally:
+            self._lock.release()
+
+    def _queue_input(
+        self, chunk: str | Callable[[], str], running: frozenset[int] | None, *, notify: bool
+    ) -> asyncio.Task[BaseException | None]:
+        """Start an input cycle and queue its write; the state lock is held.
+
+        The caller awaits the write outside the lock, so a program that
+        prints while reading input cannot block its own output reader.
         """
         restart, changed = self._activity.input(
             self._services.monotonic(),
-            notify=True,
+            notify=notify,
             delivery_pending=self._delivery_pending(),
             running=running,
         )
-        try:
-            await asyncio.to_thread(self._adapter.write, chunk)
-        except (EOFError, OSError) as error:
-            # The cycle the input opened still settles: a reply wait after
-            # text that was sent ends at its quiet boundary.
-            self._restart_quiet(restart)
-            return error
+        writing = self._queue_write(chunk, input_chunk=True)
         self._restart_quiet(restart)
         self._output_event.set()
         self._signal_change()
         if changed:
             self._publish_state()
-        return None
+        return writing
+
+    def _queue_write(
+        self, text: str | Callable[[], str], *, input_chunk: bool = False
+    ) -> asyncio.Task[BaseException | None]:
+        """Serialize Agent, operator and protocol writes without blocking the reader.
+
+        Session-owned tasks keep a cancelled caller's in-flight thread in
+        order. Protocol replies only enqueue: awaiting them in the reader
+        would deadlock a program that fills both PTY buffers.
+        """
+        previous = self._writer_task
+        if input_chunk:
+            self._input_writes += 1
+
+        async def write() -> BaseException | None:
+            try:
+                if previous is not None and not previous.done():
+                    await asyncio.wait({previous})
+                async with self._lock:
+                    if self.finished:
+                        return EOFError("Terminal Session is no longer running")
+                    chunk = text() if callable(text) else text
+                try:
+                    await asyncio.to_thread(self._adapter.write, chunk)
+                except (EOFError, OSError) as error:
+                    return error
+                return None
+            finally:
+                if input_chunk:
+                    async with self._lock:
+                        self._input_writes -= 1
+                        if not self._input_writes and not self.finished:
+                            # Output may have advanced the generation while
+                            # the write blocked. Settle the current one only.
+                            self._restart_quiet(QuietRestart(self._activity.generation, False))
+                        self._output_event.set()
+                        self._signal_change()
+
+        task = asyncio.create_task(write(), name=f"terminal:{self.terminal_id}:writer")
+
+        def completed(done: asyncio.Task[BaseException | None]) -> None:
+            if self._writer_task is done:
+                self._writer_task = None
+            _log_task_failure(
+                done, f"Terminal input writing failed for terminal={self.terminal_id}"
+            )
+
+        task.add_done_callback(completed)
+        self._writer_task = task
+        return task
 
     async def _await_text_taken(self, typed_at: float) -> None:
         """Wait until the program took the text typed at *typed_at*: until its
@@ -770,35 +845,23 @@ class TerminalSession:
     ) -> None:
         """Write exact operator bytes; *expected_program* must run in the process tree."""
         write_error: BaseException | None = None
-        async with self._input_lock, self._lock:
-            self._require_live()
-            # Output waits for the lock, so the checks below see the screen
-            # and process the input reaches.
-            if expected_program is not None and not await asyncio.to_thread(
-                self._services.program_probe, self._adapter.pid, expected_program
-            ):
-                raise TerminalProgramNotRunningError(
-                    f"{expected_program} is not running in this Terminal; the input was not written"
-                )
-            self._check_revision(expected_screen_revision)
-            self._screen_revision += 1
-            running = await self._running_before_input()
-            restart, changed = self._activity.input(
-                self._services.monotonic(),
-                notify=self.attachment is not None,
-                delivery_pending=self._delivery_pending(),
-                running=running,
-            )
-            try:
-                await asyncio.to_thread(self._adapter.write, data)
-            except (EOFError, OSError) as error:
-                write_error = error
-            else:
-                self._restart_quiet(restart)
-                self._output_event.set()
-                self._signal_change()
-                if changed:
-                    self._publish_state()
+        async with self._input_lock:
+            async with self._input_state():
+                self._require_live()
+                # Check the screen and program before enqueuing the input.
+                if expected_program is not None and not await asyncio.to_thread(
+                    self._services.program_probe, self._adapter.pid, expected_program
+                ):
+                    raise TerminalProgramNotRunningError(
+                        f"{expected_program} is not running in this Terminal; "
+                        "the input was not written"
+                    )
+                self._check_revision(expected_screen_revision)
+                self._screen_revision += 1
+                running = await self._running_before_input()
+                writing = self._queue_input(data, running, notify=self.attachment is not None)
+            write_error = await asyncio.shield(writing)
+            if write_error is None:
                 return
         raise await self._write_failure() from write_error
 
@@ -1326,8 +1389,7 @@ class TerminalSession:
         if update.responses:
             # Terminal protocol replies, not input: they start no activity. Whether
             # a program that can no longer read them still runs is checked apart.
-            with contextlib.suppress(EOFError, OSError):
-                await asyncio.to_thread(self._adapter.write, update.responses)
+            self._queue_write(update.responses)
         paste_disabled = self._bracketed_paste and not update.bracketed_paste
         facts_changed = (update.title, update.alternate_screen) != (
             self._title,
@@ -1504,7 +1566,7 @@ class TerminalSession:
         """
         if generation != self._activity.generation or self.finished:
             return None
-        if not self._screen_current:
+        if not self._screen_current or self._input_writes:
             return None
         try:
             if self._snapshot_on_settle:
