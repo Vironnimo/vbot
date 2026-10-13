@@ -220,7 +220,7 @@ async def test_a_log_file_that_cannot_be_written_is_no_longer_named(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("output", ["lines", "one-line", "erased-long-line"])
+@pytest.mark.parametrize("output", ["lines", "one-line", "erased-long-line", "erased-line-end"])
 async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
     harness: Harness, output: str
 ) -> None:
@@ -239,6 +239,12 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
         line = text[:80_000]
         lines = [line[:-1], "", "after 1", "after 2"]
         chunks = [line[:40_000], line[40_000:] + "\x08\n\n", "after 1\nafter 2\n"]
+    elif output == "erased-line-end":
+        # Backspaces that erase more than the kept end of a long line leave a
+        # line as long as a whole line can be: all of it is kept.
+        line = text[:70_000]
+        lines = [line[:29_000]]
+        chunks = [line[:40_000], line[40_000:], "\x08" * 41_000]
     for chunk in chunks:
         process.write(chunk)
         await turns()
@@ -264,9 +270,11 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
         assert transcript.tail_cut == len(line) - COMMAND_TAIL_CHARS
         assert transcript.omitted_lines == 0
     else:
+        # A long line erased again keeps its start, and the lines after it.
         assert transcript.head == (lines[0][:COMMAND_HEAD_CHARS],)
         assert transcript.head_cut == len(lines[0]) - COMMAND_HEAD_CHARS
-        assert (transcript.tail, transcript.tail_cut) == (tuple(lines[1:]), 0)
+        kept = lines if output == "erased-line-end" else lines[1:]
+        assert (transcript.tail, transcript.tail_cut) == (tuple(kept), 0)
         assert transcript.omitted_lines == 0
 
 

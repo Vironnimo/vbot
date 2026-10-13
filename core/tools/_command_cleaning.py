@@ -115,7 +115,7 @@ class TailLines:
     def add(self, line: str, chars: int | None = None) -> None:
         """Add a line; *chars* is its length when *line* holds only its end."""
         length = len(line) if chars is None else chars
-        if length > self._limit:
+        if length > self._limit or length > len(line):
             end = line[-self._limit :]
             self._lines.clear()
             self._lines.append(end)
@@ -268,6 +268,11 @@ class OutputLines:
             self._parts[-1] = self._parts[-1][:-1]
             self._parts_chars -= 1
         self._chars -= 1
+        if not self._parts_chars and self._start is not None and self._chars <= len(self._start):
+            # The kept end is erased and what is left of the line is its kept start.
+            self._parts = [self._start[: self._chars]]
+            self._parts_chars = self._chars
+            self._start = None
 
     def clear_line(self) -> None:
         """Empty the current line."""
@@ -303,10 +308,14 @@ class OutputLines:
             self.append(lines[-1])
 
     def _shorten(self) -> None:
-        """Keep only the start and the end of a long current line."""
+        """Keep only the start and the end of a long current line.
+
+        The start is as long as the end, so a line erased to the length a whole
+        line can have is whole again (``erase``).
+        """
         text = "".join(self._parts)
         if self._start is None:
-            self._start = text[: self._head_chars]
+            self._start = text[: max(self._head_chars, self._tail_chars)]
         end = text[-self._tail_chars :]
         self._parts = [end]
         self._parts_chars = len(end)
@@ -321,7 +330,7 @@ class OutputLines:
         end = text[-self._tail_chars :]
         if self._chars == len(end):
             return end, "", self._chars
-        start = self._start if self._start is not None else text[: self._head_chars]
+        start = (self._start if self._start is not None else text)[: self._head_chars]
         return end, start, self._chars
 
     # Completed lines
@@ -337,7 +346,7 @@ class OutputLines:
                 return
             self._head_closed = True
             if not self._head:
-                self._first = (text[: self._head_chars] if start is None else start, chars)
+                self._first = ((text if start is None else start)[: self._head_chars], chars)
                 self._first_added = True
         self._tail.add(text, chars)
 
