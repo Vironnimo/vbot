@@ -153,7 +153,9 @@ def _roll_back_archive(services: ArchiveServices, entry: ArchiveEntry) -> bool:
         else:
             kept.append(tree.path)
     if entry.kind == ARCHIVE_KIND_PROJECT:
-        reroot_agents(services, entry.facts.get("unrooted_agents") or (), entry.subject_id)
+        reroot_agents(
+            services, entry.facts.get("unrooted_agents") or (), entry.subject_id, entry.archived_at
+        )
     services.sessions.archive_ledger.abandon(entry.entry_key)
     for tree in entry.trees:
         prune_empty_parents(services, stored_path(services, tree.path))

@@ -94,6 +94,8 @@ Chains: identity agents keep model -> global -> empty. Config agents resolve ove
 
 ## Store Operations
 
+Archive startup recovery uses `complete_restore_files` to repeat `restore_files`' configuration rewrite on a tree already at its destination. It loads the raw document and preserves its current-Session pointer while those Sessions are still archived; the archive service persists and supplies the planned Workspace and default Project (`archive.md`).
+
 - `agents.py` keeps catalog mutation, Session coordination, compensation and the rename record. Internal `_types.py` holds records/errors, `_config.py` owns JSON validation and normalization, and `_workspace.py` owns paths, template seeding and reversible file relocation. Model fallback validation reuses Settings' `validate_fallback_chain`; Agent diagnostics and mutation errors retain their surface-specific wording.
 - `create` creates the first Session (in `sessions.db`, before the Agent directory so a failure leaves no ghost directory), seeds the Workspace and persists the config; a failure removes the Session and the directory again. Returned Agents are effective-resolved. `get` bakes defaults and stays strict for addressed invalid agents; `list` isolates individual unreadable configs (log+skip) and degrades to empty roster on enumeration failure so bootstrap can still run. `list_with_order`/`reorder` guard roster replacement with optimistic revision + exact-set matching (`AgentOrderConflictError` otherwise).
 - `ensure_bootstrap()` creates a bootstrap Agent only when zero valid Agents exist; invalid directories stay for diagnosis and an occupied `main` shifts to the first free `main-N`.

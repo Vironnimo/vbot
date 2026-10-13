@@ -1289,6 +1289,27 @@ class AgentStore:
             self, source, target_id, workspace=workspace, root_project_id=root_project_id
         )
 
+    def complete_restore_files(
+        self,
+        target_id: str,
+        *,
+        source_id: str,
+        workspace: str | None,
+        root_project_id: str | None,
+    ) -> None:
+        """Complete an interrupted restore's config rewrite on its already moved tree.
+
+        Uses the same rewrite as ``restore_files`` and preserves the current
+        Session pointer while those Sessions are still archived.
+        """
+        _archive.complete_restore_files(
+            self,
+            target_id,
+            source_id=source_id,
+            workspace=workspace,
+            root_project_id=root_project_id,
+        )
+
     def restore_delegation_grants(
         self, agent_id: str, grants: Iterable[Mapping[str, Any]]
     ) -> tuple[str, ...]:

@@ -33,6 +33,7 @@ from core.sessions import (
     ArchiveTree,
 )
 from core.utils.logging import get_logger
+from core.utils.timestamps import canonical_timestamp
 
 if TYPE_CHECKING:
     from core.archive.archive import ArchiveServices
@@ -195,6 +196,7 @@ def archive_project(
                 unrooted.append(
                     {
                         "agent_id": agent.id,
+                        "agent_created_at": agent.created_at,
                         "workspace_before": agent.workspace,
                         "workspace_reset": workspace_reset,
                     }
@@ -247,11 +249,12 @@ def _undo_unroots(
 
 
 def reroot_agents(
-    services: ArchiveServices, records: Iterable[Any], project_id: str
+    services: ArchiveServices, records: Iterable[Any], project_id: str, archived_at: str
 ) -> builtins.list[str]:
     """Root recorded unrooted Agents in ``project_id`` again; return the Agents changed.
 
-    An Agent that is gone or meanwhile rooted elsewhere stays as it is. Its
+    An Agent that is gone, was replaced under the same id, or is meanwhile
+    rooted elsewhere stays as it is. Its
     previous Workspace returns when the unroot reset it to the default, the Agent
     still uses that default and the previous Workspace still exists. Best effort.
     """
@@ -263,6 +266,19 @@ def reroot_agents(
         agent = services.agents.find(agent_id)
         if agent is None or agent.root_project_id is not None:
             continue
+        recorded_creation = record.get("agent_created_at")
+        if recorded_creation is not None:
+            if agent.created_at != recorded_creation:
+                continue
+        else:
+            # Entries without an identity stamp can still exclude an Agent born
+            # after the Project was archived. Never guess an unreadable birth time.
+            try:
+                if canonical_timestamp(agent.created_at) > canonical_timestamp(archived_at):
+                    continue
+            except ValueError:
+                _LOGGER.warning("Cannot identify an Agent for Project restore (agent=%s)", agent_id)
+                continue
         changes: dict[str, Any] = {"root_project_id": project_id}
         before = record.get("workspace_before")
         if (

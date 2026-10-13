@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.agents import Agent, default_workspace_dir
+from core.agents import Agent, AgentError, default_workspace_dir
 from core.archive._operations import prune_empty_parents, reroot_agents, stored_path
 from core.archive._types import (
     RESTORE_CONFLICT_CODES,
@@ -131,6 +131,9 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
     target = plan.check.target_id
     renamed = target != entry.subject_id
     restore_plan: dict[str, Any] = {"target_id": target, "strip_channel_keys": renamed}
+    if entry.kind == ARCHIVE_KIND_AGENT:
+        restore_plan["workspace"] = plan.workspace
+        restore_plan["root_project_id"] = plan.root_project_id
     if plan.workspace_move is not None:
         restore_plan["workspace_destination"] = str(plan.workspace_move[1])
     with services.snapshot_barrier.compound_mutation():
@@ -191,7 +194,7 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]
         if renamed:
             _retarget_links(services, None, entry.subject_id, None, target)
     elif entry.kind == ARCHIVE_KIND_PROJECT:
-        reroot_agents(services, facts.get("unrooted_agents") or (), target)
+        reroot_agents(services, facts.get("unrooted_agents") or (), target, entry.archived_at)
         if renamed:
             for agent_id in services.sessions.list_agent_ids(target):
                 _retarget_links(services, entry.subject_id, agent_id, target, agent_id)
@@ -232,7 +235,24 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
         _return_moved_workspace(services, entry)
         ledger.abort_restore(entry.entry_key)
         return "rolled_back"
-    if not (services.agents.exists(target) if agent else services.projects.exists(target)):
+    plan = entry.facts.get("restore_plan")
+    config_problem: str | None = None
+    if agent and isinstance(plan, Mapping) and "workspace" in plan:
+        # A crash after the tree move may precede the config rewrite. Replay it
+        # through the Agent owner before making the Sessions live, keeping their
+        # current pointer and the planned Workspace/default Project intact.
+        try:
+            services.agents.complete_restore_files(
+                target,
+                source_id=entry.subject_id,
+                workspace=plan["workspace"],
+                root_project_id=plan.get("root_project_id"),
+            )
+        except AgentError as error:
+            config_problem = str(error)
+    if config_problem is not None:
+        problem = config_problem
+    elif not (services.agents.exists(target) if agent else services.projects.exists(target)):
         problem = f"it holds no valid {'Agent' if agent else 'Project'} {target}"
     else:
         renamed = target != entry.subject_id

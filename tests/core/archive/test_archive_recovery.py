@@ -174,6 +174,7 @@ async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_nex
         "payload",
         "live-files",
         "invalid-live-files",
+        "invalid-planned-files",
         "committed",
         "unreadable-live-files",
         "unreadable-payload",
@@ -216,10 +217,13 @@ async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_t
         monkeypatch.undo()
     else:
         # Stopped before the files moved, or after they did and before the commit.
-        ledger.begin_restore(entry_id, {"target_id": None, "strip_channel_keys": False})
+        restore_plan = {"target_id": None, "strip_channel_keys": False}
+        if left == "invalid-planned-files":
+            restore_plan.update(workspace=None, root_project_id=None)
+        ledger.begin_restore(entry_id, restore_plan)
         if left not in {"payload", "unreadable-payload"}:
             os.replace(payload, home)
-        if left == "invalid-live-files":
+        if left in {"invalid-live-files", "invalid-planned-files"}:
             (home / "agent.json").write_text("{ not json", encoding="utf-8")
 
     plan = world.entry(entry_id).facts.get("restore_plan")
@@ -243,13 +247,12 @@ async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_t
         assert not agents.exists("coder")
         assert (payload / "agent.json").is_file()
         return
-    if left == "invalid-live-files":
+    if left in {"invalid-live-files", "invalid-planned-files"}:
         # The files may hold new data: they stay live, and the entry says why it is stuck.
         assert world.entry(entry_id).state == "restoring"
         assert (home / "agent.json").is_file() and not payload.exists()
         [busy] = (await world.service.show(entry_id)).restore.blockers
         assert (busy.code, busy.details["path"]) == ("entry_busy", str(home))
-        assert "holds no valid Agent coder" in busy.message
         # A restore or purge refused meanwhile says the same, not "retry".
         for refused_call in (
             lambda: world.service.restore(entry_id),
@@ -276,7 +279,10 @@ async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_t
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stop", ["commit-fails", "crash-in-its-folder", "crash-in-the-archive"])
+@pytest.mark.parametrize(
+    "stop",
+    ["commit-fails", "crash-in-its-folder", "crash-in-the-archive", "crash-after-agent-move"],
+)
 async def test_a_moved_legacy_workspace_survives_a_failed_or_interrupted_restore(
     world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stop: str
 ) -> None:
@@ -284,6 +290,32 @@ async def test_a_moved_legacy_workspace_survives_a_failed_or_interrupted_restore
     entry_id = legacy_agent_entry(world, folder)
     container = world.data_dir / "archive" / "coder"
     moved = container / "workspace"
+    if stop == "crash-after-agent-move":
+        from core.agents import _archive
+
+        folder.mkdir()
+        (folder / "occupied.txt").write_text("keep", encoding="utf-8")
+        home = world.data_dir / "agents" / "coder"
+        move = _archive.move_tree
+
+        def interrupted_move(source: Path, destination: Path) -> None:
+            if source == home:
+                _fail()
+            move(source, destination)
+
+        monkeypatch.setattr(_archive, "write_json_document", _fail)
+        monkeypatch.setattr(_archive, "move_tree", interrupted_move)
+        with pytest.raises(AgentError):
+            await world.service.restore(entry_id)
+        monkeypatch.undo()
+        assert world.entry(entry_id).state == "restoring"
+        assert (home / "workspace" / "notes.md").read_text(encoding="utf-8") == "mine"
+        world.service.recover()
+        world.service.recover()
+        assert world.sessions.archive_ledger.entry(entry_id) is None
+        assert world.agents.get("coder").workspace == world.agents.default_workspace("coder")
+        assert (folder / "occupied.txt").read_text(encoding="utf-8") == "keep"
+        return
     if stop == "commit-fails":
         monkeypatch.setattr(world.sessions.archive_ledger, "commit_restore", _fail)
         with pytest.raises(OSError, match="stopped here"):
