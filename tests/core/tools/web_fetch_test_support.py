@@ -106,6 +106,7 @@ class StreamingSession:
         self._response = response
         self.calls: list[tuple[str, str, dict[str, object]]] = []
         self.curl_options: dict[object, object] = {}
+        self.cookies = curl_cffi.requests.Cookies()
 
     async def __aenter__(self) -> StreamingSession:
         return self

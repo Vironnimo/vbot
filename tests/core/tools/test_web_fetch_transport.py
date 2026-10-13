@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import curl_cffi.requests
@@ -90,27 +91,40 @@ async def test_private_and_credential_addresses_are_blocked_without_fetching(
 
 
 @pytest.mark.asyncio
-async def test_redirect_to_a_private_address_is_not_followed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("location", "code"),
+    [
+        ("http://127.0.0.1/admin", "blocked_url"),
+        # A bot check redirects to a host that does not resolve (Swarm run 2026-10-13);
+        # the Agent did not write that address, so it is not told to check it.
+        ("https://validate.bot-check.invalid/?ssc=1", "redirect_unreachable"),
+    ],
+    ids=["private-address", "unresolvable-host"],
+)
+async def test_a_redirect_that_cannot_be_followed_says_where_it_led(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, location: str, code: str
 ) -> None:
     start_url = "https://public.example/start"
-    blocked_redirect = "http://127.0.0.1/admin"
     fetched: list[str] = []
+    resolve = public_http._resolve_host_addresses
+
+    async def resolve_or_fail(host: str, port: int) -> list[public_http.IpAddress]:
+        if host.endswith(".invalid"):
+            raise public_http._HostNotFoundError(public_http._host_not_found(host))
+        return await resolve(host, port)
 
     def responder(url: str) -> PublicResponse:
         fetched.append(url)
-        return make_result(status_code=302, headers={"Location": blocked_redirect})
+        return make_result(status_code=302, headers={"Location": location})
 
+    monkeypatch.setattr(public_http, "_resolve_host_addresses", resolve_or_fail)
     install_http_get(monkeypatch, responder)
 
     result = await fetch(tmp_path, {"url": start_url})
 
-    error = assert_failure_envelope(result, "blocked_url")
-    assert error["message"].startswith(
-        f"{start_url} redirected to an address that is not followed. 127.0.0.1 is a "
-        "private or local network address; only public internet addresses can be "
-        "fetched."
-    )
+    error = assert_failure_envelope(result, code)
+    assert error["message"].startswith(f"{start_url} redirected to ")
+    assert "typo" not in error["message"]
     assert fetched == [start_url]
 
 
@@ -128,33 +142,18 @@ def _redirect_back_and_forth(request_url: str, calls: int) -> str:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("location", "calls", "message"),
+    ("location", "calls"),
     [
         # Ever-new URLs exhaust the hop budget.
-        (
-            _redirect_to_new_urls,
-            11,
-            "https://example.com/first redirected more than 10 times without reaching a "
-            "page. Try another source or a more direct address.",
-        ),
+        (_redirect_to_new_urls, 11),
         # A bot-deflection self-loop and an alternating pair fail on the first repeat.
-        (
-            _redirect_to_itself,
-            1,
-            "https://example.com/first redirects in a loop and never reaches a page; the "
-            "site may require cookies or a browser. Try another source.",
-        ),
-        (
-            _redirect_back_and_forth,
-            2,
-            "https://example.com/first redirects in a loop and never reaches a page; the "
-            "site may require cookies or a browser. Try another source.",
-        ),
+        (_redirect_to_itself, 1),
+        (_redirect_back_and_forth, 2),
     ],
     ids=["hop-limit", "self-loop", "alternating"],
 )
 async def test_redirect_loops_end_with_a_not_retryable_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, location, calls: int, message: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, location, calls: int
 ) -> None:
     requested: list[str] = []
 
@@ -171,9 +170,37 @@ async def test_redirect_loops_end_with_a_not_retryable_failure(
     result = await fetch(tmp_path, {"url": "https://example.com/first"})
 
     error = assert_failure_envelope(result, "redirect_loop")
-    assert error["message"] == message
+    assert error["message"].startswith("https://example.com/first redirect")
     assert error["retryable"] is False
     assert len(requested) == calls
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_back_after_a_login_service_set_cookies_reaches_the_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # nature.com and link.springer.com articles pass through their identity
+    # service, which sets cookies and sends the request back (Swarm run 2026-10-13).
+    article = "https://example.com/article"
+    login = "https://idp.example.org/authorize"
+    requested: list[str] = []
+
+    async def http_get(session: StreamingSession, url: str, max_bytes: int) -> PublicResponse:
+        del max_bytes
+        requested.append(url)
+        if url == login:
+            session.cookies.set("session", "1", domain="example.com")
+            return make_result(status_code=302, headers={"Location": article}, url=url)
+        if session.cookies.get("session"):
+            return make_result(headers={"Content-Type": "text/plain"}, text="Article", url=url)
+        return make_result(status_code=303, headers={"Location": login}, url=url)
+
+    monkeypatch.setattr(public_http, "_http_get", http_get)
+
+    result = await fetch(tmp_path, {"url": article})
+
+    assert assert_success_envelope(result)["content"] == "Article"
+    assert requested == [article, login, article]
 
 
 @pytest.mark.asyncio
@@ -226,8 +253,7 @@ async def test_redirect_loops_end_with_a_not_retryable_failure(
             422,
             "request_rejected",
             False,
-            "HTTP 422: example.com rejected the request for https://example.com/page. "
-            "The request was a plain GET without custom headers, cookies or a body.",
+            "HTTP 422: example.com rejected the request for https://example.com/page.",
         ),
     ],
 )
@@ -262,6 +288,39 @@ async def test_each_http_failure_is_named_with_its_next_step(
         assert "attempts_made" not in error
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_status", [200, 406], ids=["served", "refused-again"])
+async def test_a_page_refusing_the_requested_formats_is_asked_once_more_like_a_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_status: int
+) -> None:
+    # A site answered HTTP 406 to text/markdown and served HTML (Swarm run 2026-10-13).
+    sessions: list[dict[str, Any]] = []
+
+    def make_session(**options: Any) -> StreamingSession:
+        sessions.append(options)
+        return StreamingSession()
+
+    statuses = [406, second_status]
+    monkeypatch.setattr(curl_cffi.requests, "AsyncSession", make_session)
+    install_http_get(
+        monkeypatch,
+        lambda url: make_result(
+            status_code=statuses.pop(0), headers={"Content-Type": "text/plain"}, text="Page"
+        ),
+    )
+
+    result = await fetch(tmp_path, {"url": "https://example.com/page"})
+
+    assert statuses == []
+    assert "text/markdown" in sessions[0]["headers"]["Accept"]
+    # The second request carries the impersonated browser's own Accept header.
+    assert sessions[1]["headers"] == {}
+    if second_status == 200:
+        assert assert_success_envelope(result)["content"] == "Page"
+    else:
+        assert assert_failure_envelope(result, "request_rejected")["retryable"] is False
+
+
 def _curl_error(kind: type[Exception], code: int, reason: str) -> Exception:
     return kind(
         f"Failed to perform, curl: ({code}) {reason}. See "
@@ -294,7 +353,7 @@ def _curl_error(kind: type[Exception], code: int, reason: str) -> Exception:
             "tls_error",
             1,
             False,
-            "SSL certificate problem: certificate has expired",
+            "expired",
         ),
         (
             _curl_error(
@@ -306,7 +365,7 @@ def _curl_error(kind: type[Exception], code: int, reason: str) -> Exception:
             "tls_error",
             1,
             False,
-            "SSLV3_ALERT_HANDSHAKE_FAILURE",
+            "example.com",
         ),
         # A peer that cuts the TLS handshake off is a connection failure, not
         # broken TLS (Swarm run 2026-10-12: the same page loaded 17 s later).
@@ -362,9 +421,10 @@ async def test_transport_failures_are_retried_only_as_far_as_useful(
         result = await fetch(tmp_path, {"url": "https://example.com/slow"})
 
     failure = assert_failure_envelope(result, code)
+    # No curl boilerplate or OpenSSL codes; a TLS failure says what failed in plain words.
+    assert not re.search(r"curl|SSL|_ALERT_", failure["message"])
     if reason is not None:
-        # curl's own reason, without its boilerplate and documentation link.
-        assert reason in failure["message"] and "curl" not in failure["message"]
+        assert reason in failure["message"]
     else:
         # A connect timeout can end much earlier than the response limit.
         # Report the timeout without claiming a duration we did not measure.

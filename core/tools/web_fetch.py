@@ -98,8 +98,9 @@ _SCRIPT_DEMAND = re.compile(
     re.I | re.M,
 )
 _WALL_GUIDANCE = "Try another source."
-# Direct failures a real browser can still read: bot checks and JavaScript pages.
-_BROWSER_CODES = frozenset({"access_denied", "no_content"})
+# Direct failures a real browser can still read: bot checks, JavaScript pages and
+# redirect loops that wait for something only a browser does.
+_BROWSER_CODES = frozenset({"access_denied", "no_content", "redirect_loop"})
 # Several URLs in one call share roughly two single-page results of Context.
 _MULTI_PAGE_BUDGET = 2 * DEFAULT_MAX_CHARS
 _MULTI_PAGE_MIN_CHARS = 2_000
