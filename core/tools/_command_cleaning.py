@@ -9,12 +9,16 @@ decoded as UTF-8 incrementally (invalid bytes become U+FFFD) and cleaned the way
 a terminal would show their final state, without any terminal behind them:
 
 - Escape sequences are removed: CSI, two-character sequences, and the control
-  strings OSC, DCS, SOS, PM and APC (titles, hyperlinks), also in their C1
-  forms. Parsing is bounded, so an unterminated sequence cannot hide output: a
-  line break or a character that cannot continue a sequence ends it. An ESC
-  that cannot start a control, before a lowercase letter, a control character
-  or non-ASCII text, is data and shows as the text ``\\x1b``: PowerShell writes
-  one for ```e`` in a double-quoted string, as in a Markdown span ```expected```.
+  strings OSC, DCS, SOS, PM and APC (titles, hyperlinks), each started by ESC.
+  Parsing is bounded, so an unterminated sequence cannot hide output: a line
+  break or a character that cannot continue a sequence ends it. An ESC that
+  cannot start a control, before a lowercase letter, a control character or
+  non-ASCII text, is data and shows as the text ``\\x1b``: PowerShell writes one
+  for ```e`` in a double-quoted string, as in a Markdown span ```expected```.
+- The C1 code points U+0080-U+009F are removed one by one and never start a
+  sequence: a UTF-8 terminal does not interpret them, and they occur as text,
+  such as UTF-8 decoded as Latin-1 (``Ã\\x9f`` for ``ß``), whose rest of the line
+  a C1 sequence start would swallow.
 - ``\\r\\n`` ends a line like ``\\n``. A lone ``\\r`` restarts the current line: the
   next text replaces it, so a redrawn progress line keeps its final state, and a
   line that ends with ``\\r`` keeps its text.
@@ -37,7 +41,7 @@ from collections import deque
 from collections.abc import Sequence
 from typing import NamedTuple
 
-# Characters that may start or be part of a terminal control in decoded text.
+# Characters that start a terminal control, or are dropped (C1), in decoded text.
 _TEXT_CONTROL = re.compile(r"[\x1b\x80-\x9f]")
 # Characters that act on the current line, or are dropped: C0 except tab, and DEL.
 _LINE_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
@@ -543,11 +547,7 @@ class _EscapeFilter:
             return True
         if char == "\x1b":
             self._start("escape")
-        elif char == "\x9b":
-            self._start("csi")
-        elif char in "\x90\x98\x9d\x9e\x9f":
-            self._start("string", osc=char == "\x9d")
-        # Other C1 controls are dropped.
+        # C1 code points are dropped.
         return True
 
     def _start(self, state: str, *, osc: bool = False) -> None:

@@ -95,6 +95,12 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         (["ä".encode()[:1], "ä".encode()[1:] + b" \xff ok\n"], ["ä � ok"]),
         # PowerShell writes a bare ESC for `e in a double-quoted string.
         ([b"literal \x1bexpected\n"], ["literal \\x1bexpected"]),
+        # C1 code points are text to a UTF-8 terminal: each is dropped, none
+        # starts a sequence that hides the rest of the line.
+        (
+            ["Grüße und mehr\n".encode().decode("latin-1").encode(), "a\x85b\x9bc\x90d\n".encode()],
+            ["GrÃ¼Ãe und mehr", "abcd"],
+        ),
         ([b"no line break"], ["no line break"]),
     ],
     ids=[
@@ -104,6 +110,7 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         "backspace",
         "utf-8",
         "data-escape",
+        "c1-code-points",
         "last-line",
     ],
 )
