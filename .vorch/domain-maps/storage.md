@@ -20,6 +20,11 @@ Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's pe
 
 The archived Browser Use Extension previously owned `artifacts/browser-use/` (including its `refs.db` counter) and `~/.agent-browser/browsers`. Removal from bundled discovery does not delete these existing files or make them Storage cleanup categories; see `extensions/browser-use.md`.
 
+The Shell owner keeps a disposable compiled PowerShell host cache outside the
+data directory, in `~/.cache/vbot-powershell-host/`. It is not a retained artifact
+category or canonical state; placement, validation and rebuild behavior belong
+to `tools/shell.md` -> PowerShell bootstrap.
+
 ## Temporary files
 
 `DataDirectoryLayout.scratch_temporary` places conversation Scratch Areas under `artifacts/temp/scratch/`; `scratch_state_temporary` names their separate disposable bookkeeping under `artifacts/temp/scratch-state/`. `ScratchAreas` lazily creates and repairs the latter, so corrupted optional metadata is not a required Storage bootstrap dependency. The Tools owner creates and removes complete areas with tree-wide busy rules; neither tree is a `TemporaryFileManager` category (`tools/scratch.md`).

@@ -23,7 +23,7 @@ History: 2026-09-09 (8edafd3d5) closed the shell's stdin and removed `process` i
 
 ## Ownership
 
-- `core/tools/shell.py` owns the shell Tool's Agent-facing behavior: definition, call parsing, the wait and the move to the background, the `next` texts, display and registration. `_shell_results.py` describes a `CommandReport` to Agents for both Tools: the ended and running results, output shaping, stop texts, the delivery body and the durable status fold. `_shell_arguments.py` reads other harnesses' argument shapes, the `env` object, timeout units and the no-effect notes, and builds the display parts. `_powershell.py` builds the Windows bootstrap and each command's request (PowerShell bootstrap below), `shell_hints.py` maps failure output to one `hint`, `shell_environment.py` builds the environment of every shell vBot starts (commands and interactive terminals), `_workdir.py` resolves `project:<id>` workdirs for this Tool and `terminal`, and `update_handoff.py` owns the `vbot update` token (`cli/application.md`).
+- `core/tools/shell.py` owns the shell Tool's Agent-facing behavior: definition, call parsing, the wait and the move to the background, the `next` texts, display and registration. `_shell_results.py` describes a `CommandReport` to Agents for both Tools: the ended and running results, output shaping, stop texts, the delivery body and the durable status fold. `_shell_arguments.py` reads other harnesses' argument shapes, the `env` object, timeout units and the no-effect notes, and builds the display parts. `_powershell.py` builds the Windows bootstrap and each command's request; `_powershell_host.py` holds its C# console host and disposable compiled-assembly cache (PowerShell bootstrap below), `shell_hints.py` maps failure output to one `hint`, `shell_environment.py` builds the environment of every shell vBot starts (commands and interactive terminals), `_workdir.py` resolves `project:<id>` workdirs for this Tool and `terminal`, and `update_handoff.py` owns the `vbot update` token (`cli/application.md`).
 - `core/tools/command_manager.py` (`CommandManager`) owns command processes from launch until they are forgotten, with the internal units `_command_launch.py` (start on pipes, containment, the warm shell), `_command_decoding.py` (incremental UTF-8/UTF-16 interpretation shared with `read`), `_command_cleaning.py` (`OutputCleaner` and `OutputLines`: the clean, bounded lines of the transcript, standard library only, run off the Event Loop), `_command_output.py` (`CommandOutput`: the transcript and newest lines on the Event Loop side; `CommandLog`: the raw log file; and `command_output_host()`), `_command_record.py` (one command: end detection, stop, background state, delivery) and `_command_types.py` (values, limits, errors). `_interpreter_host.py` (`InterpreterHost`, with the object registry `_hosted_objects.py`) runs objects on subinterpreter workers for the command output and the Terminal screens (`tools/terminal.md`). Agent-facing wording stays in the Tools.
 - `core/tools/background_tasks.py` owns the `background_tasks` schema, texts and result layout; `_background_tasks_arguments.py` reads its dialects. It dispatches on the id prefix to `CommandManager` (commands) and to the `SubAgentTree` the Runtime passes (`SubAgentCoordinator`, `subagents.md`), which keep their behavior.
 - `core/tools/process_tree.py` (process-tree tracking: liveness, CPU time, child exit codes, kill) is shared with the interactive terminals. The terminal domain (`tools/terminal.md`) holds no command code: no command runs in a Terminal Session, and `terminal` refuses `cmd_` ids. Add follow-up capabilities for commands to `CommandManager` and `background_tasks`, never to the terminal subsystem.
@@ -47,7 +47,7 @@ On Windows, a `pwsh` started with the bootstrap before a call needs it, waiting 
 - `workdir`: absolute or relative to `effective_cwd`; a missing directory fails naming similar directories and the fix (pass an existing directory, or omit `workdir`); a file fails saying so, with the fix to pass the directory it is in or omit `workdir`; a missing working directory with `workdir` omitted names only the first. Unadvertised `project:<project-id>` runs in that Project's directory (`_workdir.project_workdir`, shared with `terminal`; the Projects block teaches each Project's path); its failures (`ProjectWorkdirError.code`: `invalid_workdir`, `project_not_found`, `project_unavailable`) are `invalid_arguments` failures here, each naming a next step.
 - `timeout` is how long the call waits for the command, in seconds: omitted 120 (`SHELL_DEFAULT_WAIT_SECONDS`), at most 600 (`SHELL_MAX_WAIT_SECONDS`; a larger value is read as 600 with a note), `0` read as omitted with a note. A value of at least 10,000 that is a whole thousand is read as milliseconds with a note; disagreeing `timeout`/`timeout_ms` fail; a negative one fails. With `run_in_background` it is ignored. No timer ever stops a command (user decision 2).
 - `env` (unadvertised) sets plain variables; vBot never passes a credential value written in the call. Credentials come only through granted `env_keys` names resolved server-side. An ungranted `env_keys` name the server process itself has passes with a note; an unknown one fails, naming the granted keys.
-- Host shell (`_shell_start`, resolved against the call's fresh environment's PATH off the Event Loop): Windows `pwsh -NoProfile -NonInteractive -Command <POWERSHELL_BOOTSTRAP>`, the same text for every call, started with the environment's base; the command, the `workdir` and the call's own environment layer travel as the request on the shell's stdin (`powershell_request`; PowerShell bootstrap below), so no command-line limit applies to the command. POSIX `bash -c <command>` with the complete environment. A missing `pwsh`/`bash` fails with "Ask the user to install it". These failures are `command_not_started` (not `invalid_arguments`), because the command is right and the host cannot run it.
+- Host shell (`_shell_start`, resolved against the call's fresh environment's PATH off the Event Loop): Windows `pwsh -NoProfile -NonInteractive -Command <powershell_bootstrap()>`, the same text for every call, started with the environment's base; the command, the `workdir` and the call's own environment layer travel as the request on the shell's stdin (`powershell_request`; PowerShell bootstrap below), so no command-line limit applies to the command. POSIX `bash -c <command>` with the complete environment. A missing `pwsh`/`bash` fails with "Ask the user to install it". These failures are `command_not_started` (not `invalid_arguments`), because the command is right and the host cannot run it.
 - Start failures (`tool_failure`; nothing ran, the update token is released): `command_limit` (retryable) when vBot already runs 64 commands, naming `background_tasks` list and stop when the Agent can call it, otherwise to run again once one of its background commands exited; `command_not_started` when the turn was cancelled or vBot shuts down, when the `workdir` was removed after the call was checked (the missing-directory text), or when the shell could not start. The last case is logged at WARNING (`Starting a shell command failed`) and named by the state the operating system error reports (`_launch_problem`), never by the error's own message, which is in the host's language and names no next step: no operating system error, out of memory or process resources (`ENOMEM`, `EAGAIN`, `EMFILE`, `ENFILE`; Windows errors 4, 8, 14, 1450, 1455; naming `background_tasks` list and stop when callable), and any other error with its number are retryable and say to tell the user if it fails the same way; a full disk (`ENOSPC`, `EDQUOT`; Windows 39, 112) and denied access (to the `workdir` when the shell starts, to vBot's data directory when the output file is created) are not retryable and say to tell the user (`test_a_shell_that_cannot_start_names_the_state_instead_of_the_raw_error`). On Windows a call also fails `command_not_started` after the start when the bootstrap ran nothing of the command (PowerShell bootstrap -> Nothing ran).
 - Results (`tool_success` data; `ok: true` for every started command, also for a non-zero exit), fields in this order and omitted when empty:
   - ended: `status` (`exited` | `stopped`), `exit_code` (exited, when known; a stopped command has none, because its code is vBot's kill, not the program's), `stopped_because` (stopped), `output`, `failed_programs` (direct child programs of the shell that exited non-zero before any stop, Windows only, such as `git.exe exited with code 128` or `python.exe exited with code 2 (-m pytest)`; omitted when exactly one failed with the `exit_code` of a command that exited by itself, which it would only repeat), `hint` (non-zero exit with a known failure shape, or a command that did not run as written whatever its exit code; after a stop by vBot only the held-output hint, Output shaping -> Holding pipe stages), and for processes the command left running `command_id`, `still_running` (`name (pid N)`) and `next` (the call that stops them). Such a command is listed as a background command without delivery, so the user and the Agent can see and stop what remains; its result names the log file only when the output was cut.
@@ -122,8 +122,8 @@ On Windows, a `pwsh` started with the bootstrap before a call needs it, waiting 
 
 ## PowerShell bootstrap (`_powershell.py`)
 
-`POWERSHELL_BOOTSTRAP` is the fixed `-Command` text of each single-use Windows
-shell, cold or warm. It prepares the console and runner, reads one request from
+`powershell_bootstrap()` builds the `-Command` text of each single-use Windows
+shell, cold or warm, with a fixed cache directory owned by the server's user. It prepares the console and runner, reads one request from
 stdin, applies its environment and workdir, and executes the command text
 unchanged. It prints no runner diagnostics. `pwsh -NoProfile -NonInteractive`
 uses pipes; `Read-Host`, `Get-Credential` and confirmation prompts fail rather
@@ -167,7 +167,8 @@ than waiting for an answer.
   errors run nothing and use the command's own positions. Incomplete input such
   as a trailing backtick produces a ParserError and exit 1, where bare
   `pwsh -Command` is silent with exit 1.
-- **Execution owner:** `VBotPowerShellHost`, compiled through public `Add-Type`,
+- **Execution owner:** `VBotPowerShellHost`, loaded from the validated cache or
+  compiled through public `Add-Type`,
   delegates to the existing ConsoleHost while recording real native starts,
   completions and `SetShouldExit` calls. The command runs globally through
   `AddScript(text, useLocalScope: false)` in a fresh runspace. Its initial
@@ -238,18 +239,40 @@ than waiting for an answer.
   and loaded host type remain inspectable; transcript headers identify the
   actual bootstrap process command line. These are not hidden by rewriting the
   command or its output.
+- **Host assembly cache:** `_powershell_host.py` owns a disposable cache under
+  the server user's `~/.cache/vbot-powershell-host/`, resolved in Python before
+  command environment changes. It is separate from installations and canonical
+  data; no startup provisioning or package build is required. Its key includes
+  the exact C# source hash, PowerShell version/home, and the loaded PowerShell
+  and core runtime modules' MVIDs. A runtime or source change gets a different
+  entry; the key identifies runtime compatibility, not every compiler reference.
+  The initial language-mode guard runs before any cache access.
+  Each `v1-<hash>.bin` is one bounded entry (at most 1 MiB), a SHA-256 checksum
+  followed by assembly bytes. Only the verified bytes are loaded, without a file
+  lock. Entries are disposable executable code in the user's own cache; checksums
+  detect damage, not malicious replacement by that same user.
+  A per-entry exclusive file handle serializes builders, rechecking the entry
+  after acquisition; the OS releases the handle if a builder dies. Completed
+  bytes publish with one same-directory atomic rename. Each builder removes its
+  own staging files on normal completion; an abruptly killed builder can leave
+  disposable staging files. Lock files remain as stable coordination names.
+  An unusable cache or a lock still held after 3 s falls back to the same host
+  compiled in memory, without changing command output or execution. Once a host
+  is loaded, a publication failure does not trigger another compilation.
+  Old keys are not loaded after an update and can be deleted with the cache.
 - **Warm-up and cost:** the waiting shell prepares the host, parser, formatting,
   observer and frame walk before reading a request. Its synthetic warm-up
   runspace is discarded; the command gets a new one. No extra native program is
-  launched to warm the observer. Compiling/loading the host is a measured tradeoff:
-  interleaved Windows probes against `bf8b81125` found roughly 40–45 MB additional
-  private memory per waiting command, almost entirely reproduced by `Add-Type`
-  alone. Explicit GC did not materially remove it and is not added. After moving
-  observation entirely into C#, warm native calls no longer pay the earlier
-  extra half-second for cross-runspace script callbacks; focused warm-up reduced
-  direct/function native medians further to about 167/171 ms. Cold startup still
-  pays compilation, approximately 0.8–1.1 s versus 0.36–0.47 s in these probes.
-  These are local measurements, not timing guarantees.
+  launched to warm the observer. A cache hit avoids compiling the host in each
+  process. The first miss still pays compilation once per source/runtime key;
+  an unavailable cache retains the previous per-process cost. Explicit GC is
+  not used. Interleaved Windows probes against `3b857f657` measured prepared
+  processes at about 49 MB private memory instead of 86 MB, and 131 MB RSS
+  instead of 176 MB. With a populated cache, fresh-process-to-exit medians were
+  438-500 ms instead of 855-892 ms; prepared request-to-exit medians were
+  81-118 ms instead of 124-171 ms. The initial build took 959 ms including the
+  first trivial command. These are local measurements, not timing guarantees;
+  they show avoided compiler work, not that Roslyn assemblies remain unloaded.
 
 Verification includes the prior 120-case exit battery in cold and genuinely
 claimed warm shells, additional execution/alias/CommandInfo/language-mode/host

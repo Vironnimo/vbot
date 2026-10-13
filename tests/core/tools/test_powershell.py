@@ -18,13 +18,15 @@ from pathlib import Path
 import pytest
 
 from core.sessions import SessionAddress
+from core.tools import _powershell_host
 from core.tools._command_launch import PipeLauncher
 from core.tools._powershell import (
     OUTPUT_COLUMNS,
-    POWERSHELL_BOOTSTRAP,
     REQUEST_UNREADABLE_EXIT_CODE,
     PowerShellCulture,
+    powershell_bootstrap,
     powershell_culture,
+    powershell_literal,
     powershell_request,
 )
 from core.tools.command_manager import CommandManager, CommandReport, NotRunReason
@@ -35,12 +37,14 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def _run(cwd: Path, command: str, *, prefix: str = "") -> tuple[int | None, str]:
+async def _run(
+    cwd: Path, command: str, *, prefix: str = "", cache_dir: Path | None = None
+) -> tuple[int | None, str]:
     """Run *command* as the shell Tool does; return its exit code and output.
 
     *prefix* runs before the bootstrap.
     """
-    report = await _report(cwd, command, prefix=prefix)
+    report = await _report(cwd, command, prefix=prefix, cache_dir=cache_dir)
     transcript = report.transcript
     assert transcript.omitted_lines == 0
     return report.exit_code, "".join(f"{line}\n" for line in (*transcript.head, *transcript.tail))
@@ -51,6 +55,7 @@ async def _report(
     command: str,
     *,
     prefix: str = "",
+    cache_dir: Path | None = None,
     workdir: Path | None = None,
     sent: Callable[[bytes], bytes] | None = None,
 ) -> CommandReport:
@@ -60,6 +65,9 @@ async def _report(
     directory; *sent* turns the request into what reaches the shell.
     """
     layers = command_environment(RunIdentity("agent-a", "session-a", None))
+    # Share compiled code across this run's cases without touching the user's cache.
+    if cache_dir is None:
+        cache_dir = cwd.parent / "powershell-host-cache"
     pwsh = shutil.which("pwsh")
     assert pwsh is not None
     request = powershell_request(command, str(workdir or cwd), layers.changes)
@@ -67,7 +75,13 @@ async def _report(
     try:
         handle = await manager.launch(
             SessionAddress(None, "agent-a", "session-a"),
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", prefix + POWERSHELL_BOOTSTRAP],
+            [
+                pwsh,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                prefix + powershell_bootstrap(cache_dir),
+            ],
             command=command,
             description=None,
             cwd=cwd,
@@ -81,6 +95,123 @@ async def _report(
         return manager.report(handle.command_id)
     finally:
         await manager.aclose()
+
+
+def _watch_host_compilation(markers: Path, *, gate: Path | None = None) -> str:
+    """Observe real compiler calls without changing the command runspace."""
+    directory = powershell_literal(str(markers))
+    pause = ""
+    if gate is not None:
+        pause = (
+            "$deadline = [DateTime]::UtcNow.AddSeconds(10); "
+            f"while (-not [IO.File]::Exists({powershell_literal(str(gate))})) {{ "
+            "if ([DateTime]::UtcNow -gt $deadline) { throw 'compiler gate timed out' }; "
+            "[Threading.Thread]::Sleep(10) }; "
+        )
+    return (
+        f"[IO.File]::WriteAllText([IO.Path]::Combine({directory}, \"$PID.ready\"), 'ready'); "
+        "function Add-Type { [CmdletBinding()] param([string]$TypeDefinition, "
+        "[string]$OutputAssembly) "
+        f'[IO.File]::AppendAllText([IO.Path]::Combine({directory}, "$PID.compile"), '
+        '$(if ($OutputAssembly) { "disk`n" } else { "memory`n" })); '
+        + pause
+        + "Microsoft.PowerShell.Utility\\Add-Type @PSBoundParameters }; "
+    )
+
+
+def _compilation_attempts(markers: Path) -> list[str]:
+    return [line for path in markers.glob("*.compile") for line in path.read_text().splitlines()]
+
+
+@pytest.mark.asyncio
+async def test_host_cache_reuses_valid_code_and_rebuilds_invalid_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = tmp_path / "host-cache"
+    markers = tmp_path / "compiler"
+    markers.mkdir()
+    prefix = _watch_host_compilation(markers)
+    command = "'cache-output'; cmd /c exit 5"
+    expected = (5, "cache-output\n")
+
+    assert await _run(tmp_path, command, prefix=prefix, cache_dir=cache) == expected
+    assert _compilation_attempts(markers) == ["disk"]
+    (entry,) = cache.glob("*.bin")
+    original = entry.read_bytes()
+
+    # A fresh process must load the entry without invoking any compiler path.
+    forbidden = "function Add-Type { throw 'compiler must not run on a hit' }; "
+    assert await _run(tmp_path, command, prefix=forbidden, cache_dir=cache) == expected
+    assert entry.read_bytes() == original
+
+    corrupt = bytearray(original)
+    corrupt[-1] ^= 1
+    for attempts, invalid in enumerate((bytes(corrupt), b"\0" * (1024 * 1024 + 1)), start=2):
+        entry.write_bytes(invalid)
+        assert await _run(tmp_path, command, prefix=prefix, cache_dir=cache) == expected
+        assert _compilation_attempts(markers) == ["disk"] * attempts
+        assert 32 < entry.stat().st_size < 1024 * 1024
+
+    # Changing the actual C# input, even without a behavioral change, changes the
+    # cache identity. The old entry is neither loaded nor overwritten.
+    monkeypatch.setattr(
+        _powershell_host, "HOST_SOURCE", _powershell_host.HOST_SOURCE + "\n// new\n"
+    )
+    assert await _run(tmp_path, command, prefix=prefix, cache_dir=cache) == expected
+    assert _compilation_attempts(markers) == ["disk"] * 4
+    assert len(list(cache.glob("*.bin"))) == 2
+    assert all(path.suffix in {".bin", ".lock"} for path in cache.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_host_cache_failure_preserves_command_output_and_exit(tmp_path: Path) -> None:
+    # A file where a cache directory is required is never a usable cache. Its
+    # contents must survive while the command uses in-memory compilation.
+    cache = tmp_path / "not-a-directory"
+    cache.write_text("keep this file")
+    markers = tmp_path / "compiler"
+    markers.mkdir()
+
+    result = await _run(
+        tmp_path,
+        "[Console]::Error.WriteLine('cache-output'); $Host.SetShouldExit(7)",
+        prefix=_watch_host_compilation(markers),
+        cache_dir=cache,
+    )
+
+    assert result == (7, "cache-output\n")
+    assert _compilation_attempts(markers) == ["memory"]
+    assert cache.read_text() == "keep this file"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_host_cache_misses_publish_one_complete_entry(tmp_path: Path) -> None:
+    cache = tmp_path / "host-cache"
+    markers = tmp_path / "compiler"
+    markers.mkdir()
+    gate = tmp_path / "compile-now"
+    prefix = _watch_host_compilation(markers, gate=gate)
+    async with asyncio.TaskGroup() as group:
+        calls = [
+            group.create_task(_run(tmp_path, "'cache-output'", prefix=prefix, cache_dir=cache))
+            for _ in range(3)
+        ]
+        try:
+            async with asyncio.timeout(10):
+                while len(list(markers.glob("*.ready"))) != 3:
+                    await asyncio.sleep(0.01)
+        finally:
+            gate.touch()
+
+    assert [call.result() for call in calls] == [(0, "cache-output\n")] * 3
+    assert _compilation_attempts(markers) == ["disk"]
+    assert len(list(cache.glob("*.bin"))) == 1
+    assert all(path.suffix in {".bin", ".lock"} for path in cache.iterdir())
+    forbidden = "function Add-Type { throw 'compiler must not run on a hit' }; "
+    assert await _run(tmp_path, "'cache-output'", prefix=forbidden, cache_dir=cache) == (
+        0,
+        "cache-output\n",
+    )
 
 
 # --- Exit status, errors and text --------------------------------------------
@@ -609,7 +740,7 @@ async def test_native_output_keeps_its_bytes_and_timing(tmp_path: Path) -> None:
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        POWERSHELL_BOOTSTRAP,
+        powershell_bootstrap(tmp_path.parent / "powershell-host-cache"),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

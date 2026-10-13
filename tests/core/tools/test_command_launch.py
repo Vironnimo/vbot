@@ -26,7 +26,7 @@ from core.tools._command_launch import (
     launch_pipe_process,
 )
 from core.tools._interpreter_host import InterpreterHost
-from core.tools._powershell import POWERSHELL_BOOTSTRAP, powershell_request
+from core.tools._powershell import powershell_bootstrap, powershell_request
 from core.tools.command_manager import CommandManager
 from core.tools.process_tree import ProcessTree, ProcessTreeTracker
 from core.tools.scratch_areas import ScratchFolder
@@ -384,7 +384,13 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
     layers = command_environment(RunIdentity("agent-a", "session-a", None), scratch=scratch)
     base = {**layers.base, "VBOT_PROBE_REMOVED": "base"}
     changes = {**layers.changes, "VBOT_PROBE": "ä b", "VBOT_PROBE_REMOVED": None}
-    argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_BOOTSTRAP]
+    argv = [
+        pwsh,
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        powershell_bootstrap(tmp_path / "host-cache"),
+    ]
     workdir = tmp_path / "wörk dir"
     workdir.mkdir()
     (workdir / "relative.txt").write_bytes(b"relative-sentinel")
