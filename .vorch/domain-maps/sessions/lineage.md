@@ -22,6 +22,8 @@ Task-gated detail for `sessions.md`: how forks share history, how a history edit
 
 `move` updates the one row's address; lineage references `session_key`, so descendants and ancestors stay attached. It rejects owner-managed Sessions and an occupied destination and applies the same prompt-state scope rule. Archive changes only the row state: an archived ancestor's entries stay readable by its descendants.
 
+Live Sub-Agent children store their Parent's public address, so `move` retargets those links in the same transaction, matching all three source address parts and preserving the creating Run/Tool-call facts. This keeps tree discovery, `message_parent` and completion forwarding attached after an Agent Takeover (`test_sessions_lifecycle.py`).
+
 ## History edit
 
 `_store_operations.apply_edit` (one transaction, 60s transcript budget):
