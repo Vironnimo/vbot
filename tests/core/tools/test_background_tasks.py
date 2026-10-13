@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import errno
 import json
+import os
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
 from functools import partial
@@ -25,15 +27,17 @@ from core.runtime import _bootstrap
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
 from core.subagents import SubAgentState, SubAgentStopOutcome
+from core.tools import _command_output as command_output_module
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS, ToolAccess, resolve_tool_access
 from core.tools.background_tasks import (
     BACKGROUND_TASKS_TOOL_NAME,
     register_background_tasks_tool,
 )
 from core.tools.command_manager import CommandManager, NotRunReason
+from core.tools.file_state import os_error_reason
 from core.tools.model_names import called_tool_name
 from core.tools.process_tree import RunningProcess
-from core.tools.shell import SHELL_TOOL_NAME, register_shell_tool
+from core.tools.shell import SHELL_TOOL_NAME, format_command_delivery, register_shell_tool
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry
 from core.utils.config import Config
 from tests.core.tools.command_manager_helpers import (
@@ -629,6 +633,47 @@ async def test_a_stop_does_not_call_the_log_complete_when_a_pipe_stage_held_outp
         assert "complete" not in stopped["next"]
     else:
         assert "next" not in stopped
+
+
+@pytest.mark.parametrize("kept", [6, 0], ids=["its-start", "nothing"])
+@pytest.mark.asyncio
+async def test_a_log_file_vbot_could_not_write_is_never_called_complete(
+    tasks: Tasks, monkeypatch: pytest.MonkeyPatch, kept: int
+) -> None:
+    full = OSError(errno.ENOSPC, "No space left on device")
+    room = [kept]
+
+    def full_disk(fd: int, data: bytes) -> tuple[int, OSError | None]:
+        # The disk takes the first *kept* bytes of the output and nothing more.
+        count = os.write(fd, data[: room[0]]) if room[0] else 0
+        room[0] -= count
+        return (count, None) if count == len(data) else (count, full)
+
+    monkeypatch.setattr(command_output_module, "_write_all", full_disk)
+    command_id, process = await tasks.background()
+    path = tasks.commands.manager.report(command_id).log_path
+    assert path is not None
+    process.write("first\n" + "".join(f"line {number}\n" for number in range(5_000)))
+    await tasks.commands.advance(5, step=1)
+
+    def explained(text: str, *, named: bool = True) -> None:
+        # Once, with why; the file named only when it holds something.
+        assert text.count(os_error_reason(full)) == 1, text
+        assert "complete" not in text, text
+        assert (path.name in text) is (named and kept > 0), text
+
+    listed = data(await tasks.call({"action": "list"}))["tasks"]
+    [row] = [task for task in listed if task["type"] == "command"]
+    assert ("log" in row) is (kept > 0)
+    explained(row["log_incomplete"], named=False)
+    running = data(await tasks.call({"action": "status", "id": command_id, "filter": "error"}))
+    explained(running["next"])
+    explained(" ".join(running["notes"]))
+    process.exit(1)
+    report = await tasks.commands.finish(command_id)
+    explained(json.dumps(data(await tasks.call({"action": "status", "id": command_id}))))
+    explained(format_command_delivery(report))
+    assert path.read_bytes() == b"first\n"[:kept]
 
 
 async def _later_reads_speak_to_their_reader(

@@ -104,6 +104,20 @@ class CommandTranscript:
 
 
 @dataclass(frozen=True, slots=True)
+class LogLoss:
+    """Why a command's log file holds only part of its output: writing it failed.
+
+    The file keeps what was written before the failure, and nothing after it.
+    """
+
+    # What made the write fail, such as ``OSError`` ENOSPC on a full disk.
+    error: BaseException
+    # The bytes the file holds, and the line feeds among them: its complete lines.
+    kept_bytes: int
+    kept_lines: int
+
+
+@dataclass(frozen=True, slots=True)
 class CommandReport:
     """What a command did, as of its end or the moment the report was taken."""
 
@@ -127,7 +141,8 @@ class CommandReport:
     stop_reason: StopReason | None
     transcript: CommandTranscript
     # Every byte the command wrote, unchanged, appended as it arrives; None
-    # without temporary-file storage and once writing it failed.
+    # without temporary-file storage, and when writing it failed before its
+    # first byte (``log_loss``).
     log_path: Path | None
     # Direct child programs of the shell that exited with a non-zero code before
     # any stop, such as ``git.exe exited with code 128`` (Windows only).
@@ -144,6 +159,8 @@ class CommandReport:
     # Why the shell ran nothing of the command, once it exited with a code the
     # launch named for that; None when the command ran or may have.
     not_run: NotRunReason | None = None
+    # Why the log file misses output from some point on; None while it holds every byte.
+    log_loss: LogLoss | None = None
 
     @property
     def status(self) -> CommandStatus:
@@ -346,6 +363,7 @@ __all__ = [
     "CommandTranscript",
     "CommandWaitOutcome",
     "CompletionSink",
+    "LogLoss",
     "NotRunReason",
     "OutputCallback",
     "StopReason",
