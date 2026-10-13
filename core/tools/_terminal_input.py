@@ -9,6 +9,17 @@ from ._terminal_state import (
     TERMINAL_INPUT_MAX_CHARS,
 )
 
+# The cursor keys while the program set application cursor mode (DECCKM),
+# as xterm sends them: SS3 instead of CSI.
+_APPLICATION_CURSOR_KEYS = {
+    "up": "\x1bOA",
+    "down": "\x1bOB",
+    "right": "\x1bOC",
+    "left": "\x1bOD",
+    "home": "\x1bOH",
+    "end": "\x1bOF",
+}
+
 
 def input_chunks(
     *,
@@ -16,12 +27,14 @@ def input_chunks(
     text: str | None,
     key: str | None,
     bracketed_paste: bool = False,
+    application_cursor: bool = False,
 ) -> tuple[str, ...]:
     """The writes for one input: exact *data*, or *text* followed by *key*.
 
     Text is typed as on a keyboard, where each line break is the Enter key;
     with *bracketed_paste* it is pasted as one block instead, its line breaks
-    sent as a terminal pastes them.
+    sent as a terminal pastes them. With *application_cursor*, the cursor
+    keys send what a terminal sends in that mode.
     """
     if data == "":
         data = None
@@ -50,7 +63,10 @@ def input_chunks(
             else typed
         )
     if key is not None:
-        chunks.append(TERMINAL_INPUT_KEY_SEQUENCES[key])
+        sequence = TERMINAL_INPUT_KEY_SEQUENCES[key]
+        if application_cursor:
+            sequence = _APPLICATION_CURSOR_KEYS.get(key, sequence)
+        chunks.append(sequence)
     return tuple(chunks)
 
 

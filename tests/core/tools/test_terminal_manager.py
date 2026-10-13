@@ -53,11 +53,14 @@ async def test_launch_runs_in_the_terminal_environment_and_keeps_explicit_env(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resized", [False, True], ids=["output", "output-after-resize"])
 async def test_startup_waits_for_a_visible_screen_and_answers_terminal_queries_meanwhile(
-    clocked_manager: Clocked, tmp_path: Path
+    clocked_manager: Clocked, tmp_path: Path, resized: bool
 ) -> None:
     """A terminal's own start-up sequences draw nothing, so they show no first
-    screen; the program's first visible output does. Starting types nothing."""
+    screen; the program's first visible output does, also when it comes right
+    after a resize, where it counts as a redraw (code review R6: start waited
+    its whole wait). Starting types nothing."""
     manager, factory, _trigger, clock = clocked_manager
     started = await spawn(manager, tmp_path)
     adapter = factory.adapters[0]
@@ -70,8 +73,19 @@ async def test_startup_waits_for_a_visible_screen_and_answers_terminal_queries_m
     await eventually(lambda: terminal_info(manager, started.terminal_id).state == "ready")
     assert not waiting.done()
 
+    if resized:
+        await manager.resize_for_operator(started.terminal_id, columns=100, rows=30)
+    revision = terminal_info(manager, started.terminal_id).screen_revision
     adapter.emit("READY> ")
-    await eventually(lambda: terminal_info(manager, started.terminal_id).state == "working")
+    if resized:
+        # A redraw keeps the screen revision.
+        async def drawn() -> bool:
+            return bool((await manager.snapshot(started.terminal_id, owner()))["screen"])
+
+        await eventually(drawn)
+    else:
+        await eventually(lambda: terminal_info(manager, started.terminal_id).state == "working")
+        assert terminal_info(manager, started.terminal_id).screen_revision > revision
     await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
     await waiting
     assert adapter.writes == ["\x1b[1;1R"]

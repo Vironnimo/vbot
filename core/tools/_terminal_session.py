@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import json
 import re
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
+from collections import deque
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Literal
 
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
@@ -35,7 +37,6 @@ from ._terminal_state import (
     TERMINAL_NOTICE_MESSAGE_CAP_CHARS,
     TERMINAL_REPAINT_WINDOW_SECONDS,
     TERMINAL_STATUS_MAX_LINES,
-    TERMINAL_UNRENDERED_MAX_CHARS,
     AttentionKind,
     TerminalAlreadyAttachedError,
     TerminalAttention,
@@ -65,6 +66,17 @@ _NOTICE_LABEL_CHARS = 60
 # did not submit it; 0.3 s later it submitted (measured 2026-10-11).
 _ECHO_PAUSE_SHARE = 0.125
 _ECHO_LIMIT_SHARE = 0.5
+# A screen drawn anew from the log replays it in pieces of this size; the
+# last piece, at most the second size, replays under the Session lock.
+_REPLAY_PIECE_BYTES = 1 << 20
+_REPLAY_LOCKED_BYTES = 1 << 16
+# A failed redraw is tried again after twice the quiet period, doubling up
+# to this many seconds.
+_REDRAW_RETRY_MAX_SECONDS = 300.0
+# Once the program has ended, its final screen is drawn anew for at most this long.
+_FINAL_REDRAW_SECONDS = 10.0
+# The latest clears of the screen recorded for acknowledgements that arrive late.
+_CLEARS_KEPT = 64
 # Failures that persist across chunks or polls, keyed by (terminal id, kind):
 # logged when they start and when they end, not on every repetition.
 _CONDITIONS = LoggedConditions()
@@ -85,6 +97,8 @@ class TerminalSessionServices:
     operator_summary: Callable[[TerminalInfo], dict[str, Any]]
     # Operator-visible Terminal state changed.
     changed: Callable[[str], None]
+    # A new screen of this size, for one drawn anew from the log.
+    open_screen: Callable[[int, int], Awaitable[TerminalScreen]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +114,9 @@ class TerminalObservation:
     # The history line number just below the last screen line shown: the
     # Agent has seen every line above it that scrolls into history.
     seen_line: int
+    # Clears of the screen before it was shown; a later clear erased what it
+    # showed from the clear's first line on.
+    clears: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +187,8 @@ class TerminalSession:
         )
         self._title = ""
         self._bracketed_paste = False
+        # The program set application cursor mode: cursor keys send SS3.
+        self._application_cursor = False
         # The program asked for focus reports; it is told the focus is lost.
         self._focus_reporting = False
         self._alternate_screen = False
@@ -179,6 +198,11 @@ class TerminalSession:
         # The attached Agent has seen every history line above this number,
         # in a result or a delivery; None before it saw any screen.
         self._seen_line: int | None = None
+        # Clears of the screen so far, and the first line each of the latest
+        # erased: a screen shown before a clear acknowledges only the lines
+        # above it.
+        self._clear_count = 0
+        self._clears: deque[tuple[int, int]] = deque(maxlen=_CLEARS_KEPT)
         self._output_count = 0
         # Quiet boundaries so far: output paused for the quiet period after
         # activity. Replies to input end at the next one.
@@ -188,8 +212,10 @@ class TerminalSession:
         self._snapshot_on_settle = False
         self._attention: TerminalAttention | None = None
         self._attention_body = ""
-        # The history line below the screen the pending attention brings.
+        # The history line below the screen the pending attention brings,
+        # and the clears before that screen.
         self._attention_seen_line = 0
+        self._attention_clears = 0
         self._attention_revision = 0
         self._acknowledged_attention_revision = 0
         self._activity_origin_run_id: str | None = None
@@ -222,13 +248,24 @@ class TerminalSession:
         self._last_output_at = services.monotonic()
         # Set once vBot killed the process tree.
         self._tree_killed = asyncio.Event()
-        # Why output can no longer be read, and why the screen fell behind it;
-        # either becomes the Session's failure once its processes have ended.
+        # Why output can no longer be read: the Session's failure once its
+        # processes have ended.
         self._read_failure: Exception | None = None
+        # Why the screen misses output: drawing it failed. Results say so until
+        # a screen drawn anew from the log replaced it (``_redraw_screen``).
         self._render_failure: Exception | None = None
-        # Output the screen missed while rendering failed, fed again with the
-        # next chunk (at most the newest TERMINAL_UNRENDERED_MAX_CHARS).
-        self._unrendered = ""
+        # The screen shows the output as it comes; False after a failed draw.
+        self._screen_current = True
+        # What a screen drawn anew replays: the log holds every byte of output,
+        # _log_size of them so far, and the resizes (log offset, columns, rows)
+        # and the last input happened at these log offsets.
+        self._log_size = 0
+        self._first_size = (screen.columns, screen.rows)
+        self._resizes: list[tuple[int, int, int]] = []
+        self._input_offset: int | None = None
+        # The log offset of the first output the screen missed.
+        self._missed_from = 0
+        self._redraw_task: asyncio.Task[None] | None = None
 
     # Facts
 
@@ -328,7 +365,7 @@ class TerminalSession:
                 return False
             self._termination_pending = False
         self._adapter.close()
-        for task in (self._reader_task, self._settle_task, self._sample_task):
+        for task in (self._reader_task, self._settle_task, self._sample_task, self._redraw_task):
             self._cancel_task(task)
         self._finish_files()
         return True
@@ -348,6 +385,7 @@ class TerminalSession:
                 self._settle_task,
                 self._sample_task,
                 self._delivery_task,
+                self._redraw_task,
             )
             if task is not None and not task.done()
         ]
@@ -355,6 +393,7 @@ class TerminalSession:
     def release(self) -> None:
         """Drop a finished Session's retained resources when it leaves the catalog."""
         self._cancel_delivery()
+        self._cancel_task(self._redraw_task)
         self._finish_files()
         self._screen.close()
         for kind in ("render", "skipped", "end_check", "process_sample"):
@@ -568,7 +607,9 @@ class TerminalSession:
             self.attachment = target
         self._publish_state()
         if pending and attention is not None:
-            self._schedule_delivery(attention, self._attention_body, self._attention_seen_line)
+            self._schedule_delivery(
+                attention, self._attention_body, self._attention_seen_line, self._attention_clears
+            )
         return True
 
     # Input and size
@@ -587,8 +628,12 @@ class TerminalSession:
 
         A key typed after text follows once the program took the text
         (``_await_text_taken``); other input waits until both are written.
+        Text the program got is reported even when its key was not sent
+        (``key_unsent``: the program had ended, or the PTY refused the key),
+        so the Agent does not type it again.
         """
         write_error: BaseException | None = None
+        text_sent = 0
         async with self._input_lock:
             async with self._lock:
                 self._require_live()
@@ -597,7 +642,11 @@ class TerminalSession:
                     text is not None and ("\n" in text or "\r" in text) and self._bracketed_paste
                 )
                 chunks = input_chunks(
-                    data=data, text=text, key=key, bracketed_paste=bracketed_paste
+                    data=data,
+                    text=text,
+                    key=key,
+                    bracketed_paste=bracketed_paste,
+                    application_cursor=self._application_cursor,
                 )
                 if not chunks:
                     # An empty write changes no activity or observation.
@@ -609,16 +658,28 @@ class TerminalSession:
                 # not echo it (for example, a password prompt).
                 self._screen_revision += 1
                 # A wait's pattern matches what the program prints below this line.
-                await self._screen.mark_input()
+                self._input_offset = self._log_size
+                await self._mark_input()
                 running = await self._running_before_input()
                 *typed, last = chunks
                 typed_at = self._services.monotonic()
                 if typed:
                     write_error = await self._write_input(typed[0], running)
-            if typed and write_error is None:
+                    if write_error is None:
+                        text_sent = len(typed[0])
+            if text_sent:
                 await self._await_text_taken(typed_at)
             if write_error is None:
                 async with self._lock:
+                    if text_sent and (self.finished or self.finished_at is not None):
+                        # The program ended on the text, as on "q" for quit.
+                        return self._input_result(
+                            text_sent,
+                            key,
+                            pasted=bracketed_paste,
+                            superseded=superseded,
+                            key_unsent="ended",
+                        )
                     self._require_live()
                     write_error = await self._write_input(last, running)
                     if write_error is None:
@@ -633,7 +694,16 @@ class TerminalSession:
                             pasted=bracketed_paste,
                             superseded=superseded,
                         )
-        raise await self._write_failure() from write_error
+        failure = await self._write_failure()
+        if text_sent:
+            return self._input_result(
+                text_sent,
+                key,
+                pasted=bracketed_paste,
+                superseded=superseded,
+                key_unsent="ended" if isinstance(failure, TerminalClosedError) else "refused",
+            )
+        raise failure from write_error
 
     async def _write_input(
         self, chunk: str, running: frozenset[int] | None
@@ -652,6 +722,9 @@ class TerminalSession:
         try:
             await asyncio.to_thread(self._adapter.write, chunk)
         except (EOFError, OSError) as error:
+            # The cycle the input opened still settles: a reply wait after
+            # text that was sent ends at its quiet boundary.
+            self._restart_quiet(restart)
             return error
         self._restart_quiet(restart)
         self._output_event.set()
@@ -745,7 +818,11 @@ class TerminalSession:
                 # A resize to the current dimensions would only make the
                 # program repaint, so it is skipped.
                 await asyncio.to_thread(self._adapter.resize, rows, columns)
-                await self._screen.resize(columns, rows)
+                self._resizes.append((self._log_size, columns, rows))
+                try:
+                    await self._screen.resize(columns, rows)
+                except Exception as error:
+                    self._render_failed(error, self._log_size)
                 self._resize_count += 1
                 self._activity.resize(self._services.monotonic())
                 self._publish_state()
@@ -764,13 +841,13 @@ class TerminalSession:
     ) -> dict[str, Any]:
         """Return the screen, one history page and the facts an Agent result shows.
 
-        ``screen`` marks highlighted text and ``cursor`` is the visible
+        ``screen`` marks reverse-video text and suggestions, ``cursor`` is the visible
         cursor's row and column (``ScreenObservation``); ``seen_line`` is the
         history line above which the attached Agent has seen every line (None
         before it saw any screen). ``log_file`` names the output log, and
         ``log_complete`` says whether it holds all output, and
         ``log_end_line`` the first history line it lacks when known. ``screen_behind``
-        is the rendering error while the screen misses the latest output.
+        is the rendering error while the screen misses output.
         """
         async with self._lock:
             page = await self._screen.page(start_line=start_line, limit=lines)
@@ -808,6 +885,7 @@ class TerminalSession:
                 info.rows,
                 observation.signature,
                 _seen_through(observation, alternate=info.alternate_screen),
+                self._clear_count,
             ),
         }
         observed = self._observed
@@ -835,7 +913,7 @@ class TerminalSession:
         nobody, and an idle delivery of that screen on its way is cancelled
         (its boundary can come before the result is durable).
         """
-        self._saw_lines(observation.seen_line)
+        self._saw_lines(observation.seen_line, observation.clears)
         observed = self._observed
         if observed is None or (observation.resize_count, observation.screen_revision) >= (
             observed.resize_count,
@@ -851,9 +929,29 @@ class TerminalSession:
         ):
             self.acknowledge_attention(attention.revision)
 
-    def _saw_lines(self, line: int) -> None:
-        """The attached Agent has now seen every history line above *line*."""
+    def _saw_lines(self, line: int, clears: int) -> None:
+        """The attached Agent has now seen every history line above *line* of a
+        screen shown after *clears* clears.
+
+        A later clear erased that screen from its first line on, so the lines
+        drawn there since are new to the Agent (code review R8: a late
+        acknowledgement undid a clear). When those clears are no longer
+        recorded, what the Agent saw stays as it was.
+        """
+        if clears < self._clear_count:
+            later = [cleared for count, cleared in self._clears if count > clears]
+            if len(later) < self._clear_count - clears:
+                return
+            line = min(line, *later)
         self._seen_line = max(self._seen_line or 0, line)
+
+    def _cleared(self, line: int) -> None:
+        """A clear erased the screen from history line *line* on: the Agent has
+        not seen the lines drawn there next, although they get the same numbers."""
+        self._clear_count += 1
+        self._clears.append((self._clear_count, line))
+        if self._seen_line is not None:
+            self._seen_line = min(self._seen_line, line)
 
     def _log_file(self) -> str | None:
         """The output log a result can name; ``_log_failed`` says it ends early."""
@@ -971,19 +1069,18 @@ class TerminalSession:
         its output keeps being read, so the program neither stalls nor ends.
         """
         data, text = _output_forms(received)
+        offset = self._log_size
         if self._write_log(data):
             self._log_end_line = await self._output_line()
         # Viewers get the bytes first; the snapshot a new viewer takes waits
         # for this lock, so it already contains them.
         self._publish_output(text)
-        update = await self._render(text)
+        update = await self._render(text, offset)
         self._last_output_at = self._services.monotonic()
         facts_changed = False
         if update is not None:
-            if update.cleared_line is not None and self._seen_line is not None:
-                # Rows the Agent saw were erased: the lines drawn there next
-                # are new to it, although they get the same line numbers.
-                self._seen_line = min(self._seen_line, update.cleared_line)
+            if update.cleared_line is not None:
+                self._cleared(update.cleared_line)
             facts_changed = await self._apply_update(update)
         effect = self._activity.output(
             self._services.monotonic(),
@@ -1014,6 +1111,7 @@ class TerminalSession:
         try:
             handle.write(data)
             handle.flush()
+            self._log_size += len(data)
         except OSError, ValueError:
             _LOGGER.warning(
                 "Terminal output log write failed; the log ends here (terminal=%s)",
@@ -1028,45 +1126,42 @@ class TerminalSession:
         return False
 
     async def _output_line(self) -> int | None:
-        """The history line the next output goes to: the visible cursor's line,
-        else the last line the screen shows; None when the screen cannot tell.
+        """The history line the next output goes to: the cursor's line, also
+        while the program hides the cursor; None when the screen cannot tell,
+        as while it misses output.
 
         A full-screen view keeps no history, so the primary screen's lines
         before it are complete.
         """
+        if self._render_failure is not None:
+            return None
         try:
             observation = await self._screen.observe()
         except Exception:
             return None
-        start = observation.screen_start_line
         if self._alternate_screen:
-            return start
-        if observation.cursor is not None:
-            return start + observation.cursor[0] - 1
-        rows = observation.screen.count("\n") + 1 if observation.screen else 0
-        return start + max(0, rows - 1)
+            return observation.screen_start_line
+        return observation.cursor_line
 
-    async def _render(self, text: str) -> EmulatorUpdate | None:
-        """Feed *text* to the screen; None when that failed, which leaves the screen behind.
+    async def _render(self, text: str, offset: int) -> EmulatorUpdate | None:
+        """Feed *text*, the output from log offset *offset* on, to the screen;
+        None when the screen does not show it.
 
-        The output a failed feed missed is fed again before the next chunk,
-        so the screen catches up once rendering works again; results say
-        that the screen is behind meanwhile.
+        Once drawing failed, the screen misses output, and results say so. A
+        screen drawn anew from the log replaces it (``_redraw_screen``), which
+        replays the log, so the output goes only there meanwhile. Without a
+        complete log, the screen goes on with the new output; it lacks the
+        output it missed until the program ends.
         """
-        pending = self._unrendered + text
-        try:
-            update = await self._screen.feed(pending)
-        except Exception as error:
-            # The newest output decides the screen; older missed output beyond
-            # the cap is given up.
-            self._unrendered = pending[-TERMINAL_UNRENDERED_MAX_CHARS:]
-            self._render_failed(error)
+        if self._render_failure is not None and self._redrawable():
+            self._start_redraw()
             return None
-        self._unrendered = ""
-        if self._render_failure is not None:
-            self._render_failure = None
-            if _CONDITIONS.ended((self.terminal_id, "render")):
-                _LOGGER.info("Terminal screen rendering recovered (terminal=%s)", self.terminal_id)
+        try:
+            update = await self._screen.feed(text)
+        except Exception as error:
+            self._render_failed(error, offset)
+            return None
+        self._screen_current = True
         if update.skipped and _CONDITIONS.started((self.terminal_id, "skipped")):
             # A sequence the screen could not apply; it goes on with the rest.
             _LOGGER.warning(
@@ -1077,15 +1172,137 @@ class TerminalSession:
             )
         return update
 
-    def _render_failed(self, error: Exception) -> None:
-        """The screen missed output; it follows the output again once a later chunk renders."""
-        self._render_failure = error
-        if _CONDITIONS.started((self.terminal_id, "render")):
+    def _render_failed(self, error: Exception, missed_from: int) -> None:
+        """The screen missed the output from log offset *missed_from* on, or
+        cannot be used; with a complete log, a screen drawn anew replaces it."""
+        self._screen_current = False
+        if self._render_failure is None:
+            self._render_failure = error
+            self._missed_from = missed_from
+            if _CONDITIONS.started((self.terminal_id, "render")):
+                _LOGGER.warning(
+                    "Terminal screen rendering failed; the program keeps running and its "
+                    "screen falls behind its output (terminal=%s)",
+                    self.terminal_id,
+                    exc_info=error,
+                )
+        if self._redrawable():
+            self._start_redraw()
+
+    async def _mark_input(self) -> None:
+        """Mark the screen at the Agent's input; a screen drawn anew replays the mark."""
+        if not self._screen_current:
+            return
+        try:
+            await self._screen.mark_input()
+        except Exception as error:
+            self._render_failed(error, self._log_size)
+
+    def _redrawable(self) -> bool:
+        """The log holds every byte of output, so a new screen can replay it."""
+        return self._log_path is not None and self._log_handle is not None and not self._log_failed
+
+    def _start_redraw(self) -> None:
+        task = self._redraw_task
+        if task is None or task.done():
+            self._redraw_task = self._background(self._redraw_screen(), "redraw")
+
+    async def _redraw_screen(self) -> None:
+        """Replace the screen that missed output with one drawn anew from the log;
+        a failed attempt is tried again later while the Session runs."""
+        services = self._services
+        failures = 0
+        while self._render_failure is not None and self._redrawable() and not self.finished:
+            try:
+                if await self._redraw_once():
+                    return
+            except Exception:
+                _LOGGER.warning(
+                    "Terminal screen could not be drawn anew from its log (terminal=%s)",
+                    self.terminal_id,
+                    exc_info=failures == 0,
+                )
+            failures += 1
+            delay = services.activity_quiet_seconds * 2**failures
+            await services.sleep(min(delay, _REDRAW_RETRY_MAX_SECONDS))
+
+    async def _redraw_once(self) -> bool:
+        """Draw a new screen from the log and put it in place of the screen;
+        False when a redraw is no longer needed or possible.
+
+        The log holds every byte of output, and the resizes and the last input
+        are recorded at log offsets, so the new screen reaches the state the
+        screen would have had without the failure. Output, input and resizes
+        go on meanwhile: the replay follows them through the log, and finishes
+        under the lock once little is left, so nothing comes between it and
+        the swap.
+        """
+        path = self._log_path
+        if path is None:
+            return False
+        columns, rows = self._first_size
+        screen = await self._services.open_screen(columns, rows)
+        replay = _LogReplay(screen, path, missed_from=self._missed_from)
+        try:
+            while True:
+                async with self._lock:
+                    if self._render_failure is None or not self._redrawable() or self.finished:
+                        screen.close()
+                        return False
+                    end = self._log_size
+                    resizes = tuple(self._resizes)
+                    input_offset = self._input_offset
+                    if end - replay.offset <= _REPLAY_LOCKED_BYTES:
+                        await replay.run(end, resizes, input_offset)
+                        await self._replace_screen(replay)
+                        return True
+                await replay.run(end, resizes, input_offset)
+        except BaseException:
+            screen.close()
+            raise
+        finally:
+            replay.close()
+
+    async def _replace_screen(self, replay: _LogReplay) -> None:
+        """Put the screen *replay* drew in place of the one that missed output; the
+        lock is held."""
+        old, self._screen = self._screen, replay.screen
+        old.close()
+        self._render_failure = None
+        self._screen_current = True
+        update = replay.update
+        if update is not None:
+            if replay.cleared_line is not None:
+                self._cleared(replay.cleared_line)
+            # Replies to queries the program sent long ago would arrive as input now.
+            await self._apply_update(update._replace(responses="", alternate_exited=False))
+        # Its content can differ from what any result showed.
+        self._screen_revision += 1
+        if _CONDITIONS.ended((self.terminal_id, "render")):
+            _LOGGER.info("Terminal screen drawn anew from its log (terminal=%s)", self.terminal_id)
+        settle = self._settle_task
+        if settle is None or settle.done():
+            # The quiet boundary the screen missed while it was behind.
+            generation = self._activity.generation
+            self._settle_task = self._background(
+                self._settle_after_quiet(generation), f"settle:{generation}"
+            )
+        self._publish_state()
+        self._signal_change()
+
+    async def _final_redraw(self) -> None:
+        """Before the end is recorded, draw the final screen anew from the log."""
+        task = self._redraw_task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        try:
+            await asyncio.wait_for(self._redraw_once(), _FINAL_REDRAW_SECONDS)
+        except Exception:
             _LOGGER.warning(
-                "Terminal screen rendering failed; the program keeps running and its screen "
-                "falls behind its output (terminal=%s)",
+                "The final screen of terminal=%s could not be drawn anew from its log",
                 self.terminal_id,
-                exc_info=error,
+                exc_info=True,
             )
 
     async def _apply_update(self, update: EmulatorUpdate) -> bool:
@@ -1102,6 +1319,7 @@ class TerminalSession:
         )
         self._title = update.title
         self._bracketed_paste = update.bracketed_paste
+        self._application_cursor = update.application_cursor
         self._focus_reporting = update.focus_reporting
         self._alternate_screen = update.alternate_screen
         if update.alternate_exited:
@@ -1151,10 +1369,13 @@ class TerminalSession:
                 settled = self._activity.settle(generation, observation.signature)
                 if settled is None:
                     return
+                if observation.screen and not self._screen_shown:
+                    # The first screen also shows when the program's first
+                    # output came right after a resize and counts as a redraw.
+                    self._screen_shown = True
+                    self._signal_change()
                 if settled == "activity":
                     self._quiet_boundaries += 1
-                    if observation.screen:
-                        self._screen_shown = True
                     self._signal_change()
                 if settled == "repaint" or self._settle_idle(generation, observation):
                     return
@@ -1267,27 +1488,31 @@ class TerminalSession:
         """
         if generation != self._activity.generation or self.finished:
             return None
-        if self._render_failure is not None:
+        if not self._screen_current:
             return None
-        if self._snapshot_on_settle:
-            self._snapshot_on_settle = False
-            await self._publish_snapshot()
         try:
+            if self._snapshot_on_settle:
+                self._snapshot_on_settle = False
+                await self._publish_snapshot()
             return await self._screen.observe()
         except Exception as error:
-            self._render_failed(error)
+            self._render_failed(error, self._log_size)
             return None
 
     async def _mark_finished(self) -> None:
         """Record the end once no process of the Session runs any longer.
 
-        A failure to read or render its output, if any, becomes its outcome.
+        A failure to read its output, if any, becomes its outcome. A screen
+        that missed output is drawn anew from the log first; one that still
+        misses output says so.
         """
         # A root process EOF cannot confirm that captured descendants exited.
         if self._termination_pending:
             return
         self._cancel_task(self._settle_task)
         self._cancel_task(self._sample_task)
+        if self._render_failure is not None and self._redrawable() and not self.finished:
+            await self._final_redraw()
         async with self._lock:
             if self.finished:
                 return
@@ -1296,7 +1521,7 @@ class TerminalSession:
             # Release the terminal (on Windows also its console host and reader thread).
             with contextlib.suppress(OSError):
                 await asyncio.to_thread(self._adapter.close)
-            error = self._read_failure or self._render_failure
+            error = self._read_failure
             self._activity.finish(error=error is not None)
             try:
                 await self._publish_snapshot()
@@ -1355,6 +1580,11 @@ class TerminalSession:
             created_at=_utc_now(),
         )
         self._attention = attention
+        behind = None
+        if self._render_failure is not None:
+            behind = screen_behind_note(
+                str(self._render_failure), self._log_file(), complete=not self._log_failed
+            )
         unseen = None
         if observation is not None:
             unseen = unseen_lines_note(
@@ -1373,6 +1603,7 @@ class TerminalSession:
             attention,
             observation=observation,
             unseen=unseen,
+            behind=behind,
             idle_seconds=self._services.idle_seconds,
         )
         self._attention_seen_line = (
@@ -1380,11 +1611,14 @@ class TerminalSession:
             if observation is not None
             else 0
         )
+        self._attention_clears = self._clear_count
         if kind in {"exited", "error"} and self._exit_acknowledged:
             # A result already showed the end.
             deliver = False
         if deliver:
-            self._schedule_delivery(attention, self._attention_body, self._attention_seen_line)
+            self._schedule_delivery(
+                attention, self._attention_body, self._attention_seen_line, self._attention_clears
+            )
         self._publish_state()
         self._signal_change()
 
@@ -1395,15 +1629,20 @@ class TerminalSession:
             return label[: _NOTICE_LABEL_CHARS - 3] + "..."
         return label
 
-    def _schedule_delivery(self, attention: TerminalAttention, body: str, seen_line: int) -> None:
-        """Deliver *body*, which shows the screen down to history line *seen_line*."""
+    def _schedule_delivery(
+        self, attention: TerminalAttention, body: str, seen_line: int, clears: int
+    ) -> None:
+        """Deliver *body*, which shows the screen down to history line *seen_line*
+        as it was after *clears* clears."""
         if self._services.trigger_service is None or self.attachment is None:
             return
         self._delivery_task = self._background(
-            self._deliver(attention, body, seen_line), f"attention:{attention.revision}"
+            self._deliver(attention, body, seen_line, clears), f"attention:{attention.revision}"
         )
 
-    async def _deliver(self, attention: TerminalAttention, body: str, seen_line: int) -> None:
+    async def _deliver(
+        self, attention: TerminalAttention, body: str, seen_line: int, clears: int
+    ) -> None:
         trigger_service = self._services.trigger_service
         attachment = self.attachment
         origin_run_id = self._activity_origin_run_id or self.origin_run_id
@@ -1434,7 +1673,7 @@ class TerminalSession:
             self._acknowledged_attention_revision, attention.revision
         )
         if self.attachment == attachment:
-            self._saw_lines(seen_line)
+            self._saw_lines(seen_line, clears)
         if self._attention is attention:
             self._attention = replace(attention, delivered=True)
 
@@ -1517,12 +1756,16 @@ class TerminalSession:
         *,
         pasted: bool,
         superseded: int | None,
+        key_unsent: Literal["ended", "refused"] | None = None,
     ) -> dict[str, Any]:
         return {
             "terminal_id": self.terminal_id,
             "state": self.state,
             "characters_sent": characters,
             "key": key,
+            # Why the key after typed text was not sent: the program had
+            # ended, or the PTY refused it while the program runs.
+            "key_unsent": key_unsent,
             # Multiline text went to the program as one bracketed paste.
             "pasted": pasted,
             "superseded_attention_revision": superseded,
@@ -1575,6 +1818,7 @@ def _attention_body(
     observation: ScreenObservation | None,
     unseen: str | None,
     idle_seconds: float,
+    behind: str | None = None,
 ) -> str:
     """The message that tells the attached Agent its interactive program needs a look.
 
@@ -1594,6 +1838,7 @@ def _attention_body(
             cursor=cursor,
             left_out=left_out,
             unseen=unseen,
+            behind=behind,
             idle_seconds=idle_seconds,
         )
         if len(body) <= TERMINAL_NOTICE_MESSAGE_CAP_CHARS or left_out >= len(rows):
@@ -1614,6 +1859,7 @@ def _compose_attention(
     cursor: tuple[int, int] | None,
     left_out: int,
     unseen: str | None,
+    behind: str | None,
     idle_seconds: float,
 ) -> str:
     if not readable:
@@ -1640,8 +1886,7 @@ def _compose_attention(
             )
         closing = [
             f'To type into it, call terminal with action "input", terminal_id "{terminal_id}", '
-            'your text as text and key "enter". When it shows something new and goes idle '
-            "again, that screen arrives as another message."
+            'your text as text and key "enter". Its next new screen arrives the same way.'
         ]
     elif attention.kind == "exited":
         headline = (
@@ -1662,10 +1907,25 @@ def _compose_attention(
             f"The top {_count(left_out, 'line')} of the screen {_are(left_out)} left out; "
             f"to see the whole screen, call terminal {status}."
         )
+    if behind:
+        lines.append(behind)
     if unseen:
         lines.append(unseen)
     lines.extend(closing)
     return "\n".join(lines)
+
+
+def screen_behind_note(error: str, log: str | None, *, complete: bool) -> str:
+    """The screen misses output: drawing it failed."""
+    note = (
+        f"This screen is out of date: drawing the program's output failed ({error}), so the "
+        "screen lacks some of that output."
+    )
+    if log is None:
+        return note
+    if complete:
+        return f"{note} The output is in the log {log}."
+    return f"{note} The log {log} has the output only until writing it failed."
 
 
 def unseen_lines_note(
@@ -1696,14 +1956,19 @@ def unseen_lines_note(
     what = f"{lines} you have not seen" if seen else lines
     kept_from = max(unseen_from, first_line)
     kept = max(0, shown_from - kept_from)
-    page = "terminal " + json.dumps(
-        {
-            "action": "status",
-            "terminal_id": terminal_id,
-            "start_line": kept_from,
-            "lines": TERMINAL_STATUS_MAX_LINES,
-        }
-    )
+    if log and log_complete:
+        # The log has every line; the page is the newest of them the terminal
+        # keeps, right above what the message shows (user decision D1).
+        newest = min(kept, TERMINAL_STATUS_MAX_LINES)
+        page = _status_page(terminal_id, shown_from - newest, newest)
+        if newest == count:
+            where = f"to read them, call {page}, or read the log {log}"
+        else:
+            where = f"to read them, read the log {log}" + (
+                f"; the newest {newest} of them can also be read with {page}" if newest else ""
+            )
+        return f"{what} {_are(count)} not shown; {where}."
+    page = _status_page(terminal_id, kept_from, TERMINAL_STATUS_MAX_LINES)
     if log and not log_complete:
         if log_end_line is not None:
             where = _partial_log_sources(
@@ -1722,6 +1987,17 @@ def unseen_lines_note(
     else:
         where = "they are no longer kept"
     return f"{what} {_are(count)} not shown; {where}."
+
+
+def _status_page(terminal_id: str, start_line: int, lines: int) -> str:
+    """The status call that reads *lines* history lines from *start_line*."""
+    page = {
+        "action": "status",
+        "terminal_id": terminal_id,
+        "start_line": start_line,
+        "lines": lines,
+    }
+    return "terminal " + json.dumps(page)
 
 
 def _partial_log_sources(count: int, kept: int, logged: int, page: str, log: str) -> str:
@@ -1796,6 +2072,78 @@ def _output_forms(received: str) -> tuple[bytes, str]:
     except UnicodeEncodeError:
         data = received.encode("utf-8", "surrogatepass")
     return data, _SURROGATE.sub("\ufffd", received)
+
+
+class _LogReplay:
+    """Draws a new screen from a Session's output log, piece by piece."""
+
+    def __init__(self, screen: TerminalScreen, path: Path, *, missed_from: int) -> None:
+        self.screen = screen
+        self._path = path
+        self._file: BinaryIO | None = None
+        self._decoder = codecs.getincrementaldecoder("utf-8")("surrogateescape")
+        self._missed_from = missed_from
+        # The log offset replayed up to, and how many resizes were applied.
+        self.offset = 0
+        self._resized = 0
+        self._marked: int | None = None
+        # The update of the last output replayed, and the first line a clear
+        # erased in the output the old screen missed.
+        self.update: EmulatorUpdate | None = None
+        self.cleared_line: int | None = None
+
+    async def run(
+        self, end: int, resizes: Sequence[tuple[int, int, int]], input_offset: int | None
+    ) -> None:
+        """Replay the log up to offset *end*, with each resize and the input mark
+        where they happened."""
+        while True:
+            while self._resized < len(resizes) and resizes[self._resized][0] <= self.offset:
+                _at, columns, rows = resizes[self._resized]
+                await self.screen.resize(columns, rows)
+                self._resized += 1
+            if (
+                input_offset is not None
+                and input_offset <= self.offset
+                and self._marked != input_offset
+            ):
+                await self.screen.mark_input()
+                self._marked = input_offset
+            if self.offset >= end:
+                return
+            stop = min(end, self.offset + _REPLAY_PIECE_BYTES)
+            upcoming = resizes[self._resized][0] if self._resized < len(resizes) else None
+            for boundary in (upcoming, input_offset, self._missed_from):
+                if boundary is not None and self.offset < boundary < stop:
+                    stop = boundary
+            data = await asyncio.to_thread(self._read, self.offset, stop - self.offset)
+            if len(data) != stop - self.offset:
+                raise OSError(f"the log ends at byte {self.offset + len(data)}, before byte {stop}")
+            missed = self.offset >= self._missed_from
+            self.offset = stop
+            text = _SURROGATE.sub("\ufffd", self._decoder.decode(data))
+            if not text:
+                continue
+            update = await self.screen.feed(text)
+            self.update = update
+            cleared = update.cleared_line
+            if missed and cleared is not None:
+                self.cleared_line = (
+                    cleared if self.cleared_line is None else min(self.cleared_line, cleared)
+                )
+
+    def _read(self, offset: int, size: int) -> bytes:
+        if self._file is None:
+            self._file = self._path.open("rb")
+        self._file.seek(offset)
+        return self._file.read(size)
+
+    def close(self) -> None:
+        """Close the log; the screen stays open."""
+        if self._file is not None:
+            with contextlib.suppress(OSError):
+                self._file.close()
+            self._file = None
 
 
 def _fenced(text: str) -> str:

@@ -46,7 +46,9 @@ from pathlib import Path
 
 from core.tools.terminal_backend import (
     WINDOWS_COMMAND_PROCESSOR_OPTIONS,
+    is_batch_program,
     windows_command_processor_line,
+    windows_program,
 )
 
 _POWERSHELL_SHELLS = frozenset({"pwsh", "powershell"})
@@ -189,14 +191,13 @@ def shell_launch(
     if name in _POWERSHELL_SHELLS:
         line = _powershell_line(command, arguments, windows_powershell=name == "powershell")
         run = line
-        if _batch_program(command, environment) and any(
-            _BATCH_UNSAFE.search(argument) for argument in arguments
-        ):
+        batch = _batch_program(command, environment)
+        if batch is not None and any(_BATCH_UNSAFE.search(argument) for argument in arguments):
             # PowerShell hands a batch file (such as an npm program shim)
             # quotes and cmd metacharacters unprotected, so cmd runs it with
             # the exact command line instead; the history keeps the line.
             comspec = environment.get("COMSPEC") or "cmd.exe"
-            exact = windows_command_processor_line(command, arguments)
+            exact = windows_command_processor_line(batch, arguments)
             run = (
                 f"& {_powershell_literal(comspec)} --% "
                 f'{WINDOWS_COMMAND_PROCESSOR_OPTIONS} /s /c "{exact}"'
@@ -296,11 +297,12 @@ def _cmd_prompt(environment: Mapping[str, str]) -> str:
     return _CMD_PROMPT_MARK + (environment.get("PROMPT") or "$P$G")
 
 
-def _batch_program(command: str, environment: Mapping[str, str]) -> bool:
+def _batch_program(command: str, environment: Mapping[str, str]) -> str | None:
+    """The batch program Windows starts for *command*, else None."""
     if os.name != "nt":
-        return False
-    program = shutil.which(command, path=environment.get("PATH"))
-    return program is not None and Path(program).suffix.lower() in {".bat", ".cmd"}
+        return None
+    program = windows_program(command, environment.get("PATH"))
+    return program if is_batch_program(program) else None
 
 
 # What PowerShell passes to a batch file without the protection cmd needs.

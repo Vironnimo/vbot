@@ -63,6 +63,9 @@ _FIELD_ALIASES = SpellingAliases(
 _SUBMIT = "submit"
 # The terminal's size follows the user's view of it; no call resizes it.
 _RESIZE = "resize"
+# Interrupting what the program does and stopping the program are different
+# calls; these names fit both (user decision D3).
+_AMBIGUOUS_STOPS = frozenset({"cancel", "abort", "interrupt"})
 _ACTION_VALUES = {
     **dict.fromkeys(("start", "launch", "spawn", "create", "new"), "start"),
     **dict.fromkeys(("list", "ls", "listterminals", "terminals"), "list"),
@@ -170,8 +173,21 @@ _OBSERVATION_FIELDS = (
 # Labels and start settings that change nothing on an existing terminal.
 _START_LABELS = ("name", "group", "workdir")
 _ACCEPTED_FIELDS = {
+    # Input given to start is not sent; the result says how to send it.
     "start": frozenset(
-        {"terminal_id", "command", "args", "text", "workdir", "name", "group", "columns", "rows"}
+        {
+            "terminal_id",
+            "command",
+            "args",
+            "text",
+            "data",
+            "key",
+            "workdir",
+            "name",
+            "group",
+            "columns",
+            "rows",
+        }
     ),
     "list": frozenset(),
     "attach": frozenset({"terminal_id"}),
@@ -239,6 +255,8 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
     if "action" not in normalized:
         _infer_action(normalized, press_enter)
     action = normalized.get("action")
+    if isinstance(action, str) and spelling(action) in _AMBIGUOUS_STOPS:
+        raise ValueError(_not_run(_ambiguous_stop_problem(action, normalized)))
     if action == _RESIZE:
         status = _call("status", normalized)
         raise ValueError(
@@ -410,17 +428,8 @@ def _normalize_start(arguments: dict[str, Any]) -> None:
         arguments["command"], arguments["args"] = command[0], command[1:]
         if not arguments["args"]:
             del arguments["args"]
-    # Enter for start's text is dropped with it: start types nothing, and its
-    # result says how to send the text once the program is ready.
-    key = arguments.pop("key", None)
-    if key not in (None, "enter"):
-        raise ValueError(
-            _not_run(f'start presses no keys; send key "{key}" with the input action after start.')
-        )
-    if "data" in arguments:
-        raise ValueError(
-            _not_run("start types nothing; send exact data with the input action after start.")
-        )
+    # start sends no input: text, data and keys stay for the handler, whose
+    # result says how to send them once the program is ready.
 
 
 def _normalize_input(arguments: dict[str, Any], press_enter: bool) -> None:
@@ -481,6 +490,19 @@ def _command_elsewhere_problem(action: str, arguments: dict[str, Any]) -> str:
             f"{_call('input', arguments, text=line, key='enter')}."
         )
     return f"command and args start a new program only with start; {action} leaves them unused."
+
+
+def _ambiguous_stop_problem(action: str, arguments: dict[str, Any]) -> str:
+    """Interrupting the program's work and stopping the program are two calls."""
+    interrupt = _call("input", arguments, key="ctrl_c")
+    stop = _call("kill", arguments)
+    named = "" if "terminal_id" in arguments else " with the terminal's terminal_id"
+    return (
+        f'"{action}" can mean two things; nothing was done. To interrupt what the program is '
+        f"doing, as Ctrl+C does, call terminal {interrupt}{named}, or press the key its screen "
+        "names, such as escape. To stop the program and everything it started, call terminal "
+        f"{stop}{named}."
+    )
 
 
 def _call(action: str, arguments: dict[str, Any], **fields: Any) -> str:

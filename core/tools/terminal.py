@@ -14,6 +14,7 @@ import re
 import shutil
 from collections.abc import Awaitable, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -70,6 +71,7 @@ from core.tools.terminal_manager import (
     TerminalNotOwnedError,
     TerminalOwner,
     TerminalStaleScreenError,
+    screen_behind_note,
     unseen_lines_note,
 )
 from core.tools.tools import (
@@ -115,6 +117,8 @@ TERMINAL_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
 _LISTED_TERMINALS = 3
 # A matched line longer than this is cut.
 _MATCHED_LINE_CHARS = 500
+# An argument an error names is cut to this many characters.
+_ARGUMENT_CHARS = 80
 _TERMINAL_LABEL_CHARS = 40
 # A list row shows this much of the program's first line.
 _PROGRAM_CHARS = 80
@@ -134,7 +138,10 @@ def _terminal_description(*, shell: str | None) -> str:
     if shell:
         sentences.append(f"Run all other commands, servers included, with {shell}.")
     sentences.append("A program keeps running after your turn ends, until it exits or is stopped.")
-    sentences.append("In screens, ⟦ and ⟧ mark highlighted text, such as a selected menu item.")
+    sentences.append(
+        "In screens, ⟦ and ⟧ mark reverse-video text, such as a selection or a drawn cursor, "
+        "and ⟪ and ⟫ mark faint suggestion text after the cursor, which Enter does not submit."
+    )
     return " ".join(sentences)
 
 
@@ -392,12 +399,6 @@ async def _handle_terminal(
         return tool_failure(code, f"No terminal was started: {error}", retryable=False)
     except TerminalLaunchError as error:
         cause = error.__cause__
-        if isinstance(cause, UnpassableArgumentError) and cause.index is not None:
-            return tool_failure(
-                "invalid_arguments",
-                _unpassable_argument_message(cause.index, arguments),
-                retryable=False,
-            )
         if isinstance(cause, FileNotFoundError):
             return tool_failure(
                 "terminal_command_not_found",
@@ -486,9 +487,8 @@ async def _handle_start(
         minimum=TERMINAL_MIN_ROWS,
         maximum=TERMINAL_MAX_ROWS,
     )
-    # start types nothing: the program gets the text once it is ready for it.
-    text = arguments.get("text")
-    untyped = isinstance(text, str) and bool(text.strip())
+    # start sends no input: the program gets it once it is ready for it.
+    unsent = _UnsentStartInput.of(arguments)
     raw_workdir = arguments.get("workdir")
     workdir_value = optional_string(raw_workdir, field_name="workdir")
     if raw_workdir == "":
@@ -527,19 +527,27 @@ async def _handle_start(
             pass
         else:
             overlay = scratch_environment(folder)
-    started = await terminal_manager.spawn(
-        owner,
-        argv,
-        cwd=workdir,
-        env=overlay,
-        columns=columns,
-        rows=rows,
-        origin_run_id=context.run_id,
-        execution_owner=context.execution_owner,
-        name=name,
-        group_id=group_id,
-    )
+    try:
+        started = await terminal_manager.spawn(
+            owner,
+            argv,
+            cwd=workdir,
+            env=overlay,
+            columns=columns,
+            rows=rows,
+            origin_run_id=context.run_id,
+            execution_owner=context.execution_owner,
+            name=name,
+            group_id=group_id,
+        )
+    except TerminalLaunchError as error:
+        cause = error.__cause__
+        if isinstance(cause, UnpassableArgumentError) and cause.index is not None:
+            raise ToolContractError(_unpassable_argument_message(argv[0], cause.value)) from error
+        raise
     terminal_id = started.terminal_id
+    # An empty screen that is out of date does not show that nothing was printed.
+    shown_nothing = False
     try:
         await terminal_manager.wait_for_startup(terminal_id)
         snapshot = await terminal_manager.snapshot(terminal_id, owner)
@@ -551,26 +559,63 @@ async def _handle_start(
     else:
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
         data = _screen_result(snapshot, view="start", unseen_from=_unseen_from(snapshot))
+        shown_nothing = data.get("screen") == "" and not snapshot.get("screen_behind")
     running = data["state"] == "running"
-    if untyped:
-        notes.append(_untyped_text_note(terminal_id, running=running))
+    unsent_note = unsent.note(terminal_id, running=running)
+    if unsent_note is not None:
+        notes.append(unsent_note)
     if requested_id is not None:
         notes.append(f"start assigns the terminal_id: use {terminal_id}, not {requested_id}.")
     data = _with_notes(data, notes)
     if running:
-        data["next"] = _DELIVERIES_TEXT
+        data["next"] = (
+            _first_screen_pending_text(terminal_id) if shown_nothing else _DELIVERIES_TEXT
+        )
     return tool_success(data)
 
 
-def _untyped_text_note(terminal_id: str, *, running: bool) -> str:
-    """start got text, which it does not type."""
-    if not running:
-        return "text was not typed: start only launches the program."
-    return (
-        "text was not typed: start only launches the program. Once its screen shows that it is "
-        'ready for the text, send it with terminal action "input", terminal_id '
-        f'"{terminal_id}", your text as text and key "enter".'
-    )
+@dataclass(frozen=True, slots=True)
+class _UnsentStartInput:
+    """Input given to start, which launches the program and sends nothing."""
+
+    text: str | None
+    data: str | None
+    key: str | None
+
+    @classmethod
+    def of(cls, arguments: JsonObject) -> _UnsentStartInput:
+        text, data = arguments.get("text"), arguments.get("data")
+        key = optional_string(arguments.get("key"), field_name="key") or None
+        if key is not None and key not in TERMINAL_KEYS:
+            raise ToolContractError(_unknown_key_message(key))
+        text = text if isinstance(text, str) and text else None
+        if key == "enter" and text is None:
+            # Enter is the habitual companion of text, and requests nothing alone.
+            key = None
+        return cls(text, data if isinstance(data, str) and data else None, key)
+
+    def note(self, terminal_id: str, *, running: bool) -> str | None:
+        """What was not sent, and how to send it once the program is ready."""
+        if self.text is not None or self.data is not None:
+            what = "text was not typed" if self.text is not None else "data was not sent"
+            if not running:
+                return f"{what}: start only launches the program."
+            if self.text is not None:
+                yours, fields = "your text", f'your text as text and key "{self.key or "enter"}"'
+            else:
+                yours, fields = "your data", "your data as data"
+            return (
+                f"{what}: start only launches the program. Answer what its screen asks first, "
+                f"if anything; once it is ready for {yours}, send it with terminal action "
+                f'"input", terminal_id "{terminal_id}", {fields}.'
+            )
+        if self.key is None:
+            return None
+        unsent = f'key "{self.key}" was not pressed: start only launches the program.'
+        if not running:
+            return unsent
+        press = json.dumps({"action": "input", "terminal_id": terminal_id, "key": self.key})
+        return f"{unsent} Once the program is ready for it, call terminal {press}."
 
 
 def _unread_screen_result(
@@ -841,11 +886,7 @@ async def _handle_input(
             "Enter), or send text and key without data."
         )
     if key is not None and key not in TERMINAL_KEYS:
-        raise ToolContractError(
-            f'terminal was not run: key "{key}" is not a named key. Named keys: '
-            f"{TERMINAL_KEY_SUMMARY}. Type other characters as text, or send exact sequences "
-            "as data."
-        )
+        raise ToolContractError(_unknown_key_message(key))
     # A pattern or a longer wait after input is accepted for other harnesses'
     # habits, not advertised; a pattern makes input wait as wait does.
     pattern, pattern_notes = _wait_pattern(arguments)
@@ -889,8 +930,6 @@ async def _handle_input(
             )
         )
     typed: JsonObject = {}
-    if sent.get("key"):
-        typed["key"] = sent["key"]
     if isinstance(text, str) and ("\n" in text or "\r" in text):
         # Whether the lines went as one pasted block, or each line break as Enter.
         typed["pasted"] = bool(sent.get("pasted"))
@@ -902,6 +941,18 @@ async def _handle_input(
         else:
             unsent = "text was typed"
         notes.insert(0, f"{unsent} but not submitted. To submit it, call terminal {submit}.")
+    key_unsent = sent.get("key_unsent")
+    if key_unsent == "ended":
+        # The program ended on the text, as on "q" for quit: typing it again
+        # would repeat what it did.
+        notes.insert(0, f'text was typed, but key "{key}" was not sent: the program had ended.')
+    elif key_unsent == "refused":
+        press = json.dumps({"action": "input", "terminal_id": terminal_id, "key": key})
+        notes.insert(
+            0,
+            f'text was typed, but the terminal refused key "{key}". To press it, call '
+            f"terminal {press}.",
+        )
     matched: list[str] = []
     try:
         if pattern is not None:
@@ -946,6 +997,13 @@ async def _handle_input(
     return tool_success(result)
 
 
+def _unknown_key_message(key: str) -> str:
+    return (
+        f'terminal was not run: key "{key}" is not a named key. Named keys: '
+        f"{TERMINAL_KEY_SUMMARY}. Type other characters as text, or send exact sequences as data."
+    )
+
+
 async def _handle_kill(
     terminal_manager: TerminalManager,
     context: ToolContext,
@@ -974,12 +1032,20 @@ _DELIVERIES_TEXT = (
 
 
 # The output after input paused and the program declared no end of its work:
-# a coding agent waiting for its model shows neither output nor CPU time.
+# a coding agent waiting for its model shows neither output nor CPU time
+# (user decision D5).
 _PAUSED_TEXT = (
-    "Its output paused, which does not show that it finished: when its screen changes and it "
-    "goes idle again, that screen arrives as a new message. Continue with your next step "
-    "instead of polling with status."
+    "It can still be working: unless its screen shows it waiting for input, its next screen "
+    "arrives as a new message once it goes idle."
 )
+
+
+def _first_screen_pending_text(terminal_id: str) -> str:
+    """What comes next for a running program that has shown nothing (user decision D4)."""
+    return (
+        "It has shown nothing yet. Its first screen arrives as a new message once it shows one; "
+        f"to wait for it now, call terminal {_call('wait', terminal_id)}."
+    )
 
 
 def _reply_pending_text(terminal_id: str) -> str:
@@ -1028,6 +1094,9 @@ _ALTERNATE_SCREEN_NOTE = (
 # Launch facts: status shows them; other results do not repeat them, except
 # that start names the log.
 _LAUNCH_FIELDS = ("program", "title", "workdir", "log", "name")
+# Results that follow the program: their history holds only lines the Agent
+# has not seen, and they offer no pages (user decision D1).
+_FOLLOWING_VIEWS = frozenset({"start", "input", "wait"})
 
 
 def _log_text(path: str, *, complete: bool, end_line: int | None = None) -> str:
@@ -1056,10 +1125,12 @@ def _screen_result(
 ) -> JsonObject:
     """Shape an interactive terminal's snapshot for one action's result.
 
-    History text becomes its own multi-line ``history`` field; ``scrollback``
-    keeps the line numbers and the requests for the adjacent pages, and
-    appears only when there is history or another page to read. ``cursor``
-    follows the screen of a running program. With *unseen_from* (the first
+    History text becomes its own multi-line ``history`` field; in status,
+    ``scrollback`` keeps the line numbers and the requests for the adjacent
+    pages, and appears only when there is history or another page to read.
+    start, input and wait show history only from *unseen_from* on and no
+    ``scrollback``. ``cursor`` follows a running program's screen that shows
+    something. With *unseen_from* (the first
     history line the reader has not seen), a note says how many of those
     lines the page leaves out above it and where to read them;
     *unseen_by_you* says the reader is the attached Session, whose seen
@@ -1093,6 +1164,13 @@ def _screen_result(
     screen = projected.pop("screen", None)
     page = dict(projected.pop("scrollback", None) or {})
     history = page.pop("text", "")
+    shown_from = page.get("start_line")
+    following = view in _FOLLOWING_VIEWS
+    if following and history and isinstance(shown_from, int) and unseen_from is not None:
+        rows = history.split("\n")
+        seen = max(0, min(len(rows), unseen_from - shown_from))
+        history = "\n".join(rows[seen:])
+        shown_from += seen
     scrollback: JsonObject = {
         key: page[key]
         for key in ("first_line", "start_line", "end_line", "total_lines", "screen_start_line")
@@ -1113,25 +1191,30 @@ def _screen_result(
     if include_screen:
         projected["screen"] = screen if isinstance(screen, str) else ""
         cursor = snapshot.get("cursor")
-        if projected["state"] == "running" and isinstance(cursor, tuple | list) and cursor:
+        if (
+            projected["state"] == "running"
+            and projected["screen"]
+            and isinstance(cursor, tuple | list)
+            and cursor
+        ):
             projected["cursor"] = f"row {cursor[0]}, column {cursor[1]}"
-    if not include_screen or history or "older_request" in scrollback:
+    if not following and (not include_screen or history or "older_request" in scrollback):
         projected["scrollback"] = scrollback
     notes: list[str] = []
     behind = snapshot.get("screen_behind")
-    if include_screen and behind and projected["state"] == "running":
-        notes.append(_screen_behind_note(str(behind), log, complete=log_complete))
+    if include_screen and behind:
+        notes.append(screen_behind_note(str(behind), log, complete=log_complete))
     if view == "status" and snapshot.get("alternate_screen"):
         notes.append(_ALTERNATE_SCREEN_NOTE)
     if requested_start is not None and isinstance(page.get("start_line"), int):
         moved = _moved_page_note(requested_start, page, log, complete=log_complete, log_end=log_end)
         if moved is not None:
             notes.append(moved)
-    if unseen_from is not None and isinstance(page.get("start_line"), int):
+    if unseen_from is not None and isinstance(shown_from, int):
         unseen = unseen_lines_note(
             str(snapshot["terminal_id"]),
             unseen_from=unseen_from,
-            shown_from=int(page["start_line"]),
+            shown_from=shown_from,
             first_line=int(page.get("first_line") or 0),
             log=log,
             seen=unseen_by_you,
@@ -1140,20 +1223,10 @@ def _screen_result(
         )
         if unseen is not None:
             notes.append(unseen)
+            if view == "start" and log is not None and log in unseen:
+                # The note names the log where the Agent needs it.
+                projected.pop("log", None)
     return _with_notes(projected, notes)
-
-
-def _screen_behind_note(error: str, log: str | None, *, complete: bool) -> str:
-    """The screen misses the program's latest output: it could not be drawn."""
-    note = (
-        f"This screen is out of date: drawing the program's latest output failed ({error}), "
-        "so the screen does not show that output yet."
-    )
-    if log is None:
-        return note
-    if complete:
-        return f"{note} The output is in the log {log}."
-    return f"{note} The log {log} has the output only until writing it failed."
 
 
 def _moved_page_note(
@@ -1187,8 +1260,9 @@ def _moved_page_note(
             "failed before the later ones."
         )
     total = page.get("total_lines")
-    if isinstance(total, int) and requested > start:
-        return f"Line {requested} does not exist yet: the terminal has lines up to {total - 1}."
+    if isinstance(total, int) and requested >= total:
+        has = f"has lines up to {total - 1}" if total else "has no lines yet"
+        return f"Line {requested} does not exist yet: the terminal {has}."
     return None
 
 
@@ -1477,14 +1551,28 @@ def _capacity_message(error: TerminalCapacityError) -> str:
     return str(error)
 
 
-def _unpassable_argument_message(index: int, arguments: JsonObject) -> str:
-    """start's batch program cannot receive an argument through cmd.exe."""
-    program = arguments.get("command") or "the program"
+def _unpassable_argument_message(program: str, value: str) -> str:
+    """start's batch program cannot receive the argument *value* through cmd.exe.
+
+    The argument is named by its text: the command can have been split into
+    words before args, so a position would point at the wrong one.
+    """
+    breaks = "\n" in value or "\r" in value
+    nul = "\0" in value
+    if len(value) > _ARGUMENT_CHARS:
+        value = value[: _ARGUMENT_CHARS - 3] + "..."
+    what = " and ".join(
+        part for part, present in (("a line break", breaks), ("a NUL character", nul)) if present
+    )
+    plural = " and ".join(
+        part for part, present in (("line breaks", breaks), ("NUL characters", nul)) if present
+    )
     return (
         f"No terminal was started: {program} is a batch program (.cmd or .bat), which runs "
-        f"through cmd.exe, and cmd.exe cannot pass argument {index} to it because that "
-        "argument contains a line break. Pass that text without line breaks, or leave it out "
-        "and send it with the input action once the program is ready."
+        f"through cmd.exe, and cmd.exe cannot pass the argument "
+        f"{json.dumps(value, ensure_ascii=False)} to it because it contains {what}. Pass that "
+        f"text without {plural}, or leave it out and send it with the input action once the "
+        "program is ready."
     )
 
 
