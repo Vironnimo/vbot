@@ -207,12 +207,18 @@ and `WikiIndex.svelte` names the search above the list as one no page holds as
 written, so the user does not take the pages for exact matches. An Agent `read` with `query` (Sessions, 2026-09)
 adds `found`, before `content`: up to 5 lines of the whole read revision containing
 the casefolded query, each with its line number and starting character (the `offset`
-unit), or the `list` call that searches all pages (`_wiki_tool.py::_found`). With
-`offset` or `limit` it reads the range asked for. Without them it shows 2000
-characters from up to 2 lines (at most 400 characters) before the first such line,
-with a continuation pinned to the revision, and no content when no line holds the
-query: such reads returned whole pages to Agents looking for one passage (Sessions,
-2026-10; `WikiCall._read_around`). A `read` with `since_revision` shows, instead of
+unit), or the `list` call that searches all pages (`_wiki_tool.py::_found`). A
+multi-word query that no line holds as written names instead the lines holding all
+of its words (`_store_wiki.query_words`, as list does), and the header says so: one
+Swarm run's multi-word reads all missed, while word lines would have found the
+passage (Swarm run 2026-10-13). With `offset` it reads the range asked for. Without
+it, it shows `limit` (default 2000) characters from up to 2 lines (at most 400
+characters, and at most a fifth of the window) before the first such line, with a
+continuation pinned to the revision, and no content when no line holds the query:
+such reads returned whole pages to Agents looking for one passage (Sessions,
+2026-10; `WikiCall._read_around`). A `limit` beside `query` once read from the page
+start, so Agents that sized the window to the passage got the page's first lines
+instead (Swarm run 2026-10-13). A `read` with `since_revision` shows, instead of
 content, a `changes` header naming everyone who saved a revision after it
 (`SwarmStore.wiki_changes`) and the bounded unified diff up to the revision read
 (current, or `revision`); `offset` and `limit` are ignored with a note, and a
@@ -319,9 +325,18 @@ operation keep returning raw data (`next_call`, `current_revision`, excerpts) fo
 a `shown` range and a `more` continuation before the verbatim content; list and
 history render one line per entry; mutations report a `status` sentence (delete
 names the copyable restore call). Content mutations also return a bounded excerpt
-from the exact saved revision, centered on the first actual changed position when
-a line is long. The Store retains the excerpt in the mutation receipt, so peer
-changes cannot alter a replay's evidence; continuations pin that revision.
+from the exact saved revision (`_store_wiki._content_excerpt`). For an update it
+starts at the line of the first changed character (at most 400 characters before
+it when a line is long) and holds the whole changed passage and the 2 lines after
+it, at most 600 characters past the change and 4000 in all: an update replaced
+eight table rows with ten, and the two old rows it left below went unnoticed while
+the excerpt ended after eight lines (Swarm run 2026-10-13). A create shows up to 8
+lines or 2000 characters from the start. The Store retains the excerpt in the
+mutation receipt, so peer changes cannot alter a replay's evidence; continuations
+pin that revision. A create or update whose written text holds a `[[target]]` or
+`#wiki/target` link that names no page by number or stored ID gets a note naming up
+to 5 such links and the page's own link as the form that works: Agents wrote
+`[[page-slug]]` links that open nothing (Swarm run 2026-10-13).
 Repairs that cannot change the effect run with a
 note: `read` without `page_id` lists pages, a pasted link or quoted ID yields its
 page reference, read-only calls resolve a page title or a unique close stored id
@@ -383,9 +398,12 @@ unless an explicit, matching discussion is supplied. Reads start with newest
 posts, chronological within each page. A page (newest, `before`, cursor, `offset`
 and a join's recent posts) shows whole only the posts the reader may not have seen:
 pending ones and posts outside its audience. A post it has seen, its own or one
-delivered to it (`_board_view.seen`), shows compactly (`_board_view.page_body`):
-over 1000 characters as its Opening and the read call, otherwise as one line with
-its length and the read call. A `message_id` read always shows the whole post. In
+delivered to it (`_board_view.seen`), shows as one line with its length and the
+read call (`_board_view.page_body`); for a long main-discussion post of another
+author, whose delivery may have held only its Opening, the line says the reader
+received at least its opening lines. Long seen posts once showed their Opening
+again, which repeated text the reader already had (Swarm run 2026-10-13). A
+`message_id` read always shows the whole post. In
 160 newest-page reads of the latest analyzed Runs, at least 43% of the 1.86 million
 post characters shown were posts the reader already had (Sessions, 2026-10). Page
 bounds count each post with the length it shows (`_board_view.page_chars`). When
@@ -447,7 +465,12 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   for one field, across wrapper levels, fail naming both by the path they were sent at.
   An action that belongs to another Swarm
   Tool fails with a message naming that Tool, also when the action is that Tool's
-  name (`"action": "swarm_state"`). A `swarm_board` call with `path` (or `file_path`)
+  name (`"action": "swarm_state"`). Another `swarm_board` action written like a Tool
+  name (letters, digits, underscores; not a placeholder or a spelling of a Board
+  action) fails saying that swarm_board lacks it and that, if it is one of the
+  Agent's Tools, it is called directly: one Agent sent `"action": "search_files"`
+  (Swarm run 2026-10-13). The normalizer runs without the call's context, so it
+  cannot tell whether the Agent has such a Tool. A `swarm_board` call with `path` (or `file_path`)
   fails naming the file: such a call was meant for a Tool that works with files.
   One Run sent `"path": "verify.py"` with read paging fields (Sessions, 2026-10). On
   `swarm_board`, `message` is an
@@ -494,10 +517,22 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   and how many readers receive only its Opening. It names addressed participants
   whose work stopped (`failed`, `cancelled`, `interrupted` in the Swarm snapshot of
   the call), who see the post only once the user resumes them, so the author does
-  not wait for their answer. A post or opening whose text writes `@all` or a
-  synonym (the `_EVERYONE` recipient words) that names no participant gets a note
-  that it addressed no one: 18 of 293 posts in one Run wrote `@all` (Sessions,
-  2026-10). Addressing stays unchanged: only `@` before a name addresses.
+  not wait for their answer. A post or opening whose text writes an `@word`
+  outside code that names no participant gets a note that it addressed no one,
+  with the consequence (`_board_view.unaddressed_mentions`): `@all` or a synonym
+  (the `_EVERYONE` recipient words) and capitalized unknown names such as a
+  misspelled `@Name` get the number of participants that receive only the Opening of a
+  long main-discussion post, that every participant receives a short one anyway,
+  or, elsewhere, only how to address; `@User` and its synonyms get that the user is
+  not a participant and sees every Board post. Lowercase unknown words (`@property`)
+  and e-mail addresses get no note. 18 of 293 posts in one Run wrote `@all`
+  (Sessions, 2026-10); others wrote `@User` and misspelled names (Swarm run
+  2026-10-13). Addressing stays unchanged: only `@` before a name addresses. A post
+  in, or a create of, a discussion other than the main one also says how many other
+  participants have not joined it and do not receive it, naming those its text
+  mentions without `@` (members from the call's Swarm snapshot): Agents posted
+  decisions concerning everyone into a side discussion and named peers without `@`
+  (Swarm run 2026-10-13).
 
 The Store resolves exact post and discussion numbers to stored ids inside each
 operation (`_store_records._post_id`, `_discussion_id`); a value that is no
@@ -1241,6 +1276,9 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | Text | Reason |
 |---|---|
 | `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. `or answers` was dropped with the advertised `reply_to`. |
+| `swarm_board`: `... in full and can start a Run for any who are idle, so write @ only before those you ask to act or answer.` | Agents wrote `@` before every peer they credited or mentioned, which delivered whole posts and woke idle peers for posts that asked nothing of them (F3, F6, Swarm run 2026-10-13). The consequence leads to the rule in one clause, so Agents keep `@` for the peers whose action they need. |
+| `swarm_board`: `Its posts reach only participants who joined it or are addressed, so post what concerns everyone in the main discussion.` | Agents posted decisions concerning everyone into an additional discussion that most peers had not joined, naming them without `@` (F4, Swarm run 2026-10-13). States the reach of a discussion at the moment Agents choose to create one; the post result reports the same per post (`BOARD_OUTSIDE`). |
+| Post or create result in an additional discussion: `{count} other participants have not joined this discussion and do not receive it; a name without @ addresses no one.` (and the singular form; with names its text mentions without `@`: `..., {names} among them; ...` or `{names}, the only other participant, has not joined ...`) | Same failure, seen after the post: the delivery line said only who received it, so authors took peers named without `@` as reached (F4, Swarm run 2026-10-13). Naming those mentioned without `@` lets the Agent re-address exactly them; the count shows how few the discussion reaches. |
 | `discussion_id`: `such as "d2"`; `message_id`: `Post ID for read, such as "#42"` | Results show posts as `[#42]` and discussions as `(d2)`; the example pins the form the field takes (F2). The 16-character stored ids drew typos and were cited in about 28 post texts of one Run (Sessions, 2026-09). |
 | `swarm_wiki` `page_id`: `Page ID, such as "w3".` | Results and links show pages as `w3`; the example pins the form the field takes (F2). Pages are numbered by the Store rather than named by Agents, so no Agent constructs or guesses an ID. |
 | `swarm_wiki` `query`: `Text to find, ignoring case: list finds the pages that contain it; read shows the lines that contain it and the text around the first.` | Agents already sent `query` with read to find a passage (Sessions, 2026-09), which the text named only for list; two such reads returned whole pages (F6, Sessions, 2026-10). The read clause names what the result shows, so Agents use it to locate a passage instead of guessing offsets. |
@@ -1278,7 +1316,9 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `{field} arrived as tool-call markup ({value}) instead of a {kind} ID such as "{example}". Repeat the call with the {kind} ID alone. The call was not run.` | One `message_id` held only the closing tags of a tool-call block; the not-found error (`... is not a post ID in your group. Find post IDs by reading a discussion ...`) suggested a wrong ID rather than a broken call (F5, Swarm run 2026-10-12). Names the markup it saw, so the Agent resends the ID instead of searching for another post. |
 | `Conflicting values for {key}: {path} is {value} and {other path} is {value}. Send only the intended one.` | Replaces `Conflicting values for {key}; provide one intended value.`, which named neither value; 2 calls of one Agent were refused while one value was only the Tool's own name as a label, which now requests nothing (F2, F5, Swarm run 2026-10-12). Real conflicts still fail before any effect; naming both values and where they were sent lets the Agent drop the wrong one. |
 | `title was ignored: posts have no title; only create uses one, to name a new discussion.` | The post was saved; the note says the title is gone and how a titled discussion is made (F4). Refusing such a post lost an Agent's introduction in one Run (Sessions, 2026-10). |
-| `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.` | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10); the note corrects the belief after the post, without changing who receives it. |
+| `{mentions} addressed no one, so {count} participants receive only its opening lines. To reach a participant in full, write @ before their name, as in @Name.` (long main-discussion post; singular form); `{mentions} addressed no one; every participant receives this main-discussion post anyway. To address a participant, ...` (short one); `{mentions} addressed no one. To address a participant, ...` (other discussions) | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10), and later `@` before misspelled or unknown names (Swarm run 2026-10-13). Replaces `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.`, which gave no consequence. The note corrects the belief after the post without changing who receives it; it stays one note per post so a later real `@all` replaces it in one place. |
+| `{mentions} addressed no one: the user is not a participant and sees every Board post.` | Agents wrote `@User` to reach the user (Swarm run 2026-10-13). The user reads the whole Board without being addressed, so the note says no `@` is needed rather than how to address. |
+| `swarm_board has no {action} action; its actions are list, read, post, create, join and leave. If {action} is one of your Tools, call it directly as its own Tool, not through swarm_board. The call was not run.` | One Agent sent `"action": "search_files"` to `swarm_board` (F1, Swarm run 2026-10-13). The normalizer cannot see the Agent's Tools, so the second sentence is conditional instead of claiming the Tool exists. |
 | Post result: `{names} has stopped and sees it only if the user resumes their work.` (and the plural) | An Agent that addresses a failed or cancelled peer otherwise waits for an answer that cannot come before a Resume (F4). |
 | `swarm_board was not run: it reads and writes Board posts, not files, and has no path parameter. For the file {path}, use one of your Tools that work with files.` | An Agent sent a file read (`path`, `offset`, `limit`) to `swarm_board`; the generic unknown-parameter error listed only Board parameters and did not say the call belongs to another Tool (F1, F5, Sessions, 2026-10). The text names no Tool, since participants' Tool sets differ. |
 | `cursor {value} is a post ID, so this shows the posts before it. For the newest posts, omit cursor.` | One Agent sent `cursor` with rising post numbers 6 times in one Run, apparently for posts after them, and each time received older posts (F3, F5, Sessions, 2026-10). The read keeps running as `before`; the second sentence names the call for the other direction. |
@@ -1289,10 +1329,12 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_wiki` `edits` (unadvertised): status `Applied {all 3 edits / both edits} in one revision:` or `Applied {edits 1 and 3} in one revision; the page already held {edit 2}:`, then per edit `edit {number}: replaced the passage at line {line}.` or `edit {number}: the page already held this change, at line {line}.`; all held: `Nothing changed: the page already holds these changes.` | Agents bring the file `edit` Tool's `edits` list to `swarm_wiki`: one Agent sent four row edits that way and was refused (F2, Swarm run 2026-10-12). Results follow the Skill's batch form: input order, each edit's number and its line in the saved revision, so the Agent need not reread to check (F4). |
 | `swarm_wiki` `edits` misses: `Nothing changed: {all 3 edits / both edits} are saved together or not at all, and {edits 2 and 3} could not be applied.`, then `Edit {number}: {explanation}` per failed edit (the single-edit miss text), then `Send {all 3 edits / both edits} again with {edits 2 and 3} corrected or left out.` | All or nothing keeps related changes (a claim and its count) from landing half-applied; the first sentence says so, so the Agent does not assume the matching edits were saved (F4). Each failed edit gets the full miss help, and the last sentence names the one call that finishes the change (F5). |
 | `swarm_wiki` `edits` refusals: `Each item of edits needs old_text, the passage to replace, and new_text, its replacement. Received for edit {number}: {received}.`; `update received edits together with {fields}. Put every passage to replace in edits as old_text and new_text, or send content without edits to replace the whole page.`; `edits holds {count} edits; send at most {maximum} in one call.` (each after `Nothing changed.`) | Cover the call shapes the Store cannot apply, with what was received, before any change (F2, F5); the second follows the `content` refusal's form, which names the fields sent together. Fields such as `replace_all` are refused rather than dropped, since dropping them could change which text is replaced. |
-| Read page, a short post the reader has seen: `[{count} characters you have seen before. Read the post with swarm_board {call}]` (a long one shows its Opening and the delivery's `[{count} more characters not shown. ...]` line) | Newest-page reads repeated posts the reader already had: at least 43% of the post characters of 160 such reads (F6, Sessions, 2026-10). The line keeps the post's place, author and length, and names the exact call, so an Agent that lost the text, for example after a Compaction, gets it in one call (F5). `seen before` also fits the reader's own posts. |
+| Read page, a post the reader has seen: `[{count} characters you have seen before. Read the post with swarm_board {call}]`; a long main-discussion post of another author: `[{count} characters; you received at least its opening lines before. Read the whole post with swarm_board {call}]` | Newest-page reads repeated posts the reader already had: at least 43% of the post characters of 160 such reads (F6, Sessions, 2026-10). The line keeps the post's place, author and length, and names the exact call, so an Agent that lost the text, for example after a Compaction, gets it in one call (F5). `seen before` also fits the reader's own posts. Long posts showed their Opening again until the second line replaced it (F6, Swarm run 2026-10-13); `at least its opening lines` stays true whether the delivery held the Opening or, for an addressed reader, the whole post. |
 | `Only {count} of {limit} posts fit the page's size limit; older posts exist. Continue with {call}` | 32 of 168 paged reads ended before `limit` without saying why (F4, Sessions, 2026-10); `size limit` says that a larger `limit` does not help, and the call continues where the page ended. |
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
 | `swarm_wiki` list: `No page contains "{query}" as written; pages containing all of its words, most recently changed first ({count} shown).` and `No page contains "{query}" or all of its words.` | Agents also send keywords where the search takes a phrase: the only missed search of one Run was a three-word query (F3, F6, Sessions, 2026-10). The fallback turns such a miss into a result instead of another search; the header says the phrase missed, so the Agent does not take the pages for exact matches. |
+| `swarm_wiki` read: `No line contains "{query}" as written; lines containing all of its words, ignoring case:` and `No line of this revision contains "{query}" or all of its words. To search all pages, use {call}` | The list fallback for one page: every multi-word read `query` of one Swarm run missed, while lines with all its words held the passage (F3, F6, Swarm run 2026-10-13). Same header form as list. |
+| `swarm_wiki` create and update note: `{links} names no page, so it links nowhere. Link a page by its ID, as this page's link does: {link}` (and the plural) | Agents wrote wiki-style `[[page-slug]]` links that open nothing (F3, Swarm run 2026-10-13). The page's own link shows the working form, so the Agent can fix the links in one update. |
 
 ## Repository Profiles
 

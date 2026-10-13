@@ -36,6 +36,14 @@ MUTATIONS = {"create", "update", "delete", "restore"}
 _ORIGIN_REVISIONS = 20
 # Passage edits one update applies together, each as old_text and new_text.
 _MAX_EDITS = 100
+# A change's evidence shows its whole changed passage and the lines after it, where
+# leftover text would meet it, within this many characters. Create shows the page's
+# start: the caller wrote all of it.
+_EXCERPT_CHARS = 4000
+_EXCERPT_AFTER_LINES = 2
+_EXCERPT_AFTER_CHARS = 600
+_EXCERPT_START_CHARS = 2000
+_EXCERPT_START_LINES = 8
 _TEXT_CHARS = 200000
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
 # Punctuation around a search word, as in a quoted phrase or a list of terms.
@@ -221,11 +229,20 @@ def _search(rows: list[sqlite3.Row], query: str) -> tuple[list[str], Iterator[sq
                 yield row
 
     phrase = [query.casefold()] if query else []
-    words = [word.strip(_WORD_EDGE) for word in query.casefold().split()]
-    words = list(dict.fromkeys(filter(None, words)))
+    words = query_words(query)
     if len(words) > 1 and next(containing(phrase), None) is None:
         return words, containing(words)
     return phrase, containing(phrase)
+
+
+def query_words(query: str) -> list[str]:
+    """Return a query's distinct casefolded words without edge punctuation.
+
+    A query no text holds as written matches by these words instead.
+    """
+
+    words = [word.strip(_WORD_EDGE) for word in query.casefold().split()]
+    return list(dict.fromkeys(filter(None, words)))
 
 
 def _read(
@@ -441,13 +458,15 @@ def _mutate(
     def metadata(row: sqlite3.Row) -> Json:
         return _metadata(row, _page_numbers(connection, swarm_id))
 
-    def finish(result: Json, *, changed_offset: int | None = None) -> Json:
+    def finish(result: Json, *, changed: tuple[int, int] | None = None) -> Json:
         if not result["deleted"] and (
             action in {"create", "restore"} or {"old_text", "edits", "content"} & arguments.keys()
         ):
             saved = _page(connection, swarm_id, result["page_id"], result["revision"])
             result["content_excerpt"] = _content_excerpt(
-                saved["content"], result.get("line", 1), changed_offset
+                saved["content"],
+                result.get("line", 1),
+                None if action == "create" else changed,
             )
         connection.execute(
             "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
@@ -576,15 +595,7 @@ def _mutate(
         result["notes"] = notes
     if "edits" in arguments:
         result["edits"] = outcomes
-    changed_offset = next(
-        (
-            index
-            for index, (before, after) in enumerate(zip(previous_content, content, strict=False))
-            if before != after
-        ),
-        min(len(previous_content), len(content)),
-    )
-    return finish(result, changed_offset=changed_offset)
+    return finish(result, changed=_changed_span(previous_content, content))
 
 
 def _passage_edits(arguments: Json) -> list[Json]:
@@ -685,24 +696,58 @@ def _origin(
     return int(held["revision"]), str(held["content"]), str(author["author_name"])
 
 
-def _content_excerpt(content: str, line: int, changed_offset: int | None) -> Json:
-    """Bounded evidence from the exact saved revision, retained in its replay receipt."""
+def _changed_span(before: str, after: str) -> tuple[int, int]:
+    """Return where ``after`` differs from ``before``: its start and its end in ``after``.
+
+    Text both share at the start and at the end lies outside; a pure deletion
+    yields an empty span at the place of the deleted text.
+    """
+
+    start = next(
+        (index for index, (old, new) in enumerate(zip(before, after, strict=False)) if old != new),
+        min(len(before), len(after)),
+    )
+    shared = 0
+    room = min(len(before), len(after)) - start
+    while shared < room and before[-1 - shared] == after[-1 - shared]:
+        shared += 1
+    return start, len(after) - shared
+
+
+def _content_excerpt(content: str, line: int, changed: tuple[int, int] | None) -> Json:
+    """Bounded evidence from the exact saved revision, retained in its replay receipt.
+
+    For a change, it holds the whole changed passage and the lines after it, so a
+    seam with text the change left in place shows: one update replaced eight table
+    rows with ten, and the two old rows it left below went unnoticed while the
+    excerpt ended after eight lines (Swarm run 2026-10-13).
+    """
 
     starts = [0, *(match.end() for match in _LINE_BREAK.finditer(content))]
-    index = min(max(0, line - 1), len(starts) - 1)
-    offset = starts[index]
-    if changed_offset is not None:
-        anchor = min(changed_offset, len(content))
-        line_start = starts[bisect_right(starts, anchor) - 1]
-        # A long line must show the change, not just its unchanged first 2000
-        # characters. Keep a little preceding context and exact page coordinates.
-        offset = max(line_start, anchor - 400)
-        if offset == len(content) and content:
-            offset = max(0, offset - 400)
-        index = bisect_right(starts, offset) - 1
-    end = min(len(content), offset + 2000)
-    if index + 8 < len(starts):
-        end = min(end, starts[index + 8])
+    if changed is None:
+        index = min(max(0, line - 1), len(starts) - 1)
+        offset = starts[index]
+        end = min(len(content), offset + _EXCERPT_START_CHARS)
+        if index + _EXCERPT_START_LINES < len(starts):
+            end = min(end, starts[index + _EXCERPT_START_LINES])
+        return _excerpt(content, index, offset, end)
+    anchor = min(changed[0], len(content))
+    line_start = starts[bisect_right(starts, anchor) - 1]
+    # A long line must show the change, not just its unchanged start. Keep a little
+    # preceding context and exact page coordinates.
+    offset = max(line_start, anchor - 400)
+    if offset == len(content) and content:
+        offset = max(0, offset - 400)
+    index = bisect_right(starts, offset) - 1
+    changed_end = max(anchor, min(changed[1], len(content)))
+    last = bisect_right(starts, max(anchor, changed_end - 1)) - 1
+    after = last + 1 + _EXCERPT_AFTER_LINES
+    end = starts[after] if after < len(starts) else len(content)
+    end = min(end, changed_end + _EXCERPT_AFTER_CHARS, offset + _EXCERPT_CHARS)
+    return _excerpt(content, index, offset, end)
+
+
+def _excerpt(content: str, index: int, offset: int, end: int) -> Json:
     snippet = content[offset:end]
     return {
         "line": index + 1,

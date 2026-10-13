@@ -10,11 +10,14 @@ BOARD_DESCRIPTION = (
     "Read and contribute to your group's shared Board. Use the main discussion for shared "
     "conversation and coordination. To address a participant, write @ before their name, as in "
     "@Name; a name without @ addresses no one. A post reaches the participants it addresses in "
-    "full. Other participants receive a main-discussion post longer than "
+    "full and can start a Run for any who are idle, so write @ only before those you ask to act "
+    "or answer. Other participants receive a main-discussion post longer than "
     f"{FULL_POST_CHARS} characters as its opening lines with the call to read the rest, so "
     "begin with what they most need to know. Create an "
     "additional discussion when several Agents need to work through a specific problem "
-    "together; creating it joins it and announces it in the main discussion. Every participant "
+    "together; creating it joins it and announces it in the main discussion. Its posts reach "
+    "only participants who joined it or are addressed, so post what concerns everyone in the "
+    "main discussion. Every participant "
     "can read every discussion; joining one makes its future posts reach you in full and "
     "returns its recent posts. Messages for you reach you as the group's delivery settings "
     "allow, so you need not read the Board to receive them; posts you read here are not "
@@ -207,6 +210,12 @@ BOARD_FOREIGN_ACTIONS = {
     "swarm_wiki": "swarm_board has no {action} action. Use swarm_wiki to create, find, and edit "
     "shared pages.",
 }
+# An unknown action that may name one of the Agent's other Tools.
+BOARD_OTHER_TOOL = (
+    "swarm_board has no {action} action; its actions are list, read, post, create, join and "
+    "leave. If {action} is one of your Tools, call it directly as its own Tool, not through "
+    "swarm_board. The call was not run."
+)
 BOARD_FILE_PATH = (
     "swarm_board was not run: it reads and writes Board posts, not files, and has no path "
     "parameter. For the file {path}, use one of your Tools that work with files."
@@ -378,9 +387,32 @@ BOARD_ADDRESSED_STOPPED = {
     "one": "{names} has stopped and sees it only if the user resumes their work.",
     "many": "{names} have stopped and see it only if the user resumes their work.",
 }
-MENTION_EVERYONE = (
-    "{mentions} addressed no one. To address participants, write @ before each one's name, "
-    "as in @Name."
+# Outside the main discussion, a post reaches only the discussion's members and those it
+# addresses; names without @ reach no one.
+BOARD_OUTSIDE = {
+    "one": "1 other participant has not joined this discussion and does not receive it; a name "
+    "without @ addresses no one.",
+    "many": "{count} other participants have not joined this discussion and do not receive it; "
+    "a name without @ addresses no one.",
+    "one_named": "{names}, the only other participant, has not joined this discussion and does "
+    "not receive it; a name without @ addresses no one.",
+    "many_named": "{count} other participants have not joined this discussion and do not "
+    "receive it, {names} among them; a name without @ addresses no one.",
+}
+# "@all", its synonyms and "@" before a word that names no participant address no one;
+# the note says what readers receive instead.
+MENTION_NO_ONE = {
+    "opening_one": "{mentions} addressed no one, so 1 participant receives only its opening "
+    "lines. To reach a participant in full, write @ before their name, as in @Name.",
+    "opening_many": "{mentions} addressed no one, so {count} participants receive only its "
+    "opening lines. To reach a participant in full, write @ before their name, as in @Name.",
+    "main": "{mentions} addressed no one; every participant receives this main-discussion post "
+    "anyway. To address a participant, write @ before their name, as in @Name.",
+    "other": "{mentions} addressed no one. To address a participant, write @ before their name, "
+    "as in @Name.",
+}
+MENTION_USER = (
+    "{mentions} addressed no one: the user is not a participant and sees every Board post."
 )
 BOARD_OPENING = {
     "one": "1 participant receives only its opening lines and the call to read the rest.",
@@ -406,8 +438,13 @@ BOARD_PENDING_AUTOMATIC = (
 POST_HEADER_REPLY = "reply to {post_id}"
 POST_HEADER_TO = "to {names}"
 POST_SHORTENED = "[{count} more characters not shown. Read the whole post with swarm_board {call}]"
-# A read page shows a short post the reader has seen as only this line.
+# A read page shows a post the reader has seen as only this line; a long main-discussion
+# post may have reached it as its opening lines only.
 POST_SEEN = "[{count} characters you have seen before. Read the post with swarm_board {call}]"
+POST_SEEN_OPENING = (
+    "[{count} characters; you received at least its opening lines before. Read the whole post "
+    "with swarm_board {call}]"
+)
 POST_HEADER_IN = "in {discussion}"
 POST_HEADER_MAIN = "the main discussion {discussion_id}"
 POST_HEADER_DISCUSSION = '"{title}" {discussion_id}'

@@ -26,15 +26,17 @@ from ._board_view import (
     discussion_choices,
     discussion_label,
     discussions_text,
-    everyone_mentions,
     excerpt,
     news_text,
+    outside_text,
     page_text,
+    plain_mentions,
     post_block,
     post_discussion_label,
     post_suggestion,
     queued_text,
     spoken_list,
+    unaddressed_mentions,
 )
 from ._extension_values import AgentCallError, Json, _call_request_id, _call_step_id
 from ._store_values import discussion_number, discussion_ref, post_number, post_ref
@@ -353,24 +355,30 @@ class BoardCall:
                 "post_id": post_ref(data["sequence"]),
                 "discussion": await self._label(data["discussion_id"]),
             }
-        long_main = (
-            data["discussion_id"] == self.main and len(values["text"]) > text.FULL_POST_CHARS
-        )
+        in_main = data["discussion_id"] == self.main
+        long_main = in_main and len(values["text"]) > text.FULL_POST_CHARS
         addressed = data.get("addressed", [])
         states = {
             participant["id"]: participant["state"] for participant in self.swarm["participants"]
         }
+        opening = data["routes"].get("main", 0) if long_main else 0
+        # Outside the main discussion, a post reaches only members and addressed participants.
+        outside = 0 if in_main else len(self.roster.names) - 1 - sum(data["routes"].values())
         result: Json = {
             "post_id": post_ref(data["sequence"]),
             "discussion": await self._label(data["discussion_id"]),
             "delivery": queued_text(
                 data["routes"],
                 [self.roster.name(pid) for pid in addressed],
-                opening=data["routes"].get("main", 0) if long_main else 0,
+                opening=opening,
                 stopped=[self.roster.name(pid) for pid in addressed if states.get(pid) in _STOPPED],
+                outside=outside,
+                named_outside=self._named_outside(values["text"], data["discussion_id"], addressed)
+                if outside
+                else (),
             ),
         }
-        self._note_everyone(values["text"])
+        self._note_unaddressed(values["text"], "main" if in_main else "other", opening=opening)
         if data.get("replayed"):
             result["replayed"] = text.REPLAYED
         return result
@@ -404,7 +412,15 @@ class BoardCall:
             "opening_post_id": post_ref(opening["sequence"]),
             "status": text.BOARD_CREATED,
         }
-        self._note_everyone(values["text"])
+        # Only the participants its opening addresses receive it; the others see the
+        # announcement in the main discussion.
+        addressed = opening.get("recipients") or []
+        outside = len(self.roster.names) - 1 - len(addressed)
+        if outside > 0:
+            result["delivery"] = outside_text(
+                outside, self._named_outside(values["text"], data["discussion_id"], addressed)
+            )
+        self._note_unaddressed(values["text"], "other")
         if data.get("replayed"):
             result["replayed"] = text.REPLAYED
         return result
@@ -568,10 +584,34 @@ class BoardCall:
             )
         return error
 
-    def _note_everyone(self, value: str) -> None:
-        mentions = everyone_mentions(value, self.roster)
-        if mentions:
-            self.notes.append(text.MENTION_EVERYONE.format(mentions=spoken_list(mentions)))
+    def _note_unaddressed(self, value: str, where: str, *, opening: int = 0) -> None:
+        """Note "@" words that addressed no one, with what readers receive instead."""
+
+        found = unaddressed_mentions(value, self.roster)
+        if found.others:
+            key = ("opening_one" if opening == 1 else "opening_many") if opening else where
+            self.notes.append(
+                text.MENTION_NO_ONE[key].format(mentions=spoken_list(found.others), count=opening)
+            )
+        if found.user:
+            self.notes.append(text.MENTION_USER.format(mentions=spoken_list(found.user)))
+
+    def _named_outside(
+        self, value: str, discussion_id: str, addressed: Sequence[str]
+    ) -> tuple[str, ...]:
+        """Name the participants a post's text names without "@" who do not receive it."""
+
+        members = {
+            participant["id"]
+            for participant in self.swarm["participants"]
+            if discussion_id in participant.get("discussion_ids", ())
+        }
+        outside = {
+            pid: name
+            for pid, name in self.roster.names.items()
+            if pid != self.pid and pid not in addressed and pid not in members
+        }
+        return tuple(outside[pid] for pid in plain_mentions(value, outside))
 
     def _user_request(self) -> str:
         goal = post_ref(self.swarm["goal_post_sequence"])

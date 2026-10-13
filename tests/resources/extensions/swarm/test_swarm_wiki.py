@@ -24,6 +24,8 @@ from resources.extensions.swarm.wiki_text import (
     WIKI_LIST_WORD_MATCHES,
     WIKI_OFFSET_FROM_END,
     WIKI_OWN_REVISION,
+    WIKI_READ_FOUND_NONE_WORDS,
+    WIKI_READ_FOUND_WORDS,
     WIKI_SINCE_IGNORES,
     WIKI_STATUS,
 )
@@ -522,6 +524,35 @@ async def test_wiki_results_read_as_text(board):
         False,
         "# Plan\n\nDone",
     )
+
+
+@pytest.mark.asyncio
+async def test_wiki_change_notes_written_links_that_name_no_page(board):
+    plan = await invoke(board, {"action": "create", "title": "Plan", "content": "Step one"})
+    plan_id = plan["data"]["page_id"]
+    linked = await invoke(
+        board,
+        {
+            "action": "create",
+            "title": "Spec",
+            "content": f"See [[design-notes]], [x](#wiki/w9) and [plan](#wiki/{plan_id}).",
+        },
+    )
+    note = linked["data"]["note"]
+    assert "[[design-notes]]" in note and "#wiki/w9" in note and plan_id not in note
+    assert note.endswith(linked["data"]["link"])
+    # Links to existing pages, by number or stored ID, need no note.
+    stored_id = (await pages(board))[0]["page_id"]
+    edited = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": plan_id,
+            "old_text": "Step one",
+            "new_text": f"Step one, see [[{plan_id}]] and #wiki/{stored_id}",
+        },
+    )
+    assert edited["ok"] and "note" not in edited["data"], edited
 
 
 @pytest.mark.asyncio
@@ -1081,6 +1112,7 @@ async def test_wiki_read_with_query_names_the_lines_that_contain_it(board):
     lines = ["# Modules", *(f"- module {number}: notes about it" for number in range(1, 200))]
     lines[120] = "- errors.py holds MiniError"
     lines[150] = "- see ERRORS.PY for the codes"
+    lines[160] = "- the parser raises MiniError on bad input"
     content = "\n".join(lines)
     page_id = await create(board, content)
     offset = len("\n".join(lines[:150])) + 1
@@ -1097,7 +1129,15 @@ async def test_wiki_read_with_query_names_the_lines_that_contain_it(board):
         f"line 151, character {offset}: - see ERRORS.PY for the codes"
     )
     assert list(result["data"]).index("found") < list(result["data"]).index("content")
-    assert result["data"]["content"] == content[:100]
+    # A limit bounds the text shown around the first line found; only offset moves it.
+    match = content.index("errors.py")
+    assert result["data"]["content"] == content[match - 20 : match + 80]
+    ranged = await invoke(
+        board,
+        {"action": "read", "page_id": page_id, "query": "errors.py", "offset": 0, "limit": 100},
+    )
+    assert ranged["data"]["content"] == content[:100]
+    assert ranged["data"]["found"] == result["data"]["found"]
     # Without offset and limit, the read shows the text around the first line found,
     # from two lines before it, instead of the whole page.
     around = await invoke(board, {"action": "read", "page_id": page_id, "query": "errors.py"})
@@ -1112,6 +1152,20 @@ async def test_wiki_read_with_query_names_the_lines_that_contain_it(board):
     }
     listed = await invoke(board, {"action": "list", "query": "errors.py"})
     assert listed["data"]["pages"].startswith('Pages containing "errors.py"')
+    # Words no line holds as written match by the lines that hold all of them, as list does.
+    words = await invoke(board, {"action": "read", "page_id": page_id, "query": "MiniError parser"})
+    assert words["data"]["found"].splitlines() == [
+        WIKI_READ_FOUND_WORDS.format(query="MiniError parser"),
+        f"line 161, character {content.index(lines[160])}: {lines[160]}",
+    ]
+    assert words["data"]["content"].startswith(lines[158])
+    missing = await invoke(
+        board, {"action": "read", "page_id": page_id, "query": "MiniError unicorn"}
+    )
+    assert missing["data"]["found"].startswith(
+        WIKI_READ_FOUND_NONE_WORDS.format(query="MiniError unicorn", call="")
+    )
+    assert "content" not in missing["data"]
 
 
 @pytest.mark.asyncio

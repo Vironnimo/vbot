@@ -10,6 +10,7 @@ resolve them against the group and explain any correction.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
@@ -26,6 +27,7 @@ from ._store_values import post_number
 from .agent_text import (
     BOARD_FILE_PATH,
     BOARD_FOREIGN_ACTIONS,
+    BOARD_OTHER_TOOL,
     INBOX_ONLY_RECEIVE,
     STATE_ONLY_STATUS,
 )
@@ -131,6 +133,9 @@ _BOARD_ELSEWHERE = {
     "swarminbox": "swarm_inbox",
     "swarmwiki": "swarm_wiki",
 }
+# An unknown action spelled like a Tool name, such as "search_files", may be a call meant for
+# another of the Agent's Tools; the normalizer cannot see which Tools the Agent has.
+_TOOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 # A file path means the call was meant for a Tool that works with files.
 _BOARD_FILE_FIELDS = frozenset({"path", "filepath"})
 
@@ -261,7 +266,7 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
         contract,
         value,
         fields=_BOARD_FIELDS["message_id" if is_post else "text"],
-        actions=_action_normalizer(_BOARD_ACTIONS, _BOARD_ELSEWHERE),
+        actions=_action_normalizer(_BOARD_ACTIONS, _BOARD_ELSEWHERE, other_tool=BOARD_OTHER_TOOL),
         optional=("discussion_id", "message_id", "reply_to", "before", "cursor", "limit"),
         # A placeholder beside the real text, such as "message": "placeholder", asks for
         # nothing; two different texts are refused as conflicting values.
@@ -452,7 +457,7 @@ def _normalize(
 
 
 def _action_normalizer(
-    synonyms: Mapping[str, str], elsewhere: Mapping[str, str]
+    synonyms: Mapping[str, str], elsewhere: Mapping[str, str], *, other_tool: str | None = None
 ) -> Callable[[Any], Any]:
     def normalize(action: Any) -> Any:
         if not isinstance(action, str):
@@ -464,6 +469,14 @@ def _action_normalizer(
         target = elsewhere.get(spelling(action))
         if target is not None:
             raise ToolContractError(BOARD_FOREIGN_ACTIONS[target].format(action=action))
+        if (
+            other_tool is not None
+            and _TOOL_NAME.fullmatch(action)
+            and not is_placeholder(action)
+            # Enum formatting accepts another spelling of an action, such as "LIST".
+            and spelling(action) not in {spelling(value) for value in synonyms.values()}
+        ):
+            raise ToolContractError(other_tool.format(action=action))
         return action
 
     return normalize
