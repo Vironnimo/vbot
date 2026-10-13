@@ -22,6 +22,7 @@ from core.tools.terminal_backend import (
     TerminalAdapter,
     spawn_terminal_adapter,
     windows_command_processor_line,
+    windows_program,
 )
 from core.tools.terminal_emulator import TerminalEmulator
 
@@ -73,7 +74,8 @@ def test_powershell_runs_a_batch_program_through_cmd_when_an_argument_needs_prot
 ) -> None:
     """PowerShell hands a batch program (such as an npm program shim) quotes and
     cmd metacharacters unprotected, so cmd runs it with the exact command line."""
-    (tmp_path / "codex.cmd").write_text("@echo off\n", encoding="utf-8")
+    shim = tmp_path / "codex.cmd"
+    shim.write_text("@echo off\n", encoding="utf-8")
     environment = {"PATH": str(tmp_path), "COMSPEC": "C:\\Windows\\system32\\cmd.exe"}
 
     unsafe = shell_launch(["pwsh.exe"], "codex", _SPECIAL, environment=environment)
@@ -81,14 +83,22 @@ def test_powershell_runs_a_batch_program_through_cmd_when_an_argument_needs_prot
         ["pwsh.exe"], "codex", ["--profile", "work space"], environment=environment
     )
 
+    def through_cmd(program: str) -> str:
+        exact = windows_command_processor_line(program, _SPECIAL)
+        return f"& 'C:\\Windows\\system32\\cmd.exe' --% /d /e:on /v:off /s /c \"{exact}\""
+
     script = _powershell_script(unsafe)
-    exact = windows_command_processor_line("codex", _SPECIAL)
-    assert script[-1] == (
-        f"& 'C:\\Windows\\system32\\cmd.exe' --% /d /e:on /v:off /s /c \"{exact}\""
-    )
+    program = windows_program("codex", str(tmp_path))
+    assert Path(program) == shim
+    assert script[-1] == through_cmd(program)
     # The history keeps the line as the operator would type it in PowerShell.
     assert _history_entry(r"""codex 'a "b" c' '100%' 'x&y|z' 'it''s'""") in script[-2]
     assert _powershell_script(plain)[-1] == "codex --profile 'work space'"
+    # Windows drops trailing dots and spaces from a program name: such a name
+    # starts the same batch program, so it gets the same protection.
+    for name in ("codex.cmd.", "codex.cmd..", "codex.cmd. "):
+        dotted = shell_launch(["pwsh.exe"], str(tmp_path / name), _SPECIAL, environment=environment)
+        assert _powershell_script(dotted)[-1] == through_cmd(str(shim))
 
 
 def _powershell_script(launch: ShellLaunch) -> list[str]:

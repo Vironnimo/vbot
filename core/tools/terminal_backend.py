@@ -6,6 +6,7 @@ import codecs
 import contextlib
 import errno
 import functools
+import ntpath
 import os
 import re
 import select
@@ -590,6 +591,32 @@ def _command_processor_word(value: str) -> str:
     return f'"{text}{"\\" * backslashes}"'
 
 
+def windows_program(command: str, search_path: str | None) -> str:
+    """Return the program file Windows starts for *command*.
+
+    A name without a folder is looked up on *search_path*. Windows starts a
+    program by its full path, which drops the trailing dots and spaces of the
+    last part: ``tool.cmd.`` and ``tool.cmd `` start the batch program
+    ``tool.cmd`` (CVE-2024-43402). The returned name is normalized the same
+    way, so a check of its extension sees the program that runs. A name that
+    is no file comes back unchanged.
+    """
+    found = shutil.which(command, path=search_path)
+    if found is None:
+        if not os.path.isfile(command):
+            return command
+        found = command
+    full = ntpath.abspath(found)
+    folder, name = ntpath.split(full)
+    trimmed = name.rstrip(". ")
+    return ntpath.join(folder, trimmed) if trimmed else full
+
+
+def is_batch_program(program: str) -> bool:
+    """Whether Windows runs *program* (from ``windows_program``) through cmd.exe."""
+    return ntpath.splitext(program)[1].lower() in {".bat", ".cmd"}
+
+
 def _windows_command(
     argv: Sequence[str], env: Mapping[str, str], command_line: str | None
 ) -> tuple[str, str]:
@@ -599,10 +626,10 @@ def _windows_command(
     through the command processor, whose own grammar the line follows; other
     programs get the C runtime quoting of their arguments.
     """
-    executable = shutil.which(argv[0], path=env.get("PATH")) or argv[0]
+    executable = windows_program(argv[0], env.get("PATH"))
     if command_line is not None:
         return executable, command_line
-    if Path(executable).suffix.lower() not in {".bat", ".cmd"}:
+    if not is_batch_program(executable):
         return executable, subprocess.list2cmdline(argv[1:])
     command_processor = env.get("COMSPEC") or os.environ.get("COMSPEC") or "cmd.exe"
     line = windows_command_processor_line(executable, argv[1:])
@@ -657,7 +684,9 @@ __all__ = [
     "TerminalAdapterFactory",
     "UnpassableArgumentError",
     "default_terminal_argv",
+    "is_batch_program",
     "spawn_terminal_adapter",
     "terminate_process_tree",
     "windows_command_processor_line",
+    "windows_program",
 ]

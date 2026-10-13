@@ -110,6 +110,11 @@ def test_batch_programs_receive_their_arguments_unchanged_through_the_command_pr
         f'"{executable}" {line}', capture_output=True, text=True, timeout=10, check=True
     )
     assert completed.stdout.splitlines() == [json.dumps(arguments)]
+    # Windows drops trailing dots and spaces from a program name, so these
+    # names start the same batch program and get the same command line.
+    for name in ("echo-args.cmd.", "echo-args.cmd..", "echo-args.cmd. "):
+        dotted = [str(shim.with_name(name)), *arguments]
+        assert terminal_backend._windows_command(dotted, environment, None) == (executable, line)
     # cmd ends its command line at a line break, so such an argument starts nothing.
     with pytest.raises(terminal_backend.UnpassableArgumentError):
         terminal_backend._windows_command([str(shim), "two\nlines"], environment, None)
