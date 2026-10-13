@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from core.tools import shell_hints
-from core.tools._powershell import POWERSHELL_ERROR_NOTE
 from core.tools.shell_hints import annotate_failure
 
 _NOT_RECOGNIZED = (
@@ -296,12 +295,19 @@ def test_platform_specific_hints_follow_the_host_shell(
 @pytest.mark.parametrize(
     ("command", "output", "expected"),
     [
+        # PowerShell and programs read /dev/null as a path on the current drive.
         (
-            "git log | Out-File /dev/null",
+            "git log 2>/dev/null",
             "Out-File: Could not find a part of the path 'C:\\dev\\null'.",
-            "PowerShell has no /dev/null file: discard output with `| Out-Null` instead of "
-            "passing /dev/null as a path.",
+            "Windows has no /dev/null",
         ),
+        (
+            "python export.py --out /dev/null",
+            "FileNotFoundError: [Errno 2] No such file or directory: '/dev/null'",
+            "Windows has no /dev/null",
+        ),
+        # Output that names it, from a command that does not.
+        ("python export.py", "error: cannot write /dev/null", None),
         (
             "ls -la src",
             "Get-ChildItem: A parameter cannot be found that matches parameter name 'la'.",
@@ -441,6 +447,9 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
             _NOT_RECOGNIZED,
         ),
         ("cargo build", "cargo", "Check with `Get-Command cargo`", _NOT_RECOGNIZED_DE),
+        ("git log | head -n 5", "head", "`Select-Object -First 10`", _NOT_RECOGNIZED),
+        ("tail -n 20 app.log", "tail", "`Get-Content path -Tail 10`", _NOT_RECOGNIZED),
+        ("wc -l notes.txt", "wc", "`(Get-Content path).Count`", _NOT_RECOGNIZED),
         # A description sent as the command; a missing program keeps its own hint.
         (
             "Check shell files compile and behave",
@@ -1006,7 +1015,7 @@ _CLOSED_OUTPUT = (
             None,
         ),
         # The output never reached 8 lines, -Wait lets it finish, a query loses
-        # nothing, and -Last and head read to the end.
+        # nothing, and -Last reads to the end.
         ("python build.py 2>&1 | Select-Object -First 20", "step", _FAILED, 8, None),
         ("python build.py 2>&1 | Select-Object -First 8 -Wait", "step", _FAILED, 8, None),
         (
@@ -1017,7 +1026,6 @@ _CLOSED_OUTPUT = (
             None,
         ),
         ("python build.py 2>&1 | Select-Object -Last 8", "step", _FAILED, 8, None),
-        ("python build.py 2>&1 | head -n 8", "step", _FAILED, 8, None),
         ("Write-Output '| Select-Object -First 1'; python build.py 2>&1", "step", _FAILED, 8, None),
     ],
 )
@@ -1056,20 +1064,27 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
         # grep was not found, so the checker before it never ran.
         (
             "python check.py 2>&1 | grep FAIL; Write-Output done",
-            f"{_NOT_RECOGNIZED.format(name='grep')}\ndone\n\n{POWERSHELL_ERROR_NOTE}",
+            f"{_NOT_RECOGNIZED.format(name='grep')}\ndone",
             ("Select-String", "`grep`", "code 0"),
         ),
-        # The command recovered from an error of its own.
+        # A program called by its quoted path.
         (
-            "Remove-Item x -ErrorAction SilentlyContinue; 'done'",
-            f"done\n\n{POWERSHELL_ERROR_NOTE}",
-            None,
+            "& 'C:\\tools\\lint.exe' src; 'done'",
+            f"{_NOT_RECOGNIZED.format(name='C:\\tools\\lint.exe')}\ndone",
+            ("Get-Command", "did not run", "code 0"),
         ),
-        # Without the note, the text is the program's own output.
+        # A redirection to /dev/null kept its statement from running.
+        (
+            "python check.py 2>/dev/null; 'done'",
+            "Out-File: Could not find a part of the path 'C:\\dev\\null'.\ndone",
+            ("`2>$null`", "/dev/null did not run", "code 0"),
+        ),
+        # The error text is a program's output: the command calls no such name.
         ("python check.py", _NOT_RECOGNIZED.format(name="grep"), None),
+        ("python check.py --skip 'grep'", _NOT_RECOGNIZED.format(name="grep"), None),
     ],
 )
-def test_a_command_powershell_did_not_recognize_behind_exit_code_0_is_named(
+def test_a_statement_powershell_could_not_run_behind_exit_code_0_is_named(
     monkeypatch: pytest.MonkeyPatch, command: str, output: str, names: tuple[str, ...] | None
 ) -> None:
     monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
@@ -1082,6 +1097,9 @@ def test_a_command_powershell_did_not_recognize_behind_exit_code_0_is_named(
         assert hint is not None
         for name in names:
             assert name in hint
+    # Only PowerShell runs commands this way.
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, 0, output) is None
 
 
 @pytest.mark.parametrize(

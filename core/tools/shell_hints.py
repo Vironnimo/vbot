@@ -11,10 +11,11 @@ Design rules (keep them when adding a pattern):
 
 * Only non-zero exit codes get a hint, except for a command that did not run as
   written: a typographic quote or a \\" that ended a PowerShell string, a
-  command PowerShell did not recognize behind exit code 0 (its recorded-error
-  note), or a program that failed in a pipeline with a Select-Object -First
-  stage; a successful command with expandable variables inside Python source;
-  and a command that sleeps to read a background command's log.
+  statement PowerShell could not run behind exit code 0 (a command it did not
+  recognize, a redirection to /dev/null), or a program that failed in a
+  pipeline with a Select-Object -First stage; a successful command with
+  expandable variables inside Python source; and a command that sleeps to read
+  a background command's log.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
 * Only the first and the last ``_SCAN_CHARS`` characters of output are
@@ -44,7 +45,6 @@ from itertools import islice
 from pathlib import Path, PureWindowsPath
 
 from core.tools._path_suggestions import similar_entries
-from core.tools._powershell import POWERSHELL_ERROR_NOTE
 
 # The shell Tool runs commands in PowerShell on Windows and in bash elsewhere.
 _POWERSHELL = sys.platform == "win32"
@@ -209,6 +209,19 @@ _POWERSHELL_EQUIVALENTS: dict[str, str | Callable[[_Failure], str]] = {
     "awk": (
         "`awk` does not exist in PowerShell: split fields with "
         "`ForEach-Object { ($_ -split '\\s+')[1] }`."
+    ),
+    "head": (
+        "`head` does not exist in PowerShell: use `Select-Object -First 10` for command output "
+        "and `Get-Content path -TotalCount 10` for a file."
+    ),
+    "tail": (
+        "`tail` does not exist in PowerShell: use `Select-Object -Last 10` for command output "
+        "and `Get-Content path -Tail 10` for a file."
+    ),
+    "wc": (
+        "`wc` does not exist in PowerShell: count lines with `(Get-Content path).Count` or "
+        "`(command | Measure-Object).Count`, and words or characters with "
+        "`Measure-Object -Word -Character`."
     ),
     "which": "`which` does not exist in PowerShell: use `(Get-Command name).Source`.",
     "touch": (
@@ -766,8 +779,7 @@ def _hint_escaped_quote(
 
 # A stage that closes the output of the commands before it in its pipeline once
 # N lines have passed: Select-Object -First N (any prefix down to -f) without
-# -Wait. The bootstrap's head reads its input to the end. The stage's text runs
-# to the next pipe or statement.
+# -Wait. The stage's text runs to the next pipe or statement.
 _FIRST_STAGE = re.compile(
     r"(?<!\|)\|(?!\|)[ \t]*+(?:Select-Object|select)(?=[ \t])(?P<arguments>[^|;\n]*+)",
     re.IGNORECASE,
@@ -1239,26 +1251,42 @@ def _hint_waiting_for_background(command: str) -> str | None:
     )
 
 
-def _hint_hidden_failure(command: str, output: str, offers: Callable[[str], bool]) -> str | None:
+def _hint_hidden_failure(
+    command: str, exit_code: int | None, output: str, offers: Callable[[str], bool]
+) -> str | None:
     """Name a statement PowerShell could not run behind exit code 0.
 
     ``checker 2>&1 | grep ...; python -c ...`` exited with 0 from its last
-    statement: grep is not recognized, so the checker never ran, and only the
-    recorded-error note said that something failed.
+    statement: grep is not recognized, so no element of that pipeline ran, and
+    the Agent read the checker's missing output as a pass. A redirection to
+    /dev/null fails the same way: PowerShell cannot open ``C:\\dev\\null``, so
+    the statement does not run. Only a name the command itself calls counts,
+    not one an error message in the output merely mentions.
     """
-    if not _POWERSHELL or POWERSHELL_ERROR_NOTE not in output:
+    if not _POWERSHELL or exit_code != 0:
         return None
     window = _scan_window(output)
     missing = _POWERSHELL_NOT_RECOGNIZED.search(window)
-    if missing is None:
-        return None
-    hint = _hint_powershell_command_not_found(_Failure(command, window, None, offers))
-    if hint is None:
-        return None
-    return (
-        f"{hint} The statement with `{missing[1]}` did not run, although the command exited "
-        "with code 0."
-    )
+    if missing is not None and _calls(command, missing[1]):
+        hint = _hint_powershell_command_not_found(_Failure(command, window, None, offers))
+        if hint is not None:
+            return (
+                f"{hint} The statement with `{missing[1]}` did not run, although the command "
+                "exited with code 0."
+            )
+    if _DEV_NULL.search(command) and _DEV_NULL_PATH.search(window):
+        return (
+            f"{_DEV_NULL_HINT} The statement with /dev/null did not run, although the command "
+            "exited with code 0."
+        )
+    return None
+
+
+def _calls(command: str, name: str) -> bool:
+    """Whether *command* names *name* outside its strings and comments, or calls it with &."""
+    if any(word[0] == name for word in _COMMAND_WORD.finditer(_powershell_code(command).text)):
+        return True
+    return re.search(rf"&[ \t]*[{_QUOTES}]{re.escape(name)}[{_QUOTES}]", command) is not None
 
 
 # A word of the command, between blanks, quotes, parentheses and separators.
@@ -1297,16 +1325,22 @@ def _hint_native_glob(failure: _Failure) -> str | None:
     return None
 
 
+# Windows has no /dev/null: PowerShell resolves it as \dev\null on the current
+# drive, so a redirection or a cmdlet reports the missing C:\dev\null, and a
+# program reports /dev/null as it was given.
+_DEV_NULL = re.compile(r"[/\\]dev[/\\]null", re.IGNORECASE)
+_DEV_NULL_PATH = re.compile(r"\b[A-Za-z]:\\dev\\null\b", re.IGNORECASE)
+_DEV_NULL_HINT = (
+    "Windows has no /dev/null: PowerShell and programs read it as the path \\dev\\null on the "
+    "current drive. Discard output with `2>$null`, `*>$null` or `| Out-Null`, and give a "
+    "program `NUL` as its output file, such as `curl -o NUL`."
+)
+
+
 def _hint_dev_null(failure: _Failure) -> str | None:
-    # The bootstrap runs redirections to /dev/null as $null and passes it to native
-    # programs as NUL; a cmdlet that takes it as a path, such as Out-File /dev/null,
-    # reports the missing C:\dev\null.
-    if "\\dev\\null" not in failure.output:
+    if not _POWERSHELL or not _DEV_NULL.search(failure.command):
         return None
-    return (
-        "PowerShell has no /dev/null file: discard output with `| Out-Null` instead of "
-        "passing /dev/null as a path."
-    )
+    return _DEV_NULL_HINT if _DEV_NULL.search(failure.output) else None
 
 
 _MISSING_MODULE = re.compile(
@@ -1885,8 +1919,9 @@ def annotate_failure(
     A command that did not run as written gets a hint whatever its exit code,
     since a later statement's success can hide its failure: a typographic quote
     or a \\" ended a string early (first, since every error follows from it), a
-    command PowerShell did not recognize behind exit code 0, or a program failed
-    in a pipeline with a Select-Object -First stage. A non-zero exit code can
+    statement PowerShell could not run behind exit code 0 (a command it did not
+    recognize, a redirection to /dev/null), or a program failed in a pipeline
+    with a Select-Object -First stage. A non-zero exit code can
     come from a pipeline whose failed program made && skip the rest. Last, a
     successful command with expandable variables in double-quoted Python source
     is told how to preserve literal text. A command that sleeps to read a
@@ -1907,7 +1942,7 @@ def annotate_failure(
         hint = _failure_hint(command, exit_code, output, workdir, offers)
     else:
         try:
-            hint = _hint_hidden_failure(command, output, offers)
+            hint = _hint_hidden_failure(command, exit_code, output, offers)
         except Exception:
             hint = None
     if hint:

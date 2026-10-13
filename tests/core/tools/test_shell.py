@@ -34,6 +34,7 @@ from core.tools import shell as shell_module
 from core.tools import shell_hints
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools._command_launch import PipeLauncher
+from core.tools._powershell import REQUEST_UNREADABLE_EXIT_CODE, WORKDIR_UNAVAILABLE_EXIT_CODE
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import CommandManager
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -235,13 +236,13 @@ def launched(launcher: FakeLauncher, index: int = 0) -> tuple[str, dict[str, str
     def text(field: str) -> str:
         return base64.b64decode(field).decode("utf-8")
 
-    for line in lines[3:-1]:
+    for line in lines[2:-1]:
         name, separator, value = line.partition(" ")
         if separator:
             environment[text(name)] = text(value)
         else:
             environment.pop(text(name), None)
-    return text(lines[2]), environment
+    return text(lines[1]), environment
 
 
 # Command log files: tmp_<id>.log in Storage.
@@ -904,6 +905,65 @@ async def test_a_shell_that_cannot_start_names_the_state_instead_of_the_raw_erro
         assert model_path(workdir) in message
     # Out of resources, the Agent can free some by stopping its background commands.
     assert stop_calls(message) == ([{"action": "list"}] if error.errno == errno.ENOMEM else [])
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "removed", "retryable", "fragment"),
+    [
+        (REQUEST_UNREADABLE_EXIT_CODE, False, True, "could not pass the command to the shell"),
+        (WORKDIR_UNAVAILABLE_EXIT_CODE, False, False, "pass that directory as workdir"),
+        # The directory was removed after the call was checked.
+        (WORKDIR_UNAVAILABLE_EXIT_CODE, True, False, "is not an existing directory"),
+    ],
+    ids=["request-unreadable", "workdir-unavailable", "workdir-removed"],
+)
+@pytest.mark.asyncio
+async def test_a_shell_that_ran_nothing_fails_the_call(
+    shell: Shell, exit_code: int, removed: bool, retryable: bool, fragment: str
+) -> None:
+    # PowerShell's bootstrap exits with a code of its own and prints nothing.
+    workdir = shell.commands.cwd / "build"
+    workdir.mkdir()
+    call = shell.call({"command": "make", "workdir": "build"})
+    process = await shell.started()
+    if removed:
+        workdir.rmdir()
+    process.exit(exit_code)
+
+    failure = (await shell.returned(call))["error"]
+    message = failure["message"]
+    assert (failure["code"], failure["retryable"]) == ("command_not_started", retryable)
+    assert message.startswith(f"{SHELL_MODEL_NAME} was not run: ")
+    assert fragment in message
+    assert str(exit_code) not in message
+    if exit_code == WORKDIR_UNAVAILABLE_EXIT_CODE:
+        assert model_path(workdir) in message
+
+
+@pytest.mark.asyncio
+async def test_a_background_command_that_ran_nothing_delivers_why(shell: Shell) -> None:
+    command_id = data(await shell.call({"command": "serve", "run_in_background": True}))[
+        "command_id"
+    ]
+    (await shell.started()).exit(REQUEST_UNREADABLE_EXIT_CODE)
+    await shell.commands.finish(command_id)
+
+    body = shell.sink.bodies[0]
+    assert body.startswith(f"The background command {command_id} (serve) did not run: ")
+    assert str(REQUEST_UNREADABLE_EXIT_CODE) not in body
+    assert background_command_statuses([note(body)]) == {command_id: "failed"}
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_printed_owns_its_exit_code(shell: Shell) -> None:
+    # Only a shell that printed nothing and ran no program can have run nothing.
+    call = shell.call({"command": "tool"})
+    process = await shell.started()
+    process.write("ran\n")
+    process.exit(REQUEST_UNREADABLE_EXIT_CODE)
+
+    result = data(await shell.returned(call))
+    assert (result["exit_code"], result["output"]) == (REQUEST_UNREADABLE_EXIT_CODE, "ran")
 
 
 @pytest.mark.parametrize("companion", [True, False])
