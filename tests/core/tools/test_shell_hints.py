@@ -447,8 +447,9 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
             _NOT_RECOGNIZED,
         ),
         ("cargo build", "cargo", "Check with `Get-Command cargo`", _NOT_RECOGNIZED_DE),
-        ("git log | head -n 5", "head", "`Select-Object -First 10`", _NOT_RECOGNIZED),
-        ("tail -n 20 app.log", "tail", "`Get-Content path -Tail 10`", _NOT_RECOGNIZED),
+        # head and tail point to the untrimmed output, not to a trim stage.
+        ("git log | head -n 5", "head", "Run the command without it", _NOT_RECOGNIZED),
+        ("tail -n 20 app.log", "tail", "`Get-Content path -Tail 20`", _NOT_RECOGNIZED),
         ("wc -l notes.txt", "wc", "`(Get-Content path).Count`", _NOT_RECOGNIZED),
         # A description sent as the command; a missing program keeps its own hint.
         (
@@ -468,6 +469,7 @@ def test_missing_powershell_command_names_the_equivalent(
 
     assert hint is not None
     assert expected in hint
+    assert "Select-Object" not in hint
 
 
 _WINDOWS_FIND = (
@@ -519,6 +521,18 @@ _WINDOWS_FIND = (
             _NOT_RECOGNIZED_DE.format(name="sed"),
             {"edit"},
             "change files with edit,",
+        ),
+        (
+            "head -n 5 notes.txt",
+            _NOT_RECOGNIZED.format(name="head"),
+            {"read"},
+            "with read and limit.",
+        ),
+        (
+            "tail -n 20 app.log",
+            _NOT_RECOGNIZED.format(name="tail"),
+            {"read"},
+            "with read and a negative offset, such as -20.",
         ),
         # find.exe's messages follow the Windows display language.
         ("find . -name '*.md'", "FIND: Parameter format not correct", set(), f"{_WINDOWS_FIND}."),

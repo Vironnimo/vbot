@@ -200,6 +200,32 @@ def _sed_hint(failure: _Failure) -> str:
     return f"`sed` does not exist in PowerShell: {change}, and {lines}."
 
 
+# Long output keeps its first and last lines on its own, so the hints for head and
+# tail point there instead of to a trim stage, which holds or cuts the output.
+_UNTRIMMED_OUTPUT = (
+    "Run the command without it: long output keeps its first and last lines, and the "
+    "result names a file with all of it."
+)
+
+
+def _head_hint(failure: _Failure) -> str:
+    lines = (
+        f"Read the first lines of a file with {_READ_TOOL} and limit."
+        if failure.offers(_READ_TOOL)
+        else "Print the first lines of a file with `Get-Content path -TotalCount 10`."
+    )
+    return f"`head` does not exist in PowerShell. {_UNTRIMMED_OUTPUT} {lines}"
+
+
+def _tail_hint(failure: _Failure) -> str:
+    lines = (
+        f"Read the last lines of a file with {_READ_TOOL} and a negative offset, such as -20."
+        if failure.offers(_READ_TOOL)
+        else "Print the last lines of a file with `Get-Content path -Tail 20`."
+    )
+    return f"`tail` does not exist in PowerShell. {_UNTRIMMED_OUTPUT} {lines}"
+
+
 # PowerShell equivalents for bash commands Agents reach for on a Windows host.
 _POWERSHELL_EQUIVALENTS: dict[str, str | Callable[[_Failure], str]] = {
     "grep": _grep_hint,
@@ -210,14 +236,8 @@ _POWERSHELL_EQUIVALENTS: dict[str, str | Callable[[_Failure], str]] = {
         "`awk` does not exist in PowerShell: split fields with "
         "`ForEach-Object { ($_ -split '\\s+')[1] }`."
     ),
-    "head": (
-        "`head` does not exist in PowerShell: use `Select-Object -First 10` for command output "
-        "and `Get-Content path -TotalCount 10` for a file."
-    ),
-    "tail": (
-        "`tail` does not exist in PowerShell: use `Select-Object -Last 10` for command output "
-        "and `Get-Content path -Tail 10` for a file."
-    ),
+    "head": _head_hint,
+    "tail": _tail_hint,
     "wc": (
         "`wc` does not exist in PowerShell: count lines with `(Get-Content path).Count` or "
         "`(command | Measure-Object).Count`, and words or characters with "
