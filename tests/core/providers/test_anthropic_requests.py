@@ -10,7 +10,11 @@ import respx
 
 from core.providers import AnthropicCompatibleAdapter
 from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, TOOL_RESULT_CONTENT_BLOCKS_FIELD
+from core.providers.adapter import (
+    IMAGE_WIRE_MEDIA_TYPES,
+    TOOL_RESULT_CONTENT_BLOCKS_FIELD,
+    request_input_budget,
+)
 from core.providers.errors import ProviderError, ProviderRequestTooLargeError
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
@@ -643,14 +647,28 @@ async def test_thinking_effort_renders_the_models_wire_control(model, kwargs, ex
 
 
 @pytest.mark.asyncio
-async def test_context_clamped_output_allowance_bounds_the_reasoning_budget() -> None:
-    model = claude_model(control="budget", context_window=10_000, max_output_tokens=10_000)
-    messages = [{"role": "user", "content": "x" * 8_000}]
-
-    payload = await sent_payload(make_adapter(model=model), messages, thinking_effort="high")
-
-    assert 0 < payload["max_tokens"] < 10_000
-    assert payload["thinking"] == {"type": "enabled", "budget_tokens": payload["max_tokens"] - 1}
+async def test_context_clamping_preserves_thinking_until_capacity_is_exhausted() -> None:
+    adapter = make_adapter(model=claude_model(control="budget"))
+    reservation = adapter.minimum_output_tokens(MODEL_ID, "max")
+    assert reservation == 32_769
+    budgets = []
+    for tokens in (100_000, 140_000, 150_000, 165_000):
+        with request_input_budget(MODEL_ID, tokens):
+            payload = await sent_payload(adapter, thinking_effort="max")
+        budgets.append(payload["thinking"])
+        assert reservation <= payload["max_tokens"] <= 200_000 - tokens
+    assert budgets == [{"type": "enabled", "budget_tokens": 32_768}] * 4
+    # An oversized request fails before I/O instead of silently changing the
+    # Model's thinking, including when Compaction is disabled or failed.
+    with request_input_budget(MODEL_ID, 170_000), respx.mock:
+        route = respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200))
+        with pytest.raises(ProviderError):
+            await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID, thinking_effort="max")
+        assert route.call_count == 0
+    assert (
+        make_adapter(model=claude_model(control="levels")).minimum_output_tokens(MODEL_ID, "high")
+        == 0
+    )
 
 
 @pytest.mark.parametrize(

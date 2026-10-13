@@ -367,9 +367,10 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
 
     from core.channels import ChannelConfig
     from core.projects import ProjectStore
+    from core.prompts import BlockDefinition
     from core.sessions import is_prompt_block_change_note
     from core.subagents import SubAgentPromptTarget
-    from core.tools.file_state import FileReadState
+    from core.tools.file_state import FileReadState, StaleReason
     from core.tools.project import register_project_tool
     from core.tools.subagent import register_subagent_tools
     from core.tools.tools import ToolPromptBlockRegistry
@@ -399,7 +400,11 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
         ),
         prompt_blocks,
     )
-    agent = _agent(tmp_path / "workspace")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    included = workspace / "STATIC.md"
+    included.write_text("ORIGINAL_INCLUDE", encoding="utf-8")
+    agent = _agent(workspace)
 
     def channel(channel_id: str, chat_ids: list[str]) -> ChannelConfig:
         return ChannelConfig(
@@ -419,12 +424,22 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
         tmp_path,
         tools=tools,
         channels=cast(Any, SimpleNamespace(list_channels=lambda: list(channels))),
-        block_definitions=prompt_blocks.block_definitions(),
+        block_definitions=[
+            *prompt_blocks.block_definitions(),
+            BlockDefinition(
+                id="extension:files",
+                owner="always",
+                kind="text",
+                default_text="{include:STATIC.md}",
+            ),
+        ],
     )
     runtime.chat_sessions.create(agent.id, session_id="s1")
     loop = build_chat_loop(runtime)
 
     await loop.send(agent.id, "First", session_id="s1")
+    assert runtime.file_read_state.check_stale("s1", included.resolve()) is None
+    included.write_text("CHANGED_INCLUDE_WITH_DIFFERENT_SIZE", encoding="utf-8")
     projects.create("web", "Web", tmp_path / "web")
     targets.append(SubAgentPromptTarget(agent_id="writer", name="Writer", description="Drafts."))
     channels.append(channel("tg-group", ["111", "222"]))
@@ -433,6 +448,8 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
 
     systems = [_system_message(adapter, request) for request in range(3)]
     assert systems[0] == systems[1] == systems[2]
+    assert "ORIGINAL_INCLUDE" in systems[0]
+    assert runtime.file_read_state.check_stale("s1", included.resolve()) == StaleReason.MODIFIED
     assert '<project id="vbot"' in systems[0] and "`reviewer`" in systems[0]
     assert "- tg-private: telegram" in systems[0]
     assert '<project id="web"' not in systems[0] and "`writer`" not in systems[0]

@@ -542,40 +542,13 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 self._model_context_window(model_id), self._config
             ),
             estimated_input_tokens=estimated_input,
+            minimum_output_tokens=self.minimum_output_tokens(
+                model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit
+            ),
         )
         if resolved is not None and rules.output_limit_cap is not None:
             resolved = min(resolved, rules.output_limit_cap)
         return resolved
-
-    def _model_max_output_tokens(self, model_id: str) -> int | None:
-        """The model's catalog output ceiling, or ``None`` when it is unknown.
-
-        Strips a ``::variant`` suffix and tolerates a missing lookup or model.
-        """
-
-        if self._model_lookup is None:
-            return None
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return None
-        return model.max_output_tokens
-
-    def _model_context_window(self, model_id: str) -> int | None:
-        """The Model's catalog context window, or ``None`` when unknown."""
-
-        if self._model_lookup is None:
-            return None
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return None
-        context_window = model.context_window
-        if _is_positive_int(context_window):
-            return context_window
-        return None
-
-    # ------------------------------------------------------------------
-    # Error detail helper (Anthropic-specific)
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _build_error_detail(status_code: int, response_body: str = "") -> str:

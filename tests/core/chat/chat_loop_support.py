@@ -426,10 +426,11 @@ class StubPrompts:
         on_demand_tools: Any = None,
         session_tool_grants: Any = (),
         pinned_blocks: Any = None,
+        pinned_block_order: Any = (),
         request_block_definitions: Any = (),
         thinking_effort: str | None = None,
     ) -> str:
-        del agent_project_id, pinned_blocks
+        del agent_project_id, pinned_blocks, pinned_block_order
         self.effective_tool_name_calls.append(
             tuple(str(definition["name"]) for definition in (effective_tool_definitions or ()))
         )

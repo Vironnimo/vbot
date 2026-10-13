@@ -517,6 +517,21 @@ class AgenticProgression:
                 finally:
                     async with self._dependencies.sessions.write_lock(session_address):
                         await context.session_snapshot.flush_deferred_notes(session)
+                # Hook notes were persisted before this Model step. Send them
+                # here too, so replay cannot move them ahead of its reply later.
+                hook_notes = session.drain_pending_notes()
+                for request_view in (
+                    [messages]
+                    if messages_for_request is messages
+                    else [messages, messages_for_request]
+                ):
+                    extend_request_with_notes(
+                        request_view,
+                        hook_notes,
+                        context.session_snapshot.active_messages,
+                        replay_policy=target.replay_policy,
+                        agent_model=target.model_reference,
+                    )
 
             messages_for_request, request_estimate = await _CHAT_TRANSFORM_WORKERS.run(
                 _prepare_request_context,

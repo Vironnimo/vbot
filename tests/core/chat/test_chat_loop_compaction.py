@@ -71,18 +71,29 @@ def _probe_tools() -> ToolRegistry:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reservation", "input_tokens", "window", "reason"),
+    [(0, 90, 100, "context_ratio"), (32_769, 140_000, 200_000, "output_reservation")],
+)
 async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_request(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    reservation: int,
+    input_tokens: int,
+    window: int,
+    reason: str,
 ) -> None:
-    runtime = compaction_runtime(tmp_path)
+    runtime = compaction_runtime(tmp_path, context_window=window)
+    monkeypatch.setattr(runtime.adapter, "minimum_output_tokens", lambda *_args: reservation)
     agent = runtime.agents.get("coder")
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     checkpoint = seed_tail(session)
-    service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    service = StubCompactionService(should_auto=reservation == 0, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
 
     caplog.set_level(logging.INFO, logger="vbot.compaction.coordination")
-    probe = await auto_compact(loop, agent, session, usage={"input_tokens": 90})
+    probe = await auto_compact(loop, agent, session, usage={"input_tokens": input_tokens})
 
     # One INFO line reports the committed Compaction; per-step detail stays at DEBUG.
     [completed] = [
@@ -90,7 +101,12 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
         for record in caplog.records
         if record.name == "vbot.compaction.coordination" and record.levelno >= logging.INFO
     ]
-    fields = ("session=session-one", "trigger=auto", "reason=context_ratio", "input_tokens=90")
+    fields = (
+        "session=session-one",
+        "trigger=auto",
+        f"reason={reason}",
+        f"input_tokens={input_tokens}",
+    )
     assert all(field in completed for field in fields)
     assert all(key in completed for key in ("tokens_after=", "carried_notes=0", "duration_ms="))
     assert persisted_roles(session.load()) == ["user", "assistant", "compaction_checkpoint"]
@@ -121,24 +137,24 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
         COMPACTION_COMPLETED_EVENT,
     ]
     assert lifecycle[0].payload == {
-        "context_tokens_before": 90,
+        "context_tokens_before": input_tokens,
         "context_usage": {
-            "tokens": 90,
+            "tokens": input_tokens,
             "estimated": False,
-            "provider_input_tokens": 90,
-            "context_window": 100,
+            "provider_input_tokens": input_tokens,
+            "context_window": window,
         },
     }
     assert lifecycle[1].payload["checkpoint"] == 1
     assert lifecycle[1].payload["checkpoint_id"] == checkpoint.id
-    assert lifecycle[1].payload["context_tokens_before"] == 90
+    assert lifecycle[1].payload["context_tokens_before"] == input_tokens
     assert lifecycle[1].payload["context_tokens_after"] == tokens_after
     assert lifecycle[1].payload["context_usage"] == {"tokens": tokens_after, "estimated": True}
     usage = dict(session.load()[-1].usage or {})
     duration_ms = usage.pop("compaction_duration_ms")
     assert usage == {
         "compacted_token_count": 42,
-        "context_tokens_before": 90,
+        "context_tokens_before": input_tokens,
         "context_tokens_after": tokens_after,
         # The factor newer messages are estimated with (no calibration here).
         "context_estimation": {"factor": 1.0},

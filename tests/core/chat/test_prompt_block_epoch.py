@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Collection
+from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
@@ -55,7 +55,7 @@ def test_pin_and_note_payloads_round_trip_with_their_entry_order() -> None:
         "tool:project": _catalog(("zeta", "- zeta"), ("alpha", "- alpha"), frame="## Projects"),
         "tool:bash": RenderedBlock("## Shell"),
     }
-    pin = PromptBlockPin.start(blocks)
+    pin = PromptBlockPin.start(blocks, order=("core:runtime", "tool:project", "tool:bash"))
     change = plan_prompt_block_change(pin, [], {"tool:bash": RenderedBlock("## Shell\n\nKeys")})
 
     assert PromptBlockPin.from_payload(_stored(pin.to_payload())) == pin
@@ -133,18 +133,24 @@ def test_the_plan_counts_only_the_pinned_epochs_notes() -> None:
 
     assert plan_prompt_block_change(pin, [note], live) is None
     assert plan_prompt_block_change(pin, [stale_note], live) == told
-    assert plan_prompt_block_change(pin, [note, stale_note], {}) is None
+    removed = plan_prompt_block_change(pin, [note, stale_note], {})
+    assert removed is not None and removed.blocks == {"tool:x": RenderedBlock("")}
+    removed_note = ChatMessage.note(removed.note_content())
+    assert plan_prompt_block_change(pin, [note, removed_note], {}) is None
+    assert plan_prompt_block_change(pin, [note], {}, unavailable={"tool:x"}) is None
+    restored = plan_prompt_block_change(pin, [note, removed_note], live)
+    assert restored is not None and restored.blocks == live
     assert without_other_epoch_prompt_block_changes(
         [user, stale_note, note, malformed], pin.epoch
     ) == [user, note]
 
 
-def test_a_block_shown_first_mid_epoch_joins_the_pin_and_pinned_texts_stay() -> None:
+def test_a_block_shown_first_mid_epoch_is_announced_without_changing_the_pin() -> None:
     live = {"tool:x": RenderedBlock("x1")}
     store = _PinStore()
 
-    def render(pinned: Collection[str]) -> dict[str, RenderedBlock]:
-        return {block_id: block for block_id, block in live.items() if block_id not in pinned}
+    def render() -> PromptBlockPin:
+        return PromptBlockPin.start(live, order=live)
 
     first = ensure_prompt_block_pin(cast(Any, store), cast(Any, None), render)
     live.update({"tool:x": RenderedBlock("x2"), "extension:y": RenderedBlock("y1")})
@@ -152,5 +158,16 @@ def test_a_block_shown_first_mid_epoch_joins_the_pin_and_pinned_texts_stay() -> 
 
     assert first.texts() == {"tool:x": "x1"}
     assert second.epoch == first.epoch
-    assert second.texts() == {"tool:x": "x1", "extension:y": "y1"}
+    assert second == first
+    change = plan_prompt_block_change(second, [], live)
+    assert change is not None and change.blocks == live
+    note = ChatMessage.note(change.note_content())
+    assert plan_prompt_block_change(second, [note], live) is None
     assert PromptBlockPin.from_payload(store.value) == second
+
+    # Additive layout metadata can be filled without resetting an existing pin.
+    assert store.value is not None
+    store.value.pop("order")
+    enriched = ensure_prompt_block_pin(cast(Any, store), cast(Any, None), render)
+    assert enriched.epoch == first.epoch and enriched.blocks == first.blocks
+    assert enriched.order == tuple(live)

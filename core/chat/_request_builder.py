@@ -68,7 +68,7 @@ from core.chat.wire_shaping import (
 )
 from core.extensions import invoke_extension_handler
 from core.projects import ProjectError
-from core.prompts import BLOCK_KIND_DATA, BlockDefinition, RenderedBlock
+from core.prompts import BLOCK_KIND_DATA, BlockDefinition
 from core.prompts.pinned_context import (
     PINNED_DYNAMIC_BLOCKS_SLOT,
     PINNED_TOOL_DEFINITIONS_SLOT,
@@ -350,12 +350,17 @@ class RequestBuilder:
         snapshot) and returns one note for every change, which the Run persists
         with its input. ``None`` when the Session has no pins yet or nothing changed.
         """
+        inputs = RequestBuildInputs.from_context(context, context.primary_target)
+        failed_blocks: set[str] = set()
+        session_blocks = await self._session_prompt_blocks(inputs, failed_blocks=failed_blocks)
         return await _CHAT_TRANSFORM_WORKERS.run(
             self._plan_prompt_block_change,
             context.agent,
             context.session.address,
-            RequestBuildInputs.from_context(context, context.primary_target),
+            inputs,
             context.session_snapshot.active_messages,
+            session_blocks,
+            failed_blocks,
         )
 
     def _plan_prompt_block_change(
@@ -364,19 +369,69 @@ class RequestBuilder:
         address: SessionAddress,
         inputs: RequestBuildInputs,
         messages: list[ChatMessage],
+        session_blocks: Sequence[BlockDefinition],
+        failed_blocks: set[str],
     ) -> str | None:
         sessions = self._dependencies.sessions
         pin = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
         tool_pin = self._stored_tool_epoch_pin(address)
-        if pin is None or tool_pin is None or not pin.blocks:
+        if pin is None or tool_pin is None:
             return None
         live = self._dependencies.get_system_prompts().render_dynamic_blocks(
             agent,
-            block_ids=pin.blocks.keys(),
+            request_block_definitions=session_blocks,
+            failed_blocks=failed_blocks,
             **self._block_render_inputs(inputs, tool_pin),
         )
-        change = plan_prompt_block_change(pin, messages, live)
+        change = plan_prompt_block_change(pin, messages, live, unavailable=failed_blocks)
         return None if change is None else change.note_content()
+
+    async def _session_prompt_blocks(
+        self, inputs: RequestBuildInputs, *, failed_blocks: set[str] | None = None
+    ) -> tuple[BlockDefinition, ...]:
+        """Render temporary Session contributions for snapshots and change notes."""
+        binding = inputs.temporary_binding
+        if binding is None:
+            return ()
+        registry = self._dependencies.get_extension_registry()
+        capability = (
+            registry.session_capability(binding, self._dependencies.tools)
+            if registry is not None
+            else None
+        )
+        if capability is None or registry is None:
+            raise ChatError(
+                "This Session has an invalid configuration. "
+                "Ask the user to check it through its Extension."
+            )
+        blocks: list[BlockDefinition] = []
+        for declaration in capability.prompt_blocks:
+            block_id = f"extension_session:{declaration.slug}"
+            try:
+                rendered = await invoke_extension_handler(declaration.render, binding)
+            except Exception:
+                _LOGGER.warning("Session prompt block %r failed", declaration.slug, exc_info=True)
+                if failed_blocks is not None:
+                    failed_blocks.add(block_id)
+                continue
+            if isinstance(rendered, str):
+                blocks.append(
+                    BlockDefinition(
+                        id=block_id,
+                        owner="always",
+                        kind=BLOCK_KIND_DATA,
+                        default_text=rendered.strip(),
+                        default_rank=10_000,
+                    )
+                )
+            elif failed_blocks is not None:
+                failed_blocks.add(block_id)
+        if not registry.is_registration_current(capability.identity):
+            raise ChatError(
+                "This Session has an invalid configuration. "
+                "Ask the user to check it through its Extension."
+            )
+        return tuple(blocks)
 
     def _block_render_inputs(
         self, inputs: RequestBuildInputs, tool_pin: ToolEpochPin
@@ -400,22 +455,42 @@ class RequestBuilder:
         render_inputs: Mapping[str, Any],
         *,
         fresh: bool,
+        session_blocks: Sequence[BlockDefinition],
+        read_paths: list[Path],
     ) -> PromptBlockPin:
-        """Return the prompt epoch's dynamic block pin, pinning blocks shown for the first time.
+        """Return the prompt epoch's immutable block inventory, texts and layout order.
 
         A *fresh* pin starts a new epoch from the blocks as they render now; the
         caller persists it (Compaction commit).
         """
         system_prompts = self._dependencies.get_system_prompts()
+        captured: PromptBlockPin | None = None
+        captured_reads: list[Path] = []
 
-        def render(pinned: Collection[str]) -> Mapping[str, RenderedBlock]:
-            return system_prompts.render_dynamic_blocks(agent, skip=pinned, **render_inputs)
+        def render() -> PromptBlockPin:
+            nonlocal captured
+            order: list[str] = []
+            blocks = system_prompts.render_dynamic_blocks(
+                agent,
+                block_order=order,
+                request_block_definitions=session_blocks,
+                read_paths=captured_reads,
+                **render_inputs,
+            )
+            captured = PromptBlockPin.start(blocks, order=order)
+            return captured
 
         if fresh:
-            return PromptBlockPin.start(await _CHAT_TRANSFORM_WORKERS.run(render, ()))
-        return await _CHAT_TRANSFORM_WORKERS.run(
-            ensure_prompt_block_pin, self._dependencies.sessions, session.address, render
-        )
+            pin = await _CHAT_TRANSFORM_WORKERS.run(render)
+        else:
+            pin = await _CHAT_TRANSFORM_WORKERS.run(
+                ensure_prompt_block_pin, self._dependencies.sessions, session.address, render
+            )
+        # A concurrent pin or a layout-only enrichment keeps different text.
+        # Stamp only files whose captured content this request actually shows.
+        if captured is not None and pin.epoch == captured.epoch:
+            read_paths.extend(captured_reads)
+        return pin
 
     async def build_request_state(
         self,
@@ -497,8 +572,15 @@ class RequestBuilder:
             if not inputs.fresh_prompt_epoch:
                 pin = await self._ensure_tool_epoch_pin(session, pin)
         render_inputs = self._block_render_inputs(inputs, pin)
+        prompt_read_paths: list[Path] = []
+        request_block_definitions = await self._session_prompt_blocks(inputs)
         prompt_blocks = await self._prompt_block_pin(
-            agent, session, render_inputs, fresh=inputs.fresh_prompt_epoch
+            agent,
+            session,
+            render_inputs,
+            fresh=inputs.fresh_prompt_epoch,
+            session_blocks=request_block_definitions,
+            read_paths=prompt_read_paths,
         )
         effort_pin = (
             EffortPin.start(
@@ -535,30 +617,8 @@ class RequestBuilder:
             list_announced=inputs.list_announced_tools,
             tool_loads=tool_loads,
         )
-        request_block_definitions: tuple[BlockDefinition, ...] = ()
         if session_capability is not None and inputs.temporary_binding is not None:
             assert extension_registry is not None and catalog is not None
-            rendered_blocks: list[BlockDefinition] = []
-            for declaration in session_capability.prompt_blocks:
-                try:
-                    rendered = await invoke_extension_handler(
-                        declaration.render, inputs.temporary_binding
-                    )
-                except Exception:
-                    _LOGGER.warning(
-                        "Session prompt block %r failed", declaration.slug, exc_info=True
-                    )
-                    continue
-                if isinstance(rendered, str) and rendered.strip():
-                    rendered_blocks.append(
-                        BlockDefinition(
-                            id=f"extension_session:{declaration.slug}",
-                            owner="always",
-                            kind=BLOCK_KIND_DATA,
-                            default_text=rendered.strip(),
-                            default_rank=10_000,
-                        )
-                    )
             if not extension_registry.is_registration_current(session_capability.identity):
                 raise ChatError(
                     "This Session has an invalid configuration. "
@@ -576,8 +636,6 @@ class RequestBuilder:
                     "This Session has an invalid configuration. "
                     "Ask the user to check it through its Extension."
                 )
-            request_block_definitions = tuple(rendered_blocks)
-        prompt_read_paths: list[Path] = []
         # The System Prompt describes the pinned Tool list (``render_inputs``)
         # and shows the pinned dynamic block texts and thinking effort, so it
         # stays unchanged for the whole prompt epoch too.
@@ -588,6 +646,7 @@ class RequestBuilder:
             skill_catalog=inputs.skill_catalog,
             read_paths=prompt_read_paths,
             pinned_blocks=prompt_blocks.texts(),
+            pinned_block_order=prompt_blocks.order,
             request_block_definitions=request_block_definitions,
             thinking_effort=effort.pin.effort,
             **render_inputs,
