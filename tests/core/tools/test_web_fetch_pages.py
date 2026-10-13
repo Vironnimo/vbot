@@ -98,6 +98,11 @@ async def test_find_searches_full_page_and_match_reference_reads_more(tmp_path, 
     following = await tool.dispatch(context, read_on)
     assert "ZEBRA42" not in following["data"]["content"]
     assert "ZEBRA42 license" + " Terms apply." * 200 in passage + following["data"]["content"]
+    # The ref copied with the main content's letter names the call that reads on
+    # (an Agent sent .m. for a passage's .p. ref, 2026-10-13).
+    slipped = await tool.dispatch(context, {"ref": read_on["ref"].replace(".p.", ".m.")})
+    assert slipped["error"]["code"] == "invalid_arguments"
+    assert json.dumps(read_on) in slipped["error"]["message"]
 
 
 @pytest.mark.asyncio
