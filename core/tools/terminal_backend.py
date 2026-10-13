@@ -34,10 +34,28 @@ _CLOSE_GRACE_SECONDS = 0.1
 # reports the exit; ConPTY delivered all output before the exit in measurements.
 _EXIT_OUTPUT_QUIET_SECONDS = 0.02
 _CLOSE_READER_SECONDS = 2.0
-# cmd.exe metacharacters, escaped with ^ in a typed command line.
-_CMD_META = re.compile(r'([()%!^"<>&|])')
-# Characters cmd acts on outside quotes when it parses a line again.
-_CMD_ACTIVE = re.compile(r"[()^<>&|]")
+# ASCII characters that neither cmd.exe nor the C runtime acts on; an argument
+# with any other ASCII character is quoted on a cmd.exe command line.
+_CMD_PLAIN = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$*+-./:?@\\_"
+)
+# Text cmd.exe cannot pass on: a line break ends its command line.
+_CMD_UNPASSABLE = re.compile(r"[\r\n\x00]")
+# cmd.exe options for running one command line: command extensions on (the
+# percent-sign protection needs them) and delayed !variable! expansion off.
+WINDOWS_COMMAND_PROCESSOR_OPTIONS = "/d /e:on /v:off"
+
+
+class UnpassableArgumentError(ValueError):
+    """An argument that cmd.exe cannot hand to a program unchanged.
+
+    *index* counts the arguments after the program from 1; None names the
+    program itself.
+    """
+
+    def __init__(self, message: str, *, index: int | None) -> None:
+        super().__init__(message)
+        self.index = index
 
 
 class TerminalAdapter(Protocol):
@@ -503,32 +521,68 @@ def terminate_process_tree(adapter: TerminalAdapter, *, targets: list[Any] | Non
 def windows_command_processor_line(command: str, arguments: Sequence[str]) -> str:
     """Render a program and its arguments as a cmd.exe command line.
 
-    The executable keeps its quotes for cmd's command lookup; the argument
-    syntax is escaped so cmd hands the native C-runtime command line to the
-    program unchanged. Inside ``cmd /s /c "<line>"`` or ``/k`` the line works
-    as if it were typed at the prompt.
+    Inside ``cmd /s /c "<line>"`` or ``/k`` the line works as if it were typed
+    at the prompt, and the program receives every argument unchanged. A batch
+    program, such as an npm program shim, hands its arguments to cmd once
+    more with ``%*``; cmd then reads them as commands where its quote state
+    differs from the C runtime's (BatBadBut, CVE-2024-24576). So every
+    argument cmd or the C runtime could act on is quoted, with each quote
+    inside it doubled, which both read alike: cmd's metacharacters stay inside
+    quotes on both readings. A percent sign stands alone between quotes, so
+    every %name% that cmd or PowerShell's ``--%`` could expand has quotes in
+    its name, which no variable has.
+
+    Raises UnpassableArgumentError for a line break or NUL in the command or
+    an argument, and for a quote in the command: cmd ends its command line at
+    a line break, and a program name cannot hold a quote.
     """
-    return " ".join(
-        [
-            subprocess.list2cmdline([command]),
-            *(_CMD_META.sub(r"^\1", _command_processor_word(value)) for value in arguments),
-        ]
-    )
+    if _CMD_UNPASSABLE.search(command) or '"' in command:
+        raise UnpassableArgumentError(
+            "the program name contains a quote or line break, which cmd.exe cannot run",
+            index=None,
+        )
+    words = [_command_processor_word(command)]
+    for index, value in enumerate(arguments, start=1):
+        if _CMD_UNPASSABLE.search(value):
+            raise UnpassableArgumentError(
+                f"argument {index} contains a line break, which cmd.exe cannot pass to a program",
+                index=index,
+            )
+        words.append(_command_processor_word(value))
+    return " ".join(words)
 
 
 def _command_processor_word(value: str) -> str:
-    """Return the C runtime quoting of *value*, quoted if cmd could act on it.
-
-    A batch file such as an npm program shim hands ``%*`` to cmd once more,
-    which keeps metacharacters literal only inside quotes; ``list2cmdline``
-    quotes only around whitespace.
-    """
-    word = subprocess.list2cmdline([value])
-    if word.startswith('"') or not _CMD_ACTIVE.search(value):
-        return word
-    # Backslashes before the closing quote are doubled to stay literal.
-    trailing = len(word) - len(word.rstrip("\\"))
-    return f'"{word}{"\\" * trailing}"'
+    """Quote *value* for cmd.exe and the C runtime that parses it afterwards."""
+    quote = (
+        not value
+        or value.endswith("\\")
+        or any(
+            (character.isascii() and character not in _CMD_PLAIN) or not character.isprintable()
+            for character in value
+        )
+    )
+    word: list[str] = []
+    backslashes = 0
+    for character in value:
+        if character == "\\":
+            backslashes += 1
+            word.append(character)
+            continue
+        # Backslashes before a quote are doubled to stay literal.
+        if character == '"':
+            # A doubled quote is one literal quote inside a quoted argument.
+            word.append("\\" * backslashes + '""')
+        elif character == "%":
+            # Close the quotes before the percent sign and open them after it.
+            word.append("\\" * backslashes + '"%"')
+        else:
+            word.append(character)
+        backslashes = 0
+    text = "".join(word)
+    if not quote:
+        return text
+    return f'"{text}{"\\" * backslashes}"'
 
 
 def _windows_command(
@@ -549,7 +603,7 @@ def _windows_command(
     line = windows_command_processor_line(executable, argv[1:])
     return (
         shutil.which(command_processor, path=env.get("PATH")) or command_processor,
-        f'/d /s /c "{line}"',
+        f'{WINDOWS_COMMAND_PROCESSOR_OPTIONS} /s /c "{line}"',
     )
 
 
@@ -593,8 +647,10 @@ def _accept_console_interrupts() -> None:
 
 
 __all__ = [
+    "WINDOWS_COMMAND_PROCESSOR_OPTIONS",
     "TerminalAdapter",
     "TerminalAdapterFactory",
+    "UnpassableArgumentError",
     "default_terminal_argv",
     "spawn_terminal_adapter",
     "terminate_process_tree",

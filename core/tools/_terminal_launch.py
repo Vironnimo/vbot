@@ -44,7 +44,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.tools.terminal_backend import windows_command_processor_line
+from core.tools.terminal_backend import (
+    WINDOWS_COMMAND_PROCESSOR_OPTIONS,
+    windows_command_processor_line,
+)
 
 _POWERSHELL_SHELLS = frozenset({"pwsh", "powershell"})
 _POSIX_RC_SHELLS = frozenset({"bash", "zsh"})
@@ -194,7 +197,10 @@ def shell_launch(
             # the exact command line instead; the history keeps the line.
             comspec = environment.get("COMSPEC") or "cmd.exe"
             exact = windows_command_processor_line(command, arguments)
-            run = f'& {_powershell_literal(comspec)} --% /d /s /c "{exact}"'
+            run = (
+                f"& {_powershell_literal(comspec)} --% "
+                f'{WINDOWS_COMMAND_PROCESSOR_OPTIONS} /s /c "{exact}"'
+            )
         # PSReadLine loads its history at the first prompt and drops what was
         # added before, so the line joins the history once the prompt idles.
         script = (
@@ -216,7 +222,10 @@ def shell_launch(
         comspec = environment.get("COMSPEC") or "cmd.exe"
         line = windows_command_processor_line(command, arguments)
         shell_line = windows_command_processor_line(shell, shell_argv[1:])
-        return ShellLaunch([comspec], command_line=f'/d /s /c "{line} & {shell_line}"')
+        return ShellLaunch(
+            [comspec],
+            command_line=f'{WINDOWS_COMMAND_PROCESSOR_OPTIONS} /s /c "{line} & {shell_line}"',
+        )
     line = " ".join(shlex.quote(token) for token in (command, *arguments))
     if name == "fish":
         program = " ".join(map(_fish_word, (command, *arguments)))
