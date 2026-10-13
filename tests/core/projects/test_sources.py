@@ -119,6 +119,14 @@ NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
         (
             "opencode",
             ".opencode/agents/reviewer.md",
+            "---\npermission:\n  '*': deny\n  task:\n    builder: allow\n"
+            "  skill:\n    review: ask\n---\nReview.",
+            {"subagent", "skill"},
+            "ready",
+        ),
+        (
+            "opencode",
+            ".opencode/agents/reviewer.md",
             "---\npermission:\n  bash:\n    '*': allow\n    'git push*': deny\n"
             "  edit: ask\n  todowrite: deny\n---\nReview.",
             ALL_TOOLS,
@@ -195,6 +203,36 @@ def test_imports_grant_the_tools_an_agent_may_use(repo, source, path, document, 
     assert set(actual.allowed_tools) == expected | (
         {"message_parent"} if status != "needs_attention" else set()
     )
+
+
+@pytest.mark.parametrize("global_denial", [False, True])
+def test_opencode_named_exceptions_keep_other_targets_and_skills_denied(
+    agents, projects, repo, global_denial
+):
+    permission = {"task": {"builder": "allow"}, "skill": {"review": "ask"}}
+    document = {
+        "permission": {"*": "deny"} if global_denial else {},
+        "agent": {
+            "reviewer": {
+                "prompt": "Review.",
+                "permission": permission if global_denial else {"*": "deny", **permission},
+            },
+            "builder": {"prompt": "Build."},
+            "other": {"prompt": "Other."},
+        },
+    }
+    write(repo, "opencode.json", json.dumps(document))
+    projects.create("repo", "Repo", repo, default_model="openai/gpt-mini")
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        project_skill_names={"repo": frozenset({"review", "private"})},
+    )
+    resolved = resolver.resolve_agent("repo", "reviewer")
+    assert set(resolved.tool_access.allowed) == {"subagent", "skill"}
+    assert resolved.tools["subagent"]["allowed_agents"] == ["builder"]
+    assert resolved.allowed_skills == ["review"]
 
 
 def test_mixed_sources_priority_and_new_detection_preserve_winners(repo):
