@@ -230,6 +230,25 @@ async def test_wiki_mutation_excerpt_is_bounded_revision_pinned_and_replayable(b
 
 
 @pytest.mark.asyncio
+async def test_wiki_excerpt_shows_the_whole_changed_passage_and_the_lines_after_it(board):
+    old_rows = [f"| {i} | old |" for i in range(10)]
+    new_rows = [f"| {i} | new |" for i in range(10)]
+    content = "\n".join(["# Table", *old_rows, "Closing line one", "Closing line two"])
+    page_id = await create(board, content)
+    # The edit replaces eight rows with ten, leaving the last two old rows below the seam.
+    result = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "old_text": "\n".join(old_rows[:8]),
+            "new_text": "\n".join(new_rows),
+        },
+    )
+    assert result["data"]["content"] == "\n".join([*new_rows, *old_rows[8:]]) + "\n"
+
+
+@pytest.mark.asyncio
 async def test_wiki_deletion_and_whole_page_replacement_show_actual_saved_content(board):
     page_id = await create(board, "Before\nRemove this\nAfter")
     removed = await invoke(

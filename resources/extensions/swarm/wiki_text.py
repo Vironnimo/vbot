@@ -175,6 +175,13 @@ WIKI_OWN_REVISION = (
 )
 WIKI_CREATE_IGNORED_ID = "create makes a new page, so page_id {value} was ignored."
 WIKI_TITLE_FROM_HEADING = 'create needs a title; used the first heading, "{title}".'
+# Links in written text that open no page; only page IDs link pages.
+WIKI_LINKS_UNKNOWN = {
+    "one": "{links} names no page, so it links nowhere. Link a page by its ID, as this page's "
+    "link does: {link}",
+    "many": "{links} name no page, so they link nowhere. Link a page by its ID, as this page's "
+    "link does: {link}",
+}
 WIKI_OFFSET_FROM_END = "Read offset {value} as counting back from the end of the page."
 WIKI_SINCE_IGNORES = "{field} has no effect with since_revision and was ignored."
 WIKI_PAGE_FROM_TEXT = (
@@ -237,6 +244,14 @@ WIKI_READ_FOUND_LINE = "line {line}, character {offset}: {text}"
 WIKI_READ_FOUND_MORE = "{count} more lines contain it."
 WIKI_READ_FOUND_NONE = (
     'No line of this revision contains "{query}". To search all pages, use {call}'
+)
+# A query of several words that no line holds as written matches by its words.
+WIKI_READ_FOUND_WORDS = (
+    'No line contains "{query}" as written; lines containing all of its words, ignoring case:'
+)
+WIKI_READ_FOUND_NONE_WORDS = (
+    'No line of this revision contains "{query}" or all of its words. To search all pages, '
+    "use {call}"
 )
 WIKI_NOT_FOUND = "old_text does not occur in the current page (revision {current})."
 WIKI_NOT_FOUND_STALE = (

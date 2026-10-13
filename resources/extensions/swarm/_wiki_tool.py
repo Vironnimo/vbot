@@ -20,7 +20,7 @@ from . import wiki_text as text
 from ._board_view import call_text, spoken_list
 from ._extension_values import AgentCallError, Json, _call_request_id
 from ._store_values import wiki_number, wiki_ref
-from ._store_wiki import _FIELDS, _MAX_EDITS, MUTATIONS
+from ._store_wiki import _FIELDS, _MAX_EDITS, MUTATIONS, query_words
 from .agent_text import FIELD_IGNORED, LIMIT_CLAMPED, REPLAYED
 from .store import SwarmStore, SwarmStoreError
 
@@ -34,6 +34,10 @@ _PRECONDITIONS = ("expected_revision",)
 # A page link ends in "#wiki/w3"; a quoted stored page ID starts with "wpg_".
 _LINKED_PAGE = re.compile(r"#wiki/([A-Za-z0-9_]+)")
 _PAGE_ID = re.compile(r"wpg_[A-Za-z0-9]+")
+# A wiki-style "[[target]]" link, or a "#wiki/<page>" link target; only page numbers and
+# stored page IDs open a page.
+_LINK_TARGET = re.compile(r"\[\[([^\[\]\n]+)\]\]|#wiki/([^\s)\]>\"'`]+)")
+_UNKNOWN_LINKS = 5
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _CLOSE_MATCH = 0.85
 _EXCERPT_CHARS = 200
@@ -45,7 +49,7 @@ _AMBIGUOUS_LINES = 10
 # A read with a query names at most this many matching lines, each cut to this length.
 _FOUND_LINES = 5
 _FOUND_LINE_CHARS = 200
-# Without offset or limit, it shows this much text from a little before the first of them.
+# Without offset, it shows limit characters, or this many, from a little before the first.
 _AROUND_CHARS = 2000
 _AROUND_LINES_BEFORE = 2
 _AROUND_CHARS_BEFORE = 400
@@ -100,6 +104,8 @@ class WikiCall:
         changed = action in MUTATIONS and not data.get("replayed") and not data.get("unchanged")
         if action == "update" and unbased and changed:
             self.notes.append(text.WIKI_OWN_REVISION.format(revision=data["revision"] - 1))
+        if action in {"create", "update"} and changed:
+            await self._note_unknown_links(_written(arguments), data["link"])
         if action == "list":
             rendered = self._list(data, arguments)
             unfiltered = not {"query", "include_deleted", "cursor"} & arguments.keys()
@@ -111,6 +117,28 @@ class WikiCall:
         if action == "history":
             return self._history(data, arguments), changed
         return self._mutation(action, data, arguments), changed
+
+    async def _note_unknown_links(self, written: str, link: str) -> None:
+        """Note links in the text a change wrote that open no page, such as "[[slug]]"."""
+
+        targets = {
+            match.group(0): match.group(1) or match.group(2)
+            for match in _LINK_TARGET.finditer(written)
+        }
+        if not targets:
+            return
+        pages = await self.store.wiki_pages(self.sid)
+        unknown = [
+            shown
+            for shown, target in targets.items()
+            if _named_page(target.strip().rstrip(".,;:!?"), pages) is None
+        ][:_UNKNOWN_LINKS]
+        if unknown:
+            self.notes.append(
+                text.WIKI_LINKS_UNKNOWN["one" if len(unknown) == 1 else "many"].format(
+                    links=spoken_list(unknown), link=link
+                )
+            )
 
     def _prepare(self, arguments: Json) -> str:
         """Check the call in place and return its action."""
@@ -184,10 +212,11 @@ class WikiCall:
         offset = arguments.get("offset")
         if type(offset) is int and offset < 0:
             self.from_end = arguments.pop("offset")
+        # limit bounds how much it shows; only an explicit offset moves where it starts.
         self.around = (
             self.find is not None
             and self.since is None
-            and not {"offset", "limit"} & arguments.keys()
+            and "offset" not in arguments
             and self.from_end is None
         )
 
@@ -541,10 +570,11 @@ class WikiCall:
             return rendered
         line, position = first
         starts = [0, *(index + 1 for index, char in enumerate(content) if char == "\n")]
-        start = max(
-            starts[max(0, line - 1 - _AROUND_LINES_BEFORE)], position - _AROUND_CHARS_BEFORE
-        )
-        end = min(len(content), start + _AROUND_CHARS)
+        limit = arguments.get("limit", _AROUND_CHARS)
+        # The lead before the match stays a small part of the window, so it shows the match.
+        lead = min(_AROUND_CHARS_BEFORE, limit // 5)
+        start = max(starts[max(0, line - 1 - _AROUND_LINES_BEFORE)], position - lead)
+        end = min(len(content), start + limit)
         next_call = {**arguments, "revision": data["revision"], "offset": end}
         rendered = self._read(
             {
@@ -766,6 +796,14 @@ def _old_texts(arguments: Json) -> list[str]:
     return [old_text] if isinstance(old_text, str) else []
 
 
+def _written(arguments: Json) -> str:
+    """Return the text a create or update writes: its content or its new passages."""
+
+    parts = [arguments.get("content"), arguments.get("new_text")]
+    parts.extend(item.get("new_text") for item in arguments.get("edits", ()))
+    return "\n".join(part for part in parts if isinstance(part, str))
+
+
 def _check_edits(arguments: Json) -> None:
     """Refuse an update's edits unless each is an old_text with its new_text."""
 
@@ -849,29 +887,41 @@ def _edits_status(outcomes: list[Json]) -> str:
 def _found(content: str, query: str) -> tuple[str, tuple[int, int] | None]:
     """Name the lines of ``content`` that contain ``query``, ignoring case.
 
-    Also return the line number and character position of the first match, if any.
+    When no line holds a query of several words as written, name the lines that
+    hold all of its words, as list does for pages. Also return the line number
+    and character position of the first match, if any.
     """
 
-    wanted = query.casefold()
+    hits, first = _lines_with(content, [query.casefold()])
+    header = text.WIKI_READ_FOUND
+    words = query_words(query)
+    if not hits and len(words) > 1:
+        hits, first = _lines_with(content, words)
+        header = text.WIKI_READ_FOUND_WORDS
+    if not hits:
+        none = text.WIKI_READ_FOUND_NONE_WORDS if len(words) > 1 else text.WIKI_READ_FOUND_NONE
+        return none.format(query=query, call=_call({"action": "list", "query": query})), None
+    shown = [header.format(query=query), *hits[:_FOUND_LINES]]
+    if len(hits) > _FOUND_LINES:
+        shown.append(text.WIKI_READ_FOUND_MORE.format(count=len(hits) - _FOUND_LINES))
+    return "\n".join(shown), first
+
+
+def _lines_with(content: str, terms: list[str]) -> tuple[list[str], tuple[int, int] | None]:
+    """Return the lines holding every casefolded term, and where the first match starts."""
+
     hits: list[str] = []
     first: tuple[int, int] | None = None
     offset = 0
     for number, line in enumerate(content.split("\n"), 1):
-        position = line.casefold().find(wanted)
-        if position >= 0:
-            first = first or (number, offset + min(position, len(line)))
+        folded = line.casefold()
+        positions = [folded.find(term) for term in terms]
+        if all(position >= 0 for position in positions):
+            first = first or (number, offset + min(min(positions), len(line)))
             clipped = line if len(line) <= _FOUND_LINE_CHARS else line[:_FOUND_LINE_CHARS] + "..."
             hits.append(text.WIKI_READ_FOUND_LINE.format(line=number, offset=offset, text=clipped))
         offset += len(line) + 1
-    if not hits:
-        found = text.WIKI_READ_FOUND_NONE.format(
-            query=query, call=_call({"action": "list", "query": query})
-        )
-        return found, None
-    shown = [text.WIKI_READ_FOUND.format(query=query), *hits[:_FOUND_LINES]]
-    if len(hits) > _FOUND_LINES:
-        shown.append(text.WIKI_READ_FOUND_MORE.format(count=len(hits) - _FOUND_LINES))
-    return "\n".join(shown), first
+    return hits, first
 
 
 def _named_page(value: str, pages: list[Json]) -> Json | None:
