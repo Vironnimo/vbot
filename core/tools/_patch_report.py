@@ -532,11 +532,15 @@ def _entry_text(entry: JsonObject) -> str:
     return f"{prefix}: {failure_text(entry['error'])}"
 
 
+# Why a text replacement whose new text equals the text it matched changed nothing.
+EQUAL_TEXT = "the new text equals the current text; nothing to change."
+
+
 def _no_op_text(entry: JsonObject) -> str:
     if entry.get("note"):
         return str(entry["note"])
     if entry["status"] == "unchanged":
-        return f"{entry['where']}: the new text equals the current text; nothing to change."
+        return f"{entry['where']}: {EQUAL_TEXT}"
     if entry["action"] == "add":
         return f"{entry['where']} already has this content."
     if entry["action"] == "move":

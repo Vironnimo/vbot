@@ -353,7 +353,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   shown lines (26 of 34 merged reports, Sessions, 2026-09).
   Diagnostics also note when the new
   text already occurs (a change made earlier; not when `old_string` contains
-  `new_string`, as after a deletion); without candidates the text names
+  `new_string`, as after a deletion). An `old_string` replacement whose change
+  the file already holds, by the evidence `tools/edit.md` -> Results names,
+  changes nothing instead of failing (`_new_text_in_place`; an `apply_patch`
+  step then reports `already contains this change`). Without candidates the text names
   the `read` call. A first difference for a one-line copy is shown at the closest
   candidate's line; longer copies are aligned by the lines the file holds.
   An `old_string` whose words are all at exactly one place of the file, with

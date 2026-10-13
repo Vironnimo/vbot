@@ -117,13 +117,13 @@ def _plan(
     before: dict[Path, _Snapshot],
     change_ends: dict[Path, int | None],
     failures: list[_PatchError] | None = None,
-    unchanged: list[str] | None = None,
+    unchanged: dict[str, str] | None = None,
 ) -> tuple[dict[Path, _Snapshot], dict[Path, list[str]]]:
     """Plan the operations' effects; each Update's change end goes into ``change_ends``.
 
     See ``apply_hunks`` for what a change end orders, and for ``failures``: with
     it, an Update's hunks that fail are skipped and collected there. The labels
-    of text replacements that changed nothing go to ``unchanged``.
+    of text replacements that changed nothing go to ``unchanged``, with why.
     """
     pending = before.copy()
     warnings: dict[Path, list[str]] = {}
@@ -488,7 +488,8 @@ def _run_step(
     With ``one_write``, a text change that fails is skipped and the others are
     written; the skipped ones go to ``outcome["failures"]``. When nothing is
     left to write, the step fails with them. The labels of text replacements
-    that changed nothing in a written step go to ``outcome["unchanged"]``.
+    that changed nothing go to ``outcome["unchanged"]``, each with the reason
+    when its new text already stood in the file (``apply_hunks``).
     """
     first = operations[0]
     resolved = set(paths.values())
@@ -523,11 +524,13 @@ def _run_step(
                 ]
             change_ends = dict(batch.change_ends)
             failures: list[_PatchError] | None = [] if one_write else None
-            unchanged: list[str] = []
+            unchanged: dict[str, str] = {}
             pending, warnings = _plan(
                 operations, paths, before, change_ends, failures, unchanged if one_write else None
             )
             skipped = _skipped_changes(context, state, batch, source, failures or [])
+            if unchanged:
+                outcome["unchanged"] = unchanged
             if skipped and pending == before:
                 # Every change failed or left the text as it was: nothing to write.
                 outcome.update(status="failed", error=skipped[0], failures=skipped)
@@ -553,8 +556,6 @@ def _run_step(
                 batch.change_ends.update(change_ends)
                 if skipped:
                     outcome["failures"] = skipped
-                if unchanged and completed:
-                    outcome["unchanged"] = unchanged
         if adds and completed:
             batch.replaced.add(source)
         elif moving and first.destination and source in batch.replaced:

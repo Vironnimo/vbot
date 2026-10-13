@@ -22,12 +22,12 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from functools import cache, partial
 from typing import Any, Literal
 
 from core.tools._file_changes import cancelled_paths, change_batch, file_reports, run_operations
-from core.tools._patch_report import failure_text, patch_result
+from core.tools._patch_report import EQUAL_TEXT, failure_text, patch_result
 from core.tools._patch_requests import APPLY_PATCH_TOOL_NAME, content_operation
 from core.tools._patch_syntax import _Hunk, _Operation, _Replacement, _same_path
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
@@ -617,8 +617,18 @@ def _failed_edit(
     return prepared
 
 
-def _edit_failure(context: ToolContext, errors: Sequence[JsonObject], total: int) -> JsonObject:
-    """Say that no edit was applied, why each failed edit failed, and which to correct."""
+def _edit_failure(
+    context: ToolContext,
+    errors: Sequence[JsonObject],
+    total: int,
+    in_place: Mapping[int, str] | None = None,
+) -> JsonObject:
+    """Say that no edit was applied, why each failed edit failed, and which to correct.
+
+    ``in_place`` says, by edit number, which other edits found their new text
+    already in the file: they need no other call.
+    """
+    in_place = in_place or {}
     numbers = [n for n in (_edit_number(error, total) for error in errors) if n is not None]
     failures = []
     for error in errors:
@@ -632,9 +642,13 @@ def _edit_failure(context: ToolContext, errors: Sequence[JsonObject], total: int
             if total == 2
             else (f"None of the {total} edits were", f"all {total} edits")
         )
-        lines = [f"{none} applied; no file was changed.", *failures]
+        lines = [f"{none} applied; no file was changed.", *failures, *in_place.values()]
         if len(numbers) == total:
             lines.append(f"Send {every} again, each corrected or left out.")
+        elif numbers and len(numbers) + len(in_place) == total:
+            missed = _edit_numbers(numbers)
+            each = "each " if len(numbers) > 1 else ""
+            lines.append(f"Send only {missed} again, {each}corrected or left out.")
         elif numbers:
             lines.append(f"Send {every} again with {_edit_numbers(numbers)} corrected or left out.")
     first = errors[0]
@@ -676,26 +690,39 @@ def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadSt
         if _REFUSED in edit
     ]
     skipped = outcome.get("failures") or []
-    # Edits that matched and changed nothing, in a call that changed the file.
-    unchanged = [
-        n
-        for n in (_edit_number({"label": label}, total) for label in outcome.get("unchanged") or [])
-        if n is not None
-    ]
+    # Edits that changed nothing, each with why when its new text already stood there.
+    unchanged: dict[int, str] = {}
+    for label, reason in (outcome.get("unchanged") or {}).items():
+        # The edit of a one-edit call has no label.
+        number = 1 if total == 1 else _edit_number({"label": label}, total)
+        if number is not None:
+            unchanged[number] = reason
     applied = total - len(refused) - len(skipped) - len(unchanged)
     files = file_reports(context, batch, edits=applied)
     if outcome["status"] == "failed" and not skipped:
         # A problem of the whole call, such as a missing file.
         return _edit_failure(context, [outcome["error"], *refused], total)
     errors = sorted([*refused, *skipped], key=lambda error: _edit_number(error, total) or 0)
+
+    def where(n: int) -> str:
+        return str(outcome["where"]) if total == 1 else f"{outcome['where']}, edit {n} of {total}"
+
+    in_place = {n: f"{where(n)}: {reason}" for n, reason in sorted(unchanged.items()) if reason}
+    if outcome["status"] == "already_applied" and in_place and len(unchanged) == total:
+        # Nothing to write: say why for each edit, naming where new text already stood.
+        outcome["note"] = " ".join(
+            in_place.get(n, f"{where(n)}: {EQUAL_TEXT}") for n in sorted(unchanged)
+        )
     no_ops: list[JsonObject] = [
         {
             "status": "unchanged",
             "action": "update",
             "path": outcome["path"],
-            "where": f"{outcome['where']}, edit {n} of {total}",
+            "where": where(n),
+            **({"note": in_place[n]} if n in in_place else {}),
         }
-        for n in unchanged
+        for n in sorted(unchanged)
+        if outcome["status"] == "applied"
     ]
     for error in errors[1:]:
         # Matched precisely only, so that no other text stands in for a failed edit's.
@@ -705,7 +732,7 @@ def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadSt
         return patch_result(context, files, [*batch.results, *no_ops], cancelled_paths(batch))
     if outcome["status"] != "applied":
         # The edits that did not fail left the file as it was.
-        return _edit_failure(context, errors, total)
+        return _edit_failure(context, errors, total, in_place)
     failed = [n for n in (_edit_number(error, total) for error in errors) if n is not None]
     entries = [
         outcome,

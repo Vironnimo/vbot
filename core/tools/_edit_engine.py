@@ -70,6 +70,10 @@ class DeviationNote(str):
     """
 
 
+class AlreadyApplied(str):
+    """Why a text replacement changed nothing: its new text already stands in the file."""
+
+
 def _deviations(notes: list[str]) -> list[str]:
     return [DeviationNote(note) for note in notes]
 
@@ -118,7 +122,7 @@ def apply_hunks(
     previous: int | None = None,
     *,
     failures: list[_PatchError] | None = None,
-    unchanged: list[str] | None = None,
+    unchanged: dict[str, str] | None = None,
 ) -> tuple[str, list[str], int | None]:
     """Apply one file's hunks in order and return the text, the notes and the change end.
 
@@ -134,7 +138,8 @@ def apply_hunks(
     details: the lines of the text it saw that each earlier hunk wrote, as
     ``{label, first, last}``, and ``replaced_by``, the label of the earlier hunk
     that replaced its old text. With ``unchanged``, the labels of text
-    replacements whose new text equals the text they matched go there.
+    replacements that changed nothing go there, each with the reason when its
+    new text already stood in the file (``AlreadyApplied``), else "".
     """
     notes: list[str] = []
     written: list[tuple[str, int, int]] = []
@@ -163,8 +168,10 @@ def apply_hunks(
                 raise
             failures.append(error)
             continue
+        applied = [note for note in placed if isinstance(note, AlreadyApplied)]
+        placed = [note for note in placed if not isinstance(note, AlreadyApplied)]
         if edited == content and unchanged is not None and hunk.replacement is not None:
-            unchanged.append(hunk.label)
+            unchanged[hunk.label] = applied[0] if applied else ""
         if edited != content:
             seen.append((hunk.label, content))
             previous = _change_end_line(content, edited)
@@ -320,6 +327,10 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         found, kept = _keep_final_break(content, found, hunk)
         edited, placed = _keep_decorated(content, found, path)
         return edited, notes + kept + _joined_lines(content, found) + placed
+    if not replace_all:
+        applied = _new_text_in_place(content, old, new)
+        if applied is not None:
+            return content, [applied]
     details = _not_found(content, old, source="old_string")
     present = None
     if new.strip() and new != old:
@@ -356,6 +367,56 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         label=hunk.label,
         details=details,
     )
+
+
+def _new_text_in_place(content: str, old: str, new: str) -> AlreadyApplied | None:
+    """Say where ``new`` stands when the file already holds this edit's result.
+
+    ``old`` is not in the file (the precise steps found nothing). The result
+    holds when ``new`` occurs exactly once and not inside ``old``, both share a
+    whole non-blank line at their start or end, so they name one passage, and
+    no copy of ``old`` with errors stands anywhere else. Then the edit has
+    nothing left to do; otherwise ``None``.
+    """
+    if not new.strip() or new.strip() in old or not _share_an_edge_line(old, new):
+        return None
+    present = replace_fuzzy(content, new, new, replace_all=False, typographic=True)
+    if not isinstance(present, FuzzyReplacement):
+        return None
+    start, end = present.before_spans[0]
+    copied = replace_copied(content, old, new)
+    if isinstance(copied, AmbiguousFuzzyMatch):
+        return None
+    if copied is not None and any(
+        copy_end <= start or copy_start >= end for copy_start, copy_end in copied.before_spans
+    ):
+        return None
+    first, last = present.first_changed_line, present.last_changed_line
+    lines = f"line {first}" if first == last else f"lines {first}-{last}"
+    return AlreadyApplied(_ALREADY_APPLIED_NOTE.format(lines=lines))
+
+
+_ALREADY_APPLIED_NOTE = (
+    "new_string already stands at {lines} and old_string is not in the file; nothing to change."
+)
+
+
+def _share_an_edge_line(old: str, new: str) -> bool:
+    """Whether ``old`` and ``new`` start or end with the same line that holds a word.
+
+    A line of punctuation alone, such as ``}``, ends many passages.
+    """
+    old_lines = [line.strip() for line in split_text_lines(old) if line.strip()]
+    new_lines = [line.strip() for line in split_text_lines(new) if line.strip()]
+    if len(old_lines) < 2 or len(new_lines) < 2:
+        return False
+    return any(
+        old_line == new_line and _WORD.search(old_line)
+        for old_line, new_line in ((old_lines[0], new_lines[0]), (old_lines[-1], new_lines[-1]))
+    )
+
+
+_WORD = re.compile(r"\w")
 
 
 def _keep_decorated(content: str, found: FuzzyReplacement, path: object) -> tuple[str, list[str]]:

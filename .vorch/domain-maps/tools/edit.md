@@ -145,6 +145,19 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   labels, `_run_step` puts them in `outcome["unchanged"]`). Evidence: 12
   written calls held an item whose `new_string` was its `old_string`; the
   results counted it as applied and never named it (Swarm runs 2026-10-11/12).
+  An edit whose change the file already holds is such a no-op too
+  (`_edit_engine._new_text_in_place`): its `old_string` is not in the file,
+  its `new_string` stands exactly once (precise matching) and is not part of
+  `old_string`, the two start or end with the same line holding a word, and no
+  copy of `old_string` with errors stands outside that place. It is named
+  `X[, edit K of N]: new_string already stands at lines A-B and old_string is
+  not in the file; nothing to change.`, in place of the template when the call
+  had nothing else to write, after the file report in a written call, and
+  after the failure reports when other edits failed, whose closing then asks
+  only for the failed ones (`Send only edit 2 again, ...`). Otherwise the
+  failure keeps its `already occurs` hint. Evidence: 2 calls of the Swarm of
+  2026-10-13 resent a change already made (a rewritten block, an added comma)
+  and failed as not found; both Agents confirmed the change was in place.
   A call with failed and applied edits is a success led by the edit numbers in
   place of `apply_patch`'s change counts (`patch_result(..., lead=...)`,
   `_partial_lead`): `Edits 1, 2 and 4 were applied; edit 3 was not. Send only
@@ -297,6 +310,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `Edit J of this call already replaced this old_string; to change that text again, use what edit J wrote as old_string.` | In a partial result edit J stays written, so merging would resend an edit whose `old_string` is gone; the next call can only build on what edit J wrote. |
 | Partial lead: `Edits 1, 2 and 4 were applied; edit 3 was not. Send only edit 3 again, corrected or left out.` (`edits 2 and 3 were not. Send only edits 2 and 3 again, each corrected or left out.`) | User decision 2026-10-12: a call applies every edit it can; results name the items by their numbers in input order (`vbot-agent-tools` -> Results). `Send only` keeps the Agent from resending the applied edits, whose `old_string` is gone or whose insertion would repeat; `left out` covers a failed edit whose change is already in the file. Replay 2026-10-12: 14 live calls refused as a whole apply in part this way. |
 | No-op item in a written call: `X, edit K of N: the new text equals the current text; nothing to change.`; the lead names only the edits that changed text (`Edit 1 was applied; edit 3 was not. ...`) | The `vbot-agent-tools` Skill requires every item without effect to be named. The sentence is the one a call of only such edits already gets, with the item's label. Before, 12 written calls counted such an item as applied (Swarm runs 2026-10-11/12). |
+| Change already made: `X, edit K of N: new_string already stands at lines A-B and old_string is not in the file; nothing to change.` | An effect that already holds is a success with nothing to do (`vbot-agent-tools`). 2 calls of the Swarm of 2026-10-13 resent a change already made and got `old_string was not found`; each Agent spent a call to confirm the change. The lines are the evidence, so the Agent need not reread; naming both texts says why nothing was changed. |
 | `After an earlier edit of this call failed, old_string must match the file exactly (up to whitespace).` | After a failed edit the later ones match without copy tolerance, so a copy that applies in a call of its own fails here; without the sentence the not-found report reads as if the text were missing, and the Agent cannot tell why the same copy matched before. |
 | `Neither edit was applied; no file was changed.` first, then the reports, then `Send both edits again, each corrected or left out.` (`None of the N edits were applied; ...`, `all N edits`) | When every edit failed, each has its report above; naming them all again in the closing adds nothing. |
 | Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |

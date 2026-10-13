@@ -659,19 +659,80 @@ async def test_edits_that_leave_the_file_as_it_is_say_so(tmp_path, edits, messag
     assert result["data"] == {"content": f"{message} No file was changed."}
 
 
+TOTALS = (
+    "def f(rows):\n    total = 0\n    for row in rows:\n        total += row.size\n"
+    "    return total\n"
+)
+# An edit of the loop of TOTALS, already made: old_string is not in the file.
+TOTALS_EDIT = (
+    "    for row in rows:\n        total += row\n    return total",
+    "    for row in rows:\n        total += row.size\n    return total",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "edit", "done"),
+    [
+        # Swarm run 2026-10-13: an edit sent again after it was made failed as not found.
+        pytest.param(TOTALS, TOTALS_EDIT, True, id="made-earlier"),
+        # Nearby: the new text tells nothing about where old_string would be.
+        pytest.param("x = 2\n", ("x = 1", "x = 2"), False, id="no-common-line"),
+        pytest.param(
+            "function f() {\n  return 2;\n}\n",
+            ("  return 1;\n}", "  return 2;\n}"),
+            False,
+            id="punctuation-in-common",
+        ),
+        pytest.param(TOTALS + "\n" + TOTALS, TOTALS_EDIT, False, id="new-text-twice"),
+        # A copy of old_string with errors stands elsewhere: the edit can be meant there.
+        pytest.param(
+            TOTALS + "\ndef g(rows):\n    total = 0\n    for row in rows:\n        total += rows\n"
+            "    return total\n",
+            TOTALS_EDIT,
+            False,
+            id="old-text-copied-elsewhere",
+        ),
+    ],
+)
+async def test_an_edit_whose_result_already_stands_has_nothing_to_do(
+    tmp_path, content, edit, done
+) -> None:
+    (tmp_path / "a.py").write_bytes(content.encode())
+
+    result = await call(
+        tmp_path,
+        {"path": "a.py", "edits": [{"old_string": edit[0], "new_string": edit[1]}]},
+        name="edit",
+    )
+
+    assert (tmp_path / "a.py").read_bytes() == content.encode()
+    if not done:
+        assert result["error"]["code"] == "text_not_found"
+        return
+    assert result["ok"]
+    assert edit_outcome(text(result)) == "unchanged"
+    # It names the lines that hold the new text.
+    assert "3-5" in text(result)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True], ids=["all-matched", "one-failed"])
+@pytest.mark.parametrize("made", [False, True], ids=["same-text", "made-earlier"])
 async def test_an_edit_that_changes_nothing_is_named_apart_from_the_applied_ones(
-    tmp_path, fails
+    tmp_path, fails, made
 ) -> None:
     # Swarm runs 2026-10-11/12: 12 written calls held an edit whose new_string was its
-    # old_string; the results counted it as applied and never named it.
-    (tmp_path / "a.py").write_bytes(b"x = 1\ny = 2\nz = 3\n")
+    # old_string; the results counted it as applied and never named it. Swarm run
+    # 2026-10-13: an edit whose new text already stood there failed as not found.
+    (tmp_path / "a.py").write_bytes(b"x = 1\ny = 2\nw = 4\nz = 3\n")
     edits = [
         {"old_string": "x = 1", "new_string": "x = 9"},
-        {"old_string": "y = 2", "new_string": "y = 2"},
+        {"old_string": "y = 2\nw = 5" if made else "y = 2", "new_string": "y = 2\nw = 4"},
         {"old_string": "zzz" if fails else "z = 3", "new_string": "z = 9"},
     ]
+    if not made:
+        edits[1]["new_string"] = "y = 2"
     tools = registry()
     ctx = replace(context(tmp_path), tool_name="edit")
     arguments = {"path": "a.py", "edits": edits}
@@ -683,7 +744,7 @@ async def test_an_edit_that_changes_nothing_is_named_apart_from_the_applied_ones
     display = tools.display_for_call("edit", arguments, context=ctx, result=result)
     counts = {f["unit"]: f["value"] for f in display["facts"] if f["kind"] == "count"}
     assert counts == {"edits": 1 if fails else 2}
-    after = b"x = 9\ny = 2\nz = 3\n" if fails else b"x = 9\ny = 2\nz = 9\n"
+    after = b"x = 9\ny = 2\nw = 4\nz = 3\n" if fails else b"x = 9\ny = 2\nw = 4\nz = 9\n"
     assert (tmp_path / "a.py").read_bytes() == after
     assert edit_outcome(message) == ("partial" if fails else "applied")
     # Edit 2 is named once, in its own sentence: not as applied, not as failed.
