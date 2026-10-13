@@ -34,7 +34,9 @@ from core.sessions import SessionAddress
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
     POWERSHELL_BOOTSTRAP,
+    PowerShellCulture,
     PowerShellRequest,
+    powershell_culture,
     powershell_request,
 )
 from core.tools._shell_arguments import (
@@ -132,7 +134,7 @@ if sys.platform == "win32":
     # How Agents start a program in the background without the Tool.
     _DETACHED_START = "Start-Process or a trailing &"
     # How Agents cut a command's output themselves.
-    _TRIMMING = "Select-Object -First or -Last"
+    _TRIMMING = "Select-Object -First or -Last, or with head and tail, which PowerShell lacks"
 else:
     _OPENING = (
         "Run a bash command in a new process and return its output and exit code. Use bash syntax."
@@ -140,13 +142,25 @@ else:
     _DETACHED_START = "nohup or a trailing &"
     _TRIMMING = "head or tail"
 
+
+def _culture_sentence(culture: PowerShellCulture | None) -> str:
+    """Name the user's format for numbers and dates where it is not the one Models assume."""
+    if culture is None or culture.name in ("", "en-US"):
+        return ""
+    return (
+        f" PowerShell prints and parses numbers and dates in the user's {culture.name} format, "
+        f"such as {culture.number} and {culture.date}."
+    )
+
+
 # The same for every Tool set: what happens to a long command, and the calls
-# that follow it up, the results say when it happens.
+# that follow it up, the results say when it happens. The culture is read once
+# per process, so the definition stays the same for the Provider's cache.
 SHELL_TOOL_DESCRIPTION = (
-    f"{_OPENING} Long output keeps its first and last lines, and the result names a file "
-    f"with all of it, so there is no need to trim it with {_TRIMMING}. Calls in one message "
-    "run at the same time; chain dependent commands in one call. When another tool covers the "
-    "task, use it instead of a shell command."
+    f"{_OPENING}{_culture_sentence(powershell_culture())} Long output keeps its first and last "
+    f"lines, and the result names a file with all of it, so there is no need to trim it with "
+    f"{_TRIMMING}. Calls in one message run at the same time; chain dependent commands in one "
+    "call. When another tool covers the task, use it instead of a shell command."
 )
 
 _COMMAND_PARAMETER: JsonObject = {"type": "string", "minLength": 1}

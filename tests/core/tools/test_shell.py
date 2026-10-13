@@ -33,7 +33,11 @@ from core.storage.temp_files import TemporaryFileManager
 from core.tools import shell as shell_module
 from core.tools import shell_hints
 from core.tools._command_launch import PipeLauncher
-from core.tools._powershell import REQUEST_UNREADABLE_EXIT_CODE
+from core.tools._powershell import (
+    REQUEST_UNREADABLE_EXIT_CODE,
+    PowerShellCulture,
+    powershell_culture,
+)
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import CommandManager, NotRunReason
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -1124,6 +1128,29 @@ def test_definition_states_the_host_shell_and_its_detached_start() -> None:
     assert f"instead of {'Start-Process' if windows else 'nohup'} or a trailing &." in background
     # The handler caps the wait; the schema names no maximum.
     assert "maximum" not in SHELL_TOOL_PARAMETERS["properties"]["timeout"]
+
+
+@pytest.mark.parametrize(
+    ("culture", "named"),
+    [
+        (PowerShellCulture("de-DE", "3,14", "13.10.2026"), True),
+        # The formats Models assume, and a culture vBot could not read, go unnamed.
+        (PowerShellCulture("en-US", "3.14", "10/13/2026"), False),
+        (PowerShellCulture("", "3.14", "10/13/2026"), False),
+        (None, False),
+    ],
+)
+def test_the_definition_names_the_users_number_and_date_format(
+    culture: PowerShellCulture | None, named: bool
+) -> None:
+    # The definition is fixed when the module loads; the sentence comes from this culture.
+    sentence = shell_module._culture_sentence(culture)
+
+    assert bool(sentence) is named
+    if culture is not None and named:
+        for text in (culture.name, culture.number, culture.date):
+            assert text in sentence
+    assert shell_module._culture_sentence(powershell_culture()) in SHELL_TOOL_DESCRIPTION
 
 
 # --- Real shells -------------------------------------------------------------------

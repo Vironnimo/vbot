@@ -23,6 +23,8 @@ from core.tools._powershell import (
     OUTPUT_COLUMNS,
     POWERSHELL_BOOTSTRAP,
     REQUEST_UNREADABLE_EXIT_CODE,
+    PowerShellCulture,
+    powershell_culture,
     powershell_request,
 )
 from core.tools.command_manager import CommandManager, CommandReport, NotRunReason
@@ -84,6 +86,10 @@ async def _report(
 # --- Exit status, errors and text --------------------------------------------
 
 
+# The user's format, which the shell Tool's description names; read without a shell.
+_CULTURE = powershell_culture() or PowerShellCulture("unread", "unread", "unread")
+
+
 _PRINTED_ERROR_TEXT = "; ".join(
     [
         "Write-Output 'MethodInvocationException: printed test failure'",
@@ -119,14 +125,16 @@ _PRINTED_ERROR_TEXT = "; ".join(
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, ("requires-sentinel",)),
         # PowerShell's messages are English whatever the display language; numbers
-        # keep the user's own regional format.
+        # and dates keep the user's own regional format, the one vBot read.
         (
-            "$own = [cultureinfo]::new((Get-Culture).Name, $true)\n"
-            "'{0} {1}' -f (Get-UICulture).Name, ('{0:N1}' -f 1234.5 -ceq "
-            "(1234.5).ToString('N1', $own))\n"
-            "Get-Item does-not-exist",
+            "(Get-UICulture).Name\n(Get-Culture).Name\n3.14\n"
+            "[datetime]::new(2026, 10, 13).ToString('d')\nGet-Item does-not-exist",
             1,
-            ("en-US True", "Cannot find path", "does-not-exist"),
+            (
+                f"en-US\n{_CULTURE.name}\n{_CULTURE.number}\n{_CULTURE.date}\n",
+                "Cannot find path",
+                "does-not-exist",
+            ),
         ),
         # A syntax error names the command's own line, in UTF-8, and runs nothing.
         (
@@ -216,7 +224,7 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "called-native-exit",
         "called-later-statement",
         "requires",
-        "english-messages-own-numbers",
+        "english-messages-own-culture",
         "parse-error",
         "unknown-pipeline-command",
         "shown-error",

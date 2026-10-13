@@ -57,7 +57,8 @@ keeps up to 199 characters.
 English messages. PowerShell's own messages follow the Windows display language.
 The setup switches them to en-US, so Agents and the failure hints read one
 wording. Numbers and dates keep the user's regional format, as in the user's
-own shell; native programs keep the user's settings.
+own shell; native programs keep the user's settings. ``powershell_culture``
+says which format that is, for the shell Tool's description.
 
 Parsing after the setup. The command arrives as data and is parsed after the
 setup by PowerShell's own parser: ``using`` statements, ``#requires``, a
@@ -99,10 +100,13 @@ a new shell. Only the bootstrap's ``__vbot`` functions remain visible.
 from __future__ import annotations
 
 import base64
+import functools
 import re
 import secrets
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any, cast
 
 from core.tools._command_types import NotRunReason
 
@@ -409,6 +413,85 @@ def _base64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8", "surrogatepass")).decode("ascii")
 
 
+@dataclass(frozen=True, slots=True)
+class PowerShellCulture:
+    """The format PowerShell prints and parses numbers and dates in for this user."""
+
+    # Such as de-DE; empty for the invariant culture.
+    name: str
+    # 3.14 as PowerShell prints it, such as 3,14.
+    number: str
+    # 13 October 2026 as PowerShell's short date, such as 13.10.2026.
+    date: str
+
+
+@functools.cache
+def powershell_culture() -> PowerShellCulture | None:
+    """Return the culture of every PowerShell the shell Tool starts; None when unknown.
+
+    pwsh takes it from the user's Windows regional format, with the changes the
+    user made to it (``CultureInfo.UseUserOverride``), and the bootstrap leaves
+    it alone. Windows reports the same for the user's default locale, so it is
+    read here without starting a shell, once per process.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        return _windows_culture()
+    except OSError:
+        return None
+
+
+# Windows NLS: LOCALE_SDECIMAL, DATE_SHORTDATE and LOCALE_NAME_MAX_LENGTH.
+_DECIMAL_SEPARATOR = 0x0E
+_SHORT_DATE = 0x01
+_LOCALE_NAME_LENGTH = 85
+
+
+def _windows_culture() -> PowerShellCulture | None:
+    import ctypes
+    from ctypes import wintypes
+
+    class SystemTime(ctypes.Structure):
+        _fields_ = [
+            (field, wintypes.WORD)
+            for field in ("year", "month", "weekday", "day", "hour", "minute", "second", "ms")
+        ]
+
+    # Windows-only ctypes members, typed loosely so other platforms type-check.
+    kernel32 = cast(Any, ctypes).WinDLL("kernel32", use_last_error=True)
+    kernel32.GetUserDefaultLocaleName.argtypes = (wintypes.LPWSTR, ctypes.c_int)
+    kernel32.GetLocaleInfoEx.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.c_int,
+    )
+    kernel32.GetDateFormatEx.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(SystemTime),
+        wintypes.LPCWSTR,
+        wintypes.LPWSTR,
+        ctypes.c_int,
+        wintypes.LPCWSTR,
+    )
+    text = ctypes.create_unicode_buffer(_LOCALE_NAME_LENGTH)
+    if not kernel32.GetUserDefaultLocaleName(text, len(text)):
+        return None
+    name = text.value
+    # None names the user's default locale, with the user's changes to it.
+    if not kernel32.GetLocaleInfoEx(None, _DECIMAL_SEPARATOR, text, len(text)):
+        return None
+    number = f"3{text.value}14"
+    day = SystemTime(2026, 10, 2, 13, 0, 0, 0, 0)
+    if not kernel32.GetDateFormatEx(
+        None, _SHORT_DATE, ctypes.byref(day), None, text, len(text), None
+    ):
+        return None
+    return PowerShellCulture(name, number, text.value)
+
+
 __all__ = [
     "EXIT_STATUS_STATEMENT",
     "OUTPUT_COLUMNS",
@@ -419,7 +502,9 @@ __all__ = [
     "SETUP_STATEMENT",
     "UI_CULTURE_STATEMENT",
     "UTF8_CONSOLE_STATEMENT",
+    "PowerShellCulture",
     "PowerShellRequest",
+    "powershell_culture",
     "powershell_literal",
     "powershell_request",
 ]
