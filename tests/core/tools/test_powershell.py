@@ -179,6 +179,14 @@ _PRINTED_ERROR_TEXT = "; ".join(
             ("begin-sentinel\nend-sentinel",),
         ),
         ("begin { 'begin-sentinel' } process { cmd /c exit 3 }", 3, ("begin-sentinel",)),
+        # A clean block runs last and decides; its errors are dropped as in plain pwsh.
+        (
+            "end { 'end-sentinel' } clean { Write-Error 'silenced-sentinel' }",
+            1,
+            ("end-sentinel",),
+        ),
+        # A top-level return before the end keeps the last statement's status.
+        ("return (Write-Error 'return-sentinel')\n'not-run'", 1, ("Write-Error: return-sentinel",)),
         # Objects the table formatter holds still print before the exit; a native
         # program has no terminal, for input or output.
         (
@@ -212,6 +220,8 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "printed-text-and-quotes",
         "named-blocks",
         "named-blocks-exit",
+        "clean-block",
+        "top-level-return",
         "formatted-objects-and-native-program-without-tty",
         "wide-table",
     ],

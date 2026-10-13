@@ -58,24 +58,30 @@ as PowerShell's own ParserError in English, and error positions are the
 command's own line numbers.
 
 Exit status. ``pwsh -Command`` exits with 1 whenever the last statement failed,
-so a native program's own exit code is lost. A closing statement at the end of
-the command's last block records the last statement's status as ``bash -c``
-reports it: a failed statement reports the last native program's code, else 1;
-a successful one 0, unless it calls a function, script block or script whose
-last statement runs a native program, which reports that program's code as bash
-reports a function's status (``STATUS_FUNCTION``). An ``exit`` in the command
-ends the shell with its own code. The statement is the only text added to the
-command: PowerShell keeps the last statement's success (``$?``) only within the
-command's statement list, so no statement outside it can read that success. It
-follows the command's last line, so no line of the command moves.
+so a native program's own exit code is lost. vBot reports the last statement's
+status as ``bash -c`` reports it: a failed statement reports the last native
+program's code, else 1; a successful one 0, unless it calls a function, script
+block or script whose last statement runs a native program, which reports that
+program's code as bash reports a function's status (``STATUS_FUNCTION``). A
+closing statement at the end of the last block that runs, the command's clean
+block if it has one, else its end block, records it. It is the only text added
+to the command and follows the block's last line, so no line or column of the
+command moves; a block that another named block follows in the text gets none.
+A command without it, or one that returns before it with a top-level ``return``,
+reports the success its last statement left (``$?``), which the last element of
+the pipeline the command runs in reads (``__vbotReturned``), without the look
+into a called function. An ``exit`` in the command ends the shell with
+its own code. A ``break`` or ``continue`` outside a loop ends the command with
+0, where plain pwsh reports the last statement's success.
 
 Output. The command's output and its errors go to PowerShell's Out-Default as
 one pipeline (``2>&1``), as ``pwsh -Command`` merges them, so an error shows
 between the rows the formatter printed before it and those after it. Native
-programs' stderr is not captured by that merge and passes as bytes. The
-bootstrap exits with the recorded code after that pipeline ended. As in ``pwsh
--Command``, an ``exit`` in the command discards objects the table formatter
-still holds.
+programs' stderr is not captured by that merge and passes as bytes. A clean
+block runs after Out-Default ended, so its output and errors are dropped, as in
+plain pwsh. The bootstrap exits with the recorded code after that
+pipeline ended. As in ``pwsh -Command``, an ``exit`` in the command discards
+objects the table formatter still holds.
 
 Hidden bookkeeping. The command sees none of the bootstrap's variables; it runs
 as a function's dot-sourced body, and ``$Error`` is empty when it starts, as in
@@ -112,8 +118,11 @@ OUTPUT_WIDTH_STATEMENT = (
 # Explicit exit statements bypass this epilogue, preserving the caller's control
 # flow.
 EXIT_STATUS_STATEMENT = "$global:__vbotExitCode = __vbotStatus $?"
-# The status of the command's last statement, as bash -c reports it (see the
-# module docstring). A failed statement reports the last native program's code,
+# The status of the command's last statement, the one before the exit status
+# statement, as bash -c reports it (see the module docstring). A command that
+# returned before that statement gets its status from __vbotReturned instead, the
+# last element of its pipeline, whose end block runs before any other statement
+# can change $?. A failed statement reports the last native program's code,
 # else 1. A successful one reports 0, unless it is a call of a function, filter,
 # script block or script (also through an alias or as an assignment's value) whose
 # body's last statement runs a native program: PowerShell's $? is true after such a
@@ -163,7 +172,12 @@ STATUS_FUNCTION = r"""function __vbotStatus($__vbotSucceeded) {
             }
             $__vbotTarget
         }
-        $__vbotStatements = ${function:__vbotBody}.Ast.EndBlock.Statements
+        $__vbotAst = ${function:__vbotBody}.Ast
+        $__vbotBlock = $__vbotAst.PSObject.Properties['CleanBlock']
+        $__vbotBlock = if ($__vbotBlock -and $__vbotBlock.Value) {
+            $__vbotBlock.Value
+        } else { $__vbotAst.EndBlock }
+        $__vbotStatements = $__vbotBlock.Statements
         $__vbotStatement = if ($__vbotStatements.Count -gt 1) {
             $__vbotStatements[$__vbotStatements.Count - 2]
         }
@@ -194,6 +208,14 @@ STATUS_FUNCTION = r"""function __vbotStatus($__vbotSucceeded) {
     } catch {}
     0
 }
+function __vbotReturned {
+    end {
+        $__vbotSucceeded = $?
+        if (-not (Get-Variable -Name __vbotExitCode -Scope Global -ErrorAction Ignore)) {
+            $global:__vbotExitCode = if ($__vbotSucceeded) { 0 } else { __vbotStatus $false }
+        }
+    }
+}
 """
 STATUS_FUNCTION = re.sub(r"(?m)^[ \t]+", "", STATUS_FUNCTION)
 SETUP_STATEMENT = "; ".join(
@@ -221,7 +243,7 @@ if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
             'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management')
         $null = [pscustomobject]@{ Name = 1 } | Out-String
         ${function:__vbotBody} = [scriptblock]::Create('')
-        . __vbotInvoke 2>&1 | Out-Default
+        . __vbotInvoke
         Remove-Variable -Name __vbotWarm* -Scope Global
         Set-Location - -ErrorAction Stop
         Set-Location -LiteralPath ([Environment]::CurrentDirectory) -ErrorAction Stop
@@ -266,21 +288,28 @@ if ($PWD.ProviderPath -ne $__vbotWorkdir) {
 """
 REQUEST_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REQUEST_STATEMENTS)
 # Parse the command after the setup; a syntax error is thrown as PowerShell reports
-# its own. The exit status runs at the end of the last block: the unnamed body, a
-# named end block, or an end block added after begin or process blocks. The
-# command runs without the bootstrap's variables and with an empty $Error; the
-# exit status statement sets the only variable, and a command that returns before
-# reaching it exits with 0.
+# its own. The exit status runs at the end of the last block that runs: a clean
+# block, else the unnamed body, a named end block, or an end block added after
+# begin or process blocks. A named block that another named block follows in the
+# text gets none, since the lines after it would move; __vbotReturned reads the
+# status then. The command runs without the bootstrap's variables and with an
+# empty $Error; the exit status sets the only variable, and a command that ends
+# without it, through break or continue outside a loop, exits with 0.
 RUN_STATEMENTS = r"""$__vbotParseErrors = $null
 $__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
     $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
 if ($__vbotParseErrors) {
     throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
 }
-$__vbotEnd = $__vbotAst.EndBlock
+$__vbotLast = $__vbotAst.CleanBlock
+if (-not $__vbotLast) { $__vbotLast = $__vbotAst.EndBlock }
+$__vbotLater = @($__vbotAst.DynamicParamBlock, $__vbotAst.BeginBlock, $__vbotAst.ProcessBlock,
+    $__vbotAst.EndBlock).Where({ $_ -and $_.Extent.StartOffset -gt $__vbotLast.Extent.StartOffset })
 $__vbotExitStatus = '{exit_status}'
-$__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
-    $__vbotCommand.Insert($__vbotEnd.Extent.EndOffset - 1, "`n`n$__vbotExitStatus`n")
+$__vbotCommand = if ($__vbotLast -and -not $__vbotLast.Unnamed) {
+    if ($__vbotLater) { $__vbotCommand } else {
+        $__vbotCommand.Insert($__vbotLast.Extent.EndOffset - 1, "`n`n$__vbotExitStatus`n")
+    }
 } elseif ($__vbotAst.BeginBlock -or $__vbotAst.ProcessBlock -or $__vbotAst.DynamicParamBlock) {
     "$__vbotCommand`nend {`n$__vbotExitStatus`n}"
 } else {
@@ -289,7 +318,7 @@ $__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
 ${function:__vbotBody} = [scriptblock]::Create($__vbotCommand)
 Remove-Variable -Name __vbot* -Scope Global
 $Error.Clear()
-. __vbotInvoke 2>&1 | Out-Default
+. __vbotInvoke
 $__vbotExitCode = Get-Variable -Name __vbotExitCode -Scope Global -ValueOnly -ErrorAction Ignore
 if (-not $__vbotExitCode) { exit 0 }
 exit $__vbotExitCode
@@ -299,8 +328,12 @@ RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS)
 # which PowerShell shows only beyond the first line, so no bootstrap line appears in
 # the command's errors. Dot-sourcing the function and its body keeps the command's
 # own scope; the body is the command's script block, not a function of its own,
-# whose name its errors would show.
-INVOKE_STATEMENT = "function __vbotInvoke { . ${function:__vbotBody} }"
+# whose name its errors would show. Its errors merge into Out-Default's input, as
+# pwsh -Command merges a script's; __vbotReturned reads the status of a command
+# that returned early.
+INVOKE_STATEMENT = (
+    "function __vbotInvoke { . ${function:__vbotBody} 2>&1 | Out-Default | __vbotReturned }"
+)
 _QUOTE = re.compile("(['‘’‚‛])")
 
 
