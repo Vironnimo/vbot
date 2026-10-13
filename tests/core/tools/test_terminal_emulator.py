@@ -434,8 +434,11 @@ def test_only_scrolling_from_the_top_row_of_the_primary_screen_keeps_history() -
 
 
 @pytest.mark.parametrize("retained", [1, 10])
-def test_resizing_moves_rows_between_the_screen_and_retained_history(retained: int) -> None:
-    emulator = TerminalEmulator(20, 5, scrollback_lines=retained)
+@pytest.mark.parametrize("max_rows", [None, 7])
+def test_resizing_moves_rows_between_the_screen_and_retained_history(
+    retained: int, max_rows: int | None
+) -> None:
+    emulator = TerminalEmulator(20, 5, scrollback_lines=retained, max_rows=max_rows)
     emulator.feed("1\r\n\x1b[7m2\x1b[0m\r\n3\r\n4\r\n5\x1b7")
     original = emulator.observe()
 
@@ -491,6 +494,71 @@ def test_resizing_moves_rows_between_the_screen_and_retained_history(retained: i
     wrapped.resize(4, 3)
     assert wrapped.screen_text() == "abcd\nefgh\nij"
     assert wrapped.pattern_text(start_line=None)["text"] == "abcdefghij"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rows", [24, 80])
+async def test_history_beyond_the_largest_screen_stays_readable_after_resizing(rows: int) -> None:
+    host = TerminalRenderHost.in_process()
+    try:
+        screen = host.open_screen(40, rows, scrollback_lines=2_000)
+        reference = TerminalEmulator(40, rows, scrollback_lines=2_000)
+        output = "".join(
+            f"\x1b[31;7mline-{index:03d}\x1b[0m wide: \u754c\x1b[8m hidden\x1b[0m\r\n"
+            for index in range(160)
+        )
+        await screen.feed(output)
+        reference.feed(output)
+
+        async def same_screen() -> None:
+            assert await screen.observe() == reference.observe()
+            assert await screen.ansi_snapshot() == reference.ansi_snapshot()
+            assert await screen.page(start_line=0, limit=2_000) == reference.page(
+                start_line=0, limit=2_000
+            )
+
+        async def resize(height: int) -> None:
+            await screen.resize(40, height)
+            reference.resize(40, height)
+            await same_screen()
+
+        await same_screen()
+        # A smaller current height does not discard attributes needed when
+        # the terminal grows, whether it has reached that height before or not.
+        for height in (10, 20, 80, 10, 80):
+            await resize(height)
+        assert (await screen.page(start_line=0, limit=1))["text"] == "line-000 wide: \u754c"
+        assert (await screen.observe()).screen.startswith("\u27e6line-081\u27e7")
+
+        # Resizing the hidden primary screen has the same restoration bound.
+        await screen.feed("\x1b[?1049hFULL SCREEN")
+        reference.feed("\x1b[?1049hFULL SCREEN")
+        for height in (10, 80):
+            await resize(height)
+        await screen.feed("\x1b[?1049l")
+        reference.feed("\x1b[?1049l")
+        await same_screen()
+
+        # Erasing saved lines and a full reset keep text and restorable cells
+        # aligned, including subsequent output that evicts old history again.
+        for reset in ("\x1b[3J", "\x1bc"):
+            await screen.feed(reset + output)
+            reference.feed(reset + output)
+            for height in (10, 80):
+                await resize(height)
+
+        before = await screen.observe()
+        with pytest.raises(ValueError):
+            await screen.resize(40, 81)
+        assert (screen.columns, screen.rows) == (40, 80)
+        assert await screen.observe() == before
+        with pytest.raises(ValueError):
+            host.open_screen(40, 81, scrollback_lines=2_000)
+        # The standalone emulator has no host-imposed height bound.
+        reference.resize(40, 100)
+        assert reference.rows == 100
+    finally:
+        host.close()
 
 
 def test_scroll_up_and_down_move_the_region_and_keep_the_cursor() -> None:

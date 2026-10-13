@@ -1185,9 +1185,6 @@ class _HistoryLine(NamedTuple):
     number: int
     # A wrapped row keeps its trailing spaces: its text continues on the next row.
     text: str
-    # Keep immutable cells and their row metadata for a later height increase.
-    # The copied row cannot be changed by the screen after it scrolls away.
-    cells: Any
     wrapped: bool = False
 
 
@@ -1200,11 +1197,22 @@ class TerminalEmulator:
     lines beyond the retention bound disappear.
     """
 
-    def __init__(self, columns: int, rows: int, *, scrollback_lines: int) -> None:
+    def __init__(
+        self, columns: int, rows: int, *, scrollback_lines: int, max_rows: int | None = None
+    ) -> None:
+        if max_rows is not None and rows > max_rows:
+            raise ValueError(f"rows must not exceed max_rows ({max_rows})")
         self.columns = columns
         self.rows = rows
+        self._max_rows = max_rows
         self._next_line = 0
         self._history: deque[_HistoryLine] = deque(maxlen=scrollback_lines)
+        # Only rows that can return to the screen need full cells. Keep the
+        # maximum height, not the current one: shrinking must not evict the
+        # rows that a later growth restores. Without a height bound every
+        # retained row remains restorable.
+        cell_rows = scrollback_lines if max_rows is None else min(scrollback_lines, max_rows)
+        self._history_cells: deque[Any] = deque(maxlen=cell_rows)
         # Where a wait's pattern starts matching: a row number, and whether
         # the logical line on that row is skipped too. None: every retained line.
         self._match_start: tuple[int, bool] | None = None
@@ -1216,7 +1224,7 @@ class TerminalEmulator:
             self._remember_line,
             self._restore_history,
             self._cleared,
-            self._history.clear,
+            self._clear_history,
         )
         self._guarded = _GuardedScreen(self._screen)
         self._stream = _EmulatorStream(
@@ -1262,6 +1270,8 @@ class TerminalEmulator:
         )
 
     def resize(self, columns: int, rows: int) -> None:
+        if self._max_rows is not None and rows > self._max_rows:
+            raise ValueError(f"rows must not exceed max_rows ({self._max_rows})")
         self._screen.resize(lines=rows, columns=columns)
         self.columns = columns
         self.rows = rows
@@ -1490,10 +1500,11 @@ class TerminalEmulator:
             _HistoryLine(
                 self._next_line,
                 _render_buffer_line(line, self._screen.columns, strip=not continues),
-                copy.copy(line),
                 continues,
             )
         )
+        # Cells are immutable, but the screen can still mutate their row.
+        self._history_cells.append(copy.copy(line))
         self._next_line += 1
 
     def _restore_history(self, count: int) -> list[Any]:
@@ -1503,7 +1514,13 @@ class TerminalEmulator:
             return []
         restored.reverse()
         self._next_line = restored[0].number
-        return [line.cells for line in restored]
+        cells = [self._history_cells.pop() for _ in restored]
+        cells.reverse()
+        return cells
+
+    def _clear_history(self) -> None:
+        self._history.clear()
+        self._history_cells.clear()
 
     def _cleared(self) -> None:
         # Everything drawn on a cleared screen is new: after input, the
