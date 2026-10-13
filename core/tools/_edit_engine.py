@@ -8,7 +8,9 @@ Text replacements (``old_string``/``new_string``) match as substrings:
 
 1. ``fuzzy_match.replace_fuzzy``: exact, then its precise normalized strategies.
 2. Read-output gutters stripped: a unique whole-line match.
-3. ``copy_match.replace_copied``: old text copied with errors.
+3. Escapes such as ``\\u00fc`` of characters beyond ASCII read as those characters.
+4. An edit whose new text already stands in place changes nothing.
+5. ``copy_match.replace_copied``: old text copied with errors.
 
 V4A line hunks (`` ``/``-``/``+`` lines, ``@@`` hints, ``*** End of File``):
 
@@ -28,6 +30,7 @@ changed lines take the file's line endings, indentation and typography.
 
 from __future__ import annotations
 
+import json
 import re
 from bisect import bisect_right
 from dataclasses import dataclass, replace
@@ -312,6 +315,20 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         )
         if isinstance(found, FuzzyReplacement):
             notes.append(_GUTTER_WARNING)
+    escaped = _unicode_escapes(old) if found is None else None
+    if escaped:
+        # The file has the characters that old_string writes as \u escapes.
+        unescaped = replace(replacement, old=_with_characters(old), new=_with_characters(new))
+        found = replace_fuzzy(
+            content,
+            unescaped.old,
+            unescaped.new,
+            replace_all=replace_all,
+            typographic=True,
+        )
+        if isinstance(found, FuzzyReplacement):
+            hunk = replace(hunk, replacement=unescaped)
+            notes.append(DeviationNote(_escapes_note(escaped)))
     if isinstance(found, AmbiguousFuzzyMatch):
         details, values = _ambiguity(content, found)
         raise _PatchError(
@@ -366,6 +383,61 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         path=path,
         label=hunk.label,
         details=details,
+    )
+
+
+# A run of \uXXXX escapes after an even number of backslashes: a backslash
+# written as \\ ends no escape.
+_ESCAPE_RUN = re.compile(r"(?<!\\)((?:\\\\)*)((?:\\u[0-9a-fA-F]{4})+)")
+# Only escapes of characters beyond ASCII and its controls are read as those
+# characters: an Agent writes ü as ü, not a quote or a line break.
+_FIRST_ESCAPED = 0xA0
+_ESCAPES_SHOWN = 3
+
+
+def _escaped_characters(run: str) -> str | None:
+    """Return the characters a run of \\u escapes stands for, ``None`` if it is no such run."""
+    try:
+        characters = str(json.loads(f'"{run}"'))
+    except ValueError:
+        return None
+    if any(
+        ord(character) < _FIRST_ESCAPED or 0xD800 <= ord(character) <= 0xDFFF
+        for character in characters
+    ):
+        return None
+    return characters
+
+
+def _unicode_escapes(text: str) -> dict[str, str]:
+    """Return the \\u escape runs of ``text`` that stand for characters, with those characters."""
+    found: dict[str, str] = {}
+    for match in _ESCAPE_RUN.finditer(text):
+        characters = _escaped_characters(match[2])
+        if characters is not None:
+            found[match[2]] = characters
+    return found
+
+
+def _with_characters(text: str) -> str:
+    """Return ``text`` with its \\u escapes of characters written as the characters."""
+
+    def character(match: re.Match[str]) -> str:
+        characters = _escaped_characters(match[2])
+        return match[1] + (match[2] if characters is None else characters)
+
+    return _ESCAPE_RUN.sub(character, text)
+
+
+def _escapes_note(escaped: dict[str, str]) -> str:
+    """Say which escapes of old_string the file has as characters, and how new_string was read."""
+    shown = list(escaped.items())[:_ESCAPES_SHOWN]
+    escapes = ", ".join(escape for escape, _ in shown)
+    characters = ", ".join(characters for _, characters in shown)
+    more = " and others" if len(escaped) > len(shown) else ""
+    return (
+        f"old_string has {escapes}{more} where the file has {characters}{more}; the \\u "
+        "escapes in new_string were written as the characters they stand for."
     )
 
 

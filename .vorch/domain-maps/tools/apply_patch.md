@@ -599,6 +599,16 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   of other text (Swarm run 2026-10-12: such a copy wrote the closing brace and
   the added lines one level too deep). Test:
   `test_copy_match.py::test_line_endings_and_indentation_follow_the_file`.
+- An `old_string` replacement that writes characters beyond ASCII as `\uXXXX`
+  escapes (after an even run of backslashes; at least U+00A0, surrogate pairs
+  joined, no lone surrogate) is retried after the gutter step with those
+  escapes read as the characters, in `old_string` and `new_string` alike
+  (`_edit_engine._with_characters`), through the precise strategies only; a
+  match writes the characters and a deviation note names the escapes and the
+  characters (Swarm 2026-10-13: `ü` and `°` copied against a JSON and
+  a Python file holding `ü` and `°`, 2 calls, both now apply as their Agents'
+  eventual files have them). The reverse, a character in `old_string` for an
+  escape in the file, is not read: no call showed it.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.

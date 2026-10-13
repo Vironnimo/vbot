@@ -374,6 +374,44 @@ async def test_reports_quote_text_as_the_file_has_it(tmp_path, line, edit, shown
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("edit", "after"),
+    [
+        # Swarm run 2026-10-13: old_string wrote ü and ° as \u escapes the file has
+        # as characters; new_string's escapes are read the same way.
+        pytest.param(
+            ('name = "gr\\u00fcn"', 'name = "gr\\u00fcn \\u00b0"'),
+            'name = "grün °"\nunit = "°C"\n',
+            id="escapes-for-characters",
+        ),
+        # Nearby: an escaped backslash ends no escape, and an escape of an ASCII
+        # character is no slip of the kind.
+        pytest.param(('name = "gr\\\\u00fcn"', 'name = "x"'), None, id="escaped-backslash"),
+        pytest.param(('n\\u0061me = "grün"', 'name = "x"'), None, id="ascii-escape"),
+    ],
+)
+async def test_unicode_escapes_in_old_string_match_the_characters_of_the_file(
+    tmp_path, edit, after
+) -> None:
+    content = 'name = "grün"\nunit = "°C"\n'
+    (tmp_path / "a.py").write_text(content, encoding="utf-8", newline="\n")
+
+    result = await call(
+        tmp_path,
+        {"path": "a.py", "edits": [{"old_string": edit[0], "new_string": edit[1]}]},
+        name="edit",
+    )
+
+    written = (tmp_path / "a.py").read_text(encoding="utf-8")
+    if after is None:
+        assert result["error"]["code"] == "text_not_found"
+        assert written == content
+        return
+    assert written == after
+    assert len([line for line in text(result).split("\n") if line.startswith("Note: ")]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("content", "edit", "outcome"),
     [
         # Every word is the file's, only the line breaks fall elsewhere: new_string
