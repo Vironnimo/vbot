@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from core.tools import shell_hints
+from core.tools._powershell import POWERSHELL_ERROR_NOTE
 from core.tools.shell_hints import annotate_failure
 
 _NOT_RECOGNIZED = (
@@ -347,6 +348,12 @@ def test_platform_specific_hints_follow_the_host_shell(
         ),
         ("git add src/*.py", "fatal: pathspec 'src/*.py' did not match any files", None),
         ("rg -g '*.py' todo", "rg: *.py: No such file or directory (os error 2)", None),
+        # A regular expression in a string is the program's own pattern.
+        (
+            'python find.py "Melting point.*" data.txt',
+            'No line matched "Melting point.*" in data.txt',
+            None,
+        ),
         # \" ended the string early and a { } block of the code became an argument.
         (
             'python -c "\nfor (sql,) in cases:\n    print(f\'{run(f\\"SELECT {sql}\\")}\')\n"',
@@ -611,6 +618,17 @@ def test_hints_name_only_the_tools_the_agent_is_offered(
             "Inside a @'...'@ here-string, '\\'' and '\"'\"' stay as written.",
         ),
         ("python -c @'\nprint(\"it's\")\n'@", "SyntaxError: invalid syntax", None),
+        # A here-string written on one line, or with its '@ indented.
+        (
+            "python -c @'import re; print(re.sub('a', 'b', 'abc'))'@",
+            "No characters are allowed after a here-string header but before the end of the line.",
+            "A here-string's @' must end its line",
+        ),
+        (
+            "@'\nprint(1)\n  '@ | python -",
+            "White space is not allowed before the string terminator.",
+            "A here-string's @' must end its line",
+        ),
     ],
 )
 def test_bash_syntax_and_quoting_that_break_powershell_are_named(
@@ -816,9 +834,25 @@ _CLOSED_OUTPUT = (
             5,
             ("`select -f:4`", "python"),
         ),
+        # $LASTEXITCODE read after the stage does not hold the program's code.
+        (
+            'python check.py 2>&1 | Select-Object -First 3; "exit=$LASTEXITCODE"',
+            "error: bad url",
+            _FAILED,
+            3,
+            ("`Select-Object -First 3`", "$LASTEXITCODE"),
+        ),
         # No failed program: it finished its work; its errors bypassed the stage;
         # a run outside such a pipeline may have failed.
         ("python build.py 2>&1 | Select-Object -First 8", "step", (), 8, None),
+        # The output already shows why it failed.
+        (
+            "python check.py --url x 2>&1 | Select-Object -First 3",
+            "Traceback (most recent call last):\nValueError: bad url",
+            ("python.exe exited with code 2",),
+            3,
+            None,
+        ),
         ("python build.py | Select-Object -First 8", "ValueError: bad", _FAILED, 8, None),
         (
             "python build.py 2>&1 | Select-Object -First 2; python build.py --check",
@@ -870,6 +904,109 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
     # Select-Object is PowerShell's.
     monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
     assert annotate_failure(command, 0, output, failed_programs=failed) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "output", "names"),
+    [
+        # grep was not found, so the checker before it never ran.
+        (
+            "python check.py 2>&1 | grep FAIL; Write-Output done",
+            f"{_NOT_RECOGNIZED.format(name='grep')}\ndone\n\n{POWERSHELL_ERROR_NOTE}",
+            ("Select-String", "`grep`", "code 0"),
+        ),
+        # The command recovered from an error of its own.
+        (
+            "Remove-Item x -ErrorAction SilentlyContinue; 'done'",
+            f"done\n\n{POWERSHELL_ERROR_NOTE}",
+            None,
+        ),
+        # Without the note, the text is the program's own output.
+        ("python check.py", _NOT_RECOGNIZED.format(name="grep"), None),
+    ],
+)
+def test_a_command_powershell_did_not_recognize_behind_exit_code_0_is_named(
+    monkeypatch: pytest.MonkeyPatch, command: str, output: str, names: tuple[str, ...] | None
+) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, 0, output)
+
+    if names is None:
+        assert hint is None
+    else:
+        assert hint is not None
+        for name in names:
+            assert name in hint
+
+
+@pytest.mark.parametrize(
+    ("command", "exit_code", "failed", "names"),
+    [
+        (
+            "python check.py | Select-Object -Last 6 && python report.py",
+            1,
+            _FAILED,
+            ("python", "`python report.py`", ";"),
+        ),
+        (
+            "python check.py 2>&1 | findstr FAIL && git add . && git commit -m x",
+            1,
+            _FAILED,
+            ("`git add .` and what follows it",),
+        ),
+        # -First stops the pipeline early and lets it succeed.
+        ("python check.py | Select-Object -First 6 && python report.py", 1, _FAILED, None),
+        # || runs its right side after the failure.
+        ("python check.py | Select-Object -Last 6 || Write-Output failed", 1, _FAILED, None),
+        # Another run of the program may be the part after && that failed.
+        ("python check.py | Select-Object -Last 6 && python report.py", 1, _FAILED * 2, None),
+        # The exit code is another program's; a pipe in a string is text.
+        ("python check.py | Select-Object -Last 6 && git push", 128, _FAILED, None),
+        ("Write-Output 'a | b' && python report.py", 1, _FAILED, None),
+    ],
+)
+def test_a_failed_program_in_a_pipeline_names_what_and_and_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    exit_code: int,
+    failed: tuple[str, ...],
+    names: tuple[str, ...] | None,
+) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, exit_code, "checked 4 files", failed_programs=failed)
+
+    if names is None:
+        assert hint is None
+    else:
+        assert hint is not None and "&&" in hint
+        for name in names:
+            assert name in hint
+    # In bash, && follows the pipeline's last command.
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, exit_code, "checked", failed_programs=failed) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "hinted"),
+    [
+        (
+            "Start-Sleep -Seconds 90; Get-Content C:\\vbot\\commands\\tmp_k3x9a0b2c4d1.log -Tail 5",
+            True,
+        ),
+        ("sleep 60 && tail -n 5 /home/u/.vbot/commands/tmp_k3x9a0b2c4d1.log", True),
+        # Waiting for something else, or reading the log without waiting.
+        ("Start-Sleep 5; Get-Content server.log -Tail 5", False),
+        ("Get-Content C:\\vbot\\commands\\tmp_k3x9a0b2c4d1.log -Tail 5", False),
+    ],
+)
+def test_waiting_to_read_a_background_command_log_names_the_result_message(
+    command: str, hinted: bool
+) -> None:
+    hint = annotate_failure(command, 0, "step 3/9")
+
+    assert (hint is not None and "new message" in hint) is hinted
 
 
 def _project(tmp_path: Path) -> Path:
