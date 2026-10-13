@@ -26,6 +26,9 @@ _LITERAL_MISSES = _SHAPE_OPERATORS - {"*"}
 # Escaped punctuation, such as "\.", stands for itself; "\b" only bounds a word.
 _ESCAPED_PUNCTUATION = re.compile(r"\\(?:[^\w\s]|b)")
 _WORD = re.compile(r"\w")
+# Regex parts written to match a line break, which a search without -U never
+# reaches: \s (also in [\s\S]) and the s flag.
+_LINE_BREAKING = re.compile(r"(?<!\\)(?:\\\\)*\\s|\(\?[a-zA-Z]*s[a-zA-Z]*[:)]")
 
 
 def file_name_extensions(pattern: str) -> list[str] | None:
@@ -93,6 +96,20 @@ def literal_text_note(pattern: str, files: int) -> str:
     return (
         f"As a regular expression, pattern matches nothing ({named}); as literal text it "
         f"occurs in {where}. Add -F to args to search for it literally."
+    )
+
+
+def can_span_lines(pattern: str) -> bool:
+    """Whether the pattern has a part that matches a line break once matches span lines."""
+    return _LINE_BREAKING.search(pattern) is not None
+
+
+def spanning_note(files: int) -> str:
+    """Say that a regex without matches within lines matches across lines in ``files`` files."""
+    where = "1 file" if files == 1 else f"{files} files"
+    return (
+        f"Within one line, pattern matches nothing; across lines it occurs in {where}. "
+        "Add -U to args to let a match span lines."
     )
 
 

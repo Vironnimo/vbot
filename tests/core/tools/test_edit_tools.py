@@ -142,6 +142,7 @@ WRAPPED = (
 REWRAPPED_SIGNATURE = (
     "def spawn(db, api, *, fault=None, pace=1.0, exit_code=70,\n          start=None):"
 )
+ONE_LINE_JSON = '{"note": "Marked as estimated.", "status": "predicted", "unit": "kg/m3", "v": 6}\n'
 
 
 @pytest.mark.asyncio
@@ -373,6 +374,44 @@ async def test_reports_quote_text_as_the_file_has_it(tmp_path, line, edit, shown
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("edit", "after"),
+    [
+        # Swarm run 2026-10-13: old_string wrote ü and ° as \u escapes the file has
+        # as characters; new_string's escapes are read the same way.
+        pytest.param(
+            ('name = "gr\\u00fcn"', 'name = "gr\\u00fcn \\u00b0"'),
+            'name = "grün °"\nunit = "°C"\n',
+            id="escapes-for-characters",
+        ),
+        # Nearby: an escaped backslash ends no escape, and an escape of an ASCII
+        # character is no slip of the kind.
+        pytest.param(('name = "gr\\\\u00fcn"', 'name = "x"'), None, id="escaped-backslash"),
+        pytest.param(('n\\u0061me = "grün"', 'name = "x"'), None, id="ascii-escape"),
+    ],
+)
+async def test_unicode_escapes_in_old_string_match_the_characters_of_the_file(
+    tmp_path, edit, after
+) -> None:
+    content = 'name = "grün"\nunit = "°C"\n'
+    (tmp_path / "a.py").write_text(content, encoding="utf-8", newline="\n")
+
+    result = await call(
+        tmp_path,
+        {"path": "a.py", "edits": [{"old_string": edit[0], "new_string": edit[1]}]},
+        name="edit",
+    )
+
+    written = (tmp_path / "a.py").read_text(encoding="utf-8")
+    if after is None:
+        assert result["error"]["code"] == "text_not_found"
+        assert written == content
+        return
+    assert written == after
+    assert len([line for line in text(result).split("\n") if line.startswith("Note: ")]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("content", "edit", "outcome"),
     [
         # Every word is the file's, only the line breaks fall elsewhere: new_string
@@ -391,6 +430,18 @@ async def test_reports_quote_text_as_the_file_has_it(tmp_path, line, edit, shown
             ("- Rendering uses the engine's own digit rules, not repr.", "- Rendering is exact."),
             "# Notes\n\n- Rendering is exact.\n- Next\n",
             id="prose",
+        ),
+        # Swarm run 2026-10-13: an indented copy of a passage inside a line.
+        pytest.param(
+            ONE_LINE_JSON,
+            (
+                '    "status": "predicted",\n    "unit": "kg/m3",',
+                '    "status": "predicted",\n    "reason": "estimated",\n    "unit": "kg/m3",',
+            ),
+            ONE_LINE_JSON.replace(
+                ' "unit": "kg/m3",', '\n"reason": "estimated",\n"unit": "kg/m3",'
+            ),
+            id="inside-a-line",
         ),
         pytest.param(
             WRAPPED.replace("\n", "\r\n"),
@@ -424,6 +475,13 @@ async def test_reports_quote_text_as_the_file_has_it(tmp_path, line, edit, shown
             ("\n    print(total)\n    return total", "\n    print(total)\n    return total + 1"),
             ("text_not_found", {"7-8", "7"}),
             id="starts-a-line",
+        ),
+        # Inside a line, indentation stands for a space or tab before the passage.
+        pytest.param(
+            ONE_LINE_JSON.replace(' "status"', '"status"'),
+            ('    "status": "predicted",\n    "unit": "kg/m3",', '    "status": "measured",'),
+            ("text_not_found", {"1"}),
+            id="inside-a-line-without-space",
         ),
         # Too few words to tell the place.
         pytest.param(
@@ -466,6 +524,41 @@ async def test_old_string_with_line_breaks_in_other_places_than_the_file(
     assert result["error"]["code"] == code
     assert (tmp_path / "a.py").read_bytes() == content.encode()
     assert set(re.findall(r"\blines? (\d+(?:-\d+)?)", text(result))) == lines
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("old", "seen", "named"),
+    [
+        # Swarm run 2026-10-13: an edit meant for another file the Agent worked on.
+        pytest.param("def load(rows):\n    return rows", True, True, id="read-elsewhere"),
+        # Nearby: a file the Session never read, or text too short to tell a file.
+        pytest.param("def load(rows):\n    return rows", False, False, id="not-read"),
+        pytest.param("return rows", True, False, id="short"),
+    ],
+)
+async def test_an_old_string_from_another_file_of_the_session_names_that_file(
+    tmp_path, old, seen, named
+) -> None:
+    (tmp_path / "a.py").write_bytes(b"x = 1\n")
+    other = tmp_path / "b.py"
+    other.write_bytes(b"def load(rows):\n    return rows\n")
+    state = FileReadState()
+    if seen:
+        state.record_read("session-test", other)
+
+    result = await call(
+        tmp_path,
+        {"path": "a.py", "edits": [{"old_string": old, "new_string": "pass"}]},
+        tools=registry(state),
+        name="edit",
+    )
+
+    assert result["error"]["code"] == "text_not_found"
+    assert ("b.py" in text(result)) is named
+    # The edit is never applied to the other file.
+    assert (tmp_path / "a.py").read_bytes() == b"x = 1\n"
+    assert other.read_bytes() == b"def load(rows):\n    return rows\n"
 
 
 @pytest.mark.asyncio
@@ -549,6 +642,12 @@ _PART_EDITS = '[{"old_string": "x = 1", '
             b'got "x": not a number\n',
             id="quote-colon-text",
         ),
+        # Swarm run 2026-10-13: closing brackets after the value close nothing.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = "a""}]}\n'},
+            b'x = "a"\n',
+            id="stray-closers",
+        ),
         # These have another reading than slips inside new_string: nothing runs,
         # and the error names the field the JSON breaks in.
         pytest.param(
@@ -575,6 +674,12 @@ _PART_EDITS = '[{"old_string": "x = 1", '
             {"edits": '[{"old_string": "x = 1", "new_string": "x = \\_"}]'},
             "new_string",
             id="other",
+        ),
+        # A value after the end can be an edit meant to run: nothing runs.
+        pytest.param(
+            {"edits": '[{"old_string": "x = 1", "new_string": "x = 2"}], {"old_string": "x"}]'},
+            "character 48",
+            id="value-after-the-end",
         ),
         # Text that ends early lost part of the call, also when the rest arrived
         # beside it: nothing runs, and the error says where the text ends.
@@ -627,19 +732,80 @@ async def test_edits_that_leave_the_file_as_it_is_say_so(tmp_path, edits, messag
     assert result["data"] == {"content": f"{message} No file was changed."}
 
 
+TOTALS = (
+    "def f(rows):\n    total = 0\n    for row in rows:\n        total += row.size\n"
+    "    return total\n"
+)
+# An edit of the loop of TOTALS, already made: old_string is not in the file.
+TOTALS_EDIT = (
+    "    for row in rows:\n        total += row\n    return total",
+    "    for row in rows:\n        total += row.size\n    return total",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "edit", "done"),
+    [
+        # Swarm run 2026-10-13: an edit sent again after it was made failed as not found.
+        pytest.param(TOTALS, TOTALS_EDIT, True, id="made-earlier"),
+        # Nearby: the new text tells nothing about where old_string would be.
+        pytest.param("x = 2\n", ("x = 1", "x = 2"), False, id="no-common-line"),
+        pytest.param(
+            "function f() {\n  return 2;\n}\n",
+            ("  return 1;\n}", "  return 2;\n}"),
+            False,
+            id="punctuation-in-common",
+        ),
+        pytest.param(TOTALS + "\n" + TOTALS, TOTALS_EDIT, False, id="new-text-twice"),
+        # A copy of old_string with errors stands elsewhere: the edit can be meant there.
+        pytest.param(
+            TOTALS + "\ndef g(rows):\n    total = 0\n    for row in rows:\n        total += rows\n"
+            "    return total\n",
+            TOTALS_EDIT,
+            False,
+            id="old-text-copied-elsewhere",
+        ),
+    ],
+)
+async def test_an_edit_whose_result_already_stands_has_nothing_to_do(
+    tmp_path, content, edit, done
+) -> None:
+    (tmp_path / "a.py").write_bytes(content.encode())
+
+    result = await call(
+        tmp_path,
+        {"path": "a.py", "edits": [{"old_string": edit[0], "new_string": edit[1]}]},
+        name="edit",
+    )
+
+    assert (tmp_path / "a.py").read_bytes() == content.encode()
+    if not done:
+        assert result["error"]["code"] == "text_not_found"
+        return
+    assert result["ok"]
+    assert edit_outcome(text(result)) == "unchanged"
+    # It names the lines that hold the new text.
+    assert "3-5" in text(result)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True], ids=["all-matched", "one-failed"])
+@pytest.mark.parametrize("made", [False, True], ids=["same-text", "made-earlier"])
 async def test_an_edit_that_changes_nothing_is_named_apart_from_the_applied_ones(
-    tmp_path, fails
+    tmp_path, fails, made
 ) -> None:
     # Swarm runs 2026-10-11/12: 12 written calls held an edit whose new_string was its
-    # old_string; the results counted it as applied and never named it.
-    (tmp_path / "a.py").write_bytes(b"x = 1\ny = 2\nz = 3\n")
+    # old_string; the results counted it as applied and never named it. Swarm run
+    # 2026-10-13: an edit whose new text already stood there failed as not found.
+    (tmp_path / "a.py").write_bytes(b"x = 1\ny = 2\nw = 4\nz = 3\n")
     edits = [
         {"old_string": "x = 1", "new_string": "x = 9"},
-        {"old_string": "y = 2", "new_string": "y = 2"},
+        {"old_string": "y = 2\nw = 5" if made else "y = 2", "new_string": "y = 2\nw = 4"},
         {"old_string": "zzz" if fails else "z = 3", "new_string": "z = 9"},
     ]
+    if not made:
+        edits[1]["new_string"] = "y = 2"
     tools = registry()
     ctx = replace(context(tmp_path), tool_name="edit")
     arguments = {"path": "a.py", "edits": edits}
@@ -651,7 +817,7 @@ async def test_an_edit_that_changes_nothing_is_named_apart_from_the_applied_ones
     display = tools.display_for_call("edit", arguments, context=ctx, result=result)
     counts = {f["unit"]: f["value"] for f in display["facts"] if f["kind"] == "count"}
     assert counts == {"edits": 1 if fails else 2}
-    after = b"x = 9\ny = 2\nz = 3\n" if fails else b"x = 9\ny = 2\nz = 9\n"
+    after = b"x = 9\ny = 2\nw = 4\nz = 3\n" if fails else b"x = 9\ny = 2\nw = 4\nz = 9\n"
     assert (tmp_path / "a.py").read_bytes() == after
     assert edit_outcome(message) == ("partial" if fails else "applied")
     # Edit 2 is named once, in its own sentence: not as applied, not as failed.
@@ -689,6 +855,39 @@ async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(t
     assert text(replaced) == "Replaced the content of a.txt (1 line)."
     assert path.read_bytes() == b"new\n"
     assert bare.read_bytes() == b"new"
+
+
+ESCAPED_BREAKS = "    # checks" + "\\n    for page in pages:\\n        check(page)" * 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "line", "noted"),
+    [
+        pytest.param("check.py", ESCAPED_BREAKS, True, id="behind-a-comment"),
+        pytest.param("check.py", f'SCRIPT = "{ESCAPED_BREAKS}"', False, id="inside-a-string"),
+        pytest.param("data.json", ESCAPED_BREAKS, False, id="data-file"),
+    ],
+)
+@pytest.mark.parametrize("tool", ["write", "edit"])
+async def test_a_line_of_escaped_line_breaks_is_written_as_sent_with_a_note(
+    tmp_path, tool, path, line, noted
+) -> None:
+    state = FileReadState()
+    target = tmp_path / path
+    target.write_bytes(b"def main():\n    pass\n")
+    state.record_read("session-test", target)
+    content = f"def main():\n{line}\n"
+    arguments = (
+        {"path": path, "content": content}
+        if tool == "write"
+        else {"path": path, "old_string": "    pass", "new_string": line}
+    )
+
+    result = await call(tmp_path, arguments, tools=registry(state), name=tool)
+
+    assert target.read_bytes() == content.encode()
+    assert ("Note: Line 2 " in text(result)) is noted
 
 
 @pytest.mark.asyncio

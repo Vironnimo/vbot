@@ -8,7 +8,9 @@ Text replacements (``old_string``/``new_string``) match as substrings:
 
 1. ``fuzzy_match.replace_fuzzy``: exact, then its precise normalized strategies.
 2. Read-output gutters stripped: a unique whole-line match.
-3. ``copy_match.replace_copied``: old text copied with errors.
+3. Escapes such as ``\\u00fc`` of characters beyond ASCII read as those characters.
+4. An edit whose new text already stands in place changes nothing.
+5. ``copy_match.replace_copied``: old text copied with errors.
 
 V4A line hunks (`` ``/``-``/``+`` lines, ``@@`` hints, ``*** End of File``):
 
@@ -28,6 +30,7 @@ changed lines take the file's line endings, indentation and typography.
 
 from __future__ import annotations
 
+import json
 import re
 from bisect import bisect_right
 from dataclasses import dataclass, replace
@@ -68,6 +71,10 @@ class DeviationNote(str):
     repeated text chose. A result that carries one shows the changed region as
     it now reads, since the written text is not what the call sent.
     """
+
+
+class AlreadyApplied(str):
+    """Why a text replacement changed nothing: its new text already stands in the file."""
 
 
 def _deviations(notes: list[str]) -> list[str]:
@@ -118,7 +125,7 @@ def apply_hunks(
     previous: int | None = None,
     *,
     failures: list[_PatchError] | None = None,
-    unchanged: list[str] | None = None,
+    unchanged: dict[str, str] | None = None,
 ) -> tuple[str, list[str], int | None]:
     """Apply one file's hunks in order and return the text, the notes and the change end.
 
@@ -134,7 +141,8 @@ def apply_hunks(
     details: the lines of the text it saw that each earlier hunk wrote, as
     ``{label, first, last}``, and ``replaced_by``, the label of the earlier hunk
     that replaced its old text. With ``unchanged``, the labels of text
-    replacements whose new text equals the text they matched go there.
+    replacements that changed nothing go there, each with the reason when its
+    new text already stood in the file (``AlreadyApplied``), else "".
     """
     notes: list[str] = []
     written: list[tuple[str, int, int]] = []
@@ -163,8 +171,10 @@ def apply_hunks(
                 raise
             failures.append(error)
             continue
+        applied = [note for note in placed if isinstance(note, AlreadyApplied)]
+        placed = [note for note in placed if not isinstance(note, AlreadyApplied)]
         if edited == content and unchanged is not None and hunk.replacement is not None:
-            unchanged.append(hunk.label)
+            unchanged[hunk.label] = applied[0] if applied else ""
         if edited != content:
             seen.append((hunk.label, content))
             previous = _change_end_line(content, edited)
@@ -305,6 +315,20 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         )
         if isinstance(found, FuzzyReplacement):
             notes.append(_GUTTER_WARNING)
+    escaped = _unicode_escapes(old) if found is None else None
+    if escaped:
+        # The file has the characters that old_string writes as \u escapes.
+        unescaped = replace(replacement, old=_with_characters(old), new=_with_characters(new))
+        found = replace_fuzzy(
+            content,
+            unescaped.old,
+            unescaped.new,
+            replace_all=replace_all,
+            typographic=True,
+        )
+        if isinstance(found, FuzzyReplacement):
+            hunk = replace(hunk, replacement=unescaped)
+            notes.append(DeviationNote(_escapes_note(escaped)))
     if isinstance(found, AmbiguousFuzzyMatch):
         details, values = _ambiguity(content, found)
         raise _PatchError(
@@ -320,6 +344,10 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         found, kept = _keep_final_break(content, found, hunk)
         edited, placed = _keep_decorated(content, found, path)
         return edited, notes + kept + _joined_lines(content, found) + placed
+    if not replace_all:
+        applied = _new_text_in_place(content, old, new)
+        if applied is not None:
+            return content, [applied]
     details = _not_found(content, old, source="old_string")
     present = None
     if new.strip() and new != old:
@@ -356,6 +384,111 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         label=hunk.label,
         details=details,
     )
+
+
+# A run of \uXXXX escapes after an even number of backslashes: a backslash
+# written as \\ ends no escape.
+_ESCAPE_RUN = re.compile(r"(?<!\\)((?:\\\\)*)((?:\\u[0-9a-fA-F]{4})+)")
+# Only escapes of characters beyond ASCII and its controls are read as those
+# characters: an Agent writes ü as ü, not a quote or a line break.
+_FIRST_ESCAPED = 0xA0
+_ESCAPES_SHOWN = 3
+
+
+def _escaped_characters(run: str) -> str | None:
+    """Return the characters a run of \\u escapes stands for, ``None`` if it is no such run."""
+    try:
+        characters = str(json.loads(f'"{run}"'))
+    except ValueError:
+        return None
+    if any(
+        ord(character) < _FIRST_ESCAPED or 0xD800 <= ord(character) <= 0xDFFF
+        for character in characters
+    ):
+        return None
+    return characters
+
+
+def _unicode_escapes(text: str) -> dict[str, str]:
+    """Return the \\u escape runs of ``text`` that stand for characters, with those characters."""
+    found: dict[str, str] = {}
+    for match in _ESCAPE_RUN.finditer(text):
+        characters = _escaped_characters(match[2])
+        if characters is not None:
+            found[match[2]] = characters
+    return found
+
+
+def _with_characters(text: str) -> str:
+    """Return ``text`` with its \\u escapes of characters written as the characters."""
+
+    def character(match: re.Match[str]) -> str:
+        characters = _escaped_characters(match[2])
+        return match[1] + (match[2] if characters is None else characters)
+
+    return _ESCAPE_RUN.sub(character, text)
+
+
+def _escapes_note(escaped: dict[str, str]) -> str:
+    """Say which escapes of old_string the file has as characters, and how new_string was read."""
+    shown = list(escaped.items())[:_ESCAPES_SHOWN]
+    escapes = ", ".join(escape for escape, _ in shown)
+    characters = ", ".join(characters for _, characters in shown)
+    more = " and others" if len(escaped) > len(shown) else ""
+    return (
+        f"old_string has {escapes}{more} where the file has {characters}{more}; the \\u "
+        "escapes in new_string were written as the characters they stand for."
+    )
+
+
+def _new_text_in_place(content: str, old: str, new: str) -> AlreadyApplied | None:
+    """Say where ``new`` stands when the file already holds this edit's result.
+
+    ``old`` is not in the file (the precise steps found nothing). The result
+    holds when ``new`` occurs exactly once and not inside ``old``, both share a
+    whole non-blank line at their start or end, so they name one passage, and
+    no copy of ``old`` with errors stands anywhere else. Then the edit has
+    nothing left to do; otherwise ``None``.
+    """
+    if not new.strip() or new.strip() in old or not _share_an_edge_line(old, new):
+        return None
+    present = replace_fuzzy(content, new, new, replace_all=False, typographic=True)
+    if not isinstance(present, FuzzyReplacement):
+        return None
+    start, end = present.before_spans[0]
+    copied = replace_copied(content, old, new)
+    if isinstance(copied, AmbiguousFuzzyMatch):
+        return None
+    if copied is not None and any(
+        copy_end <= start or copy_start >= end for copy_start, copy_end in copied.before_spans
+    ):
+        return None
+    first, last = present.first_changed_line, present.last_changed_line
+    lines = f"line {first}" if first == last else f"lines {first}-{last}"
+    return AlreadyApplied(_ALREADY_APPLIED_NOTE.format(lines=lines))
+
+
+_ALREADY_APPLIED_NOTE = (
+    "new_string already stands at {lines} and old_string is not in the file; nothing to change."
+)
+
+
+def _share_an_edge_line(old: str, new: str) -> bool:
+    """Whether ``old`` and ``new`` start or end with the same line that holds a word.
+
+    A line of punctuation alone, such as ``}``, ends many passages.
+    """
+    old_lines = [line.strip() for line in split_text_lines(old) if line.strip()]
+    new_lines = [line.strip() for line in split_text_lines(new) if line.strip()]
+    if len(old_lines) < 2 or len(new_lines) < 2:
+        return False
+    return any(
+        old_line == new_line and _WORD.search(old_line)
+        for old_line, new_line in ((old_lines[0], new_lines[0]), (old_lines[-1], new_lines[-1]))
+    )
+
+
+_WORD = re.compile(r"\w")
 
 
 def _keep_decorated(content: str, found: FuzzyReplacement, path: object) -> tuple[str, list[str]]:

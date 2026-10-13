@@ -149,6 +149,12 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   like `read`, with a caret under the reported column when the parser names one;
   `syntax_check._with_excerpt`); a warning for an error the file already had shows
   none, since that error is not the Agent's to find now.
+  A written line (a created or replaced file's lines, an Update's changed and
+  added lines) holding at least 5 literal `\n` sequences followed by
+  indentation, the first outside a quoted string (`#` or `//` outside a string
+  starts a comment), gets a note naming the line; the text is written as sent.
+  Not for `.json`, `.jsonl` and `.ipynb`, which escape line breaks in strings
+  (`_patch_report._escaped_breaks`).
 - Mixed outcomes are a success led by counts (`N of M changes
   applied; K did not.`, or `fully applied; K only in part` when a write was
   incomplete; `edit` leads with its edit numbers instead, `tools/edit.md` ->
@@ -353,7 +359,16 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   shown lines (26 of 34 merged reports, Sessions, 2026-09).
   Diagnostics also note when the new
   text already occurs (a change made earlier; not when `old_string` contains
-  `new_string`, as after a deletion); without candidates the text names
+  `new_string`, as after a deletion). An `old_string` replacement whose change
+  the file already holds, by the evidence `tools/edit.md` -> Results names,
+  changes nothing instead of failing (`_new_text_in_place`; an `apply_patch`
+  step then reports `already contains this change`). An `old_string` of at
+  least 20 non-whitespace characters that is not in the file but stands as
+  sent (line endings aside) in one of the 20 files the Session read or changed
+  most recently (`FileReadState.recent_files`, each up to 1 MB) gets
+  `old_string occurs in X, which this Session read or changed; this call is for
+  Y.` after the not-found sentence (`_file_changes._elsewhere`, at most 3 files
+  named); the change is never applied there. Without candidates the text names
   the `read` call. A first difference for a one-line copy is shown at the closest
   candidate's line; longer copies are aligned by the lines the file holds.
   An `old_string` whose words are all at exactly one place of the file, with
@@ -459,7 +474,10 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   whose words (non-whitespace runs) are all the file's, in order, with line
   breaks in other places: between words a space and a line break with any
   indentation stand for each other, a blank line must be in the file too, a
-  leading or trailing line break must start or end a file line, at least one
+  leading or trailing line break must start or end a file line, leading
+  indentation alone stands for the start of a line or a space or tab inside one
+  (Swarm 2026-10-13: an indented copy of a passage in a one-line JSON file; a
+  start after indentation counts once, from the line's start), at least one
   break must fall elsewhere, and the old text needs 4 words. It never serves an
   edit that changes only whitespace, since such an edit is about the breaks the
   old text misstates. It is ambiguous like the others; the replacement is
@@ -593,6 +611,16 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   of other text (Swarm run 2026-10-12: such a copy wrote the closing brace and
   the added lines one level too deep). Test:
   `test_copy_match.py::test_line_endings_and_indentation_follow_the_file`.
+- An `old_string` replacement that writes characters beyond ASCII as `\uXXXX`
+  escapes (after an even run of backslashes; at least U+00A0, surrogate pairs
+  joined, no lone surrogate) is retried after the gutter step with those
+  escapes read as the characters, in `old_string` and `new_string` alike
+  (`_edit_engine._with_characters`), through the precise strategies only; a
+  match writes the characters and a deviation note names the escapes and the
+  characters (Swarm 2026-10-13: `ü` and `°` copied against a JSON and
+  a Python file holding `ü` and `°`, 2 calls, both now apply as their Agents'
+  eventual files have them). The reverse, a character in `old_string` for an
+  escape in the file, is not read: no call showed it.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.
@@ -736,6 +764,7 @@ replacements still went through Delete File plus Add File (agent-eval
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
 | Syntax warning excerpt (shared with `edit` and `write`): `Warning: Syntax check failed after this edit: SyntaxError: '(' was never closed (line 2, column 12)` followed by `1| ...`, `2| ...`, a caret line and `3| ...` | Real Sessions (2026-10) read 30-45 lines after a warning to find the line the error names; the excerpt shows it in the result. Only the error's own lines are shown, not more, so a result stays short. |
+| Escaped line breaks (shared with `edit` and `write`): `Line 424 holds 221 \n sequences followed by indentation, outside a string, so the text after them stays on that line. If they stand for line breaks, write real line breaks.` | One `write` of a Python file put its last 220 lines, with their line breaks written as `\n`, behind a comment on one line; the file still parsed, so no syntax warning came and the code silently did nothing (Sessions, 2026-10-13). Of 237 `write` contents and 713 edit texts of that day, only this one gets the note. The text is never rewritten: a string or a comment can hold such sequences on purpose. |
 | Decorator note (shared with `edit`): `The added lines went above line 13 (@staticmethod), not between it and the definition at line 14 it belongs to.` | The written text differs from the call, so the Agent learns it and gets the region shown; without the note it would see its lines below where it put them and could "fix" them back between decorator and definition. Line numbers name the decorators and the definition, not the added lines, whose numbers the `Updated X (lines ...)` header can count differently when an added line repeats a decorator. |
 | `context_lines_not_found`: `X: the context lines around the + lines were not found.` | A block that only adds lines was reported as `the lines to replace were not found`, which names lines the block does not have and points the Agent at text to replace instead of at its context lines (review of a Swarm Run, 2026-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |
@@ -745,6 +774,7 @@ replacements still went through Delete File plus Add File (agent-eval
 | `eof_not_found` next step: `That marker changes only the end of the file; to change these lines where they are, leave it out.` | The error named the mismatch but no next step (Errors: three parts); the lines are in the file, so leaving out the marker is the call that applies the change where the excerpt shows them. |
 | `eof_after_hint`: `*** End of File adds the lines at the end of the file, but the @@ line "..." is not the last line. To add them after that line, leave out *** End of File; to add them at the end of the file, leave out the @@ line.` | Replaces `the file does not end with the lines before *** End of File` plus `No similar text is in the file`, a misleading cause for added lines, which are never in the file. Both next steps are safe as written. |
 | `context_block_not_found`: `the lines of the @@ block "..." above the lines to replace were not found together.` | Names the block by its first line: a patch can hold several `@@` blocks, and without candidates nothing else in the error said which one failed. |
+| Truncated excerpt (shared with `edit`): `Excerpt truncated. Continue with read(path="X", offset="12:241", limit=3).` | Names the call that shows the cut text, in the form `read` takes. It said `If read is available, continue with ...; otherwise use another file reader.` until 2026-10-13: the other results and errors of this pipeline name `read` calls without a condition (`_read_hint`), and the hedge only made the next step longer. |
 
 ## Verification
 

@@ -72,6 +72,17 @@ async def message(root: Path, tool: str, arguments: dict, offered: set[str]) -> 
         ),
         ("edit", EDIT, 'swarm_wiki: action "update", page_id "w3"'),
         ("apply_patch", PATCH, 'swarm_wiki: action "update", page_id "w3"'),
+        # A change that names the page as page_id instead of a path.
+        (
+            "edit",
+            {"edits": EDIT["edits"], "page_id": "w1"},
+            'swarm_wiki: action "update", page_id "w1"',
+        ),
+        (
+            "write",
+            {"content": "final", "pageId": "w4"},
+            'swarm_wiki: action "update", page_id "w4"',
+        ),
     ],
 )
 async def test_a_missing_wiki_page_number_names_the_offered_swarm_wiki_call(

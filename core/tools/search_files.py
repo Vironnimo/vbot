@@ -40,10 +40,12 @@ from core.tools._search_execution import (
 )
 from core.tools._search_hints import (
     can_miss_literal_text,
+    can_span_lines,
     file_name_extensions,
     finds_fixed_text,
     literal_text_note,
     match_count_note,
+    spanning_note,
     unnamed_files_note,
 )
 from core.tools._search_query import (
@@ -1115,9 +1117,10 @@ def _note_no_match(
 ) -> None:
     """Point a pattern that matched neither contents nor names to what it may mean.
 
-    A regex whose text occurs literally names -F. Otherwise a pattern shaped
-    like file names says that no name matches it either, and how to list
-    similar names; ``listed`` is the listing the names were taken from.
+    A regex whose text occurs literally names -F, and one that matches only
+    across lines names -U. Otherwise a pattern shaped like file names says that
+    no name matches it either, and how to list similar names; ``listed`` is the
+    listing the names were taken from.
     """
     if len(patterns) != 1 or "--invert-match" in query.rg_args:
         return
@@ -1128,6 +1131,13 @@ def _note_no_match(
         files = sum(1 for entry in found.entries if entry.count) if found else 0
         if files:
             query.notes.append(literal_text_note(patterns[0], files))
+            return
+    if patterns is query.patterns and not query.multiline and can_span_lines(patterns[0]):
+        spanning = replace(query, rg_args=[*query.rg_args, "--multiline"])
+        found = _recount(context, spanning, scopes, patterns, cwd, binary, budget)
+        files = sum(1 for entry in found.entries if entry.count) if found else 0
+        if files:
+            query.notes.append(spanning_note(files))
             return
     if query.mode not in {"content", "files_with_matches"} or not listed.complete:
         return

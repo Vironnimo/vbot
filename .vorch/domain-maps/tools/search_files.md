@@ -148,7 +148,7 @@ Modes:
   and got only `No matches`; a note naming the matching files did not change
   its next call either (agent-eval 2026-10-10). Coverage:
   `test_search_files_arguments.py::test_a_content_search_without_matches_lists_files_whose_names_match`.
-- When no name matches either, a single pattern (without `-v`) gets one of two
+- When no name matches either, a single pattern (without `-v`) gets one of three
   notes (`_note_no_match`):
   - **Literal text.** A regex holding an operator with which it can miss its own
     text (`?+()[]{}^$\`; `.`, `*` and `|` cannot) is counted once more with
@@ -159,6 +159,16 @@ Modes:
     or one `pattern_retry` repaired, gets no note. A Swarm Agent searched a URL
     with `?ele=` in it, got `No matches` and went on as if the URL were absent
     (Swarm run 2026-10-12, one call).
+  - **Across lines.** Otherwise a regex without `-U` that holds `\s` (also in
+    `[\s\S]`) or the `s` flag (`(?s)`, `(?is:`), written to match a line break,
+    is counted once more with `--multiline`. When it then matches, the `note`
+    says so and names `-U`: `Within one line, pattern matches nothing; across
+    lines it occurs in 1 file. Add -U to args to let a match span lines.` The
+    call keeps its empty result. A literal `\n` needs no note: ripgrep's error
+    already names `-U`. An Agent searched a JSON file with `[\s\S]` between
+    two lines without `-U` and got only `No matches` (Sessions, 2026-10-13);
+    that pattern allowed one character where the file has a line break and
+    indentation, so it matches nothing with `-U` either and gets no note.
   - **File names.** Otherwise, in content or files output, a pattern shaped like
     file names (`file_name_extensions` in `_search_hints.py`) whose names the
     complete listing did not match gets `No file name matches pattern either. To
@@ -174,6 +184,7 @@ Modes:
     directory prefix, without extensions), each answered only `No matches in 812
     searched files.` (Swarm run 2026-10-12). Coverage:
     `test_a_regex_without_matches_names_the_literal_search_when_its_text_occurs`,
+    `test_a_regex_without_matches_names_the_multiline_search_when_it_spans_lines`,
     `test_a_file_name_pattern_without_matches_says_no_name_matches_either`.
 - A files search (`output: "files"`) that does find contents, with one pattern
   shaped like file names (`file_name_extensions`: words, `-`, `/`, dots, `\.`,
@@ -597,6 +608,7 @@ blank placeholders, so no sentence has to warn about them.
 | Help: `Output: content names each file on its own line, followed by line:text for its matching lines and line-text for context lines.` | States the heading layout (Results and Paging -> Content lines) for an Agent that asks how to read results (F4); it replaced `content shows path:line:text for matching lines and path-line-text for context lines` with the layout change (2026-10-12). |
 | `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
 | Bare flag beside its field: `--glob in args had no value and was ignored; glob gives "tools/*.py".` | The call runs as the named field says; the note tells the Agent the flag had no effect, so it does not repeat it (Swarm run 2026-10-12: one call failed with `needs a value as the next item` although `glob` gave the value). |
+| Across lines: `Within one line, pattern matches nothing; across lines it occurs in 1 file. Add -U to args to let a match span lines.` | A search whose regex was written to cross a line break (`[\s\S]`) found nothing without `-U`, and the empty result gave no cause (Sessions, 2026-10-13). Names the flag; only when the `-U` count finds the text, so the note never sends the Agent to a search that also comes back empty. |
 | Literal text: `As a regular expression, pattern matches nothing ("?" is an operator); as literal text it occurs in 1 file. Add -F to args to search for it literally.` | An empty result for a URL with `?` read as "the URL is absent" (Swarm run 2026-10-12). Names the operator so the Agent sees why, and the flag that searches the text. |
 | File names: `No file name matches pattern either. To list similar file names, pass glob "harvest_*.txt" without pattern.` | `No matches` alone did not tell the Agent that names were checked too; it searched the same missing files three times (Swarm run 2026-10-12). "without pattern" keeps the suggested call a listing, since `glob` beside `pattern` still searches contents. |
 | Count: `The counts are matching lines, which hold 3 matches in all. Add --count-matches to args to count matches per file.` | The Agent wanted occurrences and needed a second call (Swarm run 2026-10-12); the total answers most such calls without one. |

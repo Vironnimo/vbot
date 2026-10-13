@@ -37,7 +37,8 @@ Tool shares only its name.
   `Replaced the content of X (N lines).`, `X already has this content. No file was
   changed.` Content that leaves a Python, JSON, YAML or TOML file unparsable adds
   the syntax warning shared with `edit` and `apply_patch`, with the lines around
-  the error (`apply_patch.md` -> Agent-facing text). A file changed on disk while the call ran fails `file_changed`:
+  the error (`apply_patch.md` -> Agent-facing text); a line of many escaped line
+  breaks gets the note shared with them (same table). A file changed on disk while the call ran fails `file_changed`:
   `X changed on disk while this write ran. Read it before writing it again.`
 - Coverage: `tests/core/tools/test_edit_tools.py`
   (`test_write_creates_replaces_after_a_read_and_keeps_identical_content`,
@@ -56,3 +57,4 @@ definitions` estimate).
 | `path`: no text | The name says the role; both path forms are accepted (review 2026-10-10). |
 | `content`: `Complete file content.` | Says the value is the whole file, so an Agent does not send a fragment or a diff. |
 | `write replaces the whole file and has no old_string. To replace text inside a file, call edit with path and edits.` | Edit-shaped calls sent to `write` name the Tool that takes them instead of failing on unknown parameters. |
+| `write has no page_id: it writes the file given as path.` plus the `swarm_wiki` change call | Shared with `edit` (`edit.md` -> Agent-facing text). |

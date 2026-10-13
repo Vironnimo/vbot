@@ -1470,7 +1470,8 @@ def _match_rewrapped(content: str, old: str) -> list[tuple[int, int]]:
     line break with any indentation stand for each other between words. Leading
     and trailing whitespace keeps its line breaks: a copy that starts with a
     line break starts a line of the file, one that ends with a line break ends
-    one. At least one line break must fall elsewhere, else a precise strategy
+    one, and one that starts with indentation alone starts a line or follows a
+    space or tab inside one. At least one line break must fall elsewhere, else a precise strategy
     decides, and the copy needs ``_REWRAPPED_MIN_WORDS`` words.
     """
     lead, core, trail = _rewrapped_parts(old)
@@ -1486,7 +1487,9 @@ def _match_rewrapped(content: str, old: str) -> list[tuple[int, int]]:
         # Trailing spaces of the line before stay; the indentation is replaced.
         head = r"\n" + r"[ \t]*\n" * (lead_breaks - 1) + r"[ \t]*"
     else:
-        head = r"^[ \t]*" if lead else ""
+        # Indentation alone: the start of a line, or a space or tab inside one,
+        # as where a file written on one line holds the passage.
+        head = r"(?:^[ \t]*|(?<=[ \t]))" if lead else ""
     trail_breaks = trail.count("\n")
     if trail_breaks:
         tail = r"[ \t]*\n" * trail_breaks + (r"[ \t]*" if trail[-1] != "\n" else "")
@@ -1494,11 +1497,14 @@ def _match_rewrapped(content: str, old: str) -> list[tuple[int, int]]:
         tail = r"[ \t]*$" if trail else ""
     pattern = re.compile(f"(?=({head}({body}){tail}))", re.MULTILINE)
     wanted = [run.count("\n") for run in runs]
+    folded = _folded(content, typographic=True)
     found = [
         match.span(1)
-        for match in pattern.finditer(_folded(content, typographic=True))
+        for match in pattern.finditer(folded)
         # A copy whose line breaks are all the file's is the precise strategies' concern.
         if [run.count("\n") for run in _SPACE_RUN_RE.findall(match[2])] != wanted
+        # After indentation alone, the match from the start of the line holds the passage.
+        and not (lead and not lead_breaks and _after_indentation(folded, match.start(1)))
     ]
     if not found:
         return []
@@ -1512,6 +1518,12 @@ def _match_rewrapped(content: str, old: str) -> list[tuple[int, int]]:
             continue
         matches.append((spans[start][0], spans[end - 1][1]))
     return matches
+
+
+def _after_indentation(text: str, start: int) -> bool:
+    """Whether only spaces and tabs, at least one, precede ``start`` on its line."""
+    line_start = text.rfind("\n", 0, start) + 1
+    return start > line_start and not text[line_start:start].strip(" \t")
 
 
 def rewrapped_place(content: str, old: str) -> tuple[int, int] | None:

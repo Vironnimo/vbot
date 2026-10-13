@@ -22,14 +22,15 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from functools import cache, partial
 from typing import Any, Literal
 
 from core.tools._file_changes import cancelled_paths, change_batch, file_reports, run_operations
-from core.tools._patch_report import failure_text, patch_result
+from core.tools._patch_report import EQUAL_TEXT, failure_text, patch_result
 from core.tools._patch_requests import APPLY_PATCH_TOOL_NAME, content_operation
 from core.tools._patch_syntax import _Hunk, _Operation, _Replacement, _same_path
+from core.tools._swarm_references import wiki_change_call
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import (
@@ -146,6 +147,8 @@ _WRITE_TEMPLATES = {
     "partial_change": f"call {model_tool_name(EDIT_TOOL_NAME)} to change only part of it",
 }
 _NO_PATH = "The call names no file. Add path, relative to the working directory or absolute."
+# A call that names a Swarm Wiki page as page_id and no path; the handler refuses it.
+_PAGE_ID = "page_id"
 
 
 def edit_dialect(family: str) -> EditDialect:
@@ -299,6 +302,10 @@ def normalize_edit_arguments(arguments: Any) -> Any:
             raise ValueError("\n".join(refusals))
         normalized["edits"] = items
     if "path" not in normalized:
+        page = _wiki_page(normalized)
+        if page is not None:
+            # The path and edits only satisfy the contract: the handler refuses first.
+            return {_PAGE_ID: page, "path": ".", "edits": []}
         raise ValueError("\n".join([_NO_PATH, *refusals]))
     if not edits and set(normalized) <= {"path", "edits"}:
         raise ValueError(
@@ -510,6 +517,10 @@ def normalize_write_arguments(arguments: Any) -> Any:
             f"a file, call {edit} with path and edits."
         )
     if "path" not in normalized:
+        page = _wiki_page(normalized)
+        if page is not None:
+            # The path and content only satisfy the contract: the handler refuses first.
+            return {_PAGE_ID: page, "path": ".", "content": ""}
         raise ValueError(_NO_PATH)
     if "content" not in normalized:
         raise ValueError(
@@ -517,6 +528,26 @@ def normalize_write_arguments(arguments: Any) -> Any:
             'text of the file ("" empties it).'
         )
     return normalized
+
+
+def _wiki_page(arguments: dict[str, Any]) -> str | None:
+    """Return the page a call without path names as ``page_id``, if it names one."""
+    pages = [
+        value
+        for key, value in arguments.items()
+        if spelling(key) == spelling(_PAGE_ID) and isinstance(value, str) and value.strip()
+    ]
+    return pages[0] if len(pages) == 1 else None
+
+
+def _page_id_refusal(context: ToolContext, tool: str, page: Any) -> JsonObject:
+    """Refuse a change of ``page_id``, naming the swarm_wiki call when it is offered."""
+    action = "changes the file" if tool == EDIT_TOOL_NAME else "writes the file"
+    message = (
+        f"No file was changed.\n{model_tool_name(tool)} has no page_id: it {action} given as path."
+    )
+    call = wiki_change_call(page, context.offers)
+    return tool_failure("invalid_arguments", f"{message} {call}" if call else message)
 
 
 def _refusing(normalizer: Any) -> Any:
@@ -617,8 +648,18 @@ def _failed_edit(
     return prepared
 
 
-def _edit_failure(context: ToolContext, errors: Sequence[JsonObject], total: int) -> JsonObject:
-    """Say that no edit was applied, why each failed edit failed, and which to correct."""
+def _edit_failure(
+    context: ToolContext,
+    errors: Sequence[JsonObject],
+    total: int,
+    in_place: Mapping[int, str] | None = None,
+) -> JsonObject:
+    """Say that no edit was applied, why each failed edit failed, and which to correct.
+
+    ``in_place`` says, by edit number, which other edits found their new text
+    already in the file: they need no other call.
+    """
+    in_place = in_place or {}
     numbers = [n for n in (_edit_number(error, total) for error in errors) if n is not None]
     failures = []
     for error in errors:
@@ -632,9 +673,13 @@ def _edit_failure(context: ToolContext, errors: Sequence[JsonObject], total: int
             if total == 2
             else (f"None of the {total} edits were", f"all {total} edits")
         )
-        lines = [f"{none} applied; no file was changed.", *failures]
+        lines = [f"{none} applied; no file was changed.", *failures, *in_place.values()]
         if len(numbers) == total:
             lines.append(f"Send {every} again, each corrected or left out.")
+        elif numbers and len(numbers) + len(in_place) == total:
+            missed = _edit_numbers(numbers)
+            each = "each " if len(numbers) > 1 else ""
+            lines.append(f"Send only {missed} again, {each}corrected or left out.")
         elif numbers:
             lines.append(f"Send {every} again with {_edit_numbers(numbers)} corrected or left out.")
     first = errors[0]
@@ -676,26 +721,39 @@ def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadSt
         if _REFUSED in edit
     ]
     skipped = outcome.get("failures") or []
-    # Edits that matched and changed nothing, in a call that changed the file.
-    unchanged = [
-        n
-        for n in (_edit_number({"label": label}, total) for label in outcome.get("unchanged") or [])
-        if n is not None
-    ]
+    # Edits that changed nothing, each with why when its new text already stood there.
+    unchanged: dict[int, str] = {}
+    for label, reason in (outcome.get("unchanged") or {}).items():
+        # The edit of a one-edit call has no label.
+        number = 1 if total == 1 else _edit_number({"label": label}, total)
+        if number is not None:
+            unchanged[number] = reason
     applied = total - len(refused) - len(skipped) - len(unchanged)
     files = file_reports(context, batch, edits=applied)
     if outcome["status"] == "failed" and not skipped:
         # A problem of the whole call, such as a missing file.
         return _edit_failure(context, [outcome["error"], *refused], total)
     errors = sorted([*refused, *skipped], key=lambda error: _edit_number(error, total) or 0)
+
+    def where(n: int) -> str:
+        return str(outcome["where"]) if total == 1 else f"{outcome['where']}, edit {n} of {total}"
+
+    in_place = {n: f"{where(n)}: {reason}" for n, reason in sorted(unchanged.items()) if reason}
+    if outcome["status"] == "already_applied" and in_place and len(unchanged) == total:
+        # Nothing to write: say why for each edit, naming where new text already stood.
+        outcome["note"] = " ".join(
+            in_place.get(n, f"{where(n)}: {EQUAL_TEXT}") for n in sorted(unchanged)
+        )
     no_ops: list[JsonObject] = [
         {
             "status": "unchanged",
             "action": "update",
             "path": outcome["path"],
-            "where": f"{outcome['where']}, edit {n} of {total}",
+            "where": where(n),
+            **({"note": in_place[n]} if n in in_place else {}),
         }
-        for n in unchanged
+        for n in sorted(unchanged)
+        if outcome["status"] == "applied"
     ]
     for error in errors[1:]:
         # Matched precisely only, so that no other text stands in for a failed edit's.
@@ -705,7 +763,7 @@ def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadSt
         return patch_result(context, files, [*batch.results, *no_ops], cancelled_paths(batch))
     if outcome["status"] != "applied":
         # The edits that did not fail left the file as it was.
-        return _edit_failure(context, errors, total)
+        return _edit_failure(context, errors, total, in_place)
     failed = [n for n in (_edit_number(error, total) for error in errors) if n is not None]
     entries = [
         outcome,
@@ -733,6 +791,8 @@ def _execute_write(context: ToolContext, arguments: JsonObject, state: FileReadS
 
 def make_edit_handler(file_state: FileReadState) -> ToolHandler:
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if _PAGE_ID in arguments:
+            return _page_id_refusal(context, EDIT_TOOL_NAME, arguments[_PAGE_ID])
         return _execute_edit(context, arguments, file_state)
 
     return handler
@@ -740,6 +800,8 @@ def make_edit_handler(file_state: FileReadState) -> ToolHandler:
 
 def make_write_handler(file_state: FileReadState) -> ToolHandler:
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if _PAGE_ID in arguments:
+            return _page_id_refusal(context, WRITE_TOOL_NAME, arguments[_PAGE_ID])
         return _execute_write(context, arguments, file_state)
 
     return handler
@@ -816,6 +878,7 @@ def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) ->
             activation_source=APPLY_PATCH_TOOL_NAME,
             open_input_schema=True,
             argument_normalizer=_refusing(normalizer),
+            unadvertised_parameters={_PAGE_ID: {}},
             result_schema=_RESULT_SCHEMA,
             display=ToolDisplay(parts_builder=parts, hidden_argument_keys=hidden, details=True),
         )

@@ -202,6 +202,28 @@ async def test_a_regex_without_matches_names_the_literal_search_when_its_text_oc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("pattern", "noted"),
+    [
+        (r'"uses": \[[\s\S]*?"note"', True),
+        (r'(?s)"uses".*"note"', True),
+        # Across lines it matches nothing either.
+        (r'"uses": \[[\s\S]\{', False),
+    ],
+)
+async def test_a_regex_without_matches_names_the_multiline_search_when_it_spans_lines(
+    project: Path, pattern: str, noted: bool
+):
+    (project / "uses.json").write_text('{\n  "uses": [\n    {"note": 1}\n  ]\n}\n')
+    result = await dispatch(project, {"pattern": pattern})
+    assert "content" not in result["data"]
+    assert ("-U" in result["data"].get("note", "")) is noted
+    spanning = await dispatch(project, {"pattern": pattern, "args": ["-U"]})
+    assert ("uses.json" in spanning["data"].get("content", "")) is noted
+    assert "note" not in spanning["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("arguments", "noted"),
     [
         # Swarm run 2026-10-12: one counted line held the text three times.

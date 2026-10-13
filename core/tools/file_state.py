@@ -75,6 +75,9 @@ class StaleReason(Enum):
 
     NEVER_READ = "never_read"
     MODIFIED = "modified"
+    # The stamp is current, but a change of this Session merged over content
+    # another writer made after its read, which it has not read since.
+    UNSEEN = "unseen"
 
 
 class FileReadState:
@@ -82,6 +85,8 @@ class FileReadState:
 
     def __init__(self) -> None:
         self._stamps: dict[tuple[str, str], tuple[float, int]] = {}
+        # Stamped files whose current content holds changes the Session never read.
+        self._unseen: set[tuple[str, str]] = set()
         self._stamps_lock = threading.Lock()
         self._path_locks: dict[Path, _PathLockEntry] = {}
         self._path_locks_lock = threading.Lock()
@@ -89,9 +94,8 @@ class FileReadState:
     def record_read(self, session_id: str, resolved: Path) -> None:
         """Stamp a file's current ``(mtime, size)`` for a session.
 
-        Called for content a Session received in one step, and by the file edit
-        Tools after a successful write — the tool's own write is an implicit read, so the
-        next full-file write in the same session needs no re-read.
+        Called for content a Session received in one step; the file edit Tools
+        stamp what they wrote with ``record_change``.
         """
         stamp = self.stamp(resolved)
         if stamp is not None:
@@ -113,13 +117,53 @@ class FileReadState:
         """Record a stamp captured by ``stamp`` for a completed read."""
         if not FILE_STATE_GUARD_ENABLED:
             return
+        self._record(session_id, resolved, stamp, unseen=False)
+
+    def record_change(self, session_id: str, resolved: Path, *, merged: bool) -> None:
+        """Stamp a file after a change of the Session wrote it or left it as it was.
+
+        The file edit Tools call this in place of ``record_read``: the Session knows
+        the result only as far as it knew the file before. ``merged`` says the
+        change applied to content another writer changed after the Session's
+        read; that content stays unseen, as does content left unseen by an
+        earlier such change, until the Session reads the file again.
+        """
+        stamp = self.stamp(resolved)
+        if stamp is None:
+            return
+        key = (session_id, str(resolved))
+        with self._stamps_lock:
+            unseen = merged or key in self._unseen
+        self._record(session_id, resolved, stamp, unseen=unseen)
+
+    def _record(
+        self, session_id: str, resolved: Path, stamp: tuple[float, int], *, unseen: bool
+    ) -> None:
         key = (session_id, str(resolved))
         with self._stamps_lock:
             # Re-insert so a re-read counts as most-recently-used for eviction.
             self._stamps.pop(key, None)
             self._stamps[key] = stamp
+            if unseen:
+                self._unseen.add(key)
+            else:
+                self._unseen.discard(key)
             while len(self._stamps) > _MAX_TRACKED_FILES:
-                del self._stamps[next(iter(self._stamps))]
+                oldest = next(iter(self._stamps))
+                del self._stamps[oldest]
+                self._unseen.discard(oldest)
+
+    def recent_files(self, session_id: str, limit: int) -> list[Path]:
+        """Return up to ``limit`` files the Session read or changed, most recent first."""
+        with self._stamps_lock:
+            keys = list(self._stamps)
+        recent: list[Path] = []
+        for owner, path in reversed(keys):
+            if owner == session_id:
+                recent.append(Path(path))
+                if len(recent) == limit:
+                    break
+        return recent
 
     def check_stale(self, session_id: str, resolved: Path) -> StaleReason | None:
         """Return why a mutation on ``resolved`` is stale, or ``None`` if safe.
@@ -127,12 +171,16 @@ class FileReadState:
         Only meaningful for a file that exists — the caller skips a non-existent
         write target (a new file is never stale). ``NEVER_READ`` means the session
         has no stamp for the file; ``MODIFIED`` means its current ``(mtime, size)``
-        differs from the stamp (changed on disk since the read).
+        differs from the stamp (changed on disk since the read); ``UNSEEN`` means
+        the stamp is current but a change of the Session merged over content it
+        has not read (``record_change``).
         """
         if not FILE_STATE_GUARD_ENABLED:
             return None
+        key = (session_id, str(resolved))
         with self._stamps_lock:
-            stamp = self._stamps.get((session_id, str(resolved)))
+            stamp = self._stamps.get(key)
+            unseen = key in self._unseen
         if stamp is None:
             return StaleReason.NEVER_READ
         current = _stamp(resolved)
@@ -142,6 +190,8 @@ class FileReadState:
             return None
         if current != stamp:
             return StaleReason.MODIFIED
+        if unseen:
+            return StaleReason.UNSEEN
         return None
 
     @contextmanager

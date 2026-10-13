@@ -52,7 +52,8 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   quote repair in `tools.md` -> Shared argument repair, against the schema of an
   edit; 5 of 12 real stringified `edits` decoded this way, all as the reviewed
   reading; of the 6 `edits` texts that failed in the Swarm of 2026-10-12, 1
-  more decodes with raw line breaks read). Text that is not JSON at all is
+  more decodes with raw line breaks read; stray closing brackets after the
+  array are left out, Swarm 2026-10-13). Text that is not JSON at all is
   refused with `edits arrived as text, not as an array. ...`; broken JSON text
   is refused with where it breaks (character, item and field, the text around
   it, how to write it) and one closing sentence. When the call also has a root
@@ -108,8 +109,8 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   exactly its `old_string` -> `new_string` replacement (one through the
   `rewrapped` step, with its note), and the 395 recorded successes replay
   unchanged. Each `old_string` must match exactly one place (substring matching through the
-  engine's precise steps, read gutters, then `copy_match`, never `copy_match` with
-  `replace_all`; `apply_patch.md` -> Matching and recovery); several matches fail
+  engine's precise steps, read gutters, `\u` escapes, then `copy_match`, never
+  `copy_match` with `replace_all`; `apply_patch.md` -> Matching and recovery); several matches fail
   `ambiguous_match` with their lines, also after an earlier edit of the call.
   An `old_string` that differs from the file only in where its lines break (a
   signature wrapped after another argument, a paragraph sent as one line)
@@ -144,6 +145,19 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   labels, `_run_step` puts them in `outcome["unchanged"]`). Evidence: 12
   written calls held an item whose `new_string` was its `old_string`; the
   results counted it as applied and never named it (Swarm runs 2026-10-11/12).
+  An edit whose change the file already holds is such a no-op too
+  (`_edit_engine._new_text_in_place`): its `old_string` is not in the file,
+  its `new_string` stands exactly once (precise matching) and is not part of
+  `old_string`, the two start or end with the same line holding a word, and no
+  copy of `old_string` with errors stands outside that place. It is named
+  `X[, edit K of N]: new_string already stands at lines A-B and old_string is
+  not in the file; nothing to change.`, in place of the template when the call
+  had nothing else to write, after the file report in a written call, and
+  after the failure reports when other edits failed, whose closing then asks
+  only for the failed ones (`Send only edit 2 again, ...`). Otherwise the
+  failure keeps its `already occurs` hint. Evidence: 2 calls of the Swarm of
+  2026-10-13 resent a change already made (a rewritten block, an added comma)
+  and failed as not found; both Agents confirmed the change was in place.
   A call with failed and applied edits is a success led by the edit numbers in
   place of `apply_patch`'s change counts (`patch_result(..., lead=...)`,
   `_partial_lead`): `Edits 1, 2 and 4 were applied; edit 3 was not. Send only
@@ -296,6 +310,9 @@ where every form a Model sends is accepted (relative and absolute paths).
 | `Edit J of this call already replaced this old_string; to change that text again, use what edit J wrote as old_string.` | In a partial result edit J stays written, so merging would resend an edit whose `old_string` is gone; the next call can only build on what edit J wrote. |
 | Partial lead: `Edits 1, 2 and 4 were applied; edit 3 was not. Send only edit 3 again, corrected or left out.` (`edits 2 and 3 were not. Send only edits 2 and 3 again, each corrected or left out.`) | User decision 2026-10-12: a call applies every edit it can; results name the items by their numbers in input order (`vbot-agent-tools` -> Results). `Send only` keeps the Agent from resending the applied edits, whose `old_string` is gone or whose insertion would repeat; `left out` covers a failed edit whose change is already in the file. Replay 2026-10-12: 14 live calls refused as a whole apply in part this way. |
 | No-op item in a written call: `X, edit K of N: the new text equals the current text; nothing to change.`; the lead names only the edits that changed text (`Edit 1 was applied; edit 3 was not. ...`) | The `vbot-agent-tools` Skill requires every item without effect to be named. The sentence is the one a call of only such edits already gets, with the item's label. Before, 12 written calls counted such an item as applied (Swarm runs 2026-10-11/12). |
+| Change already made: `X, edit K of N: new_string already stands at lines A-B and old_string is not in the file; nothing to change.` | An effect that already holds is a success with nothing to do (`vbot-agent-tools`). 2 calls of the Swarm of 2026-10-13 resent a change already made and got `old_string was not found`; each Agent spent a call to confirm the change. The lines are the evidence, so the Agent need not reread; naming both texts says why nothing was changed. |
+| Escape note: `old_string has ü where the file has ü; the \u escapes in new_string were written as the characters they stand for.` | 2 calls of the Swarm of 2026-10-13 wrote `ü` and `°` as `ü` and `°` in the `old_string` of a JSON and a Python file that hold the characters, and failed as not found. The written text differs from the call, so the note says how both texts were read and, as a deviation note, shows the changed lines. |
+| Other file: `old_string occurs in X, which this Session read or changed; this call is for Y.` | 7 failed edits of 3 Agents in the Swarm of 2026-10-13 sent `old_string` from one file the Agent worked on with the `path` of another and got only the closest text or `No similar text is in the file`; each Agent found the slip itself and resent the edit to the other file. Naming the file states the likely slip without applying the edit there: which file is meant stays the Agent's call. Not for short texts, which occur in unrelated files. |
 | `After an earlier edit of this call failed, old_string must match the file exactly (up to whitespace).` | After a failed edit the later ones match without copy tolerance, so a copy that applies in a call of its own fails here; without the sentence the not-found report reads as if the text were missing, and the Agent cannot tell why the same copy matched before. |
 | `Neither edit was applied; no file was changed.` first, then the reports, then `Send both edits again, each corrected or left out.` (`None of the N edits were applied; ...`, `all N edits`) | When every edit failed, each has its report above; naming them all again in the closing adds nothing. |
 | Split report: `old_string joins lines from different places in the file: its lines 1-3 are lines 60-62 and its lines 5-6 are lines 41-42. Give each place its own edit.` | An `old_string` that joined file lines 60-62 and 41-42 got the closest texts and a first difference at line 37, which named neither cause; the Agent rewrote the whole 142-line file with `write` instead (Swarm Run 2026-10). A passage that only left out a few lines keeps its first difference, which names the missing line. |
@@ -309,6 +326,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | Quoted text in match reports, the `line_join` refusal and notes, such as `First difference, line 1: the file has "s = 'a°b'" where old_string has ...`: the characters as the file or the call has them, a backslash or quote single, an escape only for a character that shows nothing and is not whitespace (`​`) (`_patch_syntax.quoted`, shared with `apply_patch`) | `repr` doubled every backslash: a line holding `°` read `'...\\u00b0...'` in the first difference while the closest-text listing above it showed one backslash (Swarm review, 2026-10-12), and an Agent copying the quote into `old_string` would send two. Tabs and other whitespace stay as written, as in the listing: matching and the first difference compare runs of whitespace as equal, so a tab is never the difference shown, and a `\t` escape among literal backslashes could not be told from a file's own `\t`; the quotes show where trailing spaces end. A zero-width character keeps its escape: the first difference can rest on one, and shown raw both sides would read alike. |
 | `edits item K has no old_string, the current text to replace. To insert text, put the line above it in old_string, and that line followed by the new text in new_string.` (`...; old_string "" creates a file.` unless another item has old text; flat: `new_string needs old_string, the current text it replaces. ...`) | Both such refusals in the live Sessions (Swarm, 2026-10-12) were inserts into a file other items of the call edited; the former `Send old_string and new_string (old_string "" creates a file)` named only file creation. Repeating the line in `new_string` keeps it, which Models miss when told only to use it as `old_string`. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
+| `edit has no page_id: it changes the file given as path. Swarm Wiki page w1 changes with swarm_wiki: action "update", page_id "w1", and old_text and new_text for the passage.` (after `No file was changed.`; `write ... it writes the file given as path.` for `write`) | An `edit` call sent a Wiki passage change with `page_id: "w1"` and no `path` and got only `The call names no file. Add path ...` (Swarm Sessions, 2026-10-13). A call without `path` that names a page as `page_id` is refused in the handler, where the offered Tools are known (`_page_id_refusal`); a call with `path` and `page_id` is refused the same way, since it has two targets. The Wiki sentence only when `swarm_wiki` is offered and the value is a page ID such as `w1` (`_swarm_references.wiki_change_call`). |
 | `file_not_found` for a page number: `w3.md is not a file. Swarm Wiki page w3 changes with swarm_wiki: action "update", page_id "w3", and old_text and new_text for the passage.` | An `edit` call named a Wiki page number as `path` (Swarm Sessions, 2026-10-12). No ready call: the Wiki takes its own `old_text` and `new_text`. Only when `swarm_wiki` is offered; built with `missing_file_message` (`tools/read.md`), shared with `apply_patch`. |
 | Broken `edits` JSON text: `edits is not valid JSON. At character N, <what breaks in which field>:` + the text around it + how to write it | The former `edits arrived as text, not as an array.` named no break, so the Model could not tell what to fix; 12 `edits` texts in the live Sessions failed this way, 7 of them still after the quote repair (tool review 2026-10-11). |
 | `If this text fails again, send one edit per call, or call write with the whole file.` | Only for a break inside a text (a quote, an escape, a line break) with no edit field beside `edits`: long code with quotes is what Models fail to escape; a smaller call or `write` avoids the nested JSON. Dispatch does not know whether the call repeats, so the sentence is conditional. |

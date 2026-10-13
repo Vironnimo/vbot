@@ -37,6 +37,14 @@ _NOT_FOUND_CODES = {"text_not_found", "context_not_found", "line_numbered_conten
 _AMBIGUOUS_CODES = {"ambiguous_match", "ambiguous_context"}
 # An Update names at most this many changed places before counting the rest.
 _NAMED_PLACES = 5
+# A written line with this many escaped line breaks followed by indentation, the
+# first outside a quoted string, holds code that was meant as lines of its own: one
+# write put about 220 lines of Python behind a comment on one line (Sessions,
+# 2026-10-13). Data files escape line breaks in strings as a rule.
+_ESCAPED_BREAK = re.compile(r"\\n(?:\\n)*[ \t]{2,}\S")
+_ESCAPED_BREAKS = 5
+_ESCAPED_BREAK_SUFFIXES = frozenset({".json", ".jsonl", ".ipynb"})
+_ESCAPED_BREAK_LINES = 3
 # The leads of a partial result: apply_patch's change counts, edit's edit numbers.
 _PARTIAL_LEAD = re.compile(
     r"\d+ of \d+ changes (?:fully )?applied|Edits? \d[-\d, and]* (?:was|were) applied; edits? \d"
@@ -169,16 +177,82 @@ def file_report(
         return report
     if kind in {"created", "replaced"}:
         text = after or ""
-        report.line_count = len(split_text_lines(text))
+        lines = split_text_lines(text)
+        report.line_count = len(lines)
         warning = warning_for_written_file(path, text) if after is not None else None
         report.syntax_warning = warning
+        report.notes.extend(_escaped_breaks(path, list(enumerate(lines, 1))))
         return report
     if before is None or after is None or before == after:
         return report
     report.preview = _after_preview(before, after)
     report.places, report.removed = _changed_places(before, after)
     report.syntax_warning = warning_for_edited_file(path, before, after)
+    old_lines, new_lines = split_text_lines(before), split_text_lines(after)
+    written = [
+        (number + 1, new_lines[number])
+        for tag, _, _, first, last in line_opcodes(old_lines, new_lines)
+        if tag != "equal"
+        for number in range(first, last)
+    ]
+    report.notes.extend(_escaped_breaks(path, written))
     return report
+
+
+def _escaped_breaks(path: Path, lines: list[tuple[int, str]]) -> list[str]:
+    """Note written lines that hold many escaped line breaks outside a string.
+
+    The text is written as sent; the note says that the text after the first
+    escaped break stays on that line.
+    """
+    if path.suffix.casefold() in _ESCAPED_BREAK_SUFFIXES:
+        return []
+    found: list[tuple[int, int]] = []
+    for number, line in lines:
+        breaks = list(_ESCAPED_BREAK.finditer(line))
+        if len(breaks) < _ESCAPED_BREAKS:
+            continue
+        if _in_string(line[: breaks[0].start()]):
+            continue
+        found.append((number, len(breaks)))
+    if not found:
+        return []
+    numbers = [str(number) for number, _ in found[:_ESCAPED_BREAK_LINES]]
+    if len(found) > _ESCAPED_BREAK_LINES:
+        numbers.append(f"{len(found) - _ESCAPED_BREAK_LINES} more")
+    where = (
+        f"Line {numbers[0]} holds"
+        if len(found) == 1
+        else f"Lines {', '.join(numbers[:-1])} and {numbers[-1]} hold"
+    )
+    count = sum(breaks for _, breaks in found)
+    return [
+        f"{where} {count} \\n sequences followed by indentation, outside a string, so the "
+        "text after them stays on that line. If they stand for line breaks, write real "
+        "line breaks."
+    ]
+
+
+def _in_string(lead: str) -> bool:
+    """Say whether the end of ``lead``, the start of a line, is inside a quoted string.
+
+    A ``#`` or ``//`` outside a string starts a comment, whose quotes open nothing.
+    """
+    quote = None
+    index = 0
+    while index < len(lead):
+        character = lead[index]
+        if quote is not None:
+            if character == "\\":
+                index += 1
+            elif character == quote:
+                quote = None
+        elif character in "\"'`":
+            quote = character
+        elif character == "#" or lead.startswith("//", index):
+            return False
+        index += 1
+    return quote is not None
 
 
 def _file_text(report: _FileReport, *, partial: bool) -> str:
@@ -275,11 +349,7 @@ def _excerpts(candidates: list[JsonObject], path: str | None = None) -> list[str
             f'offset="{line}:{character}", limit={end - line})'
             for line, character, end in continuations
         ]
-        rendered.append(
-            f"Excerpt truncated. If {read} is available, continue with "
-            + "; ".join(calls)
-            + "; otherwise use another file reader."
-        )
+        rendered.append("Excerpt truncated. Continue with " + "; ".join(calls) + ".")
     elif continuations or any(
         candidate.get("truncated") and not candidate.get("continuations")
         for candidate in candidates
@@ -532,11 +602,15 @@ def _entry_text(entry: JsonObject) -> str:
     return f"{prefix}: {failure_text(entry['error'])}"
 
 
+# Why a text replacement whose new text equals the text it matched changed nothing.
+EQUAL_TEXT = "the new text equals the current text; nothing to change."
+
+
 def _no_op_text(entry: JsonObject) -> str:
     if entry.get("note"):
         return str(entry["note"])
     if entry["status"] == "unchanged":
-        return f"{entry['where']}: the new text equals the current text; nothing to change."
+        return f"{entry['where']}: {EQUAL_TEXT}"
     if entry["action"] == "add":
         return f"{entry['where']} already has this content."
     if entry["action"] == "move":

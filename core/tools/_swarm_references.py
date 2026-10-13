@@ -2,11 +2,12 @@
 
 Swarm participants see Wiki pages as ``w3`` and Board posts as ``#42``, and some
 send them to ``read``, ``edit`` or ``search_files``: a page number as a path, a
-post as ``message_id`` (Swarm Sessions, 2026-10-12). The file Tools cannot run
-such a call, but their errors name the Swarm call that reads or changes the
-page or post, when the Agent is offered that Tool. The bundled Swarm
-Extension owns these Tools; this module is the one place outside it that names
-them and their call shape (``extensions/swarm.md``).
+post as ``message_id`` (Swarm Sessions, 2026-10-12), a page as ``page_id`` of an
+``edit`` (2026-10-13). The file Tools cannot run such a call, but their errors
+name the Swarm call that reads or changes the page or post, when the Agent is
+offered that Tool. The bundled Swarm Extension owns these Tools; this module is
+the one place outside it that names them and their call shape
+(``extensions/swarm.md``).
 """
 
 from __future__ import annotations
@@ -52,10 +53,7 @@ def wiki_page_call(
         return None
     page = f"w{int(match[1])}"
     if change:
-        return (
-            f'Swarm Wiki page {page} changes with {SWARM_WIKI_TOOL}: action "update", '
-            f'page_id "{page}", and old_text and new_text for the passage.'
-        )
+        return _change_call(page)
     arguments = {"action": "read", "page_id": page, **(fields or {})}
     left_out = ""
     if positions and all(value >= _CHARACTER_POSITIONS for value in positions.values()):
@@ -68,6 +66,26 @@ def wiki_page_call(
         )
     call = json.dumps(arguments, ensure_ascii=False)
     return f"Swarm Wiki page {page} reads with {SWARM_WIKI_TOOL} {call}.{left_out}"
+
+
+def wiki_change_call(page_id: Any, offers: Callable[[str], bool]) -> str | None:
+    """Name the swarm_wiki call that changes page ``page_id``, when it is offered.
+
+    A file change sent with ``page_id`` instead of a path meant that Wiki page.
+    """
+    if not isinstance(page_id, str):
+        return None
+    match = _PAGE_NUMBER.fullmatch(page_id.strip())
+    if match is None or not offers(SWARM_WIKI_TOOL):
+        return None
+    return _change_call(f"w{int(match[1])}")
+
+
+def _change_call(page: str) -> str:
+    return (
+        f'Swarm Wiki page {page} changes with {SWARM_WIKI_TOOL}: action "update", '
+        f'page_id "{page}", and old_text and new_text for the passage.'
+    )
 
 
 def board_post_call(message_id: Any, offers: Callable[[str], bool]) -> str | None:
