@@ -149,6 +149,12 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   like `read`, with a caret under the reported column when the parser names one;
   `syntax_check._with_excerpt`); a warning for an error the file already had shows
   none, since that error is not the Agent's to find now.
+  A written line (a created or replaced file's lines, an Update's changed and
+  added lines) holding at least 5 literal `\n` sequences followed by
+  indentation, the first outside a quoted string (`#` or `//` outside a string
+  starts a comment), gets a note naming the line; the text is written as sent.
+  Not for `.json`, `.jsonl` and `.ipynb`, which escape line breaks in strings
+  (`_patch_report._escaped_breaks`).
 - Mixed outcomes are a success led by counts (`N of M changes
   applied; K did not.`, or `fully applied; K only in part` when a write was
   incomplete; `edit` leads with its edit numbers instead, `tools/edit.md` ->
@@ -758,6 +764,7 @@ replacements still went through Delete File plus Add File (agent-eval
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
 | Syntax warning excerpt (shared with `edit` and `write`): `Warning: Syntax check failed after this edit: SyntaxError: '(' was never closed (line 2, column 12)` followed by `1| ...`, `2| ...`, a caret line and `3| ...` | Real Sessions (2026-10) read 30-45 lines after a warning to find the line the error names; the excerpt shows it in the result. Only the error's own lines are shown, not more, so a result stays short. |
+| Escaped line breaks (shared with `edit` and `write`): `Line 424 holds 221 \n sequences followed by indentation, outside a string, so the text after them stays on that line. If they stand for line breaks, write real line breaks.` | One `write` of a Python file put its last 220 lines, with their line breaks written as `\n`, behind a comment on one line; the file still parsed, so no syntax warning came and the code silently did nothing (Sessions, 2026-10-13). Of 237 `write` contents and 713 edit texts of that day, only this one gets the note. The text is never rewritten: a string or a comment can hold such sequences on purpose. |
 | Decorator note (shared with `edit`): `The added lines went above line 13 (@staticmethod), not between it and the definition at line 14 it belongs to.` | The written text differs from the call, so the Agent learns it and gets the region shown; without the note it would see its lines below where it put them and could "fix" them back between decorator and definition. Line numbers name the decorators and the definition, not the added lines, whose numbers the `Updated X (lines ...)` header can count differently when an added line repeats a decorator. |
 | `context_lines_not_found`: `X: the context lines around the + lines were not found.` | A block that only adds lines was reported as `the lines to replace were not found`, which names lines the block does not have and points the Agent at text to replace instead of at its context lines (review of a Swarm Run, 2026-10). |
 | `file_not_read` lead (shared with `write`): `X already exists and was not read with read in this conversation, so it was not replaced.` | Names the real state: an Agent that saw the file through the shell or a search has no read stamp, and the former `this Session has not read it` contradicted what it remembered (review 2026-10-10). |

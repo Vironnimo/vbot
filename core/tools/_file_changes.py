@@ -907,7 +907,7 @@ def file_reports(
         added += change["added"]
         removed += change["removed"]
         if after.exists:
-            report.notes = batch.warnings.get(path, [])
+            report.notes[:0] = batch.warnings.get(path, [])
         reports.append(report)
     if entries:
         context.add_display_line_changes(added=added, removed=removed)

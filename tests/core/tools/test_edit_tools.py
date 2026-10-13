@@ -857,6 +857,39 @@ async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(t
     assert bare.read_bytes() == b"new"
 
 
+ESCAPED_BREAKS = "    # checks" + "\\n    for page in pages:\\n        check(page)" * 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "line", "noted"),
+    [
+        pytest.param("check.py", ESCAPED_BREAKS, True, id="behind-a-comment"),
+        pytest.param("check.py", f'SCRIPT = "{ESCAPED_BREAKS}"', False, id="inside-a-string"),
+        pytest.param("data.json", ESCAPED_BREAKS, False, id="data-file"),
+    ],
+)
+@pytest.mark.parametrize("tool", ["write", "edit"])
+async def test_a_line_of_escaped_line_breaks_is_written_as_sent_with_a_note(
+    tmp_path, tool, path, line, noted
+) -> None:
+    state = FileReadState()
+    target = tmp_path / path
+    target.write_bytes(b"def main():\n    pass\n")
+    state.record_read("session-test", target)
+    content = f"def main():\n{line}\n"
+    arguments = (
+        {"path": path, "content": content}
+        if tool == "write"
+        else {"path": path, "old_string": "    pass", "new_string": line}
+    )
+
+    result = await call(tmp_path, arguments, tools=registry(state), name=tool)
+
+    assert target.read_bytes() == content.encode()
+    assert ("Note: Line 2 " in text(result)) is noted
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("before", "tool", "arguments", "after"),
