@@ -2,8 +2,8 @@
 
 Each real-PowerShell case starts ``pwsh -NoProfile -NonInteractive -Command`` with
 the bootstrap on pipes through ``CommandManager`` and sends the command as its
-request, as the shell Tool does when no shell waits for a command (about a third
-of a second), so a case exists only for a distinct path through the bootstrap;
+request, as the shell Tool does when no shell waits for a command (about one
+second), so a case exists only for a distinct path through the bootstrap;
 cases that share a path share a process.
 """
 
@@ -121,6 +121,11 @@ _PRINTED_ERROR_TEXT = "; ".join(
             6,
             (),
         ),
+        (
+            "Set-Content fail.ps1 'exit 5'; Set-Alias s .\\fail.ps1; function f { s }; f",
+            5,
+            (),
+        ),
         ("function f { cmd /c exit 5; 'after-call' }\nf", 0, ("after-call",)),
         # What ran decides, not the text: through conditions and try blocks, never
         # a program that did not run, and an error after a program leaves $?.
@@ -131,6 +136,29 @@ _PRINTED_ERROR_TEXT = "; ".join(
             ("returned-sentinel",),
         ),
         ("cmd /c exit 5; Get-Item missing-sentinel", 1, ("missing-sentinel",)),
+        # Actual native starts include resolved CommandInfo, aliases and commands
+        # hidden from the script debugger. A manually written variable is no exit.
+        ("$command = Get-Command cmd; & $command /c exit 7", 7, ()),
+        ("Set-Alias c cmd; c /c exit 5", 5, ()),
+        ("function f { [System.Diagnostics.DebuggerHidden()] param(); cmd /c exit 7 }; f", 7, ()),
+        (
+            "function f { Set-Variable LASTEXITCODE 7 -Scope Global }; f; "
+            "function g { Set-Item Variable:global:LASTEXITCODE 9 }; g",
+            0,
+            (),
+        ),
+        ("cmd /c exit 7; Get-Item silenced-sentinel -ErrorAction Ignore", 1, ()),
+        (
+            "$PSNativeCommandUseErrorActionPreference = $true; function f { cmd /c exit 5 }; f",
+            5,
+            ("NativeCommandExitException",),
+        ),
+        (
+            "$PSNativeCommandUseErrorActionPreference = $true; "
+            "cmd /c exit 5; Get-Item silenced-sentinel -ErrorAction Ignore",
+            1,
+            ("NativeCommandExitException",),
+        ),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, ("requires-sentinel",)),
         # PowerShell's messages are English whatever the display language; numbers
@@ -185,6 +213,23 @@ _PRINTED_ERROR_TEXT = "; ".join(
         # end the command with the status plain pwsh reports.
         ("Write-Error 'recorded-sentinel'; exit 0", 0, ()),
         ("Write-Error 'break-sentinel'; break\n'not-run'", 1, ("break-sentinel",)),
+        ("$Host.SetShouldExit(7); cmd /c exit 3", 7, ()),
+        ("$Host.SetShouldExit(7); exit 3", 3, ()),
+        ("$Host.SetShouldExit(7); throw 'host-sentinel'", 7, ("host-sentinel",)),
+        # The command can change its language mode without disabling the runner
+        # which reports its actual status, or causing bootstrap errors to leak.
+        (
+            "$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; cmd /c exit 5",
+            5,
+            (),
+        ),
+        (
+            "$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; "
+            "Get-Item silenced-sentinel -ErrorAction Ignore",
+            1,
+            (),
+        ),
+        ("$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; exit 3", 3, ()),
         # Printed error text, warnings, and native stderr pass unchanged. Quotes
         # reach PowerShell unchanged, including typographic ones.
         (
@@ -213,8 +258,23 @@ _PRINTED_ERROR_TEXT = "; ".join(
             ("end-sentinel",),
         ),
         ("clean { cmd /c exit 7 } end { 'end-sentinel' }", 7, ("end-sentinel",)),
+        ("end { Write-Error 'end-sentinel' } clean { exit 7 }", 1, ("end-sentinel",)),
+        (
+            "end { function global:Write-Error { 'silenced-sentinel' }; "
+            "$PSDefaultParameterValues = @{'Write-Error:OutVariable' = 'global:helperSideEffect'}; "
+            "$PSModuleAutoLoadingPreference = 'None'; cmd /c exit 5 } "
+            "clean { [Console]::WriteLine('clean: ' + $?); "
+            "[Console]::WriteLine('exists: ' + "
+            "[bool]$ExecutionContext.SessionState.PSVariable.Get('helperSideEffect')); "
+            "[Console]::WriteLine('defaults: ' + $PSDefaultParameterValues.Count) }",
+            0,
+            ("clean: False\nexists: False\ndefaults: 1",),
+        ),
         # A top-level return before the end keeps the last statement's status.
         ("return (Write-Error 'return-sentinel')\n'not-run'", 1, ("Write-Error: return-sentinel",)),
+        ("return (cmd /c exit 7)", 7, ()),
+        ("return @(cmd /c exit 7)", 7, ()),
+        ("return @(cmd /c exit 7; 'after-call')", 0, ("after-call",)),
         # Objects the table formatter holds still print before the exit; a native
         # program has no terminal, for input or output.
         (
@@ -235,10 +295,18 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "param-block-native-exit",
         "later-statement",
         "called-native-exit",
+        "called-script-alias-exit",
         "called-later-statement",
         "native-in-blocks",
         "native-that-never-ran",
         "error-after-native",
+        "resolved-native-command",
+        "native-alias",
+        "debugger-hidden-native",
+        "written-exit-variable-is-no-program",
+        "ignored-error-after-native",
+        "native-error-preference",
+        "native-error-then-ignored-error",
         "requires",
         "english-messages-own-culture",
         "parse-error",
@@ -249,12 +317,23 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "silenced-then-native-exit",
         "exit-0",
         "break-after-error",
+        "host-exit-after-native",
+        "explicit-exit-after-host-exit",
+        "host-exit-and-throw",
+        "language-mode-native",
+        "language-mode-error",
+        "language-mode-exit",
         "printed-text-and-quotes",
         "named-blocks",
         "named-blocks-exit",
         "clean-block",
         "clean-block-first",
+        "clean-exit-keeps-failure",
+        "clean-observes-failure",
         "top-level-return",
+        "returned-native-exit",
+        "returned-native-array",
+        "returned-array-later-output",
         "formatted-objects-and-native-program-without-tty",
         "wide-table",
     ],
@@ -313,6 +392,98 @@ async def test_the_command_starts_like_a_new_shell(tmp_path: Path) -> None:
         "DEBUG:    7+ $ErrorView = 'NormalView';  >>>> Write-Error 'stopped' -ErrorAction Stop",
     ]
     assert "At line:7 char:28\n" in output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("begin", "runs"),
+    [
+        ("", True),
+        ("$null = @($input)", False),
+        ("if ($false) { $global:input }", False),
+        ("function unused { $input }", True),
+    ],
+    ids=["standalone", "empty-input", "lexical-input", "nested-input"],
+)
+async def test_empty_console_input_preserves_process_block_effects(
+    tmp_path: Path, begin: str, runs: bool
+) -> None:
+    # ConsoleHost treats a root reference to $input as an input stream. With
+    # closed stdin that stream has no objects, so process must never run.
+    marker = tmp_path / "process.txt"
+    command = (
+        f"begin {{ {begin} }} process {{ Add-Content -LiteralPath '{marker}' -Value 'executed' }} "
+        "end { 'end-sentinel' }"
+    )
+
+    code, output = await _run(tmp_path, command)
+
+    assert (code, output) == (0, "end-sentinel\n")
+    assert marker.exists() is runs
+    if runs:
+        assert marker.read_text() == "executed\n"
+
+
+@pytest.mark.asyncio
+async def test_an_initial_language_policy_runs_nothing_and_reports_why(tmp_path: Path) -> None:
+    marker = tmp_path / "ran.txt"
+
+    report = await _report(
+        tmp_path,
+        f"New-Item -ItemType File -Path '{marker}'",
+        prefix="$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; ",
+    )
+
+    assert report.not_run == "language_mode_unavailable"
+    assert report.transcript.total_lines == 0
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["default", "custom", "failed", "exit-nested", "host-exit"])
+async def test_nested_prompt_uses_the_commands_scope_and_returns_at_eof(
+    tmp_path: Path, kind: str
+) -> None:
+    marker = tmp_path / "prompt.txt"
+    command = ""
+    if kind in {"custom", "host-exit"}:
+        command = (
+            f"function prompt {{ Add-Content -LiteralPath '{marker}' -Value $NestedPromptLevel; "
+            "'custom:' + $NestedPromptLevel + '>' }; "
+        )
+    elif kind == "failed":
+        command = "function prompt { throw 'suppressed' }; "
+    elif kind == "exit-nested":
+        command = "function prompt { $Host.ExitNestedPrompt(); 'not-printed' }; "
+    if kind == "host-exit":
+        command += "$Host.SetShouldExit(7); "
+    command += "$Host.EnterNestedPrompt(); $Host.EnterNestedPrompt(); 'after'"
+    if kind == "failed":
+        command += "; $Error.Count; $?"
+    pwsh = shutil.which("pwsh")
+    assert pwsh is not None
+    plain = await asyncio.create_subprocess_exec(
+        pwsh,
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        command,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=tmp_path,
+    )
+    direct, _ = await plain.communicate()
+
+    code, output = await _run(tmp_path, command)
+
+    assert code == plain.returncode
+    assert output == direct.decode().replace("\r\n", "\n")
+    if kind == "custom":
+        # One invocation per shell: the second nested prompt sees the same EOF.
+        assert marker.read_text() == "1\n1\n"
+    else:
+        assert not marker.exists()
 
 
 def _without_terminator(request: bytes) -> bytes:

@@ -56,8 +56,9 @@ COMMAND_STOP_GRACE_SECONDS = 3.0
 StopReason = Literal["agent", "parent", "user", "run_cancelled", "shutdown", "scope"]
 CommandStatus = Literal["running", "completed", "failed", "stopped"]
 # Why the shell ran nothing of a command: it could not read the request that
-# carries the command, or could not enter its workdir (``CommandManager.launch``).
-NotRunReason = Literal["request_unreadable", "workdir_unavailable"]
+# carries the command, could not enter its workdir, or cannot run the bootstrap
+# in the shell's language mode (``CommandManager.launch``).
+NotRunReason = Literal["request_unreadable", "workdir_unavailable", "language_mode_unavailable"]
 # ``idle``: the wait passed while the command's processes were quiet over its end.
 CommandWaitOutcome = Literal["ended", "deadline", "idle"]
 # The label of a command in lists and deliveries is cut to this many characters.

@@ -30,13 +30,14 @@ PowerShell opened at, and the drive where the shell waited is at its root.
 
 Nothing ran. vBot draws a random code for each request (``PowerShellRequest``).
 A request the bootstrap cannot read ends the shell with that code, a workdir it
-cannot enter with the code after it, before the command runs and without
-output; the shell Tool reports either as a failure of the call, not as the
+cannot enter with the code after it, and an initially restricted language mode
+with the second code after it, before the command runs and without output;
+the shell Tool reports these as a failure of the call, not as the
 command's result (``CommandReport.not_run``). The command cannot know the code:
 it travels only in the request, which the bootstrap has read from stdin before
-the command runs, and in bootstrap variables removed by then. Only a command
-that exits with such a code anyway, by a chance of one in 900 million, is
-reported as not run although it ran. A fixed code was no proof: a command that
+the command runs, and in bootstrap variables removed by then. A coincidental
+match is possible: the base is drawn from almost 900 million values. A fixed
+code was no proof: a command that
 ran, printed nothing and exited with it read as one that never ran (shell
 review 2026-10-13). A request too short to carry its code ends the shell with
 ``REQUEST_UNREADABLE_EXIT_CODE``, reported as an exit code like any other: vBot
@@ -67,24 +68,31 @@ as PowerShell's own ParserError in English, and nothing runs. Incomplete input,
 such as a trailing backtick or an unclosed string, is reported the same way,
 where ``pwsh -Command`` exits with 1 without a word.
 
-Running. The command's text runs unchanged as its own script in a nested
-pipeline of the shell's runspace, in the global scope, as in ``pwsh -Command``:
+Running. The command's text runs unchanged as its own script in a fresh
+runspace, in its global scope, as in ``pwsh -Command``:
 ``$MyInvocation``, error positions and ``Set-PSDebug`` traces show the command's
-own lines and no line of the bootstrap.
+own lines and no line of the bootstrap. Its host delegates the console's UI
+and native console state to the original ConsoleHost. A nested prompt evaluates
+the command's prompt once and returns at the input's known EOF. The
+runner's separate runspace stays able to report the result when the command
+changes its own language mode; an initially restricted mode runs no command.
 
 Exit status. ``pwsh -Command`` exits with 1 whenever the last statement failed,
-so a native program's own exit code is lost. vBot reports the status as
-``bash -c`` does: the success the command's last statement left (``$?``) gives 0
-or 1, and a native program's or a script's exit code takes its place when that
+so a native program's own exit code is lost. The success the command's last
+statement left (``$?``) gives 0 or 1, and a native program's or a script's exit
+code takes its place when that
 program decided it: it ran as the command's last statement, or as the last
 statement of the function, script block or script the last statement called,
 as bash reports a function's status. vBot judges what ran, not the text: a
 program that never ran changes nothing, and an error recorded after the program
-leaves the status to ``$?``. Where the runtime cannot show it, as for a ``switch`` clause,
-``ForEach-Object``'s script block, ``Invoke-Expression`` or a loop the program
-does not end, vBot reports plain pwsh's status. An ``exit`` in the command ends
-the shell with its own code; ``break``, ``continue``, ``return`` and ``throw``
-end it as in plain pwsh.
+leaves the status to ``$?``. A program's own NativeCommandExitException is part
+of that exit, not an unrelated failure. Where the runtime cannot show the
+relationship, vBot keeps plain pwsh's status: for example a ``switch`` clause,
+``ForEach-Object``'s script block, ``Invoke-Expression``, a loop the program does
+not end, or an already resolved ExternalScriptInfo invoked without command
+lookup. An ``exit`` in the command and ``$Host.SetShouldExit`` retain their
+codes. PowerShell ignores ``exit`` inside ``clean``; a clean block with no
+executed status-changing statement keeps the preceding status.
 
 Output. The command's output and its errors go to PowerShell's Out-Default as
 one pipeline (``2>&1``), as ``pwsh -Command`` merges them, so an error shows
@@ -95,9 +103,11 @@ plain pwsh. As in ``pwsh -Command``, an ``exit`` in the command discards
 objects the table formatter still holds.
 
 Like a new shell. The command sees none of the bootstrap's variables or
-functions, and ``$Error`` is empty when it starts. What still shows the runner:
-``Get-PSCallStack`` lists its two frames below the command's,
-``$MyInvocation.PipelineLength`` counts its reader after Out-Default,
+functions, and ``$Error`` is empty when it starts. Its call stack contains only
+its own frames. What still shows the runner: ``Get-Runspace`` lists the outer
+runner's runspace, the host delegates to that runspace, transcript headers name
+the process's bootstrap, ``$MyInvocation.PipelineLength`` counts the reader
+after Out-Default (and an empty input stage for scripts that reference $input),
 ``$ExecutionContext.InvokeCommand.PostCommandLookupAction`` holds its hook, and
 ``$input.Reset()`` succeeds where plain pwsh's console input refuses it.
 """
@@ -134,27 +144,111 @@ OUTPUT_WIDTH_STATEMENT = (
     "$ui.BufferSize = [System.Management.Automation.Host.Size]::new("
     f"{OUTPUT_COLUMNS}, $ui.BufferSize.Height) }} }} catch {{}} }}"
 )
-# The runner. The command runs as its own script (AddScript without a local
-# scope) in a nested pipeline of the shell's runspace, followed by Out-Default and
-# the runner's reader; Run starts it dot-sourced from the top level, so the
-# command runs in the global scope as in pwsh -Command and parses, positions and
-# reports its errors as there. Its text is never changed. The runner keeps its
-# state in closures it finds through AppDomain data under RUNNER_KEY, so no
-# bootstrap variable or function is visible to the command, and every runner
-# block that can run after the command started is DebuggerHidden, so Set-PSDebug
-# traces none of it. The pipeline exposes break and continue to Run as
-# exceptions instead of swallowing them.
+# The outer ConsoleHost remains the owner of its UI and console modes. The host
+# delegates those operations while observing native starts/completions and exit
+# requests. Nested prompts evaluate in the command's runspace and return at EOF;
+# the original host's input loop would wait on the outer runspace and deadlock.
+HOST_STATEMENT = r"""Add-Type @"
+using System;
+using System.Collections;
+using System.Globalization;
+using System.Linq;
+using System.Management.Automation;
+using System.Management.Automation.Host;
+using System.Management.Automation.Runspaces;
+public sealed class VBotPowerShellHost : PSHost, IHostSupportsInteractiveSession {
+    readonly PSHost inner;
+    bool promptInputEnded;
+    public int? ExitCode;
+    public PSVariableIntrinsics Variables;
+    public Runspace CommandRunspace;
+    public IList Errors;
+    public object[] Record;
+    public object NativeExit;
+    public VBotPowerShellHost(PSHost inner) { this.inner = inner; }
+    public override string Name => inner.Name;
+    public override Version Version => inner.Version;
+    public override Guid InstanceId => inner.InstanceId;
+    public override PSHostUserInterface UI => inner.UI;
+    public override CultureInfo CurrentCulture => inner.CurrentCulture;
+    public override CultureInfo CurrentUICulture => inner.CurrentUICulture;
+    public override PSObject PrivateData => inner.PrivateData;
+    public override void SetShouldExit(int code) {
+        ExitCode = code;
+        inner.SetShouldExit(code);
+    }
+    public override void EnterNestedPrompt() {
+        // The request consumed stdin to EOF. ConsoleHost would evaluate one
+        // prompt and return. Its own runspace is waiting for this one, so the
+        // prompt must run here; delegating its input loop would deadlock.
+        if (ExitCode.HasValue || promptInputEnded) return;
+        if (UI.RawUI.CursorPosition.X != 0) UI.WriteLine();
+        string prompt = null;
+        try {
+            using (var pipeline = CommandRunspace.CreateNestedPipeline("prompt", false)) {
+                var output = pipeline.Invoke();
+                if (output.Count != 0) prompt = output[0]?.BaseObject?.ToString();
+            }
+        }
+        catch { } // ConsoleHost falls back when prompt evaluation fails.
+        UI.Write(string.IsNullOrEmpty(prompt) ? "PS>" : prompt);
+        promptInputEnded = true;
+    }
+    public override void ExitNestedPrompt() => inner.ExitNestedPrompt();
+    public override void NotifyBeginApplication() {
+        inner.NotifyBeginApplication();
+        RecordCommand();
+    }
+    public override void NotifyEndApplication() {
+        try { NativeExit = Variables.GetValue("global:LASTEXITCODE"); }
+        catch { Record = null; NativeExit = null; }
+        finally { inner.NotifyEndApplication(); }
+    }
+    public void RecordCommand() {
+        try {
+            var frames = CommandRunspace.Debugger.GetCallStack().ToArray();
+            Record = frames.Length == 0 ? null : new object[] { frames, frames[0].Position,
+                Variables.GetValue("global:LASTEXITCODE"), Errors.Count == 0 ? null : Errors[0] };
+        }
+        catch { Record = null; NativeExit = null; }
+    }
+    public EventHandler<CommandLookupEventArgs> LookupHook => OnCommandLookup;
+    void OnCommandLookup(object sender, CommandLookupEventArgs lookup) {
+        try {
+            var command = lookup.Command;
+            if (command is AliasInfo alias) command = alias.ResolvedCommand;
+            if (command is ExternalScriptInfo) RecordCommand();
+        }
+        catch { Record = null; NativeExit = null; }
+    }
+    public bool IsRunspacePushed => ((IHostSupportsInteractiveSession)inner).IsRunspacePushed;
+    public Runspace Runspace => ((IHostSupportsInteractiveSession)inner).Runspace;
+    public void PushRunspace(Runspace runspace) =>
+        ((IHostSupportsInteractiveSession)inner).PushRunspace(runspace);
+    public void PopRunspace() => ((IHostSupportsInteractiveSession)inner).PopRunspace();
+}
+"@
+"""
+# The runner. The command runs unchanged as its own script (AddScript without a
+# local scope) in a fresh runspace, followed by Out-Default and a status reader.
+# The original ConsoleHost is delegated through the public PSHost interface;
+# the outer runspace owns the runner and can still finish after the command
+# changes its language mode. InitialSessionState supplies the normal defaults,
+# with ConsoleHost's PROFILE copied explicitly. Runspace.Open happens after the
+# request applies the environment and workdir. The pipeline exposes control-flow
+# exceptions; a terminating error is formatted in the command's own runspace.
 #
-# The exit code follows the bash rule (the module docstring). It starts from the
+# The exit code follows the contract in the module docstring. It starts from the
 # success the command's last statement left ($?), which the reader records at the
 # end of the pipeline, or in its clean block when the command's own clean block
 # ran statements after its end block. A native program's or a script's code
 # replaces 1, or 0 for a call of a function, script block or script, only when
-# the runtime shows that it decided that status. A hook on command lookup, a
-# compiled filter that calls the recorder for native programs and scripts only,
-# records the call stack, the $LASTEXITCODE value and the newest $Error entry
-# before each of them runs; the code counts when the program set $LASTEXITCODE
-# since, no error was recorded since, and its statement ends every frame up to
+# the runtime shows that it decided that status. The host observes native starts
+# and completions directly, including CommandInfo and debugger-hidden calls.
+# A command-lookup hook covers external scripts and their aliases. Both capture
+# the call stack, $LASTEXITCODE and newest $Error entry before execution; native
+# completion records the resulting code. The code counts when execution changed
+# $LASTEXITCODE, no unrelated error followed, and its statement ends every frame up to
 # the command's last statement. $walk checks the frames from the innermost one
 # out, and $climb checks one statement's way up to its frame's root: no later
 # statement in its block except a bare return or an exit, no later named block
@@ -162,31 +256,19 @@ OUTPUT_WIDTH_STATEMENT = (
 # every pass. A program in the command's own last statement skips the walk.
 RUNNER_KEY = "vBot.PowerShell"
 RUNNER_STATEMENTS = r"""& {
-    $state = @{ Variables = $ExecutionContext.SessionState.PSVariable }
-    $variables = $state.Variables
-    $errors = $global:Error
-    $debugger = [runspace]::DefaultRunspace.Debugger
-    $recorder = [Action[System.Management.Automation.CommandLookupEventArgs]]{
-        [System.Diagnostics.DebuggerHidden()] param($lookup)
-        $frames = @($debugger.GetCallStack())
-        if ($frames.Count -gt 1) {
-            $state.Record = $frames, $frames[1].Position,
-                $variables.GetValue('global:LASTEXITCODE'), $(if ($errors.Count) { $errors[0] })
-        }
-    }.GetNewClosure()
-    $E = [System.Linq.Expressions.Expression]
-    $sender = $E::Parameter([object])
-    $lookup = $E::Parameter([System.Management.Automation.CommandLookupEventArgs])
-    $command = $E::Property($lookup, 'Command')
-    $state.Hook = $E::Lambda([EventHandler[System.Management.Automation.CommandLookupEventArgs]],
-        $E::IfThen($E::OrElse($E::TypeIs($command, [System.Management.Automation.ApplicationInfo]),
-            $E::TypeIs($command, [System.Management.Automation.ExternalScriptInfo])),
-            $E::Invoke($E::Constant($recorder), $lookup)), $sender, $lookup).Compile()
+    $state = @{ Host = [VBotPowerShellHost]::new($Host); Profile = $PROFILE }
+    $state.Fail = Get-Command Microsoft.PowerShell.Utility\Write-Error -CommandType Cmdlet
+    $state.OutDefault = Get-Command Microsoft.PowerShell.Core\Out-Default -CommandType Cmdlet
     $state.Settings = [System.Management.Automation.PSInvocationSettings]@{
         ExposeFlowControlExceptions = $true
     }
-    $reader = '[System.Diagnostics.DebuggerHidden()] param($state) begin {} ' +
-        'end { $state.Ended = $? }'
+    $reader = '[System.Diagnostics.DebuggerHidden()] param($state) ' +
+        'begin { $PSDefaultParameterValues = @{} } ' +
+        # Recording $? changes it. Restore a failure without output or an $Error
+        # entry so the command's clean block observes the original status. The
+        # bound cmdlet cannot be replaced by a user function or disabled autoload.
+        # Only its local scope clears defaults, preventing helper side effects.
+        'end { $state.Ended = $?; if (-not $state.Ended) { & $state.Fail "" -ErrorAction Ignore } }'
     if ([enum]::IsDefined([System.Management.Automation.Language.TokenKind], 'Clean')) {
         $reader += ' clean { $state.Cleaned = $?; $state.CleanRan = $true; ' +
             '$state.CleanExit = $state.Variables.GetValue(''global:LASTEXITCODE'') }'
@@ -194,16 +276,46 @@ RUNNER_STATEMENTS = r"""& {
     }
     $state.Prepare = {
         param($text)
-        foreach ($name in 'Ended', 'Cleaned', 'CleanExit', 'CleanRan', 'Record') {
+        foreach ($name in 'Ended', 'Cleaned', 'CleanExit', 'CleanRan') {
             $state[$name] = $null
         }
-        $state.Text = $text
-        $state.Pipeline = [PowerShell]::Create('CurrentRunspace')
+        if ($state.Pipeline) { $state.Pipeline.Dispose(); $state.Runspace.Dispose() }
+        $state.Host.ExitCode = $null
+        $state.Host.Record = $null
+        $state.Host.NativeExit = $null
+        $initial = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
+        $initial.LanguageMode = $ExecutionContext.SessionState.LanguageMode
+        $state.Runspace = [runspacefactory]::CreateRunspace($state.Host, $initial)
+        $state.Runspace.Open()
+        $state.Host.CommandRunspace = $state.Runspace
+        $state.Variables = $state.Runspace.SessionStateProxy.PSVariable
+        $state.Variables.Set('PROFILE', $state.Profile)
+        $state.Errors = $state.Variables.GetValue('Error')
+        $state.Host.Variables = $state.Variables
+        $state.Host.Errors = $state.Errors
+        $state.Pipeline = [PowerShell]::Create()
+        $state.Pipeline.Runspace = $state.Runspace
+        # ConsoleHost supplies an empty input stream only when the outer script
+        # refers to $input. An empty upstream stage gives the command pipeline
+        # the same distinction between no input and a standalone invocation.
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput(
+            $text, [ref]$null, [ref]$null)
+        $usesInput = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $node.VariablePath.UserPath.Split(':')[-1] -eq 'input'
+        }, $false)
+        if ($usesInput) {
+            $null = $state.Pipeline.AddScript(
+                '[System.Diagnostics.DebuggerHidden()] param() begin {}', $true)
+        }
         $null = $state.Pipeline.AddScript($text, $false)
-        $state.Pipeline.Commands.Commands[0].MergeMyResults('Error', 'Output')
-        $null = $state.Pipeline.AddCommand('Out-Default')
+        $commands = $state.Pipeline.Commands.Commands
+        $commands[$commands.Count - 1].MergeMyResults('Error', 'Output')
+        $null = $state.Pipeline.AddCommand($state.OutDefault)
         $null = $state.Pipeline.AddScript($reader, $true).AddArgument($state)
-        $ExecutionContext.InvokeCommand.PostCommandLookupAction = $state.Hook
+        $state.Runspace.SessionStateProxy.InvokeCommand.PostCommandLookupAction =
+            $state.Host.LookupHook
     }.GetNewClosure()
     $climb = {
         [System.Diagnostics.DebuggerHidden()] param($node, $root)
@@ -261,6 +373,14 @@ RUNNER_STATEMENTS = r"""& {
                 $conditional = $true
             } elseif ($parent -is [System.Management.Automation.Language.AssignmentStatementAst]) {
                 if (-not [object]::ReferenceEquals($node, $parent.Right)) { return $false }
+            } elseif ($parent -is [System.Management.Automation.Language.ParenExpressionAst] -or
+                $parent -is [System.Management.Automation.Language.ArrayExpressionAst] -or
+                $parent -is [System.Management.Automation.Language.SubExpressionAst] -or
+                $parent -is [System.Management.Automation.Language.CommandExpressionAst] -or
+                $parent -is [System.Management.Automation.Language.PipelineAst] -or
+                $parent -is [System.Management.Automation.Language.ReturnStatementAst]) {
+                # A returned expression executes unchanged; its native status
+                # survives the return just as its output does.
             } elseif ($parent -is [System.Management.Automation.Language.PipelineChainAst]) {
                 if ([object]::ReferenceEquals($node, $parent.LhsPipelineChain) -and
                     "$($parent.Operator)" -ne 'AndAnd') { return $false }
@@ -271,15 +391,15 @@ RUNNER_STATEMENTS = r"""& {
     }
     $walk = {
         [System.Diagnostics.DebuggerHidden()] param($frames, $position)
-        $last = $frames.Count - 3
-        for ($index = 1; $index -le $last; $index++) {
+        $last = $frames.Count - 1
+        for ($index = 0; $index -le $last; $index++) {
             $invocation = $frames[$index].InvocationInfo
             $root = $invocation.MyCommand.ScriptBlock.Ast
             if ($root -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
                 $root = $root.Body
             }
             if ($root -isnot [System.Management.Automation.Language.ScriptBlockAst]) { return -1 }
-            if ($index -eq 1) {
+            if ($index -eq 0) {
                 $node = $null
                 foreach ($node in $root.FindAll({
                     [System.Diagnostics.DebuggerHidden()] param($ast)
@@ -307,17 +427,17 @@ RUNNER_STATEMENTS = r"""& {
                     $invocation.PipelinePosition -ne $invocation.PipelineLength) { return -1 }
             }
         }
-        $last - 1
+        $last
     }.GetNewClosure()
     $decide = {
         [System.Diagnostics.DebuggerHidden()] param($caught)
-        $lastExit = $variables.GetValue('global:LASTEXITCODE')
+        $lastExit = $state.Variables.GetValue('global:LASTEXITCODE')
         if ($caught) {
             $exception = $caught.Exception
             if ($exception -is [System.Management.Automation.MethodInvocationException] -and
                 $exception.InnerException) { $exception = $exception.InnerException }
             if ($exception -isnot [System.Management.Automation.LoopFlowException]) {
-                throw $exception
+                return 1
             }
             return $(if ($state.Cleaned -eq $false) { 1 } else { 0 })
         }
@@ -330,21 +450,21 @@ RUNNER_STATEMENTS = r"""& {
         $code = 1
         try {
             $succeeded = $state.Ended
-            if ($state.CleanRan -and $state.Cleaned -ne $succeeded) {
-                $block = [System.Management.Automation.Language.Parser]::ParseInput(
-                    $state.Text, [ref]$null, [ref]$null).PSObject.Properties['CleanBlock']
-                if ($block.Value -and $block.Value.Statements.Count) { $succeeded = $state.Cleaned }
-            }
+            if ($state.CleanRan) { $succeeded = $state.Cleaned }
             if ($succeeded) { $code = 0 }
-            $record = $state.Record
+            $record = $state.Host.Record
             if ($record -and $lastExit -is [int] -and $lastExit -ne 0 -and
                 -not [object]::ReferenceEquals($lastExit, $record[2]) -and
-                -not ($errors.Count -and -not [object]::ReferenceEquals($errors[0], $record[3]))) {
+                -not ($state.Errors.Count -and
+                    -not [object]::ReferenceEquals($state.Errors[0], $record[3]) -and
+                    -not ($state.Errors[0].Exception -is
+                        [System.Management.Automation.NativeCommandExitException] -and
+                        $state.Errors[0].Exception.ExitCode -eq $state.Host.NativeExit))) {
                 $frames = $record[0]
                 $position = $record[1]
                 $depth = $null
-                if ($frames.Count -eq 4) {
-                    $root = $frames[1].InvocationInfo.MyCommand.ScriptBlock.Ast
+                if ($frames.Count -eq 1) {
+                    $root = $frames[0].InvocationInfo.MyCommand.ScriptBlock.Ast
                     $statements = $root.EndBlock.Statements
                     $statement = if ($statements.Count) { $statements[$statements.Count - 1] }
                     $clean = $root.PSObject.Properties['CleanBlock']
@@ -364,12 +484,32 @@ RUNNER_STATEMENTS = r"""& {
     }.GetNewClosure()
     $state.Finish = {
         [System.Diagnostics.DebuggerHidden()] param($caught)
+        if ($caught) {
+            $exception = $caught.Exception
+            if ($exception -is [System.Management.Automation.MethodInvocationException] -and
+                $exception.InnerException) { $exception = $exception.InnerException }
+            if ($exception -is [System.Management.Automation.RuntimeException]) {
+                # A terminating error escapes Invoke. Format its original record
+                # in the command's runspace, with its ErrorView and type data.
+                # ConsoleHost resolves Out-Default again for such an error, so a
+                # user override must apply here too (unlike the initial pipeline).
+                $formatter = [PowerShell]::Create()
+                $formatter.Runspace = $state.Runspace
+                $null = $formatter.AddCommand('Out-Default')
+                $null = $formatter.Invoke(@($exception.ErrorRecord))
+                $formatter.Dispose()
+            }
+        }
+        if ($null -ne $state.Host.ExitCode) {
+            exit $state.Host.ExitCode
+        }
         exit (& $decide $caught)
     }.GetNewClosure()
     $state.WarmUp = {
         [System.Diagnostics.DebuggerHidden()] param()
-        $frames = & { & { & { $debugger.GetCallStack() } } }
-        $null = (& $walk $frames $frames[1].Position), (& $decide $null), $recorder.Invoke($null)
+        $record = $state.Host.Record
+        if ($record) { $null = & $walk $record[0] $record[1] }
+        $null = & $decide $null
     }.GetNewClosure()
     $state.Run = {
         [System.Diagnostics.DebuggerHidden()] param()
@@ -391,9 +531,17 @@ SETUP_STATEMENT = "; ".join(
 # The bootstrap's exit code for a request too short to carry its not-run code:
 # "VB" in the high bytes. A command can exit with it too, so it proves nothing.
 REQUEST_UNREADABLE_EXIT_CODE = 0x56420001
-# A request's not-run code has nine decimal digits; the code after it has too.
+# A request's not-run code and the two codes after it have nine decimal digits.
 _NOT_RUN_CODE_FIRST = 100_000_000
 _NOT_RUN_CODES = 899_999_998
+LANGUAGE_MODE_STATEMENT = r"""if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+    $__vbotRequest = @($input)
+    if ($__vbotRequest.Count -and $__vbotRequest[0] -match '^[0-9]{9}$') {
+        exit ([int]$__vbotRequest[0] + 2)
+    }
+    exit {unreadable}
+}
+"""
 # A shell started ahead of its command waits in Windows' system directory
 # (``_command_launch``). While it waits it pays the first use of what follows:
 # type lookups, the parser, PowerShell's utility and file cmdlets, formatting, the
@@ -412,7 +560,7 @@ WARM_UP_STATEMENTS = r"""if ([Environment]::CurrentDirectory -eq [Environment]::
                 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management')
             $null = [pscustomobject]@{ Name = 1 } | Out-String
             $runner = [AppDomain]::CurrentDomain.GetData('{key}')
-            & $runner.Prepare ''
+            & $runner.Prepare "[AppDomain]::CurrentDomain.GetData('{key}').Host.RecordCommand()"
             $null = $runner.Pipeline.Invoke($null, $runner.Settings)
             $ExecutionContext.InvokeCommand.PostCommandLookupAction = $null
             & $runner.WarmUp
@@ -498,7 +646,9 @@ def _escaped(text: str) -> str:
 
 # Everything before the request runs before the command is known.
 POWERSHELL_BOOTSTRAP = (
-    f"{SETUP_STATEMENT}\n"
+    LANGUAGE_MODE_STATEMENT.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
+    + f"{SETUP_STATEMENT}\n"
+    + HOST_STATEMENT
     + RUNNER_STATEMENTS
     + WARM_UP_STATEMENTS
     + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
@@ -531,7 +681,11 @@ def powershell_request(
     lines.append(".")
     return PowerShellRequest(
         "\n".join(lines).encode("ascii") + b"\n",
-        {code: "request_unreadable", code + 1: "workdir_unavailable"},
+        {
+            code: "request_unreadable",
+            code + 1: "workdir_unavailable",
+            code + 2: "language_mode_unavailable",
+        },
     )
 
 

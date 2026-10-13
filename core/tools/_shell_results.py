@@ -240,6 +240,11 @@ def not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
     """
     if report.not_run == "request_unreadable":
         return f"vBot could not pass the command to the shell. {RUN_AGAIN}", True
+    if report.not_run == "language_mode_unavailable":
+        return (
+            "PowerShell's language mode prevents vBot from starting the command. Tell the user.",
+            False,
+        )
     if report.not_run != "workdir_unavailable":
         return None
     path = model_path(report.workdir)
