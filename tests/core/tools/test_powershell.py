@@ -122,6 +122,15 @@ _PRINTED_ERROR_TEXT = "; ".join(
             (),
         ),
         ("function f { cmd /c exit 5; 'after-call' }\nf", 0, ("after-call",)),
+        # What ran decides, not the text: through conditions and try blocks, never
+        # a program that did not run, and an error after a program leaves $?.
+        ("function f { if ($true) { try { cmd /c exit 5 } finally {} } }\nf", 5, ()),
+        (
+            "cmd /c exit 7\nfunction f { return 'returned-sentinel'; cmd /c exit 0 }\nf",
+            0,
+            ("returned-sentinel",),
+        ),
+        ("cmd /c exit 5; Get-Item missing-sentinel", 1, ("missing-sentinel",)),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, ("requires-sentinel",)),
         # PowerShell's messages are English whatever the display language; numbers
@@ -172,8 +181,10 @@ _PRINTED_ERROR_TEXT = "; ".join(
             1,
             (),
         ),
-        # Explicit control flow keeps its meaning.
+        # Explicit control flow keeps its meaning; break and continue outside a loop
+        # end the command with the status plain pwsh reports.
         ("Write-Error 'recorded-sentinel'; exit 0", 0, ()),
+        ("Write-Error 'break-sentinel'; break\n'not-run'", 1, ("break-sentinel",)),
         # Printed error text, warnings, and native stderr pass unchanged. Quotes
         # reach PowerShell unchanged, including typographic ones.
         (
@@ -194,12 +205,14 @@ _PRINTED_ERROR_TEXT = "; ".join(
             ("begin-sentinel\nend-sentinel",),
         ),
         ("begin { 'begin-sentinel' } process { cmd /c exit 3 }", 3, ("begin-sentinel",)),
-        # A clean block runs last and decides; its errors are dropped as in plain pwsh.
+        # A clean block runs last and decides, wherever it stands in the text; its
+        # errors are dropped as in plain pwsh.
         (
             "end { 'end-sentinel' } clean { Write-Error 'silenced-sentinel' }",
             1,
             ("end-sentinel",),
         ),
+        ("clean { cmd /c exit 7 } end { 'end-sentinel' }", 7, ("end-sentinel",)),
         # A top-level return before the end keeps the last statement's status.
         ("return (Write-Error 'return-sentinel')\n'not-run'", 1, ("Write-Error: return-sentinel",)),
         # Objects the table formatter holds still print before the exit; a native
@@ -223,6 +236,9 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "later-statement",
         "called-native-exit",
         "called-later-statement",
+        "native-in-blocks",
+        "native-that-never-ran",
+        "error-after-native",
         "requires",
         "english-messages-own-culture",
         "parse-error",
@@ -232,10 +248,12 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "silenced-last-statement",
         "silenced-then-native-exit",
         "exit-0",
+        "break-after-error",
         "printed-text-and-quotes",
         "named-blocks",
         "named-blocks-exit",
         "clean-block",
+        "clean-block-first",
         "top-level-return",
         "formatted-objects-and-native-program-without-tty",
         "wide-table",
@@ -258,15 +276,43 @@ async def test_exit_status_follows_the_last_statement_and_output_is_the_commands
 async def test_the_command_starts_like_a_new_shell(tmp_path: Path) -> None:
     # Errors recorded before the command, as the bootstrap's own can be, are gone.
     prefix = "Write-Error 'before-sentinel' -ErrorAction SilentlyContinue; "
+    names = "(Get-Variable).Name -join ','\n(Get-ChildItem function:).Name -join ','"
     command = (
-        "'variables: ' + @(Get-Variable __vbot*).Count + ', errors: ' + $Error.Count + "
-        "', last exit code: ' + ($null -eq $LASTEXITCODE)"
+        f"{names}\n'errors: ' + $Error.Count + ', last exit code: ' + ($null -eq $LASTEXITCODE)\n"
+        # Traces and error positions show the command's own lines and none of vBot's.
+        "Set-PSDebug -Trace 1\nfunction f { cmd /c exit 4 }\nf\n"
+        "$ErrorView = 'NormalView'; Write-Error 'stopped' -ErrorAction Stop"
     )
+    pwsh = shutil.which("pwsh")
+    assert pwsh is not None
+    plain = await asyncio.create_subprocess_exec(
+        pwsh,
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        names,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        cwd=tmp_path,
+    )
+    new_shell, _ = await plain.communicate()
 
     code, output = await _run(tmp_path, command, prefix=prefix)
 
-    assert code == 0
-    assert output == "variables: 0, errors: 0, last exit code: True\n"
+    assert code == 1
+    lines = output.splitlines()
+    # The same variables and functions as a new pwsh: none of the bootstrap's.
+    assert lines[:2] == new_shell.decode().splitlines()
+    assert lines[2] == "errors: 0, last exit code: True"
+    assert [line for line in lines if line.startswith("DEBUG:")] == [
+        "DEBUG:    6+  >>>> f",
+        "DEBUG:    5+ function f  >>>> { cmd /c exit 4 }",
+        "DEBUG:    5+ function f {  >>>> cmd /c exit 4 }",
+        "DEBUG:    5+ function f { cmd /c exit 4  >>>> }",
+        "DEBUG:    7+  >>>> $ErrorView = 'NormalView'; Write-Error 'stopped' -ErrorAction Stop",
+        "DEBUG:    7+ $ErrorView = 'NormalView';  >>>> Write-Error 'stopped' -ErrorAction Stop",
+    ]
+    assert "At line:7 char:28\n" in output
 
 
 def _without_terminator(request: bytes) -> bytes:

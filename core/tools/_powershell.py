@@ -63,38 +63,43 @@ says which format that is, for the shell Tool's description.
 Parsing after the setup. The command arrives as data and is parsed after the
 setup by PowerShell's own parser: ``using`` statements, ``#requires``, a
 ``param`` block and named blocks keep their meaning, a syntax error is reported
-as PowerShell's own ParserError in English, and error positions are the
-command's own line numbers.
+as PowerShell's own ParserError in English, and nothing runs. Incomplete input,
+such as a trailing backtick or an unclosed string, is reported the same way,
+where ``pwsh -Command`` exits with 1 without a word.
+
+Running. The command's text runs unchanged as its own script in a nested
+pipeline of the shell's runspace, in the global scope, as in ``pwsh -Command``:
+``$MyInvocation``, error positions and ``Set-PSDebug`` traces show the command's
+own lines and no line of the bootstrap.
 
 Exit status. ``pwsh -Command`` exits with 1 whenever the last statement failed,
-so a native program's own exit code is lost. vBot reports the last statement's
-status as ``bash -c`` reports it: a failed statement reports the last native
-program's code, else 1; a successful one 0, unless it calls a function, script
-block or script whose last statement runs a native program, which reports that
-program's code as bash reports a function's status (``STATUS_FUNCTION``). A
-closing statement at the end of the last block that runs, the command's clean
-block if it has one, else its end block, records it. It is the only text added
-to the command and follows the block's last line, so no line or column of the
-command moves; a block that another named block follows in the text gets none.
-A command without it, or one that returns before it with a top-level ``return``,
-reports the success its last statement left (``$?``), which the last element of
-the pipeline the command runs in reads (``__vbotReturned``), without the look
-into a called function. An ``exit`` in the command ends the shell with
-its own code. A ``break`` or ``continue`` outside a loop ends the command with
-0, where plain pwsh reports the last statement's success.
+so a native program's own exit code is lost. vBot reports the status as
+``bash -c`` does: the success the command's last statement left (``$?``) gives 0
+or 1, and a native program's or a script's exit code takes its place when that
+program decided it: it ran as the command's last statement, or as the last
+statement of the function, script block or script the last statement called,
+as bash reports a function's status. vBot judges what ran, not the text: a
+program that never ran changes nothing, and an error recorded after the program
+leaves the status to ``$?``. Where the runtime cannot show it, as for a ``switch`` clause,
+``ForEach-Object``'s script block, ``Invoke-Expression`` or a loop the program
+does not end, vBot reports plain pwsh's status. An ``exit`` in the command ends
+the shell with its own code; ``break``, ``continue``, ``return`` and ``throw``
+end it as in plain pwsh.
 
 Output. The command's output and its errors go to PowerShell's Out-Default as
 one pipeline (``2>&1``), as ``pwsh -Command`` merges them, so an error shows
 between the rows the formatter printed before it and those after it. Native
 programs' stderr is not captured by that merge and passes as bytes. A clean
 block runs after Out-Default ended, so its output and errors are dropped, as in
-plain pwsh. The bootstrap exits with the recorded code after that
-pipeline ended. As in ``pwsh -Command``, an ``exit`` in the command discards
+plain pwsh. As in ``pwsh -Command``, an ``exit`` in the command discards
 objects the table formatter still holds.
 
-Hidden bookkeeping. The command sees none of the bootstrap's variables; it runs
-as a function's dot-sourced body, and ``$Error`` is empty when it starts, as in
-a new shell. Only the bootstrap's ``__vbot`` functions remain visible.
+Like a new shell. The command sees none of the bootstrap's variables or
+functions, and ``$Error`` is empty when it starts. What still shows the runner:
+``Get-PSCallStack`` lists its two frames below the command's,
+``$MyInvocation.PipelineLength`` counts its reader after Out-Default,
+``$ExecutionContext.InvokeCommand.PostCommandLookupAction`` holds its hook, and
+``$input.Reset()`` succeeds where plain pwsh's console input refuses it.
 """
 
 from __future__ import annotations
@@ -129,111 +134,257 @@ OUTPUT_WIDTH_STATEMENT = (
     "$ui.BufferSize = [System.Management.Automation.Host.Size]::new("
     f"{OUTPUT_COLUMNS}, $ui.BufferSize.Height) }} }} catch {{}} }}"
 )
-# Pass $? before any bookkeeping changes it or $LASTEXITCODE. The statement only
-# records the code; the bootstrap exits after the command's output is formatted.
-# Explicit exit statements bypass this epilogue, preserving the caller's control
-# flow.
-EXIT_STATUS_STATEMENT = "$global:__vbotExitCode = __vbotStatus $?"
-# The status of the command's last statement, the one before the exit status
-# statement, as bash -c reports it (see the module docstring). A command that
-# returned before that statement gets its status from __vbotReturned instead, the
-# last element of its pipeline, whose end block runs before any other statement
-# can change $?. A failed statement reports the last native program's code,
-# else 1. A successful one reports 0, unless it is a call of a function, filter,
-# script block or script (also through an alias or as an assignment's value) whose
-# body's last statement runs a native program: PowerShell's $? is true after such a
-# call whatever the program's code, and bash reports a function's status as that of
-# its last command. A body's last statement that is such a call again is followed
-# (at most 10 deep); one that runs a native program, alone or in a pipeline or
-# assignment, reports $LASTEXITCODE; anything else (a cmdlet, an expression, an if,
-# foreach or try statement, a call that cannot be resolved) reports 0. It runs after
-# the command's last statement and only reads: the command observes nothing of it,
-# and it never throws into a trap of the command. Get-Variable reads LASTEXITCODE
-# even when it was never set under Set-StrictMode; the variables carry the prefix,
-# so none hides one of the command's from the lookup of `& $name`.
-STATUS_FUNCTION = r"""function __vbotStatus($__vbotSucceeded) {
-    $__vbotCode = Get-Variable -Name LASTEXITCODE -ValueOnly -ErrorAction Ignore
-    if (-not $__vbotSucceeded) {
-        if ($__vbotCode) { return $__vbotCode }
-        return 1
+# The runner. The command runs as its own script (AddScript without a local
+# scope) in a nested pipeline of the shell's runspace, followed by Out-Default and
+# the runner's reader; Run starts it dot-sourced from the top level, so the
+# command runs in the global scope as in pwsh -Command and parses, positions and
+# reports its errors as there. Its text is never changed. The runner keeps its
+# state in closures it finds through AppDomain data under RUNNER_KEY, so no
+# bootstrap variable or function is visible to the command, and every runner
+# block that can run after the command started is DebuggerHidden, so Set-PSDebug
+# traces none of it. The pipeline exposes break and continue to Run as
+# exceptions instead of swallowing them.
+#
+# The exit code follows the bash rule (the module docstring). It starts from the
+# success the command's last statement left ($?), which the reader records at the
+# end of the pipeline, or in its clean block when the command's own clean block
+# ran statements after its end block. A native program's or a script's code
+# replaces 1, or 0 for a call of a function, script block or script, only when
+# the runtime shows that it decided that status. A hook on command lookup, a
+# compiled filter that calls the recorder for native programs and scripts only,
+# records the call stack, the $LASTEXITCODE value and the newest $Error entry
+# before each of them runs; the code counts when the program set $LASTEXITCODE
+# since, no error was recorded since, and its statement ends every frame up to
+# the command's last statement. $walk checks the frames from the innermost one
+# out, and $climb checks one statement's way up to its frame's root: no later
+# statement in its block except a bare return or an exit, no later named block
+# that runs statements, no finally block after it, and no loop it does not end on
+# every pass. A program in the command's own last statement skips the walk.
+RUNNER_KEY = "vBot.PowerShell"
+RUNNER_STATEMENTS = r"""& {
+    $state = @{ Variables = $ExecutionContext.SessionState.PSVariable }
+    $variables = $state.Variables
+    $errors = $global:Error
+    $debugger = [runspace]::DefaultRunspace.Debugger
+    $recorder = [Action[System.Management.Automation.CommandLookupEventArgs]]{
+        [System.Diagnostics.DebuggerHidden()] param($lookup)
+        $frames = @($debugger.GetCallStack())
+        if ($frames.Count -gt 1) {
+            $state.Record = $frames, $frames[1].Position,
+                $variables.GetValue('global:LASTEXITCODE'), $(if ($errors.Count) { $errors[0] })
+        }
+    }.GetNewClosure()
+    $E = [System.Linq.Expressions.Expression]
+    $sender = $E::Parameter([object])
+    $lookup = $E::Parameter([System.Management.Automation.CommandLookupEventArgs])
+    $command = $E::Property($lookup, 'Command')
+    $state.Hook = $E::Lambda([EventHandler[System.Management.Automation.CommandLookupEventArgs]],
+        $E::IfThen($E::OrElse($E::TypeIs($command, [System.Management.Automation.ApplicationInfo]),
+            $E::TypeIs($command, [System.Management.Automation.ExternalScriptInfo])),
+            $E::Invoke($E::Constant($recorder), $lookup)), $sender, $lookup).Compile()
+    $state.Settings = [System.Management.Automation.PSInvocationSettings]@{
+        ExposeFlowControlExceptions = $true
     }
-    if (-not $__vbotCode) { return 0 }
-    try {
-        $__vbotA = 'System.Management.Automation.Language.'
-        $__vbotFind = {
-            param($__vbotElement)
-            if ($__vbotElement -isnot "${__vbotA}CommandAst") { return }
-            $__vbotTarget = $__vbotElement.CommandElements[0]
-            $__vbotTarget = if ($__vbotTarget -is "${__vbotA}ScriptBlockExpressionAst") {
-                $__vbotTarget.ScriptBlock
-            } elseif ($__vbotTarget -is "${__vbotA}VariableExpressionAst") {
-                $__vbotName = $__vbotTarget.VariablePath.UserPath
-                Get-Variable -Name $__vbotName -ValueOnly -ErrorAction Ignore
+    $reader = '[System.Diagnostics.DebuggerHidden()] param($state) begin {} ' +
+        'end { $state.Ended = $? }'
+    if ([enum]::IsDefined([System.Management.Automation.Language.TokenKind], 'Clean')) {
+        $reader += ' clean { $state.Cleaned = $?; $state.CleanRan = $true; ' +
+            '$state.CleanExit = $state.Variables.GetValue(''global:LASTEXITCODE'') }'
+        $state.ReaderCleans = $true
+    }
+    $state.Prepare = {
+        param($text)
+        foreach ($name in 'Ended', 'Cleaned', 'CleanExit', 'CleanRan', 'Record') {
+            $state[$name] = $null
+        }
+        $state.Text = $text
+        $state.Pipeline = [PowerShell]::Create('CurrentRunspace')
+        $null = $state.Pipeline.AddScript($text, $false)
+        $state.Pipeline.Commands.Commands[0].MergeMyResults('Error', 'Output')
+        $null = $state.Pipeline.AddCommand('Out-Default')
+        $null = $state.Pipeline.AddScript($reader, $true).AddArgument($state)
+        $ExecutionContext.InvokeCommand.PostCommandLookupAction = $state.Hook
+    }.GetNewClosure()
+    $climb = {
+        [System.Diagnostics.DebuggerHidden()] param($node, $root)
+        $leaves = {
+            [System.Diagnostics.DebuggerHidden()] param($ast)
+            $ast -is [System.Management.Automation.Language.BreakStatementAst] -or
+                $ast -is [System.Management.Automation.Language.ContinueStatementAst] -or
+                $ast -is [System.Management.Automation.Language.ReturnStatementAst] -or
+                $ast -is [System.Management.Automation.Language.ExitStatementAst] -or
+                $ast -is [System.Management.Automation.Language.ThrowStatementAst]
+        }
+        $conditional = $false
+        while (-not [object]::ReferenceEquals($node.Parent, $root)) {
+            $parent = $node.Parent
+            if ($parent -is [System.Management.Automation.Language.StatementBlockAst] -or
+                $parent -is [System.Management.Automation.Language.NamedBlockAst]) {
+                $after = $false
+                foreach ($statement in $parent.Statements) {
+                    if ([object]::ReferenceEquals($statement, $node)) { $after = $true }
+                    elseif ($after) {
+                        $type = $statement.GetType().Name
+                        return $type -eq 'ExitStatementAst' -or
+                            ($type -eq 'ReturnStatementAst' -and -not $statement.Pipeline)
+                    } elseif ($statement.Find($leaves, $false)) { $conditional = $true }
+                }
+                if ($parent -is [System.Management.Automation.Language.NamedBlockAst]) {
+                    $kind = "$($parent.BlockKind)"
+                    $blocks = $parent.Parent
+                    $clean = $blocks.PSObject.Properties['CleanBlock']
+                    $later = @(if ($clean) { $clean.Value })
+                    if ($kind -eq 'Begin') { $later += $blocks.ProcessBlock, $blocks.EndBlock }
+                    elseif ($kind -eq 'Process' -and -not $conditional) {
+                        $later += $blocks.EndBlock
+                    }
+                    elseif ($kind -eq 'Clean') { $later = @() }
+                    elseif ($kind -ne 'End') { return $false }
+                    foreach ($block in $later) {
+                        if ($block -and $block.Statements.Count) { return $false }
+                    }
+                }
+            } elseif ($parent -is [System.Management.Automation.Language.IfStatementAst]) {
+                if ($node -isnot [System.Management.Automation.Language.StatementBlockAst]) {
+                    return $false
+                }
+                $conditional = $true
+            } elseif ($parent -is [System.Management.Automation.Language.LoopStatementAst]) {
+                if ($conditional -or -not [object]::ReferenceEquals($node, $parent.Body)) {
+                    return $false
+                }
+                $conditional = $true
+            } elseif ($parent -is [System.Management.Automation.Language.TryStatementAst]) {
+                if (-not [object]::ReferenceEquals($node, $parent.Finally) -and $parent.Finally -and
+                    $parent.Finally.Statements.Count) { return $false }
+            } elseif ($parent -is [System.Management.Automation.Language.CatchClauseAst]) {
+                $conditional = $true
+            } elseif ($parent -is [System.Management.Automation.Language.AssignmentStatementAst]) {
+                if (-not [object]::ReferenceEquals($node, $parent.Right)) { return $false }
+            } elseif ($parent -is [System.Management.Automation.Language.PipelineChainAst]) {
+                if ([object]::ReferenceEquals($node, $parent.LhsPipelineChain) -and
+                    "$($parent.Operator)" -ne 'AndAnd') { return $false }
+            } else { return $false }
+            $node = $parent
+        }
+        $true
+    }
+    $walk = {
+        [System.Diagnostics.DebuggerHidden()] param($frames, $position)
+        $last = $frames.Count - 3
+        for ($index = 1; $index -le $last; $index++) {
+            $invocation = $frames[$index].InvocationInfo
+            $root = $invocation.MyCommand.ScriptBlock.Ast
+            if ($root -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
+                $root = $root.Body
+            }
+            if ($root -isnot [System.Management.Automation.Language.ScriptBlockAst]) { return -1 }
+            if ($index -eq 1) {
+                $node = $null
+                foreach ($node in $root.FindAll({
+                    [System.Diagnostics.DebuggerHidden()] param($ast)
+                    $ast.Extent.StartOffset -le $position.StartOffset -and
+                        $ast.Extent.EndOffset -ge $position.EndOffset -and
+                        $ast -is [System.Management.Automation.Language.StatementAst] -and
+                        $ast -isnot [System.Management.Automation.Language.CommandBaseAst]
+                }, $true)) {}
             } else {
-                $__vbotElement.GetCommandName()
+                $call = $frames[$index - 1].InvocationInfo
+                $node = $root.Find({
+                    [System.Diagnostics.DebuggerHidden()] param($ast)
+                    $ast.Extent.StartLineNumber -eq $call.ScriptLineNumber -and
+                        $ast.Extent.StartColumnNumber -eq $call.OffsetInLine -and
+                        $ast -is [System.Management.Automation.Language.CommandAst]
+                }, $true)
+                if ($node) { $node = $node.Parent }
             }
-            if ($__vbotTarget -is [string]) {
-                $__vbotTarget = $ExecutionContext.InvokeCommand.GetCommand($__vbotTarget, 'All')
+            if (-not $node -or -not (& $climb $node $root)) { return -1 }
+            if ($index -lt $last) {
+                $kind = $invocation.MyCommand
+                if (-not ($kind -is [System.Management.Automation.FunctionInfo] -or
+                    $kind -is [System.Management.Automation.ExternalScriptInfo] -or
+                    $kind -is [System.Management.Automation.ScriptInfo]) -or
+                    $invocation.PipelinePosition -ne $invocation.PipelineLength) { return -1 }
             }
-            while ($__vbotTarget -is [System.Management.Automation.AliasInfo]) {
-                $__vbotTarget = $__vbotTarget.ResolvedCommand
-            }
-            if ($__vbotTarget -is [System.Management.Automation.FunctionInfo] -or
-                $__vbotTarget -is [System.Management.Automation.ExternalScriptInfo]) {
-                $__vbotTarget = $__vbotTarget.ScriptBlock
-            }
-            if ($__vbotTarget -is [scriptblock]) { $__vbotTarget = $__vbotTarget.Ast }
-            if ($__vbotTarget -is "${__vbotA}FunctionDefinitionAst") {
-                $__vbotTarget = $__vbotTarget.Body
-            }
-            $__vbotTarget
         }
-        $__vbotAst = ${function:__vbotBody}.Ast
-        $__vbotBlock = $__vbotAst.PSObject.Properties['CleanBlock']
-        $__vbotBlock = if ($__vbotBlock -and $__vbotBlock.Value) {
-            $__vbotBlock.Value
-        } else { $__vbotAst.EndBlock }
-        $__vbotStatements = $__vbotBlock.Statements
-        $__vbotStatement = if ($__vbotStatements.Count -gt 1) {
-            $__vbotStatements[$__vbotStatements.Count - 2]
-        }
-        for ($__vbotDepth = 0; $__vbotStatement -and $__vbotDepth -le 10; $__vbotDepth++) {
-            if ($__vbotStatement -is "${__vbotA}AssignmentStatementAst") {
-                $__vbotStatement = $__vbotStatement.Right
+        $last - 1
+    }.GetNewClosure()
+    $decide = {
+        [System.Diagnostics.DebuggerHidden()] param($caught)
+        $lastExit = $variables.GetValue('global:LASTEXITCODE')
+        if ($caught) {
+            $exception = $caught.Exception
+            if ($exception -is [System.Management.Automation.MethodInvocationException] -and
+                $exception.InnerException) { $exception = $exception.InnerException }
+            if ($exception -isnot [System.Management.Automation.LoopFlowException]) {
+                throw $exception
             }
-            if ($__vbotStatement -isnot "${__vbotA}PipelineAst") { break }
-            $__vbotElements = $__vbotStatement.PipelineElements
-            $__vbotStatement = $null
-            foreach ($__vbotElement in $__vbotElements) {
-                $__vbotTarget = & $__vbotFind $__vbotElement
-                if ($__vbotTarget -is [System.Management.Automation.ApplicationInfo]) {
-                    if ($__vbotDepth) { return $__vbotCode }
-                } elseif ($__vbotElements.Count -eq 1 -and
-                    $__vbotTarget -is "${__vbotA}ScriptBlockAst") {
-                    $__vbotBlocks = $__vbotTarget.EndBlock, $__vbotTarget.ProcessBlock,
-                        $__vbotTarget.BeginBlock
-                    foreach ($__vbotBlock in $__vbotBlocks) {
-                        if ($__vbotBlock -and $__vbotBlock.Statements.Count) {
-                            $__vbotStatement = $__vbotBlock.Statements[-1]
-                            break
+            return $(if ($state.Cleaned -eq $false) { 1 } else { 0 })
+        }
+        if ($null -eq $state.Ended -or
+            ($state.CleanRan -and -not [object]::ReferenceEquals($lastExit, $state.CleanExit))) {
+            return $(if ($lastExit -is [int]) { $lastExit } else { 0 })
+        }
+        # An error in the command's clean block ends the pipeline before the reader's.
+        if ($state.ReaderCleans -and -not $state.CleanRan) { return 1 }
+        $code = 1
+        try {
+            $succeeded = $state.Ended
+            if ($state.CleanRan -and $state.Cleaned -ne $succeeded) {
+                $block = [System.Management.Automation.Language.Parser]::ParseInput(
+                    $state.Text, [ref]$null, [ref]$null).PSObject.Properties['CleanBlock']
+                if ($block.Value -and $block.Value.Statements.Count) { $succeeded = $state.Cleaned }
+            }
+            if ($succeeded) { $code = 0 }
+            $record = $state.Record
+            if ($record -and $lastExit -is [int] -and $lastExit -ne 0 -and
+                -not [object]::ReferenceEquals($lastExit, $record[2]) -and
+                -not ($errors.Count -and -not [object]::ReferenceEquals($errors[0], $record[3]))) {
+                $frames = $record[0]
+                $position = $record[1]
+                $depth = $null
+                if ($frames.Count -eq 4) {
+                    $root = $frames[1].InvocationInfo.MyCommand.ScriptBlock.Ast
+                    $statements = $root.EndBlock.Statements
+                    $statement = if ($statements.Count) { $statements[$statements.Count - 1] }
+                    $clean = $root.PSObject.Properties['CleanBlock']
+                    if ($statement -is [System.Management.Automation.Language.PipelineAst] -and
+                        -not ($clean -and $clean.Value)) {
+                        foreach ($ast in @($statement) + $statement.PipelineElements) {
+                            if ($ast.Extent.StartOffset -eq $position.StartOffset -and
+                                $ast.Extent.EndOffset -eq $position.EndOffset) { $depth = 0 }
                         }
                     }
                 }
+                if ($null -eq $depth) { $depth = & $walk $frames $position }
+                if ($depth -ge 1 -or ($depth -eq 0 -and -not $succeeded)) { $code = $lastExit }
             }
+        } catch {}
+        $code
+    }.GetNewClosure()
+    $state.Finish = {
+        [System.Diagnostics.DebuggerHidden()] param($caught)
+        exit (& $decide $caught)
+    }.GetNewClosure()
+    $state.WarmUp = {
+        [System.Diagnostics.DebuggerHidden()] param()
+        $frames = & { & { & { $debugger.GetCallStack() } } }
+        $null = (& $walk $frames $frames[1].Position), (& $decide $null), $recorder.Invoke($null)
+    }.GetNewClosure()
+    $state.Run = {
+        [System.Diagnostics.DebuggerHidden()] param()
+        try {
+            $null = [AppDomain]::CurrentDomain.GetData('{key}').Pipeline.Invoke(
+                $null, [AppDomain]::CurrentDomain.GetData('{key}').Settings)
+        } catch {
+            & ([AppDomain]::CurrentDomain.GetData('{key}').Finish) $_
         }
-    } catch {}
-    0
-}
-function __vbotReturned {
-    end {
-        $__vbotSucceeded = $?
-        if (-not (Get-Variable -Name __vbotExitCode -Scope Global -ErrorAction Ignore)) {
-            $global:__vbotExitCode = if ($__vbotSucceeded) { 0 } else { __vbotStatus $false }
-        }
+        & ([AppDomain]::CurrentDomain.GetData('{key}').Finish) $null
     }
+    [AppDomain]::CurrentDomain.SetData('{key}', $state)
 }
 """
-STATUS_FUNCTION = re.sub(r"(?m)^[ \t]+", "", STATUS_FUNCTION)
+RUNNER_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUNNER_STATEMENTS).replace("{key}", RUNNER_KEY)
 SETUP_STATEMENT = "; ".join(
     (UTF8_CONSOLE_STATEMENT, UI_CULTURE_STATEMENT, PLAIN_TEXT_STATEMENT, OUTPUT_WIDTH_STATEMENT)
 )
@@ -245,30 +396,35 @@ _NOT_RUN_CODE_FIRST = 100_000_000
 _NOT_RUN_CODES = 899_999_998
 # A shell started ahead of its command waits in Windows' system directory
 # (``_command_launch``). While it waits it pays the first use of what follows:
-# type lookups, the parser, PowerShell's utility and file cmdlets, formatting, an
-# empty command through Out-Default, and moving back and forth, which leaves the
-# location history as the shell started. That takes about 40 ms from each warm
-# command; a shell started for its command skips it, since the request is
-# already there. None of it writes output; an error it records is cleared before
-# the command runs.
-WARM_UP_STATEMENTS = r"""$__vbotUtf8 = [System.Text.Encoding]::UTF8
-if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
-    try {
-        $null = [Convert]::FromBase64String('LA=='), [NullString]::Value
-        $null = [System.Management.Automation.Language.Parser]::ParseInput(
-            '"$a" | % { $_ }', [ref]$null, [ref]$null)
-        Import-Module -ErrorAction Stop -Name (
-            'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management')
-        $null = [pscustomobject]@{ Name = 1 } | Out-String
-        ${function:__vbotBody} = [scriptblock]::Create('')
-        . __vbotInvoke
-        Remove-Variable -Name __vbotWarm* -Scope Global
-        Set-Location - -ErrorAction Stop
-        Set-Location -LiteralPath ([Environment]::CurrentDirectory) -ErrorAction Stop
-    } catch {}
+# type lookups, the parser, PowerShell's utility and file cmdlets, formatting, the
+# runner with an empty command and its walk through a call stack, removing
+# variables, and moving back and forth, which leaves the location history as the
+# shell started. A shell started for its command skips it, since the request is
+# already there. None of it writes output or leaves a variable; an error it
+# records is cleared before the command runs.
+WARM_UP_STATEMENTS = r"""if ([Environment]::CurrentDirectory -eq [Environment]::SystemDirectory) {
+    & {
+        try {
+            $null = [Convert]::FromBase64String('LA=='), [NullString]::Value
+            $null = [System.Management.Automation.Language.Parser]::ParseInput(
+                '"$a" | % { $_ }', [ref]$null, [ref]$null)
+            Import-Module -ErrorAction Stop -Name (
+                'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Management')
+            $null = [pscustomobject]@{ Name = 1 } | Out-String
+            $runner = [AppDomain]::CurrentDomain.GetData('{key}')
+            & $runner.Prepare ''
+            $null = $runner.Pipeline.Invoke($null, $runner.Settings)
+            $ExecutionContext.InvokeCommand.PostCommandLookupAction = $null
+            & $runner.WarmUp
+            $ExecutionContext.SessionState.InvokeProvider.Item.Remove(
+                'Variable:\__vbotWarm*', $false)
+            Set-Location - -ErrorAction Stop
+            Set-Location -LiteralPath ([Environment]::CurrentDirectory) -ErrorAction Stop
+        } catch {}
+    }
 }
 """
-WARM_UP_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", WARM_UP_STATEMENTS)
+WARM_UP_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", WARM_UP_STATEMENTS).replace("{key}", RUNNER_KEY)
 # Wait for the request, then apply it: the environment layer, then the location of
 # PowerShell and of the process, unless the shell started there. [NullString]::Value
 # removes a variable, since PowerShell passes $null to a string parameter as ''.
@@ -279,9 +435,10 @@ WARM_UP_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", WARM_UP_STATEMENTS)
 REQUEST_STATEMENTS = r"""$__vbotRequest = @($input)
 $__vbotNotRun = {unreadable}
 try {
-    if ($__vbotRequest[0] -notmatch '^[0-9]{9}$') { throw 'no not-run code' }
+    if (-not [regex]::IsMatch($__vbotRequest[0], '^[0-9]{9}$')) { throw 'no not-run code' }
     $__vbotNotRun = [int]$__vbotRequest[0]
     if ($__vbotRequest.Count -lt 4 -or $__vbotRequest[-1] -ne '.') { throw 'ended early' }
+    $__vbotUtf8 = [System.Text.Encoding]::UTF8
     $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
     $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[2]))
     for ($__vbotIndex = 3; $__vbotIndex -lt $__vbotRequest.Count - 1; $__vbotIndex++) {
@@ -308,53 +465,23 @@ if ($PWD.ProviderPath -ne $__vbotWorkdir) {
 }
 """
 REQUEST_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REQUEST_STATEMENTS)
-# Parse the command after the setup; a syntax error is thrown as PowerShell reports
-# its own. The exit status runs at the end of the last block that runs: a clean
-# block, else the unnamed body, a named end block, or an end block added after
-# begin or process blocks. A named block that another named block follows in the
-# text gets none, since the lines after it would move; __vbotReturned reads the
-# status then. The command runs without the bootstrap's variables and with an
-# empty $Error; the exit status sets the only variable, and a command that ends
-# without it, through break or continue outside a loop, exits with 0.
+# Parse the command after the setup: a syntax error is thrown as PowerShell reports
+# its own, and nothing runs. The runner prepares the command's pipeline and its
+# hook; the bootstrap's variables are removed, without the cmdlet, which would load
+# its module first; and the command runs in the global scope with an empty $Error,
+# as in a new shell. The runner exits with its code.
 RUN_STATEMENTS = r"""$__vbotParseErrors = $null
-$__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
+$null = [System.Management.Automation.Language.Parser]::ParseInput(
     $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
 if ($__vbotParseErrors) {
     throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
 }
-$__vbotLast = $__vbotAst.CleanBlock
-if (-not $__vbotLast) { $__vbotLast = $__vbotAst.EndBlock }
-$__vbotLater = @($__vbotAst.DynamicParamBlock, $__vbotAst.BeginBlock, $__vbotAst.ProcessBlock,
-    $__vbotAst.EndBlock).Where({ $_ -and $_.Extent.StartOffset -gt $__vbotLast.Extent.StartOffset })
-$__vbotExitStatus = '{exit_status}'
-$__vbotCommand = if ($__vbotLast -and -not $__vbotLast.Unnamed) {
-    if ($__vbotLater) { $__vbotCommand } else {
-        $__vbotCommand.Insert($__vbotLast.Extent.EndOffset - 1, "`n`n$__vbotExitStatus`n")
-    }
-} elseif ($__vbotAst.BeginBlock -or $__vbotAst.ProcessBlock -or $__vbotAst.DynamicParamBlock) {
-    "$__vbotCommand`nend {`n$__vbotExitStatus`n}"
-} else {
-    "$__vbotCommand`n`n$__vbotExitStatus"
-}
-${function:__vbotBody} = [scriptblock]::Create($__vbotCommand)
-Remove-Variable -Name __vbot* -Scope Global
+& ([AppDomain]::CurrentDomain.GetData('{key}').Prepare) $__vbotCommand
+$ExecutionContext.SessionState.InvokeProvider.Item.Remove('Variable:\__vbot*', $false)
 $Error.Clear()
-. __vbotInvoke
-$__vbotExitCode = Get-Variable -Name __vbotExitCode -Scope Global -ValueOnly -ErrorAction Ignore
-if (-not $__vbotExitCode) { exit 0 }
-exit $__vbotExitCode
+. ([AppDomain]::CurrentDomain.GetData('{key}').Run)
 """
-RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS)
-# The command runs from the first line. Write-Error names its caller's position,
-# which PowerShell shows only beyond the first line, so no bootstrap line appears in
-# the command's errors. Dot-sourcing the function and its body keeps the command's
-# own scope; the body is the command's script block, not a function of its own,
-# whose name its errors would show. Its errors merge into Out-Default's input, as
-# pwsh -Command merges a script's; __vbotReturned reads the status of a command
-# that returned early.
-INVOKE_STATEMENT = (
-    "function __vbotInvoke { . ${function:__vbotBody} 2>&1 | Out-Default | __vbotReturned }"
-)
+RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS).replace("{key}", RUNNER_KEY)
 _QUOTE = re.compile("(['‘’‚‛])")
 
 
@@ -369,14 +496,13 @@ def _escaped(text: str) -> str:
     return _QUOTE.sub(r"\1\1", text)
 
 
-# The setup and the invoking function share the first line. Everything before
-# the request runs before the command is known.
+# Everything before the request runs before the command is known.
 POWERSHELL_BOOTSTRAP = (
-    f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n"
-    + STATUS_FUNCTION
+    f"{SETUP_STATEMENT}\n"
+    + RUNNER_STATEMENTS
     + WARM_UP_STATEMENTS
     + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
-    + RUN_STATEMENTS.replace("{exit_status}", _escaped(EXIT_STATUS_STATEMENT))
+    + RUN_STATEMENTS
 )
 
 
@@ -493,7 +619,6 @@ def _windows_culture() -> PowerShellCulture | None:
 
 
 __all__ = [
-    "EXIT_STATUS_STATEMENT",
     "OUTPUT_COLUMNS",
     "OUTPUT_WIDTH_STATEMENT",
     "PLAIN_TEXT_STATEMENT",
