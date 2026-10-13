@@ -64,7 +64,10 @@ class TerminalAdapter(Protocol):
     @property
     def pid(self) -> int: ...
 
-    def read(self, size: int) -> str: ...
+    def read(self, size: int) -> str:
+        """Output as UTF-8 text; a byte that is no UTF-8 is a lone surrogate
+        (``surrogateescape``)."""
+        ...
 
     def write(self, text: str) -> None: ...
 
@@ -345,7 +348,9 @@ class _PosixTerminalAdapter:
     def __init__(self, process: subprocess.Popen[bytes], master_fd: int) -> None:
         self._process = process
         self._fd = master_fd
-        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        # A byte that is no UTF-8 reads as a lone surrogate, so the Session can
+        # log the bytes exactly as they came.
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="surrogateescape")
         self._lock = threading.Lock()
         self._users = 0
         self._closed = False

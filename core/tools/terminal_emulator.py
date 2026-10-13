@@ -11,12 +11,14 @@ import copy
 import hashlib
 import itertools
 import re
+import unicodedata
 from collections import deque
 from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple, cast, override
 
 import pyte
 from pyte import graphics
+from pyte.screens import wcwidth
 
 _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
 _BRACKETED_PASTE_MODE = 2004
@@ -57,6 +59,12 @@ _SCAN_OSC_END = re.compile(r"[\x07\x1b\x18\x1a]")
 _SCAN_STRING_END = re.compile(r"[\x1b\x18\x1a]")
 # ConEmu's numbered OSC 9 commands; any other OSC 9 text is a notification.
 _OSC9_COMMAND = re.compile(r"\d+(?:;|$)")
+# What the Agent's screen text puts around text shown in reverse video, such
+# as a selected menu item: characters programs practically never print.
+HIGHLIGHT_START = "⟦"
+HIGHLIGHT_END = "⟧"
+# Erase in Display mode 3: forget the saved lines (scrollback), keep the screen.
+_ERASE_SAVED_LINES = 3
 # An OSC payload is classified by its start; longer payloads (images,
 # clipboard data) are not kept.
 _OSC_PREFIX_CHARS = 64
@@ -130,13 +138,30 @@ class EmulatorUpdate(NamedTuple):
     signals: tuple[str, ...] = ()
     # The program asked for focus reports (CSI ? 1004 h) and still wants them.
     focus_reporting: bool = False
+    # The chunk erased the whole primary screen: the history line number its
+    # first row had then, which the next lines drawn there get again.
+    cleared_line: int | None = None
+    # Screen operations of this chunk that failed and were skipped, with the
+    # first failure's description (see ``_GuardedScreen``).
+    skipped: int = 0
+    skipped_error: str = ""
 
 
 class ScreenObservation(NamedTuple):
-    """The visible screen at one moment: change signature and plain-text tail."""
+    """The visible screen at one moment, as the Agent is shown it.
+
+    ``screen`` is every row through the last non-blank one, reverse-video
+    text between ``HIGHLIGHT_START`` and ``HIGHLIGHT_END``. ``cursor`` is the
+    visible cursor's row and column, counted from 1 (None while the program
+    hides it). ``screen_start_line`` numbers the first screen row as a history
+    line; ``first_line`` is the oldest retained history line.
+    """
 
     signature: str
-    tail: str
+    screen: str
+    cursor: tuple[int, int] | None
+    screen_start_line: int
+    first_line: int
 
 
 class SignalScanner:
@@ -323,13 +348,45 @@ class _EmulatorStream(pyte.Stream):
     }
 
 
+class _GuardedScreen:
+    """The screen as pyte's parser calls it: an operation that fails is skipped.
+
+    A terminal ignores a sequence it cannot apply. An error that left pyte's
+    parser would end the parser, and the screen would never change again;
+    skipped instead, it costs only that operation's effect, and the screen
+    goes on following the output.
+    """
+
+    def __init__(self, screen: pyte.Screen) -> None:
+        self._screen = screen
+        self.skipped = 0
+        self.skipped_error = ""
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._screen, name)
+        if not callable(value):
+            return value
+
+        def guarded(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return value(*args, **kwargs)
+            except Exception as error:
+                if not self.skipped:
+                    self.skipped_error = f"{name}: {type(error).__name__}: {error}"
+                self.skipped += 1
+                return None
+
+        return guarded
+
+
 class _EmulatorScreen(pyte.Screen):
     """pyte's screen plus history, alternate screen, dim and soft-wrap tracking.
 
     A row the cursor left by auto-wrap carries ``wrapped = True``: its text
     continues on the next row. Explicit line feeds and erasing the row's end
     clear the mark, so it names exactly the rows a long line was folded into.
-    ``on_clear`` runs when the whole primary screen is erased or reset.
+    ``on_clear`` runs when the whole primary screen is erased or reset;
+    ``on_clear_history`` when the program erases the saved lines (ED 3).
     """
 
     def __init__(
@@ -338,9 +395,11 @@ class _EmulatorScreen(pyte.Screen):
         lines: int,
         on_scroll: Callable[[Any], None],
         on_clear: Callable[[], None],
+        on_clear_history: Callable[[], None],
     ) -> None:
         self._on_scroll = on_scroll
         self._on_clear = on_clear
+        self._on_clear_history = on_clear_history
         self._primary_state: dict[str, Any] | None = None
         self._alternate_modes: set[int] = set()
         self._private_modes: set[int] = set()
@@ -387,11 +446,56 @@ class _EmulatorScreen(pyte.Screen):
         # pyte auto-wraps inside draw by a carriage return and a line feed.
         self._drawing = True
         try:
-            super().draw(data)
+            if data.isascii() and data.isprintable():
+                super().draw(data)
+                if data:
+                    self._last_graphic = data[-1]
+            else:
+                self._draw_cellless(data)
         finally:
             self._drawing = False
-        if data:
-            self._last_graphic = data[-1]
+
+    def _draw_cellless(self, data: str) -> None:
+        """Draw text that holds characters taking no cell of their own.
+
+        pyte stops drawing at the first such character that is no combining
+        mark, such as a variation selector (U+FE0F), a zero-width joiner or a
+        zero-width space, and drops the rest of the text. Like a terminal, a
+        zero-width character joins the character before it and drawing goes
+        on; a character that cannot be printed is skipped.
+        """
+        start = 0
+        for index, character in enumerate(data):
+            width = wcwidth(character)
+            if width > 0:
+                self._last_graphic = character
+                continue
+            if start < index:
+                super().draw(data[start:index])
+            start = index + 1
+            if width == 0:
+                self._join_previous(character)
+        if start < len(data):
+            super().draw(data[start:])
+
+    def _join_previous(self, mark: str) -> None:
+        """Add a zero-width character to the character drawn before the cursor."""
+        x, y = self.cursor.x, self.cursor.y
+        if x == 0:
+            if y == 0:
+                return
+            # The character before the cursor ends the row above.
+            x, y = self.columns, y - 1
+        line = self.buffer[y]
+        x -= 1
+        if not line[x].data and x > 0 and _is_wide(line[x - 1].data):
+            # The second cell of a wide character: join the character itself.
+            x -= 1
+        cell = line[x]
+        if not cell.data:
+            return
+        line[x] = cell._replace(data=unicodedata.normalize("NFC", cell.data + mark))
+        self.dirty.add(y)
 
     @override
     def linefeed(self) -> None:
@@ -412,14 +516,19 @@ class _EmulatorScreen(pyte.Screen):
 
     @override
     def erase_in_display(self, how: int = 0, *args: Any, **kwargs: Any) -> None:
-        if how in (0, 2, 3):
+        if how == _ERASE_SAVED_LINES:
+            # Like xterm, ED 3 erases the saved lines and leaves the screen
+            # as it is; pyte would erase the screen instead.
+            self._on_clear_history()
+            return
+        if how in (0, 2):
             first = self.cursor.y + 1 if how == 0 else 0
             for y in range(first, self.lines):
                 line: Any = self.buffer.get(y)
                 if line is not None and getattr(line, "wrapped", False):
                     line.wrapped = False
         super().erase_in_display(how, *args, **kwargs)
-        if how in (2, 3) and self._primary_state is None:
+        if how == 2 and self._primary_state is None:
             self._on_clear()
 
     @override
@@ -610,8 +719,13 @@ class TerminalEmulator:
         # Where a wait's pattern starts matching: a row number, and whether
         # the logical line on that row is skipped too. None: every retained line.
         self._match_start: tuple[int, bool] | None = None
-        self._screen = _EmulatorScreen(columns, rows, self._remember_line, self._cleared)
-        self._stream = _EmulatorStream(self._screen)
+        # Where the current chunk first erased the whole primary screen.
+        self._cleared_line: int | None = None
+        self._screen = _EmulatorScreen(
+            columns, rows, self._remember_line, self._cleared, self._history.clear
+        )
+        self._guarded = _GuardedScreen(self._screen)
+        self._stream = _EmulatorStream(self._guarded)  # type: ignore[arg-type]
         self._held = ""
         self._responses: list[str] = []
         self._signals = SignalScanner()
@@ -624,6 +738,8 @@ class TerminalEmulator:
         """
         signals = tuple(self._signals.scan(text))
         focus_requests = self._screen.focus_requests
+        self._cleared_line = None
+        self._guarded.skipped, self._guarded.skipped_error = 0, ""
         text = self._held + text
         self._held = ""
         incomplete = _INCOMPLETE_SEQUENCE.search(text)
@@ -651,6 +767,9 @@ class TerminalEmulator:
             alternate_exited=self._screen.alternate_exit_revision != alternate_exits,
             signals=signals,
             focus_reporting=_FOCUS_REPORTING_MODE in self._screen.private_modes,
+            cleared_line=self._cleared_line,
+            skipped=self._guarded.skipped,
+            skipped_error=self._guarded.skipped_error,
         )
 
     def resize(self, columns: int, rows: int) -> None:
@@ -664,13 +783,28 @@ class TerminalEmulator:
         return _normalize_terminal_title(self._screen.title or self._screen.icon_name)
 
     def screen_text(self) -> str:
+        """The screen's plain text, through its last non-blank row."""
         return "\n".join(self._screen_lines())
 
-    def observe(self, tail_lines: int) -> ScreenObservation:
-        """Return the change signature and newest non-blank rows together."""
-        lines = self._screen_lines()
-        tail = "\n".join(lines[-tail_lines:]) if tail_lines > 0 else ""
-        return ScreenObservation(self._signature(), tail)
+    def observe(self) -> ScreenObservation:
+        """Return the screen as the Agent is shown it, with its change signature."""
+        screen = self._screen
+        reverse = pyte.modes.DECSCNM in screen.mode
+        lines = [
+            _marked_row(screen.buffer[y], screen.columns, reverse=reverse)
+            for y in range(screen.lines)
+        ]
+        while lines and not lines[-1]:
+            lines.pop()
+        cursor = screen.cursor
+        position = None if cursor.hidden else (cursor.y + 1, min(cursor.x + 1, screen.columns))
+        return ScreenObservation(
+            self._signature(),
+            "\n".join(lines),
+            position,
+            self._next_line,
+            self._history[0].number if self._history else self._next_line,
+        )
 
     def _signature(self) -> str:
         """Compare visible cells, including selection styles, without cursor blink."""
@@ -811,19 +945,14 @@ class TerminalEmulator:
         for row_index in range(self.rows):
             if row_index:
                 parts.append("\r\n")
-            line = screen.buffer[row_index]
-            for column_index in range(self.columns):
-                cell = line[column_index]
-                # pyte stores the second cell of a wide glyph as empty. The
-                # glyph already advances the viewer by two columns; emitting a
-                # space for its continuation would wrap and scroll the snapshot.
-                if not cell.data:
-                    continue
+            # A wide glyph already advances the viewer by two columns; its
+            # second cell is skipped, or the snapshot would wrap and scroll.
+            for cell, text in _visible_cells(screen.buffer[row_index], self.columns):
                 style = _cell_style(cell)
                 if style != active_style:
                     parts.append(_style_sequence(cell))
                     active_style = style
-                parts.append(cell.data)
+                parts.append(text)
         cursor = screen.cursor
         parts.extend(
             (
@@ -835,7 +964,8 @@ class TerminalEmulator:
         return "".join(parts)
 
     def _screen_lines(self) -> list[str]:
-        lines = [line.rstrip() for line in self._screen.display]
+        screen = self._screen
+        lines = [_render_buffer_line(screen.buffer[y], screen.columns) for y in range(screen.lines)]
         while lines and not lines[-1]:
             lines.pop()
         return lines
@@ -868,6 +998,8 @@ class TerminalEmulator:
         # pattern matches from the cleared screen on.
         if self._match_start is not None:
             self._match_start = (self._next_line, False)
+        if self._cleared_line is None:
+            self._cleared_line = self._next_line
 
     def _respond_to_query(
         self, prefix: str, parameters: str, intermediate: str, final: str
@@ -934,9 +1066,67 @@ def _semicolon_form(match: re.Match[str]) -> str:
     return f"\x1b[{';'.join(attributes)}m" if attributes else ""
 
 
+def _is_wide(data: str) -> bool:
+    """Whether a cell's character takes two cells."""
+    return bool(data) and not data.isascii() and wcwidth(data[0]) == 2
+
+
+def _visible_cells(line: Any, columns: int) -> list[tuple[Any, str]]:
+    """Each cell of a row a viewer sees, with the text it shows.
+
+    pyte keeps a wide character's second cell as an empty one, skipped here.
+    Like a real terminal, a wide character a narrow one half overwrote is
+    gone: both of its cells show a space instead of pyte's broken pair.
+    """
+    cells: list[tuple[Any, str]] = []
+    wide = False
+    for column in range(columns):
+        cell = line[column]
+        data = cell.data
+        if wide:
+            wide = False
+            if not data:
+                continue
+            previous, _text = cells[-1]
+            cells[-1] = (previous, " ")
+        if not data:
+            cells.append((cell, " "))
+            continue
+        cells.append((cell, data))
+        wide = _is_wide(data)
+    return cells
+
+
 def _render_buffer_line(line: Any, columns: int, *, strip: bool = True) -> str:
-    text = "".join(line[column].data for column in range(columns))
+    text = "".join(text for _cell, text in _visible_cells(line, columns))
     return text.rstrip() if strip else text
+
+
+def _marked_row(line: Any, columns: int, *, reverse: bool) -> str:
+    """A row's text with its reverse-video runs between the highlight marks.
+
+    A cell's reverse flag holds how it is shown. In the screen-wide reverse
+    mode (DECSCNM) the blank background is reverse too, so only cells that
+    differ from *reverse* stand out. Blank cells at the end of the row are
+    left out, also inside a run, which keeps at least one.
+    """
+    runs: list[tuple[bool, str]] = []
+    for cell, text in _visible_cells(line, columns):
+        highlighted = bool(cell.reverse) != reverse
+        if runs and runs[-1][0] == highlighted:
+            runs[-1] = (highlighted, runs[-1][1] + text)
+        else:
+            runs.append((highlighted, text))
+    while runs and not runs[-1][0] and not runs[-1][1].strip():
+        runs.pop()
+    if not runs:
+        return ""
+    highlighted, text = runs[-1]
+    runs[-1] = (highlighted, text.rstrip() or " ") if highlighted else (highlighted, text.rstrip())
+    return "".join(
+        f"{HIGHLIGHT_START}{text}{HIGHLIGHT_END}" if highlighted else text
+        for highlighted, text in runs
+    )
 
 
 def _normalize_terminal_title(value: object) -> str:

@@ -150,6 +150,8 @@ async def _probe_terminal_case(
             render_host=TerminalRenderHost.in_process(),
             activity_quiet_seconds=0.03,
             idle_seconds=0.06,
+            # The fixture prints nothing at start: wait briefly for its first screen.
+            start_wait_seconds=0.2,
         )
         manager.start()
         projects = ProjectStore(root / "data")
@@ -295,7 +297,7 @@ async def _probe_terminal_case(
             result = None
             effect_ok = False
             if valid and actual.get("action") == "start":
-                # start returns once the program's first screen settled and its text was typed.
+                # start returns once the program's first screen settled; it types nothing.
                 factory.initial_output = "ready> "
             if valid:
                 try:
@@ -330,10 +332,10 @@ async def _probe_terminal_case(
                         ]
                     effect_ok = effect_ok and child.name == actual.get("name")
                     if actual.get("text"):
-                        effect_ok = effect_ok and factory.adapters[-1].writes == [
-                            actual["text"],
-                            "\r",
-                        ]
+                        # The result says the text was not typed.
+                        effect_ok = (
+                            effect_ok and factory.adapters[-1].writes == [] and "note" in data
+                        )
                     if actual.get("group"):
                         effect_ok = effect_ok and child.group_id is not None
                 elif actual["action"] == "status":

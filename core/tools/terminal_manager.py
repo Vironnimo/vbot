@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, BinaryIO
 
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
@@ -48,6 +48,7 @@ from ._terminal_session import (
     TerminalObservation,
     TerminalSession,
     TerminalSessionServices,
+    unseen_lines_note,
 )
 from ._terminal_state import (
     TERMINAL_ACTIVITY_QUIET_SECONDS,
@@ -118,6 +119,7 @@ class TerminalManager:
         sweep_interval_seconds: float = TERMINAL_SWEEP_INTERVAL_SECONDS,
         activity_quiet_seconds: float = TERMINAL_ACTIVITY_QUIET_SECONDS,
         idle_seconds: float = TERMINAL_IDLE_SECONDS,
+        start_wait_seconds: float = TERMINAL_START_WAIT_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         program_probe: Callable[[int, str], bool] = process_tree_runs,
@@ -135,6 +137,8 @@ class TerminalManager:
             raise ValueError("Terminal activity quiet period must be positive")
         if idle_seconds < activity_quiet_seconds:
             raise ValueError("Terminal idle period must not be shorter than its quiet period")
+        if start_wait_seconds <= 0:
+            raise ValueError("Terminal start wait must be positive")
         self._temporary_files = temporary_files
         self._operator_store = TerminalOperatorStore(
             launch_history_path=launch_history_path,
@@ -148,6 +152,7 @@ class TerminalManager:
         self._scrollback_lines = scrollback_lines
         self._finished_session_ttl = finished_session_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
+        self._start_wait_seconds = start_wait_seconds
         self._sessions: dict[str, TerminalSession] = {}
         self._pending_spawns: dict[asyncio.Task[TerminalSession], TerminalOwner | None] = {}
         self._pending_execution_spawns: dict[asyncio.Task[TerminalSession], RunExecutionOwner] = {}
@@ -299,7 +304,6 @@ class TerminalManager:
         columns: int = TERMINAL_DEFAULT_COLUMNS,
         rows: int = TERMINAL_DEFAULT_ROWS,
         origin_run_id: str,
-        initial_text: str | None = None,
         name: str | None = None,
         group_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
@@ -319,7 +323,6 @@ class TerminalManager:
             columns=columns,
             rows=rows,
             origin_run_id=origin_run_id,
-            initial_text=initial_text,
             name=name,
             group_id=group_id,
             execution_owner=execution_owner,
@@ -461,7 +464,6 @@ class TerminalManager:
         columns: int,
         rows: int,
         origin_run_id: str | None,
-        initial_text: str | None = None,
         name: str | None = None,
         group_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
@@ -481,7 +483,7 @@ class TerminalManager:
             self._catalog.require_group(group_id)
 
         log_path: Path | None = None
-        log_handle: TextIO | None = None
+        log_handle: BinaryIO | None = None
         log_lease: TemporaryFileLease | None = None
         screen = None
         adapter: TerminalAdapter | None = None
@@ -540,7 +542,6 @@ class TerminalManager:
             group_id=group_id,
             origin_run_id=origin_run_id,
             execution_owner=execution_owner,
-            awaiting_initial_input=initial_text is not None,
             log_path=log_path,
             log_handle=log_handle,
             log_lease=log_lease,
@@ -551,7 +552,7 @@ class TerminalManager:
         if group_id is not None:
             self._catalog.add_to_group(group_id, terminal_id)
         self._sessions[terminal_id] = session
-        session.start(initial_text=initial_text)
+        session.start()
         return session
 
     async def _observe(self, pid: int) -> ProcessTree | None:
@@ -807,15 +808,15 @@ class TerminalManager:
             deadline=self._services.monotonic() + seconds, after_quiet=after_quiet
         )
 
-    async def wait_for_startup(
-        self, terminal_id: str, *, seconds: float = TERMINAL_START_WAIT_SECONDS
-    ) -> None:
-        """Wait until a started program shows its first screen, at most *seconds*.
+    async def wait_for_startup(self, terminal_id: str) -> None:
+        """Wait until a started program shows its first screen, at most the start wait.
 
-        Returns once start-up output paused for the activity quiet period,
-        the output after start's text settled, or the program ended.
+        Returns once the program printed something visible and its output then
+        paused for the activity quiet period, or once the program ended. A
+        program that shows nothing is waited for the whole start wait.
         """
-        await self._get(terminal_id).wait_started(deadline=self._services.monotonic() + seconds)
+        deadline = self._services.monotonic() + self._start_wait_seconds
+        await self._get(terminal_id).wait_started(deadline=deadline)
 
     def acknowledge_exit(self, terminal_id: str, owner: TerminalOwner) -> None:
         """A durable result showed the program's end: do not deliver its exit."""
@@ -1044,12 +1045,13 @@ class TerminalManager:
 
     def _open_raw_log(
         self,
-    ) -> tuple[Path | None, TextIO | None, TemporaryFileLease | None]:
+    ) -> tuple[Path | None, BinaryIO | None, TemporaryFileLease | None]:
+        """Open the log that receives the output as the terminal receives it."""
         if self._temporary_files is None:
             return None, None, None
         lease = self._temporary_files.create(TERMINAL_TEMPORARY_CATEGORY, ".log")
         try:
-            handle = lease.path.open("a", encoding="utf-8", newline="")
+            handle = lease.path.open("ab")
         except BaseException:
             lease.finish()
             raise
@@ -1107,4 +1109,5 @@ __all__ = [
     "WaitEnded",
     "agent_group_id",
     "observe_process_tree",
+    "unseen_lines_note",
 ]

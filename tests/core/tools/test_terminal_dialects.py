@@ -152,6 +152,10 @@ async def test_start_takes_an_argument_list_as_command(
     implicit = await terminal({"command": "fake-tui", "args": ["-i"], "name": "console"})
     assert implicit["ok"] is True
     assert manager[1].calls[-1][0] == ["fake-tui", "-i"]
+    # An empty argument is an argument: the program receives it.
+    empty = await terminal({"action": "start", "command": "fake-tui", "args": [""]})
+    assert empty["ok"] is True
+    assert manager[1].calls[-1][0] == ["fake-tui", ""]
 
 
 @pytest.mark.asyncio
@@ -219,15 +223,14 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
         retryable=True,
     )
     typed = await send(text="answer", expected_screen_revision=revision())
-    # The result shows the screen once the output settled after the input.
-    assert typed["data"] == {
-        "terminal_id": terminal_id,
-        "state": "running",
-        "screen": "QUESTION>",
-        "note": "text was typed but not submitted. To submit it, call terminal "
-        + json.dumps({"action": "input", "terminal_id": terminal_id, "key": "enter"})
-        + ".",
-    }
+    # The result shows the screen and the cursor once the output settled after
+    # the input; the paused output does not show that the program finished.
+    assert list(typed["data"]) == ["terminal_id", "state", "screen", "cursor", "note", "next"]
+    assert (typed["data"]["screen"], typed["data"]["cursor"]) == ("QUESTION>", "row 1, column 11")
+    assert (
+        json.dumps({"action": "input", "terminal_id": terminal_id, "key": "enter"})
+        in (typed["data"]["note"])
+    )
     submitted = await send(text="submit", key="enter")
     assert submitted["data"]["key"] == "enter"
     assert "note" not in submitted["data"]
@@ -259,15 +262,17 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
     assert "arrives as a new message" in unsettled["data"]["next"]
     assert json.dumps({"action": "wait", "terminal_id": terminal_id}) in unsettled["data"]["next"]
 
-    multiline = "first\n  second"
+    # Line breaks go as a terminal sends them, CR: pasted as one block when the
+    # program accepts bracketed paste, otherwise each one is Enter.
+    multiline = "first\n  second\r\nthird"
     await render("\x1b[?2004h")
     pasted = await send(text=multiline)
-    assert adapter.writes[-1] == f"\x1b[200~{multiline}\x1b[201~"
-    assert pasted["data"]["bracketed_paste"] is True
+    assert adapter.writes[-1] == "\x1b[200~first\r  second\rthird\x1b[201~"
+    assert pasted["data"]["pasted"] is True
     await render("\x1b[?2004l")
     typed_lines = await send(text=multiline)
-    assert adapter.writes[-1] == multiline
-    assert typed_lines["data"]["bracketed_paste"] is False
+    assert adapter.writes[-1] == "first\r  second\rthird"
+    assert typed_lines["data"]["pasted"] is False
 
 
 @pytest.mark.parametrize(
@@ -360,10 +365,12 @@ async def test_input_accepts_key_spellings_and_explains_unknown_keys(
         ({"text": "print(1)", "submit": True, "key": "enter"}, ["print(1)", "\r"]),
         ({"data": "print(1)", "enter": True}, ["print(1)\r"]),
         ({"text": "print(1)", "enter": False}, ["print(1)"]),
-        # Line breaks that end text submit it once, with or without key "enter".
+        # The line break that ends text is the Enter that submits it, with or
+        # without key "enter"; every other line break is an Enter too.
         ({"text": "print(1)\n"}, ["print(1)", "\r"]),
-        ({"text": "print(1)\r\n\r\n", "key": "enter"}, ["print(1)", "\r"]),
-        ({"text": "a\nb\n"}, ["a\nb", "\r"]),
+        ({"text": "print(1)\r\n\r\n", "key": "enter"}, ["print(1)\r", "\r"]),
+        ({"text": "alpha\n\n"}, ["alpha\r", "\r"]),
+        ({"text": "a\nb\n"}, ["a\rb", "\r"]),
     ],
 )
 @pytest.mark.asyncio
@@ -434,8 +441,10 @@ async def test_codex_and_hermes_input_shapes_type_into_the_terminal(
         ("await", "wait"),
         ("launch", "start"),
         ("disconnect", "detach"),
-        ("cancel", "kill"),
         ("join", "wait"),
+        # Cancelling can mean interrupting the program: no spelling of it kills.
+        ("cancel", "cancel"),
+        ("abort", "abort"),
     ],
 )
 def test_action_spellings_name_the_action(action: str, canonical: str) -> None:
@@ -673,34 +682,28 @@ async def test_input_returns_the_reply_once_its_output_pauses(
 
     data = result["data"]
     assert data["screen"].splitlines() == [">>> print(6*7)", "42", ">>>"]
-    assert list(data) == ["terminal_id", "state", "screen", "key"]
+    assert list(data) == ["terminal_id", "state", "screen", "cursor", "key", "next"]
 
 
 @pytest.mark.asyncio
 async def test_unknown_terminal_id_lists_attached_terminals(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
-    removed = (
-        "No terminal with the id term_missing is open: the id is wrong, or its program ended "
-        "more than 30 minutes ago and the terminal was removed, with its output."
-    )
-    listing = 'To see all terminals, call terminal {"action": "list"}.'
+    listing = json.dumps({"action": "list"})
     missing = await terminal({"action": "status", "terminal_id": "term_missing"})
-    assert _error(missing)["message"] == f"{removed} {listing}"
+    assert "term_missing" in _error(missing)["message"]
+    assert listing in _error(missing)["message"]
 
     first = await terminal.start(name="build")
     second = await terminal.start()
     await terminal({"action": "kill", "terminal_id": first})
     listed = await terminal({"action": "wait", "terminal_id": "term_missing", "timeout": 0.01})
-    assert _error(listed)["message"] == (
-        f"{removed} Terminals attached to this Session: {second} (running: fake-tui); {first} "
-        f"(stopped: build). {listing}"
-    )
+    assert f"{second} (running: fake-tui); {first} (stopped: build)" in _error(listed)["message"]
 
     # Another Session's terminals are not attached to it.
     other = make_context(tmp_path, session_id="session-b")
     unattached = await terminal({"action": "status", "terminal_id": "term_missing"}, other)
-    assert _error(unattached)["message"] == f"{removed} {listing}"
+    assert _error(unattached)["message"] == _error(missing)["message"]
 
 
 @pytest.mark.asyncio
@@ -720,7 +723,7 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
 ) -> None:
     started = await terminal({"action": "start", "command": "fake-tui", "args": ["-q"]})
-    assert list(started["data"]) == ["terminal_id", "state", "screen", "next"]
+    assert list(started["data"]) == ["terminal_id", "state", "log", "screen", "cursor", "next"]
     terminal_id = started["data"]["terminal_id"]
     manager[1].adapters[0].emit("".join(f"line-{index}\r\n" for index in range(30)) + "ready> ")
     await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
@@ -732,6 +735,7 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
         "state",
         "history",
         "screen",
+        "cursor",
         "scrollback",
         "wait_ended",
         "matched",
@@ -751,12 +755,8 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     status = await terminal({"action": "status", "terminal_id": terminal_id})
     assert {"program", "workdir"} <= set(status["data"])
     assert status["data"]["program"] == "fake-tui -q"
-    # The log sentence says what the file holds; the file has the raw output.
-    log = re.fullmatch(
-        r"Everything the program printed is written live to (\S+), as raw text with its "
-        r"terminal control sequences\.",
-        status["data"]["log"],
-    )
+    # The log sentence names the file; the file has the raw output.
+    log = re.search(r" (\S+\.log), ", status["data"]["log"])
     assert log is not None, status["data"]["log"]
     assert "line-29\r\nready> " in Path(log[1]).read_bytes().decode("utf-8")
     assert "log_file" not in status["data"]

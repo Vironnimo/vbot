@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-import core.tools._terminal_session as terminal_session
 import core.tools.terminal_backend as terminal_backend
 import core.tools.terminal_manager as terminal_module
 from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
@@ -677,7 +676,6 @@ async def _eventually(predicate: Any) -> None:
 @pytest_asyncio.fixture
 async def call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Call]:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["pwsh.exe"])
-    monkeypatch.setattr(terminal_session, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     # Emulated Terminals have no OS processes to stop.
     monkeypatch.setattr(
         terminal_backend, "terminate_process_tree", lambda adapter, targets=None: None

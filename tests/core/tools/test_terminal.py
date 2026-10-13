@@ -32,6 +32,7 @@ from core.tools.terminal import (
     project_terminal_tool_definitions,
     register_terminal_tool,
 )
+from core.tools.terminal_backend import UnpassableArgumentError
 from core.tools.terminal_manager import TerminalManager, TerminalOwner, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
 from core.utils.paths import model_path
@@ -39,12 +40,12 @@ from core.utils.tokens import estimate_json_tokens
 from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import (
+    TEST_START_WAIT_SECONDS,
     AdapterFactory,
     FakeClock,
     FakeTerminalAdapter,
     eventually,
 )
-from tests.core.tools.terminal_manager_helpers import quick_readiness as quick_readiness
 
 SHELL = model_tool_name(BASH_TOOL_NAME)
 
@@ -137,24 +138,8 @@ _DELIVERIES = (
 )
 
 
-@pytest.mark.parametrize(
-    ("shell_offered", "expected"),
-    [
-        (
-            True,
-            "Start and operate interactive programs you drive by typing, such as REPLs, TUIs and "
-            "coding-agent CLIs. Run all other commands, servers included, with {shell}. A "
-            "program keeps running after your turn ends, until it exits or is stopped.",
-        ),
-        (
-            False,
-            "Start and operate interactive programs you drive by typing, such as REPLs, TUIs and "
-            "coding-agent CLIs. A program keeps running after your turn ends, until it exits or "
-            "is stopped.",
-        ),
-    ],
-)
-def test_definition_fits_the_offered_tools(shell_offered: bool, expected: str) -> None:
+@pytest.mark.parametrize("shell_offered", [True, False])
+def test_definition_fits_the_offered_tools(shell_offered: bool) -> None:
     definitions: list[JsonObject] = [
         {
             "name": TERMINAL_TOOL_NAME,
@@ -167,7 +152,8 @@ def test_definition_fits_the_offered_tools(shell_offered: bool, expected: str) -
     projected = project_terminal_tool_definitions(definitions)
 
     terminal = projected[0]
-    assert terminal["description"] == expected.format(shell=SHELL)
+    # The shell Tool is named by its Model name, and only while it is offered.
+    assert (SHELL in terminal["description"]) is shell_offered
     assert terminal["parameters"] == TERMINAL_TOOL_PARAMETERS
     assert projected[1:] == definitions[1:]
     # The registered definition stays as it was.
@@ -216,9 +202,13 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
         "terminal_id": data["terminal_id"],
         "state": "running",
         "screen": data["screen"],
+        "cursor": "row 2, column 8",
+        "log": data["log"],
         "next": _DELIVERIES,
     }
     assert data["screen"].splitlines() == ["Welcome", "ready>"]
+    # start names the log, which keeps what scrolls off the screen.
+    assert re.search(r" \S+\.log, ", data["log"]), data["log"]
     assert factory.calls[0][0] == [command or "host-shell"]
     assert factory.calls[0][3:] == (24, 80)
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
@@ -314,10 +304,11 @@ async def clocked() -> AsyncIterator[tuple[TerminalManager, AdapterFactory, Fake
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("program", ["silent", "answers", "keeps-printing"])
-@pytest.mark.usefixtures("quick_readiness")
-async def test_start_with_text_returns_once_its_output_settles_or_after_ten_seconds(
+async def test_start_types_nothing_and_returns_the_first_visible_screen(
     clocked: tuple[TerminalManager, AdapterFactory, FakeClock], tmp_path: Path, program: str
 ) -> None:
+    """start returns once the program's first visible output paused, or after ten
+    seconds; text given with it is not typed, and the result says so."""
     terminal_manager, factory, clock = clocked
     if program != "silent":
         factory.initial_output = "Ready> "
@@ -329,55 +320,38 @@ async def test_start_with_text_returns_once_its_output_settles_or_after_ten_seco
         )
     )
     await eventually(lambda: clock.sleeping)
-
-    async def emit(output: str) -> None:
-        shown = terminal_manager.list_terminals()[0].screen_revision
-        factory.adapters[0].emit(output)
-        await eventually(lambda: terminal_manager.list_terminals()[0].screen_revision > shown)
-
     if program == "silent":
-        # The program shows nothing yet, so its text waits for its first screen.
         await clock.advance(9.9)
         assert not starting.done()
         await clock.advance(0.1)
+    elif program == "answers":
+        await eventually(lambda: terminal_manager.list_terminals()[0].screen_revision > 0)
+        await clock.advance(2)
     else:
-        await eventually(lambda: factory.adapters[0].writes == ["fix the tests"])
-        # Enter follows once the program took the text: its output paused for 0.25 s.
-        await clock.advance(0.25)
-        await eventually(lambda: factory.adapters[0].writes == ["fix the tests", "\r"])
-        if program == "answers":
-            await emit("fix the tests\r\nDone.\r\nReady> ")
-            await clock.advance(2)
-        else:
-            for _ in range(10):
-                await emit("working\r\n")
-                await clock.advance(1)
+
+        def revision() -> int:
+            return terminal_manager.list_terminals()[0].screen_revision
+
+        for _ in range(10):
+            shown = revision()
+            factory.adapters[0].emit("working\r\n")
+            await eventually(lambda shown=shown: revision() > shown)
+            await clock.advance(1)
 
     data = cast(dict[str, Any], (await starting)["data"])
     assert data["state"] == "running"
+    assert factory.adapters[0].writes == []
+    assert data["terminal_id"] in data["note"]
     if program == "answers":
-        # The result shows the output the text caused.
-        assert data["screen"].splitlines() == ["Ready> fix the tests", "Done.", "Ready>"]
-        assert "note" not in data
+        assert data["screen"] == "Ready>"
+        assert data["cursor"] == "row 1, column 8"
     elif program == "silent":
-        assert data["note"] == (
-            "text is not typed yet: it is typed and submitted once the program's screen stops "
-            "changing."
-        )
-        assert factory.adapters[0].writes == []
-    else:
-        assert data["note"] == (
-            "the text was submitted; its output is not on this screen yet. To see it, call "
-            "terminal "
-            + json.dumps({"action": "wait", "terminal_id": data["terminal_id"]})
-            + "; do not send it again."
-        )
+        assert data["screen"] == ""
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reference", ["codex", "claude-code", "opencode"])
-@pytest.mark.usefixtures("quick_readiness")
-async def test_coding_agent_reference_launches_exact_arguments_and_submits_task(
+async def test_coding_agent_reference_launches_exact_arguments(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, reference: str
 ) -> None:
     package = Path(__file__).resolve().parents[3] / "resources" / "skills" / "coding-agents"
@@ -394,11 +368,8 @@ async def test_coding_agent_reference_launches_exact_arguments_and_submits_task(
         assert result["ok"] is True
         assert factory.calls[-1][0] == [arguments["command"], *arguments["args"]]
         assert factory.calls[-1][1] == tmp_path
-        # start returns once the task was typed on the program's first screen.
-        adapter = factory.adapters[-1]
-        assert adapter.writes == [arguments["text"], "\r"]
         assert "note" not in cast(dict[str, Any], result["data"])
-        assert adapter.alive
+        assert factory.adapters[-1].alive
 
 
 @pytest.mark.asyncio
@@ -427,14 +398,21 @@ async def test_coding_agent_reference_launches_exact_arguments_and_submits_task(
             "opened). Check command, args and workdir, then start again.",
             "log",
         ),
+        # A batch program's argument that cmd.exe cannot pass starts nothing.
+        (
+            UnpassableArgumentError("argument 1 contains a line break", index=1),
+            "invalid_arguments",
+            None,
+            "process",
+        ),
     ],
-    ids=["missing-executable", "transport-failure", "log-open-failure"],
+    ids=["missing-executable", "transport-failure", "log-open-failure", "unpassable-argument"],
 )
 async def test_launch_failure_is_reported_and_releases_capacity(
     tmp_path: Path,
     launch_error: Exception,
     code: str,
-    message: str,
+    message: str | None,
     failure_phase: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -465,7 +443,12 @@ async def test_launch_failure_is_reported_and_releases_capacity(
     open_file = Path.open
 
     def open_log(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
-        if factory.failing and failure_phase == "log" and path.parent == logs and mode == "a":
+        if (
+            factory.failing
+            and failure_phase == "log"
+            and path.parent == logs
+            and mode.startswith("a")
+        ):
             raise launch_error
         return open_file(path, mode, *args, **kwargs)
 
@@ -476,13 +459,16 @@ async def test_launch_failure_is_reported_and_releases_capacity(
         temporary_files=temporary_files,
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
+        start_wait_seconds=TEST_START_WAIT_SECONDS,
     )
     terminal_manager.start()
     try:
         context = make_context(tmp_path)
         arguments: JsonObject = {"action": "start", "command": "fixture-command"}
         result = await call(terminal_manager, context, arguments)
-        assert result == tool_failure(code, message, retryable=False)
+        assert (result["ok"], result["error"]["code"]) == (False, code)
+        if message is not None:
+            assert result == tool_failure(code, message, retryable=False)
         assert terminal_manager.list_terminals() == []
         assert factory.adapters == []
         for path in logs.iterdir():

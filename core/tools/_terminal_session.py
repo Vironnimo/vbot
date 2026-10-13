@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import re
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, BinaryIO
 
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
@@ -31,11 +32,10 @@ from ._terminal_activity import (
 from ._terminal_input import input_chunks
 from ._terminal_render_host import TerminalScreen
 from ._terminal_state import (
-    TERMINAL_DELIVERY_TAIL_LINES,
-    TERMINAL_INITIAL_INPUT_QUIET_SECONDS,
-    TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS,
     TERMINAL_NOTICE_MESSAGE_CAP_CHARS,
     TERMINAL_REPAINT_WINDOW_SECONDS,
+    TERMINAL_STATUS_MAX_LINES,
+    TERMINAL_UNRENDERED_MAX_CHARS,
     AttentionKind,
     TerminalAlreadyAttachedError,
     TerminalAttention,
@@ -97,6 +97,9 @@ class TerminalObservation:
     rows: int
     # Visible-cell signature: the Agent saw this screen, so its idle boundary wakes nobody.
     signature: str
+    # The history line number just below the last screen line shown: the
+    # Agent has seen every line above it that scrolls into history.
+    seen_line: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,9 +135,8 @@ class TerminalSession:
         group_id: str | None,
         origin_run_id: str | None,
         execution_owner: RunExecutionOwner | None,
-        awaiting_initial_input: bool,
         log_path: Path | None,
-        log_handle: TextIO | None,
+        log_handle: BinaryIO | None,
         log_lease: TemporaryFileLease | None,
         cleanup: Callable[[], None] | None,
         services: TerminalSessionServices,
@@ -162,8 +164,6 @@ class TerminalSession:
         self._input_lock = asyncio.Lock()
         self._observer = observer
         self._activity = TerminalActivity(
-            awaiting_initial_input=awaiting_initial_input,
-            startup_silence=owner is not None and not awaiting_initial_input,
             repaint_window=TERMINAL_REPAINT_WINDOW_SECONDS,
             quiet_seconds=services.activity_quiet_seconds,
             idle_seconds=services.idle_seconds,
@@ -176,15 +176,20 @@ class TerminalSession:
         self._screen_revision = 0
         self._resize_count = 0
         self._observed: TerminalObservation | None = None
+        # The attached Agent has seen every history line above this number,
+        # in a result or a delivery; None before it saw any screen.
+        self._seen_line: int | None = None
         self._output_count = 0
         # Quiet boundaries so far: output paused for the quiet period after
-        # activity. Replies to input and start end at the next one.
+        # activity. Replies to input end at the next one.
         self._quiet_boundaries = 0
-        # Quiet boundaries when start's text was typed; None until it is typed.
-        self._initial_input_quiet: int | None = None
+        # A quiet boundary showed something: the program's first screen.
+        self._screen_shown = False
         self._snapshot_on_settle = False
         self._attention: TerminalAttention | None = None
         self._attention_body = ""
+        # The history line below the screen the pending attention brings.
+        self._attention_seen_line = 0
         self._attention_revision = 0
         self._acknowledged_attention_revision = 0
         self._activity_origin_run_id: str | None = None
@@ -201,7 +206,6 @@ class TerminalSession:
         self._termination_targets: list[Any] = []
         self._output_event = asyncio.Event()
         self._reader_task: asyncio.Task[None] | None = None
-        self._initial_input_task: asyncio.Task[None] | None = None
         self._settle_task: asyncio.Task[None] | None = None
         self._sample_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
@@ -209,6 +213,10 @@ class TerminalSession:
         self._stream = _new_terminal_stream()
         self._log_path = log_path
         self._log_handle = log_handle
+        # Writing the log failed: it ends there, and results that name it say so;
+        # from _log_end_line on (the line output went to then), when known.
+        self._log_failed = False
+        self._log_end_line: int | None = None
         self._log_lease = log_lease
         self._cleanup = cleanup
         self._last_output_at = services.monotonic()
@@ -218,6 +226,9 @@ class TerminalSession:
         # either becomes the Session's failure once its processes have ended.
         self._read_failure: Exception | None = None
         self._render_failure: Exception | None = None
+        # Output the screen missed while rendering failed, fed again with the
+        # next chunk (at most the newest TERMINAL_UNRENDERED_MAX_CHARS).
+        self._unrendered = ""
 
     # Facts
 
@@ -269,20 +280,13 @@ class TerminalSession:
 
     # Lifecycle
 
-    def start(self, *, initial_text: str | None) -> None:
-        """Start reading output and, for an Agent start with text, its first input."""
+    def start(self) -> None:
+        """Start reading output."""
         self._reader_task = self._background(self._read(), "reader")
-        if initial_text is not None and self.origin_run_id is not None:
-            self._initial_input_task = self._background(
-                self._send_initial_input(initial_text, origin_run_id=self.origin_run_id),
-                "initial-input",
-            )
-            self._initial_input_task.add_done_callback(lambda _task: self._signal_change())
         self._publish_state()
 
     async def terminate(self, *, suppress_attention: bool) -> None:
         """Stop the process tree; a failure leaves the Session unfinished for a retry."""
-        self._cancel_task(self._initial_input_task)
         if not self.finished:
             self._stopped = True
         if suppress_attention:
@@ -324,12 +328,7 @@ class TerminalSession:
                 return False
             self._termination_pending = False
         self._adapter.close()
-        for task in (
-            self._reader_task,
-            self._initial_input_task,
-            self._settle_task,
-            self._sample_task,
-        ):
+        for task in (self._reader_task, self._settle_task, self._sample_task):
             self._cancel_task(task)
         self._finish_files()
         return True
@@ -346,7 +345,6 @@ class TerminalSession:
             task
             for task in (
                 self._reader_task,
-                self._initial_input_task,
                 self._settle_task,
                 self._sample_task,
                 self._delivery_task,
@@ -359,7 +357,7 @@ class TerminalSession:
         self._cancel_delivery()
         self._finish_files()
         self._screen.close()
-        for kind in ("render", "end_check", "process_sample"):
+        for kind in ("render", "skipped", "end_check", "process_sample"):
             _CONDITIONS.ended((self.terminal_id, kind))
 
     # Waiting
@@ -439,29 +437,19 @@ class TerminalSession:
     async def wait_started(self, *, deadline: float) -> None:
         """Wait until an Agent start shows its first screen, at the latest *deadline*.
 
-        The screen is shown once start-up output has paused for the quiet
-        period, once the output after start's text settled, or once the
-        program ended.
+        The first screen shows once the program printed something visible
+        and its output then paused for the quiet period (the start-up's quiet
+        boundary, where its idle boundary is decided too), or once the
+        program ended. A terminal's own set-up sequences draw nothing, so
+        they show no first screen.
         """
         services = self._services
-        while not self.finished:
+        while not self.finished and not self._screen_shown:
             change = self._change
             now = services.monotonic()
             if now >= deadline:
                 return
-            initial_input = self._initial_input_task
-            if initial_input is not None:
-                if initial_input.done():
-                    typed_at = self._initial_input_quiet
-                    if typed_at is None or self._quiet_boundaries > typed_at:
-                        return
-                pause = deadline - now
-            else:
-                silent = now - self._last_output_at
-                if silent >= services.activity_quiet_seconds:
-                    return
-                pause = min(deadline - now, services.activity_quiet_seconds - silent)
-            await self._wait_or_sleep(change, pause)
+            await self._wait_or_sleep(change, deadline - now)
 
     def acknowledge_exit(self) -> None:
         """A result durably showed the program's end, so its exit is not delivered."""
@@ -541,6 +529,7 @@ class TerminalSession:
         changed = self.attachment is None
         if changed:
             self._observed = None
+            self._seen_line = None
         self.attachment = attachment
         self._activity_origin_run_id = origin_run_id
         self._activity_execution_owner = execution_owner
@@ -560,6 +549,7 @@ class TerminalSession:
         self._activity_execution_owner = None
         self._activity.detach()
         self._observed = None
+        self._seen_line = None
         self._publish_state()
 
     def transfer(self, source: TerminalOwner, target: TerminalOwner) -> bool:
@@ -578,7 +568,7 @@ class TerminalSession:
             self.attachment = target
         self._publish_state()
         if pending and attention is not None:
-            self._schedule_delivery(attention, self._attention_body)
+            self._schedule_delivery(attention, self._attention_body, self._attention_seen_line)
         return True
 
     # Input and size
@@ -610,9 +600,8 @@ class TerminalSession:
                     data=data, text=text, key=key, bracketed_paste=bracketed_paste
                 )
                 if not chunks:
-                    # An empty write changes no activity, observation or queued input.
-                    return self._input_result(0, key, bracketed_paste=False, superseded=None)
-                self._cancel_task(self._initial_input_task)
+                    # An empty write changes no activity or observation.
+                    return self._input_result(0, key, pasted=False, superseded=None)
                 superseded = self._attention_revision if self._attention is not None else None
                 self._activity_origin_run_id = origin_run_id
                 self._activity_execution_owner = execution_owner
@@ -641,7 +630,7 @@ class TerminalSession:
                         return self._input_result(
                             sum(len(chunk) for chunk in chunks),
                             key,
-                            bracketed_paste=bracketed_paste,
+                            pasted=bracketed_paste,
                             superseded=superseded,
                         )
         raise await self._write_failure() from write_error
@@ -710,7 +699,6 @@ class TerminalSession:
                     f"{expected_program} is not running in this Terminal; the input was not written"
                 )
             self._check_revision(expected_screen_revision)
-            self._cancel_task(self._initial_input_task)
             self._screen_revision += 1
             running = await self._running_before_input()
             restart, changed = self._activity.input(
@@ -774,11 +762,19 @@ class TerminalSession:
     async def snapshot(
         self, *, lines: int, start_line: int | None, include_name: bool
     ) -> dict[str, Any]:
-        """Return the screen, one history page and the facts an Agent result shows."""
+        """Return the screen, one history page and the facts an Agent result shows.
+
+        ``screen`` marks highlighted text and ``cursor`` is the visible
+        cursor's row and column (``ScreenObservation``); ``seen_line`` is the
+        history line above which the attached Agent has seen every line (None
+        before it saw any screen). ``log_file`` names the output log, and
+        ``log_complete`` says whether it holds all output, and
+        ``log_end_line`` the first history line it lacks when known. ``screen_behind``
+        is the rendering error while the screen misses the latest output.
+        """
         async with self._lock:
             page = await self._screen.page(start_line=start_line, limit=lines)
-            screen = await self._screen.screen_text()
-            signature = (await self._screen.observe(0)).signature
+            observation = await self._screen.observe()
             info = self.info()
         data: dict[str, Any] = {
             "terminal_id": self.terminal_id,
@@ -795,12 +791,23 @@ class TerminalSession:
             "screen_revision": info.screen_revision,
             "attention_revision": info.attention_revision,
             "alternate_screen": info.alternate_screen,
-            "screen": screen,
+            "screen": observation.screen,
+            "cursor": observation.cursor,
             "scrollback": page,
             "attention": _attention_data(info.attention),
-            "log_file": model_path(info.log_path) if info.log_path is not None else None,
+            "log_file": self._log_file(),
+            "log_complete": not self._log_failed,
+            "log_end_line": self._log_end_line,
+            "screen_behind": None if self._render_failure is None else str(self._render_failure),
+            "seen_line": self._seen_line,
+            "idle_reason": self._activity.idle_reason,
             "observation": TerminalObservation(
-                info.screen_revision, self._resize_count, info.columns, info.rows, signature
+                info.screen_revision,
+                self._resize_count,
+                info.columns,
+                info.rows,
+                observation.signature,
+                _seen_through(observation, alternate=info.alternate_screen),
             ),
         }
         observed = self._observed
@@ -819,20 +826,16 @@ class TerminalSession:
             data["name"] = info.name
         data["program"] = info.program
         data["stopped"] = info.stopped
-        initial_input = self._initial_input_task
-        data["initial_input_pending"] = initial_input is not None and not initial_input.done()
-        typed_at = self._initial_input_quiet
-        # Start's text was typed and the output after it has not settled yet.
-        data["initial_output_pending"] = (
-            typed_at is not None and self._quiet_boundaries <= typed_at and not self.finished
-        )
         return data
 
     def acknowledge_screen(self, observation: TerminalObservation) -> None:
         """Remember a durably delivered screen without consuming a later resize.
 
-        The Agent has seen it: an idle boundary showing the same screen wakes nobody.
+        The Agent has seen it: an idle boundary showing the same screen wakes
+        nobody, and an idle delivery of that screen on its way is cancelled
+        (its boundary can come before the result is durable).
         """
+        self._saw_lines(observation.seen_line)
         observed = self._observed
         if observed is None or (observation.resize_count, observation.screen_revision) >= (
             observed.resize_count,
@@ -840,11 +843,32 @@ class TerminalSession:
         ):
             self._observed = observation
             self._activity.acknowledge(observation.signature)
+        attention = self._attention
+        if (
+            attention is not None
+            and attention.kind == "idle"
+            and attention.details.get("screen_revision") == observation.screen_revision
+        ):
+            self.acknowledge_attention(attention.revision)
+
+    def _saw_lines(self, line: int) -> None:
+        """The attached Agent has now seen every history line above *line*."""
+        self._seen_line = max(self._seen_line or 0, line)
+
+    def _log_file(self) -> str | None:
+        """The output log a result can name; ``_log_failed`` says it ends early."""
+        if self._log_path is None:
+            return None
+        return model_path(self._log_path)
 
     def acknowledge_attention(self, revision: int) -> None:
         """Cancel the equivalent automatic delivery after a manual result is durable."""
         attention = self._attention
-        if attention is None or attention.revision != revision:
+        if (
+            attention is None
+            or attention.revision != revision
+            or revision <= self._acknowledged_attention_revision
+        ):
             return
         self._acknowledged_attention_revision = max(self._acknowledged_attention_revision, revision)
         self._cancel_delivery()
@@ -940,13 +964,15 @@ class TerminalSession:
                 exc_info=True,
             )
 
-    async def _render_output(self, text: str) -> None:
+    async def _render_output(self, received: str) -> None:
         """Log, stream and render one chunk of output; the lock is held.
 
         A failing log or renderer degrades the Session instead of ending it:
         its output keeps being read, so the program neither stalls nor ends.
         """
-        self._write_log(text)
+        data, text = _output_forms(received)
+        if self._write_log(data):
+            self._log_end_line = await self._output_line()
         # Viewers get the bytes first; the snapshot a new viewer takes waits
         # for this lock, so it already contains them.
         self._publish_output(text)
@@ -954,6 +980,10 @@ class TerminalSession:
         self._last_output_at = self._services.monotonic()
         facts_changed = False
         if update is not None:
+            if update.cleared_line is not None and self._seen_line is not None:
+                # Rows the Agent saw were erased: the lines drawn there next
+                # are new to it, although they get the same line numbers.
+                self._seen_line = min(self._seen_line, update.cleared_line)
             facts_changed = await self._apply_update(update)
         effect = self._activity.output(
             self._services.monotonic(),
@@ -971,34 +1001,80 @@ class TerminalSession:
         self._output_event.set()
         self._signal_change()
 
-    def _write_log(self, text: str) -> None:
+    def _write_log(self, data: bytes) -> bool:
+        """Append output to the log as the terminal received it; True when this
+        write failed, which ends the log.
+
+        Results that name the log then say that it lacks the output from
+        there on. Reading the output goes on.
+        """
         handle = self._log_handle
         if handle is None:
-            return
+            return False
         try:
-            handle.write(text)
+            handle.write(data)
             handle.flush()
-        except OSError:
+        except OSError, ValueError:
             _LOGGER.warning(
                 "Terminal output log write failed; the log ends here (terminal=%s)",
                 self.terminal_id,
                 exc_info=True,
             )
             self._log_handle = None
-            with contextlib.suppress(OSError):
+            self._log_failed = True
+            with contextlib.suppress(OSError, ValueError):
                 handle.close()
+            return True
+        return False
+
+    async def _output_line(self) -> int | None:
+        """The history line the next output goes to: the visible cursor's line,
+        else the last line the screen shows; None when the screen cannot tell.
+
+        A full-screen view keeps no history, so the primary screen's lines
+        before it are complete.
+        """
+        try:
+            observation = await self._screen.observe()
+        except Exception:
+            return None
+        start = observation.screen_start_line
+        if self._alternate_screen:
+            return start
+        if observation.cursor is not None:
+            return start + observation.cursor[0] - 1
+        rows = observation.screen.count("\n") + 1 if observation.screen else 0
+        return start + max(0, rows - 1)
 
     async def _render(self, text: str) -> EmulatorUpdate | None:
-        """Feed *text* to the screen; None when that failed, which leaves the screen behind."""
+        """Feed *text* to the screen; None when that failed, which leaves the screen behind.
+
+        The output a failed feed missed is fed again before the next chunk,
+        so the screen catches up once rendering works again; results say
+        that the screen is behind meanwhile.
+        """
+        pending = self._unrendered + text
         try:
-            update = await self._screen.feed(text)
+            update = await self._screen.feed(pending)
         except Exception as error:
+            # The newest output decides the screen; older missed output beyond
+            # the cap is given up.
+            self._unrendered = pending[-TERMINAL_UNRENDERED_MAX_CHARS:]
             self._render_failed(error)
             return None
+        self._unrendered = ""
         if self._render_failure is not None:
             self._render_failure = None
             if _CONDITIONS.ended((self.terminal_id, "render")):
                 _LOGGER.info("Terminal screen rendering recovered (terminal=%s)", self.terminal_id)
+        if update.skipped and _CONDITIONS.started((self.terminal_id, "skipped")):
+            # A sequence the screen could not apply; it goes on with the rest.
+            _LOGGER.warning(
+                "Terminal screen skipped %d operations it could not apply (terminal=%s): %s",
+                update.skipped,
+                self.terminal_id,
+                update.skipped_error,
+            )
         return update
 
     def _render_failed(self, error: Exception) -> None:
@@ -1077,6 +1153,8 @@ class TerminalSession:
                     return
                 if settled == "activity":
                     self._quiet_boundaries += 1
+                    if observation.screen:
+                        self._screen_shown = True
                     self._signal_change()
                 if settled == "repaint" or self._settle_idle(generation, observation):
                     return
@@ -1127,8 +1205,8 @@ class TerminalSession:
             generation,
             self._services.monotonic(),
             observation.signature,
-            attached=self.attachment is not None,
             seen=observed is not None and observed.screen_revision == self._screen_revision,
+            blank=not observation.screen,
         )
         if effect is None:
             return False
@@ -1138,7 +1216,7 @@ class TerminalSession:
                 summary="The program is idle.",
                 details={"screen_revision": self._screen_revision, "reason": effect.reason},
                 deliver=effect.deliver,
-                screen_tail=observation.tail,
+                observation=observation,
             )
         else:
             self._publish_state()
@@ -1195,50 +1273,10 @@ class TerminalSession:
             self._snapshot_on_settle = False
             await self._publish_snapshot()
         try:
-            return await self._screen.observe(TERMINAL_DELIVERY_TAIL_LINES)
+            return await self._screen.observe()
         except Exception as error:
             self._render_failed(error)
             return None
-
-    async def _send_initial_input(self, text: str, *, origin_run_id: str) -> None:
-        """Wait until the program's start screen is quiet before sending its first task."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS
-        seen_output = 0
-        quiet_since: float | None = None
-        try:
-            while not self.finished:
-                now = loop.time()
-                if now >= deadline:
-                    break
-                if self._output_count != seen_output:
-                    seen_output = self._output_count
-                    quiet_since = now
-                elif (
-                    quiet_since is not None
-                    and now - quiet_since >= TERMINAL_INITIAL_INPUT_QUIET_SECONDS
-                ):
-                    async with self._lock:
-                        has_screen = bool(await self._screen.screen_text())
-                    if has_screen:
-                        break
-                    quiet_since = now
-                self._output_event.clear()
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._output_event.wait(), timeout=0.1)
-            if self.finished or self.attachment is None:
-                return
-            sent = await self.send_input(
-                data=None,
-                text=text,
-                key="enter",
-                expected_screen_revision=None,
-                origin_run_id=origin_run_id,
-                execution_owner=self.execution_owner,
-            )
-            self._initial_input_quiet = int(sent["quiet_boundaries"])
-        except asyncio.CancelledError:
-            return
 
     async def _mark_finished(self) -> None:
         """Record the end once no process of the Session runs any longer.
@@ -1248,7 +1286,6 @@ class TerminalSession:
         # A root process EOF cannot confirm that captured descendants exited.
         if self._termination_pending:
             return
-        self._cancel_task(self._initial_input_task)
         self._cancel_task(self._settle_task)
         self._cancel_task(self._sample_task)
         async with self._lock:
@@ -1273,22 +1310,22 @@ class TerminalSession:
             if self._suppress_exit_attention:
                 self._publish_state()
             else:
-                tail = ""
+                observation: ScreenObservation | None = None
                 with contextlib.suppress(Exception):
-                    tail = (await self._screen.observe(TERMINAL_DELIVERY_TAIL_LINES)).tail
+                    observation = await self._screen.observe()
                 if error is None:
                     self._set_attention(
                         kind="exited",
                         summary=f"The program exited with code {self.exit_code}.",
                         details={"exit_code": self.exit_code},
-                        screen_tail=tail,
+                        observation=observation,
                     )
                 else:
                     self._set_attention(
                         kind="error",
                         summary="The terminal failed.",
                         details={"error": str(error)},
-                        screen_tail=tail,
+                        observation=observation,
                     )
             self._output_event.set()
             self._signal_change()
@@ -1303,8 +1340,9 @@ class TerminalSession:
         summary: str,
         details: dict[str, Any],
         deliver: bool = True,
-        screen_tail: str = "",
+        observation: ScreenObservation | None,
     ) -> None:
+        """Record attention, with the message that brings it and the screen it shows."""
         self._cancel_delivery()
         self._attention_revision += 1
         revision = self._attention_revision
@@ -1317,18 +1355,36 @@ class TerminalSession:
             created_at=_utc_now(),
         )
         self._attention = attention
+        unseen = None
+        if observation is not None:
+            unseen = unseen_lines_note(
+                self.terminal_id,
+                unseen_from=self._seen_line or 0,
+                shown_from=observation.screen_start_line,
+                first_line=observation.first_line,
+                log=self._log_file(),
+                log_complete=not self._log_failed,
+                log_end_line=self._log_end_line,
+                seen=True,
+            )
         self._attention_body = _attention_body(
             self.terminal_id,
             self._notice_label(),
             attention,
-            screen_tail=screen_tail,
+            observation=observation,
+            unseen=unseen,
             idle_seconds=self._services.idle_seconds,
+        )
+        self._attention_seen_line = (
+            _seen_through(observation, alternate=self._alternate_screen)
+            if observation is not None
+            else 0
         )
         if kind in {"exited", "error"} and self._exit_acknowledged:
             # A result already showed the end.
             deliver = False
         if deliver:
-            self._schedule_delivery(attention, self._attention_body)
+            self._schedule_delivery(attention, self._attention_body, self._attention_seen_line)
         self._publish_state()
         self._signal_change()
 
@@ -1339,14 +1395,15 @@ class TerminalSession:
             return label[: _NOTICE_LABEL_CHARS - 3] + "..."
         return label
 
-    def _schedule_delivery(self, attention: TerminalAttention, body: str) -> None:
+    def _schedule_delivery(self, attention: TerminalAttention, body: str, seen_line: int) -> None:
+        """Deliver *body*, which shows the screen down to history line *seen_line*."""
         if self._services.trigger_service is None or self.attachment is None:
             return
         self._delivery_task = self._background(
-            self._deliver(attention, body), f"attention:{attention.revision}"
+            self._deliver(attention, body, seen_line), f"attention:{attention.revision}"
         )
 
-    async def _deliver(self, attention: TerminalAttention, body: str) -> None:
+    async def _deliver(self, attention: TerminalAttention, body: str, seen_line: int) -> None:
         trigger_service = self._services.trigger_service
         attachment = self.attachment
         origin_run_id = self._activity_origin_run_id or self.origin_run_id
@@ -1376,6 +1433,8 @@ class TerminalSession:
         self._acknowledged_attention_revision = max(
             self._acknowledged_attention_revision, attention.revision
         )
+        if self.attachment == attachment:
+            self._saw_lines(seen_line)
         if self._attention is attention:
             self._attention = replace(attention, delivered=True)
 
@@ -1456,7 +1515,7 @@ class TerminalSession:
         characters: int,
         key: str | None,
         *,
-        bracketed_paste: bool,
+        pasted: bool,
         superseded: int | None,
     ) -> dict[str, Any]:
         return {
@@ -1464,7 +1523,8 @@ class TerminalSession:
             "state": self.state,
             "characters_sent": characters,
             "key": key,
-            "bracketed_paste": bracketed_paste,
+            # Multiline text went to the program as one bracketed paste.
+            "pasted": pasted,
             "superseded_attention_revision": superseded,
             "screen_revision": self._screen_revision,
             # A wait for the reply ends at the next quiet boundary after this count.
@@ -1477,7 +1537,7 @@ class TerminalSession:
             with contextlib.suppress(Exception):
                 observer.close()
         if self._log_handle is not None:
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(OSError, ValueError):
                 self._log_handle.close()
             self._log_handle = None
         if self._log_lease is not None:
@@ -1512,44 +1572,230 @@ def _attention_body(
     label: str,
     attention: TerminalAttention,
     *,
-    screen_tail: str,
+    observation: ScreenObservation | None,
+    unseen: str | None,
     idle_seconds: float,
 ) -> str:
-    """The message that tells the attached Agent its interactive program needs a look."""
-    if attention.kind == "idle":
-        reason: IdleReason | None = attention.details.get("reason")
-        if reason == "fallback":
-            headline = (
-                f"Terminal {terminal_id} ({label}) has printed nothing for {idle_seconds:g} "
-                "seconds; its program still runs and can still be working. Screen:"
-            )
-        else:
-            headline = (
-                f"Terminal {terminal_id} ({label}) went idle; its program still runs. Screen:"
-            )
-        lines = [
-            headline,
-            _fenced(screen_tail),
-            f'To type into it, call terminal with action "input", terminal_id "{terminal_id}", '
-            'your text as text and key "enter". When it shows something new and goes idle '
-            "again, that screen arrives as another message.",
-        ]
-    elif attention.kind == "exited":
-        lines = [
-            f"The program in terminal {terminal_id} ({label}) exited with code "
-            f"{attention.details.get('exit_code')}. Last screen lines:",
-            _fenced(screen_tail),
-        ]
-    else:
-        lines = [
-            f"Terminal {terminal_id} ({label}) failed and its program no longer runs: "
-            f"{attention.details.get('error')}. Last screen lines:",
-            _fenced(screen_tail),
-        ]
-    body = "\n".join(lines)
+    """The message that tells the attached Agent its interactive program needs a look.
+
+    It shows the whole screen; when the message would exceed its cap, the
+    screen's top rows are left out, and the message says how many.
+    """
+    rows = observation.screen.split("\n") if observation is not None and observation.screen else []
+    cursor = observation.cursor if observation is not None else None
+    left_out = 0
+    while True:
+        body = _compose_attention(
+            terminal_id,
+            label,
+            attention,
+            rows=rows[left_out:],
+            readable=observation is not None,
+            cursor=cursor,
+            left_out=left_out,
+            unseen=unseen,
+            idle_seconds=idle_seconds,
+        )
+        if len(body) <= TERMINAL_NOTICE_MESSAGE_CAP_CHARS or left_out >= len(rows):
+            break
+        left_out += 1
     if len(body) <= TERMINAL_NOTICE_MESSAGE_CAP_CHARS:
         return body
     return body[:TERMINAL_NOTICE_MESSAGE_CAP_CHARS] + "\n[message cut]"
+
+
+def _compose_attention(
+    terminal_id: str,
+    label: str,
+    attention: TerminalAttention,
+    *,
+    rows: list[str],
+    readable: bool,
+    cursor: tuple[int, int] | None,
+    left_out: int,
+    unseen: str | None,
+    idle_seconds: float,
+) -> str:
+    if not readable:
+        screen = "(the screen could not be read)"
+    elif rows:
+        screen = _fenced("\n".join(rows))
+    else:
+        screen = "(the screen is empty)"
+    if attention.kind == "idle":
+        reason: IdleReason | None = attention.details.get("reason")
+        shown = (
+            "Screen"
+            if cursor is None
+            else f"Screen (cursor at row {cursor[0]}, column {cursor[1]})"
+        )
+        if reason == "fallback":
+            headline = (
+                f"Terminal {terminal_id} ({label}) has printed nothing for {idle_seconds:g} "
+                f"seconds; its program still runs and can still be working. {shown}:"
+            )
+        else:
+            headline = (
+                f"Terminal {terminal_id} ({label}) went idle; its program still runs. {shown}:"
+            )
+        closing = [
+            f'To type into it, call terminal with action "input", terminal_id "{terminal_id}", '
+            'your text as text and key "enter". When it shows something new and goes idle '
+            "again, that screen arrives as another message."
+        ]
+    elif attention.kind == "exited":
+        headline = (
+            f"The program in terminal {terminal_id} ({label}) exited with code "
+            f"{attention.details.get('exit_code')}. Last screen:"
+        )
+        closing = []
+    else:
+        headline = (
+            f"Terminal {terminal_id} ({label}) failed and its program no longer runs: "
+            f"{attention.details.get('error')}. Last screen:"
+        )
+        closing = []
+    lines = [headline, screen]
+    if left_out:
+        status = json.dumps({"action": "status", "terminal_id": terminal_id})
+        lines.append(
+            f"The top {_count(left_out, 'line')} of the screen {_are(left_out)} left out; "
+            f"to see the whole screen, call terminal {status}."
+        )
+    if unseen:
+        lines.append(unseen)
+    lines.extend(closing)
+    return "\n".join(lines)
+
+
+def unseen_lines_note(
+    terminal_id: str,
+    *,
+    unseen_from: int,
+    shown_from: int,
+    first_line: int,
+    log: str | None,
+    seen: bool,
+    log_complete: bool = True,
+    log_end_line: int | None = None,
+) -> str | None:
+    """Say how many output lines above what a message shows are left out, and
+    where to read them; None when none are.
+
+    Lines are history line numbers: *unseen_from* is the first line the
+    reader has not seen (0 for all output), *shown_from* the first line the
+    message shows, *first_line* the oldest line the terminal keeps. With
+    *seen*, the reader is the attached Agent, whose seen lines are known.
+    Without *log_complete*, the log ends where writing it failed: it lacks
+    *log_end_line* and the lines after it, when that line is known.
+    """
+    count = shown_from - unseen_from
+    if count <= 0:
+        return None
+    lines = _count(count, "earlier line")
+    what = f"{lines} you have not seen" if seen else lines
+    kept_from = max(unseen_from, first_line)
+    kept = max(0, shown_from - kept_from)
+    page = "terminal " + json.dumps(
+        {
+            "action": "status",
+            "terminal_id": terminal_id,
+            "start_line": kept_from,
+            "lines": TERMINAL_STATUS_MAX_LINES,
+        }
+    )
+    if log and not log_complete:
+        if log_end_line is not None:
+            where = _partial_log_sources(
+                count, kept, max(0, min(shown_from, log_end_line) - unseen_from), page, log
+            )
+            return f"{what} {_are(count)} not shown; {where}."
+        log = f"{log}, which ends where writing it failed"
+    if kept == count:
+        where = f"to read them, call {page}" + (f", or read the log {log}" if log else "")
+    elif log:
+        where = f"to read them, read the log {log}" + (
+            f"; the newest {kept} of them can also be read with {page}" if kept else ""
+        )
+    elif kept:
+        where = f"the newest {kept} of them can be read with {page}; the others are no longer kept"
+    else:
+        where = "they are no longer kept"
+    return f"{what} {_are(count)} not shown; {where}."
+
+
+def _partial_log_sources(count: int, kept: int, logged: int, page: str, log: str) -> str:
+    """Where *count* unseen lines can be read when writing the log failed: the
+    oldest *logged* of them are in the log, the newest *kept* in the terminal;
+    the others are lost."""
+    if kept == count:
+        return f"to read them, call {page}" + (
+            f", or read the log {log}" if logged == count else ""
+        )
+    unkept = count - kept
+    in_log = min(logged, unkept)
+    lost = unkept - in_log
+    parts: list[str] = []
+    if in_log == count:
+        parts.append(f"to read them, read the log {log}")
+    elif in_log:
+        parts.append(f"the oldest {_lines(in_log)} {_are(in_log)} in the log {log}")
+    if lost == count:
+        parts.append(f"they are no longer kept, and writing the log {log} failed before them")
+    elif lost:
+        subject = f"{'the next' if in_log else 'the oldest'} {_lines(lost)}"
+        named = "the log" if in_log else f"the log {log}"
+        them = "it" if lost == 1 else "them"
+        parts.append(
+            f"{subject} {_are(lost)} no longer kept, and writing {named} failed before {them}"
+        )
+    if kept:
+        parts.append(f"the newest {_lines(kept)} can be read with {page}")
+    return "; ".join(parts)
+
+
+def _lines(number: int) -> str:
+    """Some of the lines a note counts: "line" or "7 lines"."""
+    return "line" if number == 1 else f"{number} lines"
+
+
+def _count(number: int, noun: str) -> str:
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+def _are(number: int) -> str:
+    return "is" if number == 1 else "are"
+
+
+def _seen_through(observation: ScreenObservation, *, alternate: bool) -> int:
+    """The history line below the last screen row *observation* shows.
+
+    Showing the screen shows its rows, which scroll into history as these
+    lines; a full-screen view (alternate screen) shows none of them.
+    """
+    if alternate or not observation.screen:
+        return observation.screen_start_line
+    return observation.screen_start_line + observation.screen.count("\n") + 1
+
+
+# A UTF-16 surrogate: a byte that was no UTF-8 (POSIX decodes such bytes as
+# lone surrogates, surrogateescape), or half of a character that never came.
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _output_forms(received: str) -> tuple[bytes, str]:
+    """The bytes the terminal received for one chunk of output, and its text.
+
+    The log keeps the bytes as they came; the screen and viewers show U+FFFD
+    for a byte that was no UTF-8.
+    """
+    if received.isascii():
+        return received.encode("ascii"), received
+    try:
+        data = received.encode("utf-8", "surrogateescape")
+    except UnicodeEncodeError:
+        data = received.encode("utf-8", "surrogatepass")
+    return data, _SURROGATE.sub("\ufffd", received)
 
 
 def _fenced(text: str) -> str:
@@ -1557,7 +1803,7 @@ def _fenced(text: str) -> str:
     fence = "```"
     while fence in text:
         fence += "`"
-    return f"{fence}text\n{text}\n{fence}" if text else "(the screen is empty)"
+    return f"{fence}text\n{text}\n{fence}"
 
 
 def _log_task_failure(task: asyncio.Task[Any], message: str) -> None:

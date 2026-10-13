@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -70,8 +71,6 @@ async def test_operator_activity_wakes_the_attached_agent_session(
 ) -> None:
     manager, factory, trigger = delivering_manager
     started = await spawn(manager, tmp_path)
-    # A text-less Agent start wakes nobody (the startup screen is not work);
-    # operator input arms delivery.
     await manager.send_operator_input(started.terminal_id, "look\r")
     factory.adapters[0].emit("screen changed")
     await eventually(lambda: terminal_info(manager, started.terminal_id).attention_revision == 1)
@@ -290,17 +289,16 @@ async def test_refused_write_ends_the_terminal_only_once_its_program_ended(
     with pytest.raises(TerminalClosedError):
         await manager.send_operator_input(started.terminal_id, "late input")
 
-    await eventually(lambda: len(trigger.submissions) == 1)
     closed = terminal_info(manager, started.terminal_id)
     assert closed.state == "exited"
     assert closed.attention is not None
     assert closed.attention.kind == "exited"
-    assert trigger.submissions[0][1]["origin_run_id"] == "attach-run"
-    # The exit message carries the last screen lines.
-    assert trigger.submissions[0][1]["body"] == (
-        f"The program in terminal {started.terminal_id} (fake-tui) exited with code 0. Last "
-        "screen lines:\n```text\nlast words\n```"
-    )
+    notice_id = closed.attention.notice_id
+    await eventually(lambda: any(kw["notice_id"] == notice_id for _a, kw in trigger.submissions))
+    exit_message = next(kw for _a, kw in trigger.submissions if kw["notice_id"] == notice_id)
+    assert exit_message["origin_run_id"] == "attach-run"
+    # The exit message carries the last screen.
+    assert exit_message["body"].endswith("\n```text\nlast words\n```")
 
 
 @pytest.mark.asyncio
@@ -613,30 +611,34 @@ async def test_unchanged_screen_stays_silent_until_content_changes(
 
 
 @pytest.mark.asyncio
-async def test_textless_agent_start_suppresses_the_startup_screen(
+async def test_a_start_result_keeps_only_the_screen_it_showed_from_being_delivered(
     clocked_manager: Clocked, tmp_path: Path
 ) -> None:
-    """A text-less Agent start stays silent until the first explicit input:
-    the startup screen (banner, prompt, TUI boot) is observed by the starting
-    Agent and must not wake the session."""
-    manager, _factory, trigger, _clock = clocked_manager
-    started = await spawn(manager, tmp_path)
-    terminal_id = started.terminal_id
-
-    await _idle(clocked_manager, terminal_id, "TUI banner")
-    assert trigger.submissions == []
-    startup = terminal_info(manager, terminal_id).attention
-    assert startup is None or not startup.delivered
+    """The first screen the start result showed is not delivered again, also when
+    its idle boundary came before the result was durable; the program's later
+    screens are, start-up screens included."""
+    manager, factory, trigger, clock = clocked_manager
+    factory.initial_output = "TUI banner"
+    persisted: list[Callable[[], None]] = []
+    context = make_context(tmp_path, result_persisted_hook=persisted.append)
+    starting = asyncio.ensure_future(call(manager, context, {"action": "start", "command": "tui"}))
+    await eventually(lambda: clock.sleeping)
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+    result = await starting
+    terminal_id = result["data"]["terminal_id"]
+    assert result["data"]["screen"] == "TUI banner"
+    for acknowledge in persisted:
+        acknowledge()
+    # Its idle boundary had scheduled the screen; the durable result cancelled it.
+    assert len(trigger.cancellations) == len(trigger.submissions)
     await _idle(clocked_manager, terminal_id, "\rTUI banner")
-    assert trigger.submissions == []
+    assert len(trigger.cancellations) == len(trigger.submissions)
 
-    await _agent_input(manager, started, data="go\r", origin_run_id="run-0")
-    await _idle(clocked_manager, terminal_id, "output after input")
-    await eventually(lambda: len(trigger.submissions) == 1)
-    assert "output after input" in trigger.submissions[0][1]["body"]
-    attention = terminal_info(manager, terminal_id).attention
-    assert attention is not None
-    assert attention.kind == "idle"
+    shown = len(trigger.submissions)
+    await _idle(clocked_manager, terminal_id, "\r\nloaded")
+    await eventually(lambda: len(trigger.submissions) == shown + 1)
+    assert "loaded" in trigger.submissions[-1][1]["body"]
+    assert len(trigger.cancellations) == shown
 
 
 @pytest.mark.parametrize("failing", ["read", "render"])
@@ -688,20 +690,24 @@ async def test_terminal_failure_keeps_the_program_until_it_ends_then_delivers_th
     assert running.finished_at is None
     with pytest.raises(ValueError, match="must be stopped"):
         manager.forget_for_operator(terminal_id)
-    assert trigger.submissions == []
+    assert running.attention is None or running.attention.kind == "idle"
 
     adapter.finish(0)
 
     async def delivered() -> bool:
         # Without output to read, the program's end is noticed by a poll.
         await clock.advance(1)
-        return bool(trigger.submissions)
+        attention = terminal_info(manager, terminal_id).attention
+        return (
+            attention is not None
+            and attention.kind == "error"
+            and any(kw["notice_id"] == attention.notice_id for _a, kw in trigger.submissions)
+        )
 
     await eventually(delivered)
-    assert trigger.submissions[0][1]["body"] == (
-        f"Terminal {terminal_id} (fake-tui) failed and its program no longer runs: {error}. "
-        f"Last screen lines:\n```text\n{last_screen}\n```"
-    )
+    body = trigger.submissions[-1][1]["body"]
+    assert error in body
+    assert body.endswith(f"\n```text\n{last_screen}\n```")
     status = await call(
         manager, make_context(tmp_path), {"action": "status", "terminal_id": terminal_id}
     )

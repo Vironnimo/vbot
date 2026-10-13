@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from core.tools.terminal_manager import TerminalInfo, TerminalManager, TerminalOwner
+from core.storage.temp_files import TemporaryFileManager
+from core.tools._terminal_render_host import TerminalScreen
+from core.tools.terminal_manager import (
+    TerminalInfo,
+    TerminalManager,
+    TerminalOwner,
+    TerminalRenderHost,
+)
 from core.tools.tools import JsonObject
 from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
-from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
+from tests.core.tools.terminal_manager_helpers import (
+    TEST_START_WAIT_SECONDS,
+    AdapterFactory,
+    eventually,
+)
 
 OWNER = TerminalOwner("project-a", "agent-a", "session-a")
 
@@ -150,14 +163,155 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
     await _render(terminal_manager, factory, terminal_id, "\x1b[?1049h\x1b[Hfull-screen view")
     full_screen = await status()
     assert full_screen["screen"] == "full-screen view"
-    assert full_screen["note"] == (
-        "The program shows a full-screen view (alternate screen), which keeps no terminal "
-        "history; to see earlier content, use the program's own scrolling or paging."
-    )
+    assert "alternate screen" in full_screen["note"]
     await _render(terminal_manager, factory, terminal_id, "\x1b[?1049l")
     primary = await status()
     assert primary["screen"].splitlines()[-1] == "more-4"
-    assert not {"alternate_screen", "note"} & set(primary)
+    assert "alternate_screen" not in primary
+    assert "alternate screen" not in primary.get("note", "")
+
+
+@pytest.mark.asyncio
+async def test_results_say_what_they_leave_out_and_where_to_read_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A result says how many lines the Agent has not seen it leaves out, and a
+    page that cannot start where asked says so; both name the log, which has
+    every line, and say where it ends once writing it failed."""
+    disk_full = False
+    open_file = Path.open
+
+    class FillingLog:
+        def __init__(self, handle: Any) -> None:
+            self._handle = handle
+
+        def write(self, data: bytes) -> int:
+            if disk_full:
+                raise OSError(28, "No space left on device")
+            return int(self._handle.write(data))
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._handle, name)
+
+    def open_log(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        handle = open_file(path, mode, *args, **kwargs)
+        return FillingLog(handle) if path.suffix == ".log" and mode == "ab" else handle
+
+    monkeypatch.setattr(Path, "open", open_log)
+    factory = AdapterFactory()
+    terminal_manager = TerminalManager(
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        temporary_files=TemporaryFileManager(tmp_path / "temp"),
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+        idle_seconds=0.06,
+        start_wait_seconds=TEST_START_WAIT_SECONDS,
+        scrollback_lines=10,
+    )
+    terminal_manager.start()
+    try:
+        persisted: list[Callable[[], None]] = []
+        context = make_context(tmp_path, result_persisted_hook=persisted.append)
+        started = await call(terminal_manager, context, {"action": "start", "command": "fake"})
+        persisted.pop()()
+        data = cast(dict[str, Any], started["data"])
+        terminal_id = data["terminal_id"]
+        named = re.search(r" (\S+\.log), ", data["log"])
+        assert named is not None, data["log"]
+        log = named[1]
+
+        def request(start_line: int) -> str:
+            page = {"action": "status", "terminal_id": terminal_id, "start_line": start_line}
+            return json.dumps({**page, "lines": 100})
+
+        async def status(**fields: Any) -> dict[str, Any]:
+            arguments = {"action": "status", "terminal_id": terminal_id, **fields}
+            return cast(dict[str, Any], (await call(terminal_manager, context, arguments))["data"])
+
+        # 60 lines on 24 rows: lines 0-36 scrolled off the screen, 27-36 are kept.
+        lines = "".join(f"line-{index}\r\n" for index in range(60))
+        await _render(terminal_manager, factory, terminal_id, lines)
+        first = await status(lines=3)
+        assert first["history"] == "line-34\nline-35\nline-36"
+        assert re.search(r"\b34\b", first["note"]), first["note"]
+        assert log in first["note"] and request(27) in first["note"]
+        persisted.pop()()
+
+        # The Agent saw down to line 59; the note counts only the lines after it.
+        lines = "".join(f"line-{index}\r\n" for index in range(60, 90))
+        await _render(terminal_manager, factory, terminal_id, lines)
+        second = await status(lines=3)
+        assert second["history"] == "line-64\nline-65\nline-66"
+        assert re.search(r"\b4\b", second["note"]), second["note"]
+        assert log in second["note"] and request(60) in second["note"]
+
+        # Pages start at the oldest kept line and end at the newest line.
+        older = await status(start_line=0, lines=3)
+        assert older["history"] == "line-57\nline-58\nline-59"
+        assert "57" in older["note"] and log in older["note"]
+        newer = await status(start_line=500, lines=3)
+        assert newer["scrollback"]["start_line"] == 90
+        assert "500" in newer["note"] and "89" in newer["note"]
+
+        # Once writing the log failed at line 90, results say which lines it lacks:
+        # 0-89 are in the log, 97-106 are kept, 90-96 are lost.
+        complete = (await status())["log"]
+        disk_full = True
+        lines = "".join(f"line-{index}\r\n" for index in range(90, 130))
+        await _render(terminal_manager, factory, terminal_id, lines)
+        assert b"line-90" not in Path(log).read_bytes()
+        failed = await status(start_line=0, lines=3)
+        assert failed["log"] != complete and log in failed["log"] and "90" in failed["log"]
+        assert log in failed["note"] and "89" in failed["note"]
+        current = (await status(lines=3))["note"]
+        assert re.search(r"\b44\b", current) and re.search(r"\b30\b", current), current
+        assert log in current and request(97) in current
+    finally:
+        await terminal_manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
+    manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """While drawing output fails, input still reaches the program and results
+    say the screen is out of date; once drawing works again, the screen shows
+    the output it missed."""
+    terminal_manager, factory = manager
+    context = make_context(tmp_path)
+    started = await call(terminal_manager, context, {"action": "start", "command": "fake"})
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+    await _render(terminal_manager, factory, terminal_id, "before\r\n")
+    feed = TerminalScreen.feed
+
+    async def broken_feed(_screen: TerminalScreen, _text: str) -> Any:
+        raise RuntimeError("renderer broke")
+
+    monkeypatch.setattr(TerminalScreen, "feed", broken_feed)
+    factory.adapters[0].emit("missed\r\n")
+    status: JsonObject = {"action": "status", "terminal_id": terminal_id}
+
+    async def behind() -> bool:
+        data = cast(dict[str, Any], (await call(terminal_manager, context, status))["data"])
+        return "renderer broke" in data.get("note", "")
+
+    await eventually(behind)
+    # The reply ends at a quiet boundary, which a screen behind its output
+    # cannot show; the short timeout ends it instead.
+    typing: JsonObject = {"action": "input", "terminal_id": terminal_id, "text": "y"}
+    typed = await call(terminal_manager, context, {**typing, "timeout": 0.05})
+    assert typed["ok"] is True, typed
+    assert factory.adapters[0].writes[-1] == "y"
+    assert "renderer broke" in cast(dict[str, Any], typed["data"])["note"]
+
+    monkeypatch.setattr(TerminalScreen, "feed", feed)
+    await _render(terminal_manager, factory, terminal_id, "after\r\n")
+    data = cast(dict[str, Any], (await call(terminal_manager, context, status))["data"])
+    assert data["screen"].splitlines() == ["before", "missed", "after"]
+    assert "renderer broke" not in data.get("note", "")
 
 
 @pytest.mark.parametrize(
