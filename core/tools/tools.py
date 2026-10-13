@@ -7,9 +7,11 @@ import contextvars
 import copy
 import inspect
 import json
+import re
 import weakref
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
+from difflib import SequenceMatcher
 from functools import wraps
 from typing import Any, ClassVar, cast
 
@@ -175,6 +177,68 @@ def _arguments_fit(contract: ToolContract, arguments: Any) -> bool:
         or value in properties[field]["enum"]
         for field, value in arguments.items()
     )
+
+
+# Characters of tool-call markup (``<function=x>``, ``parameter="y"``) that no
+# Tool or parameter name contains; a Provider's parser leaves them in a call it
+# split wrongly.
+_CALL_MARKUP = re.compile(r'[<>="]')
+_DAMAGED_NAME = re.compile(r'[<>="\s]')
+_NAME_SEPARATORS = re.compile(r"[\W_]+")
+
+
+def _call_damage(name: str, arguments: Any) -> str:
+    """Say what a call to an unknown Tool shows of damage in transit, or return "".
+
+    A Provider's parser that splits the Model's tool-call markup wrongly leaves a
+    garbled name, often with no arguments at all, or markup in the names. A call
+    without arguments can also be meant that way, so only the Agent can tell.
+    """
+    if not isinstance(arguments, dict) or not arguments:
+        return (
+            "the call arrived with no arguments at all. If you sent some, the call was "
+            "garbled on the way: send the complete call again."
+        )
+    if _DAMAGED_NAME.search(name):
+        where = "its Tool name"
+    else:
+        key = next((key for key in arguments if _CALL_MARKUP.search(key)), None)
+        if key is None:
+            return ""
+        where = f'the argument name "{key}"'
+    return (
+        f"the call arrived with tool-call markup in {where}, so it was garbled on the way. "
+        "Send the complete call again."
+    )
+
+
+def _spelling(name: str) -> str:
+    return _NAME_SEPARATORS.sub("", name).casefold()
+
+
+def _closest_tool_name(name: str, candidates: Sequence[str]) -> str | None:
+    """Return the candidate that ``name`` clearly resembles most, else None.
+
+    Clearly: at least half alike and well ahead of the next candidate, so a
+    garbled ``powerhellsparameter`` names ``powershell`` while ``swarm`` names
+    none of the ``swarm_*`` Tools.
+    """
+    damaged = _DAMAGED_NAME.search(name)
+    key = _spelling(name[: damaged.start()] if damaged else name)
+    if not key:
+        return None
+    scores = sorted(
+        (
+            (SequenceMatcher(None, key, _spelling(candidate)).ratio(), candidate)
+            for candidate in candidates
+        ),
+        reverse=True,
+    )
+    if not scores or scores[0][0] < 0.5:
+        return None
+    if len(scores) > 1 and scores[0][0] - scores[1][0] < 0.1:
+        return None
+    return scores[0][1]
 
 
 def _checked_arguments(
@@ -742,9 +806,19 @@ class ToolRegistry:
                 f"Unknown Tool: {context.tool_name}. These arguments fit {name}; "
                 f"call {name} with them."
             )
+        names = [model_tool_name(tool.name) for tool in available]
+        damage = _call_damage(context.tool_name, arguments)
+        if damage:
+            closest = _closest_tool_name(context.tool_name, names)
+            choice = (
+                f"The closest available Tool is {closest}."
+                if closest is not None
+                else f"Available Tools: {', '.join(names)}."
+            )
+            return f"Unknown Tool: {context.tool_name}. Nothing was run: {damage} {choice}"
         return (
             f"Unknown Tool: {context.tool_name}. Call one of the available Tools instead: "
-            f"{', '.join(model_tool_name(tool.name) for tool in available)}."
+            f"{', '.join(names)}."
         )
 
     def _model_facing_tools(

@@ -117,7 +117,7 @@ async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_
         [
             tool_turn(
                 ("first", "functions.WebFetch"),
-                ("second", "TodoWrite"),
+                ("second", "TodoWrite", {"todos": [{"content": "Fetch"}]}),
                 ("third", "fetch"),
                 ("fourth", "KillShell"),
             ),
