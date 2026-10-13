@@ -127,13 +127,13 @@ def normalize_tool_call_candidate(
 
     problems: list[str] = []
     if resolved_name == INVALID_TOOL_CALL_NAME and name != INVALID_TOOL_CALL_NAME:
-        problems.append("the Tool name is missing or is not a non-empty string.")
+        problems.append("the call arrived without a Tool name, so it was garbled on the way.")
     if argument_error is not None:
         problems.append(argument_error)
 
     normalized_rejection = _normalized_existing_tool_call_rejection(rejection)
     if rejection is not None and normalized_rejection is None:
-        problems.append("the Provider supplied invalid Tool Call rejection metadata.")
+        problems.append("the Provider sent it with unreadable rejection data.")
 
     candidate: JsonObject = {
         "id": resolved_id,
@@ -156,10 +156,11 @@ def normalize_tool_call_candidate(
             )
         else:
             code = "malformed_tool_call"
+            sentences = " ".join(problem[:1].upper() + problem[1:] for problem in problems)
             message = (
-                f"Tool Call {resolved_id!r} was rejected before execution: {detail}\n"
-                "Reissue the complete Tool Call with a non-empty Tool name and arguments "
-                "encoded as one JSON object."
+                f"Nothing was run. {sentences}\n"
+                "Send the complete call again, with its Tool name and its arguments "
+                "as one JSON object."
             )
         candidate[TOOL_CALL_REJECTION_FIELD] = {
             "code": code,
