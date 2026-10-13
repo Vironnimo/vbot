@@ -71,6 +71,9 @@ class OutputUpdate(NamedTuple):
     # The line still being written, if any: its end, its start unless the end
     # holds all of it (then empty), and its length.
     current_line: tuple[str, str, int] | None
+    # The first bytes of a character the decoder holds until the rest arrives,
+    # so decoding can go on from them when cleaning fails.
+    undecoded: bytes = b""
 
 
 class TailLines:
@@ -363,8 +366,8 @@ class OutputLines:
 
     # Following
 
-    def take_update(self) -> OutputUpdate:
-        """The changes since the last call."""
+    def take_update(self, undecoded: bytes = b"") -> OutputUpdate:
+        """The changes since the last call; *undecoded* as the decoder holds it."""
         tail_added, tail_cut, tail_restart = self._tail.take_added()
         update = OutputUpdate(
             tuple(self._head_added),
@@ -375,6 +378,7 @@ class OutputLines:
             tail_restart,
             self._total,
             self._current(),
+            undecoded,
         )
         self._head_added.clear()
         self._first_added = False
@@ -454,7 +458,7 @@ class OutputCleaner:
         """Add output bytes."""
         if data and not self._ended:
             self._apply(self._filter.decode(data))
-        return self._lines.take_update()
+        return self._lines.take_update(self._filter.undecoded())
 
     def end(self) -> OutputUpdate:
         """The output ended: decode what is left and complete the current line."""
@@ -510,6 +514,11 @@ class _EscapeFilter:
         self._state = "text"
         self._osc = False
         self._length = 0
+
+    def undecoded(self) -> bytes:
+        """The first bytes of a character still waiting for the rest (at most 3)."""
+        pending: bytes = self._utf8.getstate()[0]
+        return pending
 
     def decode(self, data: bytes, *, final: bool = False) -> str:
         text = self._utf8.decode(data, final=final)

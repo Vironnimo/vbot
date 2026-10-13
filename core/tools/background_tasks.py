@@ -44,6 +44,7 @@ from core.tools._shell_results import (
     ToolNames,
     duration,
     ended_result,
+    lost_output,
     named_tools,
     output_location,
     process_text,
@@ -210,7 +211,7 @@ class BackgroundTasksTool:
                 activity = subagent.activity_file if subagent is not None else None
                 notes.extend(_no_effect_notes(no_effect, shown="subagent", log=activity))
             else:
-                log = self._log_file(task_id)
+                log = self._output_location(task_id)
                 notes.extend(_no_effect_notes(no_effect, shown="output", log=log))
         if notes:
             data["notes"] = [*notes, *data.get("notes", [])]
@@ -542,13 +543,14 @@ class BackgroundTasksTool:
         more = len(running) - _YOURS_SHOWN
         return f"Running now: {entries}{f' and {more} more' if more > 0 else ''}."
 
-    def _log_file(self, command_id: str) -> str | None:
-        """The file with the complete output of *command_id*, as the Agent reads paths."""
+    def _output_location(self, command_id: str) -> str | None:
+        """The sentence naming the file with the complete output of *command_id*
+        (``output_location``)."""
         try:
             report = self._commands.report(command_id)
         except CommandNotFoundError:
             return None
-        return model_path(report.log_path) if report.log_path is not None else None
+        return output_location(report, "")
 
     def _missing_id(self, action: str, tree: _Tree) -> str:
         if action == "stop":
@@ -689,6 +691,9 @@ def _command_row(report: CommandReport, subagent: str | None) -> JsonObject:
     row["runtime"] = duration(report.elapsed_seconds)
     if report.log_path is not None and report.not_run is None:
         row["log"] = model_path(report.log_path)
+    lost = lost_output(report, name_file=False)
+    if lost is not None:
+        row["log_incomplete"] = f"{lost}."
     return row
 
 
@@ -747,8 +752,9 @@ def _no_effect_notes(
     """Notes for fields that asked to wait for a task or to filter its output.
 
     *fields* maps each key as the call sent it to its kind (``NO_EFFECT_FIELDS``);
-    *shown* is what the result shows, *log* the file with a command's complete
-    output or a Sub-Agent's activity, which the Agent can search instead.
+    *shown* is what the result shows. *log* is what the Agent can search instead:
+    for a command the sentence naming its log file (``output_location``), for a
+    Sub-Agent its activity file.
     """
     notes: list[str] = []
     waits = [key for key, kind in fields.items() if kind == NO_EFFECT_WAIT]
@@ -765,10 +771,7 @@ def _no_effect_notes(
             where = f" The Sub-Agent's activity log is {log}." if log is not None else ""
             notes.append(f"{key} has no effect.{where}")
         elif log is not None:
-            notes.append(
-                f"{key} has no effect: the output is shown unfiltered. vBot kept this "
-                f"command's complete raw output in {log} for you to read."
-            )
+            notes.append(f"{key} has no effect: the output is shown unfiltered. {log}")
         else:
             notes.append(f"{key} has no effect: the output is shown unfiltered.")
     return notes

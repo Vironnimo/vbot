@@ -28,6 +28,7 @@ from core.tools.command_manager import (
     CommandTranscript,
     StopReason,
 )
+from core.tools.file_state import os_error_reason
 from core.tools.model_names import BASH_TOOL_NAME
 from core.tools.process_tree import RunningProcess
 from core.tools.shell_hints import HINT_TOOL_NAMES, annotate_failure
@@ -54,6 +55,8 @@ SHELL_RUNNING_OUTPUT_CHARS = 4_000
 # A delivery shows the command up to this many characters.
 _DELIVERY_COMMAND_CHARS = 1_000
 RUN_AGAIN = "Run the command again; if it fails the same way, tell the user."
+# How an Agent gets the output a log file misses that vBot could not write.
+_LESS_OUTPUT = "with less output or with its output redirected to a file"
 # A pipeline stage that passes nothing on before its input ends: the last lines,
 # a sort, a count or a group, or one string of everything. Output piped into it
 # appears only once the command before the pipe has finished.
@@ -119,7 +122,13 @@ def running_output_note(report: CommandReport) -> str:
     stage that holds it appears, as sentences after a space."""
     note = ""
     stage = holding_stage(report.command)
-    if report.log_path is not None:
+    lost = lost_output(report)
+    if lost is not None:
+        note = (
+            f" {lost}. If you need all of the output, stop the command and run it again "
+            f"{_LESS_OUTPUT}."
+        )
+    elif report.log_path is not None:
         # A running result shows only the newest output; Agents did not know what a
         # bare log_file field held. A stage's output reaches the file only at its end.
         path = model_path(report.log_path)
@@ -137,8 +146,9 @@ def running_output_note(report: CommandReport) -> str:
 
 
 def output_location(report: CommandReport, output: str) -> str | None:
-    """The sentence naming the file with the complete output, unless *output*'s
-    markers name it already; None without a log file."""
+    """The sentence naming the file with the complete output, or saying how much
+    of it the file holds, unless *output*'s markers say it already; None without
+    a log file."""
     kept = _kept_output(report)
     if kept is None or kept in output:
         return None
@@ -455,7 +465,12 @@ def holding_stage(command: str) -> str | None:
 def _full_output(report: CommandReport) -> str:
     """Where the omitted output is, as a clause of a marker."""
     kept = _kept_output(report)
-    return f"; {kept}" if kept is not None else ""
+    if kept is None:
+        return ""
+    if report.log_loss is not None:
+        # The file cannot give what the marker leaves out.
+        return f"; {kept}. To see all of the output, run the command again {_LESS_OUTPUT}"
+    return f"; {kept}"
 
 
 def _kept_output(report: CommandReport) -> str | None:
@@ -465,6 +480,9 @@ def _kept_output(report: CommandReport) -> str | None:
     file for someone else's and ran the whole command again instead of reading
     it. The file holds every byte the command wrote, escape sequences included.
     """
+    lost = lost_output(report)
+    if lost is not None:
+        return lost
     path = report.log_path
     if path is None or report.not_run is not None:
         return None
@@ -474,6 +492,35 @@ def _kept_output(report: CommandReport) -> str | None:
             return None
         return f"vBot kept the raw output that reached it in {model_path(path)} for you to read"
     return f"vBot kept this command's complete raw output in {model_path(path)} for you to read"
+
+
+def lost_output(report: CommandReport, *, name_file: bool = True) -> str | None:
+    """The clause saying how much of the raw output the log file holds and why
+    not all of it, naming the file unless *name_file* is False; None while it
+    holds every byte.
+
+    A file that writing stopped short of is no copy of the output: its end is
+    not the command's, and only running the command again shows the rest.
+    """
+    loss = report.log_loss
+    if loss is None or report.not_run is not None:
+        return None
+    if isinstance(loss.error, OSError):
+        reason = os_error_reason(loss.error)
+    else:
+        reason = "an unexpected error occurred"
+    path = report.log_path
+    if path is None:
+        return f"vBot could not keep this command's raw output; writing it failed: {reason}"
+    lines = loss.kept_lines
+    if lines > 1:
+        kept = f"the first {lines:,} lines"
+    else:
+        kept = "the first line" if lines else "the start of the first line"
+    where = f", in {model_path(path)}" if name_file else ""
+    return (
+        f"vBot kept only {kept} of this command's raw output{where}; writing more failed: {reason}"
+    )
 
 
 # Delivery
@@ -612,6 +659,7 @@ __all__ = [
     "holding_stage",
     "stop_call",
     "leftovers_stop",
+    "lost_output",
     "named_tools",
     "not_run_problem",
     "output_location",

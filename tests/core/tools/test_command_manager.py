@@ -165,14 +165,21 @@ async def test_output_that_cannot_be_cleaned_is_kept_uncleaned_and_logged_whole(
 ) -> None:
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
-    process.write("\x1b[1mcollected\x1b[0m 3 items\n")
+    # The first chunk ends inside a character: its first byte waits in the cleaner.
+    first = b"\x1b[1mcollected\x1b[0m 3 items\nGr" + "ü".encode()[:1]
+    process.write(first)
     await turns()
 
     def broken(cleaner: OutputCleaner, data: bytes) -> OutputUpdate:
         raise ValueError("cleaner bug")
 
     monkeypatch.setattr(OutputCleaner, "feed", broken)
-    later = ["\x1b[32mpassed\x1b[0m 1\r\n", "passed 2\n", "passed 3"]
+    later = [
+        "ü".encode()[1:] + b"n\n",
+        b"\x1b[32mpassed\x1b[0m 1\r\n",
+        b"passed 2\n",
+        b"passed 3",
+    ]
     for chunk in later:
         process.write(chunk)
     await turns()
@@ -182,39 +189,57 @@ async def test_output_that_cannot_be_cleaned_is_kept_uncleaned_and_logged_whole(
     process.exit(1)
     report = await harness.finish(command_id)
     assert (report.status, report.exit_code) == ("failed", 1)
-    # The later output is decoded but not cleaned; nothing of it is lost.
+    # The later output is decoded but not cleaned, from where the cleaner's
+    # decoding stopped; nothing of it is lost.
     assert report.transcript.head == (
         "collected 3 items",
+        "Grün",
         "\x1b[32mpassed\x1b[0m 1",
         "passed 2",
         "passed 3",
     )
     assert log_path is not None and report.log_path == log_path
-    assert log_path.read_bytes() == ("\x1b[1mcollected\x1b[0m 3 items\n" + "".join(later)).encode()
+    assert log_path.read_bytes() == first + b"".join(later)
     errors = [record for record in caplog.records if record.levelname == "ERROR"]
     assert len(errors) == 1
 
 
+@pytest.mark.parametrize("kept", [b"first\nsecond\nth", b""], ids=["part", "nothing"])
 @pytest.mark.asyncio
-async def test_a_log_file_that_cannot_be_written_is_no_longer_named(
-    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+async def test_a_log_file_that_cannot_be_written_reports_what_it_kept_and_why(
+    harness: Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kept: bytes,
 ) -> None:
     command_id, process = await harness.launch()
-    process.write("first\n")
-    await turns()
+    log_path = harness.manager.report(command_id).log_path
+    full = OSError(errno.ENOSPC, "No space left on device")
+    room = [len(kept)]
 
-    def full_disk(_fd: int, _data: bytes) -> None:
-        raise OSError(errno.ENOSPC, "No space left on device")
+    def full_disk(fd: int, data: bytes) -> tuple[int, OSError | None]:
+        # The disk takes the first bytes of the output and nothing more.
+        count = os.write(fd, data[: room[0]]) if room[0] else 0
+        room[0] -= count
+        return (count, None) if count == len(data) else (count, full)
 
     monkeypatch.setattr(command_output_module, "_write_all", full_disk)
-    process.write("second\n")
-    process.write("third\n")
+    for chunk in ("first\n", "second\nthird\n", "fourth\n"):
+        process.write(chunk)
+        await turns()
     process.exit(0)
     report = await harness.finish(command_id)
 
-    # The file misses output, so no result calls it complete; the transcript goes on.
-    assert report.log_path is None
-    assert report.transcript.head == ("first", "second", "third")
+    # The file keeps what was written before the failure; the report says how
+    # much and why, and names no file that holds nothing. The transcript goes on.
+    assert report.log_loss is not None and report.log_loss.error is full
+    assert (report.log_loss.kept_bytes, report.log_loss.kept_lines) == (
+        len(kept),
+        kept.count(b"\n"),
+    )
+    assert report.log_path == (log_path if kept else None)
+    assert log_path is not None and log_path.read_bytes() == kept
+    assert report.transcript.head == ("first", "second", "third", "fourth")
     warnings = [record for record in caplog.records if record.levelname == "WARNING"]
     assert len(warnings) == 1 and "log file" in warnings[0].getMessage()
 

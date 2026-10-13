@@ -214,6 +214,7 @@ class CommandRecord:
         if self._exits_before_stop is not None:
             exits = exits[: self._exits_before_stop]
         ended_at = self._ended_at if self._ended_at is not None else now
+        log_loss = self._output.log_loss
         return CommandReport(
             command_id=self.command_id,
             owner=self.owner,
@@ -226,8 +227,8 @@ class CommandRecord:
             exit_code=self._exit_code,
             stop_reason=self._stop_reason,
             transcript=self._output.transcript(),
-            # An incomplete log file is no copy of the output.
-            log_path=self._log_path if self._output.log_error is None else None,
+            # A file that holds nothing of the output is no copy of it.
+            log_path=None if log_loss is not None and not log_loss.kept_bytes else self._log_path,
             failed_programs=tuple(program.describe() for program in exits),
             still_running=(
                 facts.running if facts is not None and self.ended and not self.finished else ()
@@ -240,6 +241,7 @@ class CommandRecord:
                 if self.ended and self._exit_code is not None
                 else None
             ),
+            log_loss=log_loss,
         )
 
     def latest(self, lines: int) -> str:
@@ -517,7 +519,7 @@ class CommandRecord:
             self._output_changed()
 
     async def _feed(self, data: bytes) -> None:
-        log_failed = self._output.log_error is not None
+        log_failed = self._output.log_loss is not None
         try:
             await self._output.feed(data)
         except Exception:
@@ -526,11 +528,12 @@ class CommandRecord:
                 self.command_id,
                 exc_info=True,
             )
-        if not log_failed and self._output.log_error is not None:
+        loss = self._output.log_loss
+        if not log_failed and loss is not None:
             _LOGGER.warning(
                 "Writing the log file of command %s failed; its later output is not written there",
                 self.command_id,
-                exc_info=self._output.log_error,
+                exc_info=loss.error,
             )
         self._output_changed()
 

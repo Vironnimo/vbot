@@ -22,15 +22,13 @@ from core.tools._read_arguments import (
 from core.tools._read_text import (
     DEFAULT_LINE_LIMIT,
     MAX_FILE_BYTES,
-    TextDecoding,
-    open_text,
     read_position,
     render_directory_listing,
     render_matching_lines,
+    render_matching_path,
     render_text,
     render_text_file,
     render_text_path,
-    without_bom,
 )
 from core.tools._swarm_references import wiki_page_call
 from core.tools.arguments import optional_int, split_text_lines
@@ -221,6 +219,29 @@ def make_read_handler(
                 "file_read_error", f"Could not read {label}: {os_error_reason(error)}."
             )
 
+        filtering = arguments.get("pattern") is not None
+
+        def read_text(*, command_log: bool) -> JsonObject:
+            try:
+                if filtering:
+                    content = render_matching_path(
+                        resolved, arguments, label, command_log=command_log
+                    )
+                else:
+                    content = render_text_path(resolved, arguments, command_log=command_log)
+                    if not content:
+                        return tool_success({"content": f"[{label} is empty.]"})
+            except ValueError as error:
+                return tool_failure("invalid_arguments", str(error))
+            except OSError as error:
+                return read_error(error)
+            return tool_success({"content": content})
+
+        # A command's log holds what its programs wrote: text, whatever its first
+        # bytes look like, also when they start like an image or a PDF.
+        if _is_command_log(context, resolved):
+            return read_text(command_log=True)
+
         try:
             file_size = resolved.stat().st_size
             with resolved.open("rb") as handle:
@@ -230,15 +251,10 @@ def make_read_handler(
 
         media_type = sniff_media_type(probe, resolved.name)
         kind = detect_extractable_document(resolved.name, media_type)
-        filtering = arguments.get("pattern") is not None
-        command_log = _is_command_log(context, resolved)
         if (
             filtering
             and kind is None
-            and (
-                media_type.startswith(("image/", "audio/", "video/"))
-                or (_looks_binary(probe) and not command_log)
-            )
+            and (media_type.startswith(("image/", "audio/", "video/")) or _looks_binary(probe))
         ):
             return tool_failure(
                 "invalid_arguments",
@@ -297,11 +313,7 @@ def make_read_handler(
             if extracted is not None:
                 return extracted
             del raw
-        decoding: TextDecoding = "utf-8"
-        note = None
-        if command_log:
-            decoding, note = _command_log_decoding(probe)
-        elif _looks_binary(probe):
+        if _looks_binary(probe):
             if filtering:
                 return tool_failure(
                     "invalid_arguments",
@@ -309,19 +321,7 @@ def make_read_handler(
                     "Read it without pattern.",
                 )
             return _read_binary_notice(context, label)
-        try:
-            if filtering:
-                with open_text(resolved, decoding) as text:
-                    content = render_matching_lines(without_bom(text), arguments, label)
-            else:
-                content = render_text_path(resolved, arguments, decoding=decoding)
-                if not content:
-                    return tool_success({"content": f"[{label} is empty.]"})
-        except ValueError as error:
-            return tool_failure("invalid_arguments", str(error))
-        except OSError as error:
-            return read_error(error)
-        return tool_success({"content": content if note is None else f"{note}\n{content}"})
+        return read_text(command_log=False)
 
     async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if "command" in arguments:
@@ -444,22 +444,6 @@ def _is_command_log(context: ToolContext, resolved: Path) -> bool:
     except OSError, RuntimeError:
         return False
     return resolved.is_relative_to(logs)
-
-
-def _command_log_decoding(probe: bytes) -> tuple[TextDecoding, str | None]:
-    """Decode a command's log as text, and say so where its bytes are not UTF-8.
-
-    A program's output is text even with a NUL byte: on Windows some programs,
-    such as wsl.exe, write UTF-16, so a log is never dismissed as binary.
-    """
-    if probe.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return "utf-16", "[Decoded from UTF-16.]"
-    if b"\x00" in probe:
-        return (
-            "utf-8+utf-16le",
-            "[Decoded the UTF-16 text in this output; other NUL bytes are left out.]",
-        )
-    return "utf-8+utf-16le", None
 
 
 def _looks_binary(raw: bytes) -> bool:

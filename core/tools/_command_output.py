@@ -36,6 +36,7 @@ from ._command_types import (
     COMMAND_RECENT_LINES,
     COMMAND_TAIL_CHARS,
     CommandTranscript,
+    LogLoss,
 )
 from ._interpreter_host import DEFAULT_WORKERS, HostedObject, InterpreterHost
 
@@ -50,7 +51,7 @@ class CommandLog:
 
     Owns the file descriptor *fd*; writes run through *run_blocking*, off the
     Event Loop. A failing write closes the file (``error``), and the output
-    goes on without it.
+    goes on without it; the file keeps what was written before.
     """
 
     def __init__(self, fd: int, run_blocking: Callable[..., Awaitable[Any]]) -> None:
@@ -58,7 +59,16 @@ class CommandLog:
         self._run_blocking = run_blocking
         self._writing: asyncio.Task[None] | None = None
         self._closing = False
+        self._kept_bytes = 0
+        self._kept_lines = 0
         self.error: BaseException | None = None
+
+    @property
+    def loss(self) -> LogLoss | None:
+        """What the file misses once writing it failed; None while it holds every byte."""
+        if self.error is None:
+            return None
+        return LogLoss(self.error, kept_bytes=self._kept_bytes, kept_lines=self._kept_lines)
 
     async def write(self, data: bytes) -> None:
         """Append *data*; returns once it is written or writing failed."""
@@ -84,7 +94,11 @@ class CommandLog:
             self._close_file()
 
     async def _write(self, fd: int, data: bytes) -> None:
-        await self._run_blocking(_write_all, fd, data)
+        written, error = await self._run_blocking(_write_all, fd, data)
+        self._kept_bytes += written
+        self._kept_lines += data.count(b"\n", 0, written)
+        if error is not None:
+            raise error
 
     def _written(self, writing: asyncio.Task[None]) -> None:
         error = None if writing.cancelled() else writing.exception()
@@ -101,10 +115,16 @@ class CommandLog:
                 os.close(fd)
 
 
-def _write_all(fd: int, data: bytes) -> None:
+def _write_all(fd: int, data: bytes) -> tuple[int, OSError | None]:
+    """Write *data*: the bytes written, and the error that stopped the write, if any."""
     view = memoryview(data)
-    while view:
-        view = view[os.write(fd, view) :]
+    written = 0
+    while written < len(view):
+        try:
+            written += os.write(fd, view[written:])
+        except OSError as error:
+            return written, error
+    return written, None
 
 
 class CommandOutput:
@@ -120,6 +140,8 @@ class CommandOutput:
         self._log = log
         self._lines = OutputLines(head_chars=COMMAND_HEAD_CHARS, tail_chars=COMMAND_TAIL_CHARS)
         self._uncleaned: _Uncleaned | None = None
+        # What the cleaner's decoder holds of a character after the last update.
+        self._undecoded = b""
         self._ended = False
         self._closed = False
 
@@ -159,10 +181,11 @@ class CommandOutput:
         try:
             update = await self._cleaner.call("feed", data)
         except Exception:
-            self._uncleaned = _Uncleaned(self._lines)
+            self._uncleaned = _Uncleaned(self._lines, self._undecoded)
             self._uncleaned.feed(data)
             raise
         self._lines.apply(update)
+        self._undecoded = update.undecoded
 
     async def end(self) -> None:
         """The output ended: complete the line still being written.
@@ -176,7 +199,7 @@ class CommandOutput:
             try:
                 update = await self._cleaner.call("end")
             except Exception:
-                self._uncleaned = _Uncleaned(self._lines)
+                self._uncleaned = _Uncleaned(self._lines, self._undecoded)
                 self._uncleaned.end()
                 raise
             self._lines.apply(update)
@@ -184,9 +207,10 @@ class CommandOutput:
         self._uncleaned.end()
 
     @property
-    def log_error(self) -> BaseException | None:
-        """Why writing the log file failed; None while it works, and without one."""
-        return None if self._log is None else self._log.error
+    def log_loss(self) -> LogLoss | None:
+        """What the log file misses once writing it failed; None while it holds
+        every byte, and without one."""
+        return None if self._log is None else self._log.loss
 
     # Reading
 
@@ -219,10 +243,15 @@ class CommandOutput:
 
 
 class _Uncleaned:
-    """Output after cleaning failed: decoded and split into lines, not cleaned."""
+    """Output after cleaning failed: decoded and split into lines, not cleaned.
 
-    def __init__(self, lines: OutputLines) -> None:
+    Decoding goes on from *undecoded*, the first bytes of a character the
+    cleaner's decoder held, so a character split across the failure stays whole.
+    """
+
+    def __init__(self, lines: OutputLines, undecoded: bytes) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._decoder.setstate((undecoded, 0))
         self._lines = lines
 
     def feed(self, data: bytes) -> None:
