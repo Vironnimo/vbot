@@ -383,8 +383,18 @@ _WSL_LIST = "Windows Subsystem für Linux-Distributionen:\r\nUbuntu (Standard)\r
         # Valid UTF-8 before a NUL stays as written; the stray NUL is left out.
         ("Größe: ä\x00\r\nUbuntu\r\n".encode(), "Größe: ä\r\nUbuntu\r\n", None, True),
         (b"ok\nUbuntu\n", "ok\nUbuntu\n", None, False),
+        # Output that starts like an image still reads as the text it is.
+        (b"\x89PNG\r\nUbuntu\r\n", "\ufffdPNG\r\nUbuntu\r\n", None, False),
     ],
-    ids=["utf16le", "between_utf8", "bom_then_utf8", "bom_mid_file", "utf8_before_nul", "utf8"],
+    ids=[
+        "utf16le",
+        "between_utf8",
+        "bom_then_utf8",
+        "bom_mid_file",
+        "utf8_before_nul",
+        "utf8",
+        "starts_like_png",
+    ],
 )
 async def test_a_command_log_reads_as_the_text_its_programs_wrote(
     tmp_path: Path,

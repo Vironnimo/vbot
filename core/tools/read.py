@@ -219,6 +219,29 @@ def make_read_handler(
                 "file_read_error", f"Could not read {label}: {os_error_reason(error)}."
             )
 
+        filtering = arguments.get("pattern") is not None
+
+        def read_text(*, command_log: bool) -> JsonObject:
+            try:
+                if filtering:
+                    content = render_matching_path(
+                        resolved, arguments, label, command_log=command_log
+                    )
+                else:
+                    content = render_text_path(resolved, arguments, command_log=command_log)
+                    if not content:
+                        return tool_success({"content": f"[{label} is empty.]"})
+            except ValueError as error:
+                return tool_failure("invalid_arguments", str(error))
+            except OSError as error:
+                return read_error(error)
+            return tool_success({"content": content})
+
+        # A command's log holds what its programs wrote: text, whatever its first
+        # bytes look like, also when they start like an image or a PDF.
+        if _is_command_log(context, resolved):
+            return read_text(command_log=True)
+
         try:
             file_size = resolved.stat().st_size
             with resolved.open("rb") as handle:
@@ -228,15 +251,10 @@ def make_read_handler(
 
         media_type = sniff_media_type(probe, resolved.name)
         kind = detect_extractable_document(resolved.name, media_type)
-        filtering = arguments.get("pattern") is not None
-        command_log = _is_command_log(context, resolved)
         if (
             filtering
             and kind is None
-            and (
-                media_type.startswith(("image/", "audio/", "video/"))
-                or (_looks_binary(probe) and not command_log)
-            )
+            and (media_type.startswith(("image/", "audio/", "video/")) or _looks_binary(probe))
         ):
             return tool_failure(
                 "invalid_arguments",
@@ -295,7 +313,7 @@ def make_read_handler(
             if extracted is not None:
                 return extracted
             del raw
-        if _looks_binary(probe) and not command_log:
+        if _looks_binary(probe):
             if filtering:
                 return tool_failure(
                     "invalid_arguments",
@@ -303,18 +321,7 @@ def make_read_handler(
                     "Read it without pattern.",
                 )
             return _read_binary_notice(context, label)
-        try:
-            if filtering:
-                content = render_matching_path(resolved, arguments, label, command_log=command_log)
-            else:
-                content = render_text_path(resolved, arguments, command_log=command_log)
-                if not content:
-                    return tool_success({"content": f"[{label} is empty.]"})
-        except ValueError as error:
-            return tool_failure("invalid_arguments", str(error))
-        except OSError as error:
-            return read_error(error)
-        return tool_success({"content": content})
+        return read_text(command_log=False)
 
     async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if "command" in arguments:
