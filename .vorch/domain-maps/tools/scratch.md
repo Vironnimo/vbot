@@ -84,7 +84,9 @@ uses the cleared variant. Forks strip this metadata, so inherited announcements
 cannot suppress the fork's own paths. The Compaction finalizer carries the latest
 existing Scratch note verbatim after the summary when the projection omitted it,
 preserving it during a Run as well as between Runs. Paths never enter the System
-Prompt, preserving shared prompt-cache prefixes.
+Prompt, preserving shared prompt-cache prefixes. The bundled `core:runtime`
+contains one static, path-free sentence directing temporary work to the own folder
+in the latest reminder unless the user requests another location (`prompts.md`).
 
 The Shell Tool and Agent Terminal launch call `folder_for` again before starting
 each process. Their environment sets `TEMP`, `TMP`, `TMPDIR` to `tmp` and
@@ -95,6 +97,16 @@ exclude paths below the Scratch root (`change_tracker.md`).
 Writing only in one's own Scratch folder is Agent guidance, not a filesystem
 permission boundary: existing file and Shell Tools retain their normal access.
 Results the user keeps belong outside Scratch.
+
+The 2026-10-13 live eval used three scenarios with DeepSeek V4.1 Flash and GLM
+5.3 Flash on the reminder-only implementation. All six reports contained the
+correct requested regional figures; shared-area and recreated-folder mechanics
+worked. GLM's delegation
+scenario nevertheless left extracted inputs in the Project and directed child
+intermediates there; DeepSeek initially downloaded into the Project before moving
+the file to Scratch. This evidence triggered the plan's optional static Runtime
+sentence. That subsequent sentence was reviewed but not evaluated with Models.
+Folder placement remains guidance rather than an enforced filesystem boundary.
 
 ## Agent-facing text
 
