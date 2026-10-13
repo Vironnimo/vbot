@@ -441,11 +441,11 @@ def normalize_tool_call_ids(
     input. It allocates collision-free IDs across the outgoing request and
     scopes result correlation to the immediately preceding Assistant Tool
     batch. Reusing one original ID in a later batch creates a fresh wire ID
-    rather than aliasing two logical calls.
+    rather than aliasing two logical calls. Allocation only considers earlier
+    calls, so appending a colliding ID never rewrites the existing prefix.
     """
 
     request_messages = list(messages)
-    reserved_valid_ids = _reserved_valid_tool_call_ids(messages, profile)
     used_wire_ids: set[str] = set()
     active_result_ids: dict[str, list[str]] = {}
 
@@ -456,7 +456,6 @@ def normalize_tool_call_ids(
                 message,
                 profile,
                 used_wire_ids=used_wire_ids,
-                reserved_valid_ids=reserved_valid_ids,
                 message_index=message_index,
             )
             continue
@@ -474,32 +473,11 @@ def normalize_tool_call_ids(
     return request_messages
 
 
-def _reserved_valid_tool_call_ids(
-    messages: list[JsonObject],
-    profile: ToolCallIdProfile,
-) -> set[str]:
-    reserved: set[str] = set()
-    for message in messages:
-        if message.get("role") != "assistant":
-            continue
-        tool_calls = message.get("tool_calls")
-        if not isinstance(tool_calls, list):
-            continue
-        for tool_call in tool_calls:
-            if not isinstance(tool_call, dict):
-                continue
-            tool_call_id = tool_call.get("id")
-            if isinstance(tool_call_id, str) and _tool_call_id_is_valid(tool_call_id, profile):
-                reserved.add(tool_call_id)
-    return reserved
-
-
 def _normalize_assistant_tool_call_ids(
     message: JsonObject,
     profile: ToolCallIdProfile,
     *,
     used_wire_ids: set[str],
-    reserved_valid_ids: set[str],
     message_index: int,
 ) -> tuple[JsonObject, dict[str, list[str]]]:
     tool_calls = message.get("tool_calls")
@@ -518,7 +496,6 @@ def _normalize_assistant_tool_call_ids(
             original_id,
             profile,
             used_wire_ids=used_wire_ids,
-            reserved_valid_ids=reserved_valid_ids,
             occurrence=f"{message_index}:{tool_call_index}",
         )
         result_ids.setdefault(original_id, []).append(wire_id)
@@ -540,7 +517,6 @@ def _allocate_tool_call_id(
     profile: ToolCallIdProfile,
     *,
     used_wire_ids: set[str],
-    reserved_valid_ids: set[str],
     occurrence: str,
 ) -> str:
     if _tool_call_id_is_valid(original_id, profile) and original_id not in used_wire_ids:
@@ -551,7 +527,7 @@ def _allocate_tool_call_id(
     while True:
         seed = original_id if attempt == 0 else f"{original_id}\0{occurrence}\0{attempt}"
         candidate = _derive_tool_call_id(original_id, seed, profile)
-        if candidate not in used_wire_ids and candidate not in reserved_valid_ids:
+        if candidate not in used_wire_ids:
             used_wire_ids.add(candidate)
             return candidate
         attempt += 1

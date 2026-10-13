@@ -77,6 +77,7 @@ def resolve_request_output_limit(
     provider_default: Any,
     effective_context_window: int,
     estimated_input_tokens: int,
+    minimum_output_tokens: int = 0,
 ) -> int | None:
     """Resolve and context-clamp one request's output-token allowance.
 
@@ -91,6 +92,9 @@ def resolve_request_output_limit(
     only when the estimate overflows the window even at best-case accuracy —
     an estimate inside that margin goes out unclamped, because an inflated
     estimate must not kill a request whose measured Context still fits.
+    A positive ``minimum_output_tokens`` protects a stable thinking budget:
+    clamping can consume the reserve but cannot cross that floor. Insufficient
+    remaining capacity then fails before I/O rather than changing thinking.
     """
 
     requested = next(
@@ -111,6 +115,15 @@ def resolve_request_output_limit(
         math.ceil(effective_context_window * REQUEST_CONTEXT_WINDOW_RESERVE_RATIO),
         REQUEST_MIN_RESERVE_TOKENS,
     )
+    if minimum_output_tokens > 0 and remaining < minimum_output_tokens:
+        raise ProviderError(
+            "Request input leaves insufficient capacity for the unchanged thinking budget; "
+            "compact the Context before retrying "
+            f"(estimated_input_tokens={input_tokens}, "
+            f"minimum_output_tokens={minimum_output_tokens}, "
+            f"context_window={effective_context_window})",
+            retryable=False,
+        )
     if remaining <= 0:
         if remaining + reserve > 0:
             _LOGGER.debug(
@@ -133,7 +146,29 @@ def resolve_request_output_limit(
     available_output = remaining - reserve
     if available_output <= 0:
         available_output = remaining
-    return min(requested, available_output)
+    return min(requested, max(available_output, minimum_output_tokens))
+
+
+def request_input_limit_for_output(context_window: int, output_tokens: int) -> int | None:
+    """Largest input estimate leaving the output reservation and uncertainty margin.
+
+    The same reserve bounds output clamping above. Compaction uses this limit
+    before the reserve would have to be consumed to preserve a thinking budget.
+    """
+    if output_tokens <= 0:
+        return None
+    return max(
+        0,
+        min(
+            math.floor(
+                (context_window - output_tokens) / (1 + REQUEST_INPUT_ESTIMATE_RESERVE_RATIO)
+            ),
+            context_window
+            - output_tokens
+            - math.ceil(context_window * REQUEST_CONTEXT_WINDOW_RESERVE_RATIO),
+            context_window - output_tokens - REQUEST_MIN_RESERVE_TOKENS,
+        ),
+    )
 
 
 def _positive_int(value: Any) -> int | None:

@@ -1,11 +1,9 @@
 """Prompt-epoch dynamic prompt blocks: their pinned texts and the changes told since.
 
-Tool and Extension dynamic blocks (``render`` blocks: the registered Projects,
-the Sub-Agent targets, the Shell environment keys, Extension blocks) and the
-``core:channels`` block, which lists the Agent's Channels, render from live
-state. So that every request of a prompt epoch shows the same System Prompt, the
-epoch's first request pins their texts (:class:`PromptBlockPin`) and every later
-request shows those; a successful Compaction starts the next epoch
+Contributed Tool and Extension blocks, temporary Session blocks, and
+``core:channels`` follow live contributor state. The first request pins their
+texts, membership and layout positions (:class:`PromptBlockPin`), and later
+requests reuse them; a successful Compaction starts the next epoch
 with fresh texts. A change in between reaches the Model at the start of the next
 Run as one ``[prompt-block-change]`` note: a System Reminder that lists the
 changed entries of a catalog block, or carries the current text of any other
@@ -42,8 +40,8 @@ _SECTION_REMOVED = 'The "{section}" section of your System Prompt no longer appl
 _SECTION_ADDED = "This section now applies in addition to your System Prompt:\n\n{text}"
 _SECTION_NAME_LIMIT = 80
 
-# Renders the given dynamic blocks live, leaving out the ids it is given.
-LiveBlockRenderer = Callable[[Collection[str]], Mapping[str, RenderedBlock]]
+# Captures the dynamic blocks and their positions for a fresh epoch.
+LiveBlockRenderer = Callable[[], "PromptBlockPin"]
 
 
 @dataclass(frozen=True)
@@ -51,23 +49,21 @@ class PromptBlockPin:
     """The dynamic block texts every request of one prompt epoch shows, by block id.
 
     ``epoch`` keys the change notes of this epoch; notes of another epoch are
-    ignored. A block the epoch's first request did not show is added the first
-    time a request shows it, and keeps that text for the rest of the epoch.
+    ignored. Membership, text and layout order stay fixed for the whole epoch;
+    additions and removals are announced in its history instead.
     """
 
     epoch: str
     blocks: Mapping[str, RenderedBlock]
+    order: tuple[str, ...] = ()
 
     @classmethod
-    def start(cls, blocks: Mapping[str, RenderedBlock]) -> PromptBlockPin:
+    def start(
+        cls, blocks: Mapping[str, RenderedBlock], *, order: Iterable[str] = ()
+    ) -> PromptBlockPin:
         """Start a new epoch that shows *blocks*."""
 
-        return cls(epoch=uuid.uuid4().hex, blocks=dict(blocks))
-
-    def with_blocks(self, blocks: Mapping[str, RenderedBlock]) -> PromptBlockPin:
-        """Return this pin also holding *blocks*; a block it holds keeps its text."""
-
-        return replace(self, blocks={**blocks, **self.blocks})
+        return cls(epoch=uuid.uuid4().hex, blocks=dict(blocks), order=tuple(order))
 
     def texts(self) -> dict[str, str]:
         """Return the pinned text of every block, by block id."""
@@ -81,6 +77,7 @@ class PromptBlockPin:
             "v": PROMPT_BLOCK_PIN_VERSION,
             "epoch": self.epoch,
             "blocks": _blocks_payload(self.blocks),
+            "order": list(self.order),
         }
 
     @classmethod
@@ -93,7 +90,10 @@ class PromptBlockPin:
         blocks = _blocks_from_payload(payload.get("blocks"))
         if not isinstance(epoch, str) or not epoch or blocks is None:
             return None
-        return cls(epoch=epoch, blocks=blocks)
+        order = payload.get("order", [])
+        if not isinstance(order, list) or not all(isinstance(item, str) for item in order):
+            return None
+        return cls(epoch=epoch, blocks=blocks, order=tuple(order))
 
 
 @dataclass(frozen=True)
@@ -160,6 +160,8 @@ def plan_prompt_block_change(
     pin: PromptBlockPin,
     messages: Iterable[ChatMessage],
     live: Mapping[str, RenderedBlock],
+    *,
+    unavailable: Collection[str] = (),
 ) -> PromptBlockChange | None:
     """Return the announcement that brings the Model's knowledge of *pin*'s blocks up to *live*.
 
@@ -167,8 +169,8 @@ def plan_prompt_block_change(
     in *messages* told it. A block whose *live* text differs is announced: a
     catalog block whose title and frame stayed the same by its added, changed
     and removed entries, any other block by its current text. ``None`` when no
-    pinned block changed; a block missing from *live* (gated out or failing) is
-    not announced.
+    block changed. Missing blocks are announced as removed; render failures
+    named in *unavailable* leave the previously announced state intact.
     """
 
     known = dict(pin.blocks)
@@ -178,9 +180,12 @@ def plan_prompt_block_change(
             known.update(change.blocks)
     changed: dict[str, RenderedBlock] = {}
     paragraphs: list[str] = []
-    for block_id, block in live.items():
-        before = known.get(block_id)
-        if before is None or before.text == block.text:
+    for block_id in dict.fromkeys([*live, *known]):
+        if block_id in unavailable:
+            continue
+        before = known.get(block_id, RenderedBlock(""))
+        block = live.get(block_id, RenderedBlock(""))
+        if before.text == block.text:
             continue
         changed[block_id] = block
         paragraphs.append(_describe_change(before, block))
@@ -192,33 +197,28 @@ def plan_prompt_block_change(
 def ensure_prompt_block_pin(
     sessions: ChatSessionManager, address: SessionAddress, render: LiveBlockRenderer
 ) -> PromptBlockPin:
-    """Return the Session's pin holding every dynamic block a request shows now.
-
-    *render* renders the blocks a request shows, leaving out those already
-    pinned. The epoch's first request pins all of them; a block that appears
-    later (an Extension loaded mid-epoch) joins the pin. A concurrent request
-    may have pinned an acceptable value meanwhile; every request then uses it.
-    """
+    """Return the epoch's immutable snapshot, capturing only when it has none."""
 
     stored = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
-    live = render(stored.blocks.keys() if stored is not None else ())
-    if stored is not None and not live:
+    if stored is not None and stored.order:
         return stored
+    captured = render()
     if stored is None:
-        pin = PromptBlockPin.start(live)
+        pin = captured
 
         def accept(current: JsonObject) -> bool:
             return PromptBlockPin.from_payload(current) is not None
 
     else:
-        pin = stored.with_blocks(live)
+        # Layout order is an optional additive pin field. Enrich an existing
+        # snapshot without replacing its texts, membership or epoch identity.
+        if not captured.order:
+            return stored
+        pin = replace(stored, order=captured.order)
 
         def accept(current: JsonObject) -> bool:
-            # Another epoch started meanwhile, or its pin already holds these blocks.
             other = PromptBlockPin.from_payload(current)
-            return other is not None and (
-                other.epoch != pin.epoch or pin.blocks.keys() <= other.blocks.keys()
-            )
+            return other is not None and (other.epoch != pin.epoch or bool(other.order))
 
     pinned = sessions.ensure_prompt_pin(
         address, PINNED_DYNAMIC_BLOCKS_SLOT, pin.to_payload(), accept

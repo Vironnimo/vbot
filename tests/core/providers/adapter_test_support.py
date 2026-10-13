@@ -21,6 +21,12 @@ class AdapterHookDefaults:
     mixes them in so request paths can call each hook unconditionally.
     """
 
+    def minimum_output_tokens(
+        self, model_id: str, thinking_effort: str | None, *, explicit_limit: Any = None
+    ) -> int:
+        del model_id, thinking_effort, explicit_limit
+        return 0
+
     def image_size_limit(self, model_id: str) -> int | None:
         del model_id
         return None

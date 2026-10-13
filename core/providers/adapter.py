@@ -423,6 +423,90 @@ class ProviderAdapter(ABC):
     # Reasoning render description
     # ------------------------------------------------------------------
 
+    def _model_max_output_tokens(self, model_id: str) -> int | None:
+        """The model's catalog output ceiling, or ``None`` when it is unknown.
+
+        Strips a ``::variant`` connection suffix and tolerates a missing lookup
+        or model. A gateway whose ids need richer resolution (flat vendor-prefixed
+        namespaces) overrides this.
+        """
+
+        lookup = getattr(self, "_model_lookup", None)
+        if lookup is None:
+            return None
+        model = lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        ceiling = model.max_output_tokens
+        if isinstance(ceiling, int) and not isinstance(ceiling, bool) and ceiling > 0:
+            return ceiling
+        return None
+
+    def _model_context_window(self, model_id: str) -> int | None:
+        """The Model's catalog context window, or ``None`` when unknown."""
+
+        lookup = getattr(self, "_model_lookup", None)
+        if lookup is None:
+            return None
+        model = lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        context_window = model.context_window
+        if (
+            isinstance(context_window, int)
+            and not isinstance(context_window, bool)
+            and context_window > 0
+        ):
+            return context_window
+        return None
+
+    def minimum_output_tokens(
+        self, model_id: str, thinking_effort: str | None, *, explicit_limit: Any = None
+    ) -> int:
+        """Output capacity needed to keep this route's native thinking unchanged.
+
+        Chat uses this reservation to compact before shrinking Context would
+        change the thinking configuration. Request builders apply the same
+        floor while clamping output. Only Messages thinking budgets need one;
+        adaptive thinking and effort-only wires return zero.
+        """
+        from core.providers.reasoning_dialects import render_reasoning
+
+        profile = self.wire_profile(model_id)
+        if profile.protocol != "messages" or profile.reasoning.supported is False:
+            return 0
+        if profile.reasoning.dialect != "anthropic_thinking":
+            return 0
+        config = getattr(self, "_config", None)
+        defaults = getattr(config, "defaults", None) or {}
+        allowance = next(
+            (
+                value
+                for value in (
+                    explicit_limit,
+                    self._model_max_output_tokens(model_id),
+                    profile.request.output_limit_default,
+                    defaults.get("max_tokens"),
+                )
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0
+            ),
+            None,
+        )
+        cap = profile.request.output_limit_cap
+        if cap is not None:
+            allowance = cap if allowance is None else min(allowance, cap)
+        payload: dict[str, Any] = {}
+        wire = profile.reasoning
+        render_reasoning(
+            wire,
+            wire.plan(thinking_effort, output_allowance=allowance),
+            payload,
+            output_allowance=allowance,
+        )
+        thinking = payload.get("thinking", {})
+        budget = thinking.get("budget_tokens")
+        return budget + 1 if isinstance(budget, int) and budget > 0 else 0
+
     def describe_reasoning_render(self, model_id: str, effort: str | None) -> ReasoningIntent:
         """Return the provider-neutral reasoning decision a request with ``effort`` carries.
 

@@ -21,6 +21,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.content_blocks import ContentBlock, FileBlock
+from core.extensions import ExtensionRegistry
 from core.providers.errors import ProviderStreamingUnsupportedError
 from core.runs import MODEL_STEP_USAGE_EVENT
 from core.tools import JsonObject as ToolJsonObject
@@ -564,9 +565,15 @@ async def test_notes_and_retryable_run_errors_are_sent_as_quoted_reminders(
 
 
 @pytest.mark.asyncio
-async def test_tool_time_note_follows_the_results_in_history_and_requests(tmp_path: Path) -> None:
+@pytest.mark.parametrize("note_source", ["tool", "context_hook"])
+async def test_notes_keep_their_position_in_live_requests_replay_and_forks(
+    tmp_path: Path, note_source: str
+) -> None:
+    note_text = "Background work completed"
+
     def record_note(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
-        context.add_note("Tool finished background work")
+        if note_source == "tool":
+            context.add_note(note_text)
         return tool_success({"ok": True})
 
     tools = ToolRegistry()
@@ -585,51 +592,59 @@ async def test_tool_time_note_follows_the_results_in_history_and_requests(tmp_pa
         tools=tools,
         allowed_tools=["record_note"],
     )
+    if note_source == "context_hook":
+        runtime.extensions = ExtensionRegistry()
+        announced = False
+
+        def announce(context: Any, *, messages: list[JsonObject]) -> list[JsonObject]:
+            nonlocal announced
+            if not announced:
+                announced = True
+                context.add_note(note_text)
+            return messages
+
+        runtime.extensions.install_handler("probe", "context", announce)
     loop = build_chat_loop(runtime)
-    reminder = _reminder("Tool finished background work")
+    reminder = _reminder(note_text)
 
     await loop.send("coder", "Run tool", session_id="session-one")
 
-    # The next request of the same Run already carries the note.
     same_run = runtime.adapter.requests[1]["messages"]
-    assert [message["role"] for message in same_run] == [
-        "system",
-        "user",
-        "assistant",
-        "tool",
-        "user",
-    ]
-    assert same_run[-1] == reminder
+    note_index = 4 if note_source == "tool" else 2
+    assistant_index = 2 if note_source == "tool" else 3
+    expected_roles = (
+        ["system", "user", "assistant", "tool", "user"]
+        if note_source == "tool"
+        else ["system", "user", "user", "assistant", "tool"]
+    )
+    assert [message["role"] for message in same_run] == expected_roles
+    assert same_run[note_index] == reminder
+    if note_source == "context_hook":
+        assert runtime.adapter.requests[0]["messages"][-1] == reminder
     persisted = history(runtime)
-    assert persisted_roles(persisted) == ["user", "assistant", "tool", "note", "assistant"]
-    assert persisted[3].content == "Tool finished background work"
+    assert persisted_roles(persisted) == (
+        ["user", "assistant", "tool", "note", "assistant"]
+        if note_source == "tool"
+        else ["user", "note", "assistant", "tool", "assistant"]
+    )
+    assert persisted[note_index - 1].content == note_text
     assert all(message.run_id for message in persisted)
 
     await loop.send("coder", "Follow up", session_id="session-one")
 
     next_run = runtime.adapter.requests[2]["messages"]
-    assert [message["role"] for message in next_run] == [
-        "system",
-        "user",
-        "assistant",
-        "tool",
-        "user",
-        "assistant",
-        "user",
-    ]
-    assert next_run[4] == reminder
+    assert next_run[0]["content"] == same_run[0]["content"]
+    assert next_run[1 : len(same_run)] == same_run[1:]
     sent = [message for request in runtime.adapter.requests for message in request["messages"]]
     assert all("run_id" not in message and message["role"] != "note" for message in sent)
 
     fork = await runtime.chat_sessions.fork(SESSION)
     await loop.send("coder", "Fork follow up", session_id=fork.id)
 
-    # The Tool cycle is byte-identical in the in-Run follow-up, the next Run and
-    # a fork's first request, so the Provider prompt-cache prefix holds.
     fork_run = runtime.adapter.requests[3]["messages"]
-    cycles = {json.dumps(request[2:4]) for request in (same_run, next_run, fork_run)}
-    assert len(cycles) == 1
-    assert list(same_run[2]["tool_calls"][0]["arguments"]) == ["alpha", "zeta"]
+    assert fork_run[0]["content"] == same_run[0]["content"]
+    assert fork_run[1 : len(same_run)] == same_run[1:]
+    assert list(same_run[assistant_index]["tool_calls"][0]["arguments"]) == ["alpha", "zeta"]
 
 
 @pytest.mark.asyncio

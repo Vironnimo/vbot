@@ -554,6 +554,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 self._model_context_window(model_id), self._config
             ),
             estimated_input_tokens=estimated_input,
+            minimum_output_tokens=self.minimum_output_tokens(
+                model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit_limit
+            ),
         )
         if resolved is None:
             return
@@ -566,41 +569,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             return
         if rules.output_limit_field is not None:
             request_kwargs[rules.output_limit_field] = resolved
-
-    def _model_max_output_tokens(self, model_id: str) -> int | None:
-        """The model's catalog output ceiling, or ``None`` when it is unknown.
-
-        Strips a ``::variant`` connection suffix and tolerates a missing lookup
-        or model. A gateway whose ids need richer resolution (flat vendor-prefixed
-        namespaces) overrides this.
-        """
-
-        if self._model_lookup is None:
-            return None
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return None
-        ceiling = model.max_output_tokens
-        if isinstance(ceiling, int) and not isinstance(ceiling, bool) and ceiling > 0:
-            return ceiling
-        return None
-
-    def _model_context_window(self, model_id: str) -> int | None:
-        """The Model's catalog context window, or ``None`` when unknown."""
-
-        if self._model_lookup is None:
-            return None
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return None
-        context_window = model.context_window
-        if (
-            isinstance(context_window, int)
-            and not isinstance(context_window, bool)
-            and context_window > 0
-        ):
-            return context_window
-        return None
 
     def _apply_reasoning(
         self,

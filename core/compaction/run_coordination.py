@@ -29,6 +29,7 @@ from core.compaction.compaction import (
     effective_compaction_policy,
 )
 from core.performance import record_span, session_track
+from core.providers.providers import request_input_limit_for_output
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -475,6 +476,15 @@ class CompactionRunCoordinator:
             settings.threshold,
             settings=settings,
         )
+        effort = current_state.effort
+        reservation = target.adapter.minimum_output_tokens(
+            target.model_id, effort.current if effort is not None else agent.thinking_effort
+        )
+        input_limit = request_input_limit_for_output(context_window, reservation)
+        if input_limit is not None and input_tokens > input_limit:
+            should_compact = True
+            if not forced:
+                reason = "output_reservation"
         if not should_compact and not forced:
             return current_state
         # Only this Run appends through its snapshot, but out-of-band writers

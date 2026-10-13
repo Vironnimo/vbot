@@ -661,3 +661,64 @@ def test_render_project_files_one_source_for_reminder_and_prompt(tmp_path: Path)
 
     assert rendered == '<file name="AGENTS.md">\nTeam rules\n</file>'
     assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in in_prompt
+
+
+@pytest.mark.parametrize("source", ["extension", "static-extension", "temporary-session"])
+def test_dynamic_block_membership_and_position_stay_pinned_after_reload(
+    tmp_path: Path, source: str
+) -> None:
+    from core.chat._prompt_block_epoch import PromptBlockPin
+    from core.prompts import BlockDefinition
+
+    temporary = source == "temporary-session"
+
+    def definition(name: str, text: str, rank: int) -> BlockDefinition:
+        return BlockDefinition(
+            id=f"extension_session:{name}" if temporary else f"extension:{name}",
+            owner="always" if temporary else "extension:probe",
+            kind="data",
+            default_rank=rank,
+            **(
+                {"default_text": text}
+                if source != "extension"
+                else {"render": lambda _context: text}
+            ),
+        )
+
+    original = definition("z", "ORIGINAL SENTINEL", 3)
+    manager = _manager(
+        tmp_path, block_definitions=() if temporary else [original], loaded_extensions=["probe"]
+    )
+    agent = _agent("")
+    order: list[str] = []
+    request_blocks = [original] if temporary else []
+    blocks = manager.render_dynamic_blocks(
+        agent, request_block_definitions=request_blocks, block_order=order
+    )
+    pin = PromptBlockPin.start(blocks, order=order)
+    # Persistence sorts object keys; the explicit layout order must survive it.
+    import json
+
+    stored = PromptBlockPin.from_payload(json.loads(json.dumps(pin.to_payload(), sort_keys=True)))
+    assert stored is not None
+    first = manager.build_system_prompt(
+        agent,
+        request_block_definitions=request_blocks,
+        pinned_blocks=stored.texts(),
+        pinned_block_order=stored.order,
+    )
+    assert "ORIGINAL SENTINEL" in first
+
+    changed = definition("z", "CHANGED SENTINEL", 99_999)
+    added = definition("a", "ADDED SENTINEL", 1)
+    for live in ([added, changed], []):
+        manager.update_block_definitions(
+            [] if temporary else live, loaded_extensions=["probe"] if live else []
+        )
+        rendered = manager.build_system_prompt(
+            agent,
+            request_block_definitions=live if temporary else [],
+            pinned_blocks=stored.texts(),
+            pinned_block_order=stored.order,
+        )
+        assert rendered == first

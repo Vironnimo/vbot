@@ -95,7 +95,6 @@ from core.prompts.blocks import (
     render_prompt_file,
     resolve_block_text,
     resolve_layout,
-    with_pinned_texts,
 )
 from core.tools.availability import (
     MEMORY_TOOL_NAME,
@@ -271,6 +270,7 @@ class SystemPromptManager:
         on_demand_tools: Sequence[tuple[str, str]] | None = None,
         session_tool_grants: Sequence[str] = (),
         pinned_blocks: Mapping[str, str] | None = None,
+        pinned_block_order: Sequence[str] = (),
         request_block_definitions: Sequence[BlockDefinition] = (),
         block_details: list[JsonObject] | None = None,
         thinking_effort: str | None = None,
@@ -332,9 +332,10 @@ class SystemPromptManager:
         live ``tool_list`` leaves them out.
 
         ``pinned_blocks`` maps the ids of Tool and Extension dynamic blocks and of
-        ``core:channels`` to the text each emits instead of rendering (Chat passes
-        its prompt epoch's pinned texts, see :meth:`render_dynamic_blocks`); the
-        gates still apply, and such a block without a pinned text renders live.
+        ``core:channels`` and temporary Session blocks to their epoch texts.
+        These blocks keep their pinned membership even if their contributor is
+        removed; newly contributed dynamic blocks wait for the next epoch.
+        ``pinned_block_order`` keeps their position among the other blocks.
 
         ``thinking_effort`` is the effort the runtime block names (Chat passes its
         prompt epoch's pinned effort, ``""`` for the provider default); ``None``
@@ -379,9 +380,20 @@ class SystemPromptManager:
             pinned_blocks=pinned_blocks,
             request_block_definitions=request_block_definitions,
         )
+        layout = _selected_layout(agent, definitions, layout)
+        if pinned_blocks is not None:
+            resolved = {block.definition.id: block for block in resolve_layout(definitions, layout)}
+            order = dict.fromkeys([*pinned_block_order, *resolved])
+            layout = [
+                LayoutEntry(
+                    id=block_id, enabled=block_id in pinned_blocks or resolved[block_id].enabled
+                )
+                for block_id in order
+                if block_id in resolved
+            ]
         return assemble_system_prompt(
             definitions,
-            _selected_layout(agent, definitions, layout),
+            layout,
             context,
             owner_activity=self._owner_activity(
                 effective_tool_names, session_tool_grants, subagent_session=subagent_session
@@ -408,17 +420,21 @@ class SystemPromptManager:
         effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
         on_demand_tools: Sequence[tuple[str, str]] | None = None,
         session_tool_grants: Sequence[str] = (),
+        request_block_definitions: Sequence[BlockDefinition] = (),
+        block_order: list[str] | None = None,
+        failed_blocks: set[str] | None = None,
+        read_paths: list[Path] | None = None,
     ) -> dict[str, RenderedBlock]:
         """Render live the blocks a build with these inputs shows that follow live state.
 
-        Covers every contributed block with a ``render`` and the ``core:channels``
-        block, which lists the Agent's enabled Channels, when enabled and owner
-        active (gates 1 and 2); only those in *block_ids* when given and none in
-        *skip*, keyed by block id. Each renders exactly as
+        Covers every contributed and temporary Session block and ``core:channels``
+        when enabled and owner active (gates 1 and 2); only those in *block_ids*
+        when given and none in *skip*, keyed by block id. Each renders exactly as
         :meth:`build_system_prompt` renders it without a pinned text; an empty text
-        is kept (the block collapses), a failing render is left out. Chat pins
-        these texts per prompt epoch and compares later renders with them to tell
-        the Model what changed.
+        is kept (the block collapses), a failing render is left out and named in
+        ``failed_blocks``. ``block_order`` captures the full resolved layout;
+        ``read_paths`` records snapshot file reads. Chat pins this inventory and
+        compares later renders with it to announce additions, changes and removals.
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
@@ -440,24 +456,33 @@ class SystemPromptManager:
             subagent_session=subagent_session,
             effective_tool_names=effective_tool_names,
             session_tool_grants=session_tool_grants,
+            read_observer=read_paths.append if read_paths is not None else None,
         )
         owner_activity = self._owner_activity(
             effective_tool_names, session_tool_grants, subagent_session=subagent_session
         )
-        live = [
-            *(
-                definition
-                for definition in self._catalog.core_text_definitions(prompt_scope, agent.id)
-                if definition.id == CORE_CHANNELS_BLOCK_ID
-            ),
-            *(definition for definition in self._catalog.definitions if definition.render),
-        ]
-        layout = _selected_layout(agent, live, self._catalog.resolve_layout(scope_key))
+        definitions = self._collect_block_definitions(
+            agent,
+            prompt_scope,
+            agent_body="",
+            layout=self._catalog.resolve_layout(scope_key),
+            request_block_definitions=request_block_definitions,
+        )
+        dynamic_ids = {
+            CORE_CHANNELS_BLOCK_ID,
+            *(definition.id for definition in self._catalog.definitions),
+            *(definition.id for definition in request_block_definitions),
+        }
+        layout = _selected_layout(agent, definitions, self._catalog.resolve_layout(scope_key))
+        resolved = resolve_layout(definitions, layout)
+        if block_order is not None:
+            block_order.extend(block.definition.id for block in resolved)
         rendered: dict[str, RenderedBlock] = {}
-        for block in resolve_layout(live, layout):
+        for block in resolved:
             definition = block.definition
             if (
-                not block.enabled
+                definition.id not in dynamic_ids
+                or not block.enabled
                 or definition.id in skip
                 or (block_ids is not None and definition.id not in block_ids)
                 or not owner_activity.is_owner_active(definition.owner, agent)
@@ -479,12 +504,17 @@ class SystemPromptManager:
                     replacements=self._runtime_replacements(agent),
                 )
                 rendered[definition.id] = RenderedBlock(
-                    text, self._channel_catalog(definition, agent, prompt_scope, scope_key)
+                    text,
+                    self._channel_catalog(definition, agent, prompt_scope, scope_key)
+                    if definition.id == CORE_CHANNELS_BLOCK_ID
+                    else None,
                 )
                 continue
             value = render_dynamic_block(definition, context)
             if value is not None:
                 rendered[definition.id] = value
+            elif failed_blocks is not None:
+                failed_blocks.add(definition.id)
         return rendered
 
     def _channel_catalog(
@@ -588,20 +618,42 @@ class SystemPromptManager:
         can never be shadowed by a contributor or a custom block. A custom
         ``user:`` block has no contributor definition; it is synthesized from the
         scope's *layout* (its existence is layout entry + override file, T1) so it
-        renders its override text. A block named in *pinned_blocks* (a contributed
-        dynamic block or ``core:channels``) emits its pinned text instead of rendering.
+        renders its override text. When *pinned_blocks* is given, it replaces the
+        contributed/temporary inventory and ``core:channels`` with fixed data
+        blocks, so current registry membership and gates cannot edit the prefix.
         """
         contributed = self._catalog.definitions
         core = self._catalog.core_text_definitions(prompt_scope, agent.id)
         definitions = [
-            *(with_pinned_texts(core, pinned_blocks) if pinned_blocks else core),
+            *core,
             memory_block_definition(),
             *self._data_block_definitions(agent_body=agent_body),
-            *(with_pinned_texts(contributed, pinned_blocks) if pinned_blocks else contributed),
+            *contributed,
             *request_block_definitions,
             *self._catalog.custom_definitions(layout),
         ]
-        return definitions
+        if pinned_blocks is None:
+            return definitions
+        dynamic_ids = {
+            CORE_CHANNELS_BLOCK_ID,
+            *(definition.id for definition in contributed),
+            *(definition.id for definition in request_block_definitions),
+            *pinned_blocks,
+        }
+        by_id = {definition.id: definition for definition in definitions}
+        return [
+            *(definition for definition in definitions if definition.id not in dynamic_ids),
+            *(
+                BlockDefinition(
+                    id=block_id,
+                    owner=BLOCK_OWNER_ALWAYS,
+                    kind=BLOCK_KIND_DATA,
+                    default_text=text,
+                    default_rank=by_id[block_id].default_rank if block_id in by_id else 1000,
+                )
+                for block_id, text in pinned_blocks.items()
+            ),
+        ]
 
     def _data_block_definitions(self, *, agent_body: str) -> list[BlockDefinition]:
         """Return the SOUL / Working Project / agent-body data blocks (D2).

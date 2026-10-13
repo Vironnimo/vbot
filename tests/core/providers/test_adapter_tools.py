@@ -369,6 +369,14 @@ def test_target_profiles_are_safe_deterministic_request_only_transforms(
     assert (first[0] is not messages[0]) is expected_change
     assert (first[1] is not messages[1]) is expected_change
     _assert_profile_shape(normalized_id, profile)
+    # A later raw ID can equal this call's generated replacement. Only the new
+    # occurrence changes; the already sent prefix and correlation stay exact.
+    extended = normalize_tool_call_ids([*messages, *_tool_cycle(normalized_id)], profile)
+    assert extended[: len(first)] == first
+    later_id = extended[2]["tool_calls"][0]["id"]
+    assert later_id != normalized_id
+    assert extended[3]["tool_call_id"] == later_id
+    _assert_profile_shape(later_id, profile)
 
 
 def test_transform_preserves_order_and_scopes_repeated_ids_to_each_tool_batch() -> None:

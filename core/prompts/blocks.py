@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -699,27 +699,6 @@ def render_dynamic_block(
         return None
 
 
-def with_pinned_texts(
-    definitions: Sequence[BlockDefinition], pinned: Mapping[str, str]
-) -> list[BlockDefinition]:
-    """Return *definitions* with each block named in *pinned* emitting that text.
-
-    The block keeps its id, owner and kind, so the gates treat it as before; only
-    its render, or its text and the expansion of its markers, is replaced by the
-    pinned text.
-    """
-    return [
-        replace(definition, default_text=None, render=_fixed_render(pinned[definition.id]))
-        if definition.id in pinned
-        else definition
-        for definition in definitions
-    ]
-
-
-def _fixed_render(text: str) -> BlockRenderer:
-    return lambda _context: text
-
-
 def apply_replacements(text: str, replacements: Mapping[str, str]) -> str:
     """Replace known prompt placeholders in *text* once, exactly, and non-recursively.
 
@@ -1021,6 +1000,5 @@ __all__ = [
     "resolve_block_text",
     "resolve_layout",
     "validate_workspace_include",
-    "with_pinned_texts",
     "wrap_include_file",
 ]
