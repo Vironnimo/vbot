@@ -446,6 +446,36 @@ async def test_resize_after_screen_capture_remains_unseen_after_persistence(
 
 
 @pytest.mark.asyncio
+async def test_a_screen_persisted_after_a_clear_leaves_the_lines_drawn_since_unseen(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    """A clear erases what the Agent saw: the lines drawn there next are new
+    to it, also when the result that showed the old screen becomes durable
+    after the clear (code review R8: the late acknowledgement undid the clear)."""
+    terminal_manager, factory = manager
+    terminal_id, callbacks = await _start_persisted(terminal_manager, tmp_path)
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    status = {"action": "status", "terminal_id": terminal_id, "lines": 3}
+    await _render(
+        terminal_manager, factory, terminal_id, "".join(f"old-{i}\r\n" for i in range(30))
+    )
+    await call(terminal_manager, context, status)
+    # The screen showed lines 7-30; a clear erases it from line 7 on.
+    await _render(
+        terminal_manager,
+        factory,
+        terminal_id,
+        "\x1b[2J\x1b[H" + "".join(f"new-{i}\r\n" for i in range(40)),
+    )
+    callbacks.pop()()
+
+    data = cast(dict[str, Any], (await call(terminal_manager, context, status))["data"])
+    # new-0 is line 7; the page shows lines 21-23 (new-14 to new-16).
+    assert data["history"] == "new-14\nnew-15\nnew-16"
+    assert data["note"].startswith("14 earlier lines you have not seen are not shown"), data
+
+
+@pytest.mark.asyncio
 async def test_out_of_order_screen_persistence_cannot_restore_an_old_size(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:

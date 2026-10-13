@@ -466,10 +466,13 @@ async def test_repaint_after_resizing_a_quiet_terminal_does_not_wake_agent(
 async def test_work_the_program_resumed_on_its_own_wakes_at_a_declared_end_or_the_fallback(
     clocked_manager: Clocked, tmp_path: Path, end: str
 ) -> None:
-    """A program that resumed work on its own pauses between its updates
-    without being done: its pauses wake nobody. A declared end (here a bell)
-    wakes the Agent at the next quiet boundary; without one, the fallback
-    wakes it once the program printed nothing for the idle period."""
+    """Output soon after the work input started went quiet shows that the work
+    only paused: it resumes that work, once, and its next quiet end wakes the
+    Agent (code review R12: it waited for the fallback). Work that resumes
+    after that, or on its own, pauses between its updates without being done:
+    its pauses wake nobody. A declared end (here a bell) wakes the Agent at
+    the next quiet boundary; without one, the fallback wakes it once the
+    program printed nothing for the idle period."""
     manager, factory, trigger, clock = clocked_manager
     delivered = await _baseline(clocked_manager, tmp_path)
     terminal_id = delivered.terminal_id
@@ -480,24 +483,31 @@ async def test_work_the_program_resumed_on_its_own_wakes_at_a_declared_end_or_th
         await eventually(lambda: terminal_info(manager, terminal_id).screen_revision > revision)
         await eventually(lambda: clock.sleeping)
 
+    await emit("\r\nresumed")
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+    await eventually(lambda: len(trigger.submissions) == 2)
+    resumed = terminal_info(manager, terminal_id).attention
+    assert resumed is not None
+    assert resumed.details["reason"] == "quiet"
+
     for step in range(3):
         await emit(f"\r\nstep {step}")
         await clock.advance(TEST_IDLE_SECONDS - 0.5)
         await _turns()
-        assert len(trigger.submissions) == 1
+        assert len(trigger.submissions) == 2
         assert terminal_info(manager, terminal_id).state == "working"
 
     await emit("\r\ndone\x07" if end == "declared" else "\r\ndone")
     await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
     await _turns()
     if end == "fallback":
-        assert len(trigger.submissions) == 1
+        assert len(trigger.submissions) == 2
         await clock.advance(TEST_IDLE_SECONDS - TEST_ACTIVITY_QUIET_SECONDS)
-    await eventually(lambda: len(trigger.submissions) == 2)
+    await eventually(lambda: len(trigger.submissions) == 3)
     attention = terminal_info(manager, terminal_id).attention
     assert attention is not None
     assert attention.details["reason"] == end
-    body = trigger.submissions[1][1]["body"]
+    body = trigger.submissions[2][1]["body"]
     assert "step 2\ndone" in body
     assert (f"printed nothing for {TEST_IDLE_SECONDS:g} seconds" in body) == (end == "fallback")
 

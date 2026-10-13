@@ -7,6 +7,7 @@ import codecs
 import contextlib
 import json
 import re
+from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -74,6 +75,8 @@ _REPLAY_LOCKED_BYTES = 1 << 16
 _REDRAW_RETRY_MAX_SECONDS = 300.0
 # Once the program has ended, its final screen is drawn anew for at most this long.
 _FINAL_REDRAW_SECONDS = 10.0
+# The latest clears of the screen recorded for acknowledgements that arrive late.
+_CLEARS_KEPT = 64
 # Failures that persist across chunks or polls, keyed by (terminal id, kind):
 # logged when they start and when they end, not on every repetition.
 _CONDITIONS = LoggedConditions()
@@ -111,6 +114,9 @@ class TerminalObservation:
     # The history line number just below the last screen line shown: the
     # Agent has seen every line above it that scrolls into history.
     seen_line: int
+    # Clears of the screen before it was shown; a later clear erased what it
+    # showed from the clear's first line on.
+    clears: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +198,11 @@ class TerminalSession:
         # The attached Agent has seen every history line above this number,
         # in a result or a delivery; None before it saw any screen.
         self._seen_line: int | None = None
+        # Clears of the screen so far, and the first line each of the latest
+        # erased: a screen shown before a clear acknowledges only the lines
+        # above it.
+        self._clear_count = 0
+        self._clears: deque[tuple[int, int]] = deque(maxlen=_CLEARS_KEPT)
         self._output_count = 0
         # Quiet boundaries so far: output paused for the quiet period after
         # activity. Replies to input end at the next one.
@@ -201,8 +212,10 @@ class TerminalSession:
         self._snapshot_on_settle = False
         self._attention: TerminalAttention | None = None
         self._attention_body = ""
-        # The history line below the screen the pending attention brings.
+        # The history line below the screen the pending attention brings,
+        # and the clears before that screen.
         self._attention_seen_line = 0
+        self._attention_clears = 0
         self._attention_revision = 0
         self._acknowledged_attention_revision = 0
         self._activity_origin_run_id: str | None = None
@@ -594,7 +607,9 @@ class TerminalSession:
             self.attachment = target
         self._publish_state()
         if pending and attention is not None:
-            self._schedule_delivery(attention, self._attention_body, self._attention_seen_line)
+            self._schedule_delivery(
+                attention, self._attention_body, self._attention_seen_line, self._attention_clears
+            )
         return True
 
     # Input and size
@@ -870,6 +885,7 @@ class TerminalSession:
                 info.rows,
                 observation.signature,
                 _seen_through(observation, alternate=info.alternate_screen),
+                self._clear_count,
             ),
         }
         observed = self._observed
@@ -897,7 +913,7 @@ class TerminalSession:
         nobody, and an idle delivery of that screen on its way is cancelled
         (its boundary can come before the result is durable).
         """
-        self._saw_lines(observation.seen_line)
+        self._saw_lines(observation.seen_line, observation.clears)
         observed = self._observed
         if observed is None or (observation.resize_count, observation.screen_revision) >= (
             observed.resize_count,
@@ -913,9 +929,29 @@ class TerminalSession:
         ):
             self.acknowledge_attention(attention.revision)
 
-    def _saw_lines(self, line: int) -> None:
-        """The attached Agent has now seen every history line above *line*."""
+    def _saw_lines(self, line: int, clears: int) -> None:
+        """The attached Agent has now seen every history line above *line* of a
+        screen shown after *clears* clears.
+
+        A later clear erased that screen from its first line on, so the lines
+        drawn there since are new to the Agent (code review R8: a late
+        acknowledgement undid a clear). When those clears are no longer
+        recorded, what the Agent saw stays as it was.
+        """
+        if clears < self._clear_count:
+            later = [cleared for count, cleared in self._clears if count > clears]
+            if len(later) < self._clear_count - clears:
+                return
+            line = min(line, *later)
         self._seen_line = max(self._seen_line or 0, line)
+
+    def _cleared(self, line: int) -> None:
+        """A clear erased the screen from history line *line* on: the Agent has
+        not seen the lines drawn there next, although they get the same numbers."""
+        self._clear_count += 1
+        self._clears.append((self._clear_count, line))
+        if self._seen_line is not None:
+            self._seen_line = min(self._seen_line, line)
 
     def _log_file(self) -> str | None:
         """The output log a result can name; ``_log_failed`` says it ends early."""
@@ -1043,10 +1079,8 @@ class TerminalSession:
         self._last_output_at = self._services.monotonic()
         facts_changed = False
         if update is not None:
-            if update.cleared_line is not None and self._seen_line is not None:
-                # Rows the Agent saw were erased: the lines drawn there next
-                # are new to it, although they get the same line numbers.
-                self._seen_line = min(self._seen_line, update.cleared_line)
+            if update.cleared_line is not None:
+                self._cleared(update.cleared_line)
             facts_changed = await self._apply_update(update)
         effect = self._activity.output(
             self._services.monotonic(),
@@ -1238,8 +1272,8 @@ class TerminalSession:
         self._screen_current = True
         update = replay.update
         if update is not None:
-            if replay.cleared_line is not None and self._seen_line is not None:
-                self._seen_line = min(self._seen_line, replay.cleared_line)
+            if replay.cleared_line is not None:
+                self._cleared(replay.cleared_line)
             # Replies to queries the program sent long ago would arrive as input now.
             await self._apply_update(update._replace(responses="", alternate_exited=False))
         # Its content can differ from what any result showed.
@@ -1335,10 +1369,13 @@ class TerminalSession:
                 settled = self._activity.settle(generation, observation.signature)
                 if settled is None:
                     return
+                if observation.screen and not self._screen_shown:
+                    # The first screen also shows when the program's first
+                    # output came right after a resize and counts as a redraw.
+                    self._screen_shown = True
+                    self._signal_change()
                 if settled == "activity":
                     self._quiet_boundaries += 1
-                    if observation.screen:
-                        self._screen_shown = True
                     self._signal_change()
                 if settled == "repaint" or self._settle_idle(generation, observation):
                     return
@@ -1574,11 +1611,14 @@ class TerminalSession:
             if observation is not None
             else 0
         )
+        self._attention_clears = self._clear_count
         if kind in {"exited", "error"} and self._exit_acknowledged:
             # A result already showed the end.
             deliver = False
         if deliver:
-            self._schedule_delivery(attention, self._attention_body, self._attention_seen_line)
+            self._schedule_delivery(
+                attention, self._attention_body, self._attention_seen_line, self._attention_clears
+            )
         self._publish_state()
         self._signal_change()
 
@@ -1589,15 +1629,20 @@ class TerminalSession:
             return label[: _NOTICE_LABEL_CHARS - 3] + "..."
         return label
 
-    def _schedule_delivery(self, attention: TerminalAttention, body: str, seen_line: int) -> None:
-        """Deliver *body*, which shows the screen down to history line *seen_line*."""
+    def _schedule_delivery(
+        self, attention: TerminalAttention, body: str, seen_line: int, clears: int
+    ) -> None:
+        """Deliver *body*, which shows the screen down to history line *seen_line*
+        as it was after *clears* clears."""
         if self._services.trigger_service is None or self.attachment is None:
             return
         self._delivery_task = self._background(
-            self._deliver(attention, body, seen_line), f"attention:{attention.revision}"
+            self._deliver(attention, body, seen_line, clears), f"attention:{attention.revision}"
         )
 
-    async def _deliver(self, attention: TerminalAttention, body: str, seen_line: int) -> None:
+    async def _deliver(
+        self, attention: TerminalAttention, body: str, seen_line: int, clears: int
+    ) -> None:
         trigger_service = self._services.trigger_service
         attachment = self.attachment
         origin_run_id = self._activity_origin_run_id or self.origin_run_id
@@ -1628,7 +1673,7 @@ class TerminalSession:
             self._acknowledged_attention_revision, attention.revision
         )
         if self.attachment == attachment:
-            self._saw_lines(seen_line)
+            self._saw_lines(seen_line, clears)
         if self._attention is attention:
             self._attention = replace(attention, delivered=True)
 
