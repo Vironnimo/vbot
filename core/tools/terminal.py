@@ -546,6 +546,8 @@ async def _handle_start(
             raise ToolContractError(_unpassable_argument_message(argv[0], cause.value)) from error
         raise
     terminal_id = started.terminal_id
+    # An empty screen that is out of date does not show that nothing was printed.
+    shown_nothing = False
     try:
         await terminal_manager.wait_for_startup(terminal_id)
         snapshot = await terminal_manager.snapshot(terminal_id, owner)
@@ -557,6 +559,7 @@ async def _handle_start(
     else:
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
         data = _screen_result(snapshot, view="start", unseen_from=_unseen_from(snapshot))
+        shown_nothing = data.get("screen") == "" and not snapshot.get("screen_behind")
     running = data["state"] == "running"
     unsent_note = unsent.note(terminal_id, running=running)
     if unsent_note is not None:
@@ -566,9 +569,7 @@ async def _handle_start(
     data = _with_notes(data, notes)
     if running:
         data["next"] = (
-            _first_screen_pending_text(terminal_id)
-            if data.get("screen") == ""
-            else _DELIVERIES_TEXT
+            _first_screen_pending_text(terminal_id) if shown_nothing else _DELIVERIES_TEXT
         )
     return tool_success(data)
 
