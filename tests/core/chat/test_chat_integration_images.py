@@ -360,6 +360,7 @@ async def test_read_image_stays_on_its_tool_result_until_compaction_for_vision_m
         messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         assert [message.role for message in messages] == [
             "user",
+            "note",
             "assistant",
             "tool",
             "assistant",
@@ -367,12 +368,13 @@ async def test_read_image_stays_on_its_tool_result_until_compaction_for_vision_m
             "assistant",
             "run_summary",
         ]
+        assert str(messages[1].content).startswith("[scratch-area] ")
         assert all(
             not isinstance(message.content, list) for message in messages if message.role == "user"
         )
         persisted = json.dumps([message.to_dict() for message in messages])
         assert "base64" not in persisted
-        (stored,) = messages[2].tool_media or []
+        (stored,) = messages[3].tool_media or []
         record = runtime.attachment_store.get(stored["attachment_id"])
         assert Path(record.file_path).read_bytes() == original_bytes
 
