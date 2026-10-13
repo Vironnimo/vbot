@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, override
 
@@ -9,7 +10,7 @@ import httpx
 
 from core.providers._ollama_wire import _ollama_openai_base_url
 from core.providers.adapter import ModelLookup
-from core.providers.errors import NetworkError
+from core.providers.errors import NetworkError, ProviderError
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
 )
@@ -24,7 +25,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible chat transport for direct Ollama Cloud connections.
 
     Discovery deliberately remains mapped to :class:`OllamaAdapter`; this class
-    owns only the Cloud chat transport and its verified usage quirk. The wire
+    owns the Cloud chat transport, usage quirk and error classification. The wire
     itself (effort vocabulary, explicit off, reasoning carriers, media, body
     limit) is described by ``resources/wire/ollama-cloud.json``.
     """
@@ -68,6 +69,20 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         return super()._wrap_transport_error(exc)
 
     @override
+    def _classify_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        if status_code == 429 and _is_pro_allowance_exhausted(detail):
+            error = ProviderError(f"Rate limited: {detail}", retryable=False)
+            error.status_code = status_code
+            raise error
+        super()._classify_http_status(status_code, detail=detail, response_headers=response_headers)
+
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -100,6 +115,28 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             for delta in deltas
             if delta.get("type") != "usage" or "input_tokens" in delta or "output_tokens" in delta
         ]
+
+
+def _is_pro_allowance_exhausted(detail: str) -> bool:
+    """Recognize the Cloud allowance refusal observed on 2026-10-13.
+
+    Keep other 429 bodies retryable: Cloud also uses that status for transient
+    throttling. The optional billing advice and request reference vary.
+    """
+
+    try:
+        body = json.loads(detail.removeprefix("429 "))
+    except json.JSONDecodeError:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict) or error.get("type") != "api_error":
+        return False
+    message = error.get("message")
+    return (
+        error.get("code") is None
+        and isinstance(message, str)
+        and message.startswith("You reached your Pro 5-hour limit.")
+    )
 
 
 def _drop_ollama_cloud_zero_prompt_tokens(normalized_usage: Any, raw_usage: Any) -> None:
