@@ -48,7 +48,8 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   runtime wording. Outside the Extension, `core/tools/_swarm_references.py` names the
   `swarm_wiki` read/update and `swarm_board` read calls in file Tool errors for a
   Wiki page number or Board post sent to `read`, `edit`, `apply_patch` or
-  `search_files` (`tools/read.md`); a rename of these Tools or fields updates it.
+  `search_files`, and for a Wiki page sent as `page_id` to `edit` or `write`
+  (`tools/read.md`); a rename of these Tools or fields updates it.
   `_store_wiki.py` implements Wiki transactions within the existing
   Swarm database owner.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page.
