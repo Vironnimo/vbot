@@ -17,7 +17,12 @@ from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools._interpreter_host import InterpreterHost
-from core.tools.command_manager import CommandManager, CommandReport, CommandReportFormatter
+from core.tools.command_manager import (
+    CommandManager,
+    CommandReport,
+    CommandReportFormatter,
+    NotRunReason,
+)
 from core.tools.process_tree import (
     ProcessTreeFacts,
     ProcessTreeTracker,
@@ -249,6 +254,7 @@ class Harness:
         command: str = "work",
         description: str | None = None,
         formatter: CommandReportFormatter = format_report,
+        not_run_codes: Mapping[int, NotRunReason] | None = None,
     ) -> tuple[str, FakeProcess]:
         """Start a foreground command on a fake process."""
         handle = await self.manager.launch(
@@ -262,6 +268,7 @@ class Harness:
             formatter=formatter,
             execution_owner=execution_owner,
             on_output=on_output,
+            not_run_codes=not_run_codes,
         )
         process = self.launcher.processes[-1]
         assert handle.pid == process.pid

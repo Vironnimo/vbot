@@ -422,7 +422,7 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
             env=base,
             origin_run_id="run-a",
             formatter=format_report,
-            request=powershell_request(text, str(cwd), request_changes),
+            request=powershell_request(text, str(cwd), request_changes).data,
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
         report = manager.report(handle.command_id)

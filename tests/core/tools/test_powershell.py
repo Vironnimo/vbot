@@ -23,10 +23,9 @@ from core.tools._powershell import (
     OUTPUT_COLUMNS,
     POWERSHELL_BOOTSTRAP,
     REQUEST_UNREADABLE_EXIT_CODE,
-    WORKDIR_UNAVAILABLE_EXIT_CODE,
     powershell_request,
 )
-from core.tools.command_manager import CommandManager
+from core.tools.command_manager import CommandManager, CommandReport, NotRunReason
 from core.tools.shell_environment import RunIdentity, command_environment
 
 pytestmark = pytest.mark.skipif(
@@ -34,19 +33,29 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def _run(
+async def _run(cwd: Path, command: str, *, prefix: str = "") -> tuple[int | None, str]:
+    """Run *command* as the shell Tool does; return its exit code and output.
+
+    *prefix* runs before the bootstrap.
+    """
+    report = await _report(cwd, command, prefix=prefix)
+    transcript = report.transcript
+    assert transcript.omitted_lines == 0
+    return report.exit_code, "".join(f"{line}\n" for line in (*transcript.head, *transcript.tail))
+
+
+async def _report(
     cwd: Path,
     command: str,
     *,
     prefix: str = "",
     workdir: Path | None = None,
     sent: Callable[[bytes], bytes] | None = None,
-) -> tuple[int | None, str]:
-    """Run *command* as the shell Tool does; return its exit code and output.
+) -> CommandReport:
+    """Run *command* as the shell Tool does; return the report of its end.
 
-    *prefix* runs before the bootstrap. *workdir* is the request's workdir instead
-    of *cwd*, the shell's start directory; *sent* turns the request into what
-    reaches the shell.
+    *workdir* is the request's workdir instead of *cwd*, the shell's start
+    directory; *sent* turns the request into what reaches the shell.
     """
     layers = command_environment(RunIdentity("agent-a", "session-a", None))
     pwsh = shutil.which("pwsh")
@@ -63,15 +72,13 @@ async def _run(
             env=layers.base,
             origin_run_id="run-a",
             formatter=str,
-            request=request if sent is None else sent(request),
+            request=request.data if sent is None else sent(request.data),
+            not_run_codes=request.not_run_codes,
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
-        report = manager.report(handle.command_id)
+        return manager.report(handle.command_id)
     finally:
         await manager.aclose()
-    transcript = report.transcript
-    assert transcript.omitted_lines == 0
-    return report.exit_code, "".join(f"{line}\n" for line in (*transcript.head, *transcript.tail))
 
 
 # --- Exit status, errors and text --------------------------------------------
@@ -260,7 +267,7 @@ def _without_terminator(request: bytes) -> bytes:
 
 def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:
     def cut(request: bytes) -> bytes:
-        command = request.splitlines()[1]
+        command = request.splitlines()[2]
         return request[: request.index(command) + characters]
 
     return cut
@@ -268,31 +275,54 @@ def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("sent", "workdir", "exit_code"),
+    ("sent", "workdir", "not_run"),
     [
-        (_without_terminator, None, REQUEST_UNREADABLE_EXIT_CODE),
-        (_cut_in_command(6), None, REQUEST_UNREADABLE_EXIT_CODE),
+        (_without_terminator, None, "request_unreadable"),
+        (_cut_in_command(6), None, "request_unreadable"),
         # Base64 that decodes, cut where a quantum ends.
-        (_cut_in_command(8), None, REQUEST_UNREADABLE_EXIT_CODE),
-        (lambda _request: b"", None, REQUEST_UNREADABLE_EXIT_CODE),
+        (_cut_in_command(8), None, "request_unreadable"),
         # A shell that waited elsewhere enters a workdir removed since the call was checked.
-        (None, "gone", WORKDIR_UNAVAILABLE_EXIT_CODE),
+        (None, "gone", "workdir_unavailable"),
     ],
-    ids=["no-terminator", "cut-in-command", "cut-at-base64-boundary", "empty", "workdir-gone"],
+    ids=["no-terminator", "cut-in-command", "cut-at-base64-boundary", "workdir-gone"],
 )
-async def test_a_request_the_shell_cannot_read_or_enter_runs_nothing_and_prints_nothing(
-    tmp_path: Path, sent: Callable[[bytes], bytes] | None, workdir: str | None, exit_code: int
+async def test_a_request_the_shell_cannot_read_or_enter_runs_nothing_and_says_so(
+    tmp_path: Path,
+    sent: Callable[[bytes], bytes] | None,
+    workdir: str | None,
+    not_run: NotRunReason,
 ) -> None:
     marker = tmp_path / "ran.txt"
     command = f"New-Item -ItemType File -Path '{marker}'"
 
-    code, output = await _run(
+    report = await _report(
         tmp_path, command, workdir=tmp_path / workdir if workdir else None, sent=sent
     )
 
-    assert code == exit_code, output
-    assert output == ""
+    assert report.not_run == not_run
+    assert report.transcript.total_lines == 0
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent", [None, lambda _request: b""], ids=["command-exits-with-it", "request-without-code"]
+)
+async def test_an_exit_code_alone_never_says_that_nothing_ran(
+    tmp_path: Path, sent: Callable[[bytes], bytes] | None
+) -> None:
+    # Only the code drawn for the request says so: a command that ran can exit with
+    # any other, also with the code a request too short to carry its own ends with.
+    marker = tmp_path / "ran.txt"
+    command = (
+        f"$null = New-Item -ItemType File -Path '{marker}'; exit {REQUEST_UNREADABLE_EXIT_CODE}"
+    )
+
+    report = await _report(tmp_path, command, sent=sent)
+
+    assert (report.exit_code, report.not_run) == (REQUEST_UNREADABLE_EXIT_CODE, None)
+    assert report.transcript.total_lines == 0
+    assert marker.exists() is (sent is None)
 
 
 @pytest.mark.asyncio
@@ -362,7 +392,7 @@ async def test_native_output_keeps_its_bytes_and_timing(tmp_path: Path) -> None:
     )
     assert process.stdin is not None and process.stdout is not None
     try:
-        process.stdin.write(powershell_request(command, str(tmp_path), {}))
+        process.stdin.write(powershell_request(command, str(tmp_path), {}).data)
         await process.stdin.drain()
         process.stdin.close()
         # The producer waits for the test: bytes must arrive before it exits or

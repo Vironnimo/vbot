@@ -30,7 +30,7 @@ from core.tools.background_tasks import (
     BACKGROUND_TASKS_TOOL_NAME,
     register_background_tasks_tool,
 )
-from core.tools.command_manager import CommandManager
+from core.tools.command_manager import CommandManager, NotRunReason
 from core.tools.model_names import called_tool_name
 from core.tools.process_tree import RunningProcess
 from core.tools.shell import SHELL_TOOL_NAME, register_shell_tool
@@ -152,11 +152,15 @@ class Tasks:
         return details
 
     async def background(
-        self, *, owner: SessionAddress = OWNER, command: str = "serve"
+        self,
+        *,
+        owner: SessionAddress = OWNER,
+        command: str = "serve",
+        not_run_codes: dict[int, NotRunReason] | None = None,
     ) -> tuple[str, FakeProcess]:
         """A command of *owner* that continues in the background and delivers its result."""
         command_id, process = await self.commands.launch(
-            owner=owner, command=command, formatter=format_report
+            owner=owner, command=command, formatter=format_report, not_run_codes=not_run_codes
         )
         self.commands.manager.to_background(command_id, deliver=True)
         # Each command starts a second after the one before.
@@ -366,6 +370,33 @@ async def test_status_of_an_ended_command_acknowledges_only_this_sessions_delive
     # The result showed the end to the Agent that waits for it; a Sub-Agent's stays.
     own = owner == OWNER
     assert tasks.commands.sink.cancellations == ([f"command:{command_id}"] if own else [])
+
+
+@pytest.mark.asyncio
+async def test_a_command_the_shell_ran_nothing_of_says_why_in_list_and_status(
+    tasks: Tasks,
+) -> None:
+    # The shell exits with a code its launch named for running nothing.
+    command_id, process = await tasks.background(not_run_codes={123456789: "request_unreadable"})
+    process.exit(123456789)
+    await tasks.commands.finish(command_id)
+
+    listed = data(await tasks.call({"action": "list"}))["tasks"]
+    [row] = [task for task in listed if task["type"] == "command"]
+    result = await tasks.call({"action": "status", "id": command_id})
+    status = data(result)
+    tasks.persist()
+
+    # No exit code, output or log file of the command's own.
+    assert (row["status"], "exit_code" in row, "log" in row) == ("not_run", False, False)
+    assert list(status) == ["status", "command_id", "not_run_because"]
+    assert status["status"] == "not_run"
+    assert "123456789" not in status["not_run_because"]
+    # The status said why: the delivery that says it is withdrawn.
+    assert tasks.commands.sink.cancellations == [f"command:{command_id}"]
+    assert {"type": "notice", "level": "warning", "text": "The command did not run."} in (
+        tasks.shown({"action": "status", "id": command_id}, result)
+    )
 
 
 _SUBAGENT_ID = re.compile(r"\bsub_[a-z0-9]+")

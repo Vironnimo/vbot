@@ -12,10 +12,11 @@ shell can be started before its command is known and serve it at once
 (``_command_launch``); a shell serves one command and exits with it. The
 bootstrap prints nothing of its own: the output is the command's.
 
-Request. ASCII lines, each field Base64 of its UTF-8 text: the workdir, the
-command, one line per environment change (the name, then a space and the value;
-the name alone removes the variable), and ``.`` as the last line, so a request
-that ended early is never taken for a complete one. PowerShell hands stdin to
+Request. ASCII lines: the request's not-run code (below) in nine decimal
+digits, then each field as Base64 of its UTF-8 text: the workdir, the command,
+one line per environment change (the name, then a space and the value; the name
+alone removes the variable), and ``.`` as the last line, so a request that
+ended early is never taken for a complete one. PowerShell hands stdin to
 the command as ``$input`` lines, and its own reader holds the input: a direct
 read of the console input stream races with it, ``$input`` does not. A trailing
 empty line does not reach ``$input``, which the closing ``.`` makes harmless.
@@ -27,12 +28,19 @@ to where it waited, so the command finds the location history and drive
 locations of a shell started in its workdir: ``cd -`` returns to the location
 PowerShell opened at, and the drive where the shell waited is at its root.
 
-Nothing ran. A request the bootstrap cannot read ends the shell with
-``REQUEST_UNREADABLE_EXIT_CODE``, a workdir it cannot enter with
-``WORKDIR_UNAVAILABLE_EXIT_CODE``, before the command runs and without output.
-The shell Tool reports either as a failure of the call, not as the command's
-result. No program is expected to exit with these codes, and the shell Tool also
-requires that nothing was printed and no program failed.
+Nothing ran. vBot draws a random code for each request (``PowerShellRequest``).
+A request the bootstrap cannot read ends the shell with that code, a workdir it
+cannot enter with the code after it, before the command runs and without
+output; the shell Tool reports either as a failure of the call, not as the
+command's result (``CommandReport.not_run``). The command cannot know the code:
+it travels only in the request, which the bootstrap has read from stdin before
+the command runs, and in bootstrap variables removed by then. Only a command
+that exits with such a code anyway, by a chance of one in 900 million, is
+reported as not run although it ran. A fixed code was no proof: a command that
+ran, printed nothing and exited with it read as one that never ran (shell
+review 2026-10-13). A request too short to carry its code ends the shell with
+``REQUEST_UNREADABLE_EXIT_CODE``, reported as an exit code like any other: vBot
+writes every request whole, so only a shell whose input was cut meets it.
 
 Console encodings. Native programs write and read bytes in the console's code
 pages, which default to a legacy OEM page that cannot represent most non-ASCII
@@ -92,7 +100,11 @@ from __future__ import annotations
 
 import base64
 import re
+import secrets
 from collections.abc import Mapping
+from dataclasses import dataclass
+
+from core.tools._command_types import NotRunReason
 
 # Without a byte order mark: a console encoding with one would write it first.
 UTF8_CONSOLE_STATEMENT = (
@@ -221,10 +233,12 @@ STATUS_FUNCTION = re.sub(r"(?m)^[ \t]+", "", STATUS_FUNCTION)
 SETUP_STATEMENT = "; ".join(
     (UTF8_CONSOLE_STATEMENT, UI_CULTURE_STATEMENT, PLAIN_TEXT_STATEMENT, OUTPUT_WIDTH_STATEMENT)
 )
-# The bootstrap's exit codes when the command did not run, without output: "VB"
-# in the high bytes, which no program is expected to use (see the module docstring).
+# The bootstrap's exit code for a request too short to carry its not-run code:
+# "VB" in the high bytes. A command can exit with it too, so it proves nothing.
 REQUEST_UNREADABLE_EXIT_CODE = 0x56420001
-WORKDIR_UNAVAILABLE_EXIT_CODE = 0x56420002
+# A request's not-run code has nine decimal digits; the code after it has too.
+_NOT_RUN_CODE_FIRST = 100_000_000
+_NOT_RUN_CODES = 899_999_998
 # A shell started ahead of its command waits in Windows' system directory
 # (``_command_launch``). While it waits it pays the first use of what follows:
 # type lookups, the parser, PowerShell's utility and file cmdlets, formatting, an
@@ -257,13 +271,16 @@ WARM_UP_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", WARM_UP_STATEMENTS)
 # A shell that waited elsewhere first undoes its move there, back to where
 # PowerShell opened, so the move to the workdir leaves the location history of a
 # shell started in it; the drive it waited on returns to its root. Either failure
-# exits with its code and prints nothing.
+# exits with the request's not-run code, or the code after it, and prints nothing.
 REQUEST_STATEMENTS = r"""$__vbotRequest = @($input)
+$__vbotNotRun = {unreadable}
 try {
-    if ($__vbotRequest.Count -lt 3 -or $__vbotRequest[-1] -ne '.') { throw 'ended early' }
-    $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[0]))
-    $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
-    for ($__vbotIndex = 2; $__vbotIndex -lt $__vbotRequest.Count - 1; $__vbotIndex++) {
+    if ($__vbotRequest[0] -notmatch '^[0-9]{9}$') { throw 'no not-run code' }
+    $__vbotNotRun = [int]$__vbotRequest[0]
+    if ($__vbotRequest.Count -lt 4 -or $__vbotRequest[-1] -ne '.') { throw 'ended early' }
+    $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
+    $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[2]))
+    for ($__vbotIndex = 3; $__vbotIndex -lt $__vbotRequest.Count - 1; $__vbotIndex++) {
         $__vbotPair = $__vbotRequest[$__vbotIndex].Split(' ')
         $__vbotValue = if ($__vbotPair.Count -gt 1) {
             $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotPair[1]))
@@ -272,7 +289,7 @@ try {
             $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotPair[0])), $__vbotValue)
     }
 } catch {
-    exit {unreadable}
+    exit $__vbotNotRun
 }
 if ($PWD.ProviderPath -ne $__vbotWorkdir) {
     try {
@@ -282,7 +299,7 @@ if ($PWD.ProviderPath -ne $__vbotWorkdir) {
         [Environment]::CurrentDirectory = $__vbotWorkdir
         if ($__vbotDrive -and $PWD.Drive -ne $__vbotDrive) { $__vbotDrive.CurrentLocation = '' }
     } catch {
-        exit {unavailable}
+        exit ($__vbotNotRun + 1)
     }
 }
 """
@@ -354,24 +371,38 @@ POWERSHELL_BOOTSTRAP = (
     f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n"
     + STATUS_FUNCTION
     + WARM_UP_STATEMENTS
-    + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE)).replace(
-        "{unavailable}", str(WORKDIR_UNAVAILABLE_EXIT_CODE)
-    )
+    + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
     + RUN_STATEMENTS.replace("{exit_status}", _escaped(EXIT_STATUS_STATEMENT))
 )
 
 
-def powershell_request(command: str, workdir: str, changes: Mapping[str, str | None]) -> bytes:
+@dataclass(frozen=True, slots=True)
+class PowerShellRequest:
+    """What ``POWERSHELL_BOOTSTRAP`` reads from stdin, and how it says it ran nothing."""
+
+    data: bytes
+    # The exit codes the bootstrap ends with, without output, when it runs nothing
+    # of the command, and why (``CommandManager.launch``). Drawn for this request.
+    not_run_codes: Mapping[int, NotRunReason]
+
+
+def powershell_request(
+    command: str, workdir: str, changes: Mapping[str, str | None]
+) -> PowerShellRequest:
     """Return the request ``POWERSHELL_BOOTSTRAP`` reads: run *command* in *workdir*.
 
     *changes* is the call's layer of the environment over the shell's start
     environment: a value sets the variable, None removes it.
     """
-    lines = [_base64(workdir), _base64(command)]
+    code = _NOT_RUN_CODE_FIRST + secrets.randbelow(_NOT_RUN_CODES)
+    lines = [str(code), _base64(workdir), _base64(command)]
     for name, value in changes.items():
         lines.append(_base64(name) if value is None else f"{_base64(name)} {_base64(value)}")
     lines.append(".")
-    return "\n".join(lines).encode("ascii") + b"\n"
+    return PowerShellRequest(
+        "\n".join(lines).encode("ascii") + b"\n",
+        {code: "request_unreadable", code + 1: "workdir_unavailable"},
+    )
 
 
 def _base64(text: str) -> str:
@@ -388,7 +419,7 @@ __all__ = [
     "SETUP_STATEMENT",
     "UI_CULTURE_STATEMENT",
     "UTF8_CONSOLE_STATEMENT",
-    "WORKDIR_UNAVAILABLE_EXIT_CODE",
+    "PowerShellRequest",
     "powershell_literal",
     "powershell_request",
 ]

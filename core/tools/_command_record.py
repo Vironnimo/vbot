@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -51,6 +51,7 @@ from ._command_types import (
     CommandStopError,
     CommandWaitOutcome,
     CompletionSink,
+    NotRunReason,
     OutputCallback,
     StopReason,
     command_status,
@@ -114,6 +115,7 @@ class CommandRecord:
         log_path: Path | None,
         log_lease: TemporaryFileLease | None,
         services: CommandServices,
+        not_run_codes: Mapping[int, NotRunReason] | None = None,
     ) -> None:
         self.command_id = command_id
         self.owner = owner
@@ -131,6 +133,7 @@ class CommandRecord:
         self._log_path = log_path
         self._log_lease = log_lease
         self._services = services
+        self._not_run_codes = dict(not_run_codes or {})
         self.started_at = services.monotonic()
         self._background = False
         self._deliver = False
@@ -232,6 +235,11 @@ class CommandRecord:
             background=self._background,
             delivers_result=self._delivering,
             elapsed_seconds=max(0.0, ended_at - self.started_at),
+            not_run=(
+                self._not_run_codes.get(self._exit_code)
+                if self.ended and self._exit_code is not None
+                else None
+            ),
         )
 
     def latest(self, lines: int) -> str:
@@ -597,6 +605,13 @@ class CommandRecord:
         shows what runs.
         """
         self._exit_code = exit_code
+        reason = self._not_run_codes.get(exit_code)
+        if reason is not None:
+            _LOGGER.warning(
+                "Command %s did not run: its shell reported %s",
+                self.command_id,
+                reason.replace("_", " "),
+            )
         if facts is None:
             return
         self._facts = facts
