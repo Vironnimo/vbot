@@ -356,8 +356,10 @@ async def test_system_prompt_describes_the_pinned_tools_for_the_whole_epoch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("partial_inventory", [False, True], ids=["complete", "older-pin"])
 async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     tmp_path: Path,
+    partial_inventory: bool,
 ) -> None:
     # The registered Projects, the Sub-Agent targets and the Agent's Channels render
     # once per prompt epoch. One of each added mid-epoch leaves the System Prompt
@@ -368,6 +370,7 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     from core.channels import ChannelConfig
     from core.projects import ProjectStore
     from core.prompts import BlockDefinition
+    from core.prompts.pinned_context import PINNED_DYNAMIC_BLOCKS_SLOT, PINNED_SKILL_CATALOG_SLOT
     from core.sessions import is_prompt_block_change_note
     from core.subagents import SubAgentPromptTarget
     from core.tools.file_state import FileReadState, StaleReason
@@ -416,7 +419,7 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
         )
 
     channels = [channel("tg-private", ["111"])]
-    adapter = StubAdapter([{"content": text, "tool_calls": None} for text in ("1", "2", "3")])
+    adapter = StubAdapter([{"content": str(n), "tool_calls": None} for n in range(4)])
     runtime: Any = StubRuntime(
         data_dir=tmp_path, agent=cast(Any, agent), adapter=adapter, tools=tools
     )
@@ -430,15 +433,42 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
                 id="extension:files",
                 owner="always",
                 kind="text",
-                default_text="{include:STATIC.md}",
+                default_text="{include:STATIC.md}\nSTATIC_SKILLS:{generated:skill_catalog}",
             ),
         ],
     )
     runtime.chat_sessions.create(agent.id, session_id="s1")
+    address = session_address(agent.id, "s1")
+    runtime.chat_sessions.ensure_prompt_pin(
+        address,
+        PINNED_SKILL_CATALOG_SLOT,
+        {"catalog_text": "PINNED_SKILL_SENTINEL", "working_project_id": None},
+        lambda _current: False,
+    )
     loop = build_chat_loop(runtime)
 
     await loop.send(agent.id, "First", session_id="s1")
     assert runtime.file_read_state.check_stale("s1", included.resolve()) is None
+    original_pin = runtime.chat_sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT)
+    assert original_pin is not None
+    if partial_inventory:
+        older_pin = {key: value for key, value in original_pin.items() if key != "order"}
+        older_pin["blocks"] = {
+            key: value for key, value in older_pin["blocks"].items() if key != "extension:files"
+        }
+        runtime.chat_sessions.ensure_prompt_pin(
+            address, PINNED_DYNAMIC_BLOCKS_SLOT, older_pin, lambda _current: False
+        )
+        # The newly captured include must count as read even when adoption
+        # happens in change planning before the ordinary request build.
+        runtime.file_read_state = FileReadState()
+        loop = build_chat_loop(runtime)
+    await loop.send(agent.id, "Unchanged", session_id="s1")
+    assert _system_message(adapter, 0) == _system_message(adapter, 1)
+    assert runtime.file_read_state.check_stale("s1", included.resolve()) is None
+    adopted = runtime.chat_sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT)
+    assert adopted == original_pin
+    assert not any(is_prompt_block_change_note(m) for m in history(runtime, "s1", agent.id))
     included.write_text("CHANGED_INCLUDE_WITH_DIFFERENT_SIZE", encoding="utf-8")
     projects.create("web", "Web", tmp_path / "web")
     targets.append(SubAgentPromptTarget(agent_id="writer", name="Writer", description="Drafts."))
@@ -446,9 +476,10 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     await loop.send(agent.id, "Second", session_id="s1")
     await loop.send(agent.id, "Third", session_id="s1")
 
-    systems = [_system_message(adapter, request) for request in range(3)]
-    assert systems[0] == systems[1] == systems[2]
+    systems = [_system_message(adapter, request) for request in range(4)]
+    assert all(system == systems[0] for system in systems)
     assert "ORIGINAL_INCLUDE" in systems[0]
+    assert "STATIC_SKILLS:PINNED_SKILL_SENTINEL" in systems[0]
     assert runtime.file_read_state.check_stale("s1", included.resolve()) == StaleReason.MODIFIED
     assert '<project id="vbot"' in systems[0] and "`reviewer`" in systems[0]
     assert "- tg-private: telegram" in systems[0]
@@ -470,7 +501,7 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
         if is_prompt_block_change_note(message)
     ]
     assert len(notes) == 1
-    for request in adapter.requests[1:]:
+    for request in adapter.requests[2:]:
         sent = "\n".join(str(message["content"]) for message in request["messages"])
         assert sent.count(announcement) == 1
 

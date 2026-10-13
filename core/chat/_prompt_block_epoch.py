@@ -40,8 +40,9 @@ _SECTION_REMOVED = 'The "{section}" section of your System Prompt no longer appl
 _SECTION_ADDED = "This section now applies in addition to your System Prompt:\n\n{text}"
 _SECTION_NAME_LIMIT = 80
 
-# Captures the dynamic blocks and their positions for a fresh epoch.
-LiveBlockRenderer = Callable[[], "PromptBlockPin"]
+# None captures a fresh inventory. Existing ids capture only previously live,
+# unpinned contributions, skipping those whose text the old snapshot already owns.
+LiveBlockRenderer = Callable[[Collection[str] | None], "PromptBlockPin"]
 
 
 @dataclass(frozen=True)
@@ -202,7 +203,7 @@ def ensure_prompt_block_pin(
     stored = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
     if stored is not None and stored.order:
         return stored
-    captured = render()
+    captured = render(None if stored is None else stored.blocks.keys())
     if stored is None:
         pin = captured
 
@@ -210,11 +211,12 @@ def ensure_prompt_block_pin(
             return PromptBlockPin.from_payload(current) is not None
 
     else:
-        # Layout order is an optional additive pin field. Enrich an existing
-        # snapshot without replacing its texts, membership or epoch identity.
+        # A pin without layout metadata covered only rendered blocks/channels.
+        # Capture the previously live static/temporary contributions once, while
+        # preserving every existing text and the epoch's change-note identity.
         if not captured.order:
             return stored
-        pin = replace(stored, order=captured.order)
+        pin = replace(stored, blocks={**captured.blocks, **stored.blocks}, order=captured.order)
 
         def accept(current: JsonObject) -> bool:
             other = PromptBlockPin.from_payload(current)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any, cast
 
 import pytest
@@ -149,8 +149,17 @@ def test_a_block_shown_first_mid_epoch_is_announced_without_changing_the_pin() -
     live = {"tool:x": RenderedBlock("x1")}
     store = _PinStore()
 
-    def render() -> PromptBlockPin:
-        return PromptBlockPin.start(live, order=live)
+    def render(previously_pinned: Collection[str] | None) -> PromptBlockPin:
+        blocks = (
+            live
+            if previously_pinned is None
+            else {
+                key: value
+                for key, value in live.items()
+                if key == "extension:static" and key not in previously_pinned
+            }
+        )
+        return PromptBlockPin.start(blocks, order=live)
 
     first = ensure_prompt_block_pin(cast(Any, store), cast(Any, None), render)
     live.update({"tool:x": RenderedBlock("x2"), "extension:y": RenderedBlock("y1")})
@@ -165,9 +174,16 @@ def test_a_block_shown_first_mid_epoch_is_announced_without_changing_the_pin() -
     assert plan_prompt_block_change(second, [note], live) is None
     assert PromptBlockPin.from_payload(store.value) == second
 
-    # Additive layout metadata can be filled without resetting an existing pin.
+    # An older partial inventory gains only the previously unpinned static
+    # contributions. New rendered blocks still arrive through change notes.
     assert store.value is not None
     store.value.pop("order")
+    live["extension:static"] = RenderedBlock("existing static guidance")
     enriched = ensure_prompt_block_pin(cast(Any, store), cast(Any, None), render)
-    assert enriched.epoch == first.epoch and enriched.blocks == first.blocks
+    assert enriched.epoch == first.epoch
+    assert enriched.blocks == {**first.blocks, "extension:static": live["extension:static"]}
     assert enriched.order == tuple(live)
+    change = plan_prompt_block_change(enriched, [], live)
+    assert change is not None and set(change.blocks) == {"tool:x", "extension:y"}
+    live["extension:static"] = RenderedBlock("changed static guidance")
+    assert ensure_prompt_block_pin(cast(Any, store), cast(Any, None), render) == enriched

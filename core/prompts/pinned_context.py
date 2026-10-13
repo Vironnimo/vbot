@@ -42,8 +42,8 @@ PINNED_MEMORY_FILES_SLOT = "pinned_memory_files"
 # (``core.chat._tool_epoch``); later Tool changes reach the Model as
 # ``[tool-change]`` notes until a successful Compaction replaces it.
 PINNED_TOOL_DEFINITIONS_SLOT = "pinned_tool_definitions"
-# The texts of the Tool and Extension dynamic blocks (``render`` blocks) the
-# epoch's requests show, keyed by block id, plus their epoch key. Chat resolves
+# The ordered inventory and texts of contributed Tool/Extension blocks,
+# temporary Session blocks and Channels, plus their epoch key. Chat resolves
 # and reads this pin (``core.chat._prompt_block_epoch``); a later change reaches
 # the Model as a ``[prompt-block-change]`` note until a successful Compaction
 # replaces it.

@@ -420,7 +420,11 @@ class SystemPromptManager:
         effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
         on_demand_tools: Sequence[tuple[str, str]] | None = None,
         session_tool_grants: Sequence[str] = (),
+        skill_registry: SkillPromptRegistry | None = None,
+        skill_catalog: PinnedSkillCatalog | None = None,
+        thinking_effort: str | None = None,
         request_block_definitions: Sequence[BlockDefinition] = (),
+        static_contributions_only: bool = False,
         block_order: list[str] | None = None,
         failed_blocks: set[str] | None = None,
         read_paths: list[Path] | None = None,
@@ -435,6 +439,8 @@ class SystemPromptManager:
         ``failed_blocks``. ``block_order`` captures the full resolved layout;
         ``read_paths`` records snapshot file reads. Chat pins this inventory and
         compares later renders with it to announce additions, changes and removals.
+        ``static_contributions_only`` captures the contributions older pins did
+        not cover, without adding newly visible rendered blocks or Channels.
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
@@ -478,10 +484,22 @@ class SystemPromptManager:
         if block_order is not None:
             block_order.extend(block.definition.id for block in resolved)
         rendered: dict[str, RenderedBlock] = {}
+        producers = self._build_producers(
+            agent,
+            skill_registry,
+            skill_catalog,
+            effective_tool_definitions=effective_tool_definitions,
+            on_demand=on_demand,
+            session_tool_grants=session_tool_grants,
+        )
         for block in resolved:
             definition = block.definition
             if (
                 definition.id not in dynamic_ids
+                or (
+                    static_contributions_only
+                    and (definition.render is not None or definition.id == CORE_CHANNELS_BLOCK_ID)
+                )
                 or not block.enabled
                 or definition.id in skip
                 or (block_ids is not None and definition.id not in block_ids)
@@ -493,15 +511,8 @@ class SystemPromptManager:
                     block,
                     context,
                     override_resolver=self._catalog.override_resolver(prompt_scope),
-                    producers=self._build_producers(
-                        agent,
-                        None,
-                        None,
-                        effective_tool_definitions=effective_tool_definitions,
-                        on_demand=on_demand,
-                        session_tool_grants=session_tool_grants,
-                    ),
-                    replacements=self._runtime_replacements(agent),
+                    producers=producers,
+                    replacements=self._runtime_replacements(agent, thinking_effort),
                 )
                 rendered[definition.id] = RenderedBlock(
                     text,
