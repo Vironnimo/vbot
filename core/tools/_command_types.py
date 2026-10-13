@@ -144,10 +144,12 @@ class CommandReport:
 
     @property
     def label(self) -> str:
-        """The description, else the command's first line, at most 120 characters."""
-        text = " ".join((self.description or "").split())
-        if not text:
-            text = next((line.strip() for line in self.command.splitlines() if line.strip()), "")
+        """The description, else the command, on one line of at most 120 characters.
+
+        Line breaks and runs of blanks read as one space: the first line alone
+        of ``python -c "`` followed by the code named nothing.
+        """
+        text = " ".join((self.description or "").split()) or " ".join(self.command.split())
         if len(text) > _LABEL_MAX_CHARS:
             return text[: _LABEL_MAX_CHARS - 3] + "..."
         return text
