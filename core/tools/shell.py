@@ -18,6 +18,7 @@ failures (``_shell_results``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import shutil
 import sys
@@ -79,7 +80,7 @@ from core.tools.command_manager import (
 )
 from core.tools.contracts import ToolContractError
 from core.tools.model_names import SHELL_MODEL_NAME
-from core.tools.scratch_areas import ScratchAreas
+from core.tools.scratch_areas import ScratchAreas, ScratchUnavailableError
 from core.tools.shell_environment import (
     CommandEnvironment,
     RunIdentity,
@@ -605,13 +606,14 @@ class ShellTool:
         names: ToolNames,
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
-        scratch = (
-            await self._scratch_areas.folder_for(
-                SessionAddress(context.project_id, context.agent_id, context.session_id)
-            )
-            if self._scratch_areas is not None
-            else None
-        )
+        scratch = None
+        if self._scratch_areas is not None:
+            # Scratch is optional; its owner logged an unavailable folder. The
+            # command still runs with the host's normal temporary directories.
+            with contextlib.suppress(ScratchUnavailableError):
+                scratch = await self._scratch_areas.folder_for(
+                    SessionAddress(context.project_id, context.agent_id, context.session_id)
+                )
 
         def prepare() -> _ShellStart:
             environment = command_environment(

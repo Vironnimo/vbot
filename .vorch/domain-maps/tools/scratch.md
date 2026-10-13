@@ -12,11 +12,21 @@ removes complete areas. `TemporaryFileManager` does not sweep this tree.
 
 ```
 scratch/<root-generation>/
-  .activity                    last activity, stored as filesystem mtime
   <participant-generation>/
-    .incarnation               folder-incarnation token
     tmp/                       process TEMP, TMP and TMPDIR
+
+scratch-state/<root-generation>/
+  .activity                    last activity, stored as filesystem mtime
+  .retire                      pending archive removal, when present
+  <participant>.incarnation     token and directory filesystem identities
 ```
+
+`DataDirectoryLayout.scratch_state_temporary` names the separate disposable
+bookkeeping directory. The owner creates and repairs it lazily; it is not a
+required Storage bootstrap directory. Nothing inside an announced Scratch Area
+is required system state. Older `.activity` and `.incarnation` files there are
+inert Agent files: arbitrary contents, replacement or deletion do not affect
+setup. Agents may empty or remove their entire folder.
 
 The globally unique Session generation, not its scope-local public Session id,
 keys both directories. Identity lookup and nearest-first ancestry lookup are
@@ -28,23 +38,35 @@ folder; forks have a fresh generation and no Parent link.
 
 `folder_for(address)` runs filesystem and Session lookups on a bounded worker pool,
 ensures the own folder and `tmp/`, touches `.activity`, and returns `ScratchFolder`
-with `own`, `area`, `tmp`, `recreated` and `incarnation`. The persistent incarnation
-changes when the folder is recreated, so Chat can detect loss even when a process
-launch recreated it before the next Run. Do not infer disappearance from a failed
-filesystem check or silently replace unreadable markers.
+with `own`, `area`, `tmp`, `recreated` and `incarnation`. External incarnation
+records identify the own and tmp directories by device, inode and birth time
+where available; normal writes do not change the token, including across restarts.
+Recreated/replaced directories or missing/malformed records receive a new token,
+so Chat can detect loss even when a process recreated the folder before the next
+Run. Missing tmp is recreated; a file or link replacing a disposable directory or
+metadata entry is removed as an entry and repaired, never followed. Repair of the
+shared state root is serialized across trees so one repair cannot erase another
+tree's newly written retirement intent. Unreadable entries remain failures, never
+an assertion that the old data was absent.
 
 ## Retention and archive
 
 `start()` schedules an immediate sweep, then hourly sweeps. The clock is injected;
-`SCRATCH_RETENTION` is 7 days. The marker mtime survives restarts; an absent marker
-falls back to the area's mtime. The injected busy-address snapshot combines active
+`SCRATCH_RETENTION` is 7 days. The external marker mtime survives restarts. Missing
+or malformed activity state receives a full retention grace interval; this safely
+adopts areas from the former layout without trusting old directory mtimes or
+Agent-owned markers. The injected busy-address snapshot combines active
 Runs, queued input, unfinished commands and live Agent Terminals. Any participant
 keeps its whole area and refreshes activity. Operator Terminals are outside this
 ownership. Run starts and process launches record activity through `folder_for`.
-Runtime also records every admitted Run synchronously in an activity counter. A
-sweep cannot retire an area from a busy snapshot taken before that admission;
-if admission races the rename, the original area is restored under its root lock
-before folder creation can continue. The counter lock never holds filesystem I/O.
+Runtime also records each admitted Run's Session address synchronously. Before and
+after a candidate's rename, a worker resolves one finite snapshot of newly admitted
+addresses to their trees. Admission in that tree keeps/restores its area and
+refreshes activity; unrelated admissions do not stop its cleanup. The post-rename
+snapshot is the retirement decision boundary: later starts wait for the area lock
+and get a fresh folder when needed. No retry loop waits for a quiet server, the
+counter lock holds no filesystem I/O, and admission records are cleared after the
+last outstanding sweep settles.
 
 Creation, touch and retirement serialize per root. Retirement renames the area to
 a private trash entry while holding the lock, then deletes it outside the lock.
@@ -56,16 +78,27 @@ details are DEBUG and cleanup failures WARN.
 
 Archive captures root generation ids with `roots_for_archive(addresses)` before
 changing Session liveness, then calls `remove_areas(root_ids)` after success.
-Before the rename, archive removal writes an empty `.retire-<root-generation>`
-marker beside the area. A Windows open-file handle can refuse the rename itself;
+Before the rename, archive removal writes an empty `.retire` marker in its external
+state directory. Legacy `.retire-<root-generation>` entries beside the areas are
+adopted there, preserving pending removal on upgrade. A Windows open-file handle
+can refuse the rename itself;
 this marker survives restart and makes the next sweep retry regardless of age or
 busy state. A restored Session's `folder_for` first retires any such pending area,
 or fails while the OS still refuses it; it never adopts the archived files. The
-marker is cleared after retirement and before a replacement area can be created.
+state is cleared after retirement and before a replacement area can be created.
 Archiving a Child alone does not remove its root's area. Restore creates folders
 on demand. `remove_area_of` is the convenience operation for still-live roots;
 using it after archive cannot resolve the archived generation. `stop` requests
 shutdown and `aclose` settles the sweep task and its worker.
+
+Scratch is optional: `folder_for` converts ordinary lookup/setup failures into
+`ScratchUnavailableError` and logs bounded failure/recovery transitions without
+paths or contents. The conversion happens inside the worker so late failures
+after caller cancellation are safe to log as well. Cancellation and
+`RunInterruptedError` propagate unchanged. Chat continues without announcing
+unavailable paths; Shell and Agent Terminals continue their normal launch without
+the Scratch environment overlay. Scratch failure cannot make a requested command
+or Run fail. Optional announcement persistence is isolated by Chat too.
 
 ## Chat and process contracts
 

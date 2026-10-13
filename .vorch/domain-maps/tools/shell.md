@@ -149,6 +149,12 @@ Built fresh for every start (about a millisecond; no cache), each layer over the
 
 Interactive Terminal Sessions use `terminal_environment()` (layers 1-3, `test_terminal_environment_has_no_command_layers`); Agent launches pass layer 6 as their overlay (`tools/terminal.md`). Operator Terminals and vBot-internal temporary files keep their own environment and lifecycle.
 
+Scratch setup is optional: `ScratchAreas.folder_for` logs an unavailable folder
+and raises `ScratchUnavailableError`; the Shell Tool skips that overlay and
+launches the requested command with the normal temporary-directory environment.
+Cancellation and interruption still propagate. No Scratch setup failure becomes
+a failed command or a new Agent-facing reminder.
+
 `CommandManager.busy_addresses()` returns the Sessions of pending launches and every unfinished command, including a command whose shell ended while child processes still run. Runtime includes it in Scratch retention's busy source. A warm shell carries only `base`: each command claims a fresh, single-use process and receives its own scratch variables over stdin, so no Session's paths leak to the next command (`test_command_launch.py`).
 
 ## Constraints & Gotchas

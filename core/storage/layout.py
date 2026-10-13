@@ -109,6 +109,11 @@ class DataDirectoryLayout:
         return self.temporary / "scratch"
 
     @property
+    def scratch_state_temporary(self) -> Path:
+        """Disposable Scratch bookkeeping, created and repaired by its owner."""
+        return self.temporary / "scratch-state"
+
+    @property
     def subagent_temporary(self) -> Path:
         return self.temporary / "subagents"
 

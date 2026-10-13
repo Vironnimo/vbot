@@ -32,7 +32,7 @@ from core.subagents import SubAgentCoordinator
 from core.subagents.links import link_session
 from core.tools.command_manager import CommandManager
 from core.tools.live import LIVE_TOOL_NAMES
-from core.tools.scratch_areas import ScratchAreas, ScratchFolder
+from core.tools.scratch_areas import ScratchAreas, ScratchFolder, ScratchUnavailableError
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolNotFoundError, ToolRegistry
 from core.tools.update_handoff import UpdateHandoffs
@@ -233,7 +233,7 @@ async def test_scratch_retention_observes_each_live_resource_owner(
     session = runtime.chat_sessions.create("main")
     address = session.address
     folder = await runtime.scratch_areas.folder_for(address)
-    marker = folder.area / ".activity"
+    marker = runtime.scratch_areas.state_root / folder.area.name / ".activity"
     os.utime(marker, (1, 1))
     run = Run(run_id="run_scratch", agent_id="main", session_id=address.session_id)
     monkeypatch.setattr(runtime.chat_runs, "active_runs", lambda: [run] if source == "run" else [])
@@ -272,7 +272,7 @@ async def test_scratch_retention_keeps_busy_tree_when_ancestry_is_unavailable(
         tool_call_index=None,
     )
     folder = await runtime.scratch_areas.folder_for(child)
-    marker = folder.area / ".activity"
+    marker = runtime.scratch_areas.state_root / folder.area.name / ".activity"
     os.utime(marker, (1, 1))
     run = Run(run_id="run_child", agent_id="main", session_id=child.session_id)
     monkeypatch.setattr(runtime.chat_runs, "active_runs", lambda: [run])
@@ -287,7 +287,7 @@ async def test_scratch_retention_keeps_busy_tree_when_ancestry_is_unavailable(
         unavailable.setattr(sessions, "get_metadata", unavailable_metadata)
         with pytest.raises(PermissionError):
             await runtime.scratch_areas.sweep()
-        with pytest.raises(PermissionError):
+        with pytest.raises(ScratchUnavailableError):
             await runtime.scratch_areas.folder_for(child)
         assert folder.own.is_dir()
         assert marker.stat().st_mtime == 1
@@ -298,17 +298,32 @@ async def test_scratch_retention_keeps_busy_tree_when_ancestry_is_unavailable(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["before_retirement", "during_rename"])
+@pytest.mark.parametrize("starting_session", ["same", "child", "unrelated"])
 async def test_scratch_retention_preserves_files_when_a_run_starts_during_sweep(
-    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, phase: str
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, phase: str, starting_session: str
 ) -> None:
     manager = runtime.chat_runs
     assert manager is not None
     address = runtime.chat_sessions.create("main").address
+    admitted = address
+    if starting_session != "same":
+        admitted = runtime.chat_sessions.create("main").address
+        if starting_session == "child":
+            link_session(
+                runtime.chat_sessions,
+                admitted,
+                subagent_id="sub_racing_sweep",
+                parent=address,
+                run_id="run_parent",
+                tool_call_id=None,
+                tool_call_index=None,
+            )
     scratch = runtime.scratch_areas
     folder = await scratch.folder_for(address)
     payload = folder.own / "input.txt"
     payload.write_text("unfinished work", encoding="utf-8")
-    os.utime(folder.area / ".activity", (1, 1))
+    marker = scratch.state_root / folder.area.name / ".activity"
+    os.utime(marker, (1, 1))
     loop = asyncio.get_running_loop()
     paused = asyncio.Event()
     release_sweep = threading.Event()
@@ -339,19 +354,29 @@ async def test_scratch_retention_preserves_files_when_a_run_starts_during_sweep(
         monkeypatch.setattr(Path, "rename", paused_rename)
 
     async def executor(_run: Run) -> None:
-        active_folder.set_result(await scratch.folder_for(address))
         await release_run.wait()
+        active_folder.set_result(await scratch.folder_for(admitted))
 
     sweep = asyncio.create_task(scratch.sweep())
     run: Run | None = None
     try:
         await paused.wait()
-        run = await manager.start(address, executor)
+        run = await manager.start(admitted, executor)
         release_sweep.set()
-        assert await sweep == 0
+        assert await sweep == (1 if starting_session == "unrelated" else 0)
+        if starting_session != "unrelated":
+            # Admission alone refreshes retention, before the Run calls any Tool.
+            assert marker.stat().st_mtime > 1
+        release_run.set()
         current = await active_folder
-        assert current.incarnation == folder.incarnation
-        assert payload.read_text(encoding="utf-8") == "unfinished work"
+        if starting_session == "unrelated":
+            assert not payload.exists()
+            assert current.area != folder.area
+        else:
+            assert current.area == folder.area
+            assert payload.read_text(encoding="utf-8") == "unfinished work"
+            if starting_session == "same":
+                assert current.incarnation == folder.incarnation
         assert not any(entry.name.startswith(".trash-") for entry in scratch.root.iterdir())
     finally:
         release_sweep.set()

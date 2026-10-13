@@ -15,11 +15,13 @@ from datetime import timedelta
 from pathlib import Path
 from threading import Event, Lock, RLock
 
+from core.runs import RunInterruptedError
 from core.sessions import SessionAddress
 from core.storage.layout import DataDirectoryLayout
 from core.utils.errors import VBotError
 from core.utils.file_status import is_link_status, stat_or_none
 from core.utils.ids import is_safe_id
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.tree_move import remove_tree
 from core.utils.workers import BoundedWorkerPool
@@ -31,6 +33,18 @@ _LOGGER = get_logger("tools.scratch_areas")
 _TRASH = re.compile(r"\.trash-[0-9a-f]{32}\Z")
 _INCARNATION = re.compile(r"[0-9a-f]{32}\Z")
 _RETIRE_PREFIX = ".retire-"
+
+
+class ScratchUnavailableError(VBotError):
+    """Scratch setup failed; callers can continue without the optional folder."""
+
+
+class _ScratchSweepError(VBotError):
+    """Keep a late worker failure safe to log while preserving its public error."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__("Scratch sweep failed")
+        self.error = error
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +86,7 @@ class ScratchAreas:
             raise ValueError("Scratch sweep interval must be positive")
         self._layout = DataDirectoryLayout(Path(data_dir).absolute())
         self.root = self._layout.scratch_temporary
+        self.state_root = self._layout.scratch_state_temporary
         self._identity = identity
         self._ancestors = ancestors
         self._busy_sessions = busy_sessions
@@ -80,14 +95,43 @@ class ScratchAreas:
         self._locks: dict[str, RLock] = {}
         self._locks_guard = Lock()
         self._sweep_lock = Lock()
+        self._state_root_lock = Lock()
         self._activity_lock = Lock()
         self._activity_epoch = 0
+        self._admissions: dict[SessionAddress, int] = {}
+        self._active_sweeps = 0
+        self._unavailable = LoggedConditions()
         self._stopping = Event()
         self._sweeper_task: asyncio.Task[None] | None = None
 
     async def folder_for(self, address: SessionAddress) -> ScratchFolder:
         """Ensure this Session's own folder and process temp child, recording activity."""
-        return await _WORKERS.run(self._folder_for, address)
+        try:
+            folder = await _WORKERS.run(self._checked_folder_for, address)
+        except RunInterruptedError, ScratchUnavailableError:
+            raise
+        except Exception as error:
+            raise self._unavailable_error(address, error) from error
+        if self._unavailable.ended(address):
+            _LOGGER.info("Scratch folder available again")
+        return folder
+
+    def _checked_folder_for(self, address: SessionAddress) -> ScratchFolder:
+        # Classify inside the worker too: after caller cancellation its failure
+        # is observed by the pool, whose VBotError path logs only the safe type.
+        try:
+            return self._folder_for(address)
+        except RunInterruptedError:
+            raise
+        except Exception as error:
+            raise self._unavailable_error(address, error) from error
+
+    def _unavailable_error(
+        self, address: SessionAddress, error: Exception
+    ) -> ScratchUnavailableError:
+        if self._unavailable.started(address, type(error).__name__):
+            _LOGGER.warning("Scratch folder unavailable (error=%s)", type(error).__name__)
+        return ScratchUnavailableError("Scratch folder is temporarily unavailable")
 
     async def roots_for_archive(self, addresses: Iterable[SessionAddress]) -> tuple[str, ...]:
         """Capture live tree roots before archive commits, without touching files.
@@ -110,24 +154,65 @@ class ScratchAreas:
 
     async def sweep(self) -> int:
         """Remove expired areas and crash leftovers; return the number removed."""
-        busy, epoch = self._activity_snapshot()
-        return await _WORKERS.run(self._sweep, busy, None, epoch)
+        return await self._run_sweep(None)
 
-    def record_run_start(self) -> None:
-        """Invalidate outstanding sweep decisions before an admitted Run can work.
+    async def _run_sweep(self, stopping: Event | None) -> int:
+        busy, epoch = self._activity_snapshot()
+        try:
+            return await _WORKERS.run(self._checked_sweep, busy, stopping, epoch)
+        except _ScratchSweepError as error:
+            raise error.error from None
+        finally:
+            self._finish_activity_snapshot()
+
+    def _checked_sweep(
+        self, busy: tuple[SessionAddress, ...], stopping: Event | None, activity_epoch: int
+    ) -> int:
+        try:
+            return self._sweep(busy, stopping, activity_epoch)
+        except RunInterruptedError:
+            raise
+        except Exception as error:
+            raise _ScratchSweepError(error) from error
+
+    def record_run_start(self, address: SessionAddress) -> None:
+        """Protect the admitted Session's tree from an older sweep snapshot.
 
         Runtime calls this synchronously from the Run manager's start callback.
         The counter lock never covers filesystem work or Session lookups.
         """
         with self._activity_lock:
             self._activity_epoch += 1
+            if self._active_sweeps:
+                self._admissions[address] = self._activity_epoch
 
     def _activity_snapshot(self) -> tuple[tuple[SessionAddress, ...], int]:
         # Called on the Event Loop without yielding, so admission cannot occur
         # between the busy snapshot and its epoch.
         busy = tuple(self._busy_sessions())
         with self._activity_lock:
+            self._active_sweeps += 1
             return busy, self._activity_epoch
+
+    def _finish_activity_snapshot(self) -> None:
+        with self._activity_lock:
+            self._active_sweeps -= 1
+            if not self._active_sweeps:
+                self._admissions.clear()
+
+    def _admitted_since(self, root_id: str, epoch: int) -> bool:
+        # One finite snapshot, never a retry loop waiting for a quiet server.
+        # The snapshot after rename is retirement's decision boundary: later
+        # starts wait for the area lock and receive a fresh folder if needed.
+        with self._activity_lock:
+            addresses = tuple(
+                address for address, revision in self._admissions.items() if revision > epoch
+            )
+        for address in addresses:
+            resolved = self._resolve(address)
+            if resolved is not None and resolved[1] == root_id:
+                return True
+        return False
 
     def start(self) -> None:
         """Schedule an immediate sweep and then hourly sweeps."""
@@ -138,7 +223,10 @@ class ScratchAreas:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             busy, epoch = self._activity_snapshot()
-            self._sweep(busy, None, epoch)
+            try:
+                self._sweep(busy, None, epoch)
+            finally:
+                self._finish_activity_snapshot()
             return
         self._sweeper_task = loop.create_task(self._sweep_loop(), name="scratch-areas-sweep")
 
@@ -183,6 +271,19 @@ class ScratchAreas:
         for directory in self._root_directories():
             _ensure_directory(directory)
 
+    def _state_directory(self, root_id: str) -> Path:
+        self._ensure_state_root()
+        directory = self.state_root / root_id
+        _repair_directory(directory, within=self.state_root)
+        return directory
+
+    def _ensure_state_root(self) -> None:
+        # Every root shares this directory. Serialize the complete inspect /
+        # discard / recreate repair so a delayed caller cannot discard another
+        # root's freshly written bookkeeping or pending archive retirement.
+        with self._state_root_lock:
+            _repair_directory(self.state_root, within=self._layout.temporary)
+
     def _has_root(self) -> bool:
         for directory in self._root_directories():
             status = stat_or_none(directory, follow_symlinks=False)
@@ -204,12 +305,14 @@ class ScratchAreas:
             # Windows delayed because a process still had one of them open.
             if self._pending_retirement(area):
                 trash = self._retire_archived(area)
-            _ensure_directory(area)
+            _repair_directory(area, within=self.root)
             own = area / own_id
-            recreated = _ensure_directory(own)
-            incarnation, new_incarnation = _incarnation_for(own)
+            recreated = _repair_directory(own, within=self.root)
             tmp = own / "tmp"
-            _ensure_directory(tmp)
+            tmp_recreated = _repair_directory(tmp, within=self.root)
+            incarnation, new_incarnation = self._incarnation_for(
+                root_id, own_id, own, tmp, force_new=recreated or tmp_recreated
+            )
             self._touch(area)
             folder = ScratchFolder(own, area, tmp, recreated or new_incarnation, incarnation)
         if trash is not None:
@@ -220,8 +323,8 @@ class ScratchAreas:
         return folder
 
     def _touch(self, area: Path) -> None:
-        marker = area / ".activity"
-        _ensure_regular_file(marker)
+        marker = self._state_directory(area.name) / ".activity"
+        _repair_regular_file(marker, within=self.state_root)
         now = self._clock()
         if os.utime in os.supports_follow_symlinks:
             os.utime(marker, (now, now), follow_symlinks=False)
@@ -229,6 +332,46 @@ class ScratchAreas:
             # Windows has neither descriptor nor no-follow utime support. The
             # marker was just verified as a regular file under this area's lock.
             os.utime(marker, (now, now))
+
+    def _incarnation_for(
+        self, root_id: str, own_id: str, own: Path, tmp: Path, *, force_new: bool
+    ) -> tuple[str, bool]:
+        marker = self._state_directory(root_id) / f"{own_id}.incarnation"
+        identity = f"{_directory_identity(own)} {_directory_identity(tmp)}"
+        status = stat_or_none(marker, follow_symlinks=False)
+        if (
+            not force_new
+            and status is not None
+            and not is_link_status(status)
+            and stat.S_ISREG(status.st_mode)
+            and status.st_size < 1024
+        ):
+            try:
+                token, recorded_identity = marker.read_text(encoding="ascii").splitlines()
+            except UnicodeError, ValueError:
+                pass
+            else:
+                if _INCARNATION.fullmatch(token) and recorded_identity == identity:
+                    return token, False
+        token = uuid.uuid4().hex
+        _replace_state_file(marker, f"{token}\n{identity}\n", within=self.state_root)
+        return token, True
+
+    def _last_activity(self, area: Path) -> float:
+        marker = self._state_directory(area.name) / ".activity"
+        status = stat_or_none(marker, follow_symlinks=False)
+        if (
+            status is None
+            or is_link_status(status)
+            or not stat.S_ISREG(status.st_mode)
+            or status.st_mtime > self._clock()
+        ):
+            # Existing Scratch areas may predate external bookkeeping. Never
+            # infer old activity from their directory time or Agent-owned files:
+            # adopt missing/damaged state with one full retention grace interval.
+            self._touch(area)
+            return self._clock()
+        return status.st_mtime
 
     def _roots_for_archive(self, addresses: tuple[SessionAddress, ...]) -> tuple[str, ...]:
         roots: set[str] = set()
@@ -239,23 +382,27 @@ class ScratchAreas:
         return tuple(sorted(roots))
 
     def _retire(self, area: Path, *, activity_epoch: int | None = None) -> Path | None:
-        if activity_epoch is not None:
-            with self._activity_lock:
-                if activity_epoch != self._activity_epoch:
-                    return None
+        if activity_epoch is not None and self._admitted_since(area.name, activity_epoch):
+            self._touch(area)
+            return None
         if stat_or_none(area, follow_symlinks=False) is None:
             return None
         trash = self.root / f".trash-{uuid.uuid4().hex}"
         area.rename(trash)
         if activity_epoch is not None:
-            with self._activity_lock:
-                unchanged = activity_epoch == self._activity_epoch
-            if not unchanged:
+            try:
+                admitted = self._admitted_since(area.name, activity_epoch)
+            except BaseException:
+                trash.rename(area)
+                raise
+            if admitted:
                 # The caller still holds this area's lock: folder_for cannot
                 # create a replacement before the original is back in place.
                 # Admission never waits for either rename on the Event Loop.
                 trash.rename(area)
+                self._touch(area)
                 return None
+        _remove_disposable(self.state_root / area.name, within=self.state_root)
         return trash
 
     def _discard(self, path: Path) -> None:
@@ -264,21 +411,29 @@ class ScratchAreas:
         remove_tree(path, within=self.root)
 
     def _pending_retirement(self, area: Path) -> bool:
-        marker = self.root / f"{_RETIRE_PREFIX}{area.name}"
+        marker = self._state_directory(area.name) / ".retire"
+        # Preserve cleanup intent written by the earlier layout, without ever
+        # treating Agent-owned markers inside an announced area as system state.
+        legacy = self.root / f"{_RETIRE_PREFIX}{area.name}"
+        if stat_or_none(legacy, follow_symlinks=False) is not None:
+            _repair_regular_file(marker, within=self.state_root)
+            _remove_disposable(legacy, within=self.root)
         status = stat_or_none(marker, follow_symlinks=False)
         if status is None:
             return False
-        _require_regular(marker, status)
+        # Presence is the retirement intent even if the disposable marker was
+        # replaced with a directory or link. Repair the entry, never its target.
+        _repair_regular_file(marker, within=self.state_root)
         return True
 
     def _retire_archived(self, area: Path) -> Path | None:
         # This marker survives a failed rename as well as a process restart. It
         # is outside the area because an open descendant can block its rename.
         # Clear it before allowing any replacement area to be created.
-        marker = self.root / f"{_RETIRE_PREFIX}{area.name}"
-        _ensure_regular_file(marker)
+        marker = self._state_directory(area.name) / ".retire"
+        _repair_regular_file(marker, within=self.state_root)
         trash = self._retire(area)
-        marker.unlink()
+        _remove_disposable(self.state_root / area.name, within=self.state_root)
         return trash
 
     def _remove_areas(self, roots: tuple[str, ...]) -> None:
@@ -315,6 +470,9 @@ class ScratchAreas:
                 return 0
             with os.scandir(self.root) as listing:
                 names = [entry.name for entry in listing]
+            self._ensure_state_root()
+            with os.scandir(self.state_root) as listing:
+                names.extend(entry.name for entry in listing if is_safe_id(entry.name))
         except OSError as error:
             _warn(None, error)
             return 0
@@ -341,18 +499,13 @@ class ScratchAreas:
                     else:
                         status = stat_or_none(candidate, follow_symlinks=False)
                         if status is None:
+                            _remove_disposable(self.state_root / root_id, within=self.state_root)
                             continue
                         if root_id in busy_roots:
                             _require_directory(candidate, status)
                             self._touch(candidate)
                             continue
-                        # Links are entries, never a place to inspect a marker through.
-                        if stat.S_ISDIR(status.st_mode) and not is_link_status(status):
-                            marker = stat_or_none(candidate / ".activity", follow_symlinks=False)
-                            if marker is not None:
-                                _require_regular(candidate / ".activity", marker)
-                                status = marker
-                        if status.st_mtime >= cutoff:
+                        if self._last_activity(candidate) >= cutoff:
                             continue
                         trash = self._retire(candidate, activity_epoch=activity_epoch)
                 if trash is not None:
@@ -370,8 +523,7 @@ class ScratchAreas:
         try:
             while not self._stopping.is_set():
                 try:
-                    busy, epoch = self._activity_snapshot()
-                    await _WORKERS.run(self._sweep, busy, self._stopping, epoch)
+                    await self._run_sweep(self._stopping)
                 except OSError as error:
                     _warn(None, error)
                 except VBotError as error:
@@ -395,11 +547,6 @@ def _require_directory(path: Path, status: os.stat_result) -> None:
         raise OSError(errno.ENOTDIR, "Scratch path is not a real directory", str(path))
 
 
-def _require_regular(path: Path, status: os.stat_result) -> None:
-    if is_link_status(status) or not stat.S_ISREG(status.st_mode):
-        raise OSError(errno.EINVAL, "Scratch marker is not a regular file", str(path))
-
-
 def _ensure_directory(path: Path) -> bool:
     status = stat_or_none(path, follow_symlinks=False)
     created = status is None
@@ -414,30 +561,45 @@ def _ensure_directory(path: Path) -> bool:
     return created
 
 
-def _ensure_regular_file(path: Path) -> None:
+def _remove_disposable(path: Path, *, within: Path) -> None:
     try:
-        with path.open("xb"):
-            pass
-    except FileExistsError:
-        pass
-    _require_regular(path, path.lstat())
+        remove_tree(path, within=within)
+    except PermissionError:
+        # Windows junctions are directory links: unlink refuses them, but rmdir
+        # removes the link itself. Recheck after the shared containment check and
+        # never apply this fallback to an ordinary directory or a followed target.
+        status = stat_or_none(path, follow_symlinks=False)
+        if status is None or not is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+            raise
+        path.rmdir()
 
 
-def _incarnation_for(own: Path) -> tuple[str, bool]:
-    marker = own / ".incarnation"
-    token = uuid.uuid4().hex
-    try:
-        with marker.open("x", encoding="ascii", newline="\n") as stream:
-            stream.write(token + "\n")
-        return token, True
-    except FileExistsError:
-        _require_regular(marker, marker.lstat())
-        token = marker.read_text(encoding="ascii").strip()
-        if _INCARNATION.fullmatch(token) is None:
-            raise OSError(
-                errno.EINVAL, "Scratch incarnation marker is invalid", str(marker)
-            ) from None
-        return token, False
+def _repair_directory(path: Path, *, within: Path) -> bool:
+    status = stat_or_none(path, follow_symlinks=False)
+    if status is not None and (is_link_status(status) or not stat.S_ISDIR(status.st_mode)):
+        _remove_disposable(path, within=within)
+    return _ensure_directory(path)
+
+
+def _repair_regular_file(path: Path, *, within: Path) -> None:
+    status = stat_or_none(path, follow_symlinks=False)
+    if status is not None and not is_link_status(status) and stat.S_ISREG(status.st_mode):
+        return
+    _replace_state_file(path, "", within=within)
+
+
+def _replace_state_file(path: Path, text: str, *, within: Path) -> None:
+    _remove_disposable(path, within=within)
+    with path.open("x", encoding="ascii", newline="\n") as stream:
+        stream.write(text)
+
+
+def _directory_identity(path: Path) -> str:
+    status = path.lstat()
+    _require_directory(path, status)
+    # Birth time prevents file-id reuse where available. Neither ordinary file
+    # writes nor directory-entry edits change these values, unlike ctime/mtime.
+    return f"{status.st_dev}:{status.st_ino}:{getattr(status, 'st_birthtime_ns', 0)}"
 
 
 def _warn(root_id: str | None, error: OSError) -> None:
@@ -450,4 +612,10 @@ def _warn(root_id: str | None, error: OSError) -> None:
     )
 
 
-__all__ = ["SCRATCH_RETENTION", "SCRATCH_SWEEP_INTERVAL_SECONDS", "ScratchAreas", "ScratchFolder"]
+__all__ = [
+    "SCRATCH_RETENTION",
+    "SCRATCH_SWEEP_INTERVAL_SECONDS",
+    "ScratchAreas",
+    "ScratchFolder",
+    "ScratchUnavailableError",
+]
