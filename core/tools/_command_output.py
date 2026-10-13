@@ -140,6 +140,8 @@ class CommandOutput:
         self._log = log
         self._lines = OutputLines(head_chars=COMMAND_HEAD_CHARS, tail_chars=COMMAND_TAIL_CHARS)
         self._uncleaned: _Uncleaned | None = None
+        # What the cleaner's decoder holds of a character after the last update.
+        self._undecoded = b""
         self._ended = False
         self._closed = False
 
@@ -179,10 +181,11 @@ class CommandOutput:
         try:
             update = await self._cleaner.call("feed", data)
         except Exception:
-            self._uncleaned = _Uncleaned(self._lines)
+            self._uncleaned = _Uncleaned(self._lines, self._undecoded)
             self._uncleaned.feed(data)
             raise
         self._lines.apply(update)
+        self._undecoded = update.undecoded
 
     async def end(self) -> None:
         """The output ended: complete the line still being written.
@@ -196,7 +199,7 @@ class CommandOutput:
             try:
                 update = await self._cleaner.call("end")
             except Exception:
-                self._uncleaned = _Uncleaned(self._lines)
+                self._uncleaned = _Uncleaned(self._lines, self._undecoded)
                 self._uncleaned.end()
                 raise
             self._lines.apply(update)
@@ -240,10 +243,15 @@ class CommandOutput:
 
 
 class _Uncleaned:
-    """Output after cleaning failed: decoded and split into lines, not cleaned."""
+    """Output after cleaning failed: decoded and split into lines, not cleaned.
 
-    def __init__(self, lines: OutputLines) -> None:
+    Decoding goes on from *undecoded*, the first bytes of a character the
+    cleaner's decoder held, so a character split across the failure stays whole.
+    """
+
+    def __init__(self, lines: OutputLines, undecoded: bytes) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._decoder.setstate((undecoded, 0))
         self._lines = lines
 
     def feed(self, data: bytes) -> None:
