@@ -230,33 +230,73 @@ async def test_unknown_or_disallowed_tool_becomes_a_failed_result(
     assert result == expected
 
 
+_EMPTY_CALL = (
+    "Nothing was run: the call arrived with no arguments at all. If you sent some, the call "
+    "was garbled on the way: send the complete call again."
+)
+_MARKUP_CALL = (
+    "Nothing was run: the call arrived with tool-call markup in the argument name "
+    '"parameter=path", so it was garbled on the way. Send the complete call again.'
+)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "fitting"),
+    ("name", "arguments", "hint"),
     [
-        ({"path": "SOUL.md"}, "read_file"),
-        ({"action": "post", "text": "Done."}, "board"),
-        ({"action": "read", "page_id": "w2"}, "wiki"),
+        ("pash", {"path": "SOUL.md"}, "These arguments fit read_file; call read_file with them."),
+        (
+            "pash",
+            {"action": "post", "text": "Done."},
+            "These arguments fit board; call board with them.",
+        ),
+        (
+            "pash",
+            {"action": "read", "page_id": "w2"},
+            "These arguments fit wiki; call wiki with them.",
+        ),
         # Two Tools take a read action; a required action is missing; an action the
-        # one Tool with such fields does not have; no arguments at all.
-        ({"action": "read"}, None),
-        ({"text": "noop"}, None),
-        ({"action": "delete", "text": "Done."}, None),
-        ({}, None),
+        # one Tool with such fields does not have.
+        (
+            "pash",
+            {"action": "read"},
+            "Call one of the available Tools instead: board, read_file, wiki.",
+        ),
+        (
+            "pash",
+            {"text": "noop"},
+            "Call one of the available Tools instead: board, read_file, wiki.",
+        ),
+        (
+            "pash",
+            {"action": "delete", "text": "Done."},
+            "Call one of the available Tools instead: board, read_file, wiki.",
+        ),
+        # A call garbled on the way (a Provider's parser split the Model's tool-call
+        # markup wrongly, Swarm run 2026-10-13: "powerhellsparameter" with {} 10 times):
+        # it is asked for again complete, with the one Tool its name clearly resembles,
+        # which is never run.
+        ("read_filesparameter", {}, f"{_EMPTY_CALL} The closest available Tool is read_file."),
+        ("pash", {}, f"{_EMPTY_CALL} Available Tools: board, read_file, wiki."),
+        (
+            "read_filethrough",
+            {"description": "x", "parameter=path": "SOUL.md"},
+            f"{_MARKUP_CALL} The closest available Tool is read_file.",
+        ),
     ],
 )
 async def test_an_unknown_tool_names_the_one_tool_its_arguments_fit(
-    arguments: JsonObject, fitting: str | None
+    name: str, arguments: JsonObject, hint: str
 ) -> None:
     registry = ToolRegistry()
     register_read_file(registry)
-    for name, actions, fields in (
+    for tool, actions, fields in (
         ("board", ["read", "post"], ("text", "message_id")),
         ("wiki", ["read", "update"], ("page_id",)),
     ):
         registry.register(
-            name,
-            f"Use the {name}.",
+            tool,
+            f"Use the {tool}.",
             {
                 "type": "object",
                 "properties": {
@@ -269,15 +309,10 @@ async def test_an_unknown_tool_names_the_one_tool_its_arguments_fit(
             lambda _context, _arguments: tool_success({}),
         )
 
-    result = await _run_one(registry, "pash", arguments)
+    result = await _run_one(registry, name, arguments)
 
-    hint = (
-        f"These arguments fit {fitting}; call {fitting} with them."
-        if fitting
-        else "Call one of the available Tools instead: board, read_file, wiki."
-    )
-    # The fitting Tool is named, never run.
-    assert result == tool_failure("tool_not_found", f"Unknown Tool: pash. {hint}")
+    # The fitting or closest Tool is named, never run.
+    assert result == tool_failure("tool_not_found", f"Unknown Tool: {name}. {hint}")
 
 
 @pytest.mark.asyncio

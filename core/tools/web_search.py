@@ -413,14 +413,15 @@ def _engines_did_not_answer(
     )
 
 
-def _widened_note(widened: list[tuple[str, str]]) -> str:
+def _widened_note(widened: list[tuple[str, str]], *, can_fetch: bool) -> str:
     """Say how ``site:`` operators with a path were read, or return ""."""
     if not widened:
         return ""
-    (operator, domain), *rest = widened
-    readings = [f"{operator} was read as site:{domain}"]
-    readings += [f"{operator} as site:{domain}" for operator, domain in rest]
-    return f"Site restrictions cover whole sites, so {', '.join(readings)}."
+    (operator, reading), *rest = widened
+    readings = [f"{operator} was read as {reading}"]
+    readings += [f"{operator} as {reading}" for operator, reading in rest]
+    fetch = " To read a page whose address you know, use web_fetch." if can_fetch else ""
+    return f"Site restrictions cover whole sites, so {', '.join(readings)}.{fetch}"
 
 
 def _model_view(
@@ -503,7 +504,8 @@ async def web_search_handler(
     recency, age_note, age_error = _result_age(arguments)
     if age_error is not None:
         return _invalid(age_error)
-    notes = [note for note in (_widened_note(widened), age_note) if note]
+    widened_note = _widened_note(widened, can_fetch=context.can_call(WEB_FETCH_TOOL_NAME))
+    notes = [note for note in (widened_note, age_note) if note]
 
     provider = _PROVIDERS[settings["provider"]]
     api_key = ""
