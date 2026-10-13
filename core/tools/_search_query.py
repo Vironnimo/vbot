@@ -120,6 +120,7 @@ _VALUED = frozenset(
         "generate",
         # vBot page controls
         "limit",
+        "head",
         "offset",
         # grep
         "include",
@@ -265,6 +266,7 @@ _FLAG_FIELDS = {
     "regexp": "pattern",
     "context": "context",
     "limit": "limit",
+    "head": "limit",
     "offset": "offset",
 }
 
@@ -679,8 +681,11 @@ def interpret(
                     f'{written} sorts by one of {", ".join(SORT_KEYS)}; received "{value}".'
                 )
             query.sort = (key, name == "sortr")
-        elif name == "limit":
-            limits.append(_number(name, value or "", minimum=1, maximum=MAX_LIMIT))
+        elif name in {"limit", "head"}:
+            count = _number(name, value or "", minimum=1, maximum=MAX_LIMIT)
+            limits.append(count)
+            if name == "head":
+                query.notes.append(f"--head was read as limit={count} (results per page).")
         elif name == "offset":
             offsets.append(_number(name, value or "", minimum=0, maximum=MAX_OFFSET))
         elif name in {"include", "glob"}:

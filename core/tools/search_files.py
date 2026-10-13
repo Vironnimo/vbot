@@ -45,6 +45,7 @@ from core.tools._search_hints import (
     finds_fixed_text,
     literal_text_note,
     match_count_note,
+    repaired_glob_note,
     spanning_note,
     unnamed_files_note,
 )
@@ -1114,6 +1115,7 @@ def _note_no_match(
     cwd: Path,
     binary: Path,
     budget: SearchBudget,
+    repair_note: str | None = None,
 ) -> None:
     """Point a pattern that matched neither contents nor names to what it may mean.
 
@@ -1124,6 +1126,18 @@ def _note_no_match(
     """
     if len(patterns) != 1 or "--invert-match" in query.rg_args:
         return
+    if (
+        repair_note is not None
+        and query.mode in {"content", "files_with_matches"}
+        and not (query.before or query.after or query.only_matching)
+        and listed.complete
+        and not budget.stopped
+    ):
+        filtered = bool(query.globs) or any(arg.startswith("--iglob=") for arg in query.rg_args)
+        note = repaired_glob_note(query.patterns[0], patterns[0], filtered=filtered)
+        if note is not None:
+            query.notes[query.notes.index(repair_note)] = note
+            return
     # A repaired pattern's note already says how it was read.
     if patterns is query.patterns and not query.literal and can_miss_literal_text(patterns[0]):
         literal = replace(query, rg_args=[*query.rg_args, "--fixed-strings"], literal=True)
@@ -1211,6 +1225,7 @@ def _search(
         return _Outcome(entry_page(found.entries, query), found, total, total)
 
     patterns = query.patterns
+    repair_note = None
     try:
         results = [
             count_scan(binary, query, patterns, scope, context, budget, cwd) for scope in scopes
@@ -1229,6 +1244,7 @@ def _search(
         except SearchRefusedError:
             raise error from None
         query.notes.append(note)
+        repair_note = note
     for index, (scope, result) in enumerate(zip(scopes, results, strict=True)):
         found.take(index, scope, result, cwd)
     found.finish(query)
@@ -1250,7 +1266,7 @@ def _search(
             found.entries = named
             _restart_past_the_end(query, len(named))
             return _Outcome(entry_page(named, query), found, len(named), len(named))
-        _note_no_match(context, query, scopes, patterns, listed, cwd, binary, budget)
+        _note_no_match(context, query, scopes, patterns, listed, cwd, binary, budget, repair_note)
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:

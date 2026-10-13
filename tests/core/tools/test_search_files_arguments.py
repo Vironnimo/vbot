@@ -179,6 +179,48 @@ async def test_a_file_name_pattern_without_matches_says_no_name_matches_either(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("arguments", "corrected", "files"),
+    [
+        (
+            {"pattern": "*.py|*.ts", "output": "files"},
+            {"glob": ["*.py", "*.ts"], "output": "files"},
+            {"src/app.py", "src/view.ts"},
+        ),
+        (
+            {"pattern": "*.py", "glob": ["*.py", "*.md", "!guide.md"]},
+            {"glob": ["*.py", "*.md", "!guide.md"]},
+            {"src/app.py"},
+        ),
+        (
+            {"pattern": "*.py|*.md", "args": ["--iglob=*.py"]},
+            {"args": ["--iglob=*.py"]},
+            {"src/app.py"},
+        ),
+    ],
+)
+async def test_an_empty_repaired_glob_pattern_offers_a_name_search_without_changing_it(
+    project: Path, arguments: dict, corrected: dict, files: set[str]
+) -> None:
+    original = copy.deepcopy(arguments)
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    assert "content" not in result["data"]
+    assert arguments == original
+    note = result["data"]["note"]
+    assert "glob" in note and "pattern" in note
+    if "glob" not in arguments and "args" not in arguments:
+        assert json.dumps(corrected["glob"]) in note
+    listing = await dispatch(project, corrected)
+    assert set(listing["data"]["content"].splitlines()) == files
+    # The same syntax can really be text to find. A match keeps its content result.
+    (project / "src/app.py").write_text("a literal *.py example\n")
+    matched = await dispatch(project, arguments)
+    assert "src/app.py" in matched["data"]["content"]
+    assert matched["data"]["note"] != note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("pattern", "noted"),
     [
         # Swarm run 2026-10-12: the "?" of a URL made the regex miss the URL.
@@ -938,6 +980,14 @@ _PATHS = "path must name a file or directory"
             "invalid_arguments",
             "limit was given different values",
         ),
+        (
+            {"args": ["needle", "--head=1"], "limit": 2},
+            "invalid_arguments",
+            "limit was given different values",
+        ),
+        ({"args": ["needle", "--head=0"]}, "invalid_arguments", "between 1 and 10000"),
+        ({"args": ["needle", "--head=1.5"]}, "invalid_arguments", "between 1 and 10000"),
+        ({"args": ["needle", "--head"]}, "invalid_arguments", "--head in args needs a value"),
         ({"args": ["needle", "--offset=-1"]}, "invalid_arguments", "between 0 and 1000000"),
         ({"args": ["needle", "--offset=1.5"]}, "invalid_arguments", "between 0 and 1000000"),
         ({"args": ["needle", "--offset=1000001"]}, "invalid_arguments", "between 0 and 1000000"),
@@ -1052,6 +1102,8 @@ async def test_path_discovery_case_scope_and_pagination(tmp_path):
         {"args": ["needle", "--offset", "1", "--limit=1"]},
         {"args": ["--offset=1", "needle"], "limit": 1},
         {"args": ["needle", "--offset=01", "--limit", "1"], "offset": 1, "limit": 1},
+        {"args": ["needle", "--head", "1"], "offset": 1},
+        {"args": ["--head=1", "needle"], "offset": 1, "limit": 1},
     ],
 )
 async def test_paging_flags_select_same_exact_results_as_fields(tmp_path, arguments):

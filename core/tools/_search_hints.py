@@ -29,6 +29,28 @@ _WORD = re.compile(r"\w")
 # Regex parts written to match a line break, which a search without -U never
 # reaches: \s (also in [\s\S]) and the s flag.
 _LINE_BREAKING = re.compile(r"(?<!\\)(?:\\\\)*\\s|\(\?[a-zA-Z]*s[a-zA-Z]*[:)]")
+# Plain file-name globs, sometimes joined with regex alternation by mistake.
+_GLOB_NAMES = re.compile(r"[\w./*?\-]+(?:\|[\w./*?\-]+)*")
+
+
+def repaired_glob_note(pattern: str, repaired: str, *, filtered: bool) -> str | None:
+    """Offer name filters after a repaired glob-like regex matched neither contents nor names.
+
+    Existing globs keep their scope: appending positive globs would widen it,
+    while replacing them could discard exclusions or other explicit selection.
+    """
+    if not _GLOB_NAMES.fullmatch(pattern) or not any(
+        part.startswith("*") for part in pattern.split("|")
+    ):
+        return None
+    opening = (
+        f'Searched "{repaired}" as a repaired regular expression; '
+        "no file contents or names match it. "
+    )
+    if filtered:
+        return opening + "To list files selected by the existing glob filters, omit pattern."
+    globs = json.dumps(pattern.split("|"), ensure_ascii=False)
+    return opening + f"If you meant file names, omit pattern and pass glob {globs}."
 
 
 def file_name_extensions(pattern: str) -> list[str] | None:
