@@ -2,9 +2,9 @@
 
 ``CommandManager`` owns every command the shell Tool runs: its launch on pipes
 (no input, no terminal; ``_command_launch``, whose launcher keeps a warm shell
-ready on Windows), its clean output with a live log
-file (``_command_output``, cleaned on subinterpreter workers off the Event
-Loop), the decision when it ended, its stop, the background
+ready on Windows), its output - every byte appended to a live log file, and
+a clean transcript (``_command_output``, cleaned on subinterpreter workers off
+the Event Loop) - the decision when it ended, its stop, the background
 registry with status events, the delivery of a background result, and the
 lifecycle scopes it belongs to (``_command_record``). Agent-facing wording
 belongs to the Tool, which formats ``CommandReport``.
@@ -74,20 +74,17 @@ from ._command_output import CommandOutput, command_output_host
 from ._command_record import BlockingRunner, CommandRecord, CommandServices
 from ._command_types import (
     COMMAND_DRAIN_SECONDS,
-    COMMAND_HEAD_LINES,
+    COMMAND_HEAD_CHARS,
     COMMAND_IDLE_WINDOW_SECONDS,
     COMMAND_LEFTOVER_QUIET_SECONDS,
-    COMMAND_LOG_REFRESH_SECONDS,
     COMMAND_MAX_LIVE,
-    COMMAND_MEMORY_LINE_MAX_CHARS,
     COMMAND_PROGRESS_LINES,
     COMMAND_PROGRESS_SECONDS,
     COMMAND_RECENT_LINES,
     COMMAND_RETENTION_SECONDS,
     COMMAND_STOP_GRACE_SECONDS,
     COMMAND_SWEEP_INTERVAL_SECONDS,
-    COMMAND_TAIL_LINES,
-    COMMAND_TAIL_SPARE_LINES,
+    COMMAND_TAIL_CHARS,
     COMMAND_TEMPORARY_CATEGORY,
     CommandCapacityError,
     CommandChangedCallback,
@@ -130,7 +127,7 @@ class CommandManager:
     it commands have none. The other parameters are seams for tests: the process
     *launcher* (by default a ``PipeLauncher``; the manager closes it with itself)
     and *process_tracker*, the clock (*monotonic*, *sleep*) and *run_blocking*,
-    which runs process queries and kills off the Event Loop.
+    which runs process queries, kills and log file writes off the Event Loop.
     """
 
     def __init__(
@@ -274,7 +271,7 @@ class CommandManager:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         if self._owns_output_host:
-            # Waits for the output work already queued, such as closing log files.
+            # Waits for the output work already queued.
             await self._run_blocking(self._output_host.close)
         _raise_unconfirmed(
             [record for record, result in zip(records, killed, strict=True) if result is not True]
@@ -641,7 +638,7 @@ class CommandManager:
             # Starts an output worker for this command when one more may run.
             await self._run_blocking(self._output_host.prepare)
             try:
-                output = CommandOutput.open(self._output_host, log_fd)
+                output = CommandOutput.open(self._output_host, log_fd, self._run_blocking)
             except RuntimeError as error:
                 raise CommandNotStartedError("vBot is shutting down") from error
             log_fd = None
@@ -798,20 +795,17 @@ def _group_key(owner: RunExecutionOwner) -> tuple[str, str, str]:
 
 __all__ = [
     "COMMAND_DRAIN_SECONDS",
-    "COMMAND_HEAD_LINES",
+    "COMMAND_HEAD_CHARS",
     "COMMAND_IDLE_WINDOW_SECONDS",
     "COMMAND_LEFTOVER_QUIET_SECONDS",
-    "COMMAND_LOG_REFRESH_SECONDS",
     "COMMAND_MAX_LIVE",
-    "COMMAND_MEMORY_LINE_MAX_CHARS",
     "COMMAND_PROGRESS_LINES",
     "COMMAND_PROGRESS_SECONDS",
     "COMMAND_RECENT_LINES",
     "COMMAND_RETENTION_SECONDS",
     "COMMAND_STOP_GRACE_SECONDS",
     "COMMAND_SWEEP_INTERVAL_SECONDS",
-    "COMMAND_TAIL_LINES",
-    "COMMAND_TAIL_SPARE_LINES",
+    "COMMAND_TAIL_CHARS",
     "COMMAND_TEMPORARY_CATEGORY",
     "CommandCapacityError",
     "CommandChangedCallback",

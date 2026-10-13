@@ -44,11 +44,11 @@ from core.tools._shell_results import (
     ToolNames,
     duration,
     ended_result,
-    log_sentence,
     named_tools,
     output_location,
     process_text,
     processes_text,
+    running_output_note,
     running_output_text,
     stop_call,
 )
@@ -393,8 +393,8 @@ class BackgroundTasksTool:
             delivery = f"Its result goes to the Sub-Agent {subagent}."
         data["next"] = (
             f"The command has run for {duration(report.elapsed_seconds)} and keeps running."
-            f"{log_sentence(report)} {delivery} Stop it with {stop_call(report.command_id)} if "
-            "you no longer need it."
+            f"{running_output_note(report)} {delivery} Stop it with "
+            f"{stop_call(report.command_id)} if you no longer need it."
         )
         return data
 
@@ -764,7 +764,7 @@ def _no_effect_notes(
         elif log is not None:
             notes.append(
                 f"{key} has no effect: the output is shown unfiltered. vBot kept this "
-                f"command's complete output in {log} for you to read."
+                f"command's complete raw output in {log} for you to read."
             )
         else:
             notes.append(f"{key} has no effect: the output is shown unfiltered.")

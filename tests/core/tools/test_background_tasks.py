@@ -585,9 +585,10 @@ async def test_a_stop_does_not_call_the_log_complete_when_a_pipe_stage_held_outp
     stopped = data(await tasks.call({"action": "stop", "id": command_id}))
     await tasks.commands.finish(command_id)
 
-    # The lines the stage held never reached vBot: the result names the stage, and
-    # the log file it names holds only what arrived.
-    assert stage in stopped["output"].splitlines()[-1]
+    # The lines the stage held never reached vBot: the hint names the stage, and
+    # the log file the result names holds only what arrived.
+    assert "output" not in stopped
+    assert stage in stopped["hint"]
     output_file(stopped["next"])
     assert "complete" not in stopped["next"]
 

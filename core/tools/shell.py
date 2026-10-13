@@ -63,8 +63,8 @@ from core.tools._shell_results import (
     ended_result,
     format_command_delivery,
     holding_stage,
-    log_sentence,
     named_tools,
+    running_output_note,
     running_output_text,
     stop_with,
 )
@@ -848,7 +848,7 @@ def _running_next(
     were idle over the end of the wait (``CommandManager.wait``).
     """
     command_id = report.command_id
-    log = log_sentence(report)
+    log = running_output_note(report)
     stop = stop_with(report, names)
     if reason == "background":
         # Often a server: its result arrives only once it is stopped, and the

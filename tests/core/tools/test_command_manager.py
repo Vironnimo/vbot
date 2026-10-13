@@ -10,6 +10,7 @@ pauses cost a tenth of their nominal length.
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import re
 import subprocess
@@ -26,11 +27,12 @@ import pytest_asyncio
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.tools import _command_output as command_output_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools.command_manager import (
-    COMMAND_HEAD_LINES,
-    COMMAND_MEMORY_LINE_MAX_CHARS,
+    COMMAND_HEAD_CHARS,
     COMMAND_RETENTION_SECONDS,
+    COMMAND_TAIL_CHARS,
     COMMAND_TEMPORARY_CATEGORY,
     CommandCapacityError,
     CommandManager,
@@ -124,47 +126,48 @@ async def test_output_is_clean_text(
 
 
 @pytest.mark.asyncio
-async def test_log_file_has_every_line_whole_and_shows_the_current_line_live(
-    harness: Harness,
-) -> None:
+async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(harness: Harness) -> None:
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
     assert log_path is not None and log_path.parent.name == COMMAND_TEMPORARY_CATEGORY
+    chunks = [
+        b"\x1b[31mred\x1b[0m\r\n",
+        b"progress 10%\rprogress 100%\n",
+        b"abd\x08c \xff\xfe ",
+        "ä".encode()[:1],
+        "ä".encode()[1:] + b" partial",
+    ]
 
-    process.write("first\npartial")
-    await harness.advance(1.0)
-    assert log_path.read_bytes() == b"first\npartial"
-    process.write("\rreplaced\n" + "y" * (COMMAND_MEMORY_LINE_MAX_CHARS + 4000) + "\nlast")
+    process.write(chunks[0])
+    await turns()
+    # Written as it arrives, before the command ends.
+    assert log_path.read_bytes() == chunks[0]
+    for chunk in chunks[1:]:
+        process.write(chunk)
     process.exit(0)
     report = await harness.finish(command_id)
 
-    assert log_path.read_text(encoding="utf-8") == (
-        "first\nreplaced\n" + "y" * (COMMAND_MEMORY_LINE_MAX_CHARS + 4000) + "\nlast\n"
-    )
-    # The transcript keeps the beginning of a very long line.
-    assert report.transcript.head == (
-        "first",
-        "replaced",
-        "y" * COMMAND_MEMORY_LINE_MAX_CHARS,
-        "last",
-    )
+    assert log_path.read_bytes() == b"".join(chunks)
+    assert report.log_path == log_path
+    assert report.transcript.head == ("red", "progress 100%", "abc �� ä partial")
 
 
 @pytest.mark.asyncio
-async def test_output_that_cannot_be_cleaned_is_still_read_and_discarded(
+async def test_output_that_cannot_be_cleaned_is_kept_uncleaned_and_logged_whole(
     harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
-    process.write("collected 3 items\n")
+    process.write("\x1b[1mcollected\x1b[0m 3 items\n")
     await turns()
 
     def broken(cleaner: OutputCleaner, data: bytes) -> OutputUpdate:
         raise ValueError("cleaner bug")
 
     monkeypatch.setattr(OutputCleaner, "feed", broken)
-    for number in range(3):
-        process.write(f"lost line {number}\n")
+    later = ["\x1b[32mpassed\x1b[0m 1\r\n", "passed 2\n", "passed 3"]
+    for chunk in later:
+        process.write(chunk)
     await turns()
 
     # The pipe is still read: the command never waits on a full one.
@@ -172,34 +175,79 @@ async def test_output_that_cannot_be_cleaned_is_still_read_and_discarded(
     process.exit(1)
     report = await harness.finish(command_id)
     assert (report.status, report.exit_code) == ("failed", 1)
-    transcript = report.transcript
-    assert (transcript.head + transcript.tail, transcript.processing_failed) == (
-        ("collected 3 items",),
-        True,
+    # The later output is decoded but not cleaned; nothing of it is lost.
+    assert report.transcript.head == (
+        "collected 3 items",
+        "\x1b[32mpassed\x1b[0m 1",
+        "passed 2",
+        "passed 3",
     )
-    assert log_path is not None and log_path.read_text(encoding="utf-8") == "collected 3 items\n"
+    assert log_path is not None and report.log_path == log_path
+    assert log_path.read_bytes() == ("\x1b[1mcollected\x1b[0m 3 items\n" + "".join(later)).encode()
     errors = [record for record in caplog.records if record.levelname == "ERROR"]
     assert len(errors) == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("total", "tail_from", "omitted"),
-    [(140, 41, 0), (141, 62, 21), (300, 221, 180)],
-    ids=["whole", "first-omission", "long"],
-)
-async def test_transcript_keeps_the_head_and_the_tail(
-    harness: Harness, total: int, tail_from: int, omitted: int
+async def test_a_log_file_that_cannot_be_written_is_no_longer_named(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     command_id, process = await harness.launch()
-    process.write("".join(f"line {number}\n" for number in range(1, total + 1)))
+    process.write("first\n")
+    await turns()
+
+    def full_disk(_fd: int, _data: bytes) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(command_output_module, "_write_all", full_disk)
+    process.write("second\n")
+    process.write("third\n")
+    process.exit(0)
+    report = await harness.finish(command_id)
+
+    # The file misses output, so no result calls it complete; the transcript goes on.
+    assert report.log_path is None
+    assert report.transcript.head == ("first", "second", "third")
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1 and "log file" in warnings[0].getMessage()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["lines", "one-line"])
+async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
+    harness: Harness, output: str
+) -> None:
+    command_id, process = await harness.launch()
+    if output == "lines":
+        lines = [f"line {number:05d}" for number in range(10_000)]
+        text = "".join(f"{line}\n" for line in lines)
+    else:
+        lines = ["".join(chr(ord("a") + number % 26) for number in range(200_000))]
+        text = lines[0]
+    for start in range(0, len(text), 16_384):
+        process.write(text[start : start + 16_384])
+        await turns()
     process.exit(0)
 
     transcript = (await harness.finish(command_id)).transcript
 
-    assert transcript.head == tuple(f"line {n}" for n in range(1, COMMAND_HEAD_LINES + 1))
-    assert transcript.tail == tuple(f"line {n}" for n in range(tail_from, total + 1))
-    assert (transcript.omitted_lines, transcript.total_lines) == (omitted, total)
+    assert transcript.total_lines == len(lines)
+    if output == "lines":
+        # Whole lines: the first within the head's characters, the last within the tail's.
+        head = (COMMAND_HEAD_CHARS + 1) // 11
+        tail = (COMMAND_TAIL_CHARS + 1) // 11
+        assert transcript.head == tuple(lines[:head])
+        assert transcript.tail == tuple(lines[-tail:])
+        assert (transcript.head_cut, transcript.tail_cut) == (0, 0)
+        assert transcript.omitted_lines == len(lines) - head - tail
+    else:
+        # A line too long for both: its start and its end.
+        (line,) = lines
+        assert transcript.head == (line[:COMMAND_HEAD_CHARS],)
+        assert transcript.tail == (line[-COMMAND_TAIL_CHARS:],)
+        assert transcript.head_cut == len(line) - COMMAND_HEAD_CHARS
+        assert transcript.tail_cut == len(line) - COMMAND_TAIL_CHARS
+        assert transcript.omitted_lines == 0
 
 
 @pytest.mark.asyncio

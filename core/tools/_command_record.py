@@ -5,7 +5,8 @@ reader feeds the output pipe into ``CommandOutput``; the supervisor waits for
 the shell's exit and then for the processes it left running. A command has no
 time limit of its own: it runs until it ends or something stops it. Every
 decision runs on the Event Loop; process queries and kills run through the
-blocking runner, and output cleaning on the output host's worker.
+blocking runner, log file writes through the blocking runner as well, and
+output cleaning on the output host's worker.
 
 End of a command: the shell exited, output after the exit was read for at most
 ``COMMAND_DRAIN_SECONDS``, and either no process of the command runs, or the
@@ -39,7 +40,6 @@ from ._command_types import (
     COMMAND_DRAIN_SECONDS,
     COMMAND_IDLE_WINDOW_SECONDS,
     COMMAND_LEFTOVER_QUIET_SECONDS,
-    COMMAND_LOG_REFRESH_SECONDS,
     COMMAND_PROGRESS_LINES,
     COMMAND_PROGRESS_SECONDS,
     COMMAND_STOP_GRACE_SECONDS,
@@ -158,7 +158,6 @@ class CommandRecord:
         self._reader_task: asyncio.Task[None] | None = None
         self._supervisor_task: asyncio.Task[None] | None = None
         self._progress_task: asyncio.Task[None] | None = None
-        self._flush_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
         # The Session the result was submitted to, and its body: a transfer
         # submits a result not yet delivered again, to the new Session.
@@ -224,7 +223,8 @@ class CommandRecord:
             exit_code=self._exit_code,
             stop_reason=self._stop_reason,
             transcript=self._output.transcript(),
-            log_path=self._log_path,
+            # An incomplete log file is no copy of the output.
+            log_path=self._log_path if self._output.log_error is None else None,
             failed_programs=tuple(program.describe() for program in exits),
             still_running=(
                 facts.running if facts is not None and self.ended and not self.finished else ()
@@ -450,7 +450,6 @@ class CommandRecord:
             self._reader_task,
             self._supervisor_task,
             self._progress_task,
-            self._flush_task,
             self._delivery_task,
         ):
             if task is not None and not task.done():
@@ -470,29 +469,29 @@ class CommandRecord:
                 event.set()
 
     def pending_tasks(self) -> list[asyncio.Task[Any]]:
-        return [
+        tasks: list[asyncio.Task[Any]] = [
             task
             for task in (
                 self._reader_task,
                 self._supervisor_task,
                 self._progress_task,
-                self._flush_task,
                 self._delivery_task,
             )
             if task is not None and not task.done()
         ]
+        tasks.extend(self._output.pending_tasks())
+        return tasks
 
     # Output
 
     async def _read(self) -> None:
         try:
             try:
-                # The next chunk is read once the previous one is cleaned: a
-                # command that prints faster waits for its pipe.
+                # The next chunk is read once the previous one is written and
+                # cleaned: a command that prints faster waits for its pipe.
                 while data := await self._process.read():
                     self._activity += 1
-                    if not self._output.failed:
-                        await self._feed(data)
+                    await self._feed(data)
             except Exception:
                 _LOGGER.error(
                     "Reading the output of command %s failed; it keeps running until it "
@@ -510,26 +509,26 @@ class CommandRecord:
             self._output_changed()
 
     async def _feed(self, data: bytes) -> None:
+        log_failed = self._output.log_error is not None
         try:
             await self._output.feed(data)
         except Exception:
-            # The pipe is still read, so the command never waits on a full pipe.
             _LOGGER.error(
-                "Cleaning the output of command %s failed; its later output is read and discarded",
+                "Cleaning the output of command %s failed; its later output is kept uncleaned",
                 self.command_id,
                 exc_info=True,
+            )
+        if not log_failed and self._output.log_error is not None:
+            _LOGGER.warning(
+                "Writing the log file of command %s failed; its later output is not written there",
+                self.command_id,
+                exc_info=self._output.log_error,
             )
         self._output_changed()
 
     def _output_changed(self) -> None:
-        if self._output.log_pending and (self._flush_task is None or self._flush_task.done()):
-            self._flush_task = self._task(self._flush_later(), "log")
         if not self._background:
             self._progress.set()
-
-    async def _flush_later(self) -> None:
-        await self._services.sleep(COMMAND_LOG_REFRESH_SECONDS)
-        await self._output.flush_log()
 
     async def _publish_progress(self) -> None:
         callback = self._on_output
@@ -655,7 +654,6 @@ class CommandRecord:
         self._record_end(facts)
         if self._facts is not None and self._facts.running:
             self._facts = replace(self._facts, running=())
-        self._cancel(self._flush_task)
         self._release()
         self._finished_at = self._services.monotonic()
         self._finished.set()

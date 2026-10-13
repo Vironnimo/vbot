@@ -28,19 +28,14 @@ COMMAND_SWEEP_INTERVAL_SECONDS = 60.0
 CommandOwner = SessionAddress
 # Temporary-file category of the live log files (``core/storage/temp_files.py``).
 COMMAND_TEMPORARY_CATEGORY = "commands"
-# The transcript keeps the first and the last lines of the output in memory.
-COMMAND_HEAD_LINES = 40
-COMMAND_TAIL_LINES = 80
-# The tail holds this many lines more, so the transcript never leaves out fewer
-# than this many lines: a marker for a few lines saves less than the read of the
-# log file it invites.
-COMMAND_TAIL_SPARE_LINES = 20
+# The transcript keeps the first whole lines within COMMAND_HEAD_CHARS characters
+# and the last whole lines within COMMAND_TAIL_CHARS, lines joined by line breaks:
+# what an Agent's view of the output needs (``_shell_results``). The log file has
+# every byte.
+COMMAND_HEAD_CHARS = 2_000
+COMMAND_TAIL_CHARS = 30_000
 # The newest lines ``latest_output`` can return.
 COMMAND_RECENT_LINES = 200
-# A line kept in memory for the transcript; the log file has every line whole.
-COMMAND_MEMORY_LINE_MAX_CHARS = 65_536
-# The log file shows output at most this long after it was printed.
-COMMAND_LOG_REFRESH_SECONDS = 1.0
 # ``on_output`` receives this many newest lines at most this often.
 COMMAND_PROGRESS_LINES = 40
 COMMAND_PROGRESS_SECONDS = 0.5
@@ -82,17 +77,27 @@ class CommandHandle:
 
 @dataclass(frozen=True, slots=True)
 class CommandTranscript:
-    """The clean output as a bounded head and tail around the omitted middle.
+    """The clean output, bounded: its first lines and its last ones.
 
-    The line the command is still writing, if any, is the last line.
+    ``head`` holds the first whole lines within ``COMMAND_HEAD_CHARS`` characters,
+    lines joined by line breaks. A first line longer than that is held there as
+    its start, ``head_cut`` characters short, and ``tail`` can hold it as well.
+    ``tail`` holds the last whole lines after the head within
+    ``COMMAND_TAIL_CHARS``; a last line longer than that is held alone, as its
+    end, ``tail_cut`` characters short. The line the command is still writing,
+    if any, is the last line.
     """
 
     head: tuple[str, ...]
     tail: tuple[str, ...]
-    omitted_lines: int
     total_lines: int
-    # Cleaning failed: the output after the last line is missing, also from the log file.
-    processing_failed: bool = False
+    head_cut: int = 0
+    tail_cut: int = 0
+
+    @property
+    def omitted_lines(self) -> int:
+        """The lines neither ``head`` nor ``tail`` holds, in whole or in part."""
+        return max(0, self.total_lines - len(self.head) - len(self.tail))
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,8 +123,8 @@ class CommandReport:
     # Why vBot stopped the command before it ended; None when it did not.
     stop_reason: StopReason | None
     transcript: CommandTranscript
-    # The complete clean output, written live while the command runs; None
-    # without temporary-file storage.
+    # Every byte the command wrote, unchanged, appended as it arrives; None
+    # without temporary-file storage and once writing it failed.
     log_path: Path | None
     # Direct child programs of the shell that exited with a non-zero code before
     # any stop, such as ``git.exe exited with code 128`` (Windows only).
@@ -306,20 +311,17 @@ class CommandStopError(CommandManagerError):
 
 __all__ = [
     "COMMAND_DRAIN_SECONDS",
-    "COMMAND_HEAD_LINES",
+    "COMMAND_HEAD_CHARS",
     "COMMAND_IDLE_WINDOW_SECONDS",
     "COMMAND_LEFTOVER_QUIET_SECONDS",
-    "COMMAND_LOG_REFRESH_SECONDS",
     "COMMAND_MAX_LIVE",
-    "COMMAND_MEMORY_LINE_MAX_CHARS",
     "COMMAND_PROGRESS_LINES",
     "COMMAND_PROGRESS_SECONDS",
     "COMMAND_RECENT_LINES",
     "COMMAND_RETENTION_SECONDS",
     "COMMAND_STOP_GRACE_SECONDS",
     "COMMAND_SWEEP_INTERVAL_SECONDS",
-    "COMMAND_TAIL_LINES",
-    "COMMAND_TAIL_SPARE_LINES",
+    "COMMAND_TAIL_CHARS",
     "COMMAND_TEMPORARY_CATEGORY",
     "CommandCapacityError",
     "CommandChangedCallback",
