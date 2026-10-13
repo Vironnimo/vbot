@@ -469,7 +469,9 @@ def _kept_output(report: CommandReport) -> str | None:
     if path is None or report.not_run is not None:
         return None
     if report.stop_reason is not None and holding_stage(report.command) is not None:
-        # The lines the stage held never reached vBot.
+        # The lines the stage held never reached vBot; a file of nothing is no copy.
+        if not report.transcript.total_lines:
+            return None
         return f"vBot kept the raw output that reached it in {model_path(path)} for you to read"
     return f"vBot kept this command's complete raw output in {model_path(path)} for you to read"
 

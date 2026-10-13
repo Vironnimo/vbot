@@ -606,22 +606,29 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
         await _later_reads_speak_to_their_reader(tasks, command_id, stopped)
 
 
+@pytest.mark.parametrize("before", ["", "collecting\n"], ids=["nothing", "a statement"])
 @pytest.mark.asyncio
 async def test_a_stop_does_not_call_the_log_complete_when_a_pipe_stage_held_output(
-    tasks: Tasks,
+    tasks: Tasks, before: str
 ) -> None:
     stage = "Select-Object -Last 25"
-    command_id, process = await tasks.background(command=f"python -m unittest 2>&1 | {stage}")
+    command_id, process = await tasks.background(
+        command=f"Write-Output collecting; python -m unittest 2>&1 | {stage}"
+    )
+    process.write(before)
 
     stopped = data(await tasks.call({"action": "stop", "id": command_id}))
     await tasks.commands.finish(command_id)
 
     # The lines the stage held never reached vBot: the hint names the stage, and
-    # the log file the result names holds only what arrived.
-    assert "output" not in stopped
+    # the log file the result names holds only what arrived, if anything did.
     assert stage in stopped["hint"]
-    output_file(stopped["next"])
-    assert "complete" not in stopped["next"]
+    assert stopped.get("output") == (before.strip() or None)
+    if before:
+        output_file(stopped["next"])
+        assert "complete" not in stopped["next"]
+    else:
+        assert "next" not in stopped
 
 
 async def _later_reads_speak_to_their_reader(
