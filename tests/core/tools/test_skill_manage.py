@@ -20,7 +20,7 @@ from core.skills.authoring import (
     SkillReference,
     SkillWriter,
 )
-from core.skills.skills import SkillRegistry
+from core.skills.skills import SkillRegistry, find_skill_package_dir
 from core.tools import (
     SKILL_MANAGE_TOOL_NAME,
     SKILL_MANAGE_TOOL_PARAMETERS,
@@ -91,8 +91,10 @@ class _Harness:
             lambda agent_id, name: (
                 self.home("owner") if agent_id != "owner" and name in self.shared else None
             ),
-            lambda _agent_id, name, _project_id: (scopes or {}).get(
-                name, "shared" if name in self.shared else None
+            lambda agent_id, name, _project_id: (
+                "own"
+                if find_skill_package_dir(self.home(agent_id), name) is not None
+                else (scopes or {}).get(name, "shared" if name in self.shared else None)
             ),
             on_changed=lambda: self.changes.append(list(self.invalidated)),
             run_started_at=self.run_started.get,

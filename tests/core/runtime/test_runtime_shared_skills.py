@@ -310,7 +310,17 @@ def test_background_protection_resolves_each_home_once_and_keeps_owner_precedenc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scope", ["shared", "disabled_owner", "project"])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "shared",
+        "disabled_owner",
+        "project",
+        "disabled_own_shared",
+        "disabled_own_project",
+        "disabled_own_only",
+    ],
+)
 async def test_shared_skill_mutations_target_the_package_that_activation_resolves(
     config: Config, tmp_path: Path, scope: str
 ) -> None:
@@ -321,22 +331,38 @@ async def test_shared_skill_mutations_target_the_package_that_activation_resolve
         for owner_id in ("a-owner", "z-owner"):
             runtime.agents.create(owner_id, owner_id)
             write_agent_skill(data_dir, owner_id, "deploy", "Shared playbook.")
-            runtime.skill_policy.set_shared(owner_id, "deploy", shared=True, receivers=["main"])
+            if scope != "disabled_own_only":
+                runtime.skill_policy.set_shared(owner_id, "deploy", shared=True, receivers=["main"])
+        own = None
+        if scope.startswith("disabled_own"):
+            own = (
+                write_agent_skill(data_dir, "main", "deploy", "Disabled own playbook.") / "SKILL.md"
+            )
+            runtime.skill_policy.set_package_disabled(
+                SkillPackageRef("agent", "deploy", "main"), disabled=True
+            )
         project_id = None
         if scope == "disabled_owner":
             runtime.skill_policy.set_package_disabled(
                 SkillPackageRef("agent", "deploy", "a-owner"), disabled=True
             )
-        elif scope == "project":
+        elif scope in {"project", "disabled_own_project"}:
             repo = tmp_path / "repo"
             write_project_skill(repo, "deploy", "Project playbook.")
             project_id = runtime.projects.create("p", "P", repo).project_id
         runtime.invalidate_agent_skills(None)
-        visible = runtime.skills_for(project_id, "main").get("deploy").path
+        if scope == "disabled_own_only":
+            assert "deploy" not in _names(runtime.skills_for(None, "main"))
+            assert own is not None
+            visible = own
+        else:
+            visible = runtime.skills_for(project_id, "main").get("deploy").path
         packages = [
             data_dir / "agents" / owner_id / "skills" / "deploy" / "SKILL.md"
             for owner_id in ("a-owner", "z-owner")
         ]
+        if own is not None:
+            packages.append(own)
         before = {path: path.read_bytes() for path in [*packages, visible]}
         context = ToolContext(
             agent_id="main",
@@ -365,7 +391,7 @@ async def test_shared_skill_mutations_target_the_package_that_activation_resolve
         )
 
         changed = {path for path, content in before.items() if path.read_bytes() != content}
-        if scope == "project":
+        if scope in {"project", "disabled_own_project"}:
             assert result["error"]["code"] == "skill_write_rejected"
             assert changed == set()
         else:

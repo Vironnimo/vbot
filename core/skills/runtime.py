@@ -1159,13 +1159,13 @@ class SkillRuntime:
     def _resolve_external_skill_scope(
         self, agent_id: str, name: str, project_id: str | None
     ) -> str | None:
-        """Return where ``name`` resolves outside the caller's own private home.
+        """Return where ``name`` resolves in the caller's live Skill pool.
 
         The agent-scoped registry is the same seam ``skill`` resolves through, so
         this answers how the name is *visible* to the agent (bundled / global /
-        project / shared) — never how the authoring core sees it, which only knows
-        the target root. ``agent`` origin with the name absent from own home means a
-        Skill shared into this agent; ``global`` is a package in the global home
+        project / own / shared) — never how the authoring core sees it, which only knows
+        the target root. ``own`` identifies the caller's package; another Agent
+        origin means a Skill shared into this agent. ``global`` is a package in the global home
         (``<data_dir>/skills``), which an attended Agent can change, while
         ``external`` is a global Skill from a configured skill folder or an
         Extension. ``None`` means genuinely unknown, which includes a name that
@@ -1177,7 +1177,11 @@ class SkillRuntime:
             return None
         origin = skill.origin
         if origin == SKILL_ORIGIN_AGENT:
-            return "shared"
+            return (
+                "own"
+                if skill.path.parent.parent == self.agent_skills_dir(agent_id).resolve()
+                else "shared"
+            )
         if origin == SKILL_ORIGIN_BUNDLED:
             return "bundled"
         if origin == SKILL_ORIGIN_GLOBAL:
