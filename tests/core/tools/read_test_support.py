@@ -125,7 +125,7 @@ async def read(
 def content(result: dict[str, Any]) -> str:
     assert result["ok"] is True, result
     assert result["error"] is None
-    assert set(result["data"]) == {"content"}
+    assert {"content"} <= set(result["data"]) <= {"content", "next_offset"}
     return str(result["data"]["content"])
 
 

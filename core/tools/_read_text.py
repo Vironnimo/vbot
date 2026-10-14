@@ -18,7 +18,7 @@ import re
 from bisect import bisect_right
 from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Any, override
 
@@ -46,6 +46,24 @@ _MATCH_LINE_CHARACTERS = 2000
 # How a cut-off window names its next call; ``{offset}`` becomes the offset to
 # send, such as ``813`` or ``"813:5"``.
 READ_CONTINUATION = "Use offset={offset} to continue."
+
+
+@dataclass(frozen=True)
+class ReadPage:
+    """Rendered content and its exact continuation, without parsing display text."""
+
+    content: str
+    next_offset: int | str | None = None
+
+    def prefixed(self, text: str) -> ReadPage:
+        return replace(self, content=text + self.content)
+
+    def data(self) -> JsonObject:
+        data: JsonObject = {"content": self.content}
+        if self.next_offset is not None:
+            data["next_offset"] = self.next_offset
+        return data
+
 
 # A command's log (``CommandOutputDecoder``): the bytes one raw read takes.
 _DECODING_CHUNK_BYTES = 64 * 1024
@@ -355,31 +373,49 @@ def render_text_window(
     ``continuation`` names the next call in the hint of a cut-off window, so a
     Tool other than ``read`` can page text with its own call form.
     """
+    page = render_text_page(
+        text,
+        start_line,
+        limit,
+        number=number,
+        start_character=start_character,
+        continuation=continuation,
+    )
+    return page.content, page.next_offset is not None
+
+
+def render_text_page(
+    text: str,
+    start_line: int,
+    limit: int | None,
+    *,
+    number: bool,
+    start_character: int = 1,
+    continuation: str = READ_CONTINUATION,
+) -> ReadPage:
+    """Render a bounded text page, keeping the continuation as data."""
     max_lines = limit or DEFAULT_LINE_LIMIT
     all_lines = split_text_lines(text, keepends=True)
     total_lines = len(all_lines)
 
     if total_lines == 0:
-        return "", False
+        return ReadPage("")
 
     start_line = _start_line(start_line, total_lines)
     start_index = start_line - 1
     if start_index >= total_lines:
-        return (
+        return ReadPage(
             f"[Offset {start_line} is beyond end of file "
-            f"({total_lines} {'line' if total_lines == 1 else 'lines'}). Nothing to show.]",
-            False,
+            f"({total_lines} {'line' if total_lines == 1 else 'lines'}). Nothing to show.]"
         )
     source_line = all_lines[start_index]
     if start_character > len(source_line):
         fallback = _past_line_end(ReadPosition(start_line, start_character), limit)
         if isinstance(fallback, str):
-            return fallback, False
+            return ReadPage(fallback)
         note, line, count = fallback
-        output, stopped_early = render_text_window(
-            text, line, count, number=number, continuation=continuation
-        )
-        return note + output, stopped_early
+        page = render_text_page(text, line, count, number=number, continuation=continuation)
+        return page.prefixed(note)
 
     selected_lines = [
         plain_line_end(line) for line in all_lines[start_index : start_index + max_lines]
@@ -396,9 +432,9 @@ def render_text_window(
     byte_limited = len(output.encode("utf-8")) > MAX_FILE_BYTES
 
     if not (line_limited or byte_limited):
-        return output, False
+        return ReadPage(output)
 
-    output, _ = finalize_limited_text(
+    page, _ = finalize_limited_text(
         rendered_lines,
         start_line=start_line,
         start_character=start_character,
@@ -407,7 +443,7 @@ def render_text_window(
         number=number,
         continuation=continuation,
     )
-    return output, True
+    return page
 
 
 def finalize_limited_text(
@@ -419,7 +455,7 @@ def finalize_limited_text(
     byte_limited: bool,
     number: bool,
     continuation: str = READ_CONTINUATION,
-) -> tuple[str, int]:
+) -> tuple[ReadPage, int]:
     """Fit rendered lines, append a continuation hint, and return the last line shown."""
     output = "".join(rendered_lines)
 
@@ -473,7 +509,8 @@ def finalize_limited_text(
         continuation=continuation,
     )
 
-    return output + ("\n\n" if output and not output.endswith("\n") else "") + hint, shown_end
+    content = output + ("\n\n" if output and not output.endswith("\n") else "") + hint
+    return ReadPage(content, continuation_offset or shown_end + 1), shown_end
 
 
 def _split_stream_fragments(
@@ -495,7 +532,9 @@ def _split_stream_fragments(
     return fragments, held_carriage_return
 
 
-def render_text_path(resolved: Path, arguments: JsonObject, *, command_log: bool = False) -> str:
+def render_text_path(
+    resolved: Path, arguments: JsonObject, *, command_log: bool = False
+) -> ReadPage:
     """Render a local text file with bounded memory and early truncation.
 
     A command's log (*command_log*) decodes run by run (``CommandOutputDecoder``), and a note
@@ -505,12 +544,12 @@ def render_text_path(resolved: Path, arguments: JsonObject, *, command_log: bool
     log = _LogDecoding() if command_log and encoding is None else None
     output, shown = _render_path(resolved, arguments, log, encoding)
     note = log.note(shown) if log is not None else None
-    return output if note is None else f"{note}\n{output}"
+    return output if note is None else output.prefixed(f"{note}\n")
 
 
 def _render_path(
     resolved: Path, arguments: JsonObject, log: _LogDecoding | None, encoding: str | None
-) -> tuple[str, range]:
+) -> tuple[ReadPage, range]:
     """Render like ``render_text_path`` and return the line numbers shown."""
     position = read_position(arguments)
     limit = optional_int(arguments.get("limit"), field_name="limit", minimum=1)
@@ -519,7 +558,7 @@ def _render_path(
     if position.line < 0:
         known_total = count_lines(resolved, log=log, encoding=encoding)
         if not known_total:
-            return "", range(0)
+            return ReadPage(""), range(0)
         position = ReadPosition(_start_line(position.line, known_total))
     rendered_lines: list[str] = []
     rendered_bytes = 0
@@ -634,10 +673,10 @@ def _render_path(
     if character_offset_beyond_end or (target_line_seen and not target_character_reached):
         fallback = _past_line_end(position, limit)
         if isinstance(fallback, str):
-            return fallback, range(0)
+            return ReadPage(fallback), range(0)
         note, line, count = fallback
-        output, shown = _render_path(resolved, {"offset": line, "limit": count}, log, encoding)
-        return note + output, shown
+        page, shown = _render_path(resolved, {"offset": line, "limit": count}, log, encoding)
+        return page.prefixed(note), shown
 
     reached_eof = not (line_limited or byte_limited or character_offset_beyond_end)
     total_lines = (
@@ -646,9 +685,9 @@ def _render_path(
         else None
     )
     if total_lines == 0:
-        return "", range(0)
+        return ReadPage(""), range(0)
     if not target_line_seen:
-        return (
+        return ReadPage(
             f"[Offset {position.line} is beyond end of file "
             f"({total_lines or 0} {'line' if total_lines == 1 else 'lines'}). "
             "Nothing to show.]"
@@ -656,12 +695,12 @@ def _render_path(
 
     output = "".join(rendered_lines)
     if not (line_limited or byte_limited):
-        return output, range(position.line, position.line + len(rendered_lines))
+        return ReadPage(output), range(position.line, position.line + len(rendered_lines))
     if known_total is None:
         known_total = count_lines(
             resolved, max_bytes=_LINE_COUNT_MAX_BYTES, log=log, encoding=encoding
         )
-    output, shown_end = finalize_limited_text(
+    page, shown_end = finalize_limited_text(
         rendered_lines,
         start_line=position.line,
         start_character=position.character,
@@ -669,7 +708,7 @@ def _render_path(
         byte_limited=byte_limited,
         number=True,
     )
-    return output, range(position.line, shown_end + 1)
+    return page, range(position.line, shown_end + 1)
 
 
 def count_lines(
@@ -724,7 +763,7 @@ def _without_bom(lines: Iterable[str]) -> Iterator[str]:
 
 def render_matching_path(
     resolved: Path, arguments: JsonObject, label: str, *, command_log: bool = False
-) -> str:
+) -> ReadPage:
     """Show the lines of a local text file that match ``pattern``, as ``render_matching_lines``.
 
     A command's log (*command_log*) is searched in the text a read shows of it,
@@ -735,10 +774,10 @@ def render_matching_path(
     with _open_text(resolved, log, encoding) as text:
         output, shown = _matching_lines(_without_bom(text), arguments, label)
     note = log.note(shown) if log is not None else None
-    return output if note is None else f"{note}\n{output}"
+    return output if note is None else output.prefixed(f"{note}\n")
 
 
-def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: str) -> str:
+def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: str) -> ReadPage:
     """Show the lines that match ``pattern``, numbered like a read, with optional context.
 
     A call that sends search fields to read asks for this file's matching lines.
@@ -750,7 +789,7 @@ def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: st
 
 def _matching_lines(
     lines: Iterable[str], arguments: JsonObject, label: str
-) -> tuple[str, list[int]]:
+) -> tuple[ReadPage, list[int]]:
     """Render like ``render_matching_lines`` and return the line numbers shown."""
     pattern = arguments["pattern"]
     flags = re.IGNORECASE if arguments.get("ignore_case") is True else 0
@@ -822,18 +861,18 @@ def _matching_lines(
     scope = f" from line {position.line} on" if position.line > 1 else ""
     quoted = json.dumps(pattern, ensure_ascii=False)
     if not matches:
-        return f"No line of {label}{scope} matches {quoted}{note}.", []
+        return ReadPage(f"No line of {label}{scope} matches {quoted}{note}."), []
     noun = "line" if matches == 1 else "lines"
     header = f"{matches} {noun} of {label}{scope} match {quoted}{note}:\n"
     output = header + "".join(shown)
     if resume_at is not None:
         output += f"[Output stopped before line {resume_at}. Use offset={resume_at} to continue.]"
-    return output, shown_numbers
+    return ReadPage(output, resume_at), shown_numbers
 
 
 def render_directory_listing(
     entries: Sequence[os.DirEntry[str]], arguments: JsonObject, label: str
-) -> str:
+) -> ReadPage:
     """List directory entries one per line, paged like the lines of a file.
 
     Entries are sorted by name in any letter case, directories end with ``/``, and
@@ -843,7 +882,7 @@ def render_directory_listing(
     listed = sorted(((_entry_name(entry), entry) for entry in entries), key=_listing_order)
     total = len(listed)
     if not total:
-        return f"{directory} is an empty directory."
+        return ReadPage(f"{directory} is an empty directory.")
     position = read_position(arguments)
     if position.character != 1:
         raise ValueError(
@@ -852,7 +891,9 @@ def render_directory_listing(
         )
     start = _start_line(position.line, total)
     if start > total:
-        return f"[Offset {start} is beyond the {total} entries of {directory}. Nothing to show.]"
+        return ReadPage(
+            f"[Offset {start} is beyond the {total} entries of {directory}. Nothing to show.]"
+        )
     max_entries = (
         optional_int(arguments.get("limit"), field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
     )
@@ -870,7 +911,7 @@ def render_directory_listing(
     output = f"Directory {directory} ({total} {noun}):\n" + "\n".join(shown)
     if end < total:
         output += f"\n[Showing entries {start}-{end} of {total}. Use offset={end + 1} to continue.]"
-    return output
+    return ReadPage(output, end + 1 if end < total else None)
 
 
 def _entry_name(entry: os.DirEntry[str]) -> str:

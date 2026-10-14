@@ -243,6 +243,9 @@ async def test_a_directory_is_listed_and_paged_without_being_stamped(tmp_path: P
     )
     assert content(last) == "Directory many/ (7 entries):\nf6.txt  1 B\nf7.txt  1 B"
     assert content(nothing) == "empty/ is an empty directory."
+    assert first["data"]["next_offset"] == 4
+    for complete in (listing, last, nothing):
+        assert "next_offset" not in complete["data"]
 
 
 @pytest.mark.asyncio
@@ -563,36 +566,42 @@ _LONG = "".join(f"line{i}\n" for i in range(1, 2002))
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("raw", "window", "expected"),
+    ("raw", "window", "expected", "next_offset"),
     [
         # Numbers are the file's own, and the hint names the next call.
         (
             "one\ntwo\nthree\nfour\n",
             {"offset": 2, "limit": 2},
             "2| two\n3| three\n[Showing lines 2-3 of 4. Use offset=4 to continue.]",
+            4,
         ),
         (
             "one\ntwo\n",
             {"offset": 5},
             "[Offset 5 is beyond end of file (2 lines). Nothing to show.]",
+            None,
         ),
-        ("one\n", {"offset": 2}, None),
+        ("one\n", {"offset": 2}, None, None),
         # Without a limit, a read stops after 2000 lines.
         (
             _LONG,
             {},
             "".join(f"{i}| line{i}\n" for i in range(1, 2001))
             + "[Showing lines 1-2000 of 2001. Use offset=2001 to continue.]",
+            2001,
         ),
     ],
     ids=["offset_and_limit", "past_the_end", "one_line_past_the_end", "default_limit"],
 )
 async def test_line_windows_name_the_call_that_continues_them(
-    tmp_path: Path, raw: str, window: dict[str, int], expected: str | None
+    tmp_path: Path, raw: str, window: dict[str, int], expected: str | None, next_offset: int | None
 ) -> None:
     tmp_path.joinpath("notes.txt").write_bytes(raw.encode())
 
     result = await read(tmp_path, {"path": "notes.txt", **window})
+    assert result["data"].get("next_offset") == next_offset
+    if next_offset is None:
+        assert "next_offset" not in result["data"]
 
     if expected is None:
         # Both the file path and attachment renderer name a single line correctly.
@@ -611,10 +620,12 @@ async def test_a_line_cut_at_the_byte_limit_continues_at_its_character(
     tmp_path.joinpath("minified.txt").write_bytes(source.encode(encoding or "utf-8"))
     arguments = {"path": "minified.txt", **({"encoding": encoding} if encoding else {})}
 
-    first = content(await read(tmp_path, arguments))
+    result = await read(tmp_path, arguments)
+    first = content(result)
     match = re.search(r'Use offset="(1:\d+)" to continue', first)
     assert match is not None
-    offset = match.group(1)
+    offset = result["data"]["next_offset"]
+    assert offset == match.group(1)
     character = int(offset.split(":", maxsplit=1)[1])
     assert len(first.encode("utf-8")) <= 50 * 1024 + 500
     assert "Output truncated at 50 KB" in first
@@ -623,9 +634,11 @@ async def test_a_line_cut_at_the_byte_limit_continues_at_its_character(
     # Follow every character continuation, including several pages of non-ASCII text.
     pieces = [source[: character - 1]]
     while True:
-        continued = content(await read(tmp_path, {**arguments, "offset": offset}))
+        result = await read(tmp_path, {**arguments, "offset": offset})
+        continued = content(result)
         next_match = re.search(r'Use offset="(1:\d+)" to continue', continued)
         if next_match is None:
+            assert "next_offset" not in result["data"]
             rest = source[character - 1 : source.index(chr(10))]
             assert continued == f"{offset}| {rest}\n2| second\n"
             pieces.append(rest)
@@ -634,7 +647,8 @@ async def test_a_line_cut_at_the_byte_limit_continues_at_its_character(
         part = continued.split("\n\n[", maxsplit=1)[0].removeprefix(f"{offset}| ")
         assert part == source[character - 1 : next_character - 1]
         pieces.append(part)
-        offset, character = next_match[1], next_character
+        offset, character = result["data"]["next_offset"], next_character
+        assert offset == next_match[1]
     assert "".join(pieces) == source[: source.index(chr(10))]
 
 
@@ -686,7 +700,7 @@ async def test_read_stamp_predates_bytes_so_a_concurrent_write_forces_reread(
 
     def render_after_external_write(
         resolved: Path, arguments: dict[str, Any], **options: Any
-    ) -> str:
+    ) -> read_text_module.ReadPage:
         target.write_bytes(b"written during the read\n")
         return render(resolved, arguments, **options)
 

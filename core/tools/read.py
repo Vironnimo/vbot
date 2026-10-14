@@ -28,8 +28,8 @@ from core.tools._read_text import (
     render_directory_listing,
     render_matching_lines,
     render_matching_path,
-    render_text,
     render_text_file,
+    render_text_page,
     render_text_path,
 )
 from core.tools._swarm_references import wiki_page_call
@@ -98,7 +98,10 @@ READ_TOOL_PARAMETERS: JsonObject = {
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "description": "Maximum number of lines to show. Omit to show up to 2000 lines.",
+            "description": (
+                "Maximum number of lines to show. Omit to show up to 2000 lines. "
+                "Output is capped at 50 KB."
+            ),
         },
         "encoding": {
             "type": "string",
@@ -253,7 +256,7 @@ def make_read_handler(
                     )
                 else:
                     content = render_text_path(resolved, arguments, command_log=command_log)
-                    if not content:
+                    if not content.content:
                         return tool_success({"content": f"[{label} is empty.]"})
             except UnicodeError:
                 return tool_failure(
@@ -266,7 +269,7 @@ def make_read_handler(
                 return tool_failure("invalid_arguments", str(error))
             except OSError as error:
                 return read_error(error)
-            return tool_success({"content": content})
+            return tool_success(content.data())
 
         # A command's log holds what its programs wrote: text, whatever its first
         # bytes look like, also when they start like an image or a PDF.
@@ -404,24 +407,23 @@ def _read_extracted_document(
     try:
         if arguments.get("pattern") is not None:
             lines = split_text_lines(extracted, keepends=True)
-            return tool_success(
-                {"content": f"{header}\n{render_matching_lines(lines, arguments, label)}"}
-            )
+            page = render_matching_lines(lines, arguments, label)
+            return tool_success(page.prefixed(f"{header}\n").data())
         position = read_position(arguments)
         limit = optional_int(arguments.get("limit"), field_name="limit", minimum=1)
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
 
-    body = render_text(
+    page = render_text_page(
         extracted,
         position.line,
         limit,
         number=False,
         start_character=position.character,
     )
-    if not body.strip():
-        body = "(no extractable text)"
-    return tool_success({"content": f"{header}\n{body}"})
+    if not page.content.strip():
+        page = replace(page, content="(no extractable text)")
+    return tool_success(page.prefixed(f"{header}\n").data())
 
 
 def _read_image(
@@ -516,7 +518,7 @@ def _list_directory(resolved: Path, arguments: JsonObject, label: str) -> JsonOb
     except OSError as error:
         return tool_failure("file_read_error", f"Could not list {label}: {os_error_reason(error)}.")
     try:
-        return tool_success({"content": render_directory_listing(entries, arguments, label)})
+        return tool_success(render_directory_listing(entries, arguments, label).data())
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
 
