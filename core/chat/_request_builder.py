@@ -115,10 +115,11 @@ _LOGGER = get_logger("chat")
 def _finalize_compaction_checkpoint(
     checkpoint: ChatMessage,
     session_messages: list[ChatMessage],
+    scratch_note_id: object,
 ) -> ChatMessage:
     ordinal = sum(message.role == "compaction_checkpoint" for message in session_messages) + 1
     return preserve_scratch_note(
-        finalize_checkpoint_guidance(checkpoint, ordinal=ordinal), session_messages
+        finalize_checkpoint_guidance(checkpoint, ordinal=ordinal), session_messages, scratch_note_id
     )
 
 

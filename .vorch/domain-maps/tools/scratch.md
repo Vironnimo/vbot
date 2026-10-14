@@ -136,7 +136,7 @@ or Run fail. Optional announcement persistence is isolated by Chat too.
 
 ## Chat and process contracts
 
-Chat's `_scratch_context.py` owns the persisted `[scratch-area]` note. At Run start,
+Chat's `_scratch_context.py` owns the persisted Scratch reminder. At Run start,
 after resolving effective callable Tools, Chat calls `folder_for` for Run kinds
 `user`, `channel`, `cron`, `calendar`, `subagent` and `system` with at least one of
 `bash`, `terminal`, `write`, `edit` or `apply_patch`. Background learning kinds and
@@ -146,20 +146,20 @@ not enter the Agentic executor.
 
 Open Session metadata `scratch_announced` records the own path, incarnation and
 note id. A missing record, changed path/incarnation, recreated folder, or absent
-note in the effective Compaction view causes an announcement; a folder change
-uses the cleared variant. Forks strip this metadata, so inherited announcements
-cannot suppress the fork's own paths. The Compaction finalizer carries the latest
-existing Scratch note verbatim after the summary when the projection omitted it,
-preserving it during a Run as well as between Runs. Paths never enter the System
-Prompt, preserving shared prompt-cache prefixes. The bundled `core:runtime`
-contains one static, path-free sentence directing temporary work to the own folder
-in the latest reminder unless the user requests another location (`prompts.md`).
+note in the effective Compaction view causes an announcement of the current path.
+Forks strip this metadata, so inherited announcements cannot suppress the fork's
+own paths. The Compaction finalizer identifies the current note by the metadata's
+`note_id` and carries it verbatim after the summary when the projection omitted
+it, preserving it during a Run as well as between Runs. This also preserves older
+announcements without interpreting their text. New notes have no visible type tag.
+Scratch guidance lives entirely in the reminder; the System Prompt has no Scratch
+sentence or path (user decision 2026-10-14).
 
 The Shell Tool and Agent Terminal launch call `folder_for` again before starting
 each process. Their environment sets `TEMP`, `TMP`, `TMPDIR` to `tmp` and
-`VBOT_SCRATCH_DIR` to `own` (`shell.md`, `terminal.md`). The reminder's process
-sentence appears only with a callable Shell or Terminal. Run change statistics
-exclude paths below the Scratch root (`change_tracker.md`).
+`VBOT_SCRATCH_DIR` to `own` (`shell.md`, `terminal.md`). These process settings
+are not described in the reminder. Run change statistics exclude paths below the
+Scratch root (`change_tracker.md`).
 
 Writing only in one's own Scratch folder is Agent guidance, not a filesystem
 permission boundary: existing file and Shell Tools retain their normal access.
@@ -171,30 +171,29 @@ correct requested regional figures; shared-area and recreated-folder mechanics
 worked. GLM's delegation
 scenario nevertheless left extracted inputs in the Project and directed child
 intermediates there; DeepSeek initially downloaded into the Project before moving
-the file to Scratch. This evidence triggered the plan's optional static Runtime
-sentence. That subsequent sentence was reviewed but not evaluated with Models.
+the file to Scratch. This evidence triggered an additional static Runtime sentence,
+whose effect was not verified with Models. The user chose on 2026-10-14 to remove that duplicate
+and keep a shorter reminder with the concrete file-placement examples and
+Sub-Agent guidance. The shorter wording has not been evaluated with Models.
 Folder placement remains guidance rather than an enforced filesystem boundary.
 
 ## Agent-facing text
 
 The note is English kernel-authored text, rendered as an existing System Reminder.
-Paths use forward slashes. Each sentence addresses a concrete placement or
-lifecycle mistake; the user-requested design is the evidence for these rules.
+Paths use forward slashes. The user-approved wording (2026-10-14) keeps only the
+own path, temporary-file placement, deliverable placement and cooperation rules.
+It says nothing about retention, cleanup, Memory, process environment or the
+shared area's layout. A changed path or incarnation repeats the current reminder
+without claiming that earlier files were lost: incarnation changes do not prove
+which files are missing.
 
 | Text | Reason |
 |---|---|
-| `Your Scratch folder for intermediate work is {own}.` | Gives the writable location for scripts, downloads and intermediate work instead of the repository or system temp. |
-| `Scratch Area: {area}.` | Gives the shared tree boundary so a participant can find the files named by its Parent or peers. |
-| `Other folders in this area belong to this conversation's Parent or Sub-Agents.` | Explains the other folders' provenance without suggesting they are public files or unrelated conversations. |
-| `Within this area, write only in your own folder; read the others when useful.` | Prevents concurrent writers from editing each other's intermediate files; the explicit area scope keeps final output outside Scratch possible. This is guidance, not enforced isolation. |
-| `When delegating, put the inputs in your own folder and pass their paths; let each Sub-Agent keep its intermediate files in its own Scratch folder and report its result paths.` | Makes file exchange concrete without inventing a shared writable folder or copying large intermediate content into messages. The trigger leaves ordinary chat unaffected. The input location and the Sub-Agents' own folders were added after the eval of 2026-10-13, where a GLM 5.3 Flash Parent extracted inputs into the Project and directed its Sub-Agents to write intermediate results there, overriding their own correct reminders. Not yet rerun with Models (Provider rate limit). |
-| `Temporary files of your processes already go to tmp/ in your folder; VBOT_SCRATCH_DIR names your folder in commands.` | Explains automatic temp placement and the portable command reference; shown only with Shell or Terminal access. |
-| `vBot deletes this area after 7 days without activity.` | Prevents using a current filesystem path as a promise of durable storage. |
-| `You do not need to clean it up; you can delete files you have finished with.` | Avoids a cleanup task on every turn while permitting deliberate removal of spent files. |
-| `Scratch is temporary working space, not Memory or a delivery location.` | Separates intermediate work from durable knowledge and user deliverables. |
-| `Put results the user will keep and files you hand to the user in the working directory or Workspace; put notes needed in a later conversation in the Workspace or Memory.` | Supplies the concrete destinations for artifacts that must outlive retention. |
-| `Your Scratch folder has been recreated or changed.` | Reports a changed path or incarnation, including when a process already recreated the folder. Earlier files can survive in another area after an intermediate Parent is archived, so this does not assert that every earlier file was deleted. |
-| `Do not assume files at earlier Scratch paths still exist; use the folder above for new work.` | Prevents trusting stale references after retention, archive or external deletion and directs new writes to the current own folder. |
+| `Your Scratch folder is {own}.` | Names the Agent's writable intermediate-file location. The shared area path is unnecessary when Agents exchange concrete file paths. |
+| `Use it for temporary files such as helper scripts, downloads and intermediate results, unless the user requests another location.` | Makes placement an instruction and names the file types Agents misplaced in the 2026-10-13 eval. Explicit user destinations take precedence. Replaces the duplicate System Prompt sentence. |
+| `Save deliverables in the working directory or the location requested by the user.` | Keeps finished user artifacts at their intended destination instead of using an intermediate-file path as the delivery location. |
+| `Within Scratch, write only in your own folder; you can read the others.` | Prevents participants from overwriting each other's working files without restricting deliverables outside Scratch. This is guidance, not enforced isolation. |
+| `When delegating, pass input paths and let each Sub-Agent use its own Scratch folder for intermediate files.` | Keeps file exchange explicit and prevents a Parent from directing Sub-Agent intermediates into the Project, as GLM did in the 2026-10-13 eval. |
 
 ## Source and tests
 

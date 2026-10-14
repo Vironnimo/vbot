@@ -24,7 +24,12 @@ from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_PARAMETERS
 from tests.core.chat.chat_integration_test_support import FakeAdapter, JsonObject, StartRuntime
 from tests.core.chat.chat_integration_test_support import resources_dir as resources_dir
 from tests.core.chat.chat_integration_test_support import start_runtime as start_runtime
-from tests.core.chat.chat_loop_support import RecordingReflection, build_chat_loop, history
+from tests.core.chat.chat_loop_support import (
+    RecordingReflection,
+    build_chat_loop,
+    history,
+    session_address,
+)
 from tests.core.runs.runs_test_support import RunTimelines
 
 
@@ -57,7 +62,11 @@ async def test_agent_sends_message_and_persists_assistant_response(
         ]
         assert messages[0].content == "Hello"
         assert isinstance(messages[1].content, str)
-        assert messages[1].content.startswith("[scratch-area] ")
+        announced = runtime.chat_sessions.metadata_value(
+            session_address("coder", "session-one"), "scratch_announced"
+        )
+        assert messages[1].id == announced["note_id"]
+        assert Path(announced["own"]).as_posix() in messages[1].content
         assert messages[2].model == "fake-provider/fake-model-v1"
         assert messages[-1].iteration_count == 1
         request = adapter.requests[0]
@@ -111,7 +120,6 @@ async def test_read_tool_batch_persists_each_result_and_counts_one_iteration_per
             "assistant",
             "run_summary",
         ]
-        assert str(messages[1].content).startswith("[scratch-area] ")
         found, missing = (json.loads(str(message.content)) for message in messages[3:5])
         assert (found["ok"], found["data"], found["error"], found["artifacts"]) == (
             True,

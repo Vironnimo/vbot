@@ -368,7 +368,6 @@ async def test_read_image_stays_on_its_tool_result_until_compaction_for_vision_m
             "assistant",
             "run_summary",
         ]
-        assert str(messages[1].content).startswith("[scratch-area] ")
         assert all(
             not isinstance(message.content, list) for message in messages if message.role == "user"
         )
