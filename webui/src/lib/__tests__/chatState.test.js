@@ -115,6 +115,7 @@ describe('Queue projection', () => {
         queued: true,
         item: newItem,
       });
+    let edited = false;
     const { chatState, controller } = setupController({
       operationOverrides: {
         startChatRun,
@@ -122,8 +123,16 @@ describe('Queue projection', () => {
           .fn()
           .mockResolvedValueOnce({ items: [oldItem] })
           .mockResolvedValueOnce({ items: [oldItem, newItem] })
-          .mockResolvedValue({ items: [first, second] }),
-        updateQueueItem: vi.fn().mockResolvedValue({ ok: true }),
+          .mockImplementation(async () => ({
+            items: [
+              edited ? { ...first, content: 'Edited', editable: false } : first,
+              second,
+            ],
+          })),
+        updateQueueItem: vi.fn(async () => {
+          edited = true;
+          return { ok: true };
+        }),
       },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');

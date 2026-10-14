@@ -44,11 +44,21 @@ export function createSessionSettings(context) {
   let rowRevision = $state(0);
   let lastInvalidationId = null;
   let requestedRowKey = '';
-  // Count writes per addressed Session as they start and end. Only a read
-  // of that same Session can predate the write; other Sessions stay independent.
+  // Each Session owns its write revision and field-level reconciliation. Reads
+  // cannot establish ordering while a write runs; the final completion rereads
+  // the row. Independent fields keep their own pending and successful owners.
   const overrideWrites = {};
-  // Session key -> the id of its latest override write.
-  const latestWrite = {};
+
+  function writesFor(key) {
+    return (overrideWrites[key] ??= {
+      key,
+      revision: 0,
+      nextId: 0,
+      active: 0,
+      owners: {},
+      committed: {},
+    });
+  }
 
   // What the footer is about: a draft or an existing Session, else nothing.
   let current = $derived.by(() => {
@@ -235,16 +245,20 @@ export function createSessionSettings(context) {
   });
 
   async function loadRow(requestKey, shown) {
-    const writesAtStart = overrideWrites[shown.key] ?? 0;
+    const writes = writesFor(shown.key);
+    const revisionAtStart = writes.revision;
+    const writingAtStart = writes.active > 0;
     try {
       const result = await context.chatController.getSession(
         shown.agentAddress,
         shown.sessionId,
       );
-      // A newer read, or an override write meanwhile, decides instead.
+      // A read overlapping a write may predate its commit even if the RPC
+      // reply has not arrived yet. The last write schedules a replacement.
       if (
         requestKey !== requestedRowKey ||
-        writesAtStart !== (overrideWrites[shown.key] ?? 0)
+        writingAtStart ||
+        revisionAtStart !== writes.revision
       ) {
         return;
       }
@@ -274,12 +288,16 @@ export function createSessionSettings(context) {
   // `changes` maps override fields to a value, or '' to clear it.
   async function writeOverrides(shown, changes) {
     const key = shown.key;
+    const writes = writesFor(key);
     const request = Object.fromEntries(
       Object.entries(changes).map(([field, value]) => [field, value || null]),
     );
-    const writeId = (latestWrite[key] ?? 0) + 1;
-    latestWrite[key] = writeId;
-    overrideWrites[key] = (overrideWrites[key] ?? 0) + 1;
+    const writeId = ++writes.nextId;
+    writes.revision += 1;
+    writes.active += 1;
+    for (const field of Object.keys(request)) {
+      writes.owners[field] = writeId;
+    }
     pending = { ...pending, [key]: { ...(pending[key] ?? {}), ...request } };
     try {
       const result = await context.chatController.setSessionAgentOverrides(
@@ -287,47 +305,73 @@ export function createSessionSettings(context) {
         shown.sessionId,
         request,
       );
-      if (latestWrite[key] !== writeId) {
-        return;
+      const row = rows[writes.key];
+      const overrides = { ...(row?.overrides ?? {}) };
+      const saved = isRecord(result?.agent_overrides)
+        ? result.agent_overrides
+        : {};
+      // A full reply may contain an obsolete snapshot of other fields. Keep
+      // evidence only for the fields this request wrote, without replacing a
+      // newer success or hiding a newer optimistic choice on the same field.
+      for (const field of Object.keys(request)) {
+        if ((writes.committed[field] ?? 0) > writeId) {
+          continue;
+        }
+        writes.committed[field] = writeId;
+        if (Object.hasOwn(saved, field)) {
+          overrides[field] = saved[field];
+        } else {
+          delete overrides[field];
+        }
       }
-      const projectKnown = rows[key]?.projectKnown === true;
       rows = {
         ...rows,
-        [key]: {
-          workingProjectId: rows[key]?.workingProjectId ?? null,
-          projectKnown,
-          overrides: isRecord(result?.agent_overrides)
-            ? result.agent_overrides
-            : {},
+        [writes.key]: {
+          workingProjectId: row?.workingProjectId ?? null,
+          projectKnown: row?.projectKnown === true,
+          overrides,
         },
       };
-      dropPending(key);
+      dropPending(writes.key, writeId);
     } catch (error) {
-      if (latestWrite[key] !== writeId) {
+      if (!dropPending(writes.key, writeId)) {
         return;
       }
-      dropPending(key);
       context.onError(
         `${t('chat.sessionSettings.saveError')} ${error?.message ?? ''}`.trim(),
-        key,
+        writes.key,
       );
     } finally {
-      overrideWrites[key] = (overrideWrites[key] ?? 0) + 1;
-      if (rows[key]?.projectKnown !== true && current?.key === key) {
-        // An initial row read may have been dropped during this write.
-        // Recover it after success or failure, using the completed revision.
+      writes.revision += 1;
+      writes.active -= 1;
+      if (writes.active === 0 && current?.key === writes.key) {
+        // Responses have no server revision, so concurrent same-field commits
+        // and invalidation reads need a snapshot taken after all writes settle.
+        // Also recover a dropped initial read after either success or failure.
         rowRevision += 1;
       }
     }
   }
 
-  function dropPending(key) {
-    if (!Object.hasOwn(pending, key)) {
-      return;
+  function dropPending(key, writeId) {
+    const writes = writesFor(key);
+    const changes = { ...(pending[key] ?? {}) };
+    let dropped = false;
+    for (const field of Object.keys(changes)) {
+      if (writeId === undefined || writes.owners[field] === writeId) {
+        delete changes[field];
+        delete writes.owners[field];
+        dropped = true;
+      }
     }
     const next = { ...pending };
-    delete next[key];
+    if (Object.keys(changes).length > 0) {
+      next[key] = changes;
+    } else {
+      delete next[key];
+    }
     pending = next;
+    return dropped;
   }
 
   function selectOverrides(changes) {
@@ -361,13 +405,13 @@ export function createSessionSettings(context) {
     drafts = renameAgentInKeys(drafts, oldAgentId, newAgentId);
     rows = renameAgentInKeys(rows, oldAgentId, newAgentId);
     pending = renameAgentInKeys(pending, oldAgentId, newAgentId);
-    for (const writes of [latestWrite, overrideWrites]) {
-      for (const key of Object.keys(writes)) {
-        const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
-        if (renamed !== key) {
-          writes[renamed] = writes[key];
-          delete writes[key];
-        }
+    for (const key of Object.keys(overrideWrites)) {
+      const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
+      if (renamed !== key) {
+        const writes = overrideWrites[key];
+        writes.key = renamed;
+        overrideWrites[renamed] = writes;
+        delete overrideWrites[key];
       }
     }
   }

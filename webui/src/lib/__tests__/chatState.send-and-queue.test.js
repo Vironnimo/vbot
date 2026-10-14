@@ -701,7 +701,12 @@ describe('Queue', () => {
       .mockResolvedValueOnce({ ok: true })
       .mockRejectedValueOnce(new Error('offline'));
     const { chatState, controller } = setupController({
-      operationOverrides: { updateQueueItem },
+      operationOverrides: {
+        updateQueueItem,
+        listQueue: vi.fn().mockResolvedValue({
+          items: [{ id: 'queued-one', content: 'With file', editable: false }],
+        }),
+      },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
     sessionState.queue = [
@@ -723,6 +728,99 @@ describe('Queue', () => {
     ).toBe(false);
     expect(sessionState.queue[0].content).toBe('With file');
     expect(sessionState.actionError).toBe(`${t('queue.editError')} offline`);
+  });
+
+  it.each(['invalidation', 'reconnect'])(
+    'keeps a newer authoritative Queue from %s when an older edit reply arrives',
+    async (snapshot) => {
+      const acknowledgement = deferred();
+      const reconciliation = deferred();
+      let stored = { id: 'queued-one', content: 'Original', editable: true };
+      let holdNextRead = false;
+      const listQueue = vi.fn(() => {
+        if (holdNextRead) {
+          holdNextRead = false;
+          return reconciliation.promise;
+        }
+        return Promise.resolve({ items: [structuredClone(stored)] });
+      });
+      const updateQueueItem = vi.fn((_agent, _session, _id, content) => {
+        stored = { ...stored, content };
+        return updateQueueItem.mock.calls.length === 1
+          ? acknowledgement.promise
+          : Promise.resolve({ ok: true });
+      });
+      const { chatState, controller } = setupController({
+        isDisplayedSession: () => true,
+        operationOverrides: { updateQueueItem, listQueue },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'one');
+      session.queue = [structuredClone(stored)];
+      const editing = controller.updateQueued(session, stored.id, 'Window A');
+      stored = { ...stored, content: 'Window B' };
+      if (snapshot === 'invalidation') {
+        controller.applyQueueInvalidation({
+          agentId: 'alpha',
+          sessionId: 'one',
+        });
+        await Promise.resolve();
+      } else {
+        controller.applyConnectionSnapshot({
+          active_runs: [],
+          queues: [{ agent_id: 'alpha', session_id: 'one', items: [stored] }],
+        });
+      }
+      expect(session.queue[0].content).toBe('Window B');
+
+      holdNextRead = true;
+      acknowledgement.resolve({ ok: true });
+      await Promise.resolve();
+      // Even while the replacement read is pending, the old submitted text
+      // must never reappear (and seed a later editor with a stale value).
+      expect(session.queue[0].content).toBe('Window B');
+      reconciliation.resolve({ items: [structuredClone(stored)] });
+      expect(await editing).toBe(true);
+      expect(session.queue[0].content).toBe('Window B');
+
+      expect(
+        await controller.updateQueued(session, stored.id, 'Window B continued'),
+      ).toBe(true);
+      expect(session.queue[0].content).toBe('Window B continued');
+      controller.destroy();
+    },
+  );
+
+  it('reconciles independent Queue edits whose replies arrive in reverse order', async () => {
+    const first = deferred();
+    const second = deferred();
+    const stored = [
+      { id: 'first', content: 'Original first', editable: true },
+      { id: 'second', content: 'Original second', editable: true },
+    ];
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        updateQueueItem: vi.fn((_agent, _session, id, content) => {
+          stored.find((item) => item.id === id).content = content;
+          return (id === 'first' ? first : second).promise;
+        }),
+        listQueue: vi.fn(() =>
+          Promise.resolve({ items: structuredClone(stored) }),
+        ),
+      },
+    });
+    const session = ensureSessionState(chatState, 'alpha', 'one');
+    session.queue = structuredClone(stored);
+    const edits = [
+      controller.updateQueued(session, 'first', 'Edited first'),
+      controller.updateQueued(session, 'second', 'Edited second'),
+    ];
+    second.resolve({ ok: true });
+    expect(await edits[1]).toBe(true);
+    expect(session.queue).toMatchObject(stored);
+    first.resolve({ ok: true });
+    expect(await edits[0]).toBe(true);
+    expect(session.queue).toMatchObject(stored);
+    controller.destroy();
   });
 
   it.each(['edit', 'remove'])(
@@ -762,18 +860,26 @@ describe('Queue', () => {
     'keeps an accepted Queue %s when an earlier list response arrives later',
     async (mutation) => {
       const stale = deferred();
+      let edited = false;
       const { chatState, controller } = setupController({
         operationOverrides: {
           listQueue: vi
             .fn()
             .mockReturnValueOnce(stale.promise)
-            .mockResolvedValue({
+            .mockImplementation(async () => ({
               items: [
-                { id: 'old', content: 'Original', editable: true },
+                {
+                  id: 'old',
+                  content: edited ? 'Edited' : 'Original',
+                  editable: true,
+                },
                 { id: 'new', content: 'New queued text', editable: true },
               ],
-            }),
-          updateQueueItem: vi.fn().mockResolvedValue({ ok: true }),
+            })),
+          updateQueueItem: vi.fn(async () => {
+            edited = true;
+            return { ok: true };
+          }),
           removeFromQueue: vi.fn().mockResolvedValue({ ok: true }),
           startChatRun: vi.fn().mockResolvedValue({
             queued: true,

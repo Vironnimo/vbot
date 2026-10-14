@@ -18,6 +18,7 @@ import {
   setupChatViewTestSuite,
   showProjectMock,
   streamResponses,
+  testChatStateRefs,
   waitForCondition,
 } from './ChatView.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
@@ -61,7 +62,7 @@ const PROJECTS = [
 // overrides that merge each change like the server does.
 function settingsRpcMock(options = {}) {
   const base = createChatRpcMock(options);
-  let stored = {};
+  let stored = { ...(options.overrides ?? {}) };
   return async (method, params) => {
     if (method === 'model.list') return { models: MODELS };
     if (method === 'connection.list') return { connections: [] };
@@ -272,6 +273,242 @@ describe('ChatView Session settings', () => {
   });
 
   describe('existing Session', () => {
+    it.each([
+      ...['model-first', 'effort-first'].flatMap((order) =>
+        ['model', 'effort', null].map((failed) => ({ order, failed })),
+      ),
+      { order: 'model-first', failed: 'effort', refreshFails: true },
+    ])(
+      'reconciles independent fields with $order replies, $failed failure and refresh failure $refreshFails across a scoped invalidation',
+      async ({ order, failed, refreshFails }) => {
+        const writes = {
+          model: Promise.withResolvers(),
+          effort: Promise.withResolvers(),
+        };
+        const overlapping = Promise.withResolvers();
+        const replacement = Promise.withResolvers();
+        let stored = { model: SONNET };
+        const row = (overrides) => ({
+          session: {
+            id: 'session-1',
+            working_project_id: 'vbot',
+            agent_overrides: structuredClone(overrides),
+          },
+        });
+        let phase = 'initial';
+        let replacementReads = 0;
+        getSessionMock.mockImplementation(() => {
+          if (phase === 'initial') return Promise.resolve(row(stored));
+          if (phase === 'overlap') return overlapping.promise;
+          replacementReads += 1;
+          return replacement.promise;
+        });
+        const replies = {};
+        const base = settingsRpcMock();
+        rpcMock.mockImplementation((method, params) => {
+          if (method !== 'session.set_agent_overrides') {
+            return base(method, params);
+          }
+          const field = Object.hasOwn(params.agent_overrides, 'model')
+            ? 'model'
+            : 'effort';
+          if (field !== failed) {
+            stored = { ...stored, ...params.agent_overrides };
+            replies[field] = { agent_overrides: structuredClone(stored) };
+          }
+          return writes[field].promise;
+        });
+        const props = reactiveProps({ projects: PROJECTS });
+        await chat.mountChat(props);
+        await waitForCondition(() => readOnlyProject() !== null);
+        expect(pickerText('Model')).toBe(SONNET_NAME);
+
+        await choose('Model', R1);
+        await choose('Thinking effort', 'high');
+        expect(rpcCalls('session.set_agent_overrides')).toHaveLength(2);
+        expect(pickerText('Model')).toBe(R1);
+        expect(pickerText('Thinking effort')).toBe('high');
+
+        phase = 'overlap';
+        const readsBeforeInvalidation = getSessionMock.mock.calls.length;
+        props.sessionInvalidations = [
+          { id: 1, scope: { agent_id: 'alpha', session_id: 'session-1' } },
+        ];
+        await settle();
+        expect(getSessionMock.mock.calls.length).toBeGreaterThan(
+          readsBeforeInvalidation,
+        );
+
+        const complete = async (field) => {
+          if (field === failed) {
+            writes[field].reject(new Error('override-failure-sentinel'));
+          } else {
+            writes[field].resolve(replies[field]);
+          }
+          await settle();
+        };
+        const first = order === 'model-first' ? 'model' : 'effort';
+        const second = first === 'model' ? 'effort' : 'model';
+        await complete(first);
+        // Settling one field must neither drop the other pending choice nor
+        // hide an independent success behind a newer request's sequence.
+        expect(pickerText('Model')).toBe(
+          first === 'model' && failed === 'model' ? SONNET_NAME : R1,
+        );
+        expect(pickerText('Thinking effort')).toBe(
+          first === 'effort' && failed === 'effort'
+            ? 'Provider default'
+            : 'high',
+        );
+        expect(replacementReads).toBe(0);
+
+        phase = 'replacement';
+        await complete(second);
+        expect(replacementReads).toBeGreaterThan(0);
+        const expectedModel = failed === 'model' ? SONNET_NAME : R1;
+        const expectedEffort =
+          failed === 'effort' ? 'Provider default' : 'high';
+        // The successful RPC's field remains correct before a refresh answers,
+        // even when its independent sibling failed.
+        expect(pickerText('Model')).toBe(expectedModel);
+        expect(pickerText('Thinking effort')).toBe(expectedEffort);
+        const error =
+          testChatStateRefs[0].sessions['alpha::session-1'].actionError;
+        if (failed) expect(error).toContain('override-failure-sentinel');
+        else expect(error).toBe('');
+
+        if (refreshFails) {
+          replacement.reject(new Error('refresh-failure-sentinel'));
+        } else {
+          replacement.resolve(row(stored));
+        }
+        await settle();
+        // An overlapping read that arrives last cannot restore the old Model.
+        overlapping.resolve(row({ model: SONNET }));
+        await settle();
+        expect(pickerText('Model')).toBe(expectedModel);
+        expect(pickerText('Thinking effort')).toBe(expectedEffort);
+        expect(readOnlyProject().textContent.trim()).toBe('vBot');
+      },
+    );
+
+    it('uses a final authoritative row when same-field server commits arrive in reverse request order', async () => {
+      const older = Promise.withResolvers();
+      const newer = Promise.withResolvers();
+      const replacement = Promise.withResolvers();
+      let stored = { model: SONNET };
+      let refresh = false;
+      let refreshStarted = false;
+      getSessionMock.mockImplementation(() => {
+        if (refresh) {
+          refreshStarted = true;
+          return replacement.promise;
+        }
+        return Promise.resolve({
+          session: { working_project_id: 'vbot', agent_overrides: stored },
+        });
+      });
+      const base = settingsRpcMock();
+      let count = 0;
+      rpcMock.mockImplementation((method, params) => {
+        if (method !== 'session.set_agent_overrides')
+          return base(method, params);
+        return (++count === 1 ? older : newer).promise;
+      });
+      await chat.mountChat({ projects: PROJECTS });
+      await waitForCondition(() => readOnlyProject() !== null);
+      await choose('Model', R1);
+      await choose('Model', SONNET);
+      refresh = true;
+
+      stored = {};
+      newer.resolve({ agent_overrides: stored });
+      await settle();
+      expect(pickerText('Model')).toBe(SONNET_NAME);
+      expect(refreshStarted).toBe(false);
+      stored = { model: R1 };
+      older.resolve({ agent_overrides: stored });
+      await settle();
+      expect(refreshStarted).toBe(true);
+      replacement.resolve({
+        session: { working_project_id: 'vbot', agent_overrides: stored },
+      });
+      await settle();
+      expect(pickerText('Model')).toBe(R1);
+    });
+
+    it.each(
+      ['older-first', 'newer-first'].flatMap((order) =>
+        ['success', 'error'].map((outcome) => ({ order, outcome })),
+      ),
+    )(
+      'keeps same-field ownership with $order replies and newer $outcome',
+      async ({ order, outcome }) => {
+        const older = Promise.withResolvers();
+        const newer = Promise.withResolvers();
+        const replacement = Promise.withResolvers();
+        let stored = { model: SONNET };
+        let readAfterWrites = false;
+        getSessionMock.mockImplementation(() =>
+          readAfterWrites
+            ? replacement.promise
+            : Promise.resolve({
+                session: {
+                  working_project_id: 'vbot',
+                  agent_overrides: structuredClone(stored),
+                },
+              }),
+        );
+        const base = settingsRpcMock();
+        let count = 0;
+        rpcMock.mockImplementation((method, params) => {
+          if (method !== 'session.set_agent_overrides') {
+            return base(method, params);
+          }
+          count += 1;
+          if (count === 1) {
+            stored = { model: R1 };
+            return older.promise;
+          }
+          expect(params.agent_overrides).toEqual({ model: null });
+          if (outcome === 'success') stored = {};
+          return newer.promise;
+        });
+        await chat.mountChat({ projects: PROJECTS });
+        await waitForCondition(() => readOnlyProject() !== null);
+        await choose('Model', R1);
+        // Returning to the original/default value is still a newer edit.
+        await choose('Model', SONNET);
+        expect(pickerText('Model')).toBe(SONNET_NAME);
+        readAfterWrites = true;
+
+        const completeOlder = async () => {
+          older.resolve({ agent_overrides: { model: R1 } });
+          await settle();
+        };
+        const completeNewer = async () => {
+          if (outcome === 'success') newer.resolve({ agent_overrides: {} });
+          else newer.reject(new Error('newer-override-failure-sentinel'));
+          await settle();
+        };
+        if (order === 'older-first') {
+          await completeOlder();
+          expect(pickerText('Model')).toBe(SONNET_NAME);
+          await completeNewer();
+        } else {
+          await completeNewer();
+          await completeOlder();
+        }
+        const expected = outcome === 'success' ? SONNET_NAME : R1;
+        expect(pickerText('Model')).toBe(expected);
+        replacement.resolve({
+          session: { working_project_id: 'vbot', agent_overrides: stored },
+        });
+        await settle();
+        expect(pickerText('Model')).toBe(expected);
+      },
+    );
+
     it.each(
       ['same', 'other'].flatMap((session) =>
         ['success', 'error'].map((outcome) => ({ session, outcome })),
@@ -357,17 +594,26 @@ describe('ChatView Session settings', () => {
     );
 
     it('writes Model and effort changes at once and offers the levels of the effective Model', async () => {
-      getSessionMock.mockResolvedValue({
+      let stored = { model: SONNET };
+      getSessionMock.mockImplementation(async () => ({
         session: {
           id: 'session-1',
           working_project_id: 'vbot',
-          agent_overrides: { model: SONNET },
+          agent_overrides: structuredClone(stored),
         },
-      });
+      }));
       // The Agent's Model pins a Connection, which the label leaves out.
-      rpcMock.mockImplementation(
-        settingsRpcMock({ agents: [createAgent({ model: `${R1}::default` })] }),
-      );
+      const base = settingsRpcMock({
+        agents: [createAgent({ model: `${R1}::default` })],
+        overrides: stored,
+      });
+      rpcMock.mockImplementation(async (method, params) => {
+        const result = await base(method, params);
+        if (method === 'session.set_agent_overrides') {
+          stored = result.agent_overrides;
+        }
+        return result;
+      });
       await chat.mountChat({ projects: PROJECTS });
       await waitForCondition(() => pickerText('Model') === SONNET_NAME);
       expect(readOnlyProject().textContent.trim()).toBe('vBot');
