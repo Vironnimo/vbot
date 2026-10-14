@@ -783,6 +783,10 @@ async def test_processes_left_running_are_named_with_the_call_that_stops_them(
 
 
 _MISSING_MAKE = "bash: make: command not found\n"
+_MISSING_CMDLET = (
+    "Get-Childltem: The term 'Get-Childltem' is not recognized as a name of a cmdlet.\n"
+)
+_INPUT_REDIRECTION_ERROR = "ParserError: The '<' operator is reserved for future use.\n"
 
 
 @pytest.mark.asyncio
@@ -791,6 +795,45 @@ _MISSING_MAKE = "bash: make: command not found\n"
     [
         ("make", _MISSING_MAKE, 127, "`make`"),
         ("python -c \"print('$field')\"", "\n", 0, "`$field`"),
+        (
+            "Get-Childltem; Get-ChildItem -File",
+            _MISSING_CMDLET,
+            0,
+            "`Get-ChildItem`",
+        ),
+        # Quoted text, comments and a different operation are not spelling evidence.
+        (
+            "Get-Childltem; Write-Output 'Get-ChildItem'; # Get-ChildItem",
+            _MISSING_CMDLET,
+            0,
+            "`Get-Command Get-Childltem`",
+        ),
+        (
+            "Get-Childltem; Set-Childltem",
+            _MISSING_CMDLET,
+            1,
+            "`Get-Command Get-Childltem`",
+        ),
+        (
+            "Get-Childltem; Get-ChildItem; Get-Childltems",
+            _MISSING_CMDLET,
+            1,
+            "`Get-Command Get-Childltem`",
+        ),
+        # < leaked from the regex after an escaped quote ended its outer string.
+        (
+            'python -c "pattern = r\\"(?s)<[^>]*>\\""',
+            _INPUT_REDIRECTION_ERROR,
+            1,
+            "`@'...'@ | python -`",
+        ),
+        # A real redirection in another statement keeps its own diagnosis.
+        (
+            'python -c "print(\\"x\\")"; python check.py < input.txt',
+            _INPUT_REDIRECTION_ERROR,
+            1,
+            "`Get-Content input.txt | python script.py`",
+        ),
     ],
 )
 async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(
@@ -811,6 +854,8 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(
     hint = data(result)["hint"]
     assert expected in hint
     assert data(result)["exit_code"] == exit_code
+    assert launched(shell.launcher)[0] == command
+    assert data(result).get("output", "") == output.rstrip("\n")
     # The user sees the hint as well.
     assert {"type": "notice", "level": "info", "text": f"Hint: {hint}"} in shell_detail_blocks(
         {"command": command}, result

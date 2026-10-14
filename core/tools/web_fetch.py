@@ -318,6 +318,19 @@ def _detect_bot_wall(url: str, metadata: dict[str, str], text: str) -> str | Non
     ):
         return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
 
+    # A localized reCAPTCHA interstitial can answer HTTP 200. Require its title
+    # and opening access-check sentence about this host, not a mere CAPTCHA
+    # mention or an embedded widget on a page with useful content.
+    if (
+        len(text) < 4000
+        and re.fullmatch(r"ihr browser wird geprüft\s*[-–—]\s*recaptcha", title)
+        and re.match(
+            rf"ihr browser wird geprüft,\s+bevor sie auf {re.escape(host)} zugreifen können",
+            re.sub(r"^[#>*\s]+", "", wall_text.removeprefix(title)),
+        )
+    ):
+        return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
+
     if host == _REDDIT_HOST_SUFFIX or host.endswith("." + _REDDIT_HOST_SUFFIX):
         if path.startswith(_REDDIT_LOGIN_PATH_PREFIX):
             return f"Blocked by a login wall at {url}; no readable content. {_WALL_GUIDANCE}"
