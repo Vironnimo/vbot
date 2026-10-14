@@ -105,15 +105,32 @@ def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager)
     assert manager.prompt_cache_affinity_id(session.address) == affinity
 
 
-def test_skill_activation_cache_follows_checkpoints_and_history_edits(manager, monkeypatch) -> None:
+@pytest.mark.parametrize("resource_shape", ["none", "legacy", "directory"])
+def test_skill_activation_cache_follows_checkpoints_and_history_edits(
+    manager, monkeypatch, resource_shape: str
+) -> None:
     session = manager.create("coder", session_id="skill-cache")
     session.append(ChatMessage.user("start"))
     session.activate_skill_context("alpha", {"activation_content": "ALPHA"})
+    resources = (
+        {}
+        if resource_shape == "none"
+        else {
+            "resource_files": {
+                "guidance": "RESOURCE-GUIDANCE",
+                "files": ["C:/skills/gamma/scripts/run.py", "references/a.md"],
+                **({"directory": "C:/skills/gamma"} if resource_shape == "directory" else {}),
+            }
+        }
+    )
     skill_result = ChatMessage.tool(
         tool_call_id="skill-1",
         name="skill",
         content=json.dumps(
-            {"ok": True, "data": {"status": "loaded", "name": "gamma", "content": "GAMMA"}}
+            {
+                "ok": True,
+                "data": {"status": "loaded", "name": "gamma", "content": "GAMMA", **resources},
+            }
         ),
     )
     session.start_run("run-1").append_many(
@@ -128,6 +145,11 @@ def test_skill_activation_cache_follows_checkpoints_and_history_edits(manager, m
     )
     gamma = skill_tool_activation(skill_result)
     assert gamma is not None
+    if resource_shape == "directory":
+        assert gamma[1].count("C:/skills/gamma") == 1
+        assert "- scripts/run.py" in gamma[1]
+    elif resource_shape == "legacy":
+        assert "- C:/skills/gamma/scripts/run.py" in gamma[1]
     edited = ChatMessage.user("edited away")
     session.append(edited)
     checkpoint = ChatMessage.compaction_checkpoint(

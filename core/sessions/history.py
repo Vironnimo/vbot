@@ -100,24 +100,33 @@ def skill_tool_activation(message: ChatMessage) -> tuple[str, str] | None:
     resources = data.get("resource_files")
     files: list[str] = []
     guidance = ""
+    directory = ""
     if resources is not None:
         if not isinstance(resources, dict):
             return None
         resource_guidance = resources.get("guidance")
         resource_files = resources.get("files")
+        resource_directory = resources.get("directory", "")
         if (
             not isinstance(resource_guidance, str)
             or not isinstance(resource_files, list)
             or not all(isinstance(file, str) and file for file in resource_files)
+            or not isinstance(resource_directory, str)
         ):
             return None
         guidance = resource_guidance
         files = resource_files
+        directory = resource_directory
     access = data.get("environment_access", "")
     if not isinstance(access, str):
         return None
     return name, format_skill_activation_context(
-        name, content, resource_files=files, resource_guidance=guidance, environment_access=access
+        name,
+        content,
+        resource_files=files,
+        resource_guidance=guidance,
+        resource_directory=directory,
+        environment_access=access,
     )
 
 

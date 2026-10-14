@@ -681,6 +681,33 @@ _DIGEST = '{"_vbot_compacted_tool_result":true,"tool":"read"}'
         ),
         pytest.param(_content(tool_success({})), (), "ok", id="empty-success"),
         pytest.param(
+            _content(
+                tool_success(
+                    {
+                        "resource_files": {
+                            "guidance": "RESOURCE-GUIDANCE",
+                            "directory": "C:/skills/R&D",
+                            "files": [
+                                "C:/skills/R&D/scripts/run.py",
+                                "references/a.md",
+                                "assets/a.png",
+                            ],
+                        }
+                    }
+                )
+            ),
+            (),
+            "RESOURCE-GUIDANCE\nSkill directory: C:/skills/R&D\n<resources>\n"
+            "- scripts/run.py\n- references/a.md\n- assets/a.png\n</resources>",
+            id="skill-resources-as-relative-paths-with-one-directory",
+        ),
+        pytest.param(
+            _content(tool_success({"resource_files": {"files": ["a"], "extra": 1}})),
+            (),
+            'resource_files: {"files":["a"],"extra":1}',
+            id="unrecognized-resource-shape-keeps-all-fields",
+        ),
+        pytest.param(
             _content(tool_failure("timeout", "Timed out.", retryable=True, attempts_made=3)),
             (),
             "Error (timeout): Timed out.\nretryable: true\nattempts_made: 3",

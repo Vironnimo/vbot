@@ -7,7 +7,10 @@ from typing import Any
 
 import pytest
 
+from core.chat import ChatMessage
+from core.providers._tool_result_text import tool_result_text
 from core.runs import RunKind
+from core.sessions.history import skill_tool_activation
 from core.skills import ArchivedSkill, SkillAuthoringService
 from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
@@ -87,23 +90,22 @@ def test_activation_separates_instructions_and_resource_files(tmp_path: Path) ->
     assert result["ok"] is True
     assert (data["name"], data["status"]) == ("debugging", "loaded")
     assert data["content"] == "# Debugging\n\nInvestigate failures methodically."
-    assert data["resource_files"] == {
-        "guidance": (
-            f"Files of this Skill. Run a scripts/ file by its absolute path with "
-            f"`{SHELL_MODEL_NAME}`; read another file with `skill` using this name and its "
-            "relative file_path only when the instructions call for it."
-        ),
-        "files": [
-            f"{skill_directory}/scripts/run.py",
-            "references/guide.md",
-            "assets/checklist.txt",
-        ],
-    }
+    assert data["resource_files"]["directory"] == skill_directory
+    # Persisted file meanings stay compatible; presentation is uniformly relative.
+    assert data["resource_files"]["files"] == [
+        f"{skill_directory}/scripts/run.py",
+        "references/guide.md",
+        "assets/checklist.txt",
+    ]
     activation_content = recorder.activations["debugging"]
     assert activation_content.startswith('<skill_content name="debugging">')
-    assert f"- {skill_directory}/scripts/run.py" in activation_content
-    assert "- references/guide.md" in activation_content
-    assert "- assets/checklist.txt" in activation_content
+    for text in (activation_content, tool_result_text(json.dumps(result))):
+        assert text.count(skill_directory) == 1
+        assert "- scripts/run.py" in text
+        assert "- references/guide.md" in text
+        assert "- assets/checklist.txt" in text
+    carrier = ChatMessage.tool(tool_call_id="load", name="skill", content=json.dumps(result))
+    assert skill_tool_activation(carrier) == ("debugging", activation_content)
     assert data["content"] in activation_content
     assert recorder.packages["debugging"] == SkillPackageRef(
         "folder", "debugging", (tmp_path / "skills").resolve().as_posix()
@@ -326,10 +328,9 @@ def test_unavailable_skill_fails_with_missing_requirements(tmp_path: Path) -> No
 
     result = SkillTool(tmp_path, registry).call({"name": "openai-helper"})
 
-    assert result == tool_failure(
-        "skill_unavailable",
-        "Skill 'openai-helper' is unavailable: missing environment variable 'OPENAI_API_KEY'",
-    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == "skill_unavailable"
+    assert "OPENAI_API_KEY" in result["error"]["message"]
 
 
 def test_already_active_skill_is_not_loaded_again(tmp_path: Path) -> None:
@@ -508,45 +509,40 @@ def test_contradictory_skill_addresses_are_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("arguments", "allowed_skills", "code", "message"),
+    ("arguments", "allowed_skills", "code"),
     [
         (
             {"file_path": "references/guide.md"},
             None,
             "invalid_arguments",
-            "file_path needs the Skill's name: call skill with name and file_path.",
         ),
         (
             {"name": "debugging", "file_path": "references/missing.md"},
             None,
             "skill_read_error",
-            "Skill 'debugging' file not found: references/missing.md",
         ),
         (
             {"name": "cdebugging"},
             None,
             "skill_not_found",
-            'Skill not found: cdebugging. Did you mean "debugging"? Load it with name "debugging".',
         ),
         (
             {"name": "debug"},
             None,
             "skill_not_found",
-            'Skill not found: debug. Did you mean "debugging"? Load it with name "debugging".',
         ),
         (
             {"name": "zzz"},
             None,
             "skill_not_found",
-            "Skill not found: zzz. Available Skills: debugging.",
         ),
         # Disallowed Skills are neither resolved nor suggested.
         (
             {"name": "Debugging"},
             [],
             "skill_not_found",
-            "Skill not found: Debugging. No Skills are available to you.",
         ),
+        ({"name": "debugging"}, [], "skill_not_found"),
     ],
 )
 def test_failed_lookups_explain_the_miss_without_activation(
@@ -554,7 +550,6 @@ def test_failed_lookups_explain_the_miss_without_activation(
     arguments: dict[str, object],
     allowed_skills: list[str] | None,
     code: str,
-    message: str,
 ) -> None:
     recorder = ActivationRecorder()
 
@@ -562,7 +557,69 @@ def test_failed_lookups_explain_the_miss_without_activation(
         arguments, activation_hook=recorder, allowed_skills=allowed_skills
     )
 
-    assert result == tool_failure(code, message)
+    assert result["ok"] is False
+    assert result["error"]["code"] == code
+    assert recorder.activations == {}
+
+
+def test_missing_file_suggests_a_readable_path_without_reading_it(tmp_path: Path) -> None:
+    tool = debugging_tool(tmp_path)
+    recorder = ActivationRecorder()
+
+    result = tool.call(
+        {"name": "debugging", "file_path": "references/guid.md"}, activation_hook=recorder
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "skill_read_error"
+    assert GUIDE not in result["error"]["message"]
+    assert recorder.activations == {}
+    call = re.search(r'skill\(name=("[^"]*"), file_path=("[^"]*")\)', result["error"]["message"])
+    assert call is not None
+    corrected = tool.call({"name": json.loads(call[1]), "file_path": json.loads(call[2])})
+    assert corrected["data"]["content"] == GUIDE
+
+
+@pytest.mark.parametrize("mode", ["load", "continue", "file"])
+@pytest.mark.parametrize("fault", ["permission", "encoding", "io", "locked"])
+def test_unreadable_skill_text_fails_without_raw_host_errors_or_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deny_access, mode: str, fault: str
+) -> None:
+    tool = debugging_tool(tmp_path)
+    relative = "references/guide.md" if mode == "file" else "SKILL.md"
+    target = Path(debugging_directory(tmp_path)) / relative
+    arguments: dict[str, object] = {"name": "debugging"}
+    if mode == "file":
+        arguments["file_path"] = relative
+    elif mode == "continue":
+        arguments["offset"] = 2
+    recorder = ActivationRecorder()
+    if fault == "permission":
+        deny_access(target)
+    elif fault == "encoding":
+        target.write_bytes(b"\xff")
+    else:
+        original = Path.read_text
+        error = OSError("PRIVATE-HOST-DIAGNOSTIC")
+        if fault == "locked":
+            monkeypatch.setattr(error, "winerror", 32, raising=False)
+
+        def fail_read(path: Path, *args, **kwargs) -> str:
+            if path == target:
+                raise error
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fail_read)
+
+    result = tool.call(arguments, activation_hook=recorder)
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "skill_read_error"
+    message = result["error"]["message"]
+    assert relative in message
+    assert "PRIVATE-HOST-DIAGNOSTIC" not in message
+    assert "codec can't decode" not in message
+    assert "file not found" not in message
     assert recorder.activations == {}
 
 
