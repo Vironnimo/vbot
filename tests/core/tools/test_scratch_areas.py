@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import stat
 import sys
@@ -77,10 +78,125 @@ async def test_tree_shares_an_area_with_distinct_participant_folders_and_fork(
     assert root_folder.area == child_folder.area == grandchild_folder.area
     assert len({root_folder.own, child_folder.own, grandchild_folder.own}) == 3
     assert len({root_folder.area, fork_folder.area, other_folder.area}) == 3
-    assert root_folder.area.name == tree.generations[root]
-    assert child_folder.own.name == tree.generations[child]
+    assert re.fullmatch(r"sc_[0-9a-hjkmnp-tv-z]{12}", root_folder.area.name)
+    assert root_folder.own.name == "main"
+    assert {child_folder.own.name, grandchild_folder.own.name} == {"sub1", "sub2"}
     assert all(folder.tmp.is_dir() for folder in (root_folder, child_folder, grandchild_folder))
     assert not (await owner.folder_for(root)).recreated
+    restarted = tree.owner()
+    for address, folder in (
+        (root, root_folder),
+        (child, child_folder),
+        (grandchild, grandchild_folder),
+    ):
+        again = await restarted.folder_for(address)
+        assert again.own == folder.own
+        assert again.incarnation == folder.incarnation
+        assert tree.generations[address] not in again.own.as_posix()
+
+
+@pytest.mark.asyncio
+async def test_short_names_are_claimed_without_reusing_occupied_areas_or_participants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.utils import ids
+
+    tree = Tree(tmp_path)
+    root = tree.session("root")
+    child = tree.session("child", parent=root)
+    other = tree.session("other")
+    owner = tree.owner()
+    owner.root.mkdir(parents=True)
+    occupied = owner.root / "sc_000000000000"
+    occupied.mkdir()
+    work = occupied / "keep.txt"
+    work.write_text("keep", encoding="utf-8")
+    candidates = iter((0, 1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda bits: next(candidates))
+
+    # A Child can be the first participant to use Scratch; main stays reserved.
+    child_folder = await owner.folder_for(child)
+    root_folder = await owner.folder_for(root)
+    other_folder = await owner.folder_for(other)
+
+    assert child_folder.area.name == "sc_000000000001"
+    assert child_folder.own.name == "sub1"
+    assert root_folder.own.name == "main"
+    assert other_folder.area.name == "sc_000000000002"
+    assert work.read_text(encoding="utf-8") == "keep"
+    # Even when a participant removes its folder, its assigned name stays taken.
+    shutil.rmtree(child_folder.own)
+    next_child = tree.session("next", parent=root)
+    next_folder = await tree.owner().folder_for(next_child)
+    assert next_folder.own.name == "sub2"
+    assert (await owner.folder_for(child)).own == child_folder.own
+
+
+@pytest.mark.asyncio
+async def test_existing_generation_paths_survive_upgrade_until_normal_retirement(
+    tmp_path: Path,
+) -> None:
+    tree = Tree(tmp_path)
+    root = tree.session("root")
+    child = tree.session("child", parent=root)
+    owner = tree.owner()
+    area = owner.root / tree.generations[root]
+    own = area / tree.generations[root]
+    own.mkdir(parents=True)
+    work = own / "keep.py"
+    work.write_text("existing work", encoding="utf-8")
+
+    assert (await owner.folder_for(root)).own == own
+    child_folder = await tree.owner().folder_for(child)
+    assert child_folder.own == area / tree.generations[child]
+    assert work.read_text(encoding="utf-8") == "existing work"
+    tree.now += SCRATCH_RETENTION.total_seconds() + 1
+    tree.busy.add(child)
+    assert await owner.sweep() == 0
+    tree.busy.clear()
+    tree.now += SCRATCH_RETENTION.total_seconds() + 1
+    assert await owner.sweep() == 1
+    fresh = await tree.owner().folder_for(root)
+    assert fresh.area.name.startswith("sc_")
+    assert fresh.own.name == "main"
+    assert fresh.area != area
+
+
+@pytest.mark.parametrize("damage", ["missing", "invalid", "duplicate", "link"])
+@pytest.mark.asyncio
+async def test_lost_participant_names_never_adopt_another_sessions_files(
+    tmp_path: Path, damage: str
+) -> None:
+    tree = Tree(tmp_path)
+    root = tree.session("root")
+    child = tree.session("child", parent=root)
+    other = tree.session("other", parent=root)
+    owner = tree.owner()
+    first = await owner.folder_for(child)
+    second = await owner.folder_for(other)
+    work = first.own / "keep.txt"
+    work.write_text("first participant", encoding="utf-8")
+    marker = owner.state_root / first.area.name / ".participants"
+    marker.unlink()
+    if damage == "invalid":
+        marker.write_bytes(b"\xff")
+    elif damage == "duplicate":
+        marker.write_text('{"first": "sub1", "second": "sub1"}', encoding="ascii")
+    elif damage == "link":
+        try:
+            marker.symlink_to(work)
+        except OSError:
+            pytest.skip("host does not allow symbolic links")
+
+    restarted = tree.owner()
+    replacement = await restarted.folder_for(child)
+
+    assert replacement.area == first.area
+    assert replacement.own.name == "sub3"
+    assert replacement.recreated
+    assert work.read_text(encoding="utf-8") == "first participant"
+    assert second.own.is_dir()
+    assert (await tree.owner().folder_for(child)).own == replacement.own
 
 
 @pytest.mark.asyncio
@@ -151,7 +267,8 @@ async def test_missing_activity_state_adopts_old_areas_with_one_retention_grace(
 ) -> None:
     tree = Tree(tmp_path)
     owner = tree.owner()
-    folder = await owner.folder_for(tree.session("root"))
+    address = tree.session("root")
+    folder = await owner.folder_for(address)
     marker = owner.state_root / folder.area.name / ".activity"
     marker.unlink()
     if damage == "directory":
@@ -172,6 +289,8 @@ async def test_missing_activity_state_adopts_old_areas_with_one_retention_grace(
     tree.now += SCRATCH_RETENTION.total_seconds() + 1
     assert await owner.sweep() == 0
     assert marker.stat().st_mtime == tree.now
+    if damage == "state_root_removed":
+        assert (await tree.owner().folder_for(address)).own == folder.own
     if damage == "link":
         assert outside.read_text(encoding="utf-8") == "keep"
     assert await tree.owner().sweep() == 0
@@ -205,7 +324,8 @@ async def test_archive_capture_removes_only_explicit_roots_after_live_rows_disap
     surviving = await tree.owner().folder_for(child)
     assert surviving.recreated
     assert surviving.area != child_folder.area
-    assert surviving.area.name == tree.generations[child]
+    assert surviving.area.name.startswith("sc_")
+    assert surviving.own.name == "main"
     assert await owner.roots_for_archive([child]) == (tree.generations[child],)
     # Reusing the former root address must not adopt its older Scratch state.
     tree.generations[root] = "new_generation"
@@ -542,6 +662,9 @@ async def test_archive_rename_failure_survives_restart_and_never_reuses_old_file
     tree = Tree(tmp_path)
     address = tree.session("root")
     owner = tree.owner()
+    if marker_layout == "legacy":
+        # This layout predates short names and has no ownership mapping.
+        (owner.root / tree.generations[address] / tree.generations[address]).mkdir(parents=True)
     folder = await owner.folder_for(address)
     (folder.own / "old-result.txt").write_text("old", encoding="utf-8")
     original_rename = Path.rename

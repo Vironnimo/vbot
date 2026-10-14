@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import json
 import os
 import re
 import stat
@@ -19,9 +20,10 @@ from core.runs import RunInterruptedError
 from core.sessions import SessionAddress
 from core.storage.layout import DataDirectoryLayout
 from core.tools._scratch_identity import linux_birthtime_ns
+from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.file_status import is_link_status, stat_or_none
-from core.utils.ids import is_safe_id
+from core.utils.ids import is_safe_id, new_id
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.tree_move import remove_tree
@@ -33,6 +35,7 @@ _WORKERS = BoundedWorkerPool(name="scratch-areas", max_workers=4)
 _LOGGER = get_logger("tools.scratch_areas")
 _TRASH = re.compile(r"\.trash-[0-9a-f]{32}\Z")
 _INCARNATION = re.compile(r"[0-9a-f]{32}\Z")
+_SUB_FOLDER = re.compile(r"sub[1-9][0-9]*\Z")
 _RETIRE_PREFIX = ".retire-"
 
 
@@ -97,6 +100,10 @@ class ScratchAreas:
         self._locks_guard = Lock()
         self._sweep_lock = Lock()
         self._state_root_lock = Lock()
+        self._names_lock = RLock()
+        self._area_names: dict[str, str] = {}
+        self._area_roots: dict[str, str] = {}
+        self._names_loaded = False
         self._activity_lock = Lock()
         self._activity_epoch = 0
         self._admissions: dict[SessionAddress, int] = {}
@@ -293,6 +300,124 @@ class ScratchAreas:
             _require_directory(directory, status)
         return True
 
+    def _load_area_names(self) -> None:
+        """Rebuild the lookup from external ownership records once per owner.
+
+        Session ancestry is still resolved on every call. Only the assigned
+        directory names are cached, so losing optional bookkeeping while this
+        process is running can be repaired without moving active work.
+        """
+        if self._names_loaded:
+            return
+        self._ensure_state_root()
+        with os.scandir(self.state_root) as entries:
+            names = [entry.name for entry in entries if is_safe_id(entry.name)]
+        for name in names:
+            directory = self.state_root / name
+            status = stat_or_none(directory, follow_symlinks=False)
+            if status is None or is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+                continue
+            root_id = _read_state_text(directory / ".owner")
+            if root_id is None or not is_safe_id(root_id):
+                continue
+            previous = self._area_names.get(root_id)
+            if previous is not None and previous != name:
+                raise OSError(errno.EINVAL, "Scratch ownership is ambiguous")
+            self._area_names[root_id] = name
+            self._area_roots[name] = root_id
+        self._names_loaded = True
+
+    def _area_name(self, root_id: str, *, create: bool = False) -> str | None:
+        with self._names_lock:
+            self._load_area_names()
+            name = self._area_names.get(root_id)
+            if name is None:
+                # Keep already-announced paths, including pending archive
+                # removal, until that complete area is retired normally.
+                legacy_paths = (
+                    self.root / root_id,
+                    self.state_root / root_id,
+                    self.root / f"{_RETIRE_PREFIX}{root_id}",
+                )
+                if any(
+                    stat_or_none(path, follow_symlinks=False) is not None for path in legacy_paths
+                ):
+                    return root_id
+                if not create:
+                    return None
+
+                def claim(candidate: str) -> bool:
+                    if stat_or_none(self.state_root / candidate, follow_symlinks=False) is not None:
+                        return False
+                    try:
+                        (self.root / candidate).mkdir()
+                    except FileExistsError:
+                        return False
+                    return True
+
+                name = new_id("sc", claim=claim)
+                _save_state_text(
+                    self._state_directory(name) / ".owner", root_id, within=self.state_root
+                )
+                self._area_names[root_id] = name
+                self._area_roots[name] = root_id
+            else:
+                _save_state_text(
+                    self._state_directory(name) / ".owner", root_id, within=self.state_root
+                )
+            return name
+
+    def _root_for_area(self, name: str) -> str:
+        with self._names_lock:
+            self._load_area_names()
+            return self._area_roots.get(name, name)
+
+    def _forget_area(self, name: str) -> None:
+        with self._names_lock:
+            root_id = self._area_roots.pop(name, None)
+            if root_id is not None:
+                self._area_names.pop(root_id, None)
+
+    def _participant_name(self, area: Path, root_id: str, own_id: str) -> str:
+        if area.name == root_id:
+            return own_id
+        if own_id == root_id:
+            return "main"
+        marker = self._state_directory(area.name) / ".participants"
+        text = _read_state_text(marker)
+        try:
+            participants = json.loads(text) if text is not None else {}
+        except ValueError:
+            participants = {}
+        if not (
+            isinstance(participants, dict)
+            and all(
+                is_safe_id(key) and isinstance(value, str) and _SUB_FOLDER.fullmatch(value)
+                for key, value in participants.items()
+            )
+            and len(set(participants.values())) == len(participants)
+        ):
+            participants = {}
+        if own_id in participants:
+            return str(participants[own_id])
+        # A missing/damaged mapping must never assign another participant's
+        # surviving directory. Reserve the actual folder before publishing it.
+        used = set(participants.values())
+        index = 1
+        while True:
+            name = f"sub{index}"
+            index += 1
+            if name in used:
+                continue
+            try:
+                (area / name).mkdir()
+            except FileExistsError:
+                continue
+            break
+        participants[own_id] = name
+        _save_state_text(marker, json.dumps(participants, sort_keys=True), within=self.state_root)
+        return name
+
     def _folder_for(self, address: SessionAddress) -> ScratchFolder:
         resolved = self._resolve(address)
         if resolved is None:
@@ -301,18 +426,24 @@ class ScratchAreas:
         trash = None
         with self._area_lock(root_id):
             self._ensure_root()
-            area = self.root / root_id
+            self._ensure_state_root()
+            area_name = self._area_name(root_id, create=True)
+            assert area_name is not None
+            area = self.root / area_name
             # A restored Session must never adopt files whose archive removal
             # Windows delayed because a process still had one of them open.
             if self._pending_retirement(area):
                 trash = self._retire_archived(area)
+                area_name = self._area_name(root_id, create=True)
+                assert area_name is not None
+                area = self.root / area_name
             _repair_directory(area, within=self.root)
-            own = area / own_id
+            own = area / self._participant_name(area, root_id, own_id)
             recreated = _repair_directory(own, within=self.root)
             tmp = own / "tmp"
             tmp_recreated = _repair_directory(tmp, within=self.root)
             incarnation, new_incarnation = self._incarnation_for(
-                root_id, own_id, own, tmp, force_new=recreated or tmp_recreated
+                area.name, own.name, own, tmp, force_new=recreated or tmp_recreated
             )
             self._touch(area)
             folder = ScratchFolder(own, area, tmp, recreated or new_incarnation, incarnation)
@@ -324,7 +455,12 @@ class ScratchAreas:
         return folder
 
     def _touch(self, area: Path) -> None:
-        marker = self._state_directory(area.name) / ".activity"
+        directory = self._state_directory(area.name)
+        with self._names_lock:
+            root_id = self._area_roots.get(area.name)
+        if root_id is not None:
+            _save_state_text(directory / ".owner", root_id, within=self.state_root)
+        marker = directory / ".activity"
         _repair_regular_file(marker, within=self.state_root)
         now = self._clock()
         if os.utime in os.supports_follow_symlinks:
@@ -383,7 +519,8 @@ class ScratchAreas:
         return tuple(sorted(roots))
 
     def _retire(self, area: Path, *, activity_epoch: int | None = None) -> Path | None:
-        if activity_epoch is not None and self._admitted_since(area.name, activity_epoch):
+        root_id = self._root_for_area(area.name)
+        if activity_epoch is not None and self._admitted_since(root_id, activity_epoch):
             self._touch(area)
             return None
         if stat_or_none(area, follow_symlinks=False) is None:
@@ -392,7 +529,7 @@ class ScratchAreas:
         area.rename(trash)
         if activity_epoch is not None:
             try:
-                admitted = self._admitted_since(area.name, activity_epoch)
+                admitted = self._admitted_since(root_id, activity_epoch)
             except BaseException:
                 trash.rename(area)
                 raise
@@ -404,6 +541,7 @@ class ScratchAreas:
                 self._touch(area)
                 return None
         _remove_disposable(self.state_root / area.name, within=self.state_root)
+        self._forget_area(area.name)
         return trash
 
     def _discard(self, path: Path) -> None:
@@ -435,6 +573,7 @@ class ScratchAreas:
         _repair_regular_file(marker, within=self.state_root)
         trash = self._retire(area)
         _remove_disposable(self.state_root / area.name, within=self.state_root)
+        self._forget_area(area.name)
         return trash
 
     def _remove_areas(self, roots: tuple[str, ...]) -> None:
@@ -443,7 +582,10 @@ class ScratchAreas:
                 with self._area_lock(root_id):
                     if not self._has_root():
                         continue
-                    trash = self._retire_archived(self.root / root_id)
+                    area_name = self._area_name(root_id)
+                    if area_name is None:
+                        continue
+                    trash = self._retire_archived(self.root / area_name)
                 if trash is not None:
                     self._discard(trash)
                     _LOGGER.debug("Scratch area removed (root=%s reason=archive)", root_id)
@@ -489,18 +631,20 @@ class ScratchAreas:
                     self._discard(candidate)
                     removed += 1
                     continue
-                root_id = name.removeprefix(_RETIRE_PREFIX)
-                if not is_safe_id(root_id) or root_id in visited:
+                area_name = name.removeprefix(_RETIRE_PREFIX)
+                if not is_safe_id(area_name) or area_name in visited:
                     continue
-                visited.add(root_id)
-                candidate = self.root / root_id
+                visited.add(area_name)
+                candidate = self.root / area_name
+                root_id = self._root_for_area(area_name)
                 with self._area_lock(root_id):
                     if self._pending_retirement(candidate):
                         trash = self._retire_archived(candidate)
                     else:
                         status = stat_or_none(candidate, follow_symlinks=False)
                         if status is None:
-                            _remove_disposable(self.state_root / root_id, within=self.state_root)
+                            _remove_disposable(self.state_root / area_name, within=self.state_root)
+                            self._forget_area(area_name)
                             continue
                         if root_id in busy_roots:
                             _require_directory(candidate, status)
@@ -593,6 +737,30 @@ def _replace_state_file(path: Path, text: str, *, within: Path) -> None:
     _remove_disposable(path, within=within)
     with path.open("x", encoding="ascii", newline="\n") as stream:
         stream.write(text)
+
+
+def _read_state_text(path: Path) -> str | None:
+    status = stat_or_none(path, follow_symlinks=False)
+    if (
+        status is None
+        or is_link_status(status)
+        or not stat.S_ISREG(status.st_mode)
+        or status.st_size > 1024 * 1024
+    ):
+        return None
+    try:
+        return path.read_text(encoding="ascii")
+    except UnicodeError:
+        return None
+
+
+def _save_state_text(path: Path, text: str, *, within: Path) -> None:
+    if _read_state_text(path) == text:
+        return
+    status = stat_or_none(path, follow_symlinks=False)
+    if status is not None and (is_link_status(status) or not stat.S_ISREG(status.st_mode)):
+        _remove_disposable(path, within=within)
+    atomic_write_text(path, text, encoding="ascii")
 
 
 def _directory_identity(path: Path) -> str:
