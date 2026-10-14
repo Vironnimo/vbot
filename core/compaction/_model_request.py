@@ -23,6 +23,9 @@ _sleep = asyncio.sleep
 # A retryable Provider failure, such as a stream cut short by a dropped
 # connection, gets one more attempt; recovery beyond it belongs to the caller.
 MODEL_REQUEST_ATTEMPTS = 2
+MODEL_REQUEST_TIMEOUT_SECONDS = 7 * 60
+MAX_SUMMARY_CHARACTERS = 100_000
+_TIME_LIMIT_MESSAGE = "Compaction exceeded its 7-minute time limit. No checkpoint was saved."
 
 
 async def _send_streaming_model_request(
@@ -49,42 +52,56 @@ async def _send_streaming_model_request(
 
     A retryable Provider failure is retried in place once after the shared
     backoff. Acceptance failures and cancellation are never retried. Every
-    attempt records its own Usage.
+    attempt records its own Usage. One absolute deadline covers all attempts
+    and their backoff, even while the Model keeps producing deltas.
     """
     model = model_reference or str(request_options.get("model_id") or "unknown")
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            return await _stream_attempt(
-                adapter,
-                messages,
-                request_options,
-                model=model,
-                usage_recorder=usage_recorder,
-                session_address=session_address,
-                run_id=run_id,
-                owner_name=owner_name,
-                group_id=group_id,
-            )
-        except Exception as error:
-            if attempt >= MODEL_REQUEST_ATTEMPTS or not getattr(error, "retryable", False):
-                raise
-            hint = getattr(error, "retry_after", None)
-            delay, _ = compute_retry_delay(
-                attempt - 1, retry_after=hint if isinstance(hint, (int, float)) else None
-            )
-            _LOGGER.debug(
-                "Compaction Model request failed; retrying once in %.2fs "
-                "(run=%s session=%s model=%s cause=%s: %s)",
-                delay,
-                run_id,
-                session_address.session_id if session_address is not None else None,
-                model,
-                type(error).__name__,
-                error,
-            )
-            await _sleep(delay)
+    budget = asyncio.timeout(MODEL_REQUEST_TIMEOUT_SECONDS)
+    try:
+        async with budget:
+            attempt = 0
+            while True:
+                if _budget_exhausted(budget):
+                    raise CompactionError(_TIME_LIMIT_MESSAGE)
+                attempt += 1
+                try:
+                    response = await _stream_attempt(
+                        adapter,
+                        messages,
+                        request_options,
+                        budget=budget,
+                        model=model,
+                        usage_recorder=usage_recorder,
+                        session_address=session_address,
+                        run_id=run_id,
+                        owner_name=owner_name,
+                        group_id=group_id,
+                    )
+                    if _budget_exhausted(budget):
+                        raise CompactionError(_TIME_LIMIT_MESSAGE)
+                    return response
+                except Exception as error:
+                    if attempt >= MODEL_REQUEST_ATTEMPTS or not getattr(error, "retryable", False):
+                        raise
+                    hint = getattr(error, "retry_after", None)
+                    delay, _ = compute_retry_delay(
+                        attempt - 1, retry_after=hint if isinstance(hint, (int, float)) else None
+                    )
+                    _LOGGER.debug(
+                        "Compaction Model request failed; retrying once in %.2fs "
+                        "(run=%s session=%s model=%s cause=%s: %s)",
+                        delay,
+                        run_id,
+                        session_address.session_id if session_address is not None else None,
+                        model,
+                        type(error).__name__,
+                        error,
+                    )
+                    await _sleep(delay)
+    except TimeoutError as error:
+        if not budget.expired():
+            raise
+        raise CompactionError(_TIME_LIMIT_MESSAGE) from error
 
 
 async def _stream_attempt(
@@ -92,6 +109,7 @@ async def _stream_attempt(
     messages: list[dict[str, Any]],
     request_options: dict[str, Any],
     *,
+    budget: asyncio.Timeout,
     model: str,
     usage_recorder: UsageRecorder | None,
     session_address: SessionAddress | None,
@@ -116,10 +134,47 @@ async def _stream_attempt(
         else None
     )
     try:
-        # Internal maintenance remains bounded even when a local Model stalls.
-        async for delta in iter_with_chunk_timeout(adapter.stream(messages, **request_options)):
-            if delta.get("type") != "heartbeat":
+        # Close the Provider iterator before recording failure or cancellation;
+        # an output limit can stop consumption between two stream reads.
+        source = adapter.stream(messages, **request_options)
+        stream_failed = False
+        try:
+            summary_characters = 0
+            async for delta in iter_with_chunk_timeout(source):
+                if _budget_exhausted(budget):
+                    raise CompactionError(_TIME_LIMIT_MESSAGE)
+                if delta.get("type") == "heartbeat":
+                    continue
+                if delta.get("type") == "content_delta" and isinstance(delta.get("text"), str):
+                    summary_characters += len(delta["text"])
+                    if summary_characters > MAX_SUMMARY_CHARACTERS:
+                        raise CompactionError(
+                            f"Compaction exceeded its {MAX_SUMMARY_CHARACTERS:,}-character "
+                            "summary limit. No checkpoint was saved."
+                        )
                 accumulator.add_delta(delta)
+        except BaseException:
+            stream_failed = True
+            raise
+        finally:
+            if close := getattr(source, "aclose", None):
+                try:
+                    await close()
+                except Exception as error:
+                    if not stream_failed:
+                        raise
+                    # Cleanup must not turn a limit or cancellation into a
+                    # retryable Provider error and start another request.
+                    _LOGGER.warning(
+                        "Compaction stream cleanup failed while aborting "
+                        "(run=%s model=%s cause=%s)",
+                        run_id,
+                        model,
+                        type(error).__name__,
+                    )
+        if _budget_exhausted(budget):
+            # A Provider can suppress cancellation while closing its stream.
+            raise CompactionError(_TIME_LIMIT_MESSAGE)
         if accumulator.finish_reason != TERMINAL_OUTCOME_STOP:
             raise CompactionError(
                 "Summary stream did not complete successfully "
@@ -135,9 +190,21 @@ async def _stream_attempt(
             await usage_recorder.finish(
                 call_id,
                 accumulator.usage,
-                status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                status=(
+                    "cancelled"
+                    if isinstance(exc, asyncio.CancelledError) and not budget.expired()
+                    else "failed"
+                ),
             )
         raise
     if usage_recorder is not None and call_id is not None:
         response["usage"] = await usage_recorder.finish(call_id, accumulator.usage)
     return response
+
+
+def _budget_exhausted(budget: asyncio.Timeout) -> bool:
+    """A buffered stream can reach the deadline without yielding to its timer."""
+    deadline = budget.when()
+    return budget.expired() or (
+        deadline is not None and asyncio.get_running_loop().time() >= deadline
+    )
