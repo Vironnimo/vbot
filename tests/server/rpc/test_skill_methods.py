@@ -19,8 +19,9 @@ import pytest
 
 from core.skills import SkillPolicyError
 from core.skills.authoring import SkillAuthoringService
+from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
-from core.statistics import SkillUse
+from core.statistics.skills import SkillActivationUse
 from server.events import ServerEventBus
 from server.rpc.skill_methods import install_skill_upload
 from tests.server.rpc_test_support import call, resource_changes, rpc_error, rpc_result
@@ -99,10 +100,10 @@ class _Statistics:
     """The Statistics answer the inventory reads Skill use from."""
 
     def __init__(self) -> None:
-        self.usage: dict[tuple[str, str], SkillUse] = {}
+        self.usage: tuple[SkillActivationUse, ...] = ()
         self.error: Exception | None = None
 
-    async def skill_usage_async(self) -> dict[tuple[str, str], SkillUse]:
+    async def skill_package_usage_async(self) -> tuple[SkillActivationUse, ...]:
         if self.error is not None:
             raise self.error
         return self.usage
@@ -649,59 +650,68 @@ async def test_manager_reads_return_runtime_answers_from_a_worker(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_inventory_adds_each_packages_skill_use(tmp_path: Path) -> None:
+@pytest.mark.parametrize("qualified", [False, True])
+async def test_inventory_adds_each_packages_skill_use(tmp_path: Path, qualified: bool) -> None:
     state = _state(tmp_path)
+    private = SkillPackageRef("agent", "deploy-package", "builder")
+    home = SkillPackageRef("home", "deploy-package")
+    bundled = SkillPackageRef("bundled", "deploy-package")
     state.runtime.inventory = {
         "skills": [
-            {"name": "deploy", "owner_id": "builder", "shared_with": ["reviewer"]},
-            {"name": "deploy", "owner_id": None, "shared_with": []},
-            {"name": "teach", "owner_id": None, "shared_with": []},
+            {
+                "id": "private",
+                "name": "deploy",
+                "owner_id": "builder",
+                "shared_with": [] if qualified else ["reviewer"],
+                "package": private.to_dict(),
+            },
+            {"id": "home", "name": "deploy", "owner_id": None, "package": home.to_dict()},
+            {"id": "bundled", "name": "deploy", "owner_id": None, "package": bundled.to_dict()},
+            {"id": "unused", "name": "teach", "owner_id": None, "shared_with": []},
         ]
     }
-    state.statistics_service.usage = {
-        ("builder", "deploy"): SkillUse("2026-09-01T10:00:00.000000Z", 2),
-        ("reviewer", "deploy"): SkillUse("2026-09-03T10:00:00.000000Z", 1),
-        ("main", "deploy"): SkillUse("2026-09-02T10:00:00.000000Z", 4),
-    }
+    first = "2026-09-01T10:00:00.000000Z"
+    second = "2026-09-02T10:00:00.000000Z"
+    third = "2026-09-03T10:00:00.000000Z"
+    state.statistics_service.usage = (
+        SkillActivationUse(1, "builder", "deploy", first),
+        SkillActivationUse(2, "builder", "deploy", first, home if qualified else None),
+        SkillActivationUse(3, "reviewer", "deploy", third, private if qualified else None),
+        *(SkillActivationUse(key, "main", "deploy", second) for key in range(4, 8)),
+    )
+    if qualified:
+        state.statistics_service.usage += (
+            SkillActivationUse(1, "builder", "deploy", first, private),
+            SkillActivationUse(4, "main", "deploy", second, home),
+            # Visible names can change without changing the package; count its Session once.
+            SkillActivationUse(4, "main", "earlier-name", third, home),
+            SkillActivationUse(8, "main", "deploy", third, bundled),
+        )
 
     listed = await rpc_result(state, "skill.inventory")
 
-    # The private package counts its owner and receivers; the global one the rest.
-    assert [(entry["uses"], entry["last_used_at"]) for entry in listed["skills"]] == [
-        (3, "2026-09-03T10:00:00.000000Z"),
-        (4, "2026-09-02T10:00:00.000000Z"),
-        (0, None),
-    ]
+    # Legacy use retains conservative attribution. Exact use follows the package
+    # despite changed shares or a private same-name package, deduplicated by Session.
+    expected = (
+        [(2, third), (5, third), (5, third), (0, None)]
+        if qualified
+        else [(3, third), (4, second), (4, second), (0, None)]
+    )
+    assert [(entry["uses"], entry["last_used_at"]) for entry in listed["skills"]] == expected
     # Annotation never mutates the shared scan or a later metadata-only read.
     assert all("uses" not in entry for entry in state.runtime.inventory["skills"])
     usage = await rpc_result(state, "skill.usage")
     assert usage == {
         "usage": [
-            {
-                "agent_id": "builder",
-                "name": "deploy",
-                "uses": 2,
-                "last_used_at": "2026-09-01T10:00:00.000000Z",
-            },
-            {
-                "agent_id": "main",
-                "name": "deploy",
-                "uses": 4,
-                "last_used_at": "2026-09-02T10:00:00.000000Z",
-            },
-            {
-                "agent_id": "reviewer",
-                "name": "deploy",
-                "uses": 1,
-                "last_used_at": "2026-09-03T10:00:00.000000Z",
-            },
+            {"id": entry["id"], "uses": count, "last_used_at": last}
+            for entry, (count, last) in zip(listed["skills"], expected, strict=True)
         ]
     }
 
-    async def usage_not_requested() -> dict[tuple[str, str], SkillUse]:
+    async def usage_not_requested() -> tuple[SkillActivationUse, ...]:
         pytest.fail("metadata-only inventory must not read Statistics")
 
-    state.statistics_service.skill_usage_async = usage_not_requested
+    state.statistics_service.skill_package_usage_async = usage_not_requested
     listed = await rpc_result(state, "skill.inventory", include_usage=False)
     assert all("uses" not in entry for entry in listed["skills"])
 

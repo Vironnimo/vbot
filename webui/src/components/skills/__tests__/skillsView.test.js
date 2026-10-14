@@ -1119,11 +1119,11 @@ describe('Skills manager', () => {
     });
     usage = [
       {
-        agent_id: 'main',
-        name: 'deploy',
+        id: 'private',
         uses: 3,
         last_used_at: '2026-10-01T08:00:00.000000Z',
       },
+      { id: 'bundled', uses: 0, last_used_at: null },
     ];
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'skill.set_pinned')
@@ -1654,8 +1654,7 @@ describe('Skills manager', () => {
     const use = (uses) => ({
       usage: [
         {
-          agent_id: 'main',
-          name: 'deploy',
+          id: 'private',
           uses,
           last_used_at: '2026-10-01T08:00:00.000000Z',
         },
@@ -1722,48 +1721,48 @@ describe('Skills manager', () => {
 });
 
 describe('skill projections', () => {
-  it('assigns use to owners and shared receivers before global packages', () => {
+  it('joins server use by exact package id and leaves missing evidence unknown', () => {
     const packages = [
       entry('owned', 'deploy', { shared_with: ['reviewer', 'receiver'] }),
       entry('other-owner', 'deploy', { owner_id: 'reviewer' }),
       entry('global', 'deploy', { owner_id: null }),
       entry('bundled', 'deploy', { owner_id: null }),
       entry('unused', 'teach', { owner_id: null }),
+      entry('arrived', 'deploy', { owner_id: null }),
     ];
     const counted = withSkillUsage(packages, [
       {
-        agent_id: 'main',
-        name: 'deploy',
+        id: 'owned',
         uses: 2,
         last_used_at: '2026-10-01T00:00:00Z',
       },
       {
-        agent_id: 'receiver',
-        name: 'deploy',
+        id: 'other-owner',
         uses: 3,
         last_used_at: '2026-10-03T00:00:00Z',
       },
       {
-        agent_id: 'reviewer',
-        name: 'deploy',
+        id: 'global',
         uses: 7,
         last_used_at: '2026-10-02T00:00:00Z',
       },
       {
-        agent_id: 'outsider',
-        name: 'deploy',
+        id: 'bundled',
         uses: 9,
         last_used_at: '2026-10-04T00:00:00Z',
       },
+      { id: 'unused', uses: 0, last_used_at: null },
+      { id: 'removed', uses: 99, last_used_at: '2026-10-04T00:00:00Z' },
     ]);
     expect(
       counted.map(({ uses, last_used_at }) => [uses, last_used_at]),
     ).toEqual([
-      [5, '2026-10-03T00:00:00Z'],
+      [2, '2026-10-01T00:00:00Z'],
+      [3, '2026-10-03T00:00:00Z'],
       [7, '2026-10-02T00:00:00Z'],
       [9, '2026-10-04T00:00:00Z'],
-      [9, '2026-10-04T00:00:00Z'],
       [0, null],
+      [undefined, undefined],
     ]);
     expect(packages.every((item) => !('uses' in item))).toBe(true);
   });

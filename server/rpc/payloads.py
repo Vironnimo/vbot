@@ -523,6 +523,7 @@ def remove_opaque_provider_metadata(value: Any, *, file_delivery: Any | None = N
                 "reasoning_meta",
                 "reasoning_scope",
                 "subagent_reply_target",
+                "skill_package",
             }
         }
     if isinstance(value, list):

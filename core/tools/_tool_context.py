@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from core.runs import RunExecutionOwner, RunKind
+from core.skills.policy import SkillPackageRef
 from core.tools._display_diff import (
     MAX_DISPLAY_DIFF_LINES,
     display_diff_line_count,
@@ -65,9 +66,10 @@ ToolCallCancelCheck = Callable[[str], bool]
 ToolNoteHook = Callable[[str], None]
 
 
-# (skill_name, wrapped_content) -> newly_activated. The content is passed for the
-# session's in-memory activation record only; the tool result is the durable carrier.
-ToolSkillActivationHook = Callable[[str, str], bool]
+# (skill_name, wrapped_content, loaded_package) -> newly_activated. The content
+# feeds epoch deduplication; the Tool Result carries the durable activation.
+ToolSkillActivationHook = Callable[[str, str, SkillPackageRef | None], bool]
+ToolCallSkillActivationHook = Callable[[str, str, str, SkillPackageRef | None], bool]
 ToolResultPersistedCallback = Callable[[], None]
 ToolResultPersistedHook = Callable[[ToolResultPersistedCallback], None]
 ToolCallResultPersistedRegistrar = Callable[[str, ToolResultPersistedCallback], None]
@@ -425,7 +427,9 @@ class ToolContext:
 
         self.note_hook(content)
 
-    def activate_skill(self, name: str, content: str) -> bool | None:
+    def activate_skill(
+        self, name: str, content: str, package: SkillPackageRef | None = None
+    ) -> bool | None:
         """Record a skill activation through the session hook, when present.
 
         Returns ``True`` for a fresh activation, ``False`` when the skill was
@@ -435,7 +439,7 @@ class ToolContext:
         if self.skill_activation_hook is None:
             return None
 
-        return self.skill_activation_hook(name, content)
+        return self.skill_activation_hook(name, content, package)
 
     def after_result_persisted(self, callback: ToolResultPersistedCallback) -> None:
         """Run *callback* only after this Tool Result enters Session history."""
@@ -558,7 +562,7 @@ class ToolExecutionConfig:
     tool_call_cancel_registrar: ToolCallCancelRegistrar | None = None
     tool_call_cancel_check: ToolCallCancelCheck | None = None
     note_hook: ToolNoteHook | None = None
-    skill_activation_hook: ToolSkillActivationHook | None = None
+    skill_activation_hook: ToolCallSkillActivationHook | None = None
     tool_call_result_persisted_registrar: ToolCallResultPersistedRegistrar | None = None
     tool_delivery_receipt_registrar: ToolDeliveryReceiptHook | None = None
     tool_turn_end_registrar: ToolTurnEndHook | None = None

@@ -207,7 +207,7 @@ class ProjectedRows:
         elif role == "note":
             skill_name = skill_context_note_name(message)
             if skill_name is not None:
-                self.skills.append((key, seq, skill_name))
+                self._add_skill(seq, skill_name, message)
         elif role == "error":
             self.errors.append((key, seq, instant, day, message.error_kind or UNKNOWN_MODEL_KEY))
         elif role == "compaction_checkpoint":
@@ -221,6 +221,19 @@ class ProjectedRows:
         if self.max_instant is None or instant > self.max_instant:
             self.max_instant = instant
 
+    def _add_skill(self, seq: int, name: str, message: ChatMessage) -> None:
+        package = message.skill_package
+        self.skills.append(
+            (
+                self.session_key,
+                seq,
+                name,
+                package.source if package else None,
+                package.name if package else None,
+                package.location if package else None,
+            )
+        )
+
     def _add_tool(self, seq: int, instant: int, message: ChatMessage) -> None:
         activation = skill_tool_activation_name(message)
         outcome: int | None
@@ -228,7 +241,7 @@ class ProjectedRows:
         if activation is not None:
             # A loaded Skill activation is a successful Tool call by definition.
             outcome = 1
-            self.skills.append((self.session_key, seq, activation))
+            self._add_skill(seq, activation, message)
         else:
             envelope = _parse_envelope(message.content)
             if envelope is None:

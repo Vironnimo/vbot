@@ -164,6 +164,7 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
     assert {"deploy", "release"} <= _names(registry)
     assert "secret-notes" not in _names(registry)
     assert registry.get("deploy").path == (package / "SKILL.md").resolve()
+    assert registry.get("deploy").package_ref == SkillPackageRef("agent", "a-deploy-folder", "main")
     # Resolving several shares scans an owner's home once. Loading the selected
     # packages into the receiver's registry does not reread unshared neighbours.
     assert metadata_reads[(secret / "SKILL.md").resolve()] == 1
@@ -178,6 +179,7 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
 
     # The owner's view is unchanged, including its always-allowed private Skills.
     owner_after = runtime.skills_for(None, "main")
+    assert owner_after.get("deploy").package_ref == registry.get("deploy").package_ref
     assert _names(owner_after) == _names(owner_before)
     assert sorted(_allowed(owner_after, [])) == ["deploy", "release", "secret-notes"]
 

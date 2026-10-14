@@ -311,9 +311,10 @@ def _cursor_of(state: sqlite3.Row) -> SessionReadCursor:
 
 
 def _cursor_continues(state: sqlite3.Row, cursor: SessionReadCursor) -> bool:
-    """An edit or takeover raises the floor, so no cursor before it continues."""
+    """Edits/takeovers raise the sequence floor; metadata rewrites the revision floor."""
     return (
         cursor.generation_id == str(state["generation_id"])
+        and cursor.history_revision >= int(state["cursor_floor_revision"])
         and 0 <= cursor.next_seq <= int(state["next_seq"])
         and cursor.next_seq >= int(state["cursor_floor_seq"])
     )

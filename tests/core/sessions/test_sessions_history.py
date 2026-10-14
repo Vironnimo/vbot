@@ -25,6 +25,7 @@ from core.sessions import (
 )
 from core.sessions.errors import SessionNotFoundError
 from core.sessions.history import skill_tool_activation
+from core.skills.policy import SkillPackageRef
 from tests.core.sessions.history_fixtures import complete_run
 from tests.core.sessions.sessions_test_support import _address
 
@@ -150,6 +151,37 @@ def test_skill_activation_cache_follows_checkpoints_and_history_edits(manager, m
     expected = {"alpha": "ALPHA", gamma[0]: gamma[1]}
     assert session.activated_skill_contents() == expected
     assert manager.get(session.address).activated_skill_contents() == expected
+    # The same instructions loaded from another package count as a fresh
+    # activation, and both identity and deduplication survive a reload.
+    package = SkillPackageRef("agent", "alpha", "owner")
+    data = {"activation_content": "ALPHA"}
+    session.activate_skill_context("alpha", data, package=package)
+    reloaded = manager.get(session.address)
+    assert not reloaded.register_skill_activation("alpha", "ALPHA", package)
+    assert reloaded.register_skill_activation("alpha", "ALPHA", replace(package, location="other"))
+
+
+@pytest.mark.asyncio
+async def test_package_owner_rename_invalidates_audit_and_inherited_view_cursors(manager) -> None:
+    session = manager.create("receiver", session_id="uses-shared-package")
+    package = SkillPackageRef("agent", "debugging", "owner")
+    session.activate_skill_context("debugging", {"activation_content": "DEBUG"}, package=package)
+    other = replace(ChatMessage.note("unrelated"), skill_package=replace(package, location="other"))
+    session.append(other)
+    fork = await manager.fork(session.address)
+    before = session.load_since()
+    inherited_before = fork.load_since()
+    assert before is not None and inherited_before is not None
+
+    manager.retarget_identity_agent_sessions("owner", "renamed")
+
+    assert session.load_since(before.cursor) is None
+    assert fork.load_since(inherited_before.cursor) is None
+    assert session.load()[0].skill_package == replace(package, location="renamed")
+    assert fork.load_active()[0].skill_package == replace(package, location="renamed")
+    assert session.load()[-1].skill_package == other.skill_package
+    fresh = session.load_since()
+    assert fresh is not None and session.load_since(fresh.cursor) is not None
 
 
 def test_edit_targets_only_an_own_plain_text_user_message_after_the_latest_takeover() -> None:

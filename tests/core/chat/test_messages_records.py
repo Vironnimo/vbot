@@ -26,6 +26,7 @@ from core.chat.messages import (
     error_kind_llm_visible,
 )
 from core.chat.output_files import AssistantFileReference
+from core.skills.policy import SkillPackageRef
 from tests.core.chat.messages_test_support import FIXED_TIMESTAMP, FIXED_TIMING
 
 _STAMP = "2026-05-03T14:30:00.000000Z"
@@ -440,6 +441,13 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
             ),
             {"model_fallback": {"from_model": "a", "to_model": "b"}},
         ),
+        (
+            replace(
+                ChatMessage.note("Skill activated"),
+                skill_package=SkillPackageRef("agent", "debugging", "owner"),
+            ),
+            {"skill_package": {"source": "agent", "name": "debugging", "location": "owner"}},
+        ),
     ],
     ids=[
         "interrupted",
@@ -450,6 +458,7 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
         "run-id",
         "tool",
         "model-fallback",
+        "skill-package",
     ],
 )
 def test_optional_internal_fields_persist_and_round_trip(

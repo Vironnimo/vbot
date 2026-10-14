@@ -20,6 +20,8 @@ from core.extensions import ExtensionRegistry, HookContext
 from core.performance import measure, session_track
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
 from core.sessions import ChatSession, ToolResultFacts, ToolResultPayload
+from core.sessions.history import skill_tool_activation_name
+from core.skills.policy import SkillPackageRef
 from core.tools import (
     READ_MEDIA_ARTIFACT_KIND,
     ChangeTracker,
@@ -798,6 +800,7 @@ class ToolRound:
         self._calls: list[ToolCall] = []
         self._rejections: dict[int, ToolCallRejection] = {}
         self._notes: list[str] = []
+        self._skill_packages: dict[str, SkillPackageRef] = {}
         self._registry = _EmittingToolRegistry(
             context.registry,
             run,
@@ -853,7 +856,7 @@ class ToolRound:
             ),
             tool_call_cancel_check=lambda tool_call_id: run.tool_call_cancelled(tool_call_id),
             note_hook=self._notes.append,
-            skill_activation_hook=session.register_skill_activation,
+            skill_activation_hook=self._activate_skill,
             tool_call_result_persisted_registrar=context.register_result_persisted,
             tool_delivery_receipt_registrar=(
                 context.register_delivery_receipt if context.allow_owned_effects else None
@@ -919,6 +922,14 @@ class ToolRound:
             ]
         )
 
+    def _activate_skill(
+        self, tool_call_id: str, name: str, content: str, package: SkillPackageRef | None
+    ) -> bool:
+        activated = self._context.session.register_skill_activation(name, content, package)
+        if activated and package is not None:
+            self._skill_packages[tool_call_id] = package
+        return activated
+
     def _tool_results(
         self, completed: list[tuple[ToolCall, JsonObject]]
     ) -> tuple[list[ChatMessage], list[JsonObject]]:
@@ -937,6 +948,9 @@ class ToolRound:
                 timing=registry.timing_for_call(tool_call.id),
                 tool_display=registry.display_for_completed_call(tool_call.id),
             )
+            package = self._skill_packages.pop(tool_call.id, None)
+            if package is not None and skill_tool_activation_name(tool_message) is not None:
+                tool_message = replace(tool_message, skill_package=package)
             tool_messages.append(tool_message)
             media_outputs.extend(
                 _read_media_outputs(

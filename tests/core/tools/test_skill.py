@@ -9,6 +9,7 @@ import pytest
 
 from core.runs import RunKind
 from core.skills import ArchivedSkill, SkillAuthoringService
+from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
 from core.tools import SKILL_TOOL_NAME, ToolContractError, tool_failure
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -53,9 +54,11 @@ class ActivationRecorder:
     def __init__(self, accept: bool = True) -> None:
         self.accept = accept
         self.activations: dict[str, str] = {}
+        self.packages: dict[str, SkillPackageRef | None] = {}
 
-    def __call__(self, name: str, content: str) -> bool:
+    def __call__(self, name: str, content: str, package: SkillPackageRef | None) -> bool:
         self.activations[name] = content
+        self.packages[name] = package
         return self.accept
 
 
@@ -102,6 +105,11 @@ def test_activation_separates_instructions_and_resource_files(tmp_path: Path) ->
     assert "- references/guide.md" in activation_content
     assert "- assets/checklist.txt" in activation_content
     assert data["content"] in activation_content
+    assert recorder.packages["debugging"] == SkillPackageRef(
+        "folder", "debugging", (tmp_path / "skills").resolve().as_posix()
+    )
+    assert "skill_package" not in result
+    assert "skill_package" not in data
 
 
 def test_env_requirements_add_environment_access_guidance(tmp_path: Path) -> None:

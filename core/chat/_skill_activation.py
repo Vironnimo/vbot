@@ -107,7 +107,7 @@ def _activate_triggered_skills(
             )
             session.add_note(f"Skill trigger '{skill_name}' could not be loaded: {error}")
             continue
-        if session.activate_skill_context(skill.name, data):
+        if session.activate_skill_context(skill.name, data, package=skill.package_ref):
             _LOGGER.debug(
                 "Activated triggered skill '%s' for agent=%s session=%s",
                 skill.name,

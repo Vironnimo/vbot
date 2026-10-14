@@ -154,6 +154,7 @@ def load_global_skill_registry(
         extra_dirs=roots[1:],
         environment=environment,
         origins=_origin_layers(roots),
+        package_sources=[(root.kind, root.location) for root in global_roots],
         excluded_packages=_package_exclusions(
             global_roots,
             lambda agent_id: storage.data_dir / _AGENTS_DIRNAME / agent_id / _SKILLS_DIRNAME,
@@ -850,9 +851,15 @@ class SkillRuntime:
                 if editable_scope
                 else None
             )
+            # Policy entries use the visible name; usage must distinguish the
+            # concrete loaded directory even when frontmatter names collide.
+            package = source.package_ref(skill.path.parent.name) or SkillPackageRef(
+                "folder", skill.path.parent.name, source.root.resolve().as_posix()
+            )
             skills.append(
                 {
                     "id": entry_id,
+                    "package": package.to_dict(),
                     "editable_scope": editable_scope,
                     "source_kind": source.kind,
                     "source_label": (root.parent.name if root.name == "skills" else root.name)
@@ -1154,10 +1161,14 @@ class SkillRuntime:
         scan_roots = [root.root for root in global_roots]
         roots: list[Path] = [agent_root]
         origins: list[str | None] = [SKILL_ORIGIN_AGENT]
+        package_sources: list[tuple[str, str | None]] = [("agent", agent_id)]
         project_allowed_names: set[str] = set()
         if project_id is not None:
             project = project or self._projects.refresh_sources(project_id, skill_scan=scan)
             roots.extend(project.skill_roots)
+            package_sources.extend(
+                ("folder", root.resolve().as_posix()) for root in project.skill_roots
+            )
             origins.extend([project_skill_origin(project.display_name)] * len(project.skill_roots))
             project_allowed_names.update(
                 effective_project_allowed_skills(
@@ -1174,9 +1185,13 @@ class SkillRuntime:
         # filter exactly like global skills.
         shared_package_dirs = self._shared_package_dirs(agent_id, scan=scan, policy=policy)
         roots.extend(shared_package_dirs)
+        package_sources.extend(
+            ("agent", package.parent.parent.name) for package in shared_package_dirs
+        )
         origins.extend(SKILL_ORIGIN_AGENT for _ in shared_package_dirs)
         roots.extend(scan_roots)
         origins.extend(_origin_layers(scan_roots))
+        package_sources.extend((root.kind, root.location) for root in global_roots)
         # First-found-wins ordering makes agent skills win over project, project over
         # shared, shared over bundled. The agent's own skills are always-allowed for
         # it unless its ``excluded_skills`` turn them off, so they bypass the owner's
@@ -1192,6 +1207,7 @@ class SkillRuntime:
             environment=environment,
             always_allowed=(agent_own_names - exclusions) | project_allowed_names,
             origins=origins,
+            package_sources=package_sources,
             excluded_packages=_package_exclusions(
                 global_roots, self.agent_skills_dir, policy.disabled_packages
             ),
@@ -1417,6 +1433,7 @@ class SkillRuntime:
             environment,
             project_origin=project_skill_origin(project.display_name),
             bundled_origins=_origin_layers(scan_roots),
+            bundled_package_sources=[(root.kind, root.location) for root in global_roots],
             excluded_packages=self._disabled_packages(global_roots),
             scan=scan,
         )

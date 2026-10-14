@@ -11,7 +11,9 @@ import pytest
 
 from core.chat import ChatMessage
 from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession, is_skill_available_note
+from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
+from core.tools import ToolContext, ToolRegistry, register_skill_tool, tool_failure
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -23,6 +25,7 @@ from tests.core.chat.chat_loop_support import (
     history,
     persisted_roles,
 )
+from tests.core.chat.chat_loop_tools_test_support import final, tool_runtime, tool_turn
 
 JsonObject = dict[str, Any]
 
@@ -55,7 +58,16 @@ def _runtime(tmp_path: Path, responses: int, *, allowed_skills: list[str], skill
 
 def _debugging_skills(tmp_path: Path) -> StubSkills:
     skill_file = _write_skill(tmp_path / "skills", "debugging")
-    return StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
+    return StubSkills(
+        [
+            StubSkill(
+                "debugging",
+                "Debug failures",
+                skill_file,
+                package_ref=SkillPackageRef("agent", "debugging", "coder"),
+            )
+        ]
+    )
 
 
 def _contents(request_messages: list[JsonObject]) -> list[str]:
@@ -83,6 +95,7 @@ async def test_skill_trigger_places_its_content_under_the_input_for_later_reques
     # The Skill content sits directly under the triggering user message — in
     # place, not hoisted — and replays there in later requests.
     for request_messages in (first, second):
+        assert all("skill_package" not in message for message in request_messages)
         assert request_messages[1]["content"] == trigger
         assert request_messages[2]["content"].startswith(SKILL_CONTENT)
     assert second[-1]["content"] == "continue"
@@ -90,6 +103,42 @@ async def test_skill_trigger_places_its_content_under_the_input_for_later_reques
     visible = [message for message in history(runtime) if message.role != "note"]
     assert persisted_roles(visible) == ["user", "assistant", "user", "assistant"]
     assert all(SKILL_CONTENT not in str(message.content) for message in visible)
+    [activation] = [message for message in history(runtime) if message.skill_package is not None]
+    assert activation.skill_package == SkillPackageRef("agent", "debugging", "coder")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_after_activation", [False, True])
+async def test_skill_tool_persists_loaded_package_without_exposing_it_to_the_model(
+    tmp_path: Path,
+    fail_after_activation: bool,
+) -> None:
+    _write_skill(tmp_path / "skills", "debugging")
+    skills = SkillRegistry.load(tmp_path / "skills", package_sources=[("agent", "owner")])
+    tools = ToolRegistry()
+    package = SkillPackageRef("agent", "debugging", "owner")
+    if fail_after_activation:
+
+        def fail(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            context.activate_skill("debugging", "Instructions", package)
+            return tool_failure("read_error", "The instructions could not be read.")
+
+        tools.register("skill", "Load a Skill.", {"type": "object"}, fail)
+    else:
+        register_skill_tool(tools, lambda _project, _agent: skills, lambda: None)
+    runtime = tool_runtime(
+        tmp_path, tools, [tool_turn(("load", "skill", {"name": "debugging"})), final("Done")]
+    )
+    runtime.skills = skills
+
+    await build_chat_loop(runtime).send(
+        "coder", "Investigate the failure", session_id="session-one"
+    )
+
+    [result] = [message for message in history(runtime) if message.role == "tool"]
+    assert result.skill_package == (None if fail_after_activation else package)
+    for request in runtime.adapter.requests:
+        assert all("skill_package" not in message for message in request["messages"])
 
 
 def _unavailable_skills(tmp_path: Path) -> SkillRegistry:

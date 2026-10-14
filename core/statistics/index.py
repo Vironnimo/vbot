@@ -81,7 +81,7 @@ _GLOBAL_SCOPE = ""
 # version. Bump it when the fact or aggregate tables or the meaning of their
 # rows change; the kernel adds a new table empty, so a new aggregate needs a
 # bump to be filled.
-_PROJECTION_VERSION = 6
+_PROJECTION_VERSION = 7
 # A busy index fails the read quickly as retryable instead of queueing it.
 _WRITE_PATIENCE_S = 1.0
 
@@ -187,6 +187,9 @@ CREATE TABLE stat_skills (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
     name TEXT NOT NULL,
+    package_source TEXT,
+    package_name TEXT,
+    package_location TEXT,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
 -- The Session's own canonical Run records, replaced from Sessions on refresh.
@@ -238,7 +241,10 @@ _INSERT_COLUMNS = {
         "session_key, seq, instant, day, run_id, status, duration_ms, timing_started_at, "
         "timing_completed_at, activity_start, activity_end",
     ),
-    "skills": ("stat_skills", "session_key, seq, name"),
+    "skills": (
+        "stat_skills",
+        "session_key, seq, name, package_source, package_name, package_location",
+    ),
 }
 _INSERT_ROWS = {
     name: (

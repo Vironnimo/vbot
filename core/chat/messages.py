@@ -21,6 +21,7 @@ from core.providers.adapter import (
     TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
     TOOL_CALL_REJECTION_FIELD,
 )
+from core.skills.policy import SkillPackageRef
 from core.utils.ids import new_id
 from core.utils.timestamps import format_canonical_timestamp
 
@@ -414,6 +415,8 @@ class ChatMessage:
     model_fallback: ModelFallback | None = None
     # Internal destination captured by Sessions when this entry is persisted.
     subagent_reply_target: str | None = None
+    # Actual package loaded by a Skill activation; never sent to the Model.
+    skill_package: SkillPackageRef | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -742,6 +745,8 @@ class ChatMessage:
             "role": self.role,
         }
         _add_if_not_none(message, "subagent_reply_target", self.subagent_reply_target)
+        if self.skill_package is not None:
+            message["skill_package"] = self.skill_package.to_dict()
         _add_if_not_none(message, "model", self.model)
         if self.content is not None:
             if isinstance(self.content, list):
@@ -857,6 +862,15 @@ class ChatMessage:
             if model_fallback_data is not None
             else None
         )
+        try:
+            package_data = data.get("skill_package")
+            skill_package = (
+                SkillPackageRef.from_dict(package_data) if package_data is not None else None
+            )
+        except ValueError as error:
+            raise ChatMessageValidationError(str(error)) from error
+        if skill_package is not None and role not in {"note", "tool"}:
+            raise ChatMessageValidationError("skill_package requires a Note or Tool Result")
 
         message = cls(
             id=_message_validation._require_string(data, "id"),
@@ -865,6 +879,7 @@ class ChatMessage:
             subagent_reply_target=_message_validation._optional_string(
                 data, "subagent_reply_target"
             ),
+            skill_package=skill_package,
             content=_message_validation._parse_content(data),
             model=_message_validation._optional_string(data, "model"),
             reasoning=_message_validation._optional_string(data, "reasoning"),

@@ -110,7 +110,7 @@ from core.skills import (
 )
 from core.skills._history import EXTERNAL_ACTOR
 from core.skills.skills import scan_skill_resources
-from core.statistics.skills import SkillUse
+from core.statistics.skills import SkillActivationUse, SkillUse
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
@@ -422,7 +422,7 @@ class _ActivePass:
     task: asyncio.Task[None] | None = field(default=None, repr=False)
     base: LibrarianState | None = None
     # Every Agent's Skill use by ``(agent id, name)``, read for this pass or its check.
-    usage: Mapping[tuple[str, str], SkillUse] | None = field(default=None, repr=False)
+    usage: Sequence[SkillActivationUse] | None = field(default=None, repr=False)
     archived: int = 0
     archived_revisions: tuple[int, ...] = ()
     candidates: int = 0
@@ -511,7 +511,7 @@ class LibrarianService:
         *,
         authoring: SkillAuthoringService,
         skills_dir: Callable[[str], Path],
-        skill_usage: Callable[[], Awaitable[Mapping[tuple[str, str], SkillUse]]],
+        skill_usage: Callable[[], Awaitable[Sequence[SkillActivationUse]]],
         triggered_skill_names: Callable[[str], frozenset[str]],
         shared_skill_receivers: Callable[[str], Mapping[str, frozenset[str]]],
         skills_changed: Callable[[str], None],
@@ -521,7 +521,7 @@ class LibrarianService:
     ) -> None:
         """Curate the homes ``skills_dir`` names with ``authoring``.
 
-        ``skill_usage`` reads every Agent's Skill use by ``(agent id, name)``;
+        ``skill_usage`` reads actual package activations, retaining legacy unqualified names;
         ``triggered_skill_names`` names the Skills an Agent's live automations
         trigger, and ``shared_skill_receivers`` (blocking) maps each Skill it
         shares to the Agents it shares it with. ``skills_changed`` runs after
@@ -723,7 +723,7 @@ class LibrarianService:
         )
         # Skill use is read once per check, and again after a consolidation Run,
         # during which the other Agents can use Skills for minutes.
-        usage: Mapping[tuple[str, str], SkillUse] | None = None
+        usage: Sequence[SkillActivationUse] | None = None
         for agent_id in agent_ids:
             if self._closed:
                 return
@@ -738,8 +738,8 @@ class LibrarianService:
         self,
         agent_id: str,
         settings: Mapping[str, Any],
-        usage: Mapping[tuple[str, str], SkillUse] | None,
-    ) -> Mapping[tuple[str, str], SkillUse] | None:
+        usage: Sequence[SkillActivationUse] | None,
+    ) -> Sequence[SkillActivationUse] | None:
         """Run the pass of ``agent_id`` when it is due, idle and eligible.
 
         ``usage`` is the Skill use read earlier in this check, if any. Returns the
@@ -1257,27 +1257,37 @@ def _inactive(
 
 
 def _library_usage(
-    usage: Mapping[tuple[str, str], SkillUse],
+    usage: Sequence[SkillActivationUse],
     agent_id: str,
     receivers: Mapping[str, frozenset[str]],
 ) -> dict[str, SkillUse]:
-    """The use of ``agent_id``'s Skills by name, its shared Skills' receivers included.
+    """Actual private-package use, with conservative matching for legacy records.
 
-    A receiver's use of a shared Skill's name counts toward the owner's Skill:
-    the Sessions add up and the latest activation wins.
+    New records follow their resolved package regardless of who used it. Old
+    records have no package evidence, so keep the former owner/receiver rule.
+    One Session counts once even when it has both old and qualified activations.
     """
-    library = {name: use for (owner, name), use in usage.items() if owner == agent_id}
-    for name, agents in receivers.items():
-        uses = [use for agent in agents if (use := usage.get((agent, name))) is not None]
-        own = library.get(name)
-        if own is not None:
-            uses.append(own)
-        if uses:
-            library[name] = SkillUse(
-                last_activated=max((use.last_activated for use in uses), key=parse_timestamp),
-                count=sum(use.count for use in uses),
-            )
-    return library
+    selected: dict[str, dict[int, str]] = {}
+    for use in usage:
+        package = use.package
+        if package is not None:
+            if package.source != "agent" or package.location != agent_id:
+                continue
+            name = package.name
+        else:
+            name = use.name
+            if use.agent_id != agent_id and use.agent_id not in receivers.get(name, frozenset()):
+                continue
+        sessions = selected.setdefault(name, {})
+        previous = sessions.get(use.session_key)
+        if previous is None or parse_timestamp(use.last_activated) > parse_timestamp(previous):
+            sessions[use.session_key] = use.last_activated
+    return {
+        name: SkillUse(
+            last_activated=max(sessions.values(), key=parse_timestamp), count=len(sessions)
+        )
+        for name, sessions in selected.items()
+    }
 
 
 def _by_run(revision: SkillRevision, run_id: str | None) -> bool:

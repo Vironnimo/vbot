@@ -88,11 +88,29 @@ class SkillPackageRef:
     for ``extension``, the configured folder (as written in ``skill_directories``)
     for ``folder`` and the owning Identity Agent id for ``agent``. It is ``None``
     for ``home`` and ``bundled``.
+
+    Policy refs name packages by their visible Skill name. Canonical activation
+    and inventory usage refs instead use the concrete package-directory name,
+    preserving which package loaded even when frontmatter names collide.
     """
 
     source: str
     name: str
     location: str | None = None
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {"source": self.source, "name": self.name, "location": self.location}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> SkillPackageRef:
+        if not isinstance(data, dict):
+            raise ValueError("Skill package must be an object")
+        source, name, location = data.get("source"), data.get("name"), data.get("location")
+        if not isinstance(source, str) or not source or not isinstance(name, str) or not name:
+            raise ValueError("Skill package source and name must be non-empty strings")
+        if location is not None and (not isinstance(location, str) or not location):
+            raise ValueError("Skill package location must be a non-empty string or null")
+        return cls(source, name, location)
 
 
 @dataclass(frozen=True)
