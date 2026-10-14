@@ -25,6 +25,7 @@ from core.runs import (
     Run,
     RunInterruptedError,
 )
+from core.sessions import SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents import activity as activity_module
 from core.subagents.activity import SubAgentActivity
@@ -333,3 +334,44 @@ async def test_one_file_records_each_followed_run_in_start_order(tmp_path: Path)
     assert activity.path in {path.resolve() for path in temporary_files._active}  # noqa: SLF001
     third.mark_completed(ChatMessage.assistant(model="test", content="third"))
     await activity.drain()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["delivered", "failed", "cancelled"])
+async def test_delivery_receipts_outlive_the_run_and_protect_the_activity_file(
+    tmp_path: Path, outcome: str
+) -> None:
+    files = TemporaryFileManager(tmp_path)
+    activity = await SubAgentActivity.create(files, agent_id="worker", session_id="child")
+    assert activity is not None
+    run = _child_run()
+    activity.follow(run)
+    delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    activity.track_delivery(
+        delivery,
+        delivery_id="delivery-one",
+        run_id=run.id,
+        parent=SessionAddress(None, "parent", "parent-session"),
+        answer_ids=("main-report", "addendum"),
+    )
+    run.mark_completed(ChatMessage.assistant(model="test", content="done"))
+    text = await _written(activity)
+    assert "Pending:" in text
+    assert "Delivered:" not in text
+    assert activity.path in {path.resolve() for path in files._active}  # noqa: SLF001
+    if outcome == "delivered":
+        delivery.set_result(None)
+    elif outcome == "failed":
+        delivery.set_exception(RuntimeError("Parent persistence failed"))
+    else:
+        delivery.cancel()
+    await asyncio.sleep(0)  # Future callbacks, without waiting on wall-clock time.
+    text = await _written(activity)
+    expected = {
+        "delivered": "Delivered: stored in the Parent Session.",
+        "failed": "Delivery failed: Parent persistence failed",
+        "cancelled": "Cancelled before delivery was confirmed.",
+    }[outcome]
+    assert expected in text
+    assert text.count("delivery-one") == text.count("main-report") == text.count("addendum") == 2
+    assert activity.path not in {path.resolve() for path in files._active}  # noqa: SLF001
