@@ -521,40 +521,133 @@ async def test_reports_quote_text_as_the_file_has_it(tmp_path, line, edit, shown
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("edit", "after"),
+    ("content", "edit", "replace_all", "after", "error"),
     [
-        # Swarm run 2026-10-13: old_string wrote ü and ° as \u escapes the file has
-        # as characters; new_string's escapes are read the same way.
+        # An escape's character form in old_string proves only that spelling:
+        # a new kind of escape in new_string remains literal.
         pytest.param(
+            'name = "grün"\nunit = "°C"\n',
             ('name = "gr\\u00fcn"', 'name = "gr\\u00fcn \\u00b0"'),
-            'name = "grün °"\nunit = "°C"\n',
+            False,
+            'name = "grün \\u00b0"\nunit = "°C"\n',
+            None,
             id="escapes-for-characters",
+        ),
+        pytest.param(
+            'label = "\\u221212 °C"\n',
+            ('label = "\\u221212 \\u00b0C"', 'label = "\\u221213 \\u00b0C \\u00e4"'),
+            False,
+            'label = "\\u221213 °C \\u00e4"\n',
+            None,
+            id="matching-escape-stays-literal",
+        ),
+        pytest.param(
+            'label = "\\u00b0 °"\n',
+            ('label = "\\u00b0 \\u00b0"', 'label = "\\u00b0"'),
+            False,
+            'label = "\\u00b0"\n',
+            None,
+            id="one-spelling-has-both-forms",
+        ),
+        pytest.param(
+            'label = "\\u2212°"\n',
+            ('label = "\\u2212\\u00b0"', 'label = "\\u2212\\u00b0!"'),
+            False,
+            'label = "\\u2212°!"\n',
+            None,
+            id="adjacent-escape-spellings",
+        ),
+        pytest.param(
+            'label = "😀"\n',
+            ('label = "\\ud83d\\ude00"', 'label = "\\ud83d\\ude00!"'),
+            False,
+            'label = "😀!"\n',
+            None,
+            id="surrogate-pair",
+        ),
+        pytest.param(
+            'label = "\\u2212 °"\nlabel = "− °"\n',
+            ('label = "\\u2212 \\u00b0"', 'label = "x"'),
+            False,
+            None,
+            "ambiguous_match",
+            id="mixed-and-decoded-targets",
+        ),
+        pytest.param(
+            'label = "\\u2212 °"\nlabel = "− °"\n',
+            ('label = "\\u2212 \\u00b0"', 'label = "\\u2212 \\u00b0!"'),
+            True,
+            'label = "\\u2212 °!"\nlabel = "\\u2212 °!"\n',
+            None,
+            id="all-spellings-share-only-degree-interpretation",
+        ),
+        pytest.param(
+            'label = "\\u2212 \\u00b0"\nlabel = "− °"\n',
+            ('label = "\\u2212 \\u00b0"', 'label = "literal"'),
+            False,
+            'label = "literal"\nlabel = "− °"\n',
+            None,
+            id="exact-spelling-selects-its-target",
+        ),
+        pytest.param(
+            'label = "\\u221214 °C"\n',
+            ('label = "\\u221212 \\u00b0C"', 'label = "x"'),
+            False,
+            None,
+            "text_not_found",
+            id="different-number",
+        ),
+        pytest.param(
+            'header\r\nlabel = "\\u2212 °"\n',
+            ('\nlabel = "\\u2212 \\u00b0"', '\nlabel = "x"'),
+            False,
+            None,
+            "text_not_found",
+            id="mixed-spelling-cannot-split-crlf",
         ),
         # Nearby: an escaped backslash ends no escape, and an escape of an ASCII
         # character is no slip of the kind.
-        pytest.param(('name = "gr\\\\u00fcn"', 'name = "x"'), None, id="escaped-backslash"),
-        pytest.param(('n\\u0061me = "grün"', 'name = "x"'), None, id="ascii-escape"),
+        pytest.param(
+            'name = "grün"\n',
+            ('name = "gr\\\\u00fcn"', 'name = "x"'),
+            False,
+            None,
+            "text_not_found",
+            id="escaped-backslash",
+        ),
+        pytest.param(
+            'name = "grün"\n',
+            ('n\\u0061me = "grün"', 'name = "x"'),
+            False,
+            None,
+            "text_not_found",
+            id="ascii-escape",
+        ),
     ],
 )
 async def test_unicode_escapes_in_old_string_match_the_characters_of_the_file(
-    tmp_path, edit, after
+    tmp_path, content, edit, replace_all, after, error
 ) -> None:
-    content = 'name = "grün"\nunit = "°C"\n'
     (tmp_path / "a.py").write_text(content, encoding="utf-8", newline="\n")
 
     result = await call(
         tmp_path,
-        {"path": "a.py", "edits": [{"old_string": edit[0], "new_string": edit[1]}]},
+        {
+            "path": "a.py",
+            "edits": [{"old_string": edit[0], "new_string": edit[1], "replace_all": replace_all}],
+        },
         name="edit",
     )
 
-    written = (tmp_path / "a.py").read_text(encoding="utf-8")
+    written = (tmp_path / "a.py").read_bytes().decode("utf-8")
     if after is None:
-        assert result["error"]["code"] == "text_not_found"
+        assert result["error"]["code"] == error
         assert written == content
         return
     assert written == after
-    assert len([line for line in text(result).split("\n") if line.startswith("Note: ")]) == 1
+    assert result["ok"]
+    if edit[0] not in content:
+        assert len([line for line in text(result).split("\n") if line.startswith("Note: ")]) == 1
 
 
 @pytest.mark.asyncio
@@ -782,6 +875,14 @@ _PART_EDITS = '[{"old_string": "x = 1", '
             {"edits": '[{"old_string": "x = 1", "new_string": "x = 2\ny = 3"}]'},
             b"x = 2\ny = 3\n",
             id="raw-line-break",
+        ),
+        pytest.param(
+            {
+                "edits": '[{"old_string":"x = 1", "new_string":"x = 2\ny = 3"}, '
+                '{"old_string":"y = 3", "new_string":"y = 4\\nz = 5"}]'
+            },
+            b"x = 2\ny = 4\nz = 5\n",
+            id="line-breaks-differ-between-items",
         ),
         # A quote before ":" ends the text only where a value follows the colon.
         pytest.param(

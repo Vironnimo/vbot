@@ -15,7 +15,10 @@ read, the recorded result, and an intended target when the history shows one.
   that success, with the number of calls in between.
 
 ``run`` dispatches every case through the production Tool path on its files
-in a fresh scratch directory and classifies it against the recording:
+in a fresh scratch directory and classifies it against the recording.
+Only file Tools are replayed. Reconstructed file paths and all targets of
+the current production-normalized arguments must stay within that case's
+directory; unsafe or indeterminate targets fail before setup or dispatch:
 
 * ``same``: recorded and replayed success, and the result matches the target
 * ``wrong``: replayed success whose files differ from the target
@@ -46,10 +49,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from core.runtime.runtime import Runtime
+from core.tools import ToolContext, ToolContractError
 from core.tools._line_diff import line_opcodes
 from core.tools._patch_report import edit_outcome
+from core.tools.apply_patch import patch_targets
 from core.tools.arguments import split_text_lines
-from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor
+from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor, _checked_arguments
+from core.utils.file_status import is_link_status, stat_or_none
 from scripts.tool_lab._lab_runtime import DEFAULT_AGENT_ID, lab_runtime
 from scripts.tool_lab._replay_history import (
     ROOT_TOKEN,
@@ -88,6 +94,7 @@ _FILTER_KEYS = (
 )
 _ROOT = re.compile(re.escape(ROOT_TOKEN) + r"(?=([\\/]?))")
 _DIFF_LINES = 400
+REPLAY_TOOLS = ("apply_patch", "edit", "write", "read")
 
 
 def work_directory(path: Path) -> Path:
@@ -113,13 +120,14 @@ class Dispatcher:
 
     def __init__(self, runtime: Runtime, root: Path) -> None:
         _offered, definitions = tool_definitions(runtime, DEFAULT_AGENT_ID, include_all=True)
-        self._names = tuple(definitions)
+        self._names = tuple(name for name in REPLAY_TOOLS if name in definitions)
         self._contracts = runtime.tools.contracts_for_provider_definitions(
             list(definitions.values())
         )
         self._executor = ToolExecutor(runtime.tools)
+        self._tools = runtime.tools
         self._state = runtime.file_read_state
-        self._root = root
+        self._root = root.resolve()
         self._count = 0
 
     def offers(self, tool: str) -> bool:
@@ -141,19 +149,53 @@ class Dispatcher:
         number = self._count
         workspace = self._root / "replay" / str(number)
         session_id = f"replay-{number}"
+        rewritten = _with_root(arguments, workspace)
+        context = ToolContext(
+            agent_id=DEFAULT_AGENT_ID,
+            session_id=session_id,
+            run_id=f"replay-run-{number}",
+            tool_call_id=f"replay-call-{number}",
+            tool_name=tool,
+            tool_call_index=0,
+            workspace=workspace,
+            cwd=workspace / "cwd",
+            vbot_root=_VBOT_ROOT,
+            data_root=self._root / "data",
+        )
+        try:
+            _contained_path(workspace, self._root)
+            targets = {
+                location: _contained_path(workspace / location, workspace) for location in files
+            }
+            if tool not in self._names:
+                raise ReplayError(f"{tool} is not a file replay Tool; use {', '.join(self._names)}")
+            # A repair can reveal targets absent from an older corpus's files list.
+            # Check the exact production-normalized call, never a best-effort parse.
+            normalized, _ignored = _checked_arguments(
+                self._tools.get(tool), self._contracts[tool], rewritten
+            )
+            for call_target in _call_targets(tool, normalized):
+                _contained_path(context.resolve_path(call_target), workspace)
+        except ToolContractError as error:
+            return Dispatched(False, "failed", "invalid_arguments", str(error), {})
+        except (OSError, ValueError) as error:
+            return Dispatched(False, "failed", "replay_scope", f"Nothing was replayed. {error}", {})
+        created = False
         try:
             (workspace / "cwd").mkdir(parents=True)
+            created = True
             for location, content in files.items():
                 if content is None:
                     continue
-                target = workspace / location
+                target = targets[location]
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with target.open("w", encoding="utf-8", newline="") as handle:
                     handle.write(content)
                 if location in stamped:
                     self._state.record_read(session_id, target.resolve())
         except (OSError, UnicodeEncodeError) as error:
-            shutil.rmtree(workspace, ignore_errors=True)
+            if created:
+                shutil.rmtree(workspace, ignore_errors=True)
             return Dispatched(False, "failed", "replay_setup", str(error), {})
         config = ToolExecutionConfig(
             agent_id=DEFAULT_AGENT_ID,
@@ -167,12 +209,13 @@ class Dispatcher:
             session_tool_grants=self._names,
             input_contracts=self._contracts,
         )
-        call = ToolCall(
-            id=f"replay-call-{number}", name=tool, arguments=_with_root(arguments, workspace)
-        )
+        call = ToolCall(id=context.tool_call_id, name=tool, arguments=rewritten)
         try:
             [envelope] = await self._executor.execute_many([call], config)
-            after = {location: _read(workspace / location) for location in files}
+            after = {
+                location: _read(_contained_path(target, workspace))
+                for location, target in targets.items()
+            }
         finally:
             shutil.rmtree(workspace, ignore_errors=True)
         text = model_view(envelope)
@@ -183,6 +226,43 @@ class Dispatcher:
         content = data.get("content") if isinstance(data, dict) else None
         status = edit_outcome(content) if isinstance(content, str) else "applied"
         return Dispatched(True, status, None, text, after)
+
+
+def _contained_path(path: Path, root: Path) -> Path:
+    """Refuse escaped paths and link entries before scratch setup, dispatch or reads."""
+
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root):
+        raise ReplayError(f"path {path} resolves outside the case workspace {root}")
+    # Fresh cases contain only regular reconstructed files. Refuse pre-existing
+    # aliases, including Windows junctions, rather than moving or following them.
+    for entry in (path, *path.parents):
+        if entry == root:
+            break
+        status = stat_or_none(entry, follow_symlinks=False)
+        if status is not None and is_link_status(status):
+            raise ReplayError(f"path {path} traverses a link at {entry}")
+    return resolved
+
+
+def _call_targets(tool: str, arguments: Any) -> list[str]:
+    """Enumerate every target after current Tool argument repair, or fail closed."""
+
+    if not isinstance(arguments, dict):
+        raise ReplayError("the call's file targets could not be determined")
+    if tool == "apply_patch":
+        targets = patch_targets(arguments)
+    else:
+        targets = [arguments["path"]] if "path" in arguments else []
+        if tool == "edit":
+            targets.extend(
+                edit["path"]
+                for edit in arguments.get("edits", [])
+                if isinstance(edit, dict) and "path" in edit
+            )
+    if not targets or any(not isinstance(target, str) or not target for target in targets):
+        raise ReplayError("the call's file targets could not be determined")
+    return targets
 
 
 @asynccontextmanager
@@ -391,7 +471,7 @@ async def replay_cases(
 ) -> AsyncIterator[CaseResult]:
     """Dispatch each case to ``tool`` on its files and classify the result, in case order."""
     if not dispatch.offers(tool):
-        raise ReplayError(f"the {tool} Tool is not registered in this checkout")
+        raise ReplayError(f"{tool} is not available for file replay; use {', '.join(REPLAY_TOOLS)}")
 
     async def replay(case: dict[str, Any]) -> CaseResult:
         files = {entry["path"]: entry["content"] for entry in case["files"]}

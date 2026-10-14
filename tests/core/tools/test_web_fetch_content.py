@@ -540,6 +540,14 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
             "Blocked by a bot check at https://example.com/denied; no readable content.",
         ),
         (
+            "https://example.com/guarded",
+            "<title>Ihr Browser wird geprüft&nbsp;– reCAPTCHA</title>"
+            "<p>Ihr Browser wird geprüft, bevor Sie auf example.com zugreifen können…</p>"
+            '<iframe title="reCAPTCHA" src="https://www.google.com/recaptcha/anchor"></iframe>',
+            "access_denied",
+            "Blocked by a bot check at https://example.com/guarded; no readable content.",
+        ),
+        (
             "https://example.com/app",
             "<div id='root'></div><script>runApp()</script>",
             "no_content",
@@ -580,6 +588,7 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
         "reddit-challenge",
         "challenge-title",
         "access-check",
+        "localized-captcha",
         "script-only",
         "bom",
         "js-wall",
@@ -675,8 +684,39 @@ async def test_raw_output_returns_a_challenge_page_unchanged(
             "<h1>How to enable JavaScript</h1><p>Open browser settings to enable JavaScript.</p>",
             "Open browser settings to enable JavaScript.",
         ),
+        (
+            "https://example.com/help",
+            "<title>Ihr Browser wird geprüft – reCAPTCHA</title>"
+            "<article>How to diagnose this browser check.</article>"
+            '<iframe title="reCAPTCHA" src="https://www.google.com/recaptcha/anchor"></iframe>',
+            "How to diagnose this browser check.",
+        ),
+        (
+            "https://example.com/contact",
+            "<title>Contact us</title><p>Send us your question.</p>"
+            '<iframe title="reCAPTCHA" src="https://www.google.com/recaptcha/anchor"></iframe>',
+            "Send us your question.",
+        ),
+        (
+            "https://example.com/help",
+            "<title>Ihr Browser wird geprüft – reCAPTCHA</title>"
+            "<p>Ihr Browser wird geprüft, bevor Sie auf example.com zugreifen können…</p>"
+            "<article>"
+            + "Browser checks can be diagnosed using these steps. " * 100
+            + "</article>",
+            "Browser checks can be diagnosed",
+        ),
     ],
-    ids=["similar-title", "login-path-elsewhere", "post-with-login-links", "article", "howto"],
+    ids=[
+        "similar-title",
+        "login-path-elsewhere",
+        "post-with-login-links",
+        "article",
+        "howto",
+        "captcha-help",
+        "captcha-widget",
+        "substantial-content",
+    ],
 )
 async def test_pages_that_only_mention_logins_or_checks_keep_their_content(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, html: str, expected: str

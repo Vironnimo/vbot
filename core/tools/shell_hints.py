@@ -45,6 +45,7 @@ from itertools import islice
 from pathlib import Path, PureWindowsPath
 
 from core.tools._path_suggestions import similar_entries
+from core.utils.edit_distance import edit_distance
 
 # The shell Tool runs commands in PowerShell on Windows and in bash elsewhere.
 _POWERSHELL = sys.platform == "win32"
@@ -290,6 +291,27 @@ def _quoted_in(name: str, output: str) -> bool:
     return re.search(rf"[{_QUOTES}]{re.escape(name)}[{_QUOTES}]", output) is not None
 
 
+_CMDLET_CALL = re.compile(r"(?:^|[;\n|])[ \t]*+([A-Za-z]+-[A-Za-z]+)(?=\s|[;|()]|$)")
+
+
+def _cmdlet_spelling_in_command(command: str, missing: str) -> str | None:
+    """Suggest one nearby same-verb command already called, never a name in text."""
+    # The shared edit distance is for short names; bound its work independently
+    # of command size so scanning an oversized name cannot become quadratic.
+    if len(missing) > 128 or re.fullmatch(r"[A-Za-z]+-[A-Za-z]+", missing) is None:
+        return None
+    folded = missing.lower()
+    verb = folded.partition("-")[0]
+    candidates = {
+        name.lower(): name
+        for match in _CMDLET_CALL.finditer(_powershell_code(command).flat)
+        if (name := match[1]).lower() != folded
+        and name.lower().partition("-")[0] == verb
+        and edit_distance(name.lower(), folded, 1) == 1
+    }
+    return next(iter(candidates.values())) if len(candidates) == 1 else None
+
+
 def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
     # pwsh reports "The term 'X' is not recognized as a name of a cmdlet, function,
     # script file, or executable program."
@@ -311,6 +333,11 @@ def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
         )
     if missing in _BASH_SYNTAX_WORDS:
         return _BASH_SYNTAX_HINT
+    if spelling := _cmdlet_spelling_in_command(failure.command, missing):
+        return (
+            f"`{missing}` was not found. Did you mean `{spelling}`, "
+            "which also appears as a command in your script?"
+        )
     return (
         f"`{missing}` is not installed or not on PATH. Check with `Get-Command {missing}`; "
         "install it or run it by its absolute path instead of retrying the same command."
@@ -782,6 +809,12 @@ def _hint_escaped_quote(
     if code.escaped_end is None:
         return None
     window = _scan_window(output)
+    if "ParserError" in window and _INPUT_REDIRECTION.search(window):
+        # The leaked Python/regex text, rather than a separate input
+        # redirection, contains < before the next quote or statement boundary.
+        exposed = re.split(r'[";\r\n]', code.text[code.escaped_end + 1 :], maxsplit=1)[0]
+        if "<" in exposed:
+            return _ESCAPED_QUOTE_HINT
     if _SCRIPT_BLOCK_ARGUMENT in window:
         return _ESCAPED_QUOTE_HINT
     missing = _POWERSHELL_NOT_RECOGNIZED.search(window)

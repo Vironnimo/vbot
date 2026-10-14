@@ -626,7 +626,9 @@ def _merge(
     caller writes at the edge of a change, other than its copy's there, do not fit.
     """
     copied = copy.keys
-    opcodes = _changes(tuple(copied), tuple(new.keys))
+    # Locating a copy ignores spacing; deciding what the caller changed does not.
+    # In particular, a kept word moved into a new block needs its new indentation.
+    opcodes = _changes(_change_keys(copy), _change_keys(new))
     pieces: list[str] = []
     held = -1  # the file gap the kept text before already holds
     for tag, i1, i2, j1, j2 in opcodes:
@@ -666,9 +668,22 @@ def _merge(
         held = last
     kept_first = bool(opcodes) and opcodes[0][0] == "equal"
     kept_last = bool(opcodes) and opcodes[-1][0] == "equal"
-    lead = actual.lead if kept_first else new.lead
-    trail = actual.trail if kept_last else new.trail
+    lead = actual.lead if kept_first and _spacing(copy.lead) == _spacing(new.lead) else new.lead
+    trail = actual.trail if kept_last and _spacing(copy.trail) == _spacing(new.trail) else new.trail
     return lead + "".join(pieces) + trail
+
+
+def _spacing(text: str) -> str:
+    """Compare written whitespace without treating line endings or invisibles as edits."""
+    return TEXT_LINE_BREAK.sub("\n", text.translate(_FOLD))
+
+
+def _change_keys(text: _Text) -> tuple[str, ...]:
+    """Keep whitespace spelling in the old/new diff, after new indentation was mapped."""
+    return tuple(
+        _spacing(text.source[token.start : token.end]) if _is_space(token.key) else token.key
+        for token in text.tokens
+    )
 
 
 @lru_cache(maxsize=16)

@@ -544,6 +544,17 @@ class BoardCall:
 
         if error.code == "message_not_found" and error.field == "reply_to":
             value = values["reply_to"]
+            # A fully identified discussion in a post-reference field is a kind
+            # mistake, not a missing post. Explain it without redirecting the write.
+            discussion = await self._discussion(value, required=False)
+            if discussion is not None and value.startswith("d"):
+                return AgentCallError(
+                    "message_not_found",
+                    text.REPLY_IS_DISCUSSION.format(
+                        value=_quoted(value),
+                        discussion=_quoted(discussion_ref(discussion["sequence"])),
+                    ),
+                )
             candidates = await self.store.post_suggestions(self.sid, value)
             parts = [text.REPLY_NOT_FOUND.format(value=value)]
             parts.extend(post_suggestion(candidate, self.main) for candidate in candidates)

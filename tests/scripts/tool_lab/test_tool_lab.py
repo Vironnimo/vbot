@@ -131,6 +131,107 @@ async def test_replay_exports_session_edits_and_classifies_their_replay(tmp_path
     assert [result.label for result in results] == ["same", "fixed", "same"]
 
 
+@pytest.mark.asyncio
+async def test_replay_confines_repaired_calls_and_corpus_files_to_each_case(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("before", encoding="utf-8")
+    # Corpus export could not decode this JSON text and retained no file snapshots.
+    # Current production repair can decode it, including its explicit absolute path.
+    encoded = json.dumps(
+        [{"path": outside.as_posix(), "old_string": "before", "new_string": 'said "yes"'}]
+    ).replace(r"\"yes\"", '"yes"')
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(encoded)
+    async with replay.replay_dispatcher() as dispatch:
+        cases: list[tuple[str, Any, dict[str, str | None]]] = [
+            ("edit", {"edits": encoded}, {}),
+            ("read", {"path": str(outside)}, {}),
+            ("write", {"file_path": str(outside), "content": "changed"}, {}),
+            ("write", {"path": "../../escaped.txt", "content": "changed"}, {}),
+            (
+                "apply_patch",
+                {"patch": _patch("*** Move File: source.txt -> " + outside.as_posix())},
+                {"cwd/source.txt": "before"},
+            ),
+            (
+                "apply_patch",
+                {
+                    "patch": _patch(
+                        "*** Add File: safe.txt",
+                        "+safe",
+                        "*** Add File: " + outside.as_posix(),
+                        "+changed",
+                    )
+                },
+                {},
+            ),
+            ("read", {"path": "safe.txt"}, {str(outside): "changed"}),
+            ("read", {"path": "safe.txt"}, {"../escaped.txt": None}),
+            ("bash", {"command": "must never run"}, {}),
+        ]
+        for tool, arguments, files in cases:
+            outcome = await dispatch(arguments, files, set(files), tool=tool)
+            assert not outcome.ok and outcome.error_code == "replay_scope", outcome
+            assert outcome.files == {}
+            assert outside.read_text(encoding="utf-8") == "before"
+        # Rewritten absolute and ordinary relative paths within a case still work.
+        safe = await dispatch(
+            {"path": "{replay-root}/cwd/safe.txt", "content": "after"},
+            {"cwd/safe.txt": "before"},
+            {"cwd/safe.txt"},
+            tool="write",
+        )
+        assert safe.ok and safe.files == {"cwd/safe.txt": "after"}
+        per_item = await dispatch(
+            {"edits": [{"path": "safe.txt", "old_string": "before", "new_string": "after"}]},
+            {"cwd/safe.txt": "before"},
+            {"cwd/safe.txt"},
+            tool="edit",
+        )
+        assert per_item.ok and per_item.files == {"cwd/safe.txt": "after"}
+
+
+@pytest.mark.asyncio
+async def test_replay_refuses_linked_case_directories_without_removing_the_target(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("kept", encoding="utf-8")
+    async with replay.replay_dispatcher() as dispatch:
+        linked = dispatch._root / "replay"
+        try:
+            linked.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"directory symlinks unavailable: {error}")
+        try:
+            outcome = await dispatch(
+                {"path": "note.txt", "content": "blocked"}, {}, set(), tool="write"
+            )
+            assert not outcome.ok and outcome.error_code == "replay_scope", outcome
+            assert list(outside.iterdir()) == [sentinel]
+            assert sentinel.read_text(encoding="utf-8") == "kept"
+        finally:
+            linked.unlink()
+        # A link at the final file target is rejected before reconstruction too.
+        workspace = linked / str(dispatch._count + 1)
+        (workspace / "cwd").mkdir(parents=True)
+        alias = workspace / "cwd" / "alias.txt"
+        alias.symlink_to(sentinel)
+        try:
+            outcome = await dispatch(
+                {"path": "alias.txt", "content": "blocked"}, {}, set(), tool="write"
+            )
+            assert not outcome.ok and outcome.error_code == "replay_scope", outcome
+            assert alias.is_symlink()
+            assert sentinel.read_text(encoding="utf-8") == "kept"
+        finally:
+            alias.unlink()
+            alias.parent.rmdir()
+            workspace.rmdir()
+
+
 def test_definitions_summary_counts_on_demand_tools_apart_from_the_tool_list() -> None:
     def tool(name: str, tokens: int, *, offered: bool = True, on_demand: bool = False) -> Any:
         return definitions.ToolDefinition(name, {"name": name}, tokens, offered, on_demand)

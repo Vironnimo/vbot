@@ -535,12 +535,25 @@ async def test_wiki_change_notes_written_links_that_name_no_page(board):
         {
             "action": "create",
             "title": "Spec",
-            "content": f"See [[design-notes]], [x](#wiki/w9) and [plan](#wiki/{plan_id}).",
+            "content": (
+                f"See [[design-notes]], [x](#wiki/w9) and [plan](#wiki/{plan_id}).\n\n"
+                "Literal `[[inline-example]]` and ``#wiki/code ` [[double-code]]``.\n"
+                "A multiline `[[multiline-code]]\n#wiki/multiline` example.\n\n"
+                "```text\n[[fenced-example]]\n#wiki/fenced\n```\n\n"
+                "> ~~~text\n> [[quoted-fence]]\n> ~~~\n\n"
+                "    [[indented-example]]\n\n"
+                r"Escaped \[[escaped-example]] and \#wiki/escaped."
+                "\n"
+            ),
         },
     )
     note = linked["data"]["note"]
     assert "[[design-notes]]" in note and "#wiki/w9" in note and plan_id not in note
     assert note.endswith(linked["data"]["link"])
+    assert all(
+        marker not in note
+        for marker in ("example", "double-code", "multiline", "fenced", "quoted-fence", "escaped")
+    )
     # Links to existing pages, by number or stored ID, need no note.
     stored_id = (await pages(board))[0]["page_id"]
     edited = await invoke(
@@ -549,10 +562,26 @@ async def test_wiki_change_notes_written_links_that_name_no_page(board):
             "action": "update",
             "page_id": plan_id,
             "old_text": "Step one",
-            "new_text": f"Step one, see [[{plan_id}]] and #wiki/{stored_id}",
+            "new_text": (
+                f"Step one, see [[{plan_id}]] and #wiki/{stored_id}. "
+                "Code `[[literal]]` and \\[[literal]] stays literal.\n"
+                "~~~\n[[unclosed-code]]\n"
+            ),
         },
     )
     assert edited["ok"] and "note" not in edited["data"], edited
+    # Unmatched backticks are literal, and a closed fence does not hide later links.
+    outside = await invoke(
+        board,
+        {
+            "action": "create",
+            "title": "Unclosed span",
+            "content": "```\n[[literal]]\n```\n`Unclosed [[real-link]]\n\n` [[other-link]]",
+        },
+    )
+    assert "[[real-link]]" in outside["data"]["note"]
+    assert "[[other-link]]" in outside["data"]["note"]
+    assert "[[literal]]" not in outside["data"]["note"]
 
 
 @pytest.mark.asyncio

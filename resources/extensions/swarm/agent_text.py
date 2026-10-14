@@ -216,6 +216,16 @@ BOARD_OTHER_TOOL = (
     "leave. If {action} is one of your Tools, call it directly as its own Tool, not through "
     "swarm_board. The call was not run."
 )
+BOARD_ACTION_FIELDS_MERGED = (
+    "Nothing was run. action contains merged Tool-call fields instead of one action. "
+    "Send action as {action} and {field} as a separate parameter; keep its value and the "
+    "other parameters unchanged."
+)
+REPLY_IS_DISCUSSION = (
+    "Nothing was saved. {value} names a discussion, not a post. To post there, use "
+    "discussion_id: {discussion} and omit message_id and reply_to. To answer a post, use "
+    "its post ID instead."
+)
 BOARD_FILE_PATH = (
     "swarm_board was not run: it reads and writes Board posts, not files, and has no path "
     "parameter. For the file {path}, use one of your Tools that work with files."

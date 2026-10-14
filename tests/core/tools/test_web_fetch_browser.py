@@ -64,8 +64,14 @@ def _options(fake: FakeBrowser, **settings: Any) -> dict[str, Any]:
             url=URL,
         ),
         make_result(status_code=302, headers={"Location": URL}, url=URL),
+        make_result(
+            headers={"content-type": "text/html"},
+            text="<title>Ihr Browser wird geprüft – reCAPTCHA</title>"
+            "<p>Ihr Browser wird geprüft, bevor Sie auf example.com zugreifen können…</p>",
+            url=URL,
+        ),
     ],
-    ids=["bot-check", "javascript-shell", "redirect-loop"],
+    ids=["bot-check", "javascript-shell", "redirect-loop", "localized-captcha"],
 )
 async def test_browser_reads_what_direct_reading_could_not_before_any_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, direct: PublicResponse

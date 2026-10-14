@@ -912,9 +912,44 @@ _CHANGE: JsonObject = {
             {"old": "a = 1\nb = 2", "new": "\tc"},
             id="raw-control-characters",
         ),
-        # A text that also writes a line break as an escape has a raw one that
-        # can be a slip of the output.
-        pytest.param("change", '{"old": "a\\nb", "new": "c\nd"}', None, id="mixed-line-breaks"),
+        # Each string chooses its own representation. Mixing inside one string
+        # can still be a slip of the output, such as a break inside a word.
+        pytest.param(
+            "change",
+            '{"old": "a\\nb", "new": "c\nd"}',
+            {"old": "a\nb", "new": "c\nd"},
+            id="different-field-line-breaks",
+        ),
+        pytest.param(
+            "changes",
+            '[{"old":"a", "new":"b\nc"}, {"old":"d", "new":"e\\nf"}]',
+            [{"old": "a", "new": "b\nc"}, {"old": "d", "new": "e\nf"}],
+            id="different-item-line-breaks",
+        ),
+        pytest.param(
+            "change",
+            '{"old":"a", "new":"b\\nc\nd"}',
+            None,
+            id="mixed-line-breaks",
+        ),
+        pytest.param(
+            "change",
+            '{"old":"a", "new":"b\\rc\rd"}',
+            None,
+            id="mixed-cr-breaks",
+        ),
+        pytest.param(
+            "change",
+            '{"old":"a", "new":"b\\\\nc\nd"}',
+            {"old": "a", "new": "b\\nc\nd"},
+            id="literal-backslash-n",
+        ),
+        pytest.param(
+            "change",
+            '{"old":"a", "new":"b\\"c\nd"}',
+            {"old": "a", "new": 'b"c\nd'},
+            id="escaped-quote-before-raw-break",
+        ),
         # A quote before ":" ends the text only where a value follows the colon.
         pytest.param(
             "change",

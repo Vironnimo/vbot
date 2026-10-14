@@ -133,6 +133,15 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   applied added or deleted a blank line the Agent's later fix did not have,
   because the Agents repaired a joined line without knowing where the file
   broke it.
+  Unicode escape recovery checks literal and character forms together, so mixed
+  spellings in one old text work without choosing between multiple targets. An
+  exactly matching escape remains literal. Only escape spellings proved to stand
+  for characters at every selected target are read that way in `new_string`;
+  new escape types and a spelling with both forms remain as sent. The precise
+  whitespace/typography retry for wholly decoded old text remains. Evidence:
+  a Swarm edit of 2026-10-14 mixed an escaped degree sign with a minus-sign escape
+  the file already held literally; decoding both rejected the otherwise exact
+  edit. Coverage: `test_unicode_escapes_in_old_string_match_the_characters_of_the_file`.
   `replace_all` replaces every leftmost non-overlapping occurrence. An empty
   `old_string` creates a missing file (parent folders included) or fills an empty
   or whitespace-only one, and fails `file_exists` otherwise. Changing existing text
@@ -342,7 +351,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | Partial lead: `Edits 1, 2 and 4 were applied; edit 3 was not. Send only edit 3 again, corrected or left out.` (`edits 2 and 3 were not. Send only edits 2 and 3 again, each corrected or left out.`) | User decision 2026-10-12: a call applies every edit it can; results name the items by their numbers in input order (`vbot-agent-tools` -> Results). `Send only` keeps the Agent from resending the applied edits, whose `old_string` is gone or whose insertion would repeat; `left out` covers a failed edit whose change is already in the file. Replay 2026-10-12: 14 live calls refused as a whole apply in part this way. |
 | No-op item in a written call: `X, edit K of N: the new text equals the current text; nothing to change.`; the lead names only the edits that changed text (`Edit 1 was applied; edit 3 was not. ...`) | The `vbot-agent-tools` Skill requires every item without effect to be named. The sentence is the one a call of only such edits already gets, with the item's label. Before, 12 written calls counted such an item as applied (Swarm runs 2026-10-11/12). |
 | Change already made: `X, edit K of N: new_string already stands at lines A-B and old_string is not in the file; nothing to change.` | An effect that already holds is a success with nothing to do (`vbot-agent-tools`). 2 calls of the Swarm of 2026-10-13 resent a change already made and got `old_string was not found`; each Agent spent a call to confirm the change. The lines are the evidence, so the Agent need not reread; naming both texts says why nothing was changed. |
-| Escape note: `old_string has ü where the file has ü; the \u escapes in new_string were written as the characters they stand for.` | 2 calls of the Swarm of 2026-10-13 wrote `ü` and `°` as `ü` and `°` in the `old_string` of a JSON and a Python file that hold the characters, and failed as not found. The written text differs from the call, so the note says how both texts were read and, as a deviation note, shows the changed lines. |
+| Escape note: `old_string has ... where the file has .... Only ... in new_string were written as characters.`; `new_string was kept as sent.` | Names the character interpretation used for the old text and exactly which escape spellings affected the replacement. Matching literal escapes and new escape types stay literal. A mixed-spelling edit previously failed after the whole old/new text was decoded (Swarm 2026-10-14); the deviation note also shows the changed lines. |
 | Other file: `old_string occurs in X, which this Session read or changed; this call is for Y.` | 7 failed edits of 3 Agents in the Swarm of 2026-10-13 sent `old_string` from one file the Agent worked on with the `path` of another and got only the closest text or `No similar text is in the file`; each Agent found the slip itself and resent the edit to the other file. Naming the file states the likely slip without applying the edit there: which file is meant stays the Agent's call. Not for short texts, which occur in unrelated files. |
 | `After an earlier edit of this call failed, old_string must match the file exactly (up to whitespace).` | After a failed edit the later ones match without copy tolerance, so a copy that applies in a call of its own fails here; without the sentence the not-found report reads as if the text were missing, and the Agent cannot tell why the same copy matched before. |
 | `Neither edit was applied; no file was changed.` first, then the reports, then `Send both edits again, each corrected or left out.` (`None of the N edits were applied; ...`, `all N edits`) | When every edit failed, each has its report above; naming them all again in the closing adds nothing. |

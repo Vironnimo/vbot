@@ -90,7 +90,11 @@ def main(argv: list[str] | None = None) -> int:
         "--work", type=Path, required=True, help="private output directory outside the repository"
     )
     ran.add_argument(
-        "--tool", default="apply_patch", help="Tool to dispatch each case to (default: apply_patch)"
+        "--tool",
+        default="apply_patch",
+        choices=replay.REPLAY_TOOLS,
+        help="file Tool to dispatch each case to (default: apply_patch); targets stay inside "
+        "each case's scratch directory",
     )
     ran.add_argument(
         "--filter",

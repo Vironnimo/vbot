@@ -451,6 +451,13 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
     ):
         result, _ = await dispatch(board, labelled, peer=2)
         assert result["data"]["content"] == read["data"]["content"], result
+    # One closing quote after a complete action changes no intent or payload.
+    quoted, _ = await dispatch(board, {"action": 'post"', "text": 'keep "quotes" literally'})
+    assert quoted["ok"], quoted
+    quoted_read, _ = await dispatch(
+        board, {"action": 'read"', "message_id": quoted["data"]["post_id"]}
+    )
+    assert quoted_read["data"]["content"].endswith('keep "quotes" literally')
     # A placeholder or a repeat beside the real text asks for nothing more.
     for message, text in [("placeholder", "kept"), ("same", "same")]:
         result, _ = await dispatch(board, {"action": "post", "message": message, "text": text})
@@ -477,6 +484,16 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
         ({"recipient_name": "swarm_wiki", "text": "x"}, "recipient_name"),
         # An action that names another Tool points to calling that Tool directly.
         ({"action": "search_files"}, BOARD_OTHER_TOOL.format(action="search_files")),
+        # Collapsed parameter markup is diagnosed, never executed as an action.
+        ({"action": 'read" \nmessage_id">\n#1'}, "message_id as a separate parameter"),
+        (
+            {"action": 'post" \ndiscussion_id">\nd1', "text": "not posted"},
+            "discussion_id as a separate parameter",
+        ),
+        ({"action": 'post" \ntext">\nnot posted'}, "text as a separate parameter"),
+        ({"action": 'join" \ndiscussion_id">\nd2'}, "discussion_id as a separate parameter"),
+        ({"action": 'post""', "text": "not posted"}, "action"),
+        ({"action": 'posted"', "text": "not posted"}, "action"),
     ]:
         result, _ = await dispatch(board, arguments)
         assert result["error"]["code"] == "invalid_arguments", result
@@ -744,6 +761,16 @@ async def test_board_extra_targets_run_only_when_they_change_nothing(board):
         board, {"action": "post", "message_id": target, "text": "answer"}
     )
     assert only_message["ok"], only_message
+    before_mistake = await board_posts(board)
+    for wrong_kind in ("d1", main):
+        mistaken, context = await dispatch(
+            board, {"action": "post", "message_id": wrong_kind, "text": "not redirected"}
+        )
+        assert not mistaken["ok"]
+        assert "discussion_id" in mistaken["error"]["message"]
+        assert '"d1"' in mistaken["error"]["message"]
+        assert context._delivery_receipts == []
+    assert await board_posts(board) == before_mistake
     differing, _ = await dispatch(
         board, {"action": "post", "message_id": main, "reply_to": target, "text": "other"}
     )
