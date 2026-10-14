@@ -35,7 +35,12 @@ from core.runs import (
     RunKind,
     RunNotFoundError,
 )
-from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, TemporarySessionBinding
+from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
+    SessionAddress,
+    SessionNotFoundError,
+    TemporarySessionBinding,
+)
 from core.settings import SettingsValidationError, validate_thinking_effort
 from core.subagents._constants import (
     DEFAULT_MAX_ACTIVE_SUBAGENTS,
@@ -772,6 +777,12 @@ class SubAgentCoordinator:
                 ),
             )
         address = link.session
+        try:
+            session = await sessions.get_async(address)
+        except SessionNotFoundError:
+            return _not_found(subagent_id, await sessions.run_async(children, sessions, caller))
+        generation_id = session.generation_id
+        assert generation_id is not None  # get_async returns a generation-bound handle.
         overrides = _parse_session_overrides(arguments)
         temporary_parent = await self._temporary_parent(
             context, address.agent_id, address.project_id
@@ -818,6 +829,7 @@ class SubAgentCoordinator:
                     temporary_parent=temporary_parent,
                     working_project_id=working_project_id,
                     steerable=steerable,
+                    generation_id=generation_id,
                 )
             )
 
@@ -832,25 +844,78 @@ class SubAgentCoordinator:
         temporary_parent: TemporarySessionBinding | None,
         working_project_id: str | None,
         steerable: bool,
+        generation_id: str,
     ) -> JsonObject:
-        """Store *overrides*, enqueue *content* and return the ``send`` result."""
+        """Admit *content* before storing overrides or letting Chat consume it."""
         runtime = self._runtime
         sessions = runtime.chat_sessions
         manager = runtime.chat_run_manager
-        if overrides:
-            await sessions.run_async(
-                runtime.agent_resolver.update_session_overrides, address, overrides
+        # Lock order is Session -> manager admission. Never hold the manager lock
+        # over metadata I/O: the admitted Run/Queue item already claims this
+        # Session and, when busy, its waiting-work capacity.
+        async with sessions.write_lock(address):
+            session: ChatSession | None
+            try:
+                session = await sessions.get_async(address)
+            except SessionNotFoundError:
+                session = None
+            current_link = await sessions.run_async(read_link, sessions, address, strict=True)
+            if (
+                session is None
+                or session.generation_id != generation_id
+                or current_link is None
+                or current_link.id != subagent_id
+                or current_link.parent != _caller(context)
+            ):
+                return _not_found(
+                    subagent_id, await sessions.run_async(children, sessions, _caller(context))
+                )
+            executor = runtime.chat_loop.run_executor(
+                content, parent_agent_input=True, temporary_parent_binding=temporary_parent
             )
-        executor = runtime.chat_loop.run_executor(
-            content, parent_agent_input=True, temporary_parent_binding=temporary_parent
-        )
-        item = await manager.enqueue(
-            address,
-            executor,
-            display_content=content,
-            steerable=steerable,
-            admission=_admission(context, subagent_id, working_project_id),
-        )
+            prepared = asyncio.Event()
+            preparation_error: BaseException | None = None
+
+            async def execute_prepared(run: Run) -> Any:
+                await prepared.wait()
+                if preparation_error is not None:
+                    raise preparation_error
+                return await executor(run)
+
+            item = await manager.enqueue(
+                address,
+                execute_prepared,
+                display_content=content,
+                admission=_admission(
+                    context,
+                    subagent_id,
+                    working_project_id,
+                    expected_session_generation_id=generation_id,
+                ),
+            )
+            try:
+                if overrides:
+                    await sessions.run_async(
+                        runtime.agent_resolver.update_session_overrides, address, overrides
+                    )
+                # Queued input cannot be steered before its settings commit;
+                # an idle or drained Run waits at the executor gate instead.
+                if not item.future.cancelled() and not item.withdrawn and not item.steering:
+                    # Steering needs Chat's captured request, not the admission
+                    # gate. Already-started Runs retain the gate closure.
+                    item.executor = executor
+                    item.steerable = steerable
+            except BaseException as error:
+                preparation_error = error
+                manager.remove_queued(
+                    address.agent_id,
+                    address.session_id,
+                    item.item_id,
+                    project_id=address.project_id,
+                )
+                raise
+            finally:
+                prepared.set()
         status, note = "queued", SUBAGENT_SEND_QUEUED_NOTE
         if item.future.done() and not item.future.cancelled():
             status, note = "started", SUBAGENT_SEND_STARTED_NOTE
@@ -1015,7 +1080,11 @@ def _caller(context: ToolContext) -> SessionAddress:
 
 
 def _admission(
-    context: ToolContext, subagent_id: str, working_project_id: str | None
+    context: ToolContext,
+    subagent_id: str,
+    working_project_id: str | None,
+    *,
+    expected_session_generation_id: str | None = None,
 ) -> RunAdmission:
     return RunAdmission(
         working_project_id=working_project_id,
@@ -1023,6 +1092,7 @@ def _admission(
         work_id=subagent_id,
         owner=context.execution_owner,
         contributes_to_agent_activity=context.execution_owner is None,
+        expected_session_generation_id=expected_session_generation_id,
     )
 
 

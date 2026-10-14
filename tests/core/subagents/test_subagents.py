@@ -243,8 +243,12 @@ async def test_target_that_cannot_run_fails_before_session_work(
     assert harness.sessions.list("worker") == []
 
 
+@pytest.mark.parametrize("busy", [False, True], ids=["idle", "busy"])
+@pytest.mark.parametrize("replace_effort", [False, True], ids=["keep-effort", "replace-effort"])
 async def test_model_and_thinking_effort_belong_to_the_subagent_session(
     harness: SubAgentHarness,
+    busy: bool,
+    replace_effort: bool,
 ) -> None:
     harness.resolver.unusable_models.add("acme/broken")
     refused = await harness.call(
@@ -253,11 +257,22 @@ async def test_model_and_thinking_effort_belong_to_the_subagent_session(
     assert refused["error"]["code"] == "invalid_arguments"
     assert harness.loop.turns == []
 
+    if busy:
+        harness.loop.hold("review")
     data = await harness.spawn("review", model="acme/good", thinking_effort="low")
     child = harness.subagent_session(data["id"])
     stored = await harness.resolver.session_overrides_async(child)
     assert (stored.model, stored.thinking_effort) == ("acme/good", "low")
-    await harness.settle()
+    if not busy:
+        await harness.settle()
+    reservations = (
+        []
+        if busy
+        else [
+            harness.manager.reserve_waiting_work(scope="fixture:inbound", scope_limit=32)
+            for _ in range(32)
+        ]
+    )
 
     # A stored Model that can no longer run stops the next message, naming the fix.
     harness.resolver.unusable_models.add("acme/good")
@@ -266,11 +281,23 @@ async def test_model_and_thinking_effort_belong_to_the_subagent_session(
     assert '"model"' in blocked["error"]["message"]
 
     sent = await harness.call(
-        {"action": "send", "id": data["id"], "content": "more", "model": "acme/other"}
+        {
+            "action": "send",
+            "id": data["id"],
+            "content": "more",
+            "model": "acme/other",
+            **({"thinking_effort": "high"} if replace_effort else {}),
+        }
     )
     assert sent["ok"], sent
     stored = await harness.resolver.session_overrides_async(child)
-    assert (stored.model, stored.thinking_effort) == ("acme/other", "low")
+    assert (stored.model, stored.thinking_effort) == (
+        "acme/other",
+        "high" if replace_effort else "low",
+    )
+    assert harness.manager.waiting_work_count() == (1 if busy else 32)
+    for reservation in reservations:
+        assert harness.manager.release_waiting_work(reservation)
 
 
 async def test_every_answer_reaches_the_parent_with_what_is_still_running(
