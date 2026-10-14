@@ -2,7 +2,7 @@
 
 {generated:channel_list}
 
-Use plain text for Telegram messages.
+For Telegram messages, use plain text without Markdown formatting.
 
 Group conversations:
 - In group conversations, vBot prefixes every user message with `[display_name|platform_user_id|role]`; `role` is either `admin` or `member`.

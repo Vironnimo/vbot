@@ -133,7 +133,10 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
                 "minLength": 1,
             },
             "minItems": 1,
-            "description": ("Local file paths; relative paths start in the working directory."),
+            "description": (
+                "Local file paths; relative paths start in the working directory. "
+                "To forward a file at a known path, pass it directly without reading its contents."
+            ),
         },
         "buttons": {
             "type": "array",
@@ -186,17 +189,18 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
                 "required": ["id", "label"],
             },
             "description": (
-                "Telegram checklist with a done button. Item taps toggle locally; done wakes "
-                "you with the items changed since sending, by id. In Identity Sessions, done "
-                "routes the chat back to this Session until /new. "
-                "Cannot be combined with file_paths."
+                "Telegram checklist with a done button. Item taps toggle checkmarks without "
+                "waking you. The done button wakes you with the items changed since sending, "
+                "by id. In Identity Sessions, done routes the chat back to this Session "
+                "until /new. Cannot be combined with file_paths."
             ),
         },
         "done_label": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Text of the checklist's done button, in the user's language. Omit for \"Done\"."
+                "Text of the checklist's done button, in the user's language. "
+                'Omit for English "Done"; set it for other languages.'
             ),
         },
     },
