@@ -28,7 +28,12 @@ describe('send and edit admission', () => {
       });
     const { chatState, controller, runStream } = setupController({
       isDisplayedSession: () => true,
-      operationOverrides: { startChatRun },
+      operationOverrides: {
+        startChatRun,
+        listQueue: vi.fn().mockResolvedValue({
+          items: [{ id: 'queued-two', content: 'Later' }],
+        }),
+      },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
 
@@ -428,6 +433,41 @@ describe('send and edit admission', () => {
 });
 
 describe('Queue', () => {
+  it.each(['run_started', 'user_message_persisted', 'history-reconciled'])(
+    'does not resurrect an item when its send response follows %s',
+    async (observed) => {
+      const response = deferred();
+      const { chatState, controller } = setupController({
+        operationOverrides: {
+          startChatRun: vi.fn(() => response.promise),
+          listQueue: vi.fn().mockResolvedValue({ items: [] }),
+        },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'one');
+      const pending = controller.sendMessage(session, 'Already executed');
+      if (observed !== 'history-reconciled') {
+        appendRunEvent(session, {
+          type: observed,
+          run_id: 'run',
+          sequence: 1,
+          payload: {
+            queue_item_id: 'consumed',
+            message: { id: 'user', role: 'user', content: 'Already executed' },
+          },
+        });
+      } else {
+        session.messages = [
+          { id: 'user', role: 'user', content: 'Already executed' },
+        ];
+      }
+      response.resolve({
+        queued: true,
+        item: { id: 'consumed', content: 'Already executed' },
+      });
+      expect(await pending).toEqual({ kind: 'queued' });
+      expect(session.queue).toEqual([]);
+    },
+  );
   it('steers into the active Run and reconciles a consumed item without starting another Run', async () => {
     const steerQueueItem = vi.fn().mockResolvedValue({});
     const listQueue = vi.fn().mockResolvedValue({ items: [] });
@@ -724,7 +764,15 @@ describe('Queue', () => {
       const stale = deferred();
       const { chatState, controller } = setupController({
         operationOverrides: {
-          listQueue: vi.fn().mockReturnValue(stale.promise),
+          listQueue: vi
+            .fn()
+            .mockReturnValueOnce(stale.promise)
+            .mockResolvedValue({
+              items: [
+                { id: 'old', content: 'Original', editable: true },
+                { id: 'new', content: 'New queued text', editable: true },
+              ],
+            }),
           updateQueueItem: vi.fn().mockResolvedValue({ ok: true }),
           removeFromQueue: vi.fn().mockResolvedValue({ ok: true }),
           startChatRun: vi.fn().mockResolvedValue({

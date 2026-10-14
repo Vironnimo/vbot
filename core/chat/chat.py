@@ -361,6 +361,9 @@ class ChatLoop:
         are as in :meth:`start_run`.
         """
         _validate_run_tool_iteration_limit(max_tool_iterations)
+        session = await self._get_session_async(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
         await self._reject_owner_managed_session(project_id, agent_id, session_id)
         resolver = self._dependencies.agent_resolver
         agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
@@ -370,9 +373,6 @@ class ChatLoop:
         _reject_live_input(agent, run_kind)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
-        session = await self._get_session_async(
-            agent_id, session_id, create_missing=False, project_id=project_id
-        )
         manager = self._dependencies.run_manager
         request = _RunRequest(
             content=content,
@@ -442,13 +442,13 @@ class ChatLoop:
         if compaction_service is None:
             raise CompactionUnavailableError("Compaction is not available.")
 
+        session = await self._get_session_async(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
         resolver = self._dependencies.agent_resolver
         agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
         working_project_id = await resolver.resolve_working_project_async(
             project_id, agent, session_id=session_id
-        )
-        session = await self._get_session_async(
-            agent_id, session_id, create_missing=False, project_id=project_id
         )
         return await self._dependencies.run_manager.start(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
@@ -522,6 +522,15 @@ class ChatLoop:
         _validate_run_tool_iteration_limit(max_tool_iterations)
         if session_id is None and create_missing and new_session is None:
             new_session = _NewSession()
+        session = None
+        if new_session is None:
+            try:
+                session = await self._get_session_async(
+                    agent_id, session_id, create_missing=False, project_id=project_id
+                )
+            except SessionNotFoundError:
+                if not create_missing:
+                    raise
         if session_id is not None:
             await self._reject_owner_managed_session(project_id, agent_id, session_id)
         resolver = self._dependencies.agent_resolver
@@ -551,7 +560,7 @@ class ChatLoop:
                 metadata=new_session.agent_overrides.session_metadata() or None,
                 working_project_id=_stored_working_project(project_id, working_project_id),
             )
-        else:
+        elif session is None:
             session = await self._get_session_async(
                 agent_id,
                 session_id,
@@ -587,22 +596,28 @@ class ChatLoop:
                     run_kind=run_kind,
                     contributes_to_agent_activity=contributes_to_agent_activity,
                     source_session_id=source_session_id,
-                    expected_session_generation_id=(
-                        session.generation_id if not create_missing else None
-                    ),
+                    expected_session_generation_id=session.generation_id,
                 ),
             )
         except BaseException:
-            # The Run manager admits nothing when it raises, so the new Session is unused.
+            # Another request may already have used the Session we just created.
             if new_session is not None:
-                await self._discard_new_session(address)
+                await self._discard_new_session(session)
             raise
 
-    async def _discard_new_session(self, address: SessionAddress) -> None:
+    async def _discard_new_session(self, session: ChatSession) -> None:
         """Remove a Session this start created for a Run it could not start (best effort)."""
         sessions = self._dependencies.sessions
+        address = session.address
         try:
-            await sessions.run_async(sessions.delete, address)
+            async with self._dependencies.run_manager.session_admission_guard(address):
+                if session.generation_id is not None:
+                    await sessions.run_async(
+                        sessions.discard_unused, address, session.generation_id
+                    )
+        except ActiveRunError:
+            # Active/queued work or another lifecycle operation owns this Session now.
+            return
         except Exception:
             _LOGGER.warning(
                 "Could not remove the unused new Session (agent=%s session=%s)",

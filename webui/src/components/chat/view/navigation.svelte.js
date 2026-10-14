@@ -567,11 +567,13 @@ export function createChatViewNavigation(context) {
     }
     const viewedSessionId =
       viewingSessionId || context.target.activeAgent?.current_session_id || '';
+    const viewedOwner = context.target.activeAddressing().agentAddress;
     if (passive) {
       // The server echo is part of this area's confirmed deletion. It may
       // land first without retiring the focus captured at confirmation.
       if (
         viewedSessionId === removedId &&
+        viewedOwner === ownerAddress &&
         (localDeletionFocus?.sessionId !== removedId ||
           localDeletionFocus.agentAddress !== ownerAddress)
       ) {
@@ -592,6 +594,8 @@ export function createChatViewNavigation(context) {
     if (
       !passive &&
       followed?.removedId === removedId &&
+      followed.ownerAddress === ownerAddress &&
+      viewedOwner === ownerAddress &&
       followed.landingId === viewedSessionId
     ) {
       passiveDeletionFollow = null;
@@ -599,14 +603,14 @@ export function createChatViewNavigation(context) {
       focusAfterLoad?.();
       return;
     }
-    if (viewedSessionId !== removedId) {
+    if (viewedSessionId !== removedId || viewedOwner !== ownerAddress) {
       return;
     }
     if (passive) {
       // Another area's or window's action: follow it without stealing
       // composer focus.
       const loaded = followDeletionLanding(ownerAddress, landingId);
-      passiveDeletionFollow = { removedId, landingId, loaded };
+      passiveDeletionFollow = { ownerAddress, removedId, landingId, loaded };
       await loaded;
       return;
     }

@@ -72,6 +72,74 @@ async function openSessionInfoLink(selector, text) {
 describe('ChatView Sessions', () => {
   const chat = setupChatViewTestSuite();
 
+  it('enables a draft immediately while the departed Agent History is still pending', async () => {
+    let release;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const agents = [
+      createAgent(),
+      createAgent({ id: 'beta', name: 'Beta', current_session_id: '' }),
+    ];
+    const fallback = createChatRpcMock({ agents });
+    rpcMock.mockImplementation((method, params) =>
+      method === 'chat.history' ? pending : fallback(method, params),
+    );
+    const parent = createChatViewParentHarness();
+    await chat.mountChat(parent.props(['agent'], { sharedAgents: agents }), {
+      ready: null,
+    });
+    await waitForCondition(() => historyReads('session-1') > 0);
+    expect(composerInput().disabled).toBe(true);
+    await selectAgentFromPicker('Beta');
+    await waitForCondition(() => selectedAgentName() === 'Beta');
+    expect(composerInput().disabled).toBe(false);
+    expect(findNewSessionButton().disabled).toBe(false);
+    release({ messages: [] });
+    await settle();
+    expect(composerInput().disabled).toBe(false);
+  });
+
+  it.each(['alpha', 'beta@project'])(
+    'keeps Beta/main when a deletion belongs to %s/main',
+    async (owner) => {
+      const beta = createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'main',
+      });
+      const alpha = createAgent({ current_session_id: 'main' });
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          agents: [alpha, beta],
+          sessionMessages: { main: [message('hello', 'Hello')] },
+        }),
+      );
+      const props = reactiveProps({ siblingSessionDeletion: null });
+      await chat.mountChat({
+        sharedAgents: [alpha, beta],
+        sharedSelectedAgentId: 'beta',
+        get siblingSessionDeletion() {
+          return props.siblingSessionDeletion;
+        },
+      });
+      props.siblingSessionDeletion = {
+        agentAddress: owner,
+        deletedSessionId: 'main',
+        nextSessionId: 'landing',
+        requestId: 1,
+      };
+      await settle();
+      expect(selectedAgentName()).toBe('Beta');
+      expect(historyReads('landing')).toBe(0);
+      await sendComposerMessage('Still Beta');
+      expect(rpcCalls('chat.stream').at(-1)).toMatchObject({
+        agent_id: 'beta',
+        session_id: 'main',
+      });
+    },
+  );
+
   describe('Session information', () => {
     it('reads the Session change statistics from the server while it is open', async () => {
       const answers = [

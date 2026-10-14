@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   appendRunEvent,
+  setAgents,
+  selectAgent,
   ensureSessionState,
   startRun,
   visibleTimelineItemsForRender,
@@ -13,6 +15,38 @@ import {
 } from './chatState.support.js';
 
 describe('History reads', () => {
+  it('releases a departed History load on a draft and ignores its late completion', async () => {
+    const old = deferred();
+    const next = deferred();
+    let displayed = 'alpha';
+    const { chatState, controller } = setupController({
+      isDisplayedSession: (agent) => agent === displayed,
+      operationOverrides: {
+        loadChatHistory: vi
+          .fn()
+          .mockReturnValueOnce(old.promise)
+          .mockReturnValueOnce(next.promise),
+      },
+    });
+    setAgents(chatState, [
+      { id: 'alpha', current_session_id: 'one' },
+      { id: 'beta', current_session_id: '' },
+    ]);
+    const first = controller.loadHistoryForSession('alpha', 'one');
+    expect(chatState.loadingHistory).toBe(true);
+    displayed = 'beta';
+    selectAgent(chatState, 'beta');
+    await controller.loadCurrentHistory();
+    expect(chatState.loadingHistory).toBe(false);
+    displayed = 'gamma';
+    const second = controller.loadHistoryForSession('gamma', 'two');
+    old.resolve({ messages: [] });
+    await first;
+    expect(chatState.loadingHistory).toBe(true);
+    next.resolve({ messages: [] });
+    await second;
+    expect(chatState.loadingHistory).toBe(false);
+  });
   it('keeps Session facts and an in-flight reflection read across an unchanged incremental read', async () => {
     const policy = { enabled: true, trigger: { type: 'context_ratio' } };
     const loadChatHistory = vi

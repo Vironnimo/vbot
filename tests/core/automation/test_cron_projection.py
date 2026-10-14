@@ -22,6 +22,60 @@ def service(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> CronService:
 
 class TestProjectOccurrences:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("zone", "expression", "reference", "expected"),
+        [
+            (
+                "Europe/Berlin",
+                "30 2 * * *",
+                "2027-03-28T03:10:00+02:00",
+                "2027-03-28T03:30:00+02:00",
+            ),
+            (
+                "Europe/Berlin",
+                "30 2 * * *",
+                "2027-03-28T03:30:00+02:00",
+                "2027-03-29T02:30:00+02:00",
+            ),
+            (
+                "Europe/Berlin",
+                "15,30 2,3 * * *",
+                "2027-03-28T03:10:00+02:00",
+                "2027-03-28T03:15:00+02:00",
+            ),
+            (
+                "Australia/Lord_Howe",
+                "15 2 * * *",
+                "2027-10-03T02:40:00+11:00",
+                "2027-10-03T02:45:00+11:00",
+            ),
+            (
+                "Pacific/Apia",
+                "0 12 * * *",
+                "2011-12-31T00:10:00+14:00",
+                "2011-12-31T12:00:00+14:00",
+            ),
+        ],
+    )
+    async def test_a_shifted_gap_fire_is_still_upcoming_after_the_clock_jumped(
+        self, service, zone, expression, reference, expected
+    ):
+        service.set_timezone(zone)
+        job = await service.create_job(
+            agent_id="joel", prompt="test", schedule_type="cron", cron_expression=expression
+        )
+        start = datetime.fromisoformat(reference).astimezone(UTC)
+        expected_utc = datetime.fromisoformat(expected).astimezone(UTC)
+        assert (
+            datetime.fromisoformat(service.next_fire_at(job, reference_time=start)) == expected_utc
+        )
+        # Projection includes its lower bound; exclude it here to match next_fire_at.
+        rows = service.project_occurrences(
+            start + timedelta(microseconds=1), expected_utc + timedelta(seconds=1)
+        )
+        assert rows[0].fire_at_utc == expected_utc
+
+    @pytest.mark.asyncio
     async def test_spring_gap_projection_matches_successive_live_fires(self, service):
         service.set_timezone("Europe/Berlin")
         job = await service.create_job(

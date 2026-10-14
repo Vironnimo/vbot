@@ -538,6 +538,23 @@ class ProjectStore:
                 _move_back(project_dir, source, exc, "Project restore failed")
                 raise
 
+    def complete_restore_files(self, target_id: str, *, source_id: str) -> None:
+        """Finish the configuration rewrite of an Anchor already moved by restore."""
+        with self._snapshot_barrier.compound_mutation(), self._change():
+            _validate_project_id(target_id)
+            config = self._project_dir(target_id) / _PROJECT_CONFIG_FILENAME
+            project = project_from_dict(load_validated_project_json(config))
+            if project.project_id not in (source_id, target_id):
+                raise ProjectError(
+                    f"Project restore target belongs to another Project: {target_id}"
+                )
+            self._reject_duplicate_cwd(project.cwd, exclude_project_id=target_id)
+            restored = replace(project, project_id=target_id, updated_at=utc_now_timestamp())
+            try:
+                write_json_document(config, restored.to_dict(), project_format())
+            except JsonDocumentWriteError as error:
+                raise ProjectError(str(error)) from error
+
     def session_owning_agents(self, project_id: str) -> builtins.list[str]:
         """Return the agent ids that own at least one session under this anchor.
 

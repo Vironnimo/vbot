@@ -591,6 +591,29 @@ def commit_restore(
     if taken:
         raise ArchiveAddressTakenError(str(row["entry_id"]), taken)
     for session_key, target in targets:
+        if session_id is not None:
+            original = connection.execute(
+                "SELECT project_id, agent_id, session_id, archived_at FROM sessions WHERE session_key = ?",
+                (session_key,),
+            ).fetchone()
+            if original["session_id"] != target.session_id:
+                # Children of a replacement at the old address belong to that replacement.
+                # Archived children follow too, so their own later restore keeps the tree.
+                connection.execute(
+                    "UPDATE sessions SET subagent_parent_project_id = ?, subagent_parent_agent_id = ?, "
+                    "subagent_parent_session_id = ?, state_revision = state_revision + 1 "
+                    "WHERE subagent_parent_project_id IS ? AND subagent_parent_agent_id = ? "
+                    "AND subagent_parent_session_id = ? AND created_at <= ?",
+                    (
+                        target.project_id,
+                        target.agent_id,
+                        target.session_id,
+                        original["project_id"] or None,
+                        original["agent_id"],
+                        original["session_id"],
+                        original["archived_at"],
+                    ),
+                )
         connection.execute(
             "UPDATE sessions SET state = 'live', archived_at = NULL, project_id = ?, agent_id = ?, "
             "session_id = ?, state_revision = state_revision + 1 WHERE session_key = ?",
