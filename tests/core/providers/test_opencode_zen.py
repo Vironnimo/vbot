@@ -67,6 +67,8 @@ async def _request(adapter: OpenCodeZenAdapter, model_id: str, *, streaming: boo
         ("claude-sonnet-5-5", "messages"),
         ("glm-5.3-flash", "chat_completions"),
         ("qwen3.8-max", "chat_completions"),
+        ("mistral-large-4", "chat_completions"),
+        ("gemini-4-argon", "gemini"),
         ("gemini-3.8-flash", "gemini"),
     ],
 )

@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-09T15:57:09.940187+00:00",
+  "fetched_at": "2026-10-14T09:37:00.988545+00:00",
   "models": {
     "codestral-2508": {
       "canonical": "mistral/codestral-2508",
@@ -291,6 +291,7 @@
       "name": "mistral-small-2603"
     },
     "ministral-14b-2512": {
+      "canonical": "mistral/ministral-14b-2512",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -300,9 +301,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -368,6 +366,7 @@
       "name": "ministral-14b-2512"
     },
     "ministral-3b-2512": {
+      "canonical": "mistral/ministral-3b-2512",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -377,9 +376,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -453,6 +449,7 @@
       }
     },
     "ministral-8b-2512": {
+      "canonical": "mistral/ministral-8b-2512",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -462,9 +459,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"

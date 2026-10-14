@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 import pytest
+import pytest_asyncio
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.mistral import MistralAdapter
+from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+
+from .opencode_zen_test_support import CHAT_URL as ZEN_CHAT_URL
+from .opencode_zen_test_support import zen_config
 
 API_KEY = "test-mistral-key"
 CHAT_URL = "https://api.mistral.ai/v1/chat/completions"
@@ -72,6 +79,22 @@ CATALOG = {
 
 def _adapter(*, catalog: bool = False) -> MistralAdapter:
     return MistralAdapter(CONFIG, API_KEY, model_lookup=CATALOG.get if catalog else None)
+
+
+@pytest_asyncio.fixture(params=["mistral", "opencode-zen"])
+async def content_wire(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[tuple[OpenAICompatibleAdapter, str, str]]:
+    if request.param == "mistral":
+        adapter: OpenAICompatibleAdapter = _adapter()
+        url, model_id = CHAT_URL, "mistral-large-latest"
+    else:
+        adapter = OpenCodeZenAdapter(zen_config(), API_KEY)
+        url, model_id = ZEN_CHAT_URL, "mistral-large-4"
+    try:
+        yield adapter, url, model_id
+    finally:
+        await adapter.aclose()
 
 
 def _sse(*chunks: dict[str, Any]) -> httpx.Response:
@@ -289,14 +312,17 @@ async def test_reasoning_is_a_binary_effort_toggle(
     ],
 )
 def test_completed_response_separates_text_and_reasoning(
+    content_wire: tuple[OpenAICompatibleAdapter, str, str],
     content: Any,
     extra: dict[str, Any],
     expected_content: str,
     expected_reasoning: str,
     keeps_chunks: bool,
 ) -> None:
-    normalized = _adapter().normalize_response(
-        {"choices": [{"message": {"role": "assistant", "content": content, **extra}}]}
+    adapter, _, model_id = content_wire
+    normalized = adapter.normalize_response(
+        {"choices": [{"message": {"role": "assistant", "content": content, **extra}}]},
+        model_id=model_id,
     )
 
     assert normalized["content"] == expected_content
@@ -334,13 +360,16 @@ CAPTURED_CHUNKS = [
 @respx.mock
 @pytest.mark.asyncio
 async def test_history_replays_only_captured_content_chunks(
-    assistant: dict[str, Any], wire_content: Any
+    assistant: dict[str, Any],
+    wire_content: Any,
+    content_wire: tuple[OpenAICompatibleAdapter, str, str],
 ) -> None:
-    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+    adapter, url, model_id = content_wire
+    route = respx.post(url).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
 
-    await _adapter().send(
+    await adapter.send(
         [{"role": "user", "content": "Q"}, assistant, {"role": "user", "content": "Next"}],
-        model_id="mistral-large-latest",
+        model_id=model_id,
     )
 
     wire = json.loads(route.calls.last.request.content)["messages"][1]
@@ -365,6 +394,46 @@ async def test_history_replays_only_captured_content_chunks(
             [{"choices": [{"delta": {"thinking": "Reasoning delta"}}]}],
             [{"type": "reasoning_delta", "text": "Reasoning delta"}],
             id="string-thinking-field",
+        ),
+        pytest.param(
+            [
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "content": [
+                                    {
+                                        "type": "thinking",
+                                        "thinking": [{"type": "text", "text": "Think"}],
+                                        "closed": True,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {"choices": [{"delta": {"content": "Answer"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ],
+            [
+                {"type": "reasoning_delta", "text": "Think"},
+                {"type": "content_delta", "text": "Answer"},
+                {
+                    "type": "reasoning_meta",
+                    "reasoning_meta": {
+                        "content_chunks": [
+                            {
+                                "type": "thinking",
+                                "thinking": [{"type": "text", "text": "Think"}],
+                                "closed": True,
+                            },
+                            {"type": "text", "text": "Answer"},
+                        ]
+                    },
+                },
+                {"type": "finish", "reason": "stop"},
+            ],
+            id="typed-thinking-then-plain-text-retains-answer-for-replay",
         ),
         pytest.param(
             [
@@ -461,11 +530,14 @@ async def test_history_replays_only_captured_content_chunks(
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_normalizes_string_and_typed_deltas(
-    chunks: list[dict[str, Any]], expected: list[dict[str, Any]]
+    chunks: list[dict[str, Any]],
+    expected: list[dict[str, Any]],
+    content_wire: tuple[OpenAICompatibleAdapter, str, str],
 ) -> None:
-    route = respx.post(CHAT_URL).mock(return_value=_sse(*chunks))
+    adapter, url, model_id = content_wire
+    route = respx.post(url).mock(return_value=_sse(*chunks))
 
-    deltas = [delta async for delta in _adapter().stream(HELLO, model_id="mistral-large-latest")]
+    deltas = [delta async for delta in adapter.stream(HELLO, model_id=model_id)]
 
     assert deltas == expected
     request = json.loads(route.calls.last.request.content)

@@ -1,4 +1,4 @@
-"""The OpenCode Zen Gemini ``generateContent`` codec."""
+"""The native Gemini ``generateContent`` codec."""
 
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ from core.providers.errors import (
 )
 from core.providers.tool_schema import render_tool_definitions
 
-ZEN_MAX_IMAGES_PER_REQUEST = 3_600
-"""Images Zen's Gemini wire accepts in one request."""
+GEMINI_MAX_IMAGES_PER_REQUEST = 3_600
+"""Images the Gemini wire accepts in one request."""
 
 
 def gemini_input_payload(
@@ -63,9 +63,9 @@ def gemini_input_payload(
         image_count += added_images
         if content is not None:
             contents.append(content)
-    if image_count > ZEN_MAX_IMAGES_PER_REQUEST:
+    if image_count > GEMINI_MAX_IMAGES_PER_REQUEST:
         raise ProviderError(
-            f"Gemini accepts at most {ZEN_MAX_IMAGES_PER_REQUEST} images per request",
+            f"Gemini accepts at most {GEMINI_MAX_IMAGES_PER_REQUEST} images per request",
             retryable=False,
         )
     payload: dict[str, Any] = {"contents": contents}

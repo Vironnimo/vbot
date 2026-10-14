@@ -326,8 +326,33 @@ def _extract_openai_reasoning(
 ) -> str | None:
     """Return the readable reasoning text from an assistant message or delta."""
 
+    content = message.get("content")
+    if isinstance(content, list):
+        thinking = "".join(
+            _chat_content_chunk_text(item)
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "thinking"
+        )
+        if thinking:
+            return thinking
     found = _find_openai_reasoning(message, fields)
     return found[1] if found is not None else None
+
+
+def _chat_content_chunk_text(chunk: Mapping[str, Any]) -> str:
+    """Read text and Mistral ThinkChunks, including nested thinking text."""
+    value = chunk.get("thinking") if chunk.get("type") == "thinking" else chunk.get("text")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(
+            item["text"]
+            for item in value
+            if isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+        )
+    return ""
 
 
 def _extract_openai_reasoning_meta(message: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -337,6 +362,9 @@ def _extract_openai_reasoning_meta(message: Mapping[str, Any]) -> dict[str, Any]
     for key in OPENAI_REASONING_META_KEYS:
         if key in message:
             meta[key] = message[key]
+    content = message.get("content")
+    if isinstance(content, list):
+        meta["content_chunks"] = [dict(item) for item in content if isinstance(item, Mapping)]
     return meta or None
 
 
@@ -364,10 +392,13 @@ def _openai_response_carries_reasoning(
     message = _openai_response_message(response)
     if message is None:
         return False
-    if _find_openai_reasoning(message, fields) is not None:
+    if _extract_openai_reasoning(message, fields=fields) is not None:
         return True
     meta = _extract_openai_reasoning_meta(message)
-    return meta is not None and any(meta.values())
+    if meta is None:
+        return False
+    chunks = meta.pop("content_chunks", [])
+    return any(meta.values()) or any(item.get("type") == "thinking" for item in chunks)
 
 
 def _apply_openai_reasoning_meta(

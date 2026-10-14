@@ -260,7 +260,9 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "muse-spark-1.2-contributor",
             "muse-spark-1.3-contributor",
         ),
+        "gemini": ("gemini-4-argon-contributor",),
         "chat_completions": (
+            "cat-jam-free",
             "glm-5.1",
             "glm-5.3-flash",
             "glm-5.3",
@@ -302,7 +304,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert len(expected) == 38
+    assert len(expected) == 40
 
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected

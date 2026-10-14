@@ -2,7 +2,7 @@
   "id": "opencode-go",
   "name": "OpenCode Go",
   "adapter": "opencode_go",
-  "base_url": "https://opencode.ai/zen/go/v1",
+  "base_url": "https://opencode.ai/inference/go/v1",
   "connections": [
     {
       "id": "api-key",

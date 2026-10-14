@@ -249,7 +249,7 @@ _OPENROUTER_CREDITS = UsageCredits(enabled=True, balance=37.5, unit="USD")
             "opencode-go",
             [
                 (
-                    "https://opencode.ai/zen/go/v1/usage",
+                    "https://opencode.ai/inference/go/v1/usage",
                     {
                         "User-Agent": "vBot",
                         "Authorization": "Bearer go-secret",

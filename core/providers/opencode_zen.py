@@ -2,40 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
-from contextlib import aclosing
-from functools import partial
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
 
 from core.models.models import Model
-from core.providers._http_shared import (
-    PreparedRequest,
-    RequestPlan,
-    classify_http_status,
-    connect_streaming_with_retry,
-    decode_response_json,
-    iter_sse_events,
-    json_body_headers,
-    parse_sse_json_data,
-    wrap_network_error,
-)
-from core.providers._opencode_zen_gemini import (
-    _apply_gemini_response_format,
-    _gemini_tool_choice,
-    _move_integer,
-    _move_number,
-    _normalize_gemini_response,
-    _normalize_gemini_stream_chunk,
-    gemini_input_payload,
-    gemini_returned_reasoning,
-)
-from core.providers._responses_profile import take_reasoning_renderer
-from core.providers._wire_learning import (
-    execute_learning_from_rejections,
-    stream_learning_from_rejections,
-)
+from core.providers._http_shared import classify_http_status
 from core.providers.adapter import (
     ModelLookup,
 )
@@ -45,18 +18,16 @@ from core.providers.anthropic_compatible import (
     AnthropicCompatibleAdapter,
 )
 from core.providers.errors import (
-    NetworkError,
     ProviderAuthError,
     ProviderError,
 )
+from core.providers.gemini_compatible import GeminiCompatibleAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
+from core.providers.token_getter import TokenGetter
 from core.providers.wire_profile import Protocol
 from core.providers.wire_profiles import WireBinding
-from core.utils.retry import retry_async
-from core.utils.tokens import estimate_structured_tokens
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -149,6 +120,16 @@ class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
         )
 
 
+class _OpenCodeZenGeminiAdapter(GeminiCompatibleAdapter):
+    """Zen's Gemini route with Zen error semantics."""
+
+    @override
+    def _classify_http_status(
+        self, status_code: int, *, detail: str, response_headers: httpx.Headers
+    ) -> None:
+        _classify_zen_status(status_code, detail=detail, response_headers=response_headers)
+
+
 class OpenCodeZenAdapter(OpenAIAdapter):
     """Route OpenCode Zen Models across its four official wire protocols.
 
@@ -216,15 +197,27 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
         self._messages.bind_wire_profiles(self.wire)
+        self._gemini = _OpenCodeZenGeminiAdapter(
+            config,
+            self._token_getter,
+            base_url=base_url,
+            auth_config=AuthConfig(header="x-goog-api-key", prefix=""),
+            model_lookup=model_lookup,
+            debug_recorder=debug_recorder,
+            client=self._client,
+        )
+        self._gemini.bind_wire_profiles(self.wire)
 
     @override
     def bind_wire_profiles(self, binding: WireBinding) -> None:
         super().bind_wire_profiles(binding)
         self._messages.bind_wire_profiles(binding)
+        self._gemini.bind_wire_profiles(binding)
 
     @override
     async def aclose(self) -> None:
         await self._messages.aclose()
+        await self._gemini.aclose()
         await super().aclose()
 
     @classmethod
@@ -271,10 +264,9 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 tools=tools,
             )
         if profile.protocol == "gemini":
-            self._refuse_unadmitted_model(model_id)
-            payload = gemini_input_payload(messages, media_types=profile.media.types, tools=tools)
-            history = estimate_structured_tokens(payload.pop("contents"), model_id=model_id)[0]
-            return history + estimate_structured_tokens(payload, model_id=model_id)[0]
+            return self._gemini.estimate_request_input_tokens(
+                messages, model_id=model_id, tools=tools
+            )
         return super().estimate_request_input_tokens(messages, model_id=model_id, tools=tools)
 
     @override
@@ -289,7 +281,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         if protocol == "messages":
             return await self._messages.send(messages, model_id=model_id, **kwargs)
         if protocol == "gemini":
-            return await self._send_gemini(messages, model_id=model_id, **kwargs)
+            return await self._gemini.send(messages, model_id=model_id, **kwargs)
         return await super().send(messages, model_id=model_id, **kwargs)
 
     @override
@@ -304,7 +296,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         if protocol == "messages":
             return self._messages.stream(messages, model_id=model_id, **kwargs)
         if protocol == "gemini":
-            return self._stream_gemini(messages, model_id=model_id, **kwargs)
+            return self._gemini.stream(messages, model_id=model_id, **kwargs)
         return super().stream(messages, model_id=model_id, **kwargs)
 
     @override
@@ -319,10 +311,10 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             if protocol == "messages":
                 return self._messages.normalize_response(response, model_id=model_id)
             if protocol == "gemini":
-                return _normalize_gemini_response(response)
+                return self._gemini.normalize_response(response, model_id=model_id)
             return super().normalize_response(response, model_id=model_id)
         if "candidates" in response or "promptFeedback" in response:
-            return _normalize_gemini_response(response)
+            return self._gemini.normalize_response(response, model_id=model_id)
         if response.get("type") == "message":
             return self._messages.normalize_response(response)
         return super().normalize_response(response)
@@ -340,233 +332,3 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             detail=detail,
             response_headers=response_headers,
         )
-
-    async def _gemini_headers(self, request_headers: Mapping[str, str]) -> dict[str, str]:
-        token = await self._token_getter()
-        return {**(self._config.extra_headers or {}), "x-goog-api-key": token, **request_headers}
-
-    async def _send_gemini(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        model_id: str,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        request_headers = self._stable_request_headers(model_id, kwargs)
-        auth_recovery = self._gemini_auth_recovery()
-
-        async def _request(request: PreparedRequest) -> dict[str, Any]:
-            headers = await self._gemini_headers({**request.headers, **request_headers})
-            try:
-                response = await self._client.post(
-                    f"/models/{model_id}:generateContent",
-                    content=request.body,
-                    headers=json_body_headers(headers),
-                )
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-            auth_recovery.record_response(
-                response.status_code, headers, response.text if response.status_code >= 400 else ""
-            )
-            self._classify_http_status(
-                response.status_code,
-                detail=_response_detail(response),
-                response_headers=response.headers,
-            )
-            return dict(decode_response_json(response, "OpenCode Zen Gemini provider"))
-
-        reply = await execute_learning_from_rejections(
-            lambda request: auth_recovery.run(lambda: retry_async(lambda: _request(request))),
-            self._gemini_request_plan(messages, model_id, kwargs),
-            wire=self.wire,
-            model_id=model_id,
-            provider_label=self._config.id,
-        )
-        if gemini_returned_reasoning(reply):
-            self.wire.observe_reasoning_returned(model_id)
-        return reply
-
-    async def _stream_gemini(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        model_id: str,
-        **kwargs: Any,
-    ) -> AsyncGenerator[dict[str, Any]]:
-        request_headers = self._stable_request_headers(model_id, kwargs)
-        auth_recovery = self._gemini_auth_recovery()
-        async with aclosing(
-            stream_learning_from_rejections(
-                lambda request: self._gemini_stream_deltas(
-                    request, model_id, auth_recovery, request_headers
-                ),
-                self._gemini_request_plan(messages, model_id, kwargs),
-                wire=self.wire,
-                model_id=model_id,
-                provider_label=self._config.id,
-            )
-        ) as deltas:
-            async for delta in deltas:
-                yield delta
-
-    async def _gemini_stream_deltas(
-        self,
-        request: PreparedRequest,
-        model_id: str,
-        auth_recovery: OAuthRequestRecovery,
-        request_headers: Mapping[str, str],
-    ) -> AsyncGenerator[dict[str, Any]]:
-        def _handle_error_status(status: int, body: str, headers: httpx.Headers) -> None:
-            self._classify_http_status(
-                status,
-                detail=f"{status} {body}".strip(),
-                response_headers=headers,
-            )
-
-        attempt_headers = {**request.headers, **request_headers}
-        response = await connect_streaming_with_retry(
-            self._client,
-            f"/models/{model_id}:streamGenerateContent?alt=sse",
-            request.body,
-            build_headers=lambda: self._gemini_headers(attempt_headers),
-            handle_error_status=_handle_error_status,
-            auth_recovery=auth_recovery,
-        )
-        replay_parts: list[dict[str, Any]] = []
-        seen_finish = False
-        has_tool_calls = False
-        try:
-            async for event in iter_sse_events(response):
-                data = event.data
-                if data is None:
-                    # Every event without data is a transport comment.
-                    yield {"type": "heartbeat"}
-                    continue
-                raw = parse_sse_json_data(data, context="OpenCode Zen Gemini provider")
-                if not isinstance(raw, dict):
-                    raise ProviderError(
-                        "OpenCode Zen Gemini provider sent non-object JSON in stream",
-                        retryable=False,
-                    )
-                deltas, chunk_has_tools, chunk_finished = _normalize_gemini_stream_chunk(
-                    raw,
-                    replay_parts,
-                    has_tool_calls=has_tool_calls,
-                )
-                has_tool_calls = has_tool_calls or chunk_has_tools
-                seen_finish = seen_finish or chunk_finished
-                for delta in deltas:
-                    yield delta
-            if not seen_finish:
-                raise NetworkError("Stream ended without a Gemini finish reason")
-        except httpx.TimeoutException as exc:
-            raise wrap_network_error(exc) from exc
-        except httpx.TransportError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
-        finally:
-            await response.aclose()
-
-    def _gemini_auth_recovery(self) -> OAuthRequestRecovery:
-        return OAuthRequestRecovery(
-            self._token_getter, AuthConfig(header="x-goog-api-key", prefix="")
-        )
-
-    def _gemini_request_plan(
-        self,
-        messages: list[dict[str, Any]],
-        model_id: str,
-        kwargs: Mapping[str, Any],
-    ) -> RequestPlan:
-        return self._request_plan(
-            messages, model_id, partial(self._build_gemini_payload, messages, model_id, kwargs)
-        )
-
-    def _build_gemini_payload(
-        self,
-        messages: list[dict[str, Any]],
-        model_id: str,
-        kwargs: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Render one Gemini ``generateContent`` request from the wire profile.
-
-        Raises:
-            ProviderError: (not retryable, nothing sent) when the profile does
-                not admit the Model, a media type or parameter is not carried,
-                or the request holds too many images.
-        """
-
-        self._refuse_unadmitted_model(model_id)
-        profile = self.wire_profile(model_id)
-        request = {key: value for key, value in kwargs.items() if value is not None}
-        reasoning_renderer = take_reasoning_renderer(profile, request)
-        if profile.request.parameters:
-            # Configured or learned parameter rules shape the request
-            # parameters before they move into ``generationConfig``.
-            thinking: dict[str, Any] = {}
-            reasoning_renderer(thinking)
-            profile.request.shape_parameters(
-                request, reasoning_active=bool(thinking), provider_label=self._config.name
-            )
-        self._apply_model_output_limit(request, model_id, messages)
-        if model_ceiling := self._model_max_output_tokens(model_id):
-            for output_key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
-                value = request.get(output_key)
-                if isinstance(value, int) and not isinstance(value, bool):
-                    request[output_key] = min(value, model_ceiling)
-        payload = gemini_input_payload(
-            messages,
-            media_types=profile.media.types,
-            tools=request.pop("tools", None),
-        )
-
-        generation: dict[str, Any] = {}
-        output_limits = [
-            request.pop(key)
-            for key in ("max_tokens", "max_completion_tokens", "max_output_tokens")
-            if isinstance(request.get(key), int) and not isinstance(request.get(key), bool)
-        ]
-        if output_limits:
-            generation["maxOutputTokens"] = min(output_limits)
-        _move_number(request, generation, "temperature", "temperature", minimum=0, maximum=2)
-        _move_number(request, generation, "top_p", "topP", minimum=0, maximum=1)
-        _move_integer(request, generation, "top_k", "topK", minimum=1)
-        _move_integer(request, generation, "seed", "seed")
-        _move_number(
-            request, generation, "presence_penalty", "presencePenalty", minimum=-2, maximum=2
-        )
-        _move_number(
-            request, generation, "frequency_penalty", "frequencyPenalty", minimum=-2, maximum=2
-        )
-        stop = request.pop("stop", None)
-        if isinstance(stop, str):
-            generation["stopSequences"] = [stop]
-        elif isinstance(stop, list) and all(isinstance(item, str) for item in stop):
-            generation["stopSequences"] = stop
-        elif stop is not None:
-            raise ProviderError("Gemini stop must be a string or list of strings", retryable=False)
-
-        response_format = request.pop("response_format", None)
-        if response_format is not None:
-            _apply_gemini_response_format(generation, response_format)
-
-        tool_choice = request.pop("tool_choice", None)
-        if tool_choice is not None:
-            payload["toolConfig"] = {"functionCallingConfig": _gemini_tool_choice(tool_choice)}
-        request.pop("parallel_tool_calls", None)
-        if generation:
-            payload["generationConfig"] = generation
-        reasoning_renderer(payload)
-        if request:
-            unsupported = ", ".join(sorted(request))
-            raise ProviderError(
-                f"OpenCode Zen Gemini does not support request parameters: {unsupported}",
-                retryable=False,
-            )
-        # Body rules name top-level request keys, so a ``generationConfig``
-        # entry replaces or fills the whole object.
-        profile.request.apply_body(payload)
-        return payload
-
-
-def _response_detail(response: httpx.Response) -> str:
-    return f"{response.status_code} {response.text}".strip()

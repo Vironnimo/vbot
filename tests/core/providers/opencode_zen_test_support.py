@@ -13,7 +13,7 @@ from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers import OpenCodeZenAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
-BASE_URL = "https://opencode.ai/zen/v1"
+BASE_URL = "https://opencode.ai/inference/v1"
 RESPONSES_URL = f"{BASE_URL}/responses"
 MESSAGES_URL = f"{BASE_URL}/messages"
 CHAT_URL = f"{BASE_URL}/chat/completions"

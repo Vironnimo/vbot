@@ -25,6 +25,7 @@ from .opencode_go_test_support import (
     API_KEY,
     CHAT_MODEL,
     CHAT_URL,
+    GEMINI_STREAM_URL,
     HELLO,
     RESPONSES_MODEL,
     RESPONSES_URL,
@@ -67,7 +68,7 @@ async def test_upstream_json_failure_retries_the_identical_request(
         observe_retries(notices.append),
         patch("core.utils.retry._sleep", new_callable=AsyncMock) as sleep,
     ):
-        route = respx.post(url).mock(
+        route = respx.post(GEMINI_STREAM_URL if wire == "gemini" and streaming else url).mock(
             side_effect=[
                 httpx.Response(403, json=UPSTREAM_JSON_FAILURE, headers={"retry-after": "7"}),
                 success_response(wire, streaming=streaming),
@@ -129,6 +130,7 @@ async def test_responses_wire_leaves_upstream_json_retries_to_the_retry_owner(
         ("chat", "authentication_error"),
         ("messages", "permission_denied"),
         ("responses", "authentication_error"),
+        ("gemini", "authentication_error"),
     ],
 )
 @pytest.mark.asyncio
@@ -138,7 +140,7 @@ async def test_real_forbidden_response_is_a_fatal_auth_error_on_every_wire(
     model_id, url = WIRES[wire]
 
     with respx.mock:
-        route = respx.post(url).mock(
+        route = respx.post(GEMINI_STREAM_URL if wire == "gemini" and streaming else url).mock(
             return_value=httpx.Response(
                 403, json={"error": {"type": code, "code": code, "message": "Access denied"}}
             )
@@ -210,6 +212,11 @@ async def test_other_compatible_providers_keep_the_shared_403_policy() -> None:
             {"code": "insufficient_quota", "message": "Quota exceeded."},
             id="responses-quota",
         ),
+        pytest.param(
+            "gemini",
+            {"type": "GoUsageLimitError", "message": "Monthly usage limit reached."},
+            id="gemini-quota",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -220,7 +227,7 @@ async def test_subscription_exhaustion_429_is_never_retried(
     model_id, url = WIRES[wire]
 
     with respx.mock:
-        route = respx.post(url).mock(
+        route = respx.post(GEMINI_STREAM_URL if wire == "gemini" and streaming else url).mock(
             return_value=httpx.Response(429, json={"type": "error", "error": error})
         )
         with pytest.raises(ProviderError) as failure:

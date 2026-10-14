@@ -15,6 +15,7 @@ from core.providers._chat_completions_constants import (
     OPENAI_REASONING_KEYS,
 )
 from core.providers._chat_completions_wire import (
+    _chat_content_chunk_text,
     _extract_openai_reasoning_meta,
     _extract_stream_usage,
     _find_openai_reasoning,
@@ -44,6 +45,7 @@ def _normalize_openai_stream_chunk(
         raise ProviderError(f"Provider stream error: {error}", retryable=False)
 
     normalized_deltas: list[dict[str, Any]] = []
+    state = normalization_state if normalization_state is not None else {}
     for choice in _stream_choices(chunk):
         delta = choice.get("delta", {})
         if isinstance(delta, dict):
@@ -51,7 +53,7 @@ def _normalize_openai_stream_chunk(
                 _normalize_openai_message_delta(
                     delta,
                     tool_call_slots,
-                    normalization_state=normalization_state,
+                    normalization_state=state,
                 )
             )
 
@@ -63,6 +65,15 @@ def _normalize_openai_stream_chunk(
             )
             if transport_failure is not None:
                 raise transport_failure
+            if state.get("has_typed_content") and state.get("content_chunks"):
+                normalized_deltas.append(
+                    {
+                        "type": "reasoning_meta",
+                        "reasoning_meta": {
+                            "content_chunks": [dict(item) for item in state["content_chunks"]]
+                        },
+                    }
+                )
             normalized_deltas.append(
                 {
                     "type": "finish",
@@ -96,11 +107,28 @@ def _normalize_openai_message_delta(
     normalization_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_deltas: list[dict[str, Any]] = []
+    state = normalization_state if normalization_state is not None else {}
     content = delta.get("content")
     if isinstance(content, str) and content:
         normalized_deltas.append({"type": "content_delta", "text": content})
+        state.setdefault("content_chunks", []).append({"type": "text", "text": content})
+    elif isinstance(content, list):
+        state["has_typed_content"] = True
+        chunks = state.setdefault("content_chunks", [])
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            chunks.append(dict(item))
+            chunk_type = item.get("type")
+            kind = (
+                {"text": "content_delta", "thinking": "reasoning_delta"}.get(chunk_type)
+                if isinstance(chunk_type, str)
+                else None
+            )
+            text = _chat_content_chunk_text(item)
+            if kind and text:
+                normalized_deltas.append({"type": kind, "text": text})
 
-    state = normalization_state if normalization_state is not None else {}
     found = _find_openai_reasoning(
         delta, state.get(_OPENAI_STREAM_REASONING_FIELDS_STATE_KEY, OPENAI_REASONING_KEYS)
     )
@@ -109,6 +137,9 @@ def _normalize_openai_message_delta(
         normalized_deltas.append({"type": "reasoning_delta", "text": found[1]})
 
     reasoning_meta = _extract_openai_reasoning_meta(delta)
+    if reasoning_meta:
+        # Typed content is emitted as one complete replay payload at finish.
+        reasoning_meta.pop("content_chunks", None)
     if reasoning_meta:
         reasoning_meta = _accumulate_openai_stream_reasoning_details(
             reasoning_meta,

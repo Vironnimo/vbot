@@ -24,6 +24,8 @@ from core.providers.adapter import (
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.providers.github_copilot_test_support import copilot_metadata
 from tests.core.providers.github_copilot_test_support import make_adapter as make_copilot_adapter
+from tests.core.providers.opencode_go_test_support import GEMINI_MODEL as GO_GEMINI_MODEL
+from tests.core.providers.opencode_go_test_support import go_adapter
 from tests.core.providers.opencode_zen_test_support import (
     CHAT_MODEL,
     GEMINI_MODEL,
@@ -494,7 +496,9 @@ def test_counting_holds_no_older_request_and_a_bounded_memo() -> None:
 
 
 _IMAGE = {"type": "media", "media_type": "image/png", "base64": "aW1hZ2U="}
+
 _WIRES = {
+    "go-gemini": lambda: (go_adapter(), GO_GEMINI_MODEL),
     "chat-completions": lambda: (zen_adapter(), CHAT_MODEL),
     "messages": lambda: (zen_adapter(), MESSAGES_MODEL),
     "responses": lambda: (zen_adapter(), RESPONSES_MODEL),

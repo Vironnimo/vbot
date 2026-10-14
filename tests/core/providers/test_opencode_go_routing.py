@@ -28,6 +28,9 @@ from .opencode_go_test_support import (
     CHAT_MODEL,
     CHAT_URL,
     CLOSED_TOOL,
+    GEMINI_MODEL,
+    GEMINI_STREAM_URL,
+    GEMINI_URL,
     HELLO,
     MESSAGES_MODEL,
     MESSAGES_URL,
@@ -49,6 +52,7 @@ def _mock_all_wires(*, streaming: bool) -> dict[str, respx.Route]:
             ("chat", CHAT_URL),
             ("messages", MESSAGES_URL),
             ("responses", RESPONSES_URL),
+            ("gemini", GEMINI_STREAM_URL if streaming else GEMINI_URL),
         )
     }
 
@@ -79,6 +83,7 @@ def test_request_context_is_an_opaque_prompt_cache_affinity() -> None:
         pytest.param("messages", MESSAGES_MODEL, id="messages"),
         pytest.param("chat", CHAT_MODEL, id="chat"),
         pytest.param("responses", "gpt-5.6-luna", id="responses"),
+        pytest.param("gemini", GEMINI_MODEL, id="gemini"),
     ],
 )
 @pytest.mark.asyncio
@@ -108,6 +113,10 @@ async def test_each_wire_follows_the_profile_and_carries_identification_and_affi
         assert request.headers["anthropic-version"] == ANTHROPIC_VERSION
         assert "authorization" not in request.headers
         assert body["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    elif wire == "gemini":
+        assert request.headers["x-goog-api-key"] == API_KEY
+        assert "authorization" not in request.headers
+        assert body["contents"][-1]["parts"] == [{"text": "hello"}]
     else:
         assert request.headers["authorization"] == f"Bearer {API_KEY}"
         assert "x-api-key" not in request.headers
@@ -127,8 +136,17 @@ async def test_unlisted_model_takes_the_chat_wire() -> None:
     assert not routes["responses"].called
 
 
+@pytest.mark.parametrize(
+    ("wire", "model_id", "url", "parameter"),
+    [
+        ("messages", MESSAGES_MODEL, MESSAGES_URL, "top_p"),
+        ("gemini", GEMINI_MODEL, GEMINI_URL, "topP"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_messages_wire_reads_the_connection_binding_of_the_adapter() -> None:
+async def test_composed_wire_reads_the_connection_binding_of_the_adapter(
+    wire: str, model_id: str, url: str, parameter: str
+) -> None:
     """A fact learned on the Adapter's Connection also shapes its Messages wire."""
     observations = WireObservations(None, save_delay=None)
     profiles = WireProfiles(
@@ -140,20 +158,18 @@ async def test_messages_wire_reads_the_connection_binding_of_the_adapter() -> No
     )
     adapter = go_adapter()
     adapter.bind_wire_profiles(profiles.bind("opencode-go", "api-key"))
-    observations.record_rejected_parameter("opencode-go", "api-key", MESSAGES_MODEL, "top_p")
+    observations.record_rejected_parameter("opencode-go", "api-key", model_id, "top_p")
 
     with respx.mock:
-        route = respx.post(MESSAGES_URL).mock(
-            return_value=success_response("messages", streaming=False)
-        )
-        await adapter.send(HELLO, model_id=MESSAGES_MODEL, top_p=0.5)
+        route = respx.post(url).mock(return_value=success_response(wire, streaming=False))
+        await adapter.send(HELLO, model_id=model_id, top_p=0.5)
 
-    assert "top_p" not in json.loads(route.calls.last.request.content)
+    assert parameter not in json.dumps(json.loads(route.calls.last.request.content))
 
 
 @pytest.mark.asyncio
 async def test_runtime_base_url_and_connection_reach_every_wire() -> None:
-    """The runtime factory's base URL and auth override the config on all three wires."""
+    """The runtime factory's base URL and auth override the config on all four wires."""
     runtime_url = "https://runtime-opencode-go.example/v1"
     adapter = OpenCodeGoAdapter(
         go_config(),
@@ -172,15 +188,17 @@ async def test_runtime_base_url_and_connection_reach_every_wire() -> None:
                 ("chat", "chat/completions"),
                 ("messages", "messages"),
                 ("responses", "responses"),
+                ("gemini", f"models/{GEMINI_MODEL}:generateContent"),
             )
         }
-        for model_id in (CHAT_MODEL, MESSAGES_MODEL, "gpt-5.6-luna"):
+        for model_id in (CHAT_MODEL, MESSAGES_MODEL, "gpt-5.6-luna", GEMINI_MODEL):
             await adapter.send(HELLO, model_id=model_id)
     await adapter.aclose()
 
     assert routes["chat"].calls.last.request.headers["x-runtime-key"] == f"Key {API_KEY}"
     assert routes["responses"].calls.last.request.headers["x-runtime-key"] == f"Key {API_KEY}"
     assert routes["messages"].calls.last.request.headers["x-api-key"] == API_KEY
+    assert routes["gemini"].calls.last.request.headers["x-goog-api-key"] == API_KEY
 
 
 @pytest.mark.parametrize(
@@ -189,6 +207,7 @@ async def test_runtime_base_url_and_connection_reach_every_wire() -> None:
         pytest.param("messages", MESSAGES_MODEL, MESSAGES_URL, id="messages"),
         pytest.param("chat", CHAT_MODEL, CHAT_URL, id="chat"),
         pytest.param("responses", "gpt-5.6-luna", RESPONSES_URL, id="responses"),
+        pytest.param("gemini", GEMINI_MODEL, GEMINI_URL, id="gemini"),
     ],
 )
 @pytest.mark.asyncio
@@ -201,6 +220,8 @@ async def test_no_wire_enables_strict_tool_schemas(wire: str, model_id: str, url
         await go_adapter().send(HELLO, model_id=model_id, tools=tools)
 
     rendered = json.loads(route.calls.last.request.content)["tools"]
+    if wire == "gemini":
+        rendered = rendered[0]["functionDeclarations"]
     assert len(rendered) == 21
     if wire == "messages":
         assert rendered[0] == {
@@ -211,6 +232,9 @@ async def test_no_wire_enables_strict_tool_schemas(wire: str, model_id: str, url
         assert all("strict" not in tool for tool in rendered)
     elif wire == "chat":
         assert all("strict" not in tool["function"] for tool in rendered)
+    elif wire == "gemini":
+        assert all("strict" not in tool for tool in rendered)
+        assert rendered[0]["parameters"] == CLOSED_TOOL["parameters"]
     else:
         # The Responses wire carries the non-strict invariant explicitly.
         assert all(tool["type"] == "function" and tool["strict"] is False for tool in rendered)

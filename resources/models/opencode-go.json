@@ -1,6 +1,55 @@
 {
-  "fetched_at": "2026-10-09T15:57:19.932179+00:00",
+  "fetched_at": "2026-10-14T09:37:06.247871+00:00",
   "models": {
+    "cat-jam-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "cat-jam-free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode-go/cat-jam-free"
+      }
+    },
     "claude-haiku-5-5": {
       "capabilities": {
         "input_modalities": [
@@ -285,6 +334,58 @@
           "output": 0.6
         },
         "source": "models.dev:opencode-go/deepseek-v4.1-flash"
+      }
+    },
+    "gemini-4-argon-contributor": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/google"
+        }
+      },
+      "name": "gemini-4-argon-contributor",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 4.0,
+          "output": 20.0
+        },
+        "source": "models.dev:opencode-go/gemini-4-argon-contributor"
       }
     },
     "glm-5.1": {

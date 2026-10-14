@@ -52,6 +52,7 @@ from core.providers._chat_completions_stream import (
 )
 from core.providers._chat_completions_wire import (
     _apply_openai_tools,
+    _chat_content_chunk_text,
     _extract_openai_reasoning,
     _extract_openai_reasoning_meta,
     _extract_openai_terminal_outcome,
@@ -170,6 +171,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self._config = config
         self._token_getter = (
@@ -178,7 +180,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         self._auth_config = auth_config or config.connections[0].auth
         self._connection_mode = connection_mode
         super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
-        self._client = build_async_client(
+        self._owns_client = client is None
+        self._client = client or build_async_client(
             base_url=base_url or config.base_url,
             debug_recorder=debug_recorder,
         )
@@ -190,7 +193,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     @override
     async def aclose(self) -> None:
         """Close the HTTP client and release resources."""
-        await self._client.aclose()
+        if self._owns_client:
+            await self._client.aclose()
 
     async def __aenter__(self) -> Self:
         return self
@@ -309,6 +313,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """
         message = _first_choice_message(response)
         content = message.get("content")
+        if isinstance(content, list):
+            content = (
+                "".join(
+                    _chat_content_chunk_text(item)
+                    for item in content
+                    if isinstance(item, dict) and item.get("type") == "text"
+                )
+                or None
+            )
         normalized: dict[str, Any] = {
             "role": "assistant",
             "content": content if isinstance(content, str) or content is None else str(content),
@@ -352,6 +365,14 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """
         wire = _to_openai_assistant_message(message)
         fidelity = self.reasoning_replay_fidelity(model_id or "")
+        reasoning_meta = message.get("reasoning_meta")
+        if fidelity != REASONING_REPLAY_FIDELITY_READABLE_ONLY and isinstance(
+            reasoning_meta, Mapping
+        ):
+            chunks = reasoning_meta.get("content_chunks")
+            if isinstance(chunks, list) and all(isinstance(item, Mapping) for item in chunks):
+                wire["content"] = [dict(item) for item in chunks]
+                return wire
         replay = self.wire_profile(model_id or "").replay
         carrier = replay.history_field
         if fidelity == REASONING_REPLAY_FIDELITY_META_ONLY or carrier is None:
