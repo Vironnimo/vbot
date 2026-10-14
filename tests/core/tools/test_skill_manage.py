@@ -91,7 +91,9 @@ class _Harness:
             lambda agent_id, name: (
                 self.home("owner") if agent_id != "owner" and name in self.shared else None
             ),
-            lambda _agent_id, name, _project_id: (scopes or {}).get(name),
+            lambda _agent_id, name, _project_id: (scopes or {}).get(
+                name, "shared" if name in self.shared else None
+            ),
             on_changed=lambda: self.changes.append(list(self.invalidated)),
             run_started_at=self.run_started.get,
             follow_merge=self.follow_merge,
@@ -1364,7 +1366,7 @@ def test_create_and_delete_never_target_a_shared_package(tmp_path: Path) -> None
     )
 
     # create writes the caller's own shadowing copy; delete refuses the shared one.
-    assert deleted["error"]["code"] == "skill_not_found"
+    assert deleted["error"]["code"] == "skill_write_rejected"
     assert created["ok"] is True
     assert harness.document("deploy").is_file()
     assert shared.read_bytes() == before

@@ -215,6 +215,19 @@ def test_background_writers_leave_pinned_skills_alone(
     # Attended Agents are not limited by pins.
     service.write_file(root, "demo", "references/a.md", "a\n", writer=AGENT)
 
+    # A hand edit of the declared name cannot evade the package's existing pin.
+    document = root / "demo" / "SKILL.md"
+    document.write_text(skill_document(name="renamed"), encoding="utf-8")
+    before = document.read_bytes()
+    for protected_action in (
+        lambda: service.check_writable(root, "renamed", writer=REFLECTION),
+        lambda: service.delete(root, "renamed", writer=REFLECTION),
+    ):
+        with pytest.raises(SkillProtectedError) as refused:
+            protected_action()
+        assert refused.value.reason == "pinned"
+    assert document.read_bytes() == before
+
 
 def test_background_writers_change_unpinned_skills_whoever_created_them(
     service: SkillAuthoringService, root: Path

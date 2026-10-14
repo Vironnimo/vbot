@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 import core.skills.skills as skill_module
+from core.runs import RunKind
 from core.runtime.runtime import Runtime
 from core.skills.policy import SkillPackageRef
 from core.skills.skill_validator import ValidationResult
@@ -29,7 +30,12 @@ from core.tools import ToolContext
 from core.utils.config import Config
 from server.events import ServerEventBus
 from server.rpc import agent_methods, skill_methods
-from tests.core.runtime.runtime_test_support import call_rpc, write_agent_skill, write_skill
+from tests.core.runtime.runtime_test_support import (
+    call_rpc,
+    write_agent_skill,
+    write_project_skill,
+    write_skill,
+)
 
 
 @pytest.fixture
@@ -288,6 +294,84 @@ def test_background_protection_resolves_each_home_once_and_keeps_owner_precedenc
     # explicit registry invalidation when policy changes between calls.
     runtime.skill_policy.set_shared("a-owner", "shared-one", shared=False)
     assert runtime.background_skill_protection("main", ["shared-one"]) == {"shared-one": "unknown"}
+
+    # Disabled packages cannot contribute protection for the package that takes
+    # their place, either behind an own package or behind an earlier sharer.
+    runtime.skill_policy.set_shared("a-owner", "shared-one", shared=True, receivers=["main"])
+    for owner_id, name in (("a-owner", "shared-one"), ("main", "duplicate")):
+        runtime.skill_policy.set_package_disabled(
+            SkillPackageRef("agent", name, owner_id), disabled=True
+        )
+    assert runtime.background_skill_protection("main", ["shared-one", "duplicate"]) == {
+        "shared-one": "unknown",
+        "duplicate": "unknown",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["shared", "disabled_owner", "project"])
+async def test_shared_skill_mutations_target_the_package_that_activation_resolves(
+    config: Config, tmp_path: Path, scope: str
+) -> None:
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        data_dir = runtime.storage.data_dir
+        for owner_id in ("a-owner", "z-owner"):
+            runtime.agents.create(owner_id, owner_id)
+            write_agent_skill(data_dir, owner_id, "deploy", "Shared playbook.")
+            runtime.skill_policy.set_shared(owner_id, "deploy", shared=True, receivers=["main"])
+        project_id = None
+        if scope == "disabled_owner":
+            runtime.skill_policy.set_package_disabled(
+                SkillPackageRef("agent", "deploy", "a-owner"), disabled=True
+            )
+        elif scope == "project":
+            repo = tmp_path / "repo"
+            write_project_skill(repo, "deploy", "Project playbook.")
+            project_id = runtime.projects.create("p", "P", repo).project_id
+        runtime.invalidate_agent_skills(None)
+        visible = runtime.skills_for(project_id, "main").get("deploy").path
+        packages = [
+            data_dir / "agents" / owner_id / "skills" / "deploy" / "SKILL.md"
+            for owner_id in ("a-owner", "z-owner")
+        ]
+        before = {path: path.read_bytes() for path in [*packages, visible]}
+        context = ToolContext(
+            agent_id="main",
+            session_id="session-one",
+            run_id="run-one",
+            tool_call_id="call-one",
+            tool_name="skill_manage",
+            tool_call_index=0,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=data_dir,
+            cwd=tmp_path,
+            skill_project_id=project_id,
+            run_kind=RunKind.REFLECTION,
+        )
+
+        result = await runtime.tools.dispatch(
+            context,
+            {
+                "action": "patch",
+                "name": "deploy",
+                "old_string": "Use this skill.",
+                "new_string": "Use the verified method.",
+            },
+            ["skill_manage"],
+        )
+
+        changed = {path for path, content in before.items() if path.read_bytes() != content}
+        if scope == "project":
+            assert result["error"]["code"] == "skill_write_rejected"
+            assert changed == set()
+        else:
+            assert result["ok"] is True
+            assert changed == {visible}
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio

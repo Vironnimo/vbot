@@ -961,12 +961,18 @@ class SkillAuthoringService:
         """
         try:
             record = history.observe(skill_name, skill_dir)
+            pinned = record is not None and record.pinned
+            if writer.background and skill_dir is not None and skill_dir.name != skill_name:
+                # A hand-edited frontmatter name still denotes the pinned package
+                # whose history the manager addresses by its folder name.
+                folder_record = history.record(skill_dir.name)
+                pinned = pinned or (folder_record is not None and folder_record.pinned)
         except Exception as error:
             if writer.background and skill_dir is not None:
                 raise SkillProtectedError(skill_name, "unknown") from error
             _LOGGER.warning("Skill history of '%s' not updated: %s", skill_name, error)
             return
-        if writer.background and record is not None and record.pinned:
+        if writer.background and pinned:
             raise SkillProtectedError(skill_name, "pinned")
 
     def _commit(

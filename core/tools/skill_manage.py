@@ -425,9 +425,14 @@ def make_skill_manage_handler(
             elif call.action in _SHARED_TARGET_ACTIONS and (
                 find_skill_package_dir(own_root, call.name) is None
             ):
+                scope = (
+                    resolve_external_skill_scope(owner_id, call.name, context.skill_project_id)
+                    if resolve_external_skill_scope is not None
+                    else "shared"
+                )
                 shared_root = (
                     resolve_shared_skills_dir(owner_id, call.name)
-                    if resolve_shared_skills_dir is not None
+                    if scope == "shared" and resolve_shared_skills_dir is not None
                     else None
                 )
                 if shared_root is not None:

@@ -396,7 +396,9 @@ class SkillRuntime:
         own_root = self.agent_skills_dir(agent_id)
         own_packages = {
             skill.name: skill.path.parent
-            for skill in SkillRegistry.load(own_root, environment=environment).list_all()
+            for skill in SkillRegistry.load(
+                own_root, environment=environment, excluded_packages=self._disabled_packages([])
+            ).list_all()
         }
         shared_packages = self._resolve_shared_skill_packages(
             agent_id, set(names).difference(own_packages)
@@ -1084,9 +1086,11 @@ class SkillRuntime:
         unresolved = set(names)
         if not unresolved:
             return {}
-        shared = self._policy.load().shared
+        policy = self._policy.load()
+        shared = policy.shared
         if not shared:
             return {}
+        disabled = _package_exclusions([], self.agent_skills_dir, policy.disabled_packages)
         environment = self._skill_environment(self._storage.load_environment())
         packages: dict[str, Path] = {}
         for owner_id, skills in sorted(shared.items()):
@@ -1099,7 +1103,11 @@ class SkillRuntime:
             ]
             if not candidates or not self._agents.exists(owner_id):
                 continue
-            registry = SkillRegistry.load(self.agent_skills_dir(owner_id), environment=environment)
+            registry = SkillRegistry.load(
+                self.agent_skills_dir(owner_id),
+                environment=environment,
+                excluded_packages=disabled,
+            )
             for name in candidates:
                 try:
                     packages[name] = registry.get(name).path.parent
