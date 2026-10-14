@@ -98,9 +98,11 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("archived_child", [False, True])
+@pytest.mark.parametrize("proven_parent", [False, True], ids=["unproven-legacy", "proven"])
 async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_taken_id(
     world: ArchiveWorld,
     archived_child: bool,
+    proven_parent: bool,
 ) -> None:
     agents, sessions = world.agents, world.sessions
     agents.create("manager", "Manager")
@@ -112,7 +114,27 @@ async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_t
     )
     child_entry = await world.service.archive_session(child) if archived_child else None
     first = await world.service.archive_agent("coder")
+    if not proven_parent:
+        # An upgraded archive with ambiguous original/replacement lineage must
+        # report the partial recovery, never infer identity from history time.
+        sessions.database.write(
+            lambda connection: connection.execute(
+                "UPDATE sessions SET subagent_parent_generation_id = NULL "
+                "WHERE agent_id = 'manager' AND session_id = 'child'"
+            )
+        )
     agents.create("coder", "Second")
+    # Public ids are caller-selected: a replacement can reuse the exact Parent
+    # address, not merely its Agent id.
+    replacement_parent = sessions.create("coder", session_id="first-work").address
+    replacement_child = sessions.create("manager", session_id="replacement-child").address
+    sessions.set_metadata(
+        replacement_child, {"subagent_parent": {"agent_id": "coder", "session_id": "first-work"}}
+    )
+    if not archived_child:
+        # An unrelated metadata edit must not rebind the original link to the
+        # new Parent now at that address.
+        sessions.mutate_metadata(child, lambda metadata: metadata.update(title="Original child"))
     second = await world.service.archive_agent("coder")
 
     # Archiving the same id again never replaces the earlier entry's files.
@@ -123,7 +145,8 @@ async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_t
     with pytest.raises(ArchiveRestoreConflictError, match="restore it under another id") as taken:
         await world.service.restore(first.entry_id)
     assert [conflict.code for conflict in taken.value.conflicts] == ["agent_id_taken"]
-    assert (await world.service.restore_check(first.entry_id, target_id="coder-old")).possible
+    check = await world.service.restore_check(first.entry_id, target_id="coder-old")
+    assert check.possible
 
     restored = await world.service.restore(first.entry_id, target_id="coder-old")
 
@@ -133,8 +156,57 @@ async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_t
     # A Sub-Agent link follows its parent even when the child is restored later.
     if child_entry is not None:
         await world.service.restore(child_entry.entry_id)
-    assert sessions.subagent_children(SessionAddress(None, "coder-old", "first-work")) == [child]
-    assert sessions.get_metadata(child)["subagent_parent"]["agent_id"] == "coder-old"
+    assert sessions.subagent_children(SessionAddress(None, "coder-old", "first-work")) == (
+        [child] if proven_parent else []
+    )
+    assert sessions.get_metadata(child)["subagent_parent"]["agent_id"] == (
+        "coder-old" if proven_parent else "coder"
+    )
+    assert sessions.subagent_children(replacement_parent) == (
+        [replacement_child] if proven_parent else [child, replacement_child]
+    )
+    expected_warnings = [] if proven_parent else ["subagent_parent_unproven"]
+    assert [warning.code for warning in check.warnings] == expected_warnings
+    assert [warning.code for warning in restored.warnings] == expected_warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("holder_state", "warning_code"),
+    [
+        ("legacy", "grant_holder_unproven"),
+        ("invalid", "grant_holder_unproven"),
+        ("replaced", "grant_holder_replaced"),
+        ("missing", "grant_target_missing"),
+    ],
+)
+async def test_agent_restore_reports_grants_it_cannot_safely_reinstate(
+    world: ArchiveWorld, holder_state: str, warning_code: str
+) -> None:
+    agents, ledger = world.agents, world.sessions.archive_ledger
+    agents.create("coder")
+    agents.create("manager", tools={"subagent": {"allowed_agents": ["coder"]}})
+    archived = await world.service.archive_agent("coder")
+    if holder_state in ("legacy", "invalid"):
+        [grant] = world.entry(archived.entry_id).facts["grants"]
+        grant.pop("agent_created_at")
+        if holder_state == "invalid":
+            grant["agent_created_at"] = "not-a-timestamp"
+        ledger.update_facts(world.entry(archived.entry_id).entry_key, {"grants": [grant]})
+    else:
+        await world.service.archive_agent("manager")
+        if holder_state == "replaced":
+            agents.create("manager", tools={"subagent": {"allowed_agents": []}})
+
+    check = await world.service.restore_check(archived.entry_id, target_id="coder-old")
+    restored = await world.service.restore(archived.entry_id, target_id="coder-old")
+
+    assert check.possible
+    assert [warning.code for warning in check.warnings] == [warning_code]
+    assert [warning.code for warning in restored.warnings] == [warning_code]
+    assert restored.grant_agent_ids == ()
+    if holder_state != "missing":
+        assert agents.get("manager").tools["subagent"]["allowed_agents"] == []
 
 
 @pytest.mark.asyncio
@@ -279,6 +351,61 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("target_id", [None, "vbot-2"], ids=["same-id", "new-id"])
+async def test_a_project_archive_without_association_provenance_never_guesses_ownership(
+    world: ArchiveWorld, tmp_path: Path, target_id: str | None
+) -> None:
+    world.projects.create("vbot", "vBot", _repo(tmp_path))
+    world.agents.create("coder")
+    notes = world.sessions.create("coder", session_id="notes", working_project_id="vbot").address
+    archived = await world.service.archive_project("vbot")
+
+    # A current Generation 1 archive written before provenance was available.
+    def remove_provenance(connection) -> None:
+        connection.execute("DELETE FROM session_working_project_archives")
+        connection.execute(
+            "UPDATE archive_entries SET facts_json = "
+            "json_remove(facts_json, '$.working_project_provenance')"
+        )
+
+    world.sessions.database.write(remove_provenance)
+
+    check = await world.service.restore_check(archived.entry_id, target_id=target_id)
+    restored = await world.service.restore(archived.entry_id, target_id=target_id)
+
+    assert world.projects.exists(target_id or "vbot")
+    assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == "vbot"
+    expected = [] if target_id is None else ["working_project_association_unproven"]
+    assert [warning.code for warning in check.warnings] == expected
+    assert [warning.code for warning in restored.warnings] == expected
+
+
+@pytest.mark.asyncio
+async def test_project_restore_keeps_a_later_fork_in_the_replacement_repository(
+    world: ArchiveWorld, tmp_path: Path
+) -> None:
+    sessions = world.sessions
+    original_repo, replacement_repo = _repo(tmp_path, "original"), _repo(tmp_path, "replacement")
+    world.projects.create("app", "Original", original_repo)
+    world.agents.create("coder")
+    source = sessions.create("coder", session_id="old-history", working_project_id=None)
+    original = sessions.create("coder", session_id="original", working_project_id="app").address
+    archived = await world.service.archive_project("app")
+    world.projects.create("app", "Replacement", replacement_repo)
+    in_project = await sessions.fork(source.address, target_project_id="app")
+    replacement = (await sessions.fork(in_project.address, target_project_id=None)).address
+
+    await world.service.restore(archived.entry_id, target_id="app-old")
+
+    def working_directory(address: SessionAddress) -> Path:
+        project_id = sessions.metadata_value(address, SESSION_WORKING_PROJECT_META_KEY)
+        return Path(world.projects.get(project_id).cwd)
+
+    assert working_directory(original) == original_repo.resolve()
+    assert working_directory(replacement) == replacement_repo.resolve()
+
+
+@pytest.mark.asyncio
 async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_entry(
     world: ArchiveWorld, tmp_path: Path
 ) -> None:
@@ -362,6 +489,7 @@ async def test_restoring_a_parent_under_a_new_session_id_keeps_its_children(
     link = {"agent_id": "coder", "session_id": parent.session_id, "run_id": "parent-run"}
     child = sessions.create("coder", session_id="child").address
     archived_child = sessions.create("coder", session_id="archived-child").address
+    relinked = sessions.create("coder", session_id="old-but-linked-later").address
     for address in (child, archived_child):
         sessions.set_metadata(address, {"subagent_parent": link})
     child_entry = await world.service.archive_session(archived_child)
@@ -369,12 +497,13 @@ async def test_restoring_a_parent_under_a_new_session_id_keeps_its_children(
     sessions.create("coder", session_id=parent.session_id)
     new_child = sessions.create("coder", session_id="new-child").address
     sessions.set_metadata(new_child, {"subagent_parent": link})
+    sessions.set_metadata(relinked, {"subagent_parent": link})
 
     await world.service.restore(entry.entry_id, target_id="restored")
 
     renamed = SessionAddress(None, "coder", "restored")
     assert sessions.subagent_children(renamed) == [child]
-    assert sessions.subagent_children(parent) == [new_child]
+    assert sessions.subagent_children(parent) == [relinked, new_child]
     await world.service.restore(child_entry.entry_id)
     assert sessions.subagent_children(renamed) == [child, archived_child]
     assert sessions.get_metadata(child)["subagent_parent"]["run_id"] == "parent-run"

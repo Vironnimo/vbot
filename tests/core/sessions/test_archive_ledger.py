@@ -293,17 +293,6 @@ async def test_restore_under_a_new_id_drops_channel_routing_and_follows_subagent
     (restored,) = ledger.commit_restore(
         ref.entry_key, agent_id="coder-old", strip_channel_keys=True
     )
-    assert (
-        ledger.retarget_subagent_links(
-            old_project_id=None,
-            old_agent_id="coder",
-            new_project_id=None,
-            new_agent_id="coder-old",
-            session_ids=["root"],
-        )
-        == 1
-    )
-
     assert manager.get_metadata(restored) == {"title": "Root"}
     assert manager.get_metadata(child)["subagent_parent"] == {**link, "agent_id": "coder-old"}
 

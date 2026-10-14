@@ -1256,9 +1256,10 @@ class AgentStore:
     ) -> tuple[str, ...]:
         """Remove an archived Agent's bare id from every delegation list, best effort.
 
-        ``record`` receives each grant (holder id and position) before any
-        config is written. A qualified ``agent@project`` entry names a Project's
-        Team Agent and stays. Returns the ids of the Agents whose configs changed.
+        ``record`` receives each grant (holder id, immutable creation timestamp,
+        and position) before any config is written. A qualified ``agent@project``
+        entry names a Project's Team Agent and stays. Returns the ids of the Agents
+        whose configs changed.
         """
         return _archive.remove_delegation_grants(self, agent_id, record)
 
@@ -1309,6 +1310,16 @@ class AgentStore:
             workspace=workspace,
             root_project_id=root_project_id,
         )
+
+    def delegation_grant_problem(self, grant: Mapping[str, Any]) -> str | None:
+        """Why a recorded grant cannot return to its holder, without changing state.
+
+        ``holder_missing``: no exact stored holder; ``holder_unproven``: missing
+        or invalid creation stamps or an unreadable/invalid config;
+        ``holder_replaced``: valid creation stamps differ. ``None`` identifies
+        the original holder incarnation. Never raises or repairs its config.
+        """
+        return _archive.delegation_grant_problem(self, grant)
 
     def restore_delegation_grants(
         self, agent_id: str, grants: Iterable[Mapping[str, Any]]

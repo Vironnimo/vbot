@@ -26,6 +26,7 @@ from core.agents._config import (
     _apply_defaults,
     _validate_agent_id,
     _validate_new_agent_id,
+    _validated_agent_data,
     load_validated_agent_json,
 )
 from core.agents._types import (
@@ -46,9 +47,10 @@ from core.agents._workspace import (
 from core.json_documents import JsonDocumentWriteError, document_version_state, write_json_document
 from core.settings import is_valid_agent_id
 from core.utils.atomic import atomic_write_bytes
+from core.utils.file_status import is_file_strict
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.timestamps import parse_timestamp, utc_now_timestamp
 from core.utils.tree_move import move_tree
 
 if TYPE_CHECKING:
@@ -56,8 +58,8 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("agents")
 
-# One removed or restored delegation grant: the Agent whose list held the id
-# and the id's position in that list.
+# One removed or restored delegation grant: the holder's id and immutable
+# creation timestamp, plus the archived id's position in its list.
 Grant = Mapping[str, Any]
 
 
@@ -130,7 +132,11 @@ def remove_delegation_grants(
     with store._change():
         try:
             grants: builtins.list[Grant] = [
-                {"agent_id": holder.id, "index": allowed.index(agent_id)}
+                {
+                    "agent_id": holder.id,
+                    "agent_created_at": holder.created_at,
+                    "index": allowed.index(agent_id),
+                }
                 for holder, allowed in store._allow_lists_naming(agent_id)
             ]
         except OSError as error:
@@ -294,13 +300,52 @@ def complete_restore_files(
         _write_restored_agent(store, restored)
 
 
+def _delegation_grant_holder(store: AgentStore, grant: Grant) -> tuple[Agent | None, str | None]:
+    """Identify one grant's holder under the store lock, without repairing its config."""
+    holder_id = grant.get("agent_id")
+    if not isinstance(holder_id, str) or not is_valid_agent_id(holder_id):
+        return None, "holder_unproven"
+    holder_path = store._agent_dir(holder_id) / "agent.json"
+    if not has_id_entry(store.data_dir / "agents", holder_id) or not is_file_strict(holder_path):
+        return None, "holder_missing"
+    data = _validated_agent_data(holder_path)
+    recorded_creation = grant.get("agent_created_at")
+    holder_creation = data.get("created_at")
+    if not isinstance(recorded_creation, str) or not isinstance(holder_creation, str):
+        return None, "holder_unproven"
+    try:
+        parse_timestamp(recorded_creation)
+        parse_timestamp(holder_creation)
+    except ValueError:
+        return None, "holder_unproven"
+    if holder_creation != recorded_creation:
+        return None, "holder_replaced"
+    return (
+        _agent_from_dict(
+            data, data_dir=store.data_dir, default_workspace=store._default_workspace(holder_id)
+        ),
+        None,
+    )
+
+
+def delegation_grant_problem(store: AgentStore, grant: Grant) -> str | None:
+    """Read-only, never-raising incarnation check shared with grant restoration."""
+    with store._write_lock:
+        try:
+            return _delegation_grant_holder(store, grant)[1]
+        except AgentError, OSError:
+            return "holder_unproven"
+
+
 def restore_delegation_grants(
     store: AgentStore, target_id: str, grants: Sequence[Grant]
 ) -> tuple[str, ...]:
     """Re-add ``target_id`` to the delegation lists that held the archived id.
 
-    Each grant goes back at its recorded position when its holder still exists
-    and does not list the target yet. Best effort; returns the changed holders.
+    Each grant goes back at its recorded position only for the same holder
+    incarnation, when it does not list the target yet. Missing or invalid
+    creation stamps cannot identify a holder and are skipped, including older
+    unstamped records. Best effort; returns the changed holders.
     """
     changed: builtins.list[str] = []
     with store._change():
@@ -310,10 +355,9 @@ def restore_delegation_grants(
             if not isinstance(holder_id, str) or holder_id == target_id:
                 continue
             try:
-                holder_path = store._stored_agent_path(holder_id)
-                if holder_path is None:
+                holder, _problem = _delegation_grant_holder(store, grant)
+                if holder is None:
                     continue
-                holder = store._read_agent_config(holder_path)
                 tools = deepcopy(holder.tools)
                 subagent = tools.get("subagent")
                 if not isinstance(subagent, dict):

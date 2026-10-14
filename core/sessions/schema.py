@@ -81,6 +81,7 @@ CREATE TABLE sessions (
   subagent_parent_run_id TEXT,
   subagent_parent_tool_call_id TEXT,
   subagent_parent_tool_call_index INTEGER CHECK (subagent_parent_tool_call_index IS NULL OR subagent_parent_tool_call_index >= 0),
+  subagent_parent_generation_id TEXT,
   list_visibility_mask INTEGER NOT NULL DEFAULT 0 CHECK (list_visibility_mask >= 0),
   latest_completion_run_key INTEGER,
   latest_completion_status TEXT,
@@ -132,6 +133,17 @@ CREATE INDEX sessions_by_subagent_parent
   ON sessions (subagent_parent_agent_id, subagent_parent_session_id)
   WHERE state = 'live' AND subagent_parent_session_id IS NOT NULL;
 
+-- Live and archived children of an exact Parent generation (restore).
+CREATE INDEX sessions_by_parent_generation
+  ON sessions (subagent_parent_generation_id)
+  WHERE subagent_parent_generation_id IS NOT NULL;
+
+-- Unproven children of archive members (restore diagnostics).
+CREATE INDEX sessions_by_unproven_parent
+  ON sessions (subagent_parent_agent_id, subagent_parent_session_id, subagent_parent_project_id)
+  WHERE subagent_parent_session_id IS NOT NULL
+    AND (subagent_parent_generation_id IS NULL OR subagent_parent_generation_id = '');
+
 -- The live Sub-Agent Session with one public Sub-Agent id.
 CREATE INDEX sessions_by_subagent_id
   ON sessions (subagent_parent_id)
@@ -141,6 +153,17 @@ CREATE INDEX sessions_by_subagent_id
 CREATE INDEX sessions_by_working_project
   ON sessions (working_project_id)
   WHERE working_project_id IS NOT NULL;
+
+-- Working Project associations frozen by archive, independent of inherited
+-- history timestamps. Keep the archive id after purge: its former users must
+-- not become users of a replacement Project that reused the same public id.
+CREATE TABLE session_working_project_archives (
+  session_key INTEGER PRIMARY KEY REFERENCES sessions (session_key) ON DELETE CASCADE,
+  archive_id TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX session_working_project_archives_by_archive
+  ON session_working_project_archives (archive_id);
 
 CREATE TABLE session_run_kinds (
   session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,

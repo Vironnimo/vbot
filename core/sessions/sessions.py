@@ -899,26 +899,6 @@ class ChatSessionManager:
         """
         return self._store.retarget_metadata_value(agent_id, key, old_value, new_value)
 
-    def retarget_working_project(
-        self, old_project_id: str, new_project_id: str, archived_at: str
-    ) -> int:
-        """Let the Sessions of a Project restored under a new id work in it again.
-
-        Every Session, live or archived, that was created before the Project's
-        archive at ``archived_at`` and works in ``old_project_id`` now works in
-        ``new_project_id``; a Session created later works in another Project that
-        took the old id and stays. Returns how many changed; a repeated call
-        changes nothing more.
-        """
-        changed = self._store.retarget_working_project(old_project_id, new_project_id, archived_at)
-        _LOGGER.debug(
-            "Retargeted working Project of Sessions (project=%s new_project=%s count=%d)",
-            old_project_id,
-            new_project_id,
-            changed,
-        )
-        return changed
-
     async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:
         """Give a Session a new address; history, forks and relations stay attached.
 

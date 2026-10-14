@@ -19,6 +19,7 @@ from core.chat.errors import ChatSessionError
 from core.sessions import _store_mutations, _store_values
 from core.sessions._archive_types import (
     ARCHIVE_KIND_OWNER_GROUP,
+    ARCHIVE_KIND_PROJECT,
     ARCHIVE_KIND_SESSION,
     ARCHIVE_ORIGIN_OPERATION,
     ARCHIVE_ORIGIN_RECOVERED,
@@ -295,7 +296,8 @@ def commit_scope(
 
     The membership rows, the archived Sessions and the entry's move to
     ``archived`` commit together. Owner-managed Sessions in the scope refuse the
-    whole commit.
+    whole commit. A Project also freezes its Identity Sessions' Working Project
+    associations, including archived Sessions but not an older incarnation's users.
     """
     row = _require_state(connection, entry_key, ARCHIVE_STATE_ARCHIVING)
     where, params = _scope_predicate(scope)
@@ -306,6 +308,13 @@ def commit_scope(
         f"SELECT s.session_key, ? FROM sessions AS s WHERE {where}",
         (entry_key, *params),
     ).rowcount
+    if scope.project_id is not None:
+        connection.execute(
+            "INSERT OR IGNORE INTO session_working_project_archives (session_key, archive_id) "
+            "SELECT session_key, ? FROM sessions WHERE project_id = '' AND working_project_id = ?",
+            (row["entry_id"], scope.project_id),
+        )
+        facts = {**(facts or {}), "working_project_provenance": True}
     _archive_members(connection, entry_key, now)
     connection.execute(
         "UPDATE archive_entries SET state = ?, archived_at = ?, retention_start = ?, "
@@ -558,6 +567,22 @@ def taken_addresses(
     )[1]
 
 
+def unproven_parent_link_count(connection: sqlite3.Connection, entry_key: int) -> int:
+    """Count children a renamed restore cannot safely reconnect to its members."""
+    return int(
+        connection.execute(
+            "SELECT COUNT(DISTINCT child.session_key) FROM archive_entry_sessions AS m "
+            "JOIN sessions AS parent ON parent.session_key = m.session_key "
+            "JOIN sessions AS child ON child.subagent_parent_agent_id = parent.agent_id "
+            "AND child.subagent_parent_session_id = parent.session_id "
+            "AND child.subagent_parent_project_id IS NULLIF(parent.project_id, '') "
+            "WHERE m.entry_key = ? AND child.subagent_parent_session_id IS NOT NULL "
+            "AND (child.subagent_parent_generation_id IS NULL OR child.subagent_parent_generation_id = '')",
+            (entry_key,),
+        ).fetchone()[0]
+    )
+
+
 def commit_restore(
     connection: sqlite3.Connection,
     entry_key: int,
@@ -575,7 +600,9 @@ def commit_restore(
     address refuses the whole restore with :class:`ArchiveAddressTakenError`.
     ``strip_channel_keys`` drops the Channel routing of the members. The
     membership goes and the entry becomes ``restored``. Members an Extension
-    manages refuse it with :class:`ArchiveMembersManagedError`.
+    manages refuse it with :class:`ArchiveMembersManagedError`. Proven Parent links
+    and Working Project associations follow in this same transaction; reused
+    public addresses and history timestamps never establish ownership.
     """
     row = _require_state(connection, entry_key, ARCHIVE_STATE_RESTORING)
     owned = connection.execute(
@@ -591,29 +618,21 @@ def commit_restore(
     if taken:
         raise ArchiveAddressTakenError(str(row["entry_id"]), taken)
     for session_key, target in targets:
-        if session_id is not None:
-            original = connection.execute(
-                "SELECT project_id, agent_id, session_id, archived_at FROM sessions WHERE session_key = ?",
-                (session_key,),
-            ).fetchone()
-            if original["session_id"] != target.session_id:
-                # Children of a replacement at the old address belong to that replacement.
-                # Archived children follow too, so their own later restore keeps the tree.
-                connection.execute(
-                    "UPDATE sessions SET subagent_parent_project_id = ?, subagent_parent_agent_id = ?, "
-                    "subagent_parent_session_id = ?, state_revision = state_revision + 1 "
-                    "WHERE subagent_parent_project_id IS ? AND subagent_parent_agent_id = ? "
-                    "AND subagent_parent_session_id = ? AND created_at <= ?",
-                    (
-                        target.project_id,
-                        target.agent_id,
-                        target.session_id,
-                        original["project_id"] or None,
-                        original["agent_id"],
-                        original["session_id"],
-                        original["archived_at"],
-                    ),
-                )
+        original = _store_values._state_by_key(connection, session_key)
+        if _store_values._address(original) != target:
+            # Address reuse never establishes lineage. Original children follow
+            # their exact Parent generation, including children archived elsewhere.
+            connection.execute(
+                "UPDATE sessions SET subagent_parent_project_id = ?, subagent_parent_agent_id = ?, "
+                "subagent_parent_session_id = ?, state_revision = state_revision + 1 "
+                "WHERE subagent_parent_generation_id = ?",
+                (
+                    target.project_id,
+                    target.agent_id,
+                    target.session_id,
+                    original["generation_id"],
+                ),
+            )
         connection.execute(
             "UPDATE sessions SET state = 'live', archived_at = NULL, project_id = ?, agent_id = ?, "
             "session_id = ?, state_revision = state_revision + 1 WHERE session_key = ?",
@@ -621,6 +640,17 @@ def commit_restore(
         )
         if strip_channel_keys:
             _strip_channel_routing(connection, session_key)
+    if row["kind"] == ARCHIVE_KIND_PROJECT:
+        if project_id is not None:
+            connection.execute(
+                "UPDATE sessions SET working_project_id = ?, state_revision = state_revision + 1 "
+                "WHERE session_key IN (SELECT session_key FROM session_working_project_archives "
+                "WHERE archive_id = ?)",
+                (project_id, row["entry_id"]),
+            )
+        connection.execute(
+            "DELETE FROM session_working_project_archives WHERE archive_id = ?", (row["entry_id"],)
+        )
     connection.execute("DELETE FROM archive_entry_sessions WHERE entry_key = ?", (entry_key,))
     connection.execute(
         "UPDATE archive_entries SET state = ? WHERE entry_key = ?",
@@ -651,53 +681,6 @@ def finish_restore(connection: sqlite3.Connection, entry_key: int) -> None:
         "DELETE FROM archive_entries WHERE entry_key = ? AND state = ?",
         (entry_key, ARCHIVE_STATE_RESTORED),
     )
-
-
-def retarget_subagent_links(
-    connection: sqlite3.Connection,
-    *,
-    old_project_id: str | None,
-    old_agent_id: str,
-    new_project_id: str | None,
-    new_agent_id: str,
-    session_ids: Sequence[str],
-) -> int:
-    """Point Sub-Agent parent links at Sessions a restore gave a new scope.
-
-    Only links whose parent Session id is among ``session_ids`` follow, and only
-    while no live Session holds that parent's old address. Returns how many moved.
-    """
-    if not session_ids or (old_project_id or None, old_agent_id) == (
-        new_project_id or None,
-        new_agent_id,
-    ):
-        return 0
-    project_clause = (
-        "s.subagent_parent_project_id IS NULL"
-        if not old_project_id
-        else "s.subagent_parent_project_id = ?"
-    )
-    params: tuple[Any, ...] = (() if not old_project_id else (old_project_id,)) + (
-        old_agent_id,
-        _store_values._json_list(session_ids),
-        old_project_id or "",
-        old_agent_id,
-    )
-    rows = connection.execute(
-        f"SELECT {_store_values._SESSION_STATE_COLUMNS} FROM sessions AS s "
-        f"WHERE {project_clause} AND s.subagent_parent_agent_id = ? "
-        "AND s.subagent_parent_session_id IN (SELECT value FROM json_each(?)) "
-        "AND NOT EXISTS (SELECT 1 FROM sessions AS parent WHERE parent.project_id = ? "
-        "AND parent.agent_id = ? AND parent.session_id = s.subagent_parent_session_id "
-        "AND parent.state = 'live') ORDER BY s.session_key",
-        params,
-    ).fetchall()
-    for row in rows:
-        previous = _store_values._subagent_parent_from_state(row)
-        assert previous is not None
-        updated = {**previous, "agent_id": new_agent_id, "project_id": new_project_id or None}
-        _store_mutations._write_subagent_parent(connection, int(row["session_key"]), updated)
-    return len(rows)
 
 
 # -- Purge -----------------------------------------------------------------------
