@@ -671,6 +671,8 @@ class Runtime:
             automation=self.automation_references,
             agent_name=self._agent_name,
             shares_changed=lambda: self.invalidate_agent_skills(None),
+            agents_with_access=self._skill_operations().agents_with_skill_access,
+            preserve_access=self._skill_operations().preserve_merged_skill_access,
         )
         return await follow_skill_merge(services, owner_id, name, target, delete)
 

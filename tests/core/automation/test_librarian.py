@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -367,15 +368,39 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     assert status["last_pass"]["consolidation"] == "unchanged"
     assert status["changes"] == []
 
+    # An outside write during consolidation was not necessarily reviewed. The
+    # next pass must see it even if this Run completed successfully.
+    harness.authoring.edit(
+        root, "deploy-cli", _document("deploy-cli", body="# Updated\n"), writer=_HUMAN
+    )
+
+    def concurrent_change(_started: dict[str, Any], _run_id: str) -> None:
+        harness.authoring.edit(
+            root,
+            "deploy-docs",
+            _document("deploy-docs", body="# Changed during the pass\n"),
+            writer=_HUMAN,
+        )
+
+    harness.on_run = concurrent_change
+    await harness.run_pass()
+    harness.on_run = None
+    status = await harness.run_pass()
+    assert (status["last_pass"]["consolidation"], len(harness.started)) == ("ran", 4)
+    status = await harness.run_pass()
+    assert (status["last_pass"]["consolidation"], len(harness.started)) == ("unchanged", 4)
+
     # A single candidate is never consolidated.
     for name in ("deploy-cli", "deploy-docs", "deploy-team"):
         harness.authoring.delete(root, name, writer=_HUMAN)
     status = await harness.run_pass()
-    assert (status["last_pass"]["consolidation"], len(harness.started)) == ("too_few", 2)
+    assert (status["last_pass"]["consolidation"], len(harness.started)) == ("too_few", 4)
 
 
 @pytest.mark.asyncio
-async def test_run_refuses_clearly_and_changes_nothing(harness: _Harness) -> None:
+async def test_run_refuses_clearly_and_changes_nothing(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = harness.home("main")
     harness.authoring.create(root, "old-review", _document("old-review"), writer=_REFLECTION)
     harness.authoring.create(root, "other-review", _document("other-review"), writer=_REFLECTION)
@@ -450,6 +475,25 @@ async def test_run_refuses_clearly_and_changes_nothing(harness: _Harness) -> Non
         with pytest.raises(LibrarianStateError):
             await harness.service.run("main")
     assert len(harness.authoring.history(root)) == revisions
+
+    # Shutdown may complete while manual admission is resolving its Agent.
+    harness.write_state("main", {})
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def resolve(_project_id: str | None, agent_id: str) -> Any:
+        entered.set()
+        await release.wait()
+        return harness.agents[agent_id]
+
+    monkeypatch.setattr(harness.service._runtime.agent_resolver, "resolve_agent_async", resolve)
+    pending = asyncio.create_task(harness.service.run("main"))
+    await entered.wait()
+    await harness.service.aclose()
+    release.set()
+    with pytest.raises(LibrarianBusyError):
+        await pending
+    assert len(harness.authoring.history(root)) == revisions
+    assert not harness.service.running("main")
 
 
 @pytest.mark.asyncio
@@ -555,6 +599,45 @@ async def test_a_pass_that_stops_early_is_recorded_and_every_pass_session_stays(
         (record["agent_id"], record["agent_name"], record.get("session_id"))
         for record in overview["passes"][:3]
     ] == [("main", "Main", "lib-2"), ("main", "Main", None), ("main", "Main", "lib-1")]
+    assert overview["passes"][0]["changed"] == interrupted["changed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_keeps_aging_changes_in_the_interrupted_pass(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = harness.home("main")
+    harness.authoring.create(root, "old", _document("old"), writer=_HUMAN)
+    harness.settings["consolidate"] = False
+    archived = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original_delete = harness.authoring.delete
+
+    def delete(*args: Any, **kwargs: Any) -> Any:
+        result = original_delete(*args, **kwargs)
+        loop.call_soon_threadsafe(archived.set)
+        assert release.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(harness.authoring, "delete", delete)
+    pending = asyncio.create_task(harness.service.run("main"))
+    try:
+        await archived.wait()
+        harness.service.stop()
+    finally:
+        release.set()
+    await harness.service.aclose()
+    await pending
+
+    status = await harness.service.status("main")
+    assert not (root / "old").exists()
+    assert status["last_pass"]["outcome"] == "interrupted"
+    assert status["last_pass"]["archived"] == 1
+    assert [change["skill"] for change in status["changes"]] == ["old"]
+    assert status["last_pass"]["archived_revisions"] == [status["changes"][0]["id"]]
+    assert harness.changed == ["main"]
+    assert harness.started == []
 
 
 @pytest.mark.asyncio

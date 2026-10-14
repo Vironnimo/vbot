@@ -376,6 +376,44 @@ class SkillRuntime:
             if receivers - {owner_id}
         }
 
+    def agents_with_skill_access(self, owner_id: str, name: str) -> tuple[str, ...]:
+        """Snapshot access to an owner's exact package before a merge removes it."""
+        with self._agents.lifecycle_guard():
+            package = find_skill_package_dir(self.agent_skills_dir(owner_id), name)
+            if package is None:
+                return ()
+            document = (package / "SKILL.md").resolve()
+            receivers = self.shared_skill_receivers(owner_id).get(name, frozenset())
+            permitted: list[str] = []
+            for agent_id in sorted({owner_id, *receivers}):
+                agent = self._agents.find(agent_id)
+                if agent is None or agent.builtin is not None:
+                    continue
+                registry = self.skills_for(None, agent_id)
+                try:
+                    skill = registry.get(name)
+                except KeyError:
+                    continue
+                if skill.path == document and registry.is_allowed(name, agent.allowed_skills):
+                    permitted.append(agent_id)
+            return tuple(permitted)
+
+    def preserve_merged_skill_access(self, agent_id: str, target: str) -> None:
+        """Keep a prior grant after the Skill's share moved to its successor."""
+        with self._agents.lifecycle_guard():
+            agent = self._agents.get(agent_id)
+            changes: dict[str, Any] = {}
+            allowed = agent.allowed_skills
+            if allowed is not None and "*" not in allowed and target not in allowed:
+                changes["allowed_skills"] = [*allowed, target]
+            if target in agent.excluded_skills:
+                changes["excluded_skills"] = [
+                    name for name in agent.excluded_skills if name != target
+                ]
+            if changes:
+                self._agents.update(agent_id, **changes)
+                self.invalidate_agent_skills(agent_id)
+
     def background_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
         """Return why a background Run of *agent_id* cannot change each named Skill.
 
@@ -396,7 +434,9 @@ class SkillRuntime:
         own_root = self.agent_skills_dir(agent_id)
         own_packages = {
             skill.name: skill.path.parent
-            for skill in SkillRegistry.load(own_root, environment=environment).list_all()
+            for skill in SkillRegistry.load(
+                own_root, environment=environment, excluded_packages=self._disabled_packages([])
+            ).list_all()
         }
         shared_packages = self._resolve_shared_skill_packages(
             agent_id, set(names).difference(own_packages)
@@ -1084,9 +1124,11 @@ class SkillRuntime:
         unresolved = set(names)
         if not unresolved:
             return {}
-        shared = self._policy.load().shared
+        policy = self._policy.load()
+        shared = policy.shared
         if not shared:
             return {}
+        disabled = _package_exclusions([], self.agent_skills_dir, policy.disabled_packages)
         environment = self._skill_environment(self._storage.load_environment())
         packages: dict[str, Path] = {}
         for owner_id, skills in sorted(shared.items()):
@@ -1099,7 +1141,11 @@ class SkillRuntime:
             ]
             if not candidates or not self._agents.exists(owner_id):
                 continue
-            registry = SkillRegistry.load(self.agent_skills_dir(owner_id), environment=environment)
+            registry = SkillRegistry.load(
+                self.agent_skills_dir(owner_id),
+                environment=environment,
+                excluded_packages=disabled,
+            )
             for name in candidates:
                 try:
                     packages[name] = registry.get(name).path.parent
@@ -1113,13 +1159,13 @@ class SkillRuntime:
     def _resolve_external_skill_scope(
         self, agent_id: str, name: str, project_id: str | None
     ) -> str | None:
-        """Return where ``name`` resolves outside the caller's own private home.
+        """Return where ``name`` resolves in the caller's live Skill pool.
 
         The agent-scoped registry is the same seam ``skill`` resolves through, so
         this answers how the name is *visible* to the agent (bundled / global /
-        project / shared) — never how the authoring core sees it, which only knows
-        the target root. ``agent`` origin with the name absent from own home means a
-        Skill shared into this agent; ``global`` is a package in the global home
+        project / own / shared) — never how the authoring core sees it, which only knows
+        the target root. ``own`` identifies the caller's package; another Agent
+        origin means a Skill shared into this agent. ``global`` is a package in the global home
         (``<data_dir>/skills``), which an attended Agent can change, while
         ``external`` is a global Skill from a configured skill folder or an
         Extension. ``None`` means genuinely unknown, which includes a name that
@@ -1131,7 +1177,11 @@ class SkillRuntime:
             return None
         origin = skill.origin
         if origin == SKILL_ORIGIN_AGENT:
-            return "shared"
+            return (
+                "own"
+                if skill.path.parent.parent == self.agent_skills_dir(agent_id).resolve()
+                else "shared"
+            )
         if origin == SKILL_ORIGIN_BUNDLED:
             return "bundled"
         if origin == SKILL_ORIGIN_GLOBAL:

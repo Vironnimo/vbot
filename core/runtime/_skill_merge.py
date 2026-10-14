@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from core.automation import AutomationReferences
 from core.skills import SkillPolicyError, SkillPolicyService, SkillReference
+from core.tools.tools import run_tool_worker
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("runtime.skill_merge")
@@ -34,6 +35,8 @@ class SkillMergeServices:
     agent_name: Callable[[str], str]
     # Receivers see shared Skills through their registries, which a share move outdates.
     shares_changed: Callable[[], None]
+    agents_with_access: Callable[[str, str], tuple[str, ...]]
+    preserve_access: Callable[[str, str], None]
 
 
 async def follow_skill_merge(
@@ -63,6 +66,7 @@ async def follow_skill_merge(
         )
         if target is None:
             return (*shares, *triggers) if await delete(()) else ()
+        permitted = await run_tool_worker(services.agents_with_access, owner_id, name)
         if not await delete((*shares, *triggers)):
             return ()
         failed: list[SkillReference] = []
@@ -80,6 +84,23 @@ async def follow_skill_merge(
                 failed.extend(shares)
             else:
                 services.shares_changed()
+        for agent_id in permitted:
+            # A failed share move has already been reported. Granting the name
+            # then could select an unrelated package in the receiver's pool.
+            if any(reference.id == agent_id for reference in failed):
+                continue
+            try:
+                await run_tool_worker(services.preserve_access, agent_id, target)
+            except Exception as error:
+                _LOGGER.error(
+                    "Agent Skill access did not follow a merge (agent=%s skill=%s target=%s): %s",
+                    agent_id,
+                    name,
+                    target,
+                    error,
+                    exc_info=True,
+                )
+                failed.append(SkillReference("agent", agent_id, services.agent_name(agent_id)))
         for reference, followed in zip(automations, triggers, strict=True):
             try:
                 await automation.rename_skill_triggers(owner_id, reference, name, target)
@@ -95,15 +116,16 @@ async def follow_skill_merge(
                     error,
                 )
                 failed.append(followed)
-    if shares or triggers:
+    if shares or triggers or permitted:
         _LOGGER.info(
             "Skill merge moved references (agent=%s skill=%s target=%s shares=%d "
-            "automations=%d failed=%d)",
+            "automations=%d access=%d failed=%d)",
             owner_id,
             name,
             target,
             len(shares),
             len(triggers),
+            len(permitted),
             len(failed),
         )
     return tuple(failed)

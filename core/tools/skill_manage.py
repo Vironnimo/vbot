@@ -100,6 +100,7 @@ SKILL_MANAGE_ORPHANED_WARNING = (
     "the user can change or remove them."
 )
 _REFERENCE_LABELS = {
+    "agent": "Agent '{name}'",
     "shared": "the share with Agent '{name}'",
     "bootstrap": "Bootstrap job '{name}'",
     "cron": "Cron job '{name}'",
@@ -420,14 +421,21 @@ def make_skill_manage_handler(
                 resolve_global_skills_dir() if resolve_global_skills_dir is not None else None
             )
             target_root, target = own_root, "own"
+            visible_scope = (
+                resolve_external_skill_scope(owner_id, call.name, context.skill_project_id)
+                if call.action != "create" and resolve_external_skill_scope is not None
+                else None
+            )
             if call.scope == "global" and call.action != "publish":
                 target_root, target = _global_target(call, writer, global_root), "global"
             elif call.action in _SHARED_TARGET_ACTIONS and (
                 find_skill_package_dir(own_root, call.name) is None
+                or visible_scope not in (None, "own")
             ):
+                scope = visible_scope if resolve_external_skill_scope is not None else "shared"
                 shared_root = (
                     resolve_shared_skills_dir(owner_id, call.name)
-                    if resolve_shared_skills_dir is not None
+                    if scope == "shared" and resolve_shared_skills_dir is not None
                     else None
                 )
                 if shared_root is not None:
@@ -438,19 +446,19 @@ def make_skill_manage_handler(
             # scope instead of a bare not-found. ``create`` is excluded — it
             # legitimately writes a private shadow over a shared-pool name, which
             # is the established override path.
-            if call.action != "create" and find_skill_package_dir(target_root, call.name) is None:
+            if call.action != "create" and (
+                find_skill_package_dir(target_root, call.name) is None
+                or target == "own"
+                and visible_scope not in (None, "own")
+            ):
                 if target == "global":
                     raise _RefusalError(
                         "skill_not_found", _unknown_skill_message(call.name, target_root, own=False)
                     )
-                scope = (
-                    resolve_external_skill_scope(owner_id, call.name, context.skill_project_id)
-                    if resolve_external_skill_scope is not None
-                    else None
-                )
+                scope = visible_scope
                 if scope == "global" and call.action in _SHARED_TARGET_ACTIONS:
                     target_root, target = _global_target(call, writer, global_root), "global"
-                elif scope is not None:
+                elif scope not in (None, "own"):
                     return _Outcome(
                         tool_failure(
                             "skill_write_rejected",
@@ -1369,7 +1377,7 @@ def register_skill_manage_tool(
         result = results[0]
         if result.get("ok") is True and target is None and failed:
             _note_orphaned(result, name, failed)
-        elif result.get("ok") is True and planned:
+        elif result.get("ok") is True and (planned or failed):
             _note_followed(result, name, target or name, planned, failed)
         return result
 

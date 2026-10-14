@@ -8,6 +8,7 @@ import re
 import shutil
 from collections import Counter
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +17,7 @@ import pytest
 import yaml
 
 import core.skills.skills as skill_module
+from core.runs import RunKind
 from core.runtime.runtime import Runtime
 from core.skills.policy import SkillPackageRef
 from core.skills.skill_validator import ValidationResult
@@ -29,7 +31,12 @@ from core.tools import ToolContext
 from core.utils.config import Config
 from server.events import ServerEventBus
 from server.rpc import agent_methods, skill_methods
-from tests.core.runtime.runtime_test_support import call_rpc, write_agent_skill, write_skill
+from tests.core.runtime.runtime_test_support import (
+    call_rpc,
+    write_agent_skill,
+    write_project_skill,
+    write_skill,
+)
 
 
 @pytest.fixture
@@ -289,19 +296,155 @@ def test_background_protection_resolves_each_home_once_and_keeps_owner_precedenc
     runtime.skill_policy.set_shared("a-owner", "shared-one", shared=False)
     assert runtime.background_skill_protection("main", ["shared-one"]) == {"shared-one": "unknown"}
 
+    # Disabled packages cannot contribute protection for the package that takes
+    # their place, either behind an own package or behind an earlier sharer.
+    runtime.skill_policy.set_shared("a-owner", "shared-one", shared=True, receivers=["main"])
+    for owner_id, name in (("a-owner", "shared-one"), ("main", "duplicate")):
+        runtime.skill_policy.set_package_disabled(
+            SkillPackageRef("agent", name, owner_id), disabled=True
+        )
+    assert runtime.background_skill_protection("main", ["shared-one", "duplicate"]) == {
+        "shared-one": "unknown",
+        "duplicate": "unknown",
+    }
+
 
 @pytest.mark.asyncio
-async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
-    config: Config, tmp_path: Path
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "shared",
+        "disabled_owner",
+        "project",
+        "disabled_own_shared",
+        "disabled_own_project",
+        "disabled_own_only",
+    ],
+)
+async def test_shared_skill_mutations_target_the_package_that_activation_resolves(
+    config: Config, tmp_path: Path, scope: str
 ) -> None:
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     try:
-        runtime.agents.create("receiver", "Receiver")
+        data_dir = runtime.storage.data_dir
+        for owner_id in ("a-owner", "z-owner"):
+            runtime.agents.create(owner_id, owner_id)
+            write_agent_skill(data_dir, owner_id, "deploy", "Shared playbook.")
+            if scope != "disabled_own_only":
+                runtime.skill_policy.set_shared(owner_id, "deploy", shared=True, receivers=["main"])
+        own = None
+        if scope.startswith("disabled_own"):
+            own = (
+                write_agent_skill(data_dir, "main", "deploy", "Disabled own playbook.") / "SKILL.md"
+            )
+            runtime.skill_policy.set_package_disabled(
+                SkillPackageRef("agent", "deploy", "main"), disabled=True
+            )
+        project_id = None
+        if scope == "disabled_owner":
+            runtime.skill_policy.set_package_disabled(
+                SkillPackageRef("agent", "deploy", "a-owner"), disabled=True
+            )
+        elif scope in {"project", "disabled_own_project"}:
+            repo = tmp_path / "repo"
+            write_project_skill(repo, "deploy", "Project playbook.")
+            project_id = runtime.projects.create("p", "P", repo).project_id
+        runtime.invalidate_agent_skills(None)
+        if scope == "disabled_own_only":
+            assert "deploy" not in _names(runtime.skills_for(None, "main"))
+            assert own is not None
+            visible = own
+        else:
+            visible = runtime.skills_for(project_id, "main").get("deploy").path
+        packages = [
+            data_dir / "agents" / owner_id / "skills" / "deploy" / "SKILL.md"
+            for owner_id in ("a-owner", "z-owner")
+        ]
+        if own is not None:
+            packages.append(own)
+        before = {path: path.read_bytes() for path in [*packages, visible]}
+        context = ToolContext(
+            agent_id="main",
+            session_id="session-one",
+            run_id="run-one",
+            tool_call_id="call-one",
+            tool_name="skill_manage",
+            tool_call_index=0,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=data_dir,
+            cwd=tmp_path,
+            skill_project_id=project_id,
+            run_kind=RunKind.REFLECTION,
+        )
+
+        result = await runtime.tools.dispatch(
+            context,
+            {
+                "action": "patch",
+                "name": "deploy",
+                "old_string": "Use this skill.",
+                "new_string": "Use the verified method.",
+            },
+            ["skill_manage"],
+        )
+
+        changed = {path for path, content in before.items() if path.read_bytes() != content}
+        if scope in {"project", "disabled_own_project"}:
+            assert result["error"]["code"] == "skill_write_rejected"
+            assert changed == set()
+        else:
+            assert result["ok"] is True
+            assert changed == {visible}
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection",
+    [
+        "all",
+        "selected",
+        "excluded_target",
+        "excluded_old",
+        "own_shadow",
+        "write_error",
+        "owner_write_error",
+    ],
+)
+async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        allowed = ["*"] if selection == "all" else ["deploy-web"]
+        excluded = {
+            "excluded_target": ["deploy"],
+            "excluded_old": ["deploy-web", "deploy"],
+        }.get(selection, [])
+        runtime.agents.create(
+            "receiver", "Receiver", allowed_skills=allowed, excluded_skills=excluded
+        )
+        runtime.agents.update("main", allowed_skills=["deploy-web"], excluded_skills=["deploy"])
         data_dir = runtime.storage.data_dir
         write_agent_skill(data_dir, "main", "deploy-web", "Deploy the web app.")
         write_agent_skill(data_dir, "main", "deploy", "Deploy anything.")
+        if selection == "own_shadow":
+            write_agent_skill(data_dir, "receiver", "deploy-web", "A different playbook.")
         runtime.skill_policy.set_shared("main", "deploy-web", shared=True, receivers=["receiver"])
+        if selection in {"write_error", "owner_write_error"}:
+            update = runtime.agents.update
+            failing_agent = "main" if selection == "owner_write_error" else "receiver"
+
+            def fail_receiver_update(agent_id: str, **changes: Any) -> Any:
+                if agent_id == failing_agent:
+                    raise OSError("fixture configuration write failure")
+                return update(agent_id, **changes)
+
+            monkeypatch.setattr(runtime.agents, "update", fail_receiver_update)
         job = await runtime.cron_service.create_job(
             agent_id="main",
             name="Nightly",
@@ -328,12 +471,51 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
             ["skill_manage"],
         )
 
-        assert result["data"]["content"].endswith(
-            "\nNote: These now use Skill 'deploy' in place of 'deploy-web': the share with "
-            "Agent 'Receiver'; Cron job 'Nightly'."
-        )
+        if selection in {"write_error", "owner_write_error"}:
+            assert result["ok"] is True
+            assert "\nWarning:" in result["data"]["content"]
+            failure_label = f"Agent '{runtime.agents.get(failing_agent).name}'"
+            assert failure_label in result["data"]["content"].split("\nWarning:", 1)[1]
+        else:
+            assert result["data"]["content"].endswith(
+                "\nNote: These now use Skill 'deploy' in place of 'deploy-web': the share with "
+                "Agent 'Receiver'; Cron job 'Nightly'."
+            )
         assert runtime.skill_policy.load().shared == {"main": {"deploy": frozenset({"receiver"})}}
         assert _names(runtime.skills_for(None, "receiver")) >= {"deploy"}
+        receiver = runtime.agents.get("receiver")
+        has_access = selection not in {"excluded_old", "own_shadow", "write_error"}
+        assert (
+            runtime.skills_for(None, "receiver").is_allowed("deploy", receiver.allowed_skills)
+            is has_access
+        )
+        loaded = await runtime.tools.dispatch(
+            replace(
+                context,
+                agent_id="receiver",
+                tool_name="skill",
+                allowed_skills=receiver.allowed_skills,
+            ),
+            {"name": "deploy"},
+            ["skill"],
+        )
+        assert loaded["ok"] is has_access
+        if has_access:
+            assert loaded["data"]["status"] == "loaded"
+        if selection == "all" or not has_access:
+            assert receiver.allowed_skills == allowed
+            assert receiver.excluded_skills == excluded
+        else:
+            assert receiver.allowed_skills == ["deploy-web", "deploy"]
+            assert receiver.excluded_skills == []
+        owner = runtime.agents.get("main")
+        if selection == "owner_write_error":
+            assert owner.allowed_skills == ["deploy-web"]
+            assert owner.excluded_skills == ["deploy"]
+        else:
+            assert owner.allowed_skills == ["deploy-web", "deploy"]
+            assert owner.excluded_skills == []
+            assert runtime.skills_for(None, "main").is_allowed("deploy", owner.allowed_skills)
         assert runtime.cron_service.get_job(job.id).prompt == "/deploy tonight"
         home = runtime.agent_skills_dir("main")
         [revision] = runtime.skill_authoring.history(home, "deploy-web", limit=1)
@@ -368,7 +550,7 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
         [revision] = runtime.skill_authoring.history(home, "deploy-old", limit=1)
         assert revision.followed == ()
     finally:
-        runtime.stop()
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio

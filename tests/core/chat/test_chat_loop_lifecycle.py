@@ -6,7 +6,7 @@ import asyncio
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -145,15 +145,57 @@ async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["user", "internal"])
-async def test_run_end_notifies_the_reflection_service(tmp_path: Path, origin: str) -> None:
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_run_end_notifies_the_reflection_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str, cancel: bool
+) -> None:
     runtime = _runtime(tmp_path, [_answer("Hello")])
-    reflection = RecordingReflection()
+    session = runtime.chat_sessions.get(SESSION)
+    closing, release = asyncio.Event(), asyncio.Event()
+    forks: list[asyncio.Task[Any]] = []
+
+    async def close_adapter() -> None:
+        closing.set()
+        await release.wait()
+
+    monkeypatch.setattr(runtime.adapter, "aclose", close_adapter, raising=False)
+
+    class ForkingReflection(RecordingReflection):
+        @override
+        def notify_run_end(self, run, agent, *, internal, outcome):
+            # The notification itself must observe the durable terminal row,
+            # even if adapter cleanup suspended after the last Model response.
+            summary = session.find_run_summary(run_id=run.id)
+            assert summary is not None
+            assert summary.status == ("cancelled" if cancel else "completed")
+            super().notify_run_end(run, agent, internal=internal, outcome=outcome)
+            forks.append(asyncio.create_task(runtime.chat_sessions.fork(SESSION)))
+
+    reflection = ForkingReflection()
     loop = build_chat_loop(runtime, reflection_service=reflection)
 
     run = await loop.start_run(
         "coder", "Hi", session_id="session-one", internal=origin == "internal"
     )
-    await run.wait()
+    try:
+        await asyncio.wait_for(closing.wait(), 5)
+        assert reflection.calls == []
+        # Include a checkpoint created within this Run: an early fork would
+        # discard both the completed answer and this new active Context.
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary="Current work checkpoint", projection=[], compacted_token_count=10
+        )
+        session.for_run(run.id).append(checkpoint)
+        if cancel:
+            run.request_cancel("user")
+            release.set()
+            with pytest.raises(RunCancelledError):
+                await run.wait()
+        else:
+            release.set()
+            await run.wait()
+    finally:
+        release.set()
 
     # The loop reports the internal flag verbatim; the service is the one that gates it.
     assert len(reflection.calls) == 1
@@ -165,7 +207,11 @@ async def test_run_end_notifies_the_reflection_service(tmp_path: Path, origin: s
     )
     assert call["iteration_count"] == 1
     assert call["internal"] is (origin == "internal")
-    assert call["outcome"] == "success"
+    assert call["outcome"] == ("cancelled" if cancel else "success")
+    fork = await forks[0]
+    assert fork.load_active() == session.load_active()
+    assert checkpoint.id in {message.id for message in fork.load_active()}
+    assert any(message.content == "Hello" for message in fork.load_active())
 
 
 @pytest.mark.asyncio
@@ -283,13 +329,14 @@ async def test_run_commit_failure_preserves_output_and_leaves_the_run_for_restar
 ) -> None:
     runtime = _runtime(tmp_path, [_answer("Verified")])
     session = runtime.chat_sessions.get(SESSION)
+    reflection = RecordingReflection()
 
     async def fail_finish(*_args: Any, **_kwargs: Any) -> None:
         raise OSError("injected Run transaction failure")
 
     monkeypatch.setattr(runtime.chat_sessions, "finish_run", fail_finish)
 
-    run = await build_chat_loop(runtime).start_run(
+    run = await build_chat_loop(runtime, reflection_service=reflection).start_run(
         "coder", "Verify the update", session_id="session-one"
     )
     with pytest.raises(OSError):
@@ -297,6 +344,7 @@ async def test_run_commit_failure_preserves_output_and_leaves_the_run_for_restar
 
     assert run.status is RunStatus.FAILED
     assert run.events[-1].payload["history_persisted"] is False
+    assert reflection.calls[0]["outcome"] == "error"
     assert any(message.content == "Verified" for message in session.load())
     assert session.find_run_summary(run_id=run.id) is None
     runtime.chat_sessions.recover_interrupted_runs()

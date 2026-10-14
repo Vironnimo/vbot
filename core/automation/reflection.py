@@ -78,8 +78,8 @@ REVIEW_TOOL_DENIAL_MESSAGE = (
 REFLECTION_COUNTERS_META_KEY = "reflection_counters"
 TURNS_SINCE_MEMORY_REVIEW_KEY = "turns_since_memory_review"
 ITERATIONS_SINCE_SKILL_REVIEW_KEY = "iterations_since_skill_review"
-# A manual reset advances this generation so a concurrent background review
-# cannot consume activity recorded after that reset.
+# A reset or successful review advances this generation so overlapping reviews
+# cannot consume the same activity twice.
 COUNTER_GENERATION_KEY = "generation"
 # Scope-specific Run origins so accessors can filter memory and skill reviews
 # independently; the combined scope (manual ``/reflect``) keeps the generic
@@ -103,13 +103,19 @@ class ReflectionResult:
 
 
 @dataclass(frozen=True)
-class _AdvancedCounters:
-    """One Session's counters after a Run end, and which reviews are now due."""
+class _Counters:
+    """One Session's activity since its last reviewed baseline."""
 
-    reviews_enabled: bool
     turns: int
     iterations: int
     generation: int
+
+
+@dataclass(frozen=True)
+class _AdvancedCounters(_Counters):
+    """One Session's counters after a Run end, and which reviews are now due."""
+
+    reviews_enabled: bool
     memory_due: bool
     skill_due: bool
 
@@ -136,6 +142,7 @@ class ReflectionService:
         self._librarian_running = librarian_running
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._agents_in_review: set[str] = set()
+        self._accounting_lock = asyncio.Lock()
         self._closed = False
 
     def reviewing(self, agent_id: str) -> bool:
@@ -219,16 +226,20 @@ class ReflectionService:
         skill_manage_called: bool,
         count_run: bool,
     ) -> None:
-        counters = await _REFLECTION_WORKERS.run(
-            self._advance_counters,
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
-            iteration_count=iteration_count,
-            memory_available=memory_available,
-            skill_available=skill_available,
-            memory_tool_called=memory_tool_called,
-            skill_manage_called=skill_manage_called,
-            count_run=count_run,
-        )
+        # Preserve Run-end order across the worker pool: an earlier Tool reset
+        # must not erase activity from a later Run whose settings read was faster.
+        # Only accounting is serialized; reviews keep running independently.
+        async with self._accounting_lock:
+            counters = await _REFLECTION_WORKERS.run(
+                self._advance_counters,
+                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
+                iteration_count=iteration_count,
+                memory_available=memory_available,
+                skill_available=skill_available,
+                memory_tool_called=memory_tool_called,
+                skill_manage_called=skill_manage_called,
+                count_run=count_run,
+            )
         if counters is None:
             return
         # One review at a time per agent: a due Session while a review is already
@@ -397,7 +408,7 @@ class ReflectionService:
             metadata[REFLECTION_COUNTERS_META_KEY] = {
                 TURNS_SINCE_MEMORY_REVIEW_KEY: max(current_turns - reviewed_turns, 0),
                 ITERATIONS_SINCE_SKILL_REVIEW_KEY: max(current_iterations - reviewed_iterations, 0),
-                COUNTER_GENERATION_KEY: current_generation,
+                COUNTER_GENERATION_KEY: current_generation + 1,
             }
 
         sessions.mutate_metadata(address, update)
@@ -414,6 +425,7 @@ class ReflectionService:
         focus: str | None = None,
         on_fork_created: Callable[[str], None] | None = None,
         reply_surface: ReplySurface | None = None,
+        consume_counters: bool = False,
     ) -> ReflectionResult:
         """Fork the session and run the reflection brief inside the fork.
 
@@ -428,6 +440,8 @@ class ReflectionService:
         the user's focus, appended to the brief; ``on_fork_created`` fires with
         the fork id before the review run starts, so an accessor can surface the
         fork while the review runs.
+        ``consume_counters`` lets a manual review consume the activity present
+        at its fork, preserving later work and any intervening counter reset.
         """
         agent = await self._runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
         if not agent.workspace:
@@ -452,12 +466,16 @@ class ReflectionService:
         # distinguishable in a session list that spans agents; the run-kind
         # marker on the row already says "reflection" (a fork would otherwise
         # inherit the source session's title). Both commit with the fork.
-        fork = await sessions.fork(
-            source_address,
-            target_project_id=project_id,
-            title=f"{agent.name}: {source_title}" if source_title else agent.name,
-            run_kind=run_kind,
-        )
+        counters = None
+        async with self._accounting_lock:
+            if consume_counters:
+                counters = await _REFLECTION_WORKERS.run(self._read_counters, source_address)
+            fork = await sessions.fork(
+                source_address,
+                target_project_id=project_id,
+                title=f"{agent.name}: {source_title}" if source_title else agent.name,
+                run_kind=run_kind,
+            )
         if on_fork_created is not None:
             on_fork_created(fork.id)
         # The fork is fresh and never busy — start directly, no queueing needed.
@@ -476,6 +494,17 @@ class ReflectionService:
             source_session_id=session_id,
         )
         final_message = await review_run.wait()
+        if counters is not None:
+            reviewed_memory, reviewed_skill = _scope_dimensions(scope)
+            await _REFLECTION_WORKERS.run(
+                self._consume_reviewed_counters,
+                agent_id,
+                session_id,
+                project_id=project_id,
+                counter_generation=counters.generation,
+                reviewed_turns=counters.turns if reviewed_memory else 0,
+                reviewed_iterations=counters.iterations if reviewed_skill else 0,
+            )
         return ReflectionResult(
             session_id=fork.id, summary=_final_text(final_message.content), scope=scope
         )
@@ -499,30 +528,14 @@ class ReflectionService:
         """Whether ``agent`` can call every Tool of the memory and skill dimensions."""
         return callable_review_dimensions(agent, self._runtime.tools.list_tools())
 
-    def reset_counters(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-        review_scope: ReflectionScope = "combined",
-    ) -> None:
-        """Zero the counters of the dimensions a manual ``/reflect`` reviewed."""
-        sessions = self._runtime.chat_sessions
-        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        reviewed_memory, reviewed_skill = _scope_dimensions(review_scope)
-
-        def update(metadata: dict[str, Any]) -> None:
-            raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
-            counters = raw_counters if isinstance(raw_counters, dict) else {}
-            turns = _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
-            iterations = _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY))
-            metadata[REFLECTION_COUNTERS_META_KEY] = {
-                TURNS_SINCE_MEMORY_REVIEW_KEY: 0 if reviewed_memory else turns,
-                ITERATIONS_SINCE_SKILL_REVIEW_KEY: 0 if reviewed_skill else iterations,
-                COUNTER_GENERATION_KEY: _non_negative_int(counters.get(COUNTER_GENERATION_KEY)) + 1,
-            }
-
-        sessions.mutate_metadata(address, update)
+    def _read_counters(self, address: SessionAddress) -> _Counters:
+        raw = self._runtime.chat_sessions.get_metadata(address).get(REFLECTION_COUNTERS_META_KEY)
+        counters = raw if isinstance(raw, dict) else {}
+        return _Counters(
+            turns=_non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY)),
+            iterations=_non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY)),
+            generation=_non_negative_int(counters.get(COUNTER_GENERATION_KEY)),
+        )
 
 
 def callable_review_dimensions(agent: Any, tools: Sequence[Any]) -> tuple[bool, bool]:
