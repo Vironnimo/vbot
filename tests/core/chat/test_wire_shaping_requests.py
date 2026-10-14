@@ -183,7 +183,11 @@ def test_sender_tag_parts_are_sanitized(sender: MessageSender, expected: str) ->
 def test_reply_surface_notes_round_trip_and_render_reminders() -> None:
     webui = ReplySurface.webui()
     telegram = ReplySurface.channel(
-        platform="telegram", platform_display_name="Telegram", channel_id="tg-main"
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-main",
+        platform_target="12345",
+        thread_id="42",
     )
     group = ReplySurface.channel(
         platform="discord",
@@ -196,25 +200,28 @@ def test_reply_surface_notes_round_trip_and_render_reminders() -> None:
     }
 
     for surface, note in notes.items():
-        assert reply_surface_from_note(note) == surface
+        restored = reply_surface_from_note(note)
+        assert restored == surface
+        assert restored is not None
+        assert restored.platform_target is None and restored.thread_id is None
+        assert isinstance(note.content, str)
+        assert "platform_target" not in note.content and "thread_id" not in note.content
     assert _embed_notes_into_request([notes[webui]]) == [
         {
             "role": "user",
-            "content": (
-                "<system-reminder>\n"
-                "To show the user an image or provide a file download, include "
-                "file:<filesystem-path> in your reply; vBot renders it automatically.\n"
-                "</system-reminder>"
-            ),
+            "content": (f"<system-reminder>\n{webui.reminder_text()}\n</system-reminder>"),
         }
     ]
     channel_text = _embed_notes_into_request([notes[telegram]])[0]["content"]
     assert channel_text.startswith("<system-reminder>\n")
     assert channel_text.endswith("\n</system-reminder>")
     assert "Telegram" in channel_text and "tg-main" in channel_text
-    assert _embed_notes_into_request([notes[group]])[0]["content"].startswith(
-        "<system-reminder>\nThe current conversation is a group chat on Discord. "
-    )
+    assert "channel_send" not in channel_text and "file_paths" not in channel_text
+    group_text = _embed_notes_into_request([notes[group]])[0]["content"]
+    assert "Discord" in group_text and "group" in group_text
+    assert "direct" in channel_text
+    assert "WebUI" in webui.reminder_text() and "Desktop" in webui.reminder_text()
+    assert "file:<filesystem-path>" in webui.reminder_text()
     direct = ReplySurface.channel(
         platform="discord", platform_display_name="Discord", channel_id="discord-main"
     )

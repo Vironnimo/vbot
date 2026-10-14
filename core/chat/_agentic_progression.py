@@ -605,6 +605,7 @@ class AgenticProgression:
                 project_id=project_id,
                 skill_project_id=context.skill_project_id,
                 skill_registry=context.skill_registry,
+                reply_surface=context.request.reply_surface,
                 tool_restriction=context.request.tool_restriction,
                 tool_denial_resolver=context.request.tool_denial_resolver,
                 base_allowed_tools=state.allowed_tool_names,

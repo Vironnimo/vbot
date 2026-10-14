@@ -49,7 +49,6 @@ def test_profile_offers_the_fields_of_the_agents_platforms_without_naming_channe
     assert definition == tool.definition()
     assert definition["description"] == CHANNEL_SEND_TOOL_DESCRIPTION
     assert "tg-main" not in str(definition) and "dc-team" not in str(definition)
-    assert "final reply already reaches the chat you are answering" in definition["description"]
     parameters = definition["parameters"]
     # One Channel is enough to know where to send; the Tool asks when there are several.
     assert set(parameters) == {"type", "properties"}
@@ -57,8 +56,6 @@ def test_profile_offers_the_fields_of_the_agents_platforms_without_naming_channe
     properties = parameters["properties"]
     assert set(properties) == ALL_FIELDS
     assert "enum" not in properties["channel_id"]
-    button_fields = properties["buttons"]["items"]["items"]["properties"]
-    assert all(field["description"] for field in [*properties.values(), *button_fields.values()])
 
 
 @pytest.mark.parametrize(

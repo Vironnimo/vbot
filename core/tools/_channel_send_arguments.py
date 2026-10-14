@@ -55,8 +55,12 @@ _STAND_INS = {
     "checklist": "<the checklist from this call>",
 }
 _TEMPLATE = re.compile(r"^\s*<[^<>]+>\s*$")
-_MEDIA_TOKEN = re.compile(r'MEDIA:(?:"([^"]+)"|(\S+))')
-_FILE_OBJECT_KEYS = ("path", "file_path", "filepath", "media", "file", "url", "source", "src")
+_MEDIA_LINE = re.compile(r'MEDIA:(?:"([^"\r\n]+)"|([^\s"\'`<>]+))[ \t]*')
+_CODE_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+_FILE_OBJECT_KEYS = frozenset(
+    spelling(key)
+    for key in ("path", "file_path", "filepath", "media", "file", "url", "source", "src")
+)
 
 _FIELD_ALIASES = SpellingAliases(
     {
@@ -126,8 +130,15 @@ def normalize_channel_send_arguments(contract: ToolContract, arguments: Any) -> 
         return normalized
     for name in ("platform_target", "thread_id", CHANNEL_FIELD, TARGET_FIELD):
         item = normalized.get(name)
-        if isinstance(item, str) and (is_placeholder(item) or _TEMPLATE.match(item)):
+        if isinstance(item, str) and not item.strip():
             del normalized[name]
+            continue
+        if isinstance(item, str) and (is_placeholder(item) or _TEMPLATE.match(item)):
+            raise ToolContractError(
+                f'{REFUSAL_PREFIX}{name} "{item}" is a stand-in, not a destination. '
+                f"Nothing was sent. Supply the intended destination, or omit {name} only "
+                "if the default destination is intended."
+            )
     for name in ("file_paths", "buttons", "checklist"):
         if normalized.get(name) == []:
             del normalized[name]  # An empty list asks for nothing.
@@ -188,36 +199,76 @@ def _file_list(value: Any) -> Any:
     """One path, a path object (``{"media": ...}``) or a list of either becomes a list."""
     items = value if isinstance(value, list) else [value]
     paths: list[Any] = []
-    for item in items:
+    for index, item in enumerate(items):
         if isinstance(item, dict):
-            fields = {spelling(key): entry for key, entry in item.items()}
-            found = next(
-                (fields[key] for key in map(spelling, _FILE_OBJECT_KEYS) if key in fields), None
-            )
-            paths.append(found if found is not None else item)
+            fields = [
+                (key, entry) for key, entry in item.items() if spelling(key) in _FILE_OBJECT_KEYS
+            ]
+            if not fields:
+                paths.append(item)
+                continue
+            first_key, path = fields[0]
+            for key, other in fields[1:]:
+                if other != path:
+                    raise ToolContractError(
+                        f"{REFUSAL_PREFIX}file_paths[{index}] gives different paths in "
+                        f"{first_key} and {key}. Nothing was sent. Supply only the intended "
+                        "local path."
+                    )
+            unsupported = [
+                key
+                for key, entry in item.items()
+                if spelling(key) not in _FILE_OBJECT_KEYS and entry not in (None, "")
+            ]
+            if unsupported:
+                raise ToolContractError(
+                    f"{REFUSAL_PREFIX}file_paths[{index}] has unsupported field(s): "
+                    f"{', '.join(unsupported)}. Nothing was sent. Use local file paths; put "
+                    "accompanying text in message and rename a local copy to choose its "
+                    "sent filename."
+                )
+            paths.append(path)
         elif not (isinstance(item, str) and not item.strip()) and item is not None:
             paths.append(item)
     return paths
 
 
 def _read_media_tokens(arguments: dict[str, Any]) -> None:
-    """Move ``MEDIA:<path>`` markers out of the text into ``file_paths``."""
+    """Read standalone, unquoted ``MEDIA:<path>`` lines without rewriting other text."""
     message = arguments.get("message")
     if not isinstance(message, str) or "MEDIA:" not in message:
         return
-    found = [quoted or plain for quoted, plain in _MEDIA_TOKEN.findall(message)]
+    found: list[str] = []
+    kept: list[str] = []
+    fence: str | None = None
+    for line in message.splitlines(keepends=True):
+        text = line.rstrip("\r\n")
+        marker = _CODE_FENCE.fullmatch(text)
+        if marker is not None:
+            delimiter, suffix = marker.groups()
+            if fence is None:
+                fence = delimiter
+            elif delimiter[0] == fence[0] and len(delimiter) >= len(fence) and not suffix.strip():
+                fence = None
+            kept.append(line)
+            continue
+        match = _MEDIA_LINE.fullmatch(text) if fence is None else None
+        if match is None:
+            kept.append(line)
+        else:
+            quoted, plain = match.groups()
+            found.append(quoted or plain)
     if not found:
         return
-    rest = _MEDIA_TOKEN.sub("", message)
-    rest = "\n".join(line.rstrip() for line in rest.splitlines()).strip()
+    rest = "".join(kept)
     existing = arguments.get("file_paths")
     paths = list(existing) if isinstance(existing, list) else []
     for path in found:
         if path not in paths:
             paths.append(path)
     arguments["file_paths"] = paths
-    if rest:
-        arguments["message"] = re.sub(r"\n{3,}", "\n\n", rest)
+    if rest.strip():
+        arguments["message"] = rest
     else:
         del arguments["message"]
 

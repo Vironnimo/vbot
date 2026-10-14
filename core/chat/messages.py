@@ -63,7 +63,7 @@ COMPACTION_CHECKPOINT_GUIDANCE = (
 )
 REPLY_SURFACE_NOTE_PREFIX = "[reply-surface] "
 WEBUI_REPLY_SURFACE_REMINDER = (
-    "To show the user an image or provide a file download, include "
+    "Reply surface: WebUI/Desktop. To show an image or provide a file download, include "
     "file:<filesystem-path> in your reply; vBot renders it automatically."
 )
 INPUT_ORIGIN_SPEECH_TRANSCRIPTION: InputOrigin = "speech_transcription"
@@ -281,6 +281,10 @@ class ReplySurface:
     platform_display_name: str | None = None
     channel_id: str | None = None
     conversation_kind: ConversationKind | None = None
+    # Delivery facts captured by Channel ingress for this Run only. They do not
+    # change surface identity or enter the persisted reminder/Model context.
+    platform_target: str | None = field(default=None, compare=False, repr=False)
+    thread_id: str | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.kind == "webui":
@@ -291,6 +295,8 @@ class ReplySurface:
                     self.platform_display_name,
                     self.channel_id,
                     self.conversation_kind,
+                    self.platform_target,
+                    self.thread_id,
                 )
             ):
                 raise ChatError("WebUI reply surfaces cannot include Channel fields")
@@ -301,6 +307,10 @@ class ReplySurface:
             raise ChatError("channel reply surface fields must be non-empty")
         if self.conversation_kind not in ("direct", "group"):
             raise ChatError("channel reply surface conversation_kind must be direct or group")
+        if self.platform_target is not None and not self.platform_target:
+            raise ChatError("channel reply destination must be non-empty")
+        if self.thread_id is not None and (not self.platform_target or not self.thread_id):
+            raise ChatError("channel reply thread needs a destination and a non-empty id")
 
     @classmethod
     def webui(cls) -> ReplySurface:
@@ -315,6 +325,8 @@ class ReplySurface:
         platform_display_name: str,
         channel_id: str,
         conversation_kind: ConversationKind = "direct",
+        platform_target: str | None = None,
+        thread_id: str | None = None,
     ) -> ReplySurface:
         """Return one configured Channel reply surface."""
         return cls(
@@ -323,6 +335,8 @@ class ReplySurface:
             platform_display_name=platform_display_name,
             channel_id=channel_id,
             conversation_kind=conversation_kind,
+            platform_target=platform_target,
+            thread_id=thread_id,
         )
 
     @property
@@ -358,16 +372,11 @@ class ReplySurface:
         if self.kind == "webui":
             return WEBUI_REPLY_SURFACE_REMINDER
         conversation_kind = cast(ConversationKind, self.conversation_kind)
-        opening = (
-            f"The current conversation is a group chat on {self.platform_display_name}."
-            if conversation_kind == "group"
-            else f"The current conversation is a direct message on {self.platform_display_name}."
-        )
+        conversation = "group chat" if conversation_kind == "group" else "direct message"
         return (
-            f"{opening} Your reply to the following request will be delivered via "
-            f"{self.platform_display_name} using channel `{self.channel_id}`. "
-            "Return normal reply text; vBot delivers it automatically. To deliver any file, "
-            "always call `channel_send` and include every file path in `file_paths`."
+            f"Reply surface: {self.platform_display_name} {conversation}, "
+            f"Channel `{self.channel_id}`. vBot delivers your final text automatically. "
+            "Ordinary replies do not attach files."
         )
 
 

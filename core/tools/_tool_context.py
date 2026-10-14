@@ -8,7 +8,7 @@ import os
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.runs import RunExecutionOwner, RunKind
 from core.skills.policy import SkillPackageRef
@@ -28,6 +28,9 @@ from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract, ToolContractError
 from core.tools.model_names import model_tool_name
 from core.utils.file_status import is_link_status
+
+if TYPE_CHECKING:
+    from core.chat.messages import ReplySurface
 
 _DISPLAY_MEDIA_KINDS = ("image", "video", "audio")
 # An allowlist entry that allows every Tool.
@@ -132,6 +135,9 @@ class ToolContext:
     # Kind of the Run that dispatched this call, or ``None`` outside Runs (direct
     # callers). ``core.runs.is_unattended_run_kind`` tells background Runs apart.
     run_kind: RunKind | None = None
+    # The admitted Run's reply destination, unaffected by another chat using the
+    # same Session. Runtime-only; never supplied by Model arguments.
+    reply_surface: ReplySurface | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
     cancel_registration_hook: ToolCancelRegistrationHook | None = None
@@ -554,6 +560,7 @@ class ToolExecutionConfig:
     skill_agent_id: str | None = None
     # Kind of the owning Run; see ``ToolContext.run_kind``.
     run_kind: RunKind | None = None
+    reply_surface: ReplySurface | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None

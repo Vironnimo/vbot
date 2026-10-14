@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import ChatMessage
+from core.chat import ChatMessage, ReplySurface
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     TOOL_CALL_RESULT_EVENT,
@@ -139,8 +139,16 @@ async def test_sibling_calls_run_concurrently_and_persist_in_call_order_as_one_b
 ) -> None:
     second_started = asyncio.Event()
     first_can_finish = asyncio.Event()
+    reply_surface = ReplySurface.channel(
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-coder",
+        platform_target="12345",
+        thread_id="7",
+    )
 
     async def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        assert context.reply_surface is reply_surface
         if context.tool_call_id == "call_1":
             # Completes only once its sibling of the same Tool has started.
             await asyncio.wait_for(second_started.wait(), timeout=WAIT_SECONDS)
@@ -154,6 +162,7 @@ async def test_sibling_calls_run_concurrently_and_persist_in_call_order_as_one_b
     runtime = tool_runtime(
         tmp_path, tools, [tool_turn(("call_1", "probe"), ("call_2", "probe")), final("Done")]
     )
+    runtime.chat_sessions.create("coder", session_id="session-one")
     batches: list[list[str]] = []
     original_append_many_async = ChatSession.append_many_async
 
@@ -165,7 +174,10 @@ async def test_sibling_calls_run_concurrently_and_persist_in_call_order_as_one_b
 
     monkeypatch.setattr(ChatSession, "append_many_async", recording_append_many)
 
-    assistant = await build_chat_loop(runtime).send("coder", "Run tools", session_id="session-one")
+    admitted_run = await build_chat_loop(runtime).start_run(
+        "coder", "Run tools", session_id="session-one", reply_surface=reply_surface
+    )
+    assistant = cast(ChatMessage, await admitted_run.wait())
 
     messages = history(runtime)
     run = runtime.chat_runs.get(messages[-1].run_id)

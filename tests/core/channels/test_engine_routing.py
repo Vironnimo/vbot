@@ -19,8 +19,11 @@ from core.sessions import ChatSessionManager, SessionAddress
 
 from .engine_test_support import (
     SESSION_ID,
+    HeldRuns,
     channel_state,
+    command_outcome,
     drain,
+    make_command_dispatcher,
     make_completed_run,
     make_config,
     make_conversation,
@@ -161,6 +164,60 @@ async def test_routing_writes_channel_metadata_without_notes_or_routine_logs(
         "platform_target": "12345",
     }
     assert not [record for record in caplog.records if record.name == "vbot.channels.engine"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("later_input", ["another-dm", "group-topic-command"])
+async def test_admitted_run_keeps_its_destination_when_later_input_updates_the_session(
+    tmp_path: Path, later_input: str
+) -> None:
+    group = later_input == "group-topic-command"
+    session_id = SESSION_ID if group else "ch-tg-assistant-main"
+    runs = HeldRuns()
+    dispatcher = make_command_dispatcher(result=command_outcome("status", "status reply"))
+    engine, sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        dm_scope="main",
+        response_mode="all",
+        admin_user_ids=["50"],
+        trigger_run=runs.trigger,
+        command_dispatcher=dispatcher,
+    )
+    first = make_conversation(kind="group" if group else "direct", thread_id="7" if group else None)
+    later = replace(first, chat_id="12345" if group else "67890", thread_id="8" if group else None)
+    try:
+        await engine.handle_inbound_text(first, "first request")
+        await runs.wait_started(session_id)
+        first_surface = runs.trigger.await_args_list[0].kwargs["reply_surface"]
+
+        await engine.handle_inbound_text(later, "/status" if group else "later request")
+        if group:
+            # An immediate Command can route another topic while this group's Run is held.
+            assert dispatcher.execute.await_args is not None
+            later_context = dispatcher.execute.await_args.args[1]
+            assert later_context.session_id == session_id
+            later_surface = later_context.reply_surface
+        else:
+            # Separate chat workers share one Session under dm_scope=main.
+            await drain(engine, later.chat_id)
+            assert runs.trigger.await_args_list[1].args[2] == session_id
+            later_surface = runs.trigger.await_args_list[1].kwargs["reply_surface"]
+
+        address = SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+        latest = sessions.get_metadata(address)["last_reply_target"]
+        assert latest["platform_target"] == later.chat_id
+        assert latest.get("thread_id") == later.thread_id
+        assert (later_surface.platform_target, later_surface.thread_id) == (
+            later.chat_id,
+            later.thread_id,
+        )
+        assert (first_surface.platform_target, first_surface.thread_id) == (
+            first.chat_id,
+            first.thread_id,
+        )
+    finally:
+        runs.release()
+        await engine.stop()
 
 
 @pytest.mark.asyncio

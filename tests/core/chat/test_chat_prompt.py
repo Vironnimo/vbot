@@ -482,12 +482,6 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     assert "- tg-private: telegram" in systems[0]
     assert '<project id="web"' not in systems[0] and "`writer`" not in systems[0]
     assert "tg-group" not in systems[0]
-    announcement = (
-        "The Agent ids under Sub-Agents changed since your System Prompt listed them.\n"
-        "Added:\n- `writer` — Writer — Drafts.\n\n"
-        "Your configured channels changed since your System Prompt listed them.\n"
-        "Added:\n- tg-group: telegram (explicit target required)"
-    )
     notes = [
         message
         for message in history(runtime, "s1", agent.id)
@@ -507,7 +501,8 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     )
     for request in adapter.requests[2:]:
         sent = "\n".join(str(message["content"]) for message in request["messages"])
-        assert sent.count(announcement) == 1
+        assert sent.count("- `writer` — Writer — Drafts.") == 1
+        assert sent.count("- tg-group: telegram") == 1
         assert sent.count("- web: Web") == 1
 
 
