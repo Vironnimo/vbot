@@ -97,8 +97,10 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("archived_child", [False, True])
 async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_taken_id(
     world: ArchiveWorld,
+    archived_child: bool,
 ) -> None:
     agents, sessions = world.agents, world.sessions
     agents.create("manager", "Manager")
@@ -108,6 +110,7 @@ async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_t
     sessions.set_metadata(
         child, {"subagent_parent": {"agent_id": "coder", "session_id": "first-work"}}
     )
+    child_entry = await world.service.archive_session(child) if archived_child else None
     first = await world.service.archive_agent("coder")
     agents.create("coder", "Second")
     second = await world.service.archive_agent("coder")
@@ -127,7 +130,10 @@ async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_t
     assert agents.get("coder").name == "Second"
     assert agents.get("coder-old").name == "First"
     assert SessionAddress(None, "coder-old", "first-work") in restored.addresses
-    # A Sub-Agent link follows its parent Session to the new id.
+    # A Sub-Agent link follows its parent even when the child is restored later.
+    if child_entry is not None:
+        await world.service.restore(child_entry.entry_id)
+    assert sessions.subagent_children(SessionAddress(None, "coder-old", "first-work")) == [child]
     assert sessions.get_metadata(child)["subagent_parent"]["agent_id"] == "coder-old"
 
 

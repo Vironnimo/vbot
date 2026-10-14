@@ -662,7 +662,7 @@ def retarget_subagent_links(
     new_agent_id: str,
     session_ids: Sequence[str],
 ) -> int:
-    """Point live Sub-Agent parent links at Sessions a restore gave a new scope.
+    """Point Sub-Agent parent links at Sessions a restore gave a new scope.
 
     Only links whose parent Session id is among ``session_ids`` follow, and only
     while no live Session holds that parent's old address. Returns how many moved.
@@ -685,7 +685,7 @@ def retarget_subagent_links(
     )
     rows = connection.execute(
         f"SELECT {_store_values._SESSION_STATE_COLUMNS} FROM sessions AS s "
-        f"WHERE s.state = 'live' AND {project_clause} AND s.subagent_parent_agent_id = ? "
+        f"WHERE {project_clause} AND s.subagent_parent_agent_id = ? "
         "AND s.subagent_parent_session_id IN (SELECT value FROM json_each(?)) "
         "AND NOT EXISTS (SELECT 1 FROM sessions AS parent WHERE parent.project_id = ? "
         "AND parent.agent_id = ? AND parent.session_id = s.subagent_parent_session_id "
