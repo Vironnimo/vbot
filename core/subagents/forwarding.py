@@ -2,7 +2,7 @@
 
 Every Run that the Parent or a delivery started in a linked Sub-Agent Session is
 followed: its activity reaches the Session's activity file, and when it ends its
-final answer goes to the Parent Session through the completion coordinator,
+complete answers go to the Parent Session through the completion coordinator,
 with a line that names what of the Sub-Agent is still running. Runs the user
 started never forward, and nothing forwards once the user took the Session over.
 """
@@ -26,6 +26,7 @@ from core.subagents._constants import (
     FACTS_NOTHING_RUNNING_TEXT,
     FACTS_RUNNING_TEMPLATE,
     FACTS_SIBLINGS_PENDING_TEMPLATE,
+    FORWARDED_ANSWER_TEMPLATE,
     FORWARDED_FAILURE_TEXT_TEMPLATE,
     FORWARDED_NO_ANSWER_TEXT,
     FORWARDED_RUN_KINDS,
@@ -45,10 +46,6 @@ if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
 
 _LOGGER = get_logger("subagents")
-
-# Attempts to read a Run's persisted answer that is not yet visible.
-_RESULT_READ_ATTEMPTS = 3
-_RESULT_READ_DELAY_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -159,7 +156,7 @@ class SubAgentForwarding:
         activity = await self._activities.ensure(address)
         if activity is not None:
             activity.follow(run)
-        outcome, answer = await _turn_outcome(self._runtime, run)
+        outcome, answer, answer_ids = await _turn_outcome(self._runtime, run)
         link = await sessions.run_async(read_link, sessions, address)
         if link is None or link.taken_over_at is not None or run.id in self._silenced:
             return
@@ -180,6 +177,7 @@ class SubAgentForwarding:
             title=link.title or link.id,
             agent_id=format_agent_address(address.agent_id, address.project_id),
             session_id=address.session_id,
+            run_id=run.id,
             outcome=outcome,
             answer=answer,
             facts=facts,
@@ -196,6 +194,14 @@ class SubAgentForwarding:
             on_persisted=lambda: self._mark_read(address, run.id),
         )
         delivery.add_done_callback(lambda done: _log_delivery(done, link, run.id))
+        if activity is not None:
+            activity.track_delivery(
+                delivery,
+                delivery_id=f"subagent:{run.id}",
+                run_id=run.id,
+                parent=parent,
+                answer_ids=answer_ids,
+            )
 
     async def _siblings_text(self, link: SubAgentLink, run_id: str) -> str | None:
         """Name the Parent's other Sub-Agents whose answers are still to come, as of now.
@@ -302,72 +308,68 @@ def is_working(runtime: RuntimeServices, address: SessionAddress) -> bool:
     )
 
 
-async def _turn_outcome(runtime: RuntimeServices, run: Run) -> tuple[str, str]:
-    """Wait for *run* to end; return how its turn ended and its final answer."""
+async def _turn_outcome(runtime: RuntimeServices, run: Run) -> tuple[str, str, tuple[str, ...]]:
+    """Return the Run's outcome and every complete answer, in persistence order.
+
+    Steering can continue a Run after a complete answer. Its return value is
+    only the last answer, so the Session is the source for the whole report.
+    A stopped or failed Run also retains its latest partial text.
+    """
+    result = None
+    outcome = "completed"
+    fallback = FORWARDED_NO_ANSWER_TEXT
     try:
-        message = await run.wait()
+        result = await run.wait()
     except RunCancelledError:
-        persisted = await _persisted_answer(runtime, run)
-        if persisted is not None and await _stopped_after_final_answer(runtime, run):
-            # Stop arrived after the final answer, for example during the
-            # Compaction that follows it: the turn's answer is whole.
-            return "completed", _message_text(persisted) or FORWARDED_NO_ANSWER_TEXT
-        cancelled = (
+        outcome = (
             "was cancelled by the user"
             if run.cancel_reason == USER_CANCEL_REASON
             else "was cancelled"
         )
-        return cancelled, _answer_text(persisted) or FORWARDED_NO_ANSWER_TEXT
     except RunInterruptedError as error:
-        answer = _message_text(error.result) or _answer_text(await _persisted_answer(runtime, run))
-        return "was interrupted", answer or FORWARDED_NO_ANSWER_TEXT
+        outcome, result = "was interrupted", error.result
     except Exception as error:
-        answer = _answer_text(await _persisted_answer(runtime, run))
-        return "failed", answer or FORWARDED_FAILURE_TEXT_TEMPLATE.format(error=error)
-    answer = _message_text(message) or _answer_text(await _persisted_answer(runtime, run))
-    return "completed", answer or FORWARDED_NO_ANSWER_TEXT
+        outcome, fallback = "failed", FORWARDED_FAILURE_TEXT_TEMPLATE.format(error=error)
+
+    session = await runtime.chat_sessions.get_async(_run_address(run))
+    messages = await session.load_run_messages_async(run.id)
+    progression = [m for m in messages if m.role in {"user", "assistant", "tool", "error"}]
+    if outcome.startswith("was cancelled") and progression and _is_complete_answer(progression[-1]):
+        # Stop during Compaction after the final answer does not make it partial.
+        outcome = "completed"
+    answers = [m for m in messages if _is_complete_answer(m)]
+    latest = next(
+        (m for m in reversed(messages) if m.role == "assistant" and _message_text(m)), None
+    )
+    # Normal Runs persist their return value. Keep the returned text as a
+    # fallback for executors that return an answer without persisting it.
+    if result is not None and _message_text(result):
+        latest = result
+    if (
+        latest is not None
+        and all(m.id != latest.id for m in answers)
+        and (_is_complete_answer(latest) or outcome != "completed")
+    ):
+        answers.append(latest)
+    sections = [
+        FORWARDED_ANSWER_TEMPLATE.format(
+            kind="Answer" if _is_complete_answer(m) else "Partial answer",
+            message_id=m.id,
+            content=_message_text(m),
+        )
+        for m in answers
+    ]
+    return outcome, "\n\n".join(sections) or fallback, tuple(m.id for m in answers)
 
 
-async def _persisted_answer(runtime: RuntimeServices, run: Run) -> ChatMessage | None:
-    """Read the last Assistant message with text the Run persisted, if it has one."""
-    address = _run_address(run)
-    for attempt in range(_RESULT_READ_ATTEMPTS):
-        try:
-            session = await runtime.chat_sessions.get_async(address)
-            result = await session.load_run_result_async(run_id=run.id)
-        except Exception:
-            return None
-        if result is not None:
-            return result.assistant
-        if attempt + 1 < _RESULT_READ_ATTEMPTS:
-            await asyncio.sleep(_RESULT_READ_DELAY_SECONDS)
-    return None
-
-
-async def _stopped_after_final_answer(runtime: RuntimeServices, run: Run) -> bool:
-    """Whether the Run stopped with a final answer as its last progression.
-
-    The last text answer may precede steered input or a textless Tool/Reasoning
-    turn. Notes and a checkpoint after the answer do not start further work.
-    """
-    try:
-        session = await runtime.chat_sessions.get_async(_run_address(run))
-        messages = await session.load_run_messages_async(run.id)
-    except Exception:
-        return False
-    for message in reversed(messages):
-        if message.role in {"user", "assistant", "tool", "error"}:
-            return (
-                message.role == "assistant"
-                and bool(_message_text(message))
-                and not message.interrupted
-                and not message.tool_calls
-            )
-    return False
-
-
-def _answer_text(message: ChatMessage | None) -> str | None:
-    return None if message is None else _message_text(message)
+def _is_complete_answer(message: ChatMessage) -> bool:
+    return (
+        message.role == "assistant"
+        and bool(_message_text(message))
+        and not message.interrupted
+        and not message.tool_calls
+        and message.phase != "commentary"
+    )
 
 
 def _message_text(message: ChatMessage | Any) -> str | None:

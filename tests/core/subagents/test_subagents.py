@@ -21,7 +21,14 @@ import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
-from core.runs import Run, RunAdmission, RunAdmissionBlockedError, RunKind, RunStatus
+from core.runs import (
+    Run,
+    RunAdmission,
+    RunAdmissionBlockedError,
+    RunInterruptedError,
+    RunKind,
+    RunStatus,
+)
 from core.sessions import (
     SESSION_WORKING_PROJECT_META_KEY,
     SUBAGENT_PARENT_META_KEY,
@@ -370,7 +377,47 @@ async def test_a_stopped_turn_forwards_its_latest_progression_outcome(
 
     body = harness.triggers.to(harness.parent)[-1].body
     assert outcome in body
-    assert ("Follow-up fixed." if progression == "steering-answer" else "All fixed.") in body
+    assert body.count("All fixed.") == 1
+    if progression == "steering-answer":
+        assert body.count("Follow-up fixed.") == 1
+        assert body.index("All fixed.") < body.index("Follow-up fixed.")
+    assert ("Partial answer" in body) == (progression == "partial-answer")
+
+
+@pytest.mark.parametrize("ending", ["failed", "interrupted"])
+async def test_failure_preserves_complete_answers_before_the_latest_partial(
+    harness: SubAgentHarness, ending: str
+) -> None:
+    data = await harness.spawn("review")
+    await harness.settle()
+    child = harness.subagent_session(data["id"])
+    main = ChatMessage.assistant(model="fixture", content="Main report", phase="final_answer")
+    partial = ChatMessage.assistant(
+        model="fixture", content="Unfinished follow-up", interrupted=True
+    )
+
+    async def execute(run: Run) -> ChatMessage:
+        session = (await harness.sessions.get_async(child)).for_run(run.id)
+        await session.append_many_async(
+            [
+                main,
+                ChatMessage.user("Follow up"),
+                ChatMessage.assistant(model="fixture", content="Working", phase="commentary"),
+                partial,
+            ]
+        )
+        if ending == "interrupted":
+            raise RunInterruptedError("network", result=partial)
+        raise RuntimeError("Provider unavailable")
+
+    await harness.manager.start(child, execute, admission=RunAdmission(run_kind=RunKind.SYSTEM))
+    await harness.settle()
+    body = harness.triggers.to(harness.parent)[-1].body
+    assert ("Its turn failed." if ending == "failed" else "Its turn was interrupted.") in body
+    assert body.count(main.id) == body.count(partial.id) == 1
+    assert body.index("Main report") < body.index("Unfinished follow-up")
+    assert "Working" not in body
+    assert f"Partial answer {partial.id}" in body
 
 
 async def test_answer_names_the_work_the_subagent_still_runs(
@@ -994,6 +1041,7 @@ async def test_takeover_hands_the_subagent_and_its_work_to_the_user(
 
 async def test_message_parent_reaches_the_parent_while_the_subagent_works(
     harness: SubAgentHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     harness.loop.hold("review")
     data = await harness.spawn("review")
@@ -1006,9 +1054,30 @@ async def test_message_parent_reaches_the_parent_while_the_subagent_works(
     assert notice.wake is True
     assert f"### Message from Sub-Agent {data['id']} — Do review" in notice.body
     assert "Which branch?" in notice.body
+    assert result["data"]["status"] == "queued"
+    assert result["data"]["delivery_id"] == notice.notice_id
+    assert notice.notice_id in notice.body
+    await harness.coordinator.drain_activity()
+    listed = await harness.background_tasks({"action": "list"})
+    log = Path(listed["data"]["tasks"][0]["activity_file"]).read_text(encoding="utf-8")
+    assert log.count(notice.notice_id) == 2  # Pending, then confirmed persistence.
+    assert "Pending:" in log
+    assert "Delivered: stored in the Parent Session." in log
 
     outside = await harness.message_parent("hello", address("parent", harness.parent.session_id))
     assert outside["error"]["message"] == MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE
+
+    # A closed delivery coordinator refuses before keeping the message.
+    def reject(*_args: Any, **_kwargs: Any) -> asyncio.Future[None]:
+        refused: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        refused.cancel()
+        return refused
+
+    monkeypatch.setattr(harness.triggers, "submit_completion", reject)
+    refused = await harness.message_parent("More context", child)
+    assert not refused["ok"]
+    assert refused["error"]["code"] == "delivery_unavailable"
+    assert len(harness.triggers.to(harness.parent)) == 1
 
 
 async def test_activity_file_follows_every_turn_of_a_subagent(

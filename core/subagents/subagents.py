@@ -41,9 +41,10 @@ from core.subagents._constants import (
     DEFAULT_MAX_ACTIVE_SUBAGENTS,
     DEFAULT_MAX_ACTIVE_SUBAGENTS_TOTAL,
     DEFAULT_MAX_SUBAGENT_DEPTH,
+    MESSAGE_PARENT_DELIVERY_UNAVAILABLE_MESSAGE,
     MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
     MESSAGE_PARENT_PARENT_GONE_MESSAGE,
-    MESSAGE_PARENT_SENT_NOTE,
+    MESSAGE_PARENT_QUEUED_NOTE,
     MESSAGE_PARENT_TAKEN_OVER_MESSAGE,
     PARENT_AGENT_CANCEL_REASON,
     PARENT_MESSAGE_SECTION_TEMPLATE,
@@ -328,21 +329,32 @@ class SubAgentCoordinator:
         if not await sessions.run_async(sessions.exists, link.parent):
             return tool_failure("parent_not_found", MESSAGE_PARENT_PARENT_GONE_MESSAGE)
         parent = link.parent
+        activity = await self._activities.ensure(_caller(context))
+        delivery_id = new_id("subagent-message")
         delivery = self._trigger_service.submit_completion(
             parent.agent_id,
             parent.session_id,
-            notice_id=new_id("subagent-message"),
+            notice_id=delivery_id,
             origin_run_id=context.run_id,
             body=PARENT_MESSAGE_SECTION_TEMPLATE.format(
                 id=link.id,
                 title=link.title or link.id,
+                delivery_id=delivery_id,
                 content=cast(str, arguments["content"]).strip(),
             ),
             project_id=parent.project_id,
             execution_owner=context.execution_owner,
         )
         delivery.add_done_callback(_log_message_delivery)
-        return tool_success({"status": "sent", "note": MESSAGE_PARENT_SENT_NOTE})
+        if activity is not None:
+            activity.track_delivery(
+                delivery, delivery_id=delivery_id, run_id=context.run_id, parent=parent
+            )
+        if delivery.cancelled():
+            return tool_failure("delivery_unavailable", MESSAGE_PARENT_DELIVERY_UNAVAILABLE_MESSAGE)
+        return tool_success(
+            {"status": "queued", "delivery_id": delivery_id, "note": MESSAGE_PARENT_QUEUED_NOTE}
+        )
 
     async def inspect(
         self,

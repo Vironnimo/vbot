@@ -383,6 +383,15 @@ async def test_pattern_on_a_file_shows_the_matching_lines(project: Path) -> None
     stale = file_state.check_stale("session-1", (project / "src/code.py").resolve())
     assert stale is None
 
+    first = await dispatch(project, {"path": "src/code.py", "pattern": "greet", "limit": 1})
+    assert first["data"]["next_offset"] == 10
+    last = await dispatch(
+        project,
+        {"path": "src/code.py", "pattern": "greet", "offset": first["data"]["next_offset"]},
+    )
+    assert "10|     Greeter().greet()" in content(last)
+    assert "next_offset" not in last["data"]
+
 
 @pytest.mark.asyncio
 async def test_pattern_with_case_and_context_fields(project: Path) -> None:

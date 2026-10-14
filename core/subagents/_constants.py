@@ -162,10 +162,11 @@ SUBAGENT_SESSION_PROJECT_MISSING_MESSAGE_TEMPLATE = (
 # Sections vBot delivers to the Parent Agent.
 FORWARDED_SECTION_TEMPLATE = (
     "### Sub-Agent {id} — {title}\n"
-    "agent_id {agent_id}, session_id {session_id}. Its turn {outcome}.\n\n"
+    "agent_id {agent_id}, session_id {session_id}, run_id {run_id}. Its turn {outcome}.\n\n"
     "{answer}\n\n"
     "{facts}"
 )
+FORWARDED_ANSWER_TEMPLATE = "#### {kind} {message_id}\n\n{content}"
 FORWARDED_NO_ANSWER_TEXT = "(The turn ended without an answer.)"
 FORWARDED_FAILURE_TEXT_TEMPLATE = "(The turn failed: {error})"
 FACTS_RUNNING_TEMPLATE = "Still running for this Sub-Agent: {entries}."
@@ -180,14 +181,19 @@ TAKEN_OVER_NOTICE_TEMPLATE = (
 )
 PARENT_MESSAGE_SECTION_TEMPLATE = (
     "### Message from Sub-Agent {id} — {title}\n"
+    "Delivery {delivery_id}.\n\n"
     "{content}\n\n"
     "The Sub-Agent continues working; its answer arrives separately."
 )
 
 # The ``message_parent`` Tool.
-MESSAGE_PARENT_SENT_NOTE = (
-    "Sent. Your Parent Agent reads it at its next step, or in a new turn if it is idle. "
-    "Continue your work."
+MESSAGE_PARENT_QUEUED_NOTE = (
+    "Queued for delivery. Your Parent Agent reads it at its next step, or in a new turn if it is "
+    "idle. Continue your work."
+)
+MESSAGE_PARENT_DELIVERY_UNAVAILABLE_MESSAGE = (
+    "message_parent was not queued: delivery to the Parent Session is unavailable. "
+    "Keep the message in your final answer."
 )
 MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE = (
     "message_parent was not sent: this Session has no Parent Agent. Reply to the user instead."

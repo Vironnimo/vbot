@@ -2,7 +2,8 @@
 
 Each Sub-Agent Session has one Markdown file that receives the visible activity
 of all its followed Runs in start order. The file is protected from cleanup
-while a Run is followed; retention counts from the end of the latest one.
+while a Run is followed or a Parent delivery is pending; retention counts from
+the last Run or delivery to finish.
 
 The Event Loop only builds each file's Markdown text. One process-wide ordered
 writer thread creates, appends to and completes every activity file, so a slow
@@ -40,6 +41,7 @@ from core.runs import (
     RunEvent,
     RunStatus,
 )
+from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.utils.logging import get_logger
 from core.utils.workers import OrderedWorker
@@ -76,6 +78,7 @@ class SubAgentActivity:
         # Writer thread only: the lease protecting the file, while one is held.
         self._lease: TemporaryFileLease | None = lease
         self._lease_path = lease.path
+        self._lease_users: set[str] = set()
         self._path = path
         # Followed Runs whose watch has not finished, in start order.
         self._watches: list[tuple[Run, asyncio.Task[None]]] = []
@@ -176,6 +179,56 @@ class SubAgentActivity:
         if self._watch_task is None:
             _WRITER.hand_off(self._finish_lease, limit=_NO_LIMIT)
 
+    def track_delivery(
+        self,
+        delivery: asyncio.Future[None],
+        *,
+        delivery_id: str,
+        run_id: str,
+        parent: SessionAddress,
+        answer_ids: tuple[str, ...] = (),
+    ) -> None:
+        """Record acceptance and the coordinator's persistence acknowledgement.
+
+        The Future resolves only once the Parent has stored the message. This
+        is a delivery receipt, not evidence the Parent Model has read it.
+        Status writes survive a closed watcher and keep the file's lease alive.
+        """
+        identity = (
+            f"Delivery `{delivery_id}`; Run `{run_id}`; "
+            f"Parent `{parent.project_id or ''}/{parent.agent_id}/{parent.session_id}`."
+        )
+        if answer_ids:
+            identity += " Answers: " + ", ".join(f"`{value}`" for value in answer_ids) + "."
+
+        def record(status: str, *, pending: bool) -> None:
+            self._flush()
+            text = _heading(_utc_timestamp(), "Parent delivery") + identity + f"\n{status}\n\n"
+            _WRITER.hand_off(
+                partial(self._write_delivery, delivery_id, text, pending=pending), limit=_NO_LIMIT
+            )
+
+        def finished(done: asyncio.Future[None]) -> None:
+            if done.cancelled():
+                status = "Cancelled before delivery was confirmed."
+            elif error := done.exception():
+                status = f"Delivery failed: {error}"
+            else:
+                status = "Delivered: stored in the Parent Session."
+            record(status, pending=False)
+
+        record("Pending: submitted for delivery to the Parent Session.", pending=True)
+        delivery.add_done_callback(finished)
+
+    def _write_delivery(self, delivery_id: str, text: str, *, pending: bool) -> None:
+        """Write a status and update its protection, on the writer thread."""
+        key = f"delivery:{delivery_id}"
+        if pending:
+            self._hold_lease(key)
+        self._append(text)
+        if not pending:
+            self._release_lease(key)
+
     async def drain(self) -> None:
         """Wait until the text produced so far is on disk.
 
@@ -193,7 +246,7 @@ class SubAgentActivity:
         if previous is not None:
             await asyncio.wait({previous})
         self._open = True
-        _WRITER.hand_off(self._reopen_lease, limit=_NO_LIMIT)
+        _WRITER.hand_off(partial(self._hold_lease, run.id), limit=_NO_LIMIT)
         assistant_open = False
         assistant_streamed = False
         outcome: tuple[str, str] | None = None
@@ -261,7 +314,7 @@ class SubAgentActivity:
                 error,
             )
         finally:
-            self._close()
+            self._close(run.id)
 
     def _write(self, text: str, *, kept: bool) -> None:
         """Buffer text for the writer; it is handed off within the flush interval."""
@@ -298,13 +351,21 @@ class SubAgentActivity:
                 "Sub-agent activity output dropped: its writer is behind (path=%s)", self.path
             )
 
-    def _close(self) -> None:
+    def _close(self, run_id: str) -> None:
         """Hand off the remaining text and the lease completion; ignore later text."""
         if not self._open:
             return
         self._flush()
         self._open = False
-        _WRITER.hand_off(self._finish_lease, limit=_NO_LIMIT)
+        _WRITER.hand_off(partial(self._release_lease, run_id), limit=_NO_LIMIT)
+
+    def _hold_lease(self, key: str) -> None:
+        self._lease_users.add(key)
+        self._reopen_lease()
+
+    def _release_lease(self, key: str) -> None:
+        self._lease_users.discard(key)
+        self._finish_lease()
 
     def _reopen_lease(self) -> None:
         """Protect the file again for the next followed Run, on the writer thread."""
@@ -317,7 +378,7 @@ class SubAgentActivity:
 
     def _finish_lease(self) -> None:
         """Start the file's retention, on the writer thread."""
-        if self._lease is not None:
+        if self._lease is not None and not self._lease_users:
             self._lease.finish()
             self._lease = None
 
