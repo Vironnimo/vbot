@@ -88,13 +88,14 @@ def test_interrupted_archives_are_rolled_back(world: ArchiveWorld, tmp_path: Pat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("payload", ["partial-copy", "only-copy"])
+@pytest.mark.parametrize("payload", ["partial-copy", "only-copy", "config-only", "changed-file"])
 async def test_an_interrupted_archive_beside_an_intact_source_never_loses_either(
     world: ArchiveWorld, payload: str
 ) -> None:
     agents, ledger = world.agents, world.sessions.archive_ledger
     agents.create("coder", "Coder")
     home = world.data_dir / "agents" / "coder"
+    (home / "workspace" / "only.txt").write_text("irreplaceable", encoding="utf-8")
     ref = ledger.begin(
         ARCHIVE_KIND_AGENT,
         subject_id="coder",
@@ -112,7 +113,14 @@ async def test_an_interrupted_archive_beside_an_intact_source_never_loses_either
         # The archive failed and its files could not go back; a new Agent then took the id.
         copy.parent.mkdir(parents=True)
         os.replace(home, copy)
-        agents.create("coder", "Newcomer")
+        if payload == "only-copy":
+            agents.create("coder", "Newcomer")
+        else:
+            home.mkdir()
+            shutil.copyfile(copy / "agent.json", home / "agent.json")
+            if payload == "changed-file":
+                shutil.copytree(copy / "workspace", home / "workspace")
+                (home / "workspace" / "only.txt").write_text("new contents", encoding="utf-8")
 
     world.service.recover()
 
@@ -122,7 +130,7 @@ async def test_an_interrupted_archive_beside_an_intact_source_never_loses_either
         assert (listings, copy.exists()) == ((), False)
     else:
         # The old Agent's only copy stays, as a recovered entry under the same id.
-        assert agents.get("coder").name == "Newcomer"
+        assert agents.get("coder").name == ("Newcomer" if payload == "only-copy" else "Coder")
         [listing] = listings
         assert (listing.entry.entry_id, listing.entry.origin, listing.label) == (
             ref.entry_id,
@@ -130,6 +138,45 @@ async def test_an_interrupted_archive_beside_an_intact_source_never_loses_either
             "Coder",
         )
         assert (copy / "agent.json").is_file()
+        assert (copy / "workspace" / "only.txt").read_text(encoding="utf-8") == "irreplaceable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "planned"),
+    [("agent", False), ("agent", True), ("project", False)],
+    ids=["agent-old-plan", "agent-current-plan", "project"],
+)
+async def test_restore_recovery_rewrites_a_moved_tree_under_its_new_id(
+    world: ArchiveWorld, tmp_path: Path, kind: str, planned: bool
+) -> None:
+    sessions, ledger = world.sessions, world.sessions.archive_ledger
+    if kind == "agent":
+        agent = agent_with_session(world, "original")
+        session_id = agent.current_session_id
+        entry_id = (await world.service.archive_agent("original")).entry_id
+    else:
+        world.projects.create("original", "Original", tmp_path / "repo")
+        session_id = sessions.create("coder", project_id="original").id
+        entry_id = (await world.service.archive_project("original")).entry_id
+    plan: dict[str, Any] = {"target_id": "restored", "strip_channel_keys": True}
+    if planned and kind == "agent":
+        plan.update(workspace=None, root_project_id=None)
+    ledger.begin_restore(entry_id, plan)
+    payload = world.payload(entry_id, kind)
+    target = world.data_dir / f"{kind}s" / "restored"
+    os.replace(payload, target)
+    world.service.recover()
+    world.service.recover()
+    assert ledger.entry(entry_id) is None
+    if kind == "agent":
+        restored = world.agents.get("restored")
+        assert restored.current_session_id == session_id
+        assert restored.workspace == str(target / "workspace")
+        assert sessions.exists(SessionAddress(None, "restored", session_id))
+    else:
+        assert world.projects.get("restored").project_id == "restored"
+        assert sessions.exists(SessionAddress("restored", "coder", session_id))
 
 
 @pytest.mark.asyncio

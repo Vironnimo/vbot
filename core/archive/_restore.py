@@ -28,7 +28,7 @@ from core.archive._types import (
     RestoreProblem,
 )
 from core.archive.errors import ArchiveNotRestorableError, ArchiveRestoreConflictError
-from core.projects import Project
+from core.projects import Project, ProjectError
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_PROJECT,
@@ -237,7 +237,7 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
         return "rolled_back"
     plan = entry.facts.get("restore_plan")
     config_problem: str | None = None
-    if agent and isinstance(plan, Mapping) and "workspace" in plan:
+    if agent:
         # A crash after the tree move may precede the config rewrite. Replay it
         # through the Agent owner before making the Sessions live, keeping their
         # current pointer and the planned Workspace/default Project intact.
@@ -245,10 +245,19 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
             services.agents.complete_restore_files(
                 target,
                 source_id=entry.subject_id,
-                workspace=plan["workspace"],
-                root_project_id=plan.get("root_project_id"),
+                workspace=plan.get("workspace") if isinstance(plan, Mapping) else None,
+                root_project_id=(
+                    plan.get("root_project_id", entry.facts.get("root_project_id"))
+                    if isinstance(plan, Mapping)
+                    else entry.facts.get("root_project_id")
+                ),
             )
         except AgentError as error:
+            config_problem = str(error)
+    else:
+        try:
+            services.projects.complete_restore_files(target, source_id=entry.subject_id)
+        except ProjectError as error:
             config_problem = str(error)
     if config_problem is not None:
         problem = config_problem

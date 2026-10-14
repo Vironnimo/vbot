@@ -347,6 +347,34 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
 
 
 @pytest.mark.asyncio
+async def test_restoring_a_parent_under_a_new_session_id_keeps_its_children(
+    world: ArchiveWorld,
+) -> None:
+    agent = agent_with_session(world, "coder")
+    parent = SessionAddress(None, "coder", agent.current_session_id)
+    sessions = world.sessions
+    link = {"agent_id": "coder", "session_id": parent.session_id, "run_id": "parent-run"}
+    child = sessions.create("coder", session_id="child").address
+    archived_child = sessions.create("coder", session_id="archived-child").address
+    for address in (child, archived_child):
+        sessions.set_metadata(address, {"subagent_parent": link})
+    child_entry = await world.service.archive_session(archived_child)
+    entry = await world.service.archive_session(parent)
+    sessions.create("coder", session_id=parent.session_id)
+    new_child = sessions.create("coder", session_id="new-child").address
+    sessions.set_metadata(new_child, {"subagent_parent": link})
+
+    await world.service.restore(entry.entry_id, target_id="restored")
+
+    renamed = SessionAddress(None, "coder", "restored")
+    assert sessions.subagent_children(renamed) == [child]
+    assert sessions.subagent_children(parent) == [new_child]
+    await world.service.restore(child_entry.entry_id)
+    assert sessions.subagent_children(renamed) == [child, archived_child]
+    assert sessions.get_metadata(child)["subagent_parent"]["run_id"] == "parent-run"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["session", "agent", "project"])
 async def test_archiving_only_a_subagent_keeps_its_area_until_the_root_is_archived(
     world: ArchiveWorld, tmp_path: Path, kind: str

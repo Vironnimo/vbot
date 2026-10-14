@@ -8,6 +8,7 @@ logged and tried again at the next start, and never stops the start itself.
 
 from __future__ import annotations
 
+import stat
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,7 +34,7 @@ from core.sessions import (
     ArchiveEntry,
     ArchiveTree,
 )
-from core.utils.file_status import exists_strict, is_dir_strict
+from core.utils.file_status import exists_strict, is_dir_strict, is_link_status
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp
 from core.utils.tree_move import move_tree, remove_tree
@@ -42,9 +43,6 @@ if TYPE_CHECKING:
     from core.archive.archive import ArchiveServices
 
 _LOGGER = get_logger("archive")
-
-# The configuration file that tells an Agent or Project payload tree apart from another one.
-_CONFIG_FILES = {ARCHIVE_TREE_AGENT: "agent.json", ARCHIVE_TREE_PROJECT: "project.json"}
 
 
 def recover(services: ArchiveServices) -> bool:
@@ -129,11 +127,10 @@ def _roll_back_archive(services: ArchiveServices, entry: ArchiveEntry) -> bool:
     """Undo an interrupted archive and delete its entry; its Sessions never left.
 
     A payload tree whose source path is free moves back. A payload tree beside
-    an intact source is a partial copy that an interrupted move between volumes
-    left, and is removed. Only when its configuration file differs from the
-    source's did a new Agent or Project take the id after the archive failed:
-    the payload is then the old one's only copy, so it stays and is adopted as a
-    recovered entry.
+    a source is removed only when every payload file is also there, byte for
+    byte. A restored configuration alone cannot establish that the source is
+    complete: snapshots omit Workspace files. Unproven copies stay and are
+    adopted as recovered entries.
     """
     archive_root = services.data_dir / ARCHIVE_ROOT
     kept: list[str] = []
@@ -148,7 +145,7 @@ def _roll_back_archive(services: ArchiveServices, entry: ArchiveEntry) -> bool:
         if not exists_strict(source, follow_symlinks=False):
             source.parent.mkdir(parents=True, exist_ok=True)
             move_tree(payload, source)
-        elif _partial_copy(payload, source, tree.role):
+        elif _partial_copy(payload, source):
             remove_tree(payload, within=archive_root)
         else:
             kept.append(tree.path)
@@ -161,7 +158,7 @@ def _roll_back_archive(services: ArchiveServices, entry: ArchiveEntry) -> bool:
         prune_empty_parents(services, stored_path(services, tree.path))
     if kept:
         _LOGGER.warning(
-            "Interrupted archive undone; a new %s took the id, so the archived files stay "
+            "Interrupted archive undone; the live %s may lack archived files, which stay "
             "for a recovered entry (entry=%s subject=%s paths=%s)",
             entry.kind,
             entry.entry_id,
@@ -178,16 +175,23 @@ def _roll_back_archive(services: ArchiveServices, entry: ArchiveEntry) -> bool:
     return True
 
 
-def _partial_copy(payload: Path, source: Path, role: str) -> bool:
-    """Whether a payload tree beside its intact source is an unfinished copy of it."""
-    name = _CONFIG_FILES.get(role)
-    if name is None:
-        return False
-    copied = payload / name
+def _partial_copy(payload: Path, source: Path) -> bool:
+    """Prove every payload entry exists unchanged in the source, without following links."""
     try:
-        if not exists_strict(copied):
-            return True
-        return copied.read_bytes() == (source / name).read_bytes()
+        copied, original = payload.lstat(), source.lstat()
+        if is_link_status(copied) or is_link_status(original):
+            return False
+        if stat.S_ISDIR(copied.st_mode) and stat.S_ISDIR(original.st_mode):
+            return all(_partial_copy(child, source / child.name) for child in payload.iterdir())
+        if not (stat.S_ISREG(copied.st_mode) and stat.S_ISREG(original.st_mode)):
+            return False
+        if copied.st_size != original.st_size:
+            return False
+        with payload.open("rb") as left, source.open("rb") as right:
+            while chunk := left.read(1024 * 1024):
+                if chunk != right.read(len(chunk)):
+                    return False
+            return right.read(1) == b""
     except OSError:
         # What cannot be compared is kept.
         return False
