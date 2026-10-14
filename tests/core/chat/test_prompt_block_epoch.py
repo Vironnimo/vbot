@@ -52,10 +52,10 @@ class _PinStore:
 
 def test_pin_and_note_payloads_round_trip_with_their_entry_order() -> None:
     blocks = {
-        "tool:project": _catalog(("zeta", "- zeta"), ("alpha", "- alpha"), frame="## Projects"),
+        "tool:catalog": _catalog(("zeta", "- zeta"), ("alpha", "- alpha"), frame="## Projects"),
         "tool:bash": RenderedBlock("## Shell"),
     }
-    pin = PromptBlockPin.start(blocks, order=("core:runtime", "tool:project", "tool:bash"))
+    pin = PromptBlockPin.start(blocks, order=("core:runtime", "tool:catalog", "tool:bash"))
     change = plan_prompt_block_change(pin, [], {"tool:bash": RenderedBlock("## Shell\n\nKeys")})
 
     assert PromptBlockPin.from_payload(_stored(pin.to_payload())) == pin

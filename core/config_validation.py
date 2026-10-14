@@ -58,6 +58,7 @@ class JsonValidationReport:
 class _ValidatedDocument:
     report: JsonValidationReport
     data: Any = None
+    read_error: OSError | None = None
 
 
 def validate_json_file(
@@ -95,7 +96,9 @@ def load_validated_json_file(
     document = _load_and_validate_json_file(Path(file_path), validator, missing_ok=missing_ok)
     if not document.report.ok:
         details = "; ".join(format_report_diagnostics(document.report))
-        raise JsonConfigValidationError(f"{document.report.file_path}: {details}")
+        raise JsonConfigValidationError(
+            f"{document.report.file_path}: {details}"
+        ) from document.read_error
     if not document.report.exists:
         return missing_default
     return document.data
@@ -315,5 +318,6 @@ def _unreadable_document(file_path: Path, error: OSError) -> _ValidatedDocument:
             file_path=file_path,
             exists=True,
             diagnostics=(error_diagnostic("$", f"Cannot read file: {error}"),),
-        )
+        ),
+        read_error=error,
     )

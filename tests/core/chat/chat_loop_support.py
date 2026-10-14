@@ -528,15 +528,21 @@ class StubPrompts:
         )
         return PinnedSkillCatalog(catalog_text=f"catalog:{len(skills)}")
 
-    def render_project_skills(self, project_name: str, skills: Any) -> str:
+    def render_project_skills(self, project_name: str, skills: Any, *, tool_available: Any) -> str:
         if not skills:
             return ""
-        lines = [f"Skills from project '{project_name}' — load one by name with the `skill` Tool:"]
+        guidance = " - load one by name with the `skill` Tool" if tool_available("skill") else ""
+        lines = [f"Skills from Project '{project_name}'{guidance}:"]
         lines.extend(f"- {skill.name}: {skill.description} ({skill.path})" for skill in skills)
         return "\n".join(lines)
 
     def render_project_files(
-        self, project_context: Any, *, tool_available: Any, on_read: Any = None
+        self,
+        project_context: Any,
+        *,
+        tool_available: Any,
+        on_read: Any = None,
+        on_issue: Any = None,
     ) -> str:
         del tool_available
         self.render_project_files_calls.append(project_context)

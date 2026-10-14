@@ -361,13 +361,13 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     tmp_path: Path,
     partial_inventory: bool,
 ) -> None:
-    # The registered Projects, the Sub-Agent targets and the Agent's Channels render
-    # once per prompt epoch. One of each added mid-epoch leaves the System Prompt
-    # byte-identical and reaches the Model at the next Run's start as one System
-    # Reminder; a Run after that announces nothing new.
+    # Project choices live in the Tool definition; Sub-Agent targets and Channels
+    # live in prompt blocks. Adding one of each preserves both pinned surfaces and
+    # announces the changes once through their respective change mechanism.
     from types import SimpleNamespace
 
     from core.channels import ChannelConfig
+    from core.chat._tool_epoch import tool_change_from_note
     from core.projects import ProjectStore
     from core.prompts import BlockDefinition
     from core.prompts.pinned_context import PINNED_DYNAMIC_BLOCKS_SLOT, PINNED_SKILL_CATALOG_SLOT
@@ -377,7 +377,6 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     from core.tools.project import register_project_tool
     from core.tools.subagent import register_subagent_tools
     from core.tools.tools import ToolPromptBlockRegistry
-    from core.utils.paths import model_path
     from tests.core.chat.chat_loop_support import history
     from tests.core.prompts.prompts_test_support import _agent, _manager
 
@@ -388,9 +387,7 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     targets = [SubAgentPromptTarget(agent_id="reviewer", name="Reviewer", description="")]
     tools = ToolRegistry()
     prompt_blocks = ToolPromptBlockRegistry()
-    register_project_tool(
-        tools, projects, lambda: cast(Any, None), lambda _id: [], FileReadState(), prompt_blocks
-    )
+    register_project_tool(tools, projects, lambda: cast(Any, None), lambda _id: [], FileReadState())
     register_subagent_tools(
         tools,
         cast(
@@ -481,15 +478,11 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     assert "ORIGINAL_INCLUDE" in systems[0]
     assert "STATIC_SKILLS:PINNED_SKILL_SENTINEL" in systems[0]
     assert runtime.file_read_state.check_stale("s1", included.resolve()) == StaleReason.MODIFIED
-    assert '<project id="vbot"' in systems[0] and "`reviewer`" in systems[0]
+    assert '<project id="vbot"' not in systems[0] and "`reviewer`" in systems[0]
     assert "- tg-private: telegram" in systems[0]
     assert '<project id="web"' not in systems[0] and "`writer`" not in systems[0]
     assert "tg-group" not in systems[0]
-    web_path = model_path((tmp_path / "web").resolve())
-    web = f'<project id="web" name="Web" project_path="{web_path}" />'
     announcement = (
-        "Registered Projects changed since your System Prompt listed them.\n"
-        f"Added:\n{web}\n\n"
         "The Agent ids under Sub-Agents changed since your System Prompt listed them.\n"
         "Added:\n- `writer` — Writer — Drafts.\n\n"
         "Your configured channels changed since your System Prompt listed them.\n"
@@ -501,9 +494,21 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
         if is_prompt_block_change_note(message)
     ]
     assert len(notes) == 1
+    changes = [tool_change_from_note(m) for m in history(runtime, "s1", agent.id)]
+    assert [(change.change, change.tool) for change in changes if change is not None] == [
+        ("changed", "project")
+    ]
+    first_tools = adapter.requests[0]["kwargs"]["tools"]
+    assert all(request["kwargs"]["tools"] == first_tools for request in adapter.requests)
+    project_definition = next(t for t in first_tools if t["name"] == "project")
+    assert (
+        "- vbot: vBot"
+        in project_definition["parameters"]["properties"]["project_id"]["description"]
+    )
     for request in adapter.requests[2:]:
         sent = "\n".join(str(message["content"]) for message in request["messages"])
         assert sent.count(announcement) == 1
+        assert sent.count("- web: Web") == 1
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+import errno
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -11,38 +12,19 @@ from typing import Any, cast
 import pytest
 
 from core.projects import ProjectStore
-from core.tools import FileReadState, StaleReason, ToolContext, ToolRegistry
+from core.prompts.blocks import INLINE_FILE_MAX_BYTES
+from core.tools import (
+    FileReadState,
+    StaleReason,
+    ToolContext,
+    ToolDefinitionProfileContext,
+    ToolRegistry,
+)
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.project import PROJECT_TOOL_NAME, register_project_tool
 from core.utils.paths import model_path
+from tests.core.prompts.prompts_test_support import _manager
 from tests.core.tools.tools_test_support import dispatch_as_executor
-
-
-class _Renderer:
-    def __init__(self) -> None:
-        # Whether the Tool result could point the Agent to `read`, per call.
-        self.read_offered: list[bool] = []
-
-    def render_project_files(
-        self, project_context: Any, *, tool_available: Any, on_read: Any = None
-    ) -> str:
-        self.read_offered.append(tool_available("read"))
-        blocks: list[str] = []
-        for name in project_context.auto_load:
-            path = (project_context.cwd / name).resolve()
-            if not path.is_file():
-                continue
-            if on_read is not None:
-                on_read(path)
-            blocks.append(f'<file name="{name}">\n{path.read_text(encoding="utf-8")}\n</file>')
-        return "\n".join(blocks)
-
-    def render_project_skills(self, project_name: str, skills: Sequence[Any]) -> str:
-        if not skills:
-            return ""
-        lines = [f"Skills from project '{project_name}':"]
-        lines.extend(f"- {skill.name}: {skill.description}" for skill in skills)
-        return "\n".join(lines)
 
 
 def _context(
@@ -70,10 +52,9 @@ def _registry(
     projects: ProjectStore,
     file_state: FileReadState | None = None,
     skills: list[Any] | None = None,
-    renderer: _Renderer | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
-    renderer = renderer or _Renderer()
+    renderer = _manager(projects.data_dir)
     register_project_tool(
         registry,
         projects,
@@ -134,15 +115,9 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
         "project_path": project_path,
         "content": data["content"],
     }
-    assert data["content"] == (
-        "Project Context loaded for 'vBot'. The files below are this Project's instructions: "
-        "follow them for all work in this Project. Your working directory, Workspace, and "
-        "permissions are unchanged, so use absolute paths for file Tools and set `workdir` to "
-        f"'{project_path}' on every `{SHELL_MODEL_NAME}` call.\n\n"
-        '<file name="AGENTS.md">\nFollow the Project rules.\n</file>\n'
-        '<file name="CLAUDE.md">\nClaude rules.\n</file>\n\n'
-        "Skills from project 'vBot':\n- review: Review changes."
-    )
+    assert data["content"].count("Follow the Project rules.") == 1
+    assert data["content"].count("Claude rules.") == 1
+    assert data["content"].count("- review: Review changes.") == 1
     assert model_path(skill_path) not in data["content"]
     assert file_state.check_stale("session-one", agents_file.resolve()) is None
     # The user sees where the Project lives and the context the Agent received.
@@ -182,20 +157,24 @@ def test_project_tool_lets_file_notices_name_read_only_when_the_run_can_call_it(
     repo.mkdir()
     projects = ProjectStore(tmp_path / "data")
     projects.create("vbot", "vBot", repo)
-    renderer = _Renderer()
+    agents_file = repo / "AGENTS.md"
+    agents_file.write_bytes(b"x" * (INLINE_FILE_MAX_BYTES + 1))
+    file_state = FileReadState()
     context = _context(
         tmp_path,
         tool_denial_resolver=lambda name: "Denied here." if name == denied_tool else None,
     )
 
     result = asyncio.run(
-        _registry(projects, renderer=renderer).dispatch(
-            context, {"project_id": "vbot"}, allowed_tools
-        )
+        _registry(projects, file_state).dispatch(context, {"project_id": "vbot"}, allowed_tools)
     )
 
     assert result["ok"] is True
-    assert renderer.read_offered == [read_offered]
+    content = result["data"]["content"]
+    assert "automatically loaded files" in content
+    assert ("`read` Tool" in content) is read_offered
+    assert result["data"]["note"]
+    assert file_state.check_stale("session-one", agents_file.resolve()) is StaleReason.NEVER_READ
 
 
 def test_project_tool_returns_context_for_bare_project(tmp_path: Path) -> None:
@@ -210,25 +189,19 @@ def test_project_tool_returns_context_for_bare_project(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     # No instruction files, so the result claims none.
-    assert data["content"] == (
-        "Project Context loaded for 'Empty'. Your working directory, Workspace, and "
-        "permissions are unchanged, so use absolute paths for file Tools and set `workdir` to "
-        f"'{model_path(repo.resolve())}' on every `{SHELL_MODEL_NAME}` call."
-    )
+    assert "Empty" in data["content"]
+    assert "Follow the files" not in data["content"]
+    assert "note" not in data
 
 
 def test_project_tool_rejects_unknown_project(tmp_path: Path) -> None:
     result = _call(tmp_path, ProjectStore(tmp_path / "data"), {"project_id": "missing"})
 
     assert result["ok"] is False
-    assert result["error"] == {
-        "code": "project_not_found",
-        "message": (
-            "Project not found: missing. No Projects are registered, so there is no Project "
-            "Context to load."
-        ),
-        "retryable": False,
-    }
+    assert result["error"]["code"] == "project_not_found"
+    assert result["error"]["retryable"] is False
+    assert '"missing"' in result["error"]["message"]
+    assert "No loadable Projects" in result["error"]["message"]
 
 
 @pytest.mark.parametrize("project_id", ["vBot", "VBOT", "the vbot project", "../vbot"])
@@ -238,20 +211,25 @@ def test_project_tool_never_guesses_a_project_and_names_the_ids(
     # A display name, another casing, or an invalid id is not a Project id: the
     # failure lists the exact ids instead of loading a near match.
     projects = ProjectStore(tmp_path / "data")
-    for key, name in (("vbot", "vBot"), ("docs", "Docs Site")):
+    for key, name in (
+        ("vbot", "vBot"),
+        ("docs", "Docs Site"),
+        ("alpha", "Alpha"),
+        ("beta", "Beta"),
+    ):
         (tmp_path / key).mkdir()
         projects.create(key, name, tmp_path / key)
 
     result = _call(tmp_path, projects, {"project_id": project_id})
 
-    assert result["error"] == {
-        "code": "project_not_found",
-        "message": (
-            f"Project not found: {project_id}. Use one of these registered Project ids "
-            "exactly: docs (Docs Site), vbot (vBot)."
-        ),
-        "retryable": False,
-    }
+    assert result["ok"] is False
+    assert result["error"]["code"] == "project_not_found"
+    assert project_id in result["error"]["message"]
+    assert "- vbot: vBot" in result["error"]["message"]
+    assert (
+        len([line for line in result["error"]["message"].splitlines() if line.startswith("- ")])
+        <= 3
+    )
 
 
 @pytest.mark.parametrize(
@@ -316,15 +294,21 @@ def test_project_tool_rejects_missing_or_empty_project_id(
     assert "project_id" in result["error"]["message"]
 
 
-def test_project_tool_rejects_unreachable_project_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize("is_file", [False, True], ids=["missing", "file"])
+def test_project_tool_rejects_unreachable_project_path(tmp_path: Path, is_file: bool) -> None:
     projects = ProjectStore(tmp_path / "data")
-    projects.create("missing", "Missing", tmp_path / "does-not-exist")
+    path = tmp_path / "not-a-directory"
+    projects.create("missing", "Missing", path)
+    if is_file:
+        path.write_text("file", encoding="utf-8")
 
     result = _call(tmp_path, projects, {"project_id": "missing"})
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "project_unavailable"
-    assert "no reachable Project path" in result["error"]["message"]
+    code = "project_path_not_directory" if is_file else "project_path_missing"
+    assert result["error"]["code"] == code
+    assert model_path(path) in result["error"]["message"]
+    assert "No new Project Context" in result["error"]["message"]
 
 
 def test_project_tool_refuses_a_project_run(tmp_path: Path) -> None:
@@ -349,7 +333,185 @@ def test_project_tool_does_not_stamp_missing_auto_load_file(tmp_path: Path) -> N
     result = _call(tmp_path, projects, {"project_id": "vbot"}, file_state=file_state)
 
     assert result["ok"] is True
+    assert "note" not in result["data"]
     assert (
         file_state.check_stale("session-one", (repo / "AGENTS.md").resolve())
         is StaleReason.NEVER_READ
     )
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_project_result_guidance_names_only_available_tools(
+    tmp_path: Path, available: bool
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo)
+    skill = SimpleNamespace(name="review", description="Review changes.")
+    registry = _registry(projects, skills=[skill])
+    allowed = ["project", "read", "bash", "skill"] if available else ["project"]
+
+    result = asyncio.run(registry.dispatch(_context(tmp_path), {"project_id": "vbot"}, allowed))
+
+    assert result["ok"] is True
+    content = result["data"]["content"]
+    assert "- review: Review changes." in content
+    assert ("`skill` Tool" in content) is available
+    assert (f"`{SHELL_MODEL_NAME}` call" in content) is available
+    assert ("absolute file paths" in content) is available
+    if available:
+        assert "For shell work in this Project" in content
+
+
+@pytest.mark.parametrize("problem", ["missing", "encoding", "directory", "denied", "io"])
+def test_project_load_keeps_readable_instructions_and_reports_omissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    good = repo / "AGENTS.md"
+    good.write_text("GOOD_INSTRUCTIONS", encoding="utf-8")
+    bad = repo / "other.md"
+    if problem == "encoding":
+        bad.write_bytes(b"\xff")
+    elif problem == "directory":
+        bad.mkdir()
+    elif problem in {"denied", "io"}:
+        bad.write_text("UNREAD_INSTRUCTIONS", encoding="utf-8")
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo, auto_load=["other.md"])
+    original = Path.open
+
+    def open_file(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == bad and problem in {"denied", "io"}:
+            raise OSError(errno.EACCES if problem == "denied" else errno.EIO, "RAW_OS_ERROR")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_file)
+    file_state = FileReadState()
+
+    result = _call(tmp_path, projects, {"project_id": "vbot"}, file_state=file_state)
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "loaded"
+    assert "GOOD_INSTRUCTIONS" in result["data"]["content"]
+    assert "UNREAD_INSTRUCTIONS" not in str(result)
+    note = result["data"]["note"]
+    assert model_path(bad) in note
+    expected = {
+        "missing": "does not exist",
+        "encoding": "not valid UTF-8",
+        "directory": "not a readable file",
+        "denied": "access was denied",
+        "io": "could not be read",
+    }
+    assert expected[problem] in note
+    assert "RAW_OS_ERROR" not in str(result)
+    assert "reload the Project" in note
+    assert file_state.check_stale("session-one", good.resolve()) is None
+    assert file_state.check_stale("session-one", bad.resolve()) is StaleReason.NEVER_READ
+    details = _registry(projects).display_for_call(
+        "project", {"project_id": "vbot"}, result=result
+    )["details"]
+    assert any(detail.get("level") == "warning" and detail["text"] == note for detail in details)
+
+
+@pytest.mark.parametrize(
+    ("problem", "location"),
+    [
+        ("invalid", "config"),
+        ("denied", "config"),
+        ("transient", "config"),
+        ("io", "config"),
+        ("internal", "config"),
+        ("denied", "cwd"),
+    ],
+)
+def test_project_load_failures_explain_recovery_without_claiming_a_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str, location: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo)
+    config = projects.data_dir / "projects" / "vbot" / "project.json"
+    if problem == "invalid":
+        config.write_text("{broken json", encoding="utf-8")
+    original = Path.read_text
+
+    def read_file(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path == config and location == "config" and problem not in {"invalid", "internal"}:
+            code = {"denied": errno.EACCES, "transient": errno.ETIMEDOUT, "io": errno.EINVAL}[
+                problem
+            ]
+            raise OSError(code, "RAW_OS_ERROR")
+        if path == config and problem == "internal":
+            raise RuntimeError("INTERNAL_DETAIL")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_file)
+    original_stat = os.stat
+
+    def stat_path(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(path, (str, Path)) and Path(path) == repo and location == "cwd":
+            raise PermissionError(errno.EACCES, "RAW_OS_ERROR")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat_path)
+
+    result = _call(tmp_path, projects, {"project_id": "vbot"})
+
+    assert result["ok"] is False
+    assert result["data"] is None
+    assert (
+        result["error"]["code"]
+        == {
+            "invalid": "project_configuration_invalid",
+            "denied": "project_access_denied",
+            "transient": "project_io_error",
+            "io": "project_io_error",
+            "internal": "project_load_failed",
+        }[problem]
+    )
+    message = result["error"]["message"]
+    assert "No new Project Context was loaded" in message
+    assert "vbot" in message
+    assert "RAW_OS_ERROR" not in message and "INTERNAL_DETAIL" not in message
+    assert result["error"]["retryable"] is (problem in {"transient", "internal"})
+
+
+def test_unavailable_project_catalog_is_not_an_empty_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", tmp_path / "repo")
+    config = projects.data_dir / "projects" / "vbot" / "project.json"
+    original = Path.read_text
+
+    def read_file(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path == config:
+            raise PermissionError(errno.EACCES, "RAW_OS_ERROR")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_file)
+    registry = _registry(projects)
+    definitions = registry.provider_definitions(
+        ["project"], profile_context=ToolDefinitionProfileContext("coder")
+    )
+    description = definitions[0]["parameters"]["properties"]["project_id"]["description"]
+    assert "unavailable" in description
+    assert "No loadable Projects" not in description
+
+    result = asyncio.run(
+        dispatch_as_executor(registry, _context(tmp_path), {"project_id": "unknown"})
+    )
+
+    assert result["error"]["code"] == "project_not_found"
+    assert "could not be read" in result["error"]["message"]
+    assert "No loadable Projects" not in result["error"]["message"]
+    monkeypatch.setattr(Path, "read_text", original)
+    recovered = registry.provider_definitions(
+        ["project"], profile_context=ToolDefinitionProfileContext("coder")
+    )
+    assert "- vbot: vBot" in recovered[0]["parameters"]["properties"]["project_id"]["description"]
