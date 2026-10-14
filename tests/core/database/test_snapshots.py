@@ -21,9 +21,11 @@ from core.database import (
     ANCHOR_CAPTURE,
     TRAILING_CAPTURE,
     Database,
+    DatabaseFormatError,
     DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
     MemberFrozenError,
+    Migration,
     SnapshotBarrier,
     SnapshotFacts,
     create_data_snapshot,
@@ -40,7 +42,9 @@ from core.database import (
     snapshot_root,
     snapshot_summaries,
 )
+from core.database import config_backups as config_backups_module
 from core.database import snapshots as snapshots_module
+from core.database.marker import begin_maintenance
 from core.database.snapshot_barrier import CAPTURE_ATTEMPTS, capture_members
 from core.database.snapshots import SNAPSHOT_HEALTH_FILE_NAME, SNAPSHOT_MANIFEST_NAME
 from core.json_documents import document_change
@@ -49,6 +53,7 @@ from tests.core.database.database_test_support import (
     NOTES_SCHEMA_SQL,
     add_note,
     add_notes,
+    frozen_members,
     manifest_payload,
     note_bodies,
     note_count,
@@ -69,6 +74,26 @@ def _specs(data_dir: Path) -> dict[str, Any]:
 def _status_snapshot_ids(data_dir: Path) -> list[str]:
     """The snapshots the status lists from their manifests, without rehashing."""
     return [item["snapshot_id"] for item in data_store_status(data_dir)["snapshots"]]
+
+
+@pytest.mark.parametrize("kind", ["snapshot", "configuration"])
+def test_a_capture_rechecks_maintenance_after_waiting_for_the_operation_lock(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    open_database(notes_spec(data_dir)).close()
+    module = snapshots_module if kind == "snapshot" else config_backups_module
+    acquire = module.acquire_operation_lock
+
+    def interrupted_ahead_of_capture(*args: Any, **kwargs: Any) -> Any:
+        begin_maintenance(data_dir, "config restore interrupted")
+        return acquire(*args, **kwargs)
+
+    monkeypatch.setattr(module, "acquire_operation_lock", interrupted_ahead_of_capture)
+    capture = (
+        create_data_snapshot if kind == "snapshot" else config_backups_module.capture_config_backup
+    )
+    with pytest.raises(DatabaseFormatError):
+        capture(data_dir, reason="test")
 
 
 def test_a_snapshot_captures_every_registered_database_as_one_standalone_member_each(
@@ -245,6 +270,36 @@ async def test_a_capture_waits_for_compound_mutations_in_flight_and_holds_off_ne
         in_flight.result(timeout=10.0)
         capturing.result(timeout=10.0)
     assert order == ["mutation", "capture", "new mutation"]
+
+
+@pytest.mark.parametrize("change", ["migration", "after_open"])
+def test_reopening_a_database_holds_open_time_writes_during_a_snapshot(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    spec = notes_spec(data_dir)
+    open_database(spec).close()
+
+    def write_on_open(connection: sqlite3.Connection) -> None:
+        connection.execute("INSERT INTO notes (body) VALUES ('on open')")
+
+    spec = notes_spec(
+        data_dir,
+        migrations=(Migration("notes.open", apply=write_on_open),) if change == "migration" else (),
+        after_open=write_on_open if change == "after_open" else None,
+    )
+    with ThreadPoolExecutor(max_workers=1) as threads:
+        with frozen_members(data_dir, monkeypatch) as freeze:
+            opening = threads.submit(open_database, spec)
+            assert freeze.waiting.acquire(timeout=2)
+            assert not opening.done()
+            with sqlite3.connect(spec.path) as connection:
+                assert connection.execute("SELECT COUNT(*) FROM notes").fetchone()[0] == 0
+        database = opening.result(timeout=2)
+        try:
+            assert note_bodies(database) == ["on open"]
+        finally:
+            database.close()
+    assert freeze.capture is not None and freeze.capture.attempts == 1
 
 
 def test_a_capture_freezes_held_members_until_the_anchor_is_copied(data_dir: Path) -> None:

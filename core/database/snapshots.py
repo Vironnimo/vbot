@@ -818,6 +818,7 @@ def create_data_snapshot(
     root = snapshot_root(data_dir)
     partial: Path | None = None
     try:
+        require_no_maintenance(data_dir)
         if cancelled is not None and cancelled():
             raise _SnapshotCancelledError
         # Registrations may have changed while this attempt waited for the lock.
