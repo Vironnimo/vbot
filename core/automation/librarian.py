@@ -114,7 +114,7 @@ from core.statistics.skills import SkillUse
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
@@ -405,6 +405,7 @@ class _Library:
     archived_revisions: tuple[int, ...]
     candidates: tuple[LibrarianCandidate, ...]
     fingerprint: str
+    latest_revision: int = 0
 
 
 @dataclass
@@ -600,14 +601,9 @@ class LibrarianService:
         active = self._active.get(agent_id)
         if active is None:
             state = state.settled()
-        passes = list(state.passes)
-        last_pass = state.last_pass
+        passes = await _LIBRARIAN_WORKERS.run(self._reported_passes, agent_id, state.passes)
+        last_pass = passes[0] if passes else None
         changes = await _LIBRARIAN_WORKERS.run(self._pass_revisions, agent_id, last_pass)
-        if last_pass is not None and last_pass.outcome == "interrupted":
-            # An interrupted pass never counted what its consolidation Run did.
-            created, changed, merged = _counts(changes, last_pass.run_id)
-            last_pass = replace(last_pass, created=created, changed=changed, merged=merged)
-            passes[0] = last_pass
         problem, blocked = await _LIBRARIAN_WORKERS.run(self._blocked, agent_id, agent)
         unscheduled = blocked or (None if settings["enabled"] else "schedule_disabled")
         next_due = None
@@ -668,6 +664,9 @@ class LibrarianService:
         # An unreadable state document refuses here, before any Skill changes.
         await _LIBRARIAN_WORKERS.run(self._read_state, agent_id)
         problem, reason = await _LIBRARIAN_WORKERS.run(self._blocked, agent_id, agent)
+        # Shutdown can finish while admission waits for the blocking checks.
+        if self._closed:
+            raise LibrarianBusyError("The Librarian is shutting down.")
         if reason is not None:
             raise LibrarianUnavailableError(_unavailable_message(agent_id, reason, problem))
         if agent_id in self._active:
@@ -773,7 +772,7 @@ class LibrarianService:
         if usage is None:
             usage = await self._skill_usage()
         # Checked again after the last await, so no Run or manual pass starts in between.
-        if self._busy(agent_id):
+        if self._closed or self._busy(agent_id):
             return usage
         active = self._begin(agent_id, "schedule", agent)
         active.usage = usage
@@ -854,7 +853,7 @@ class LibrarianService:
                 state = state.settled()
             passes.extend(
                 {"agent_id": agent.id, "agent_name": agent.name, **record.to_dict()}
-                for record in state.passes
+                for record in self._reported_passes(agent.id, state.passes)
             )
         passes.sort(key=lambda record: str(record["started_at"]), reverse=True)
         return problem, passes[:LIBRARIAN_OVERVIEW_PASSES]
@@ -904,6 +903,46 @@ class LibrarianService:
             active.usage = await self._skill_usage()
         usage = _library_usage(active.usage, agent_id, receivers)
         cutoff = self._clock() - timedelta(days=settings["archive_after_days"])
+        library = await settle_before_cancelling(
+            self._age_and_record(agent_id, active, usage, scheduled, cutoff)
+        )
+        fingerprint = active.base.consolidation_fingerprint
+        error = None
+        if not settings["consolidate"]:
+            active.consolidation = "disabled"
+        elif len(library.candidates) < 2:
+            active.consolidation = "too_few"
+        elif library.fingerprint == fingerprint:
+            active.consolidation = "unchanged"
+        else:
+            error = await self._consolidate(agent_id, library, active)
+            if active.consolidation == "ran":
+                fingerprint = await _LIBRARIAN_WORKERS.run(
+                    self._fingerprint_now, agent_id, usage, library.latest_revision, active.run_id
+                )
+        finished = await self._finish(agent_id, active, "completed", fingerprint, error)
+        _LOGGER.info(
+            "Librarian pass completed (agent=%s trigger=%s archived=%d candidates=%d "
+            "consolidation=%s created=%d changed=%d merged=%d)",
+            agent_id,
+            active.trigger,
+            finished.archived,
+            finished.candidates,
+            finished.consolidation,
+            finished.created,
+            finished.changed,
+            finished.merged,
+        )
+
+    async def _age_and_record(
+        self,
+        agent_id: str,
+        active: _ActivePass,
+        usage: Mapping[str, SkillUse],
+        scheduled: frozenset[str],
+        cutoff: datetime,
+    ) -> _Library:
+        """Keep archives, invalidation and their pass record together on shutdown."""
         library = await _LIBRARIAN_WORKERS.run(
             self._age_library, agent_id, usage, scheduled, cutoff
         )
@@ -918,31 +957,7 @@ class LibrarianService:
                 len(library.archived_names),
             )
             await self._write_progress(agent_id, active)
-        fingerprint = active.base.consolidation_fingerprint
-        error = None
-        if not settings["consolidate"]:
-            active.consolidation = "disabled"
-        elif len(library.candidates) < 2:
-            active.consolidation = "too_few"
-        elif library.fingerprint == fingerprint:
-            active.consolidation = "unchanged"
-        else:
-            error = await self._consolidate(agent_id, library, active)
-            if active.consolidation == "ran":
-                fingerprint = await _LIBRARIAN_WORKERS.run(self._fingerprint_now, agent_id, usage)
-        finished = await self._finish(agent_id, active, "completed", fingerprint, error)
-        _LOGGER.info(
-            "Librarian pass completed (agent=%s trigger=%s archived=%d candidates=%d "
-            "consolidation=%s created=%d changed=%d merged=%d)",
-            agent_id,
-            active.trigger,
-            finished.archived,
-            finished.candidates,
-            finished.consolidation,
-            finished.created,
-            finished.changed,
-            finished.merged,
-        )
+        return library
 
     async def _write_progress(self, agent_id: str, active: _ActivePass) -> None:
         """Record how far the pass got, as the record it has if vBot stops now."""
@@ -1030,31 +1045,39 @@ class LibrarianService:
             if archived:
                 records = self._authoring.records(root)
             candidates = librarian_candidates(self._authoring, root, usage=usage, records=records)
+            history = self._authoring.history(root, limit=_ALL_REVISIONS)
             return _Library(
                 tuple(archived),
                 tuple(revisions),
                 candidates,
-                _fingerprint(self._latest_revisions(root, candidates)),
+                _fingerprint(_latest_revisions(candidates, history)),
+                max((revision.id for revision in history), default=0),
             )
 
-    def _fingerprint_now(self, agent_id: str, usage: Mapping[str, SkillUse]) -> str:
-        """Fingerprint the candidates as a consolidation Run left them."""
-        with self._runtime.agents.lifecycle_guard():
+    def _fingerprint_now(
+        self,
+        agent_id: str,
+        usage: Mapping[str, SkillUse],
+        latest_revision: int,
+        run_id: str | None,
+    ) -> str | None:
+        """Fingerprint the result only if no outside writer changed the library.
+
+        A concurrent change may never have reached the Librarian. Leave the
+        fingerprint unset in that case so the next pass reviews it.
+        """
+        with self._runtime.agents.lifecycle_guard(), self._authoring.exclusive():
             root = self._skills_dir(agent_id)
             if not root.is_dir():
                 return _fingerprint({})
             candidates = librarian_candidates(self._authoring, root, usage=usage)
-            return _fingerprint(self._latest_revisions(root, candidates))
-
-    def _latest_revisions(
-        self, root: Path, candidates: Sequence[LibrarianCandidate]
-    ) -> dict[str, int]:
-        names = {candidate.name for candidate in candidates}
-        latest: dict[str, int] = {}
-        for revision in self._authoring.history(root, limit=_ALL_REVISIONS):
-            if revision.skill in names:
-                latest.setdefault(revision.skill, revision.id)
-        return {name: latest.get(name, 0) for name in names}
+            history = self._authoring.history(root, limit=_ALL_REVISIONS)
+            if any(
+                revision.id > latest_revision and not _by_run(revision, run_id)
+                for revision in history
+            ):
+                return None
+            return _fingerprint(_latest_revisions(candidates, history))
 
     async def _consolidate(
         self, agent_id: str, library: _Library, active: _ActivePass
@@ -1186,6 +1209,21 @@ class LibrarianService:
         except SkillAuthoringError:
             return []
 
+    def _reported_passes(
+        self, agent_id: str, passes: Sequence[LibrarianPass]
+    ) -> tuple[LibrarianPass, ...]:
+        """Reconstruct interrupted Run counts for every status and overview row."""
+        if not any(record.outcome == "interrupted" for record in passes):
+            return tuple(passes)
+        history = self._recorded_revisions(agent_id)
+        reported: list[LibrarianPass] = []
+        for record in passes:
+            if record.outcome == "interrupted":
+                created, changed, merged = _counts(history, record.run_id)
+                record = replace(record, created=created, changed=changed, merged=merged)
+            reported.append(record)
+        return tuple(reported)
+
 
 # A history limit that reads every revision of a home.
 _ALL_REVISIONS = 1_000_000
@@ -1260,6 +1298,18 @@ def _fingerprint(latest_revisions: Mapping[str, int]) -> str:
     """Fingerprint the candidates by name and latest revision id."""
     payload = json.dumps(sorted(latest_revisions.items()), separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _latest_revisions(
+    candidates: Sequence[LibrarianCandidate], history: Sequence[SkillRevision]
+) -> dict[str, int]:
+    """Return each candidate's newest revision from a newest-first history."""
+    names = {candidate.name for candidate in candidates}
+    latest: dict[str, int] = {}
+    for revision in history:
+        if revision.skill in names:
+            latest.setdefault(revision.skill, revision.id)
+    return {name: latest.get(name, 0) for name in names}
 
 
 def _next_due(state: LibrarianState, interval_days: int) -> str | None:
