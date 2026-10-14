@@ -105,7 +105,7 @@
           baselineKeepAwake = next?.general?.keep_awake === true;
           if (keepAwakeValue === submitted) keepAwakeValue = baselineKeepAwake;
         }
-        onCommit(next);
+        onCommit(next, field);
         return true;
       } catch (error) {
         onError(`${t('settings.saveError')} ${error.message}`);

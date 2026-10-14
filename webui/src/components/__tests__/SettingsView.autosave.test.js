@@ -6,6 +6,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
 
+import { dateTimePrefs } from '../../lib/dateTimePrefs.svelte.js';
+import { appearancePrefs } from '../../lib/appearancePrefs.svelte.js';
+
 import { createAutosaveCoordinator } from '../../lib/autosave.js';
 import {
   cleanupSettingsViewHarness,
@@ -14,6 +17,9 @@ import {
   getButton,
   getSettingsUpdateCalls,
   openSearchableDropdown,
+  openSimpleDropdown,
+  selectSimpleOption,
+  openSettingsSection,
   openSubAgentsPanel,
   openWebSearchPanel,
   resetSettingsViewHarness,
@@ -271,6 +277,78 @@ describe('SettingsView editor saving', () => {
       '50',
     ]);
   });
+
+  it.each(['appearance', 'timezone'])(
+    'keeps independent Settings saves when the %s response arrives last',
+    async (late) => {
+      const settings = settingsPayload();
+      settings.general.timezone = 'UTC';
+      settings.general.available_timezones = ['UTC', 'Europe/Berlin'];
+      const backend = createSettingsRpcMock({
+        settings,
+        settingsUpdate: (params, current) =>
+          params.server
+            ? { ...current, general: { ...current.general, ...params.server } }
+            : null,
+      });
+      const pending = Promise.withResolvers();
+      const onSettingsCommit = vi.fn();
+      let held = false;
+      rpcMock.mockImplementation(async (method, params) => {
+        const result = await backend(method, params);
+        if (
+          method === 'settings.update' &&
+          (late === 'appearance' ? params.appearance : params.server?.timezone)
+        ) {
+          held = true;
+          await pending.promise;
+        }
+        return result;
+      });
+      mountedComponent = mount(SettingsView, {
+        target: document.body,
+        props: { onSettingsCommit },
+      });
+      flushSync();
+      await openSettingsSection('General', 'appearance');
+      vi.useFakeTimers();
+      const chooseAppearance = async () => {
+        openSimpleDropdown('settings-appearance-chat-width');
+        selectSimpleOption('settings-appearance-chat-width', 'Wide');
+        await vi.advanceTimersByTimeAsync(800);
+        await flushAsyncUpdates();
+      };
+      const chooseTimezone = async () => {
+        const opening = openSearchableDropdown('settings-general-timezone');
+        await vi.advanceTimersByTimeAsync(0);
+        await opening;
+        selectSearchableOption('settings-general-timezone', 'Europe/Berlin');
+        await flushAsyncUpdates();
+      };
+      const first = late === 'appearance' ? chooseAppearance : chooseTimezone;
+      const second = late === 'appearance' ? chooseTimezone : chooseAppearance;
+      await first();
+      expect(held).toBe(true);
+      await second();
+      expect(onSettingsCommit).toHaveBeenCalledTimes(1);
+      pending.resolve();
+      await flushAsyncUpdates();
+      expect(onSettingsCommit).toHaveBeenCalledTimes(2);
+      const saved = onSettingsCommit.mock.lastCall[0];
+      expect(saved.general.timezone).toBe('Europe/Berlin');
+      expect(saved.appearance.chat_width).toBe('wide');
+      expect(dateTimePrefs.timeZone).toBe('Europe/Berlin');
+      expect(appearancePrefs.chatWidth).toBe('wide');
+      expect(
+        document.querySelector('#settings-general-timezone').textContent,
+      ).toContain('Europe/Berlin');
+      await vi.advanceTimersByTimeAsync(800);
+      expect(getSettingsUpdateCalls()).toHaveLength(2);
+      expect((await backend('settings.get')).general.timezone).toBe(
+        'Europe/Berlin',
+      );
+    },
+  );
 
   it.each([
     ['keep_awake', 'response', 'system', false, true],
