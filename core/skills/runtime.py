@@ -376,6 +376,44 @@ class SkillRuntime:
             if receivers - {owner_id}
         }
 
+    def agents_with_skill_access(self, owner_id: str, name: str) -> tuple[str, ...]:
+        """Snapshot access to an owner's exact package before a merge removes it."""
+        with self._agents.lifecycle_guard():
+            package = find_skill_package_dir(self.agent_skills_dir(owner_id), name)
+            if package is None:
+                return ()
+            document = (package / "SKILL.md").resolve()
+            receivers = self.shared_skill_receivers(owner_id).get(name, frozenset())
+            permitted: list[str] = []
+            for agent_id in sorted({owner_id, *receivers}):
+                agent = self._agents.find(agent_id)
+                if agent is None or agent.builtin is not None:
+                    continue
+                registry = self.skills_for(None, agent_id)
+                try:
+                    skill = registry.get(name)
+                except KeyError:
+                    continue
+                if skill.path == document and registry.is_allowed(name, agent.allowed_skills):
+                    permitted.append(agent_id)
+            return tuple(permitted)
+
+    def preserve_merged_skill_access(self, agent_id: str, target: str) -> None:
+        """Keep a prior grant after the Skill's share moved to its successor."""
+        with self._agents.lifecycle_guard():
+            agent = self._agents.get(agent_id)
+            changes: dict[str, Any] = {}
+            allowed = agent.allowed_skills
+            if allowed is not None and "*" not in allowed and target not in allowed:
+                changes["allowed_skills"] = [*allowed, target]
+            if target in agent.excluded_skills:
+                changes["excluded_skills"] = [
+                    name for name in agent.excluded_skills if name != target
+                ]
+            if changes:
+                self._agents.update(agent_id, **changes)
+                self.invalidate_agent_skills(agent_id)
+
     def background_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
         """Return why a background Run of *agent_id* cannot change each named Skill.
 

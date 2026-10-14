@@ -100,6 +100,7 @@ SKILL_MANAGE_ORPHANED_WARNING = (
     "the user can change or remove them."
 )
 _REFERENCE_LABELS = {
+    "agent": "Agent '{name}'",
     "shared": "the share with Agent '{name}'",
     "bootstrap": "Bootstrap job '{name}'",
     "cron": "Cron job '{name}'",
@@ -1374,7 +1375,7 @@ def register_skill_manage_tool(
         result = results[0]
         if result.get("ok") is True and target is None and failed:
             _note_orphaned(result, name, failed)
-        elif result.get("ok") is True and planned:
+        elif result.get("ok") is True and (planned or failed):
             _note_followed(result, name, target or name, planned, failed)
         return result
 

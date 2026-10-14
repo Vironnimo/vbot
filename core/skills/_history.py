@@ -72,7 +72,8 @@ EXTERNAL_ACTOR = "external"
 _KINDS = frozenset(
     {"baseline", "create", "change", "external", "archive", "restore", "revert", "pin", "unpin"}
 )
-SkillReferenceKind = Literal["shared", "bootstrap", "cron", "calendar"]
+SkillReferenceKind = Literal["shared", "bootstrap", "cron", "calendar", "agent"]
+# Agent-access failures are response-only references, never stored in ``followed``.
 _REFERENCE_KINDS = frozenset({"shared", "bootstrap", "cron", "calendar"})
 _ACTORS = frozenset({*SKILL_ACTORS, EXTERNAL_ACTOR})
 _CHANGES = frozenset({"created", "updated", "deleted"})
@@ -110,6 +111,8 @@ class SkillReference:
     owning Agent whose texts trigger the Skill (``id`` the job id, ``name`` the
     job name). ``calendar`` is the Calendar action of earlier vBot versions
     (``id`` the action id, ``name`` the event title), kept readable as history.
+    ``agent`` names an Agent whose access could not follow a merge; it is only
+    a failure result, never a persisted ``followed`` entry.
     """
 
     kind: SkillReferenceKind

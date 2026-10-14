@@ -8,6 +8,7 @@ import re
 import shutil
 from collections import Counter
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -375,17 +376,49 @@ async def test_shared_skill_mutations_target_the_package_that_activation_resolve
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection",
+    [
+        "all",
+        "selected",
+        "excluded_target",
+        "excluded_old",
+        "own_shadow",
+        "write_error",
+        "owner_write_error",
+    ],
+)
 async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
-    config: Config, tmp_path: Path
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str
 ) -> None:
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     try:
-        runtime.agents.create("receiver", "Receiver")
+        allowed = ["*"] if selection == "all" else ["deploy-web"]
+        excluded = {
+            "excluded_target": ["deploy"],
+            "excluded_old": ["deploy-web", "deploy"],
+        }.get(selection, [])
+        runtime.agents.create(
+            "receiver", "Receiver", allowed_skills=allowed, excluded_skills=excluded
+        )
+        runtime.agents.update("main", allowed_skills=["deploy-web"], excluded_skills=["deploy"])
         data_dir = runtime.storage.data_dir
         write_agent_skill(data_dir, "main", "deploy-web", "Deploy the web app.")
         write_agent_skill(data_dir, "main", "deploy", "Deploy anything.")
+        if selection == "own_shadow":
+            write_agent_skill(data_dir, "receiver", "deploy-web", "A different playbook.")
         runtime.skill_policy.set_shared("main", "deploy-web", shared=True, receivers=["receiver"])
+        if selection in {"write_error", "owner_write_error"}:
+            update = runtime.agents.update
+            failing_agent = "main" if selection == "owner_write_error" else "receiver"
+
+            def fail_receiver_update(agent_id: str, **changes: Any) -> Any:
+                if agent_id == failing_agent:
+                    raise OSError("fixture configuration write failure")
+                return update(agent_id, **changes)
+
+            monkeypatch.setattr(runtime.agents, "update", fail_receiver_update)
         job = await runtime.cron_service.create_job(
             agent_id="main",
             name="Nightly",
@@ -412,12 +445,51 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
             ["skill_manage"],
         )
 
-        assert result["data"]["content"].endswith(
-            "\nNote: These now use Skill 'deploy' in place of 'deploy-web': the share with "
-            "Agent 'Receiver'; Cron job 'Nightly'."
-        )
+        if selection in {"write_error", "owner_write_error"}:
+            assert result["ok"] is True
+            assert "\nWarning:" in result["data"]["content"]
+            failure_label = f"Agent '{runtime.agents.get(failing_agent).name}'"
+            assert failure_label in result["data"]["content"].split("\nWarning:", 1)[1]
+        else:
+            assert result["data"]["content"].endswith(
+                "\nNote: These now use Skill 'deploy' in place of 'deploy-web': the share with "
+                "Agent 'Receiver'; Cron job 'Nightly'."
+            )
         assert runtime.skill_policy.load().shared == {"main": {"deploy": frozenset({"receiver"})}}
         assert _names(runtime.skills_for(None, "receiver")) >= {"deploy"}
+        receiver = runtime.agents.get("receiver")
+        has_access = selection not in {"excluded_old", "own_shadow", "write_error"}
+        assert (
+            runtime.skills_for(None, "receiver").is_allowed("deploy", receiver.allowed_skills)
+            is has_access
+        )
+        loaded = await runtime.tools.dispatch(
+            replace(
+                context,
+                agent_id="receiver",
+                tool_name="skill",
+                allowed_skills=receiver.allowed_skills,
+            ),
+            {"name": "deploy"},
+            ["skill"],
+        )
+        assert loaded["ok"] is has_access
+        if has_access:
+            assert loaded["data"]["status"] == "loaded"
+        if selection == "all" or not has_access:
+            assert receiver.allowed_skills == allowed
+            assert receiver.excluded_skills == excluded
+        else:
+            assert receiver.allowed_skills == ["deploy-web", "deploy"]
+            assert receiver.excluded_skills == []
+        owner = runtime.agents.get("main")
+        if selection == "owner_write_error":
+            assert owner.allowed_skills == ["deploy-web"]
+            assert owner.excluded_skills == ["deploy"]
+        else:
+            assert owner.allowed_skills == ["deploy-web", "deploy"]
+            assert owner.excluded_skills == []
+            assert runtime.skills_for(None, "main").is_allowed("deploy", owner.allowed_skills)
         assert runtime.cron_service.get_job(job.id).prompt == "/deploy tonight"
         home = runtime.agent_skills_dir("main")
         [revision] = runtime.skill_authoring.history(home, "deploy-web", limit=1)
@@ -452,7 +524,7 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
         [revision] = runtime.skill_authoring.history(home, "deploy-old", limit=1)
         assert revision.followed == ()
     finally:
-        runtime.stop()
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio
