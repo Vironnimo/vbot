@@ -736,3 +736,11 @@ def _touch_state(connection: sqlite3.Connection, session_key: int) -> None:
         "UPDATE sessions SET state_revision = state_revision + 1 WHERE session_key = ?",
         (session_key,),
     )
+
+
+def subagent_reply_target(state: sqlite3.Row) -> str | None:
+    """Return the destination to stamp on newly persisted entries of this Session."""
+    if state["subagent_parent_id"] is None:
+        return None
+    metadata = _json_from_payload(str(state["metadata_json"]), "session metadata")
+    return "user" if metadata.get("subagent_reply_target") == "user" else "parent"

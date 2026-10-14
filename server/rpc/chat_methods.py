@@ -372,7 +372,7 @@ def _subagent_sessions(state: Any, address: SessionAddress) -> dict[SessionAddre
     """
     above: dict[SessionAddress, str] = {}
     # Breadth first: a Parent's Session is known before its children's.
-    for link in descendants(state.runtime.chat_sessions, address, stop_at_takeover=True):
+    for link in descendants(state.runtime.chat_sessions, address):
         direct = link.id if link.parent == address else above.get(link.parent)
         if direct is not None:
             above[link.session] = direct

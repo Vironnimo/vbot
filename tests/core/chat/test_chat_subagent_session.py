@@ -1,7 +1,7 @@
-"""Chat in a Sub-Agent Session: Parent framing, the user's takeover, and the Sub-Agent's Tools.
+"""Chat in a Sub-Agent Session: Parent framing, reply routing, and the Sub-Agent's Tools.
 
 A Session with a Parent link frames input from the Parent Agent as not from the
-user, records the user's first own message there as a takeover exactly once,
+user, selects the recipient for final answers from each external input,
 and offers ``message_parent``; an ordinary Session does none of that.
 """
 
@@ -17,14 +17,14 @@ from core.chat._queued_input import STEERING_SYSTEM_REMINDER
 from core.chat.messages import (
     PARENT_AGENT_INPUT_SYSTEM_REMINDER,
     PARENT_AGENT_STEERING_SYSTEM_REMINDER,
-    SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER,
+    SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER,
     ChatMessage,
 )
 from core.runs import RunAdmission, RunCancelledError, RunKind
 from core.sessions import (
     SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_REPLY_TARGET_META_KEY,
     SUBAGENT_SESSION_META_KEY,
-    SUBAGENT_TAKEN_OVER_AT_META_KEY,
     ChatSession,
     SessionAddress,
 )
@@ -43,7 +43,7 @@ pytestmark = pytest.mark.asyncio
 FRAMING = {
     PARENT_AGENT_INPUT_SYSTEM_REMINDER,
     PARENT_AGENT_STEERING_SYSTEM_REMINDER,
-    SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER,
+    SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER,
     STEERING_SYSTEM_REMINDER,
 }
 
@@ -84,8 +84,10 @@ def _runtime(tmp_path: Path, adapter: StubAdapter) -> Any:
     )
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-    runtime.takeovers = []
-    runtime.subagent_taken_over = runtime.takeovers.append
+    runtime.user_reply_switches = []
+    runtime.subagent_reply_to_user = lambda address, _message_id: (
+        runtime.user_reply_switches.append(address)
+    )
     return runtime
 
 
@@ -131,31 +133,40 @@ async def _parent_turn(runtime: Any, loop: Any, address: SessionAddress, content
     )
 
 
-async def test_parent_turns_are_framed_and_the_first_user_turn_takes_over_once(
+async def test_parent_and_user_input_switch_the_answer_destination(
     tmp_path: Path,
 ) -> None:
-    runtime = _runtime(tmp_path, StubAdapter(_answers(4)))
+    runtime = _runtime(tmp_path, StubAdapter(_answers(5)))
     address = _create(runtime, "one", linked=True)
     loop = build_chat_loop(runtime)
 
     await (await _parent_turn(runtime, loop, address, "Task")).wait()
-    assert runtime.chat_sessions.metadata_value(address, SUBAGENT_TAKEN_OVER_AT_META_KEY) is None
+    assert runtime.chat_sessions.metadata_value(address, SUBAGENT_REPLY_TARGET_META_KEY) == "parent"
     await (await loop.start_run("coder", "Hi", session_id="one")).wait()
     await (await loop.start_run("coder", "Again", session_id="one")).wait()
     await (await _parent_turn(runtime, loop, address, "Late")).wait()
+    await (await loop.start_run("coder", "Back", session_id="one")).wait()
 
     history = runtime.chat_sessions.get(address).load()
     assert _framing(history) == [
         ("Task", [PARENT_AGENT_INPUT_SYSTEM_REMINDER]),
-        ("Hi", [SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER]),
+        ("Hi", [SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER]),
         ("Again", []),
         ("Late", [PARENT_AGENT_INPUT_SYSTEM_REMINDER]),
+        ("Back", [SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER]),
     ]
-    assert runtime.chat_sessions.metadata_value(address, SUBAGENT_TAKEN_OVER_AT_META_KEY)
-    assert runtime.takeovers == [address]
+    assert runtime.chat_sessions.metadata_value(address, SUBAGENT_REPLY_TARGET_META_KEY)
+    assert runtime.user_reply_switches == [address, address]
+    assert [m.subagent_reply_target for m in history if m.role == "assistant"] == [
+        "parent",
+        "user",
+        "user",
+        "parent",
+        "user",
+    ]
 
 
-async def test_steered_input_is_framed_and_a_steered_user_message_takes_over(
+async def test_steered_input_is_framed_and_switches_the_answer_destination(
     tmp_path: Path,
 ) -> None:
     adapter = PausedAdapter(_answers(2))
@@ -183,12 +194,12 @@ async def test_steered_input_is_framed_and_a_steered_user_message_takes_over(
     assert _framing(history) == [
         ("Task", [PARENT_AGENT_INPUT_SYSTEM_REMINDER]),
         ("More", [PARENT_AGENT_STEERING_SYSTEM_REMINDER]),
-        ("Hi", [SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER, STEERING_SYSTEM_REMINDER]),
+        ("Hi", [SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER, STEERING_SYSTEM_REMINDER]),
     ]
-    assert runtime.takeovers == [address]
+    assert runtime.user_reply_switches == [address]
 
 
-async def test_a_run_cancelled_as_its_takeover_input_commits_keeps_the_takeover(
+async def test_a_run_cancelled_as_its_user_input_commits_keeps_the_answer_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = _runtime(tmp_path, StubAdapter(_answers(1)))
@@ -215,11 +226,11 @@ async def test_a_run_cancelled_as_its_takeover_input_commits_keeps_the_takeover(
     monkeypatch.undo()
 
     assert cancelled == [True]
-    assert runtime.chat_sessions.metadata_value(address, SUBAGENT_TAKEN_OVER_AT_META_KEY)
+    assert runtime.chat_sessions.metadata_value(address, SUBAGENT_REPLY_TARGET_META_KEY)
     await (await loop.start_run("coder", "Again", session_id="one")).wait()
     history = runtime.chat_sessions.get(address).load()
     assert _framing(history) == [
-        ("Hi", [SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER]),
+        ("Hi", [SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER]),
         ("Again", []),
     ]
 
@@ -237,8 +248,13 @@ async def test_message_parent_is_offered_only_in_a_subagent_session(tmp_path: Pa
     offered = [
         {tool["name"] for tool in request["kwargs"]["tools"]} for request in adapter.requests
     ]
+    assert all(
+        "subagent_reply_target" not in message
+        for request in adapter.requests
+        for message in request["messages"]
+    )
     assert MESSAGE_PARENT_TOOL_NAME in offered[0]
     assert MESSAGE_PARENT_TOOL_NAME not in offered[1]
-    # A user message in an ordinary Session is no takeover.
-    assert runtime.chat_sessions.metadata_value(plain, SUBAGENT_TAKEN_OVER_AT_META_KEY) is None
-    assert len(runtime.takeovers) == 1
+    # A user message in an ordinary Session does not change Sub-Agent routing.
+    assert runtime.chat_sessions.metadata_value(plain, SUBAGENT_REPLY_TARGET_META_KEY) is None
+    assert len(runtime.user_reply_switches) == 1

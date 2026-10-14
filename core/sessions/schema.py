@@ -242,6 +242,7 @@ CREATE TABLE entries (
   seq INTEGER NOT NULL CHECK (seq >= 0),
   role TEXT NOT NULL,
   entry_id TEXT NOT NULL,
+  subagent_reply_target TEXT,
   created_at TEXT NOT NULL,
   run_key INTEGER REFERENCES runs (run_key),
   model TEXT,

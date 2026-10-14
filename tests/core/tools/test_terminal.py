@@ -631,14 +631,14 @@ async def test_start_rejects_unresolvable_workdirs_before_spawn(
 class _SubAgents:
     """The caller's Sub-Agent Sessions at every depth, as the coordinator reports them.
 
-    The Sub-Agents in *taken_over* are ones whose Session the user took over.
+    The Sub-Agents in *answers_user* are ones whose Session the user took over.
     """
 
     def __init__(
-        self, sessions: Mapping[SessionAddress, str], taken_over: Sequence[str] = ()
+        self, sessions: Mapping[SessionAddress, str], answers_user: Sequence[str] = ()
     ) -> None:
         self.sessions = dict(sessions)
-        self.taken_over = set(taken_over)
+        self.answers_user = set(answers_user)
         self.callers: list[SessionAddress] = []
 
     async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
@@ -650,10 +650,10 @@ class _SubAgents:
                 agent_id=session.agent_id,
                 session=session,
                 parent_id=None,
-                status="taken over by the user" if subagent_id in self.taken_over else "working",
+                status="working",
                 last_tool=None,
                 activity_file=None,
-                within_takeover=subagent_id if subagent_id in self.taken_over else None,
+                reply_target="user" if subagent_id in self.answers_user else "parent",
             )
             for session, subagent_id in self.sessions.items()
         ]
@@ -692,7 +692,7 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
             SessionAddress("project-a", "helper", "session-grandchild"): "sub_grandchild",
             SessionAddress("project-a", "helper", "session-taken"): "sub_taken",
         },
-        taken_over=["sub_taken"],
+        answers_user=["sub_taken"],
     )
     arguments: JsonObject = {"action": "list"}
 
@@ -702,7 +702,7 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
     assert [(rows[id_]["attached"], rows[id_].get("subagent")) for id_ in terminal_ids] == [
         ("subagent", "sub_grandchild"),
         ("other", None),
-        ("other", None),
+        ("subagent", "sub_taken"),
         ("no", None),
     ]
     assert subagents.callers == [SessionAddress("project-a", "agent-a", "session-a")]
@@ -725,7 +725,7 @@ async def test_list_and_status_name_the_sub_agent_whose_session_holds_a_terminal
     assert [(item["attached"], item.get("subagent")) for item in statuses] == [
         ("subagent", "sub_grandchild"),
         ("other", None),
-        ("other", None),
+        ("subagent", "sub_taken"),
         ("no", None),
     ]
 

@@ -79,8 +79,6 @@ class FakeSubAgents:
         self.grandchild: SubAgentState | None = None
         self.running: list[str] = []
         self.stopped: list[str] = []
-        # The user takes over sub_child between the call's read of the tree and its stop.
-        self.taken_over_meanwhile = False
 
     async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
         if caller != OWNER:
@@ -93,11 +91,6 @@ class FakeSubAgents:
     async def stop_subagent(
         self, context: ToolContext, subagent: SubAgentState
     ) -> SubAgentStopOutcome:
-        if self.taken_over_meanwhile:
-            self.child = dataclasses.replace(
-                self.child, status="taken over by the user", within_takeover=self.child.id
-            )
-            return "taken over by the user"
         self.stopped.append(subagent.id)
         return "stopped" if subagent.status != "idle" or self.running else "idle"
 
@@ -424,10 +417,17 @@ def other_subagents(text: str, subagent_id: str) -> list[str]:
         ("idle", False, False, False, False),
         # Only its own Parent, which the text names, can message a deeper Sub-Agent.
         ("idle", True, True, False, False),
-        # It works for the user: nothing it runs is the caller's any more.
-        ("taken over by the user", False, True, False, False),
+        # A user-directed answer does not change available controls.
+        ("user", False, True, True, True),
     ],
-    ids=["working", "queued-deeper", "idle", "idle-without-subagent", "idle-deeper", "taken-over"],
+    ids=[
+        "working",
+        "queued-deeper",
+        "idle",
+        "idle-without-subagent",
+        "idle-deeper",
+        "answer-to-user",
+    ],
 )
 @pytest.mark.asyncio
 async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
@@ -438,17 +438,17 @@ async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
     stops: bool,
     sends: bool,
 ) -> None:
-    subagent = dataclasses.replace(tasks.subagents.child, status=status)
-    taken_over = status == "taken over by the user"
+    answers_user = status == "user"
+    status = "working" if answers_user else status
+    subagent = dataclasses.replace(
+        tasks.subagents.child, status=status, reply_target="user" if answers_user else "parent"
+    )
     if deeper:
         subagent = dataclasses.replace(
             subagent, id="sub_grandchild", session=GRANDCHILD, parent_id="sub_child"
         )
         tasks.subagents.grandchild = subagent
     else:
-        # The tree marks a Sub-Agent the user took over as the boundary of its own takeover.
-        if taken_over:
-            subagent = dataclasses.replace(subagent, within_takeover=subagent.id)
         tasks.subagents.child = subagent
         tasks.subagents.running = ["background command cmd_a (serve)"]
     tools = (SHELL_TOOL_NAME, SUBAGENT) if subagent_tool else (SHELL_TOOL_NAME,)
@@ -463,40 +463,23 @@ async def test_status_of_a_subagent_says_what_the_caller_can_do_about_it(
     assert shown["project_id"] == "project-a"
     # Only a working turn has a last Tool; only work it still runs for the caller is named.
     assert ("last_tool" in shown) is (status == "working")
-    running = None if deeper or taken_over else ["background command cmd_a (serve)"]
+    running = None if deeper else ["background command cmd_a (serve)"]
     assert shown.get("running") == running
-    if taken_over:
-        # A call without action offers no stop either: the user's Sub-Agent is the user's to stop.
+    if answers_user:
+        assert shown["reply_to"] == "user"
         looked = data(await tasks.call({"id": subagent.id}, tools=tools))
-        assert looked["status"] == status
-        assert calls(" ".join(looked["notes"])) == []
+        assert calls(" ".join(looked["notes"])) == [{"action": "stop", "id": subagent.id}]
     assert tasks.subagents.stopped == []
 
 
 @pytest.mark.parametrize(
-    ("status", "deeper", "subagent_tool", "continues", "takeover"),
+    ("status", "deeper", "subagent_tool", "continues", "answers_user"),
     [
-        ("working", False, True, True, None),
-        # Only its own Parent, which the note names, can message a deeper Sub-Agent.
-        ("working", True, True, True, None),
-        # Without subagent, the caller cannot message it.
-        ("working", False, False, False, None),
-        ("idle", False, True, False, None),
-        # The stop ends at a Sub-Agent below that the user took over, which a note names.
-        ("working", False, True, True, "below"),
-        # A Sub-Agent the user took over belongs to the user: its stop is refused,
-        # also when the takeover came after the call read the tree.
-        ("taken over by the user", False, True, False, "it"),
-        ("working", False, True, False, "meanwhile"),
-    ],
-    ids=[
-        "working",
-        "working-deeper",
-        "working-without-subagent",
-        "idle",
-        "taken-over-below",
-        "taken-over",
-        "taken-over-meanwhile",
+        ("working", False, True, True, False),
+        ("working", True, True, True, False),
+        ("working", False, False, False, False),
+        ("idle", False, True, False, False),
+        ("working", False, True, True, True),
     ],
 )
 @pytest.mark.asyncio
@@ -506,14 +489,13 @@ async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
     deeper: bool,
     subagent_tool: bool,
     continues: bool,
-    takeover: str | None,
+    answers_user: bool,
 ) -> None:
     working = status != "idle"
     subagent = dataclasses.replace(
         tasks.subagents.child, status=status, last_tool="bash" if status == "working" else None
     )
-    if takeover == "it":
-        subagent = dataclasses.replace(subagent, within_takeover=subagent.id)
+    subagent = dataclasses.replace(subagent, reply_target="user" if answers_user else "parent")
     if deeper:
         subagent = dataclasses.replace(
             subagent, id="sub_grandchild", session=GRANDCHILD, parent_id="sub_child"
@@ -521,34 +503,13 @@ async def test_stop_of_a_subagent_stops_its_tree_and_an_idle_one_is_no_failure(
         tasks.subagents.grandchild = subagent
     else:
         tasks.subagents.child = subagent
-    if takeover == "below":
-        tasks.subagents.grandchild = dataclasses.replace(
-            subagent,
-            id="sub_grandchild",
-            session=GRANDCHILD,
-            parent_id=subagent.id,
-            status="taken over by the user",
-            within_takeover="sub_grandchild",
-        )
-    tasks.subagents.taken_over_meanwhile = takeover == "meanwhile"
     tools = (SHELL_TOOL_NAME, SUBAGENT) if subagent_tool else (SHELL_TOOL_NAME,)
 
     result = await tasks.call({"action": "stop", "id": subagent.id}, tools=tools)
 
-    if takeover in ("it", "meanwhile"):
-        refusal = error(result)
-        assert refusal["code"] == "subagent_taken_over"
-        assert refusal["message"].startswith("Nothing was stopped")
-        assert subagent.id in refusal["message"]
-        assert tasks.subagents.stopped == []
-        return
     stopped = data(result)
     assert tasks.subagents.stopped == [subagent.id]
-    if takeover == "below":
-        note, kept = stopped.pop("notes")
-        assert other_subagents(kept, subagent.id) == ["sub_grandchild"]
-    else:
-        (note,) = stopped.pop("notes")
+    (note,) = stopped.pop("notes")
     assert stopped == {
         "id": subagent.id,
         "type": "subagent",

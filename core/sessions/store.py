@@ -504,23 +504,26 @@ class SessionStore:
         assistant_message_id: str | None = None,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
-        subagent_takeover: bool = False,
+        subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         """Append Messages in one transaction.
 
         *tool_results* reports each appended Tool Result's outcome by Tool call
         id. *seen_skills* records the Skills a persisted announcement named in
-        the same transaction. *subagent_takeover* records there that these
-        Messages are the user's takeover of a linked Sub-Agent Session, so the
-        Session can never hold the user's message while still forwarding to its
-        Parent. With *since*, the transaction also selects every entry after
+        the same transaction. *subagent_reply_target* selects the destination of
+        later answers in a linked Session, atomically with this input.
+        With *since*, the transaction also selects every entry after
         that cursor (this append and any concurrent writer's), so the caller
         needs no follow-up read; ``None`` then means the cursor cannot be
         continued.
         """
 
         def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
+            if subagent_reply_target is not None:
+                _store_mutations.record_subagent_reply_target(
+                    connection, address, subagent_reply_target
+                )
             _store_mutations.append_messages(
                 connection,
                 address,
@@ -534,8 +537,6 @@ class SessionStore:
                 _store_prompts.record_seen_skills(
                     connection, int(state["session_key"]), seen_skills
                 )
-            if subagent_takeover:
-                _store_mutations.record_subagent_takeover(connection, address)
             return self._select_since(connection, address, since)
 
         delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
@@ -583,16 +584,20 @@ class SessionStore:
         messages: Sequence[ChatMessage],
         run_id: str | None,
         seen_skills: SeenSkillsUpdate | None = None,
-        subagent_takeover: bool = False,
+        subagent_reply_target: str | None = None,
     ) -> SessionReadBatch:
         """Replace history from one User message on; see ``_store_operations.apply_edit``.
 
-        *subagent_takeover* records the takeover in the same transaction, as in
+        *subagent_reply_target* records the answer destination in the same transaction, as in
         :meth:`append_messages`. Returns the Session's complete own audit and
         current view after the edit.
         """
 
         def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta:
+            if subagent_reply_target is not None:
+                _store_mutations.record_subagent_reply_target(
+                    connection, address, subagent_reply_target
+                )
             delta = _store_operations.apply_edit(
                 connection,
                 address,
@@ -601,8 +606,6 @@ class SessionStore:
                 run_id=run_id,
                 seen_skills=seen_skills,
             )
-            if subagent_takeover:
-                _store_mutations.record_subagent_takeover(connection, address)
             return delta
 
         delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)

@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import sqlite3
-from datetime import datetime, timedelta
 
 import pytest
 
@@ -16,8 +15,8 @@ from core.runs import RunKind
 from core.sessions import (
     SESSION_RUN_KINDS_META_KEY,
     SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_REPLY_TARGET_META_KEY,
     SUBAGENT_SESSION_META_KEY,
-    SUBAGENT_TAKEN_OVER_AT_META_KEY,
     SeenSkillsUpdate,
     SessionAddress,
 )
@@ -264,7 +263,10 @@ def test_callback_failure_does_not_turn_a_committed_title_into_an_error(
     assert "session-one" in record.getMessage()
 
 
-def test_subagent_takeover_is_recorded_once_and_only_for_a_linked_session(manager) -> None:
+@pytest.mark.asyncio
+async def test_subagent_reply_destination_commits_with_input_and_is_snapshotted_per_entry(
+    manager,
+) -> None:
     linked = manager.create("child", session_id="linked").address
     plain = manager.create("child", session_id="plain").address
     manager.set_metadata(
@@ -278,17 +280,27 @@ def test_subagent_takeover_is_recorded_once_and_only_for_a_linked_session(manage
     session = manager.get(linked)
     first = ChatMessage.user("first")
     session.append(first)
-    assert SUBAGENT_TAKEN_OVER_AT_META_KEY not in manager.get_metadata(linked)
+    assert SUBAGENT_REPLY_TARGET_META_KEY not in manager.get_metadata(linked)
 
-    # The takeover commits in the transaction that persists the user's message.
-    session.apply_edit(first.id, [ChatMessage.user("second")], subagent_takeover=True)
-    stamp = manager.get_metadata(linked)[SUBAGENT_TAKEN_OVER_AT_META_KEY]
-    assert datetime.fromisoformat(stamp).utcoffset() == timedelta(0)
-    session.append_many([ChatMessage.user("third")], subagent_takeover=True)
-    assert manager.get_metadata(linked)[SUBAGENT_TAKEN_OVER_AT_META_KEY] == stamp
-
-    manager.get(plain).append_many([ChatMessage.user("hi")], subagent_takeover=True)
-    assert SUBAGENT_TAKEN_OVER_AT_META_KEY not in manager.get_metadata(plain)
+    # Editing input changes the destination atomically, as a normal append does.
+    session.apply_edit(first.id, [ChatMessage.user("second")], subagent_reply_target="user")
+    user_answer = ChatMessage.assistant(model="fixture", content="For the user")
+    session.append(user_answer)
+    session.append_many([ChatMessage.user("parent")], subagent_reply_target="parent")
+    parent_answer = ChatMessage.assistant(model="fixture", content="For the parent")
+    session.append(parent_answer)
+    assert manager.get_metadata(linked)[SUBAGENT_REPLY_TARGET_META_KEY] == "parent"
+    assert [
+        (m.content, m.subagent_reply_target) for m in session.load() if m.role == "assistant"
+    ] == [("For the user", "user"), ("For the parent", "parent")]
+    with pytest.raises(ChatSessionError):
+        session.append_many([ChatMessage.user("bad")], subagent_reply_target="other")
+    assert manager.get_metadata(linked)[SUBAGENT_REPLY_TARGET_META_KEY] == "parent"
+    assert not any(m.content == "bad" for m in session.load())
+    fork = await manager.fork(linked)
+    assert SUBAGENT_REPLY_TARGET_META_KEY not in manager.get_metadata(fork.address)
+    manager.get(plain).append_many([ChatMessage.user("hi")], subagent_reply_target="user")
+    assert SUBAGENT_REPLY_TARGET_META_KEY not in manager.get_metadata(plain)
 
 
 def test_identity_reference_changes_roll_back_together(manager, monkeypatch) -> None:

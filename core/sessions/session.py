@@ -100,7 +100,7 @@ class ChatSession:
         *,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
-        subagent_takeover: bool = False,
+        subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         """Append *messages*; see ``SessionStore.append_messages`` for the options."""
@@ -111,7 +111,7 @@ class ChatSession:
             assistant_message_id=self.assistant_message_id,
             tool_results=tool_results,
             seen_skills=seen_skills,
-            subagent_takeover=subagent_takeover,
+            subagent_reply_target=subagent_reply_target,
             since=since,
         )
         self._appended(messages)
@@ -155,7 +155,7 @@ class ChatSession:
         messages: list[ChatMessage],
         *,
         seen_skills: SeenSkillsUpdate | None = None,
-        subagent_takeover: bool = False,
+        subagent_reply_target: str | None = None,
     ) -> SessionReadBatch:
         """Replace history from *target_message_id* on with *messages*, in one transaction.
 
@@ -167,7 +167,7 @@ class ChatSession:
             messages=messages,
             run_id=self.run_id,
             seen_skills=seen_skills,
-            subagent_takeover=subagent_takeover,
+            subagent_reply_target=subagent_reply_target,
         )
         self.acknowledge_deferred_notes(messages)
         # The edit deactivated the tail it replaced; reload the Skill cache on next use.
@@ -182,14 +182,14 @@ class ChatSession:
         messages: list[ChatMessage],
         *,
         seen_skills: SeenSkillsUpdate | None = None,
-        subagent_takeover: bool = False,
+        subagent_reply_target: str | None = None,
     ) -> SessionReadBatch:
         return await self._store.run_async(
             lambda: self.apply_edit(
                 target_message_id,
                 list(messages),
                 seen_skills=seen_skills,
-                subagent_takeover=subagent_takeover,
+                subagent_reply_target=subagent_reply_target,
             )
         )
 
@@ -211,17 +211,17 @@ class ChatSession:
         *,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
-        subagent_takeover: bool = False,
+        subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
-        if not messages and seen_skills is None:
+        if not messages and seen_skills is None and subagent_reply_target is None:
             return None
         return await self._store.run_async(
             lambda: self.append_many(
                 list(messages),
                 tool_results=tool_results,
                 seen_skills=seen_skills,
-                subagent_takeover=subagent_takeover,
+                subagent_reply_target=subagent_reply_target,
                 since=since,
             )
         )

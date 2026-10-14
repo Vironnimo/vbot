@@ -45,7 +45,6 @@ from core.subagents._constants import (
     MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
     MESSAGE_PARENT_PARENT_GONE_MESSAGE,
     MESSAGE_PARENT_QUEUED_NOTE,
-    MESSAGE_PARENT_TAKEN_OVER_MESSAGE,
     PARENT_AGENT_CANCEL_REASON,
     PARENT_MESSAGE_SECTION_TEMPLATE,
     SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE,
@@ -80,7 +79,6 @@ from core.subagents._constants import (
     SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE,
     SUBAGENT_STARTED_NOTE,
     SUBAGENT_STATUS_CHANGED_EVENT,
-    SUBAGENT_TAKEN_OVER_MESSAGE_TEMPLATE,
     SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE,
     SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE,
     USER_CANCEL_REASON,
@@ -112,7 +110,6 @@ from core.subagents.links import (
     find_link,
     link_session,
     read_link,
-    taken_over_below,
 )
 from core.tools.availability import subagent_allowed_agents
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
@@ -148,14 +145,11 @@ _INSPECTED_WORK_KINDS = {
 }
 
 # ``working``: its turn runs; ``queued``: a message waits to start its next turn;
-# ``taken over by the user``: the user wrote in its Session, so it works for the
-# user whatever it does.
-SubAgentStatus = Literal["working", "queued", "idle", "taken over by the user"]
+SubAgentStatus = Literal["working", "queued", "idle"]
 
 # What a stop of a Sub-Agent did. ``stopped``: something ran and was stopped;
-# ``idle``: nothing ran; ``taken over by the user``: the user took it over, or a
-# Sub-Agent above it, so nothing was stopped.
-SubAgentStopOutcome = Literal["stopped", "idle", "taken over by the user"]
+# ``idle`` means that nothing needed stopping.
+SubAgentStopOutcome = Literal["stopped", "idle"]
 
 
 @dataclass(frozen=True)
@@ -165,9 +159,7 @@ class SubAgentState:
     ``agent_id`` is the address ``subagent`` accepts for its Agent. ``parent_id``
     names the caller's Sub-Agent it works for, ``None`` for a direct Sub-Agent of
     the caller. ``last_tool`` is the Tool its working turn called last.
-    ``within_takeover`` names the topmost Sub-Agent below the caller whose Session
-    the user took over, when that is this one or one above it: what this
-    Sub-Agent's Session runs then works for the user, not for the caller.
+    ``reply_target`` is independent of membership, status and control.
     """
 
     id: str
@@ -178,7 +170,7 @@ class SubAgentState:
     status: SubAgentStatus
     last_tool: str | None
     activity_file: str | None
-    within_takeover: str | None = None
+    reply_target: str = "parent"
 
 
 class SubAgentTree(Protocol):
@@ -186,11 +178,7 @@ class SubAgentTree(Protocol):
 
     ``background_tasks`` lists, checks and stops them and the background commands
     of their Sessions; ``terminal`` names the Sub-Agent whose Session holds a
-    terminal. Both stop at a takeover: what runs within one
-    (``SubAgentState.within_takeover``) works for the user, and no stop of an
-    Agent above it reaches it. :class:`SubAgentCoordinator` implements it. The
-    Tools import it for annotations only, because this package imports the Tool
-    package.
+    terminal. The complete tree stays visible and controllable.
     """
 
     async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
@@ -237,7 +225,7 @@ class SubAgentCoordinator:
 
         *idle_id* names the idle Sub-Agent a ``send`` would start; omitted for ``run``.
         *can_stop*: the caller can call ``background_tasks``, so the refusal names its stop.
-        Taken-over Sub-Agents count for neither limit. Call it under the admission lock.
+        All working Sub-Agents count. Call it under the admission lock.
         """
         runtime, sessions = self._runtime, self._runtime.chat_sessions
         own = await sessions.run_async(children, sessions, parent)
@@ -289,9 +277,9 @@ class SubAgentCoordinator:
         """Return additional targets for the Tool-owned System Prompt block."""
         return build_subagent_prompt_targets(self._runtime, agent, project_id)
 
-    def subagent_taken_over(self, address: SessionAddress) -> None:
-        """Handle the user's first message in a Sub-Agent Session."""
-        self._forwarding.taken_over(address)
+    def subagent_reply_to_user(self, address: SessionAddress, message_id: str) -> None:
+        """Handle an input that switches a Sub-Agent to user-directed answers."""
+        self._forwarding.reply_to_user(address, message_id)
 
     async def spawn(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         """Handle one ``subagent`` call."""
@@ -324,8 +312,6 @@ class SubAgentCoordinator:
         link = await sessions.run_async(read_link, sessions, _caller(context))
         if link is None:
             return tool_failure("not_a_subagent", MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE)
-        if link.taken_over_at is not None:
-            return tool_failure("subagent_taken_over", MESSAGE_PARENT_TAKEN_OVER_MESSAGE)
         if not await sessions.run_async(sessions.exists, link.parent):
             return tool_failure("parent_not_found", MESSAGE_PARENT_PARENT_GONE_MESSAGE)
         parent = link.parent
@@ -352,9 +338,18 @@ class SubAgentCoordinator:
             )
         if delivery.cancelled():
             return tool_failure("delivery_unavailable", MESSAGE_PARENT_DELIVERY_UNAVAILABLE_MESSAGE)
+        # Once accepted, cancellation must not leave the message sent but its answer
+        # still addressed to the user. The Session lock orders this with steering.
+        await finish_despite_cancel(self._resume_parent_replies(_caller(context)))
         return tool_success(
             {"status": "queued", "delivery_id": delivery_id, "note": MESSAGE_PARENT_QUEUED_NOTE}
         )
+
+    async def _resume_parent_replies(self, address: SessionAddress) -> None:
+        sessions = self._runtime.chat_sessions
+        async with sessions.write_lock(address):
+            session = await sessions.get_async(address)
+            await session.append_many_async([], subagent_reply_target="parent")
 
     async def inspect(
         self,
@@ -442,25 +437,17 @@ class SubAgentCoordinator:
         sessions = runtime.chat_sessions
         tree = await sessions.run_async(descendants, sessions, caller)
         ids = {link.session: link.id for link in tree}
-        # Breadth first, a Parent's takeover is known before its children's.
-        takeovers: dict[SessionAddress, str] = {}
         states: list[SubAgentState] = []
         for link in tree:
             address = link.session
-            takeover = takeovers.get(link.parent) or (
-                link.id if link.taken_over_at is not None else None
-            )
-            if takeover is not None:
-                takeovers[address] = takeover
             run = runtime.chat_run_manager.active_run(
                 agent_id=address.agent_id,
                 session_id=address.session_id,
                 project_id=address.project_id,
             )
             last_tool: str | None = None
-            if link.taken_over_at is not None:
-                status: SubAgentStatus = "taken over by the user"
-            elif run is not None:
+            status: SubAgentStatus
+            if run is not None:
                 status, last_tool = "working", _latest_tool_name(run)
             elif is_working(runtime, address):
                 status = "queued"
@@ -476,7 +463,7 @@ class SubAgentCoordinator:
                     status=status,
                     last_tool=last_tool,
                     activity_file=self._activities.path(address),
-                    within_takeover=takeover,
+                    reply_target=link.reply_target,
                 )
             )
         return states
@@ -497,11 +484,7 @@ class SubAgentCoordinator:
 
         The caller learns the outcome from its Tool result, so a direct
         Sub-Agent's stopped turn is not forwarded to it; a deeper one's is
-        forwarded to its own Parent, which did not stop it. The stop ends at every
-        takeover below *subagent*. The takeover is read again under the admission
-        lock, since *subagent* is the state the caller read before: when the user
-        took over *subagent* or a Sub-Agent between the caller and it, nothing is
-        stopped.
+        forwarded to its own Parent when its answer is addressed there.
         """
         stopped = await self._stop_subtree(
             subagent.session,
@@ -509,10 +492,7 @@ class SubAgentCoordinator:
             initiator=f"parent_run:{context.run_id}",
             silence_root=subagent.parent_id is None,
             clear_root_queue=True,
-            stopped_by=_caller(context),
         )
-        if stopped is None:
-            return "taken over by the user"
         if not stopped:
             return "idle"
         await _emit(
@@ -781,10 +761,6 @@ class SubAgentCoordinator:
                     or_stop=or_stop,
                 ),
             )
-        if link.taken_over_at is not None:
-            return tool_failure(
-                "subagent_taken_over", SUBAGENT_TAKEN_OVER_MESSAGE_TEMPLATE.format(id=link.id)
-            )
         if not has_text(arguments, "content"):
             return tool_failure(
                 "invalid_arguments",
@@ -914,15 +890,10 @@ class SubAgentCoordinator:
         initiator: str,
         silence_root: bool,
         clear_root_queue: bool,
-        stopped_by: SessionAddress | None = None,
-    ) -> int | None:
+    ) -> int:
         """Cancel a complete admitted tree before awaiting any of its cleanup.
 
-        The tree ends at every Sub-Agent below *root* the user took over: that one
-        and everything below it keep running for the user. *stopped_by* is the
-        Session of an Agent above *root* that stops it; when the user took over
-        *root* or a Sub-Agent between *stopped_by* and it, nothing is stopped and
-        the result is None. Otherwise it counts what was stopped.
+        Includes every descendant, whatever its current answer destination.
         """
         sessions = self._runtime.chat_sessions
         manager = self._runtime.chat_run_manager
@@ -934,11 +905,7 @@ class SubAgentCoordinator:
         # Cancel every captured Run while admissions are still excluded, so a
         # descendant cannot create or resume work during another Run's cleanup.
         async with self._admission_lock:
-            if stopped_by is not None and await sessions.run_async(
-                taken_over_below, sessions, stopped_by, root
-            ):
-                return None
-            below = await sessions.run_async(descendants, sessions, root, stop_at_takeover=True)
+            below = await sessions.run_async(descendants, sessions, root)
             addresses = [root, *(link.session for link in below)]
             for address in addresses:
                 if address != root or clear_root_queue:
@@ -1218,15 +1185,15 @@ def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:
 
 
 def _counts_as_working(runtime: RuntimeServices, link: SubAgentLink) -> bool:
-    """Whether *link* takes a place under the limits: working and not taken over."""
-    return link.taken_over_at is None and is_working(runtime, link.session)
+    """Whether *link* takes a place under the limits: working, whatever its answer destination."""
+    return is_working(runtime, link.session)
 
 
 def _working_subagent_count(runtime: RuntimeServices, busy: Iterable[SessionAddress]) -> int:
-    """Count the Sub-Agent Sessions among *busy* that are not taken over."""
+    """Count the Sub-Agent Sessions among *busy*."""
     sessions = runtime.chat_sessions
     links = (read_link(sessions, address) for address in busy)
-    return sum(1 for link in links if link is not None and link.taken_over_at is None)
+    return sum(1 for link in links if link is not None)
 
 
 def _positive_int(value: Any, default: int) -> int:

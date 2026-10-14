@@ -381,6 +381,7 @@ def _message_to_request_dict(
 ) -> JsonObject:
     data = message.to_dict()
     data.pop("run_id", None)
+    data.pop("subagent_reply_target", None)
     if data.get("role") == "assistant":
         if not _replays_assistant_reasoning(message, replay_policy, agent_model):
             data.pop("reasoning", None)
@@ -636,6 +637,7 @@ def _assistant_continuation_dict(
     data.pop("interrupted", None)
     data.pop("interruption_cause", None)
     data.pop("output_files", None)
+    data.pop("subagent_reply_target", None)
     data.pop("reasoning_scope", None)
     if (
         replay_policy == REASONING_REPLAY_NONE

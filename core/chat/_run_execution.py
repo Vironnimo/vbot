@@ -16,8 +16,9 @@ from core.chat._run_state import (
     RequestBuildInputs,
     _SessionSnapshot,
     create_run_execution_context,
-    report_subagent_takeover,
-    takes_over_subagent_session,
+    report_subagent_user_input,
+    subagent_input_reply_target,
+    switches_subagent_reply_to_user,
 )
 from core.chat._scratch_context import (
     SCRATCH_ANNOUNCED_META_KEY,
@@ -41,7 +42,7 @@ from core.chat.events import (
 )
 from core.chat.messages import (
     PARENT_AGENT_INPUT_SYSTEM_REMINDER,
-    SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER,
+    SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER,
     ChatMessage,
     ModelFallback,
 )
@@ -278,11 +279,9 @@ class RunExecution:
                         editable_session_message_index(
                             context.session_snapshot.active_lineage, request.edit_message_id
                         )
-                    takeover = (
-                        not request.input_already_persisted
-                        and await takes_over_subagent_session(
-                            context, request, self._dependencies.sessions
-                        )
+                    reply_target = subagent_input_reply_target(context, request)
+                    reply_to_user = await switches_subagent_reply_to_user(
+                        context, reply_target, self._dependencies.sessions
                     )
                     if internal:
                         if not isinstance(request.content, str):
@@ -304,8 +303,8 @@ class RunExecution:
                         _append_input_origin_note(session, request.input_origin)
                         if request.parent_agent_input:
                             session.add_note(PARENT_AGENT_INPUT_SYSTEM_REMINDER)
-                        if takeover:
-                            session.add_note(SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER)
+                        if reply_to_user:
+                            session.add_note(SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER)
                         _append_reply_surface_note(
                             session,
                             request.reply_surface,
@@ -321,23 +320,22 @@ class RunExecution:
                         )
                         persisted_messages = [*session.take_deferred_notes(), user_message]
                     # One transaction persists the input, records the announced
-                    # Skills and a Sub-Agent takeover, so a cancellation cannot
-                    # keep the user's message while the Session still forwards to
-                    # its Parent. An edit also replaces the edited history in that
-                    # transaction.
+                    # Skills and the Sub-Agent's answer destination, so cancellation
+                    # cannot split the input from its routing change. An edit also
+                    # replaces the edited history in that transaction.
                     if request.edit_message_id is not None:
                         await context.session_snapshot.apply_edit(
                             session,
                             persisted_messages,
                             seen_skills=record_seen_skills,
-                            subagent_takeover=takeover,
+                            subagent_reply_target=reply_target,
                         )
                     elif persisted_messages:
                         await context.session_snapshot.append(
                             session,
                             persisted_messages,
                             seen_skills=record_seen_skills,
-                            subagent_takeover=takeover,
+                            subagent_reply_target=reply_target,
                         )
                     elif record_seen_skills is not None:
                         await _CHAT_TRANSFORM_WORKERS.run(
@@ -348,8 +346,10 @@ class RunExecution:
                     record_seen_skills = None
                     if not persisted_messages:
                         await context.session_snapshot.refresh(session)
-                    if takeover:
-                        report_subagent_takeover(self._dependencies, session_address)
+                    if reply_to_user:
+                        report_subagent_user_input(
+                            self._dependencies, session_address, user_message.id
+                        )
                     if not internal and not request.input_already_persisted:
                         # A Stop during speech-to-text still persisted the input.
                         _emit_message_event(

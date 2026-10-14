@@ -632,8 +632,8 @@ def bootstrap(runtime: Runtime) -> None:
                 else False
             ),
             get_command_manager=lambda: runtime._command_manager,
-            subagent_taken_over=lambda address: (
-                runtime._subagent_coordinator.subagent_taken_over(address)
+            subagent_reply_to_user=lambda address, message_id: (
+                runtime._subagent_coordinator.subagent_reply_to_user(address, message_id)
                 if runtime._subagent_coordinator is not None
                 else None
             ),

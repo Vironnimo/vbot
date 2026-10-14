@@ -60,6 +60,7 @@ def session_database_spec(
             # working in their Agent's root Project. An older vBot ignores the
             # column and keeps using the Agent's root Project.
             Migration("sessions.0002_session_working_projects", apply=adopt_root_projects),
+            Migration("sessions.0003_subagent_reply_targets", apply=_adopt_subagent_reply_targets),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,
@@ -67,4 +68,15 @@ def session_database_spec(
         # Session writes, and so Runs, go on while a data snapshot is taken; the
         # snapshot stands for the instant this database is copied.
         snapshot_capture=ANCHOR_CAPTURE,
+    )
+
+
+def _adopt_subagent_reply_targets(connection: sqlite3.Connection) -> None:
+    """Preserve the answer destination of Sessions the user previously took over."""
+    connection.execute(
+        "UPDATE sessions SET metadata_json = json_set(metadata_json, "
+        "'$.subagent_reply_target', 'user'), state_revision = state_revision + 1 "
+        "WHERE subagent_parent_id IS NOT NULL "
+        "AND json_type(metadata_json, '$.subagent_taken_over_at') = 'text' "
+        "AND json_type(metadata_json, '$.subagent_reply_target') IS NULL"
     )

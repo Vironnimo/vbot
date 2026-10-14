@@ -10,8 +10,9 @@ from core.chat._request_history import _assign_session_image_references
 from core.chat._run_state import (
     RequestBuildInputs,
     _RunRequest,
-    report_subagent_takeover,
-    takes_over_subagent_session,
+    report_subagent_user_input,
+    subagent_input_reply_target,
+    switches_subagent_reply_to_user,
 )
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
@@ -20,7 +21,7 @@ from core.chat.errors import ChatError
 from core.chat.events import _visible_message_payload
 from core.chat.messages import (
     PARENT_AGENT_STEERING_SYSTEM_REMINDER,
-    SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER,
+    SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER,
     ChatMessage,
     InputOrigin,
 )
@@ -96,11 +97,14 @@ async def persist_steering_input(
     content = await requests.transcribe_user_audio(request.content)
     session = context.session
     await context.session_snapshot.refresh(session)
-    takeover = await takes_over_subagent_session(context, request, dependencies.sessions)
+    reply_target = subagent_input_reply_target(context, request)
+    reply_to_user = await switches_subagent_reply_to_user(
+        context, reply_target, dependencies.sessions
+    )
     session.begin_defer_notes()
     _append_input_origin_note(session, request.input_origin)
-    if takeover:
-        session.add_note(SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER)
+    if reply_to_user:
+        session.add_note(SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER)
     session.add_note(
         PARENT_AGENT_STEERING_SYSTEM_REMINDER
         if request.parent_agent_input
@@ -110,12 +114,12 @@ async def persist_steering_input(
         _assign_session_image_references(content, context.session_snapshot.active_messages),
         input_origin=request.input_origin,
     )
-    # The takeover commits with the message, so a cancellation cannot split them.
+    # The answer destination commits with the input, even if cancellation races.
     await session.append_many_async(
-        [*session.take_deferred_notes(), message], subagent_takeover=takeover
+        [*session.take_deferred_notes(), message], subagent_reply_target=reply_target
     )
-    if takeover:
-        report_subagent_takeover(dependencies, session.address)
+    if reply_to_user:
+        report_subagent_user_input(dependencies, session.address, message.id)
     context.run.emit(
         USER_MESSAGE_EVENT,
         {

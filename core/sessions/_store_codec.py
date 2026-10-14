@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 # The entry columns every read selects; ``e`` names ``entries``.
 ENTRY_COLUMNS = (
     "e.entry_key, e.session_key, e.seq, e.role, e.entry_id, e.created_at, e.run_key, "
-    "e.model, e.superseded_at_seq"
+    "e.model, e.superseded_at_seq, e.subagent_reply_target"
 )
 # Roles a plain append may write. Run footers belong to ``finish_run`` and edit
 # markers to ``apply_edit``, which keep their relations consistent.
@@ -186,7 +186,7 @@ def insert_entry(
     """
     cursor = connection.execute(
         "INSERT INTO entries (session_key, seq, role, entry_id, created_at, run_key, model, "
-        "searchable, superseded_at_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "searchable, superseded_at_seq, subagent_reply_target) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             session_key,
             seq,
@@ -197,6 +197,7 @@ def insert_entry(
             message.model,
             int(_store_fts._message_is_searchable(message)),
             superseded_at_seq,
+            message.subagent_reply_target,
         ),
     )
     if cursor.lastrowid is None:
@@ -480,6 +481,8 @@ class EntryBatch:
         try:
             data: JsonObject = {"id": str(row["entry_id"]), "role": role}
             data["timestamp"] = str(row["created_at"])
+            if row["subagent_reply_target"] is not None:
+                data["subagent_reply_target"] = str(row["subagent_reply_target"])
             if row["model"] is not None:
                 data["model"] = str(row["model"])
             if row["run_key"] is not None:
