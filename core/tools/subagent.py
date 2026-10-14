@@ -35,42 +35,30 @@ from core.tools.tools import (
 )
 
 SUBAGENT_TOOL_DESCRIPTION = (
-    "Delegate tasks to Sub-Agents and send them messages. A Sub-Agent is a copy of yourself or "
-    "an Agent listed under Sub-Agents in the System Prompt; it works in its own Session, and "
-    "vBot delivers its answers to you unless the user writes to it."
+    "Delegate work to a Sub-Agent in a separate Session without this conversation's history. "
+    "Sub-Agents use their Agent's Tools and have no automatic file isolation. Their final "
+    "answers arrive automatically unless the user writes to them."
 )
 
 SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "## Sub-Agents\n\n"
     "{target_choices}\n\n"
-    "When the user asks for an Agent that is not among these choices, tell the user that this "
-    "Agent is not available to you, then delegate to a copy of yourself or ask the user. Call "
-    "a copy your Sub-Agent, never by the name of the Agent the user asked for.\n\n"
-    "Delegate bounded work that another Agent can finish independently. Start independent "
-    "Sub-Agents with sibling calls in the same turn so they run concurrently, and give "
-    "Sub-Agents that edit files non-overlapping ownership. You remain responsible for "
-    "integrating and verifying their results.\n\n"
+    "Delegate bounded work when it can run alongside other useful work, benefits from an "
+    "independent review, or keeps a substantial investigation out of your own context. Do "
+    "small, dependent steps yourself. Start independent tasks together and give file-editing "
+    "Sub-Agents separate ownership. Integrate their findings and check the parts your result "
+    "depends on.\n\n"
+    "If a requested Agent is unavailable, say so. Use your own Agent only when it can serve "
+    "the same purpose; otherwise ask the user. Identify it as your Sub-Agent, not as the "
+    "requested Agent.\n\n"
     "{execution_guidance}"
 )
 
-TARGET_CHOICES_TEMPLATE = (
-    "In `subagent`, omit `agent_id` to delegate to a copy of yourself, or use one of these "
-    "Agent ids exactly:\n\n{subagent_list}"
-)
-NO_ADDITIONAL_SUBAGENTS_TEXT = (
-    "In `subagent`, omit `agent_id` to delegate to a copy of yourself; no other Agents are "
-    "available."
-)
+TARGET_CHOICES_TEMPLATE = "Additional Agents:\n\n{subagent_list}"
+NO_ADDITIONAL_SUBAGENTS_TEXT = "No additional Agents are available."
 EXECUTION_GUIDANCE = (
-    "Each `run` starts a Sub-Agent in the background and returns its id at once. vBot "
-    "delivers a Sub-Agent's answers to you automatically unless the user writes to it: "
-    "during your current turn if "
-    "you are still working, otherwise in a new turn right after yours ends. An answer from a "
-    "Sub-Agent that is not finished is a status report, and vBot ends each answer with a line "
-    "naming what of that Sub-Agent is still running. Continue other work, or end your turn to "
-    "wait; do not poll for completion. To correct or extend a Sub-Agent's work, use "
-    "`send` instead of starting a new Sub-Agent. If the user has written to it, messaging "
-    "in either direction resumes its answers to you."
+    "Continue other work while Sub-Agents run. When you need their answers to proceed, end "
+    "your turn to wait; do not poll for completion."
 )
 # Names the target list when vBot tells the Model that it changed mid-Session.
 SUBAGENT_CATALOG_TITLE = "The Agent ids under Sub-Agents"
@@ -82,29 +70,26 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": ["run", "send"],
             "description": (
-                "run (default) starts a new Sub-Agent with content; send sends a message to one "
-                "of your Sub-Agents."
+                "run starts a new Sub-Agent in the background; send messages one you started, "
+                "continuing its Session. Omit for send when id and content are present, "
+                "otherwise run."
             ),
         },
         "content": {
             "type": "string",
             "description": (
-                "For run, the task: goal, relevant context, scope, constraints and expected "
-                "result, self-contained. For send, the message."
+                "For run, a self-contained task: goal, relevant context, scope, constraints "
+                "and expected result. For send, the message. Required for both."
             ),
         },
         "description": {
             "type": "string",
-            "description": (
-                'For run, a 3-5 word title that the user sees, such as "Review auth module". '
-                "Required for run."
-            ),
+            "description": "For run, a 3-5 word title the user sees. Required for run.",
         },
         "agent_id": {
             "type": "string",
             "description": (
-                "For run, the Agent to delegate to, exactly as listed under Sub-Agents. Omit for "
-                "a copy of yourself."
+                "For run, an Agent id listed under Sub-Agents. Omit to use your own Agent."
             ),
         },
         "id": {
@@ -114,13 +99,17 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
         "model": {
             "type": "string",
             "description": (
-                "Model for the Sub-Agent, as <provider>/<model-id>. Omit to use the Agent's model."
+                "Model override as <provider>/<model-id>, kept for later messages. Omit on "
+                "run to use the target Agent's Model; omit on send to keep the current choice."
             ),
         },
         "thinking_effort": {
             "type": "string",
             "enum": sorted(e for e in ALLOWED_THINKING_EFFORTS if e),
-            "description": "Thinking effort for the Sub-Agent. Omit to use the Agent's setting.",
+            "description": (
+                "Thinking effort override, kept for later messages. Omit on run to use the "
+                "Agent's setting; omit on send to keep the current choice."
+            ),
         },
     },
     "required": [],
@@ -130,8 +119,9 @@ MESSAGE_PARENT_TOOL_DESCRIPTION = (
     "Send a message to your Parent Agent, the Agent that delegated your task, without ending "
     "your turn. Use it to ask what only your Parent Agent can decide while you continue "
     "other work, to report a finding that changes what your Parent Agent or its other "
-    "Sub-Agents are doing, and to answer its messages. Results and status reports belong in "
-    "your final answer. This call also directs your final answers to your Parent Agent "
+    "Sub-Agents are doing, and to answer its messages. Return the task result in your final "
+    "answer. Use this Tool for status updates your Parent Agent requests while you continue "
+    "working. This call also directs your final answers to your Parent Agent "
     "until the user writes again."
 )
 MESSAGE_PARENT_TOOL_PARAMETERS: JsonObject = {

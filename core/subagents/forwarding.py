@@ -11,7 +11,6 @@ import asyncio
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from core.projects import format_agent_address
 from core.runs import (
     Run,
     RunAdmissionBlockedError,
@@ -176,8 +175,6 @@ class SubAgentForwarding:
         body = FORWARDED_SECTION_TEMPLATE.format(
             id=link.id,
             title=link.title or link.id,
-            agent_id=format_agent_address(address.agent_id, address.project_id),
-            session_id=address.session_id,
             run_id=run.id,
             outcome=outcome,
             answer=answer,

@@ -188,8 +188,9 @@ def _read_background_tasks_action(arguments: dict[str, Any]) -> dict[str, Any]:
     action = arguments[keys[0]]
     if is_wait_action(action):
         raise ToolContractError(
-            f'Unknown action "{action}". Use one of: run, send. Sub-Agent answers arrive as new '
-            "messages, so there is nothing to wait for."
+            f'Nothing was run. Unknown action "{action}". Use one of: run, send. '
+            "Sub-Agent answers arrive as new messages. Continue other work, or end your "
+            "turn to wait."
         )
     if spelling(action) not in _BACKGROUND_TASKS_ACTIONS:
         return arguments

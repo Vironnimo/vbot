@@ -96,16 +96,29 @@ async def test_run_starts_a_linked_subagent_in_the_background(harness: SubAgentH
     assert harness.triggers.notices == []
 
 
-async def test_run_without_description_is_refused_with_the_corrected_call(
+async def test_run_without_description_keeps_the_task_for_correction(
     harness: SubAgentHarness,
 ) -> None:
-    result = await harness.call({"content": "review the module"})
+    task = (
+        "Review the API changes in src/service.py and report correctness problems "
+        "with exact locations."
+    )
+    arguments = {"content": task, "model": "fixture/reviewer"}
+    result = await harness.call(arguments)
 
     assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
     message = result["error"]["message"]
-    assert '"description": "<3-5 word title>"' in message
-    assert '"content": "review the module"' in message
+    assert "description" in message
+    assert "<" not in message
+    assert '"content":' not in message
+    assert arguments == {"content": task, "model": "fixture/reviewer"}
     assert harness.loop.turns == []
+    assert harness.sessions.subagent_children(harness.parent) == []
+
+    accepted = await harness.call({**arguments, "description": "Review API changes"})
+    assert accepted["ok"], accepted
+    assert [turn.content for turn in harness.loop.turns] == [task]
 
 
 @pytest.mark.parametrize(
@@ -140,7 +153,7 @@ async def test_targets_outside_the_callers_choices_are_refused_with_them(
     )
 
     assert result["error"]["code"] == code
-    assert "Omit agent_id to delegate to a copy of yourself" in result["error"]["message"]
+    assert "agent_id" in result["error"]["message"]
     assert harness.loop.turns == []
     assert harness.sessions.list("worker") == []
 
@@ -160,7 +173,8 @@ async def test_subagent_in_another_scope_is_addressed_by_its_qualified_agent_id(
     assert (child.agent_id, child.project_id) == ("worker", "vbot")
     await harness.settle()
     [answer] = harness.triggers.to(harness.parent)
-    assert f"agent_id worker@vbot, session_id {data['session_id']}" in answer.body
+    assert data["id"] in answer.body
+    assert data["session_id"] not in answer.body
     sent = await harness.call({"action": "send", "id": data["id"], "content": "more"})
     assert sent["ok"], sent
     assert sent["data"]["agent_id"] == "worker@vbot"
@@ -314,7 +328,8 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     assert notice.wake is True
     assert notice.origin_run_id == run.id
     assert f"### Sub-Agent {data['id']} — Do review" in notice.body
-    assert f"session_id {child.session_id}" in notice.body
+    assert child.session_id not in notice.body
+    assert run.id in notice.body
     assert "Its turn completed." in notice.body
     assert "Found two bugs." in notice.body
     assert notice.body.endswith(FACTS_NOTHING_RUNNING_TEXT)
@@ -563,6 +578,7 @@ async def test_other_spellings_of_send_reach_the_same_subagent(
 
 async def test_send_reaches_only_direct_subagents(harness: SubAgentHarness) -> None:
     outer = await harness.spawn("outer")
+    other = await harness.spawn("other")
     await harness.settle()
     inner = await harness.spawn("inner", session=harness.subagent_session(outer["id"]))
     await harness.settle()
@@ -574,6 +590,7 @@ async def test_send_reaches_only_direct_subagents(harness: SubAgentHarness) -> N
         {"action": "send", "id": inner["id"], "content": "hi"}, allowed_tools=["subagent"]
     )
     foreign = await harness.call({"action": "send", "id": stranger["id"], "content": "hi"})
+    missing = await harness.call({"action": "send", "content": "Focus on the API."})
 
     assert nested["error"]["code"] == "subagent_not_direct"
     assert outer["id"] in nested["error"]["message"]
@@ -584,6 +601,13 @@ async def test_send_reaches_only_direct_subagents(harness: SubAgentHarness) -> N
     assert foreign["error"]["code"] == "subagent_not_found"
     assert outer["id"] in foreign["error"]["message"]
     assert foreign["error"]["message"].count(stranger["id"]) == 1
+    assert missing["error"]["code"] == "invalid_arguments"
+    message = missing["error"]["message"]
+    # List the available recipients without choosing one in a suggested call.
+    assert all(message.count(child["id"]) == 1 for child in (outer, other))
+    assert '"id":' not in message
+    assert "<message>" not in message
+    assert [turn.content for turn in harness.loop.turns] == ["outer", "other", "inner", "stranger"]
 
 
 async def test_background_tasks_lists_and_checks_the_whole_tree(

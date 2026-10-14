@@ -56,13 +56,14 @@ from core.subagents._constants import (
     SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
     SUBAGENT_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_BACKGROUND_IGNORED_NOTE,
+    SUBAGENT_CHOOSE_RECIPIENT_TEXT,
     SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE,
     SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE,
     SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE,
     SUBAGENT_IGNORED_LABEL_NOTE_TEMPLATE,
     SUBAGENT_LIMIT_STOP_TEXT,
-    SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE,
+    SUBAGENT_MISSING_DESCRIPTION_MESSAGE,
     SUBAGENT_MISSING_TASK_LIST_TEXT,
     SUBAGENT_MISSING_TASK_MESSAGE,
     SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE,
@@ -82,6 +83,7 @@ from core.subagents._constants import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_SESSION_TITLE_MAX_CHARACTERS,
     SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE,
+    SUBAGENT_START_FIRST_TEXT,
     SUBAGENT_STARTED_NOTE,
     SUBAGENT_STATUS_CHANGED_EVENT,
     SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE,
@@ -135,7 +137,6 @@ if TYPE_CHECKING:
     from core.sessions.session import ChatSession
 
 _LOGGER = get_logger("subagents")
-_FOLLOW_UP_PLACEHOLDER = "<message>"
 
 
 def _subagent_count(count: int) -> str:
@@ -199,9 +200,7 @@ class SubAgentTree(Protocol):
     ) -> SubAgentStopOutcome:
         """Stop *subagent* with its queue, background work and own Sub-Agents.
 
-        The stop ends at every Sub-Agent below it the user took over, which keeps
-        running with everything below it. When the user took over *subagent*, or
-        a Sub-Agent between the caller and it, nothing is stopped.
+        The complete subtree is stopped regardless of where its answers go.
         """
         ...
 
@@ -418,9 +417,8 @@ class SubAgentCoordinator:
         The user's "Stop all"; returns how many Runs, queued messages, commands and
         terminals were stopped. The Session keeps its own queued messages. Answers of
         the stopped Sub-Agents are not forwarded, so they do not wake the Sessions
-        above them that are stopped too. A Sub-Agent below the Session that the user
-        took over keeps running with everything below it: it belongs to the user,
-        whose Stop all in its own Session stops it.
+        above them that are stopped too. The complete subtree is stopped regardless
+        of where its answers go.
         """
         stopped = await self._stop_subtree(
             address,
@@ -556,16 +554,7 @@ class SubAgentCoordinator:
 
         description = optional_text(arguments, "description")
         if description is None:
-            corrected = {
-                key: value for key, value in arguments.items() if key not in {"id", "session_id"}
-            }
-            corrected = {"description": "<3-5 word title>", **corrected}
-            if isinstance(corrected.get("content"), str) and len(corrected["content"]) > 60:
-                corrected["content"] = "<the same task>"
-            return tool_failure(
-                "invalid_arguments",
-                SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE.format(call=call_text(corrected)),
-            )
+            return tool_failure("invalid_arguments", SUBAGENT_MISSING_DESCRIPTION_MESSAGE)
 
         if arguments.get("background") is False:
             notes.append(SUBAGENT_BACKGROUND_IGNORED_NOTE)
@@ -599,7 +588,10 @@ class SubAgentCoordinator:
             error = failure["error"]
             if error["code"] in {"agent_not_found", "project_not_found"}:
                 reason = str(error["message"]).rstrip(".")
-                return tool_failure(error["code"], f"{reason}. {target_choices(runtime, context)}")
+                return tool_failure(
+                    error["code"],
+                    f"Nothing was started. {reason}. {target_choices(runtime, context)}",
+                )
             return failure
 
         settings = _load_subagent_settings(runtime)
@@ -724,12 +716,13 @@ class SubAgentCoordinator:
                 None,
             )
             if continued is None:
-                example = {"action": "send", "id": own[0].id if own else "<id>"}
                 return tool_failure(
                     "invalid_arguments",
                     SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE.format(
                         yours=yours_text(own),
-                        call=call_text({**example, "content": _FOLLOW_UP_PLACEHOLDER}),
+                        next_step=(
+                            SUBAGENT_CHOOSE_RECIPIENT_TEXT if own else SUBAGENT_START_FIRST_TEXT
+                        ),
                     ),
                 )
             return await self._send(context, arguments, continued.id, continued)
@@ -769,12 +762,7 @@ class SubAgentCoordinator:
         if not has_text(arguments, "content"):
             return tool_failure(
                 "invalid_arguments",
-                SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE.format(
-                    id=link.id,
-                    call=call_text(
-                        {"action": "send", "id": link.id, "content": _FOLLOW_UP_PLACEHOLDER}
-                    ),
-                ),
+                SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE.format(id=link.id),
             )
         address = link.session
         try:
@@ -1059,9 +1047,6 @@ def _implied_action(arguments: JsonObject, *, can_stop: bool) -> str | JsonObjec
             "invalid_arguments",
             SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE.format(
                 id=subagent_id,
-                send_call=call_text(
-                    {"action": "send", "id": subagent_id, "content": _FOLLOW_UP_PLACEHOLDER}
-                ),
                 stop=stop,
             ),
         )
