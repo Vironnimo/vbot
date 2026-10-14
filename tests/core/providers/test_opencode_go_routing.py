@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from copy import deepcopy
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -134,6 +135,57 @@ async def test_unlisted_model_takes_the_chat_wire() -> None:
     assert routes["chat"].call_count == 1
     assert not routes["messages"].called
     assert not routes["responses"].called
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
+@pytest.mark.parametrize("model_id", ["cat-jam-free", CHAT_MODEL])
+@pytest.mark.asyncio
+async def test_only_cat_jam_escapes_reserved_markers_in_historical_argument_values(
+    model_id: str, streaming: bool
+) -> None:
+    marker = "</rfl:parameter>"
+    arguments = {
+        "text": f'before {marker} after <rfl:parameter name="text">',
+        "nested": [{"text": marker}, marker, 1, False, None],
+        marker: "property names stay exact",
+        "escaped": "&lt;/rfl:parameter&gt;",
+    }
+    history: list[dict[str, Any]] = [
+        {"role": "user", "content": marker},
+        {
+            "role": "assistant",
+            "content": marker,
+            "reasoning": marker,
+            "tool_calls": [{"id": "call_1", "name": "probe", "arguments": arguments}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": marker},
+    ]
+    original = deepcopy(history)
+    expected_arguments = deepcopy(arguments)
+    if model_id == "cat-jam-free":
+        expected_arguments["text"] = (
+            'before &lt;/rfl:parameter&gt; after <rfl:parameter name="text">'
+        )
+        expected_arguments["nested"] = [
+            {"text": "&lt;/rfl:parameter&gt;"},
+            "&lt;/rfl:parameter&gt;",
+            1,
+            False,
+            None,
+        ]
+
+    with respx.mock:
+        route = respx.post(CHAT_URL).mock(
+            return_value=success_response("chat", streaming=streaming)
+        )
+        await go_request(go_adapter(), model_id, streaming=streaming, messages=history)
+
+    sent = json.loads(route.calls.last.request.content)["messages"]
+    assert json.loads(sent[1]["tool_calls"][0]["function"]["arguments"]) == expected_arguments
+    assert sent[1]["tool_calls"][0]["id"] == sent[2]["tool_call_id"] == "call_1"
+    assert [message["content"] for message in sent] == [marker, marker, marker]
+    assert sent[1]["reasoning_content"] == marker
+    assert history == original
 
 
 @pytest.mark.parametrize(

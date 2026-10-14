@@ -202,7 +202,9 @@ def _to_openai_file_part(part: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
+def _to_openai_assistant_message(
+    message: dict[str, Any], *, escape_rfl_parameter_end: bool = False
+) -> dict[str, Any]:
     openai_message: dict[str, Any] = {
         "role": "assistant",
         "content": message.get("content"),
@@ -214,7 +216,12 @@ def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
                 "type": "function",
                 "function": {
                     "name": tool_call["name"],
-                    "arguments": json.dumps(tool_call.get("arguments", {}), separators=(",", ":")),
+                    "arguments": json.dumps(
+                        _escape_rfl_parameter_end(tool_call.get("arguments", {}))
+                        if escape_rfl_parameter_end
+                        else tool_call.get("arguments", {}),
+                        separators=(",", ":"),
+                    ),
                 },
             }
             for tool_call in message["tool_calls"]
@@ -223,6 +230,23 @@ def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
         openai_message["content"] = ""
     _apply_openai_reasoning_meta(openai_message, message.get("reasoning_meta"))
     return openai_message
+
+
+def _escape_rfl_parameter_end(value: Any) -> Any:
+    """Escape a reserved delimiter in historical argument values, without mutation.
+
+    Cat Jam's prompt renderer rejects this closing marker inside a Tool argument
+    even when JSON-escaped. Only the profiled outgoing history uses this visible
+    spelling; canonical arguments, property names and Tool execution stay exact.
+    """
+
+    if isinstance(value, str):
+        return value.replace("</rfl:parameter>", "&lt;/rfl:parameter&gt;")
+    if isinstance(value, dict):
+        return {key: _escape_rfl_parameter_end(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_escape_rfl_parameter_end(item) for item in value]
+    return value
 
 
 def _apply_openai_tools(

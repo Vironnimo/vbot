@@ -363,7 +363,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         reasoning. With ``replay.echo_empty_on_tool_calls`` a Tool-call turn
         that carries no readable reasoning gets an empty carrier.
         """
-        wire = _to_openai_assistant_message(message)
+        wire = _to_openai_assistant_message(
+            message,
+            escape_rfl_parameter_end=(
+                self.wire_profile(model_id or "").request.options.get("escape_rfl_parameter_end")
+                is True
+            ),
+        )
         fidelity = self.reasoning_replay_fidelity(model_id or "")
         reasoning_meta = message.get("reasoning_meta")
         if fidelity != REASONING_REPLAY_FIDELITY_READABLE_ONLY and isinstance(

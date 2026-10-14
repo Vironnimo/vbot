@@ -214,6 +214,7 @@
     },
     "cat-jam-free": {
       "set": {
+        "request": {"options": {"escape_rfl_parameter_end": true}},
         "response": {"reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]}
       },
       "verified": {
