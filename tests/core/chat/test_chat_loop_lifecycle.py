@@ -16,6 +16,7 @@ from core.chat.streaming import StreamingChunkTimeoutError
 from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.runs import (
     PROVIDER_REQUEST_STATUS_EVENT,
+    ActiveRunError,
     RunAdmission,
     RunAdmissionBlockedError,
     RunCancelledError,
@@ -28,6 +29,8 @@ from tests.core.chat.chat_loop_support import (
     RecordingReflection,
     StubAdapter,
     StubAgent,
+    StubProject,
+    StubProjects,
     StubRuntime,
     build_chat_loop,
     history,
@@ -54,14 +57,32 @@ def _answer(content: str = "Done") -> JsonObject:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entry_point", ["start_run", "queue_run"])
-@pytest.mark.parametrize("session_state", ["missing", "archived", "recreated"])
+@pytest.mark.parametrize(
+    ("session_state", "pause_at"),
+    [
+        ("missing", "get"),
+        ("archived", "get"),
+        ("recreated", "get"),
+        ("archived", "working_project"),
+        ("recreated", "working_project"),
+    ],
+)
 async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     entry_point: str,
     session_state: str,
+    pause_at: str,
 ) -> None:
     runtime = _runtime(tmp_path, [_answer()])
+    if pause_at == "working_project":
+        runtime.projects = StubProjects(
+            {"old-project": StubProject("old-project", str(tmp_path), [])}
+        )
+        runtime.chat_sessions.delete(SESSION)
+        runtime.chat_sessions.create(
+            "coder", session_id=SESSION.session_id, working_project_id="old-project"
+        )
     loop = build_chat_loop(runtime)
     start = getattr(loop, entry_point)
 
@@ -83,7 +104,19 @@ async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
             await release.wait()
             return session
 
-        monkeypatch.setattr(runtime.chat_sessions, "get_async", paused_get)
+        if pause_at == "get":
+            monkeypatch.setattr(runtime.chat_sessions, "get_async", paused_get)
+        else:
+            resolver = runtime.agent_resolver
+            resolve = resolver.resolve_working_project_async
+
+            async def paused_project(*args, **kwargs):
+                project = await resolve(*args, **kwargs)
+                entered.set()
+                await release.wait()
+                return project
+
+            monkeypatch.setattr(resolver, "resolve_working_project_async", paused_project)
         pending = asyncio.create_task(start("coder", "Hi", session_id=SESSION.session_id))
         await asyncio.wait_for(entered.wait(), 5)
         async with runtime.chat_runs.session_admission_guard(SESSION):
@@ -92,11 +125,13 @@ async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
                 replacement = runtime.chat_sessions.create("coder", session_id=SESSION.session_id)
                 replacement.append(ChatMessage.user("Replacement history"))
         release.set()
-        admitted = await pending
-        run = admitted if entry_point == "start_run" else await admitted.future
+        run = None
         with pytest.raises(ChatSessionError):
+            admitted = await pending
+            run = admitted if entry_point == "start_run" else await admitted.future
             await run.wait()
-        assert run.events[-1].payload["history_persisted"] is False
+        if run is not None:
+            assert run.events[-1].payload["history_persisted"] is False
         assert not runtime.chat_runs.has_activity_for_session(
             "coder", SESSION.session_id, project_id=None
         )
@@ -134,21 +169,54 @@ async def test_run_end_notifies_the_reflection_service(tmp_path: Path, origin: s
 
 
 @pytest.mark.asyncio
-async def test_a_new_session_whose_run_is_not_admitted_is_removed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("used", ["unused", "running", "completed", "recreated", "history"])
+async def test_refused_new_session_start_discards_only_its_unused_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, used: str
 ) -> None:
     runtime = _runtime(tmp_path, [_answer()])
+    start = runtime.chat_runs.start
+    release = asyncio.Event()
+    other_run = None
+    created = None
 
-    async def refuse(*_args: Any, **_kwargs: Any) -> Any:
+    async def refuse(address, *_args: Any, **_kwargs: Any) -> Any:
+        nonlocal other_run, created
+        created = address
+        if used in {"running", "completed"}:
+
+            async def execute(_run):
+                await release.wait()
+
+            other_run = await start(address, execute)
+            await other_run.wait_admitted()
+        if used in {"running", "completed", "history"}:
+            runtime.chat_sessions.get(address).append(ChatMessage.user("Already stored"))
+        if used == "completed":
+            assert other_run is not None
+            release.set()
+            await other_run.wait()
+        if used == "recreated":
+            await runtime.chat_sessions.archive(address)
+            runtime.chat_sessions.create(address.agent_id, session_id=address.session_id)
         raise RunAdmissionBlockedError("Session is being archived")
 
     monkeypatch.setattr(runtime.chat_runs, "start", refuse)
 
-    with pytest.raises(RunAdmissionBlockedError):
-        await build_chat_loop(runtime).start_run_in_new_session("coder", "Hi")
+    try:
+        with pytest.raises(ActiveRunError):
+            await build_chat_loop(runtime).start_run_in_new_session("coder", "Hi")
 
-    # The Session created for the refused message is compensated; others stay.
-    assert [session.id for session in runtime.chat_sessions.list("coder")] == ["session-one"]
+        assert created is not None
+        assert runtime.chat_sessions.exists(created) is (used != "unused")
+        if used in {"running", "completed", "history"}:
+            assert runtime.chat_sessions.get(created).load()[0].content == "Already stored"
+    finally:
+        release.set()
+        if other_run is not None:
+            await other_run.wait()
+
+    # Unrelated Sessions survive every cleanup outcome.
+    assert runtime.chat_sessions.exists(SESSION)
     assert runtime.adapter.requests == []
 
 

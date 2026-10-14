@@ -226,7 +226,7 @@ class ChatSessionManager:
             raise ChatSessionError("run kind must be a RunKind")
         requested = SessionAddress(project_id, agent_id, session_id or "")
         working_project = self._new_working_project(requested, working_project_id)
-        address = self._store.create(
+        address, generation_id = self._store.create(
             requested,
             generate_id=session_id is None,
             run_kind=None if run_kind is None else run_kind.value,
@@ -242,7 +242,7 @@ class ChatSessionManager:
             f" working_project={working_project}" if working_project else "",
             actor or "internal",
         )
-        return ChatSession(self._store, address)
+        return ChatSession(self._store, address, generation_id=generation_id)
 
     async def create_async(
         self,
@@ -981,6 +981,13 @@ class ChatSessionManager:
         A review fork with a running Run stays, whole.
         """
         self._store.delete(address)
+
+    def discard_unused(self, address: SessionAddress, generation_id: str) -> bool:
+        """Discard only this newly created generation if no history or Run has used it.
+
+        The caller must also hold its Run admission guard to exclude pending admission.
+        """
+        return self._store.discard_unused(address, generation_id)
 
     def review_forks(self, address: SessionAddress) -> tuple[SessionAddress, ...]:
         """The live review forks that follow one live Session, oldest first.

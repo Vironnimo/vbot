@@ -175,9 +175,9 @@ class SessionStore:
         run_kind: str | None = None,
         metadata: JsonObject | None = None,
         working_project_id: str | None = None,
-    ) -> SessionAddress:
-        return self._execute_write(
-            lambda connection: _store_mutations.create(
+    ) -> tuple[SessionAddress, str]:
+        def create(connection: sqlite3.Connection) -> tuple[SessionAddress, str]:
+            created = _store_mutations.create(
                 connection,
                 address,
                 created_at,
@@ -186,7 +186,9 @@ class SessionStore:
                 metadata=metadata,
                 working_project_id=working_project_id,
             )
-        )
+            return created, str(_store_values._require_live(connection, created)["generation_id"])
+
+        return self._execute_write(create)
 
     def ensure_live(
         self, address: SessionAddress, new_working_project: Callable[[], str | None] | None = None
@@ -267,6 +269,11 @@ class SessionStore:
 
     def delete(self, address: SessionAddress) -> None:
         return self._execute_write(lambda connection: _store_mutations.delete(connection, address))
+
+    def discard_unused(self, address: SessionAddress, generation_id: str) -> bool:
+        return self._execute_write(
+            lambda connection: _store_mutations.discard_unused(connection, address, generation_id)
+        )
 
     def retarget_identity_agent(self, old_agent_id: str, new_agent_id: str) -> None:
         return self._execute_write(

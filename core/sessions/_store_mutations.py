@@ -557,6 +557,26 @@ def review_fork_addresses(
     )
 
 
+def discard_unused(
+    connection: sqlite3.Connection, address: SessionAddress, generation_id: str
+) -> bool:
+    """Atomically compensate a creation, never a replacement or a used Session."""
+    state = _store_values._find_live(connection, address)
+    if state is None or state["generation_id"] != generation_id or state["next_seq"] != 0:
+        return False
+    session_key = int(state["session_key"])
+    if (
+        connection.execute(
+            "SELECT 1 FROM runs WHERE session_key = ? LIMIT 1", (session_key,)
+        ).fetchone()
+        is not None
+    ):
+        return False
+    _store_values._reject_owner_managed_mutation(connection, state)
+    delete_session(connection, session_key)
+    return True
+
+
 def delete(connection: sqlite3.Connection, address: SessionAddress) -> None:
     """Delete one live Session after its idle live review forks, newest first."""
     state = _store_values._require_live(connection, address)
