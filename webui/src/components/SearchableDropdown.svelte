@@ -410,6 +410,9 @@
     }
     if (event.key === 'Tab') {
       close();
+      // Resume native Tab order at the trigger before the portaled panel
+      // disappears or an enclosing Modal checks its focus boundary.
+      triggerElement?.focus();
       return;
     }
     if (event.key === 'Enter') {
@@ -485,7 +488,7 @@
   }
 
   function handleDocumentKeyDown(event) {
-    if (event.key === 'Escape') {
+    if (event.key === 'Escape' && !isImeComposing(event)) {
       close();
     }
   }

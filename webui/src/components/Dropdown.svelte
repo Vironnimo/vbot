@@ -298,6 +298,9 @@
     }
     if (event.key === 'Tab') {
       close();
+      // Resume native Tab order at the trigger before the portaled list
+      // disappears or an enclosing Modal checks its focus boundary.
+      triggerElement?.focus();
       return;
     }
     if (isTypeaheadKey(event)) {

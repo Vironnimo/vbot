@@ -99,52 +99,95 @@ describe('SearchableDropdown', () => {
     expect(root.dataset.state).toBe('closed');
   });
 
-  it('uses combobox/listbox semantics and selects with arrow keys', async () => {
-    const onValueChange = vi.fn();
-    mountedComponent = mount(SearchableDropdown, {
-      target: document.body,
-      props: {
-        id: 'keyboard-searchable-dropdown',
-        value: 'alpha',
-        options: ['alpha', 'beta', 'gamma'],
-        searchPlaceholder: 'Filter models',
-        onValueChange,
-      },
-    });
-    flushSync();
+  it.each([
+    ['isComposing', { isComposing: true }],
+    ['legacy keyCode 229', { keyCode: 229 }],
+  ])(
+    'uses combobox/listbox keyboard navigation outside IME (%s)',
+    async (_name, composition) => {
+      const onValueChange = vi.fn();
+      mountedComponent = mount(SearchableDropdown, {
+        target: document.body,
+        props: {
+          id: 'keyboard-searchable-dropdown',
+          value: 'alpha',
+          options: ['alpha', 'beta', 'gamma'],
+          searchPlaceholder: 'Filter models',
+          onValueChange,
+        },
+      });
+      flushSync();
 
-    const trigger = document.querySelector('#keyboard-searchable-dropdown');
-    trigger.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
-    );
-    await vi.waitFor(() => {
-      expect(document.activeElement?.getAttribute('role')).toBe('combobox');
-    });
-
-    const input = document.activeElement;
-    const listbox = document.querySelector('[role="listbox"]');
-    expect(input.getAttribute('aria-controls')).toBe(listbox.id);
-    expect(input.getAttribute('aria-label')).toBe('Filter models');
-    expect(input.getAttribute('aria-activedescendant')).toContain('-option-0');
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
-    );
-    await vi.waitFor(() => {
-      expect(input.getAttribute('aria-activedescendant')).toContain(
-        '-option-1',
+      const trigger = document.querySelector('#keyboard-searchable-dropdown');
+      trigger.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
       );
-    });
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-    );
+      await vi.waitFor(() => {
+        expect(document.activeElement?.getAttribute('role')).toBe('combobox');
+      });
 
-    expect(onValueChange).toHaveBeenCalledWith(
-      'beta',
-      expect.objectContaining({ value: 'beta' }),
-    );
-    expect(document.activeElement).toBe(trigger);
-  });
+      const input = document.activeElement;
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(input.getAttribute('aria-controls')).toBe(listbox.id);
+      expect(input.getAttribute('aria-label')).toBe('Filter models');
+      expect(input.getAttribute('aria-activedescendant')).toContain(
+        '-option-0',
+      );
+
+      input.value = 'a';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      for (const key of ['Enter', 'Escape']) {
+        const event = new KeyboardEvent('keydown', {
+          key,
+          bubbles: true,
+          cancelable: true,
+          ...composition,
+        });
+        input.dispatchEvent(event);
+        flushSync();
+        expect(event.defaultPrevented).toBe(false);
+        expect(onValueChange).not.toHaveBeenCalled();
+        expect(document.querySelector('[role="combobox"]')).toBe(input);
+        expect(document.activeElement).toBe(input);
+        expect(input.value).toBe('a');
+        expect(input.getAttribute('aria-activedescendant')).toContain(
+          '-option-0',
+        );
+      }
+
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+      );
+      await vi.waitFor(() => {
+        expect(input.getAttribute('aria-activedescendant')).toContain(
+          '-option-1',
+        );
+      });
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+
+      expect(onValueChange).toHaveBeenCalledWith(
+        'beta',
+        expect.objectContaining({ value: 'beta' }),
+      );
+      expect(document.activeElement).toBe(trigger);
+
+      await mountedComponent.open();
+      flushSync();
+      const escape = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      });
+      document.activeElement.dispatchEvent(escape);
+      flushSync();
+      expect(escape.defaultPrevented).toBe(true);
+      expect(document.querySelector('[role="combobox"]')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    },
+  );
 
   it('renders option decorations and an invalid choice and opens programmatically', async () => {
     mountedComponent = mount(SearchableDropdown, {

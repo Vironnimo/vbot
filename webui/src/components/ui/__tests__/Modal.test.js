@@ -10,6 +10,9 @@ vi.mock('svelte', async () => {
 });
 
 const { default: Modal } = await import('../Modal.svelte');
+const { default: Dropdown } = await import('../../Dropdown.svelte');
+const { default: SearchableDropdown } =
+  await import('../../SearchableDropdown.svelte');
 
 function snippet(html) {
   return createRawSnippet(() => ({ render: () => html }));
@@ -17,14 +20,20 @@ function snippet(html) {
 
 describe('Modal', () => {
   let mountedComponent;
+  let mountedDropdown;
 
   beforeEach(() => {
     document.body.innerHTML = '';
     init('en');
     mountedComponent = null;
+    mountedDropdown = null;
   });
 
   afterEach(async () => {
+    if (mountedDropdown) {
+      await unmount(mountedDropdown);
+      mountedDropdown = null;
+    }
     if (mountedComponent) {
       await unmount(mountedComponent);
       mountedComponent = null;
@@ -201,48 +210,99 @@ describe('Modal', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('traps Tab navigation, isolates the background, and restores focus', async () => {
-    const opener = document.createElement('button');
-    opener.textContent = 'Open';
-    document.body.append(opener);
-    opener.focus();
+  it.each([
+    ['simple', Dropdown],
+    ['searchable', SearchableDropdown],
+  ])(
+    'traps Tab navigation with a %s dropdown, isolates the background, and restores focus',
+    async (_name, Picker) => {
+      const opener = document.createElement('button');
+      opener.textContent = 'Open';
+      document.body.append(opener);
+      opener.focus();
 
-    render({
-      body: snippet(
-        '<div class="modal-body"><button class="body-action">Action</button></div>',
-      ),
-    });
+      render({
+        body: snippet(
+          '<div class="modal-body"><button class="body-action">Action</button><div class="picker"></div><input class="after-picker" /></div>',
+        ),
+      });
 
-    const dialog = document.body.querySelector('.modal');
-    const closeButton = dialog.querySelector('.modal-close');
-    const bodyAction = dialog.querySelector('.body-action');
-    expect(document.activeElement).toBe(dialog);
-    expect(opener.inert).toBe(true);
+      const dialog = document.body.querySelector('.modal');
+      const closeButton = dialog.querySelector('.modal-close');
+      const afterPicker = dialog.querySelector('.after-picker');
+      expect(document.activeElement).toBe(dialog);
+      expect(opener.inert).toBe(true);
 
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
-    );
-    expect(document.activeElement).toBe(closeButton);
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+      );
+      expect(document.activeElement).toBe(closeButton);
 
-    bodyAction.focus();
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
-    );
-    expect(document.activeElement).toBe(closeButton);
+      afterPicker.focus();
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+      );
+      expect(document.activeElement).toBe(closeButton);
 
-    closeButton.focus();
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', {
+      closeButton.focus();
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Tab',
+          shiftKey: true,
+          bubbles: true,
+        }),
+      );
+      expect(document.activeElement).toBe(afterPicker);
+
+      const pickerHost = dialog.querySelector('.picker');
+      mountedDropdown = mount(Picker, {
+        target: pickerHost,
+        props: { options: ['alpha', 'beta'], value: 'alpha' },
+      });
+      flushSync();
+      const trigger = pickerHost.querySelector('button');
+      for (const shiftKey of [false, true]) {
+        await mountedDropdown.open();
+        flushSync();
+        const panelFocus = document.activeElement;
+        expect(dialog.contains(panelFocus)).toBe(false);
+        const tab = new KeyboardEvent('keydown', {
+          key: 'Tab',
+          shiftKey,
+          bubbles: true,
+          cancelable: true,
+        });
+        panelFocus.dispatchEvent(tab);
+        flushSync();
+        expect(trigger.getAttribute('aria-expanded')).toBe('false');
+        // jsdom does not perform native Tab navigation. Restoring the trigger
+        // and leaving Tab unconsumed lets the browser reach the next/previous
+        // field instead of wrapping to a dialog boundary.
+        expect(document.activeElement).toBe(trigger);
+        expect(tab.defaultPrevented).toBe(false);
+      }
+
+      // A dropdown at the end still wraps inside the dialog.
+      afterPicker.after(pickerHost);
+      await mountedDropdown.open();
+      flushSync();
+      const boundaryTab = new KeyboardEvent('keydown', {
         key: 'Tab',
-        shiftKey: true,
         bubbles: true,
-      }),
-    );
-    expect(document.activeElement).toBe(bodyAction);
+        cancelable: true,
+      });
+      document.activeElement.dispatchEvent(boundaryTab);
+      flushSync();
+      expect(boundaryTab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(closeButton);
 
-    await unmount(mountedComponent);
-    mountedComponent = null;
-    expect(opener.inert).toBe(false);
-    expect(document.activeElement).toBe(opener);
-  });
+      await unmount(mountedDropdown);
+      mountedDropdown = null;
+
+      await unmount(mountedComponent);
+      mountedComponent = null;
+      expect(opener.inert).toBe(false);
+      expect(document.activeElement).toBe(opener);
+    },
+  );
 });
