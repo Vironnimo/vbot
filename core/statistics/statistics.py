@@ -41,11 +41,13 @@ from core.statistics.report import (
     WindowInfo,
 )
 from core.statistics.skills import (
+    SkillActivationUse,
     SkillInventorySource,
     SkillUse,
     _ResolvedInventory,
     counts_as_skill_use,
     empty_inventory,
+    load_skill_package_use,
     load_skill_use,
     offered_skill_names,
     resolve_inventory,
@@ -288,6 +290,32 @@ class StatisticsService:
     async def skill_usage_async(self) -> dict[tuple[str, str], SkillUse]:
         """``skill_usage`` on the index database's worker pool."""
         return await self._index.run_async(self.skill_usage)
+
+    def skill_package_usage(self) -> tuple[SkillActivationUse, ...]:
+        """Return actual package activations, retaining unqualified historical facts."""
+        self._import_session_usage()
+        scopes = self._statistics_scopes()
+
+        def consume(view: IndexView) -> tuple[SkillActivationUse, ...]:
+            owners = {
+                indexed.session_key: scope.agent_id
+                for scope in scopes
+                for indexed, _session_id in _surviving(view, scope)
+                if counts_as_skill_use(indexed.summary)
+            }
+            return load_skill_package_use(view.connection, owners)
+
+        return self._index.read(
+            self._sessions,
+            _index_scopes(scopes, self._extension_sessions()),
+            consume,
+            usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
+        )
+
+    async def skill_package_usage_async(self) -> tuple[SkillActivationUse, ...]:
+        """Read package-qualified use on the index database's worker pool."""
+        return await self._index.run_async(self.skill_package_usage)
 
     async def group_usage(
         self,

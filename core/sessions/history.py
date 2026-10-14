@@ -19,6 +19,7 @@ from core.sessions._types import (
     SKILL_TOOL_MESSAGE_NAME,
     TOOL_CHANGE_NOTE_PREFIX,
 )
+from core.skills.policy import SkillPackageRef
 from core.skills.skills import format_skill_activation_context
 
 if TYPE_CHECKING:
@@ -169,6 +170,18 @@ def skill_activation_names(messages: list[ChatMessage]) -> frozenset[str]:
 
 def skill_activation_contents(messages: list[ChatMessage]) -> dict[str, str]:
     return _skill_contexts(messages)
+
+
+def skill_activation_packages(messages: list[ChatMessage]) -> dict[str, SkillPackageRef | None]:
+    """Actual packages of the current epoch's activation carriers, when recorded."""
+    result: dict[str, SkillPackageRef | None] = {}
+    for message in messages:
+        if message.role == "compaction_checkpoint":
+            result.clear()
+        activation = skill_context_note_payload(message) or skill_tool_activation(message)
+        if activation:
+            result[activation[0]] = message.skill_package
+    return result
 
 
 def current_skill_activation_contents(messages: list[ChatMessage]) -> dict[str, str]:

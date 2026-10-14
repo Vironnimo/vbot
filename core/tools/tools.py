@@ -12,7 +12,7 @@ import weakref
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from difflib import SequenceMatcher
-from functools import wraps
+from functools import partial, wraps
 from typing import Any, ClassVar, cast
 
 from core.tools._tool_context import (
@@ -1117,7 +1117,11 @@ class ToolExecutor:
                 cancel_registration_hook=cancel_registration_hook,
                 cancel_check_hook=cancel_check_hook,
                 note_hook=config.note_hook,
-                skill_activation_hook=config.skill_activation_hook,
+                skill_activation_hook=(
+                    partial(config.skill_activation_hook, tool_call.id)
+                    if config.skill_activation_hook is not None
+                    else None
+                ),
                 result_persisted_hook=result_persisted_hook,
                 delivery_receipt_hook=config.tool_delivery_receipt_registrar,
                 request_turn_end_hook=config.tool_turn_end_registrar,

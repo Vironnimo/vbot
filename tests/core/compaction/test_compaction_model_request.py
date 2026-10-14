@@ -9,6 +9,7 @@ from typing import Any, cast, override
 
 import pytest
 
+import core.compaction._model_request as model_request
 from core.chat.streaming import (
     StreamingChunkTimeoutError,
     StreamingProgressTimeoutError,
@@ -320,3 +321,176 @@ async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, hear
     with pytest.raises(expected):
         await asyncio.wait_for(_send_streaming_model_request(StalledAdapter(), [], {}), 2)
     assert closed.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "content",
+        "reasoning",
+        "retry",
+        "backoff",
+        "suppressed-backoff",
+        "suppressed-cancellation",
+        "hot-content",
+        "hot-finish",
+    ],
+)
+async def test_compaction_deadline_covers_active_output_and_recovery(monkeypatch, phase):
+    budgets: list[asyncio.Timeout] = []
+    durations: list[float] = []
+    attempts = 0
+    closed = 0
+    emitted = 0
+
+    def controlled_timeout(seconds: float) -> asyncio.Timeout:
+        durations.append(seconds)
+        budget = asyncio.timeout(seconds)
+        budgets.append(budget)
+        return budget
+
+    def expire() -> None:
+        budgets[0].reschedule(asyncio.get_running_loop().time())
+
+    async def backoff(delay: float) -> None:
+        if phase in {"backoff", "suppressed-backoff"}:
+            expire()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if phase != "suppressed-backoff":
+                    raise
+
+    class ActiveAdapter(StubAdapter):
+        @override
+        async def stream(self, messages, **kwargs):
+            nonlocal attempts, closed, emitted
+            attempts += 1
+            try:
+                yield {"type": "usage", "input_tokens": 75}
+                if phase in {"retry", "backoff", "suppressed-backoff"} and attempts == 1:
+                    raise NetworkError("stream dropped")
+                try:
+                    while True:
+                        emitted += 1
+                        yield {
+                            "type": "reasoning_delta" if phase == "reasoning" else "content_delta",
+                            "text": "Working",
+                        }
+                        if emitted == 2:
+                            if phase == "hot-finish":
+                                yield {"type": "finish", "reason": "stop"}
+                            expire()
+                            if phase == "hot-finish":
+                                return
+                        if not phase.startswith("hot-"):
+                            await asyncio.sleep(0)
+                except asyncio.CancelledError:
+                    if phase != "suppressed-cancellation":
+                        raise
+                    yield {"type": "finish", "reason": "stop"}
+            finally:
+                closed += 1
+
+    # Keep the real timeout mechanism, but fire its timer from the controlled
+    # stream/backoff instead of waiting seven minutes or changing a global clock.
+    monkeypatch.setattr(
+        model_request,
+        "asyncio",
+        SimpleNamespace(
+            timeout=controlled_timeout,
+            CancelledError=asyncio.CancelledError,
+            get_running_loop=asyncio.get_running_loop,
+        ),
+    )
+    monkeypatch.setattr(model_request, "_sleep", backoff)
+    recorder = RecordingUsageRecorder()
+    adapter = ActiveAdapter()
+    messages = [user("u1", "Request"), assistant("a1", "Answer")]
+    with pytest.raises(CompactionError) as failure:
+        await asyncio.wait_for(
+            compact(
+                messages,
+                service=CompactionService(usage_recorder=cast(Any, recorder)),
+                summary_adapter=adapter,
+                summary_model_id="active",
+                active_adapter=adapter,
+                active_model_id="active",
+                active_model_reference="openai/active",
+                settings=CompactionSettings(strategy="continuation"),
+                request_messages=provider_request(messages),
+            ),
+            2,
+        )
+    assert failure.value.model == "openai/active"
+    assert durations == [420]
+    if phase.startswith("hot-"):
+        # An immediately-ready iterator never gives the timeout callback a
+        # turn. Check the deadline itself, including after its last delta.
+        deadline = budgets[0].when()
+        assert deadline is not None and deadline <= asyncio.get_running_loop().time()
+        assert emitted <= 3
+    else:
+        assert budgets[0].expired()
+    assert closed == attempts == (2 if phase == "retry" else 1)
+    assert emitted >= 2 or phase in {"backoff", "suppressed-backoff"}
+    assert [call["status"] for call in recorder.calls] == ["failed"] * attempts
+    assert all(call["usage"]["input_tokens"] == 75 for call in recorder.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("characters", "close_failure"), [(100_000, False), (100_001, False), (100_001, True)]
+)
+async def test_compaction_summary_limit_rejects_without_retry_and_closes(
+    monkeypatch, characters, close_failure
+):
+    closed = 0
+    attempts = 0
+    waits = []
+
+    async def record_wait(delay: float) -> None:
+        waits.append(delay)
+
+    class LargeSummaryAdapter(StubAdapter):
+        @override
+        async def stream(self, messages, **kwargs):
+            nonlocal attempts, closed
+            attempts += 1
+            try:
+                yield {"type": "usage", "input_tokens": 75}
+                yield {"type": "content_delta", "text": "S" * 50_000}
+                yield {"type": "content_delta", "text": "S" * (characters - 50_000)}
+                yield {"type": "finish", "reason": "stop"}
+            finally:
+                closed += 1
+                if close_failure:
+                    raise NetworkError("cleanup failed")
+
+    monkeypatch.setattr(model_request, "_sleep", record_wait)
+    recorder = RecordingUsageRecorder()
+    adapter = LargeSummaryAdapter()
+    messages = [user("u1", "Request"), assistant("a1", "Answer")]
+    operation = compact(
+        messages,
+        service=CompactionService(usage_recorder=cast(Any, recorder)),
+        summary_adapter=adapter,
+        summary_model_id="active",
+        active_adapter=adapter,
+        active_model_id="active",
+        settings=CompactionSettings(strategy="continuation"),
+        request_messages=provider_request(messages),
+    )
+    if characters == 100_000:
+        checkpoint = await operation
+        assert "S" * characters in str(checkpoint.content)
+        expected_status = "completed"
+    else:
+        with pytest.raises(CompactionError):
+            await operation
+        expected_status = "failed"
+    assert attempts == closed == 1
+    assert waits == []
+    assert [call["status"] for call in recorder.calls] == [expected_status]
+    assert recorder.calls[0]["usage"]["input_tokens"] == 75

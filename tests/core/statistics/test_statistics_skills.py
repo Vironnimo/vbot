@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -17,6 +18,7 @@ from core.chat.messages import ChatMessage
 from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager, SeenSkillsUpdate
 from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
+from core.skills.policy import SkillPackageRef
 from core.statistics import SkillInventorySource
 from core.statistics.skills import (
     SkillsSection,
@@ -386,6 +388,46 @@ def test_skill_usage_returns_each_agents_last_activation_and_count(
     # A deleted Session no longer counts; the query refreshes the projection.
     manager.delete(first.address)
     assert asyncio.run(service.skill_usage_async())[("main", "deploy")].count == 1
+
+
+def test_package_usage_preserves_loaded_identity_and_follows_owner_rename(
+    manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
+    package = SkillPackageRef("agent", "package-folder", "owner")
+    other = replace(package, location="other")
+    later = BASE + timedelta(hours=1)
+    session = _offer_session(
+        manager,
+        "receiver",
+        (),
+        [
+            _skill_note("public-name", BASE),
+            replace(_skill_note("public-name", BASE), skill_package=package),
+            replace(_skill_note("public-name", later), skill_package=package),
+            replace(_skill_note("public-name", BASE), skill_package=other),
+        ],
+    )
+    _review_session(
+        manager, session, (), [replace(_skill_note("public-name", later), skill_package=package)]
+    )
+    service = statistics(["receiver"])
+
+    uses = service.skill_package_usage()
+
+    assert len({use.session_key for use in uses}) == 1
+    assert {(use.name, use.package, use.last_activated) for use in uses} == {
+        ("public-name", None, format_canonical_timestamp(BASE)),
+        ("public-name", package, format_canonical_timestamp(later)),
+        ("public-name", other, format_canonical_timestamp(BASE)),
+    }
+    manager.retarget_identity_agent_sessions("owner", "renamed")
+    assert {use.package for use in service.skill_package_usage()} == {
+        None,
+        replace(package, location="renamed"),
+        other,
+    }
+    manager.delete(session.address)
+    assert asyncio.run(service.skill_package_usage_async()) == ()
 
 
 def test_service_without_an_inventory_reports_an_empty_skills_section(

@@ -610,6 +610,7 @@ class StubSkill:
     description: str
     path: Path
     requirements: SkillRequirements = field(default_factory=SkillRequirements)
+    package_ref: Any = None
 
 
 class StubSkills:

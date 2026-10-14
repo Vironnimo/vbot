@@ -8,6 +8,7 @@ import re
 import shutil
 from collections import Counter
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -163,6 +164,7 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
     assert {"deploy", "release"} <= _names(registry)
     assert "secret-notes" not in _names(registry)
     assert registry.get("deploy").path == (package / "SKILL.md").resolve()
+    assert registry.get("deploy").package_ref == SkillPackageRef("agent", "a-deploy-folder", "main")
     # Resolving several shares scans an owner's home once. Loading the selected
     # packages into the receiver's registry does not reread unshared neighbours.
     assert metadata_reads[(secret / "SKILL.md").resolve()] == 1
@@ -177,6 +179,7 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
 
     # The owner's view is unchanged, including its always-allowed private Skills.
     owner_after = runtime.skills_for(None, "main")
+    assert owner_after.get("deploy").package_ref == registry.get("deploy").package_ref
     assert _names(owner_after) == _names(owner_before)
     assert sorted(_allowed(owner_after, [])) == ["deploy", "release", "secret-notes"]
 
@@ -412,6 +415,17 @@ async def test_shared_skill_mutations_target_the_package_that_activation_resolve
         "own_shadow",
         "write_error",
         "owner_write_error",
+        "disabled_target",
+        "own_target",
+        "shared_target",
+        "project_target",
+        "project_old_shadow",
+        "project_grant",
+        "project_grant_blocked",
+        "missing_requirement",
+        "removed_dependency",
+        "removed_dependency_fallback",
+        "late_share",
     ],
 )
 async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
@@ -424,17 +438,82 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
         excluded = {
             "excluded_target": ["deploy"],
             "excluded_old": ["deploy-web", "deploy"],
+            "project_grant": ["deploy-web", "deploy"],
+            "project_grant_blocked": ["deploy-web", "deploy"],
         }.get(selection, [])
         runtime.agents.create(
             "receiver", "Receiver", allowed_skills=allowed, excluded_skills=excluded
         )
-        runtime.agents.update("main", allowed_skills=["deploy-web"], excluded_skills=["deploy"])
+        runtime.agents.update(
+            "main",
+            allowed_skills=[] if selection == "removed_dependency_fallback" else ["deploy-web"],
+            excluded_skills=["deploy"],
+        )
         data_dir = runtime.storage.data_dir
         write_agent_skill(data_dir, "main", "deploy-web", "Deploy the web app.")
-        write_agent_skill(data_dir, "main", "deploy", "Deploy anything.")
+        successor = write_agent_skill(data_dir, "main", "deploy", "Deploy anything.")
         if selection == "own_shadow":
             write_agent_skill(data_dir, "receiver", "deploy-web", "A different playbook.")
-        runtime.skill_policy.set_shared("main", "deploy-web", shared=True, receivers=["receiver"])
+        runtime.skill_policy.set_shared(
+            "main", "deploy-web", shared=selection != "late_share", receivers=["receiver"]
+        )
+        if selection == "late_share":
+            skills = runtime._skill_operations()
+            guard = skills.merge_guard
+
+            @contextmanager
+            def share_before_guard() -> Iterator[None]:
+                runtime.skill_policy.set_shared(
+                    "main", "deploy-web", shared=True, receivers=["receiver"]
+                )
+                with guard():
+                    yield
+
+            monkeypatch.setattr(skills, "merge_guard", share_before_guard)
+        if selection == "disabled_target":
+            runtime.skill_policy.set_package_disabled(
+                SkillPackageRef("agent", "deploy", "main"), disabled=True
+            )
+        elif selection == "own_target":
+            write_agent_skill(data_dir, "receiver", "deploy", "A different playbook.")
+        elif selection == "shared_target":
+            runtime.agents.create("another", "Another")
+            write_agent_skill(data_dir, "another", "deploy", "Another shared playbook.")
+            runtime.skill_policy.set_shared(
+                "another", "deploy", shared=True, receivers=["receiver"]
+            )
+        elif selection in {"project_target", "project_old_shadow"}:
+            repo = tmp_path / "repo"
+            write_project_skill(repo, "deploy", "The Project's playbook.")
+            if selection == "project_old_shadow":
+                write_project_skill(repo, "deploy-web", "The Project's old playbook.")
+            runtime.projects.create("p", "P", repo)
+        elif selection in {"project_grant", "project_grant_blocked"}:
+            # Project Context can grant a shared name that the Agent personally
+            # excludes. Its prior access must also survive the merge.
+            repo = tmp_path / "repo"
+            if selection == "project_grant_blocked":
+                write_project_skill(repo, "deploy", "The Project's playbook.")
+            write_skill(data_dir / "skills", "deploy-web", "Global fallback.")
+            runtime.projects.create("p", "P", repo)
+            runtime.projects.update("p", skills_global_enabled=["deploy-web"])
+        elif selection in {
+            "missing_requirement",
+            "removed_dependency",
+            "removed_dependency_fallback",
+        }:
+            required = "missing-helper" if selection == "missing_requirement" else "deploy-web"
+            if selection == "removed_dependency_fallback":
+                write_skill(data_dir / "skills", "deploy-web", "Unselected global fallback.")
+            path = successor / "SKILL.md"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "description: Deploy anything.",
+                    "description: Deploy anything.\nmetadata:\n  vbot:\n"
+                    f"    requirements: {{skill: {required}}}",
+                ),
+                encoding="utf-8",
+            )
         if selection in {"write_error", "owner_write_error"}:
             update = runtime.agents.update
             failing_agent = "main" if selection == "owner_write_error" else "receiver"
@@ -464,12 +543,55 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
             data_root=data_dir,
             cwd=tmp_path,
         )
+        home = runtime.agent_skills_dir("main")
+        protected_files = [
+            home / "deploy-web" / "SKILL.md",
+            home / "deploy" / "SKILL.md",
+            data_dir / "skills" / "policy.json",
+            data_dir / "agents" / "main" / "agent.json",
+            data_dir / "agents" / "receiver" / "agent.json",
+        ]
+        before = {path: path.read_bytes() for path in protected_files}
+        history_before = runtime.skill_authoring.history(home, "deploy-web")
 
         result = await runtime.tools.dispatch(
             context,
             {"action": "delete", "name": "deploy-web", "absorbed_into": "deploy"},
             ["skill_manage"],
         )
+        if selection == "late_share":
+            monkeypatch.setattr(skills, "merge_guard", guard)
+
+        if selection in {
+            "disabled_target",
+            "own_target",
+            "shared_target",
+            "project_target",
+            "missing_requirement",
+            "removed_dependency",
+            "removed_dependency_fallback",
+            "project_grant_blocked",
+        }:
+            assert result["error"]["code"] == "skill_merge_blocked"
+            assert all(path.read_bytes() == content for path, content in before.items())
+            assert runtime.cron_service.get_job(job.id).prompt == "/deploy-web tonight"
+            assert runtime.skill_authoring.archived(home) == []
+            assert runtime.skill_authoring.history(home, "deploy-web") == history_before
+            # Refusal preserves actual access, not just the old selection entry.
+            loaded = await runtime.tools.dispatch(
+                replace(
+                    context,
+                    agent_id="receiver",
+                    tool_name="skill",
+                    allowed_skills=allowed,
+                    project_id="p" if selection == "project_grant_blocked" else None,
+                ),
+                {"name": "deploy-web"},
+                ["skill"],
+            )
+            assert loaded["ok"] is True
+            assert loaded["data"]["status"] == "loaded"
+            return
 
         if selection in {"write_error", "owner_write_error"}:
             assert result["ok"] is True
@@ -507,7 +629,7 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
             assert receiver.excluded_skills == excluded
         else:
             assert receiver.allowed_skills == ["deploy-web", "deploy"]
-            assert receiver.excluded_skills == []
+            assert receiver.excluded_skills == [name for name in excluded if name != "deploy"]
         owner = runtime.agents.get("main")
         if selection == "owner_write_error":
             assert owner.allowed_skills == ["deploy-web"]
@@ -517,7 +639,6 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
             assert owner.excluded_skills == []
             assert runtime.skills_for(None, "main").is_allowed("deploy", owner.allowed_skills)
         assert runtime.cron_service.get_job(job.id).prompt == "/deploy tonight"
-        home = runtime.agent_skills_dir("main")
         [revision] = runtime.skill_authoring.history(home, "deploy-web", limit=1)
         assert [reference.to_dict() for reference in revision.followed] == [
             {"kind": "shared", "id": "receiver", "name": "Receiver"},

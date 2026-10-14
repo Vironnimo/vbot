@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
@@ -28,8 +28,10 @@ from core.sessions.history import (
     _skill_context_note_content,
     current_skill_activation_contents,
     skill_activation_contents,
+    skill_activation_packages,
 )
 from core.sessions.store import SessionStore
+from core.skills.policy import SkillPackageRef
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
@@ -42,6 +44,7 @@ class _SessionBuffers:
     defer_notes: bool = False
     deferred_note_messages: list[ChatMessage] = field(default_factory=list)
     activated_skill_contents: dict[str, str] = field(default_factory=dict)
+    activated_skill_packages: dict[str, SkillPackageRef | None] = field(default_factory=dict)
     activated_skill_cache_loaded: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock)
 
@@ -173,6 +176,7 @@ class ChatSession:
         # The edit deactivated the tail it replaced; reload the Skill cache on next use.
         with self._buffers.lock:
             self._buffers.activated_skill_contents = {}
+            self._buffers.activated_skill_packages = {}
             self._buffers.activated_skill_cache_loaded = False
         return result
 
@@ -200,6 +204,7 @@ class ChatSession:
             # activations later in this same batch survive it.
             with self._buffers.lock:
                 self._buffers.activated_skill_contents = current_skill_activation_contents(messages)
+                self._buffers.activated_skill_packages = skill_activation_packages(messages)
                 self._buffers.activated_skill_cache_loaded = True
 
     async def append_async(self, message: ChatMessage) -> None:
@@ -324,30 +329,42 @@ class ChatSession:
     def _load_activated_skill_contents(self) -> dict[str, str]:
         with self._buffers.lock:
             if not self._buffers.activated_skill_cache_loaded:
-                self._buffers.activated_skill_contents = skill_activation_contents(
-                    self._store.current_skill_activation_messages(self.address)
-                )
+                messages = self._store.current_skill_activation_messages(self.address)
+                self._buffers.activated_skill_contents = skill_activation_contents(messages)
+                self._buffers.activated_skill_packages = skill_activation_packages(messages)
                 self._buffers.activated_skill_cache_loaded = True
             return dict(self._buffers.activated_skill_contents)
 
-    def register_skill_activation(self, name: str, content: str) -> bool:
+    def register_skill_activation(
+        self, name: str, content: str, package: SkillPackageRef | None = None
+    ) -> bool:
         active = self._load_activated_skill_contents()
         with self._buffers.lock:
-            if active.get(name) == content:
+            if (
+                active.get(name) == content
+                and self._buffers.activated_skill_packages.get(name) == package
+            ):
                 return False
             self._buffers.activated_skill_contents[name] = content
+            self._buffers.activated_skill_packages[name] = package
             self._buffers.activated_skill_cache_loaded = True
             return True
 
-    def activate_skill_context(self, name: str, data: JsonObject) -> bool:
+    def activate_skill_context(
+        self, name: str, data: JsonObject, *, package: SkillPackageRef | None = None
+    ) -> bool:
         from core.chat.messages import ChatMessage
 
         content = data.get("activation_content")
         if not isinstance(content, str) or not content:
             raise ChatSessionError("skill activation context must be a non-empty string")
-        if not self.register_skill_activation(name, content):
+        if not self.register_skill_activation(name, content, package):
             return False
-        self.append(ChatMessage.note(_skill_context_note_content(name, content)))
+        self.append(
+            replace(
+                ChatMessage.note(_skill_context_note_content(name, content)), skill_package=package
+            )
+        )
         return True
 
     def activated_skill_contents(self, messages: list[ChatMessage] | None = None) -> dict[str, str]:
@@ -356,6 +373,7 @@ class ChatSession:
         current = current_skill_activation_contents(messages)
         with self._buffers.lock:
             self._buffers.activated_skill_contents = dict(current)
+            self._buffers.activated_skill_packages = skill_activation_packages(messages)
             self._buffers.activated_skill_cache_loaded = True
         return dict(current)
 

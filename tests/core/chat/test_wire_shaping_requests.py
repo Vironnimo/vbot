@@ -36,6 +36,7 @@ from core.chat.wire_shaping import (
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD, tool_result_text
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX
+from core.skills.policy import SkillPackageRef
 from core.tools import read_media_artifact, tool_success
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.utils.paths import model_path
@@ -107,8 +108,23 @@ _OK_RESULT = json.dumps({"ok": True, "error": None, "data": {}, "artifacts": []}
             ),
             "timing",
         ),
+        (
+            replace(
+                ChatMessage.tool(tool_call_id="call-skill", name="skill", content="{}"),
+                skill_package=SkillPackageRef("agent", "debugging", "owner"),
+            ),
+            "skill_package",
+        ),
     ],
-    ids=["tool-display", "output-files", "reasoning-timing", "run-id", "usage", "tool-timing"],
+    ids=[
+        "tool-display",
+        "output-files",
+        "reasoning-timing",
+        "run-id",
+        "usage",
+        "tool-timing",
+        "skill-package",
+    ],
 )
 def test_provider_requests_never_carry_presentation_or_run_fields(
     message: ChatMessage, field: str

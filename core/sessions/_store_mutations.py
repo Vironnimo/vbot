@@ -627,6 +627,24 @@ def retarget_identity_agent(
         "WHERE project_id = '' AND agent_id = ? AND state = 'live'",
         (new_agent_id, old_agent_id),
     )
+    # Package owners follow an Identity Agent rename, including use in other
+    # Agents' Sessions. This changes old entries rather than appending new ones,
+    # so invalidate existing read cursors for their own and inherited views.
+    connection.execute(
+        "WITH affected AS (SELECT DISTINCT session_key FROM entries "
+        "WHERE skill_package_source = 'agent' AND skill_package_location = ?) "
+        "UPDATE sessions SET history_revision = history_revision + 1, "
+        "cursor_floor_revision = history_revision + 1, state_revision = state_revision + 1 "
+        "WHERE session_key IN (SELECT session_key FROM affected UNION "
+        "SELECT l.session_key FROM session_lineage AS l JOIN affected AS a "
+        "ON l.ancestor_key = a.session_key)",
+        (old_agent_id,),
+    )
+    connection.execute(
+        "UPDATE entries SET skill_package_location = ? "
+        "WHERE skill_package_source = 'agent' AND skill_package_location = ?",
+        (new_agent_id, old_agent_id),
+    )
 
 
 def retarget_metadata_value(

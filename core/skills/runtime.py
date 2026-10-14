@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +22,12 @@ from core.projects import (
 from core.skills.authoring import (
     ArchivedSkill,
     SkillAuthoringService,
+    SkillMergeAccessError,
     SkillRecord,
     SkillWriter,
     SkillWriteResult,
 )
-from core.skills.policy import SkillPackageRef, SkillPolicyService
+from core.skills.policy import SkillPackageRef, SkillPolicy, SkillPolicyService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
@@ -152,6 +154,7 @@ def load_global_skill_registry(
         extra_dirs=roots[1:],
         environment=environment,
         origins=_origin_layers(roots),
+        package_sources=[(root.kind, root.location) for root in global_roots],
         excluded_packages=_package_exclusions(
             global_roots,
             lambda agent_id: storage.data_dir / _AGENTS_DIRNAME / agent_id / _SKILLS_DIRNAME,
@@ -376,27 +379,131 @@ class SkillRuntime:
             if receivers - {owner_id}
         }
 
-    def agents_with_skill_access(self, owner_id: str, name: str) -> tuple[str, ...]:
-        """Snapshot access to an owner's exact package before a merge removes it."""
+    @contextmanager
+    def merge_guard(self) -> Iterator[None]:
+        """Keep the access snapshot and source deletion in one synchronous write.
+
+        Lock order is Agent lifecycle, Project configuration, Skill authoring,
+        then policy. Follow-up references still use their own
+        writes after this section; this is not a cross-store transaction.
+        """
+        if self._authoring is None:
+            raise RuntimeError("Skill authoring is not configured")
+        with (
+            self._agents.lifecycle_guard(),
+            self._projects.configuration_guard(),
+            self._authoring.exclusive(),
+            self._policy.exclusive(),
+        ):
+            yield
+
+    def prepare_skill_merge(self, owner_id: str, name: str, target: str) -> tuple[str, ...]:
+        """Refuse lost access before a merge, otherwise snapshot its actual users.
+
+        Build the same registries as activation with the proposed share/selection
+        changes, without persisting them. Every registered Project Context is a
+        scope an Identity Agent can load; only contexts that can currently load
+        this exact source package require access to its exact successor.
+        """
         with self._agents.lifecycle_guard():
-            package = find_skill_package_dir(self.agent_skills_dir(owner_id), name)
-            if package is None:
+            scan = SkillScan()
+            own = SkillRegistry.load(self.agent_skills_dir(owner_id), scan=scan)
+            try:
+                document = own.get(name).path
+                successor = own.get(target).path
+            except KeyError:
+                # The authoring Tool reports an absent source or invalid target.
                 return ()
-            document = (package / "SKILL.md").resolve()
-            receivers = self.shared_skill_receivers(owner_id).get(name, frozenset())
-            permitted: list[str] = []
+            policy = self._policy.load()
+            owner_shares = dict(policy.shared.get(owner_id, {}))
+            receivers = owner_shares.pop(name, frozenset())
+            owner_shares[target] = owner_shares.get(target, frozenset()) | receivers
+            proposed = replace(
+                policy,
+                shared={**policy.shared, owner_id: owner_shares},
+                # Simulate deletion for name resolution and Skill dependencies.
+                disabled_packages=policy.disabled_packages
+                | {SkillPackageRef("agent", name, owner_id)},
+            )
+            projects: list[Project | None] = [None]
+            projects.extend(
+                self._projects.refresh_sources(project.project_id, skill_scan=scan)
+                for project in self._projects.list()
+            )
+            permitted: set[str] = set()
+            blocked: list[tuple[str, str | None, str]] = []
             for agent_id in sorted({owner_id, *receivers}):
                 agent = self._agents.find(agent_id)
                 if agent is None or agent.builtin is not None:
                     continue
-                registry = self.skills_for(None, agent_id)
-                try:
-                    skill = registry.get(name)
-                except KeyError:
-                    continue
-                if skill.path == document and registry.is_allowed(name, agent.allowed_skills):
-                    permitted.append(agent_id)
-            return tuple(permitted)
+                exclusions = frozenset(agent.excluded_skills)
+                allowed = agent.allowed_skills
+                proposed_allowed = None if allowed is None else [*allowed, target]
+                for project in projects:
+                    project_id = project.project_id if project is not None else None
+                    bundle = (
+                        self._build_project_skill_bundle(project_id, project=project, scan=scan)
+                        if project_id is not None
+                        else None
+                    )
+                    registry = self._build_agent_skill_registry(
+                        project_id,
+                        agent_id,
+                        exclusions,
+                        project=project,
+                        project_bundle=bundle,
+                        scan=scan,
+                        policy=policy,
+                    )
+                    if not self._can_load_package(registry, name, document, allowed):
+                        continue
+                    permitted.add(agent_id)
+                    after = self._build_agent_skill_registry(
+                        project_id,
+                        agent_id,
+                        exclusions - {target},
+                        project=project,
+                        project_bundle=bundle,
+                        scan=scan,
+                        policy=proposed,
+                        removed_own_names=frozenset({name})
+                        if agent_id == owner_id
+                        else frozenset(),
+                    )
+                    if self._can_load_package(after, target, successor, proposed_allowed):
+                        continue
+                    if SkillPackageRef("agent", target, owner_id) in policy.disabled_packages:
+                        reason = "disabled"
+                    elif any(
+                        skill.name == target and skill.path != successor
+                        for skill in after.list_all()
+                    ):
+                        reason = "shadowed"
+                    else:
+                        reason = "unavailable"
+                    blocked.append(
+                        (agent.name or agent_id, project.display_name if project else None, reason)
+                    )
+                    # One inaccessible context is enough to refuse this Agent's
+                    # merge; repeating it adds no recovery information.
+                    break
+            if blocked:
+                raise SkillMergeAccessError(blocked)
+            return tuple(sorted(permitted))
+
+    @staticmethod
+    def _can_load_package(
+        registry: SkillRegistry, name: str, path: Path, allowed: list[str] | None
+    ) -> bool:
+        try:
+            skill = registry.get(name)
+        except KeyError:
+            return False
+        return (
+            skill.path == path
+            and registry.is_allowed(name, allowed)
+            and registry.availability_for(name, allowed).state == "available"
+        )
 
     def preserve_merged_skill_access(self, agent_id: str, target: str) -> None:
         """Keep a prior grant after the Skill's share moved to its successor."""
@@ -744,9 +851,15 @@ class SkillRuntime:
                 if editable_scope
                 else None
             )
+            # Policy entries use the visible name; usage must distinguish the
+            # concrete loaded directory even when frontmatter names collide.
+            package = source.package_ref(skill.path.parent.name) or SkillPackageRef(
+                "folder", skill.path.parent.name, source.root.resolve().as_posix()
+            )
             skills.append(
                 {
                     "id": entry_id,
+                    "package": package.to_dict(),
                     "editable_scope": editable_scope,
                     "source_kind": source.kind,
                     "source_label": (root.parent.name if root.name == "skills" else root.name)
@@ -1036,8 +1149,11 @@ class SkillRuntime:
         project: Project | None = None,
         project_bundle: _ProjectSkillBundle | None = None,
         scan: SkillScan | None = None,
+        policy: SkillPolicy | None = None,
+        removed_own_names: frozenset[str] = frozenset(),
     ) -> SkillRegistry:
         scan = scan or SkillScan()
+        policy = policy or self._policy.load()
         settings = self._storage.load_settings()
         environment = self._skill_environment(self._storage.load_environment())
         agent_root = self.agent_skills_dir(agent_id)
@@ -1045,10 +1161,14 @@ class SkillRuntime:
         scan_roots = [root.root for root in global_roots]
         roots: list[Path] = [agent_root]
         origins: list[str | None] = [SKILL_ORIGIN_AGENT]
+        package_sources: list[tuple[str, str | None]] = [("agent", agent_id)]
         project_allowed_names: set[str] = set()
         if project_id is not None:
             project = project or self._projects.refresh_sources(project_id, skill_scan=scan)
             roots.extend(project.skill_roots)
+            package_sources.extend(
+                ("folder", root.resolve().as_posix()) for root in project.skill_roots
+            )
             origins.extend([project_skill_origin(project.display_name)] * len(project.skill_roots))
             project_allowed_names.update(
                 effective_project_allowed_skills(
@@ -1063,11 +1183,15 @@ class SkillRuntime:
         # indistinguishably among "Your own skills", and they are NOT added to
         # ``always_allowed``: they pass through the receiver's ``allowed_skills``
         # filter exactly like global skills.
-        shared_package_dirs = self._shared_package_dirs(agent_id, scan=scan)
+        shared_package_dirs = self._shared_package_dirs(agent_id, scan=scan, policy=policy)
         roots.extend(shared_package_dirs)
+        package_sources.extend(
+            ("agent", package.parent.parent.name) for package in shared_package_dirs
+        )
         origins.extend(SKILL_ORIGIN_AGENT for _ in shared_package_dirs)
         roots.extend(scan_roots)
         origins.extend(_origin_layers(scan_roots))
+        package_sources.extend((root.kind, root.location) for root in global_roots)
         # First-found-wins ordering makes agent skills win over project, project over
         # shared, shared over bundled. The agent's own skills are always-allowed for
         # it unless its ``excluded_skills`` turn them off, so they bypass the owner's
@@ -1076,14 +1200,17 @@ class SkillRuntime:
         # that Project's effective Skill set: those exact Project-granted names also
         # bypass the Identity Agent's unrelated personal allowlist and its exclusions
         # while this project-scoped registry is active.
-        agent_own_names = scan_skill_names(agent_root, environment, scan=scan)
+        agent_own_names = scan_skill_names(agent_root, environment, scan=scan) - removed_own_names
         return SkillRegistry.load(
             roots[0],
             extra_dirs=roots[1:],
             environment=environment,
             always_allowed=(agent_own_names - exclusions) | project_allowed_names,
             origins=origins,
-            excluded_packages=self._disabled_packages(global_roots),
+            package_sources=package_sources,
+            excluded_packages=_package_exclusions(
+                global_roots, self.agent_skills_dir, policy.disabled_packages
+            ),
             allowlist_exclusions=exclusions,
             scan=scan,
         )
@@ -1223,7 +1350,11 @@ class SkillRuntime:
         return result
 
     def _shared_package_dirs(
-        self, receiver_agent_id: str, *, scan: SkillScan | None = None
+        self,
+        receiver_agent_id: str,
+        *,
+        scan: SkillScan | None = None,
+        policy: SkillPolicy | None = None,
     ) -> list[Path]:
         """Resolve every owner's shared private Skill packages for one receiver.
 
@@ -1235,7 +1366,7 @@ class SkillRuntime:
         Only skills whose receiver list
         includes this receiver are inserted.
         """
-        shared = self._policy.load().shared
+        shared = (policy or self._policy.load()).shared
         if not shared:
             return []
         environment = self._skill_environment(self._storage.load_environment())
@@ -1302,6 +1433,7 @@ class SkillRuntime:
             environment,
             project_origin=project_skill_origin(project.display_name),
             bundled_origins=_origin_layers(scan_roots),
+            bundled_package_sources=[(root.kind, root.location) for root in global_roots],
             excluded_packages=self._disabled_packages(global_roots),
             scan=scan,
         )

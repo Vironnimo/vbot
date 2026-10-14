@@ -21,7 +21,8 @@ Two persisted facts feed it, both derivable without new storage:
 
 Usage is keyed by **bare skill name across scopes**: a name collision between,
 say, a global and a project skill aggregates into one row whose ``origins`` list
-makes the ambiguity visible. Per-scope attribution is deliberately not built.
+makes the ambiguity visible. The separate package-use query preserves the actual
+loaded package for aging and package-specific inventory views.
 
 ``usage_rate`` is an offer conversion, not raw activations divided by offers.
 Its numerator counts only Sessions where the same Skill is present in both the
@@ -58,6 +59,7 @@ from typing import Protocol
 
 from core.runs import is_unattended_run_kind
 from core.sessions import SESSION_RUN_KINDS_META_KEY
+from core.skills.policy import SkillPackageRef
 from core.utils.timestamps import format_canonical_timestamp
 
 # The session-metadata sidecar key holding the skills a session was offered
@@ -154,6 +156,48 @@ class SkillUse:
 
     last_activated: str
     count: int
+
+
+@dataclass(frozen=True)
+class SkillActivationUse:
+    """One Session's use of a loaded package, or an unqualified legacy name."""
+
+    session_key: int
+    agent_id: str
+    name: str
+    last_activated: str
+    package: SkillPackageRef | None = None
+
+
+def load_skill_package_use(
+    connection: sqlite3.Connection, owners: Mapping[int, str]
+) -> tuple[SkillActivationUse, ...]:
+    """Keep package identity and Session identity for exact aging and deduplication."""
+    uses: list[SkillActivationUse] = []
+    for (
+        session_key,
+        name,
+        source,
+        package_name,
+        location,
+        _instant,
+        timestamp,
+    ) in connection.execute(
+        """
+        SELECT k.session_key, k.name, k.package_source, k.package_name, k.package_location,
+            MAX(r.instant), r.timestamp
+        FROM stat_skills k
+        JOIN stat_records r ON r.session_key = k.session_key AND r.seq = k.seq
+        GROUP BY k.session_key, k.name, k.package_source, k.package_name, k.package_location
+        """
+    ):
+        agent_id = owners.get(session_key)
+        if agent_id is not None:
+            package = (
+                SkillPackageRef(source, package_name, location) if source is not None else None
+            )
+            uses.append(SkillActivationUse(session_key, agent_id, name, timestamp, package))
+    return tuple(uses)
 
 
 def counts_as_skill_use(summary: Mapping[str, object]) -> bool:

@@ -27,7 +27,7 @@ Skill use from Statistics.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -42,7 +42,8 @@ from core.skills import (
     SkillRevertConflictError,
     SkillWriteResult,
 )
-from core.statistics import SkillUse
+from core.skills.policy import SkillPackageRef
+from core.statistics.skills import SkillActivationUse
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 from server.events import RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
@@ -464,7 +465,7 @@ async def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
     # this response and must not leak into a reader that omitted Statistics.
     inventory = {**inventory, "skills": [dict(entry) for entry in inventory["skills"]]}
     try:
-        usage = await statistics_service(state).skill_usage_async()
+        usage = await statistics_service(state).skill_package_usage_async()
     except Exception as exc:  # Skill use only annotates the inventory.
         _LOGGER.warning("Skill use is unavailable for the Skill inventory: %s", exc)
     else:
@@ -500,29 +501,30 @@ async def _inventory_read(state: Any) -> JsonObject:
 
 
 async def _skill_usage(state: Any, params: JsonObject) -> JsonObject:
-    """Return Statistics' per-Agent Skill use without scanning Skill packages."""
+    """Return use projected onto the current packages, without exposing Session rows."""
     _reject_unknown(params, set(), "skill.usage")
-    usage = await statistics_service(state).skill_usage_async()
+    inventory = await _inventory_read(state)
+    inventory = {**inventory, "skills": [dict(entry) for entry in inventory["skills"]]}
+    usage = await statistics_service(state).skill_package_usage_async()
+    _annotate_usage(inventory, usage)
     return {
         "usage": [
             {
-                "agent_id": agent_id,
-                "name": name,
-                "uses": use.count,
-                "last_used_at": use.last_activated,
+                "id": entry["id"],
+                "uses": entry["uses"],
+                "last_used_at": entry["last_used_at"],
             }
-            for (agent_id, name), use in sorted(usage.items())
+            for entry in inventory["skills"]
         ]
     }
 
 
-def _annotate_usage(inventory: JsonObject, usage: Mapping[tuple[str, str], SkillUse]) -> None:
-    """Add each entry's ``uses`` and ``last_used_at`` from per-Agent Skill use.
+def _annotate_usage(inventory: JsonObject, usage: Sequence[SkillActivationUse]) -> None:
+    """Count distinct Sessions for the exact package, with conservative legacy use.
 
-    Use is keyed by Agent and bare Skill name, like the Statistics report. A
-    private package counts its owner and the Agents it is shared with (unless
-    they own a package of that name); any other package counts every Agent that
-    neither owns nor receives a private package of that name.
+    Unqualified historical rows retain the former name/ownership projection.
+    Qualified rows follow their recorded package even if its grants changed.
+    A Session that has both kinds contributes only once to one package.
     """
     entries: list[JsonObject] = inventory["skills"]
     private_owners: dict[str, set[str]] = {}
@@ -534,19 +536,26 @@ def _annotate_usage(inventory: JsonObject, usage: Mapping[tuple[str, str], Skill
             private_users.setdefault(entry["name"], set()).update(
                 {owner, *(entry.get("shared_with") or ())}
             )
-    by_name: dict[str, list[tuple[str, SkillUse]]] = {}
-    for (agent_id, name), use in usage.items():
-        by_name.setdefault(name, []).append((agent_id, use))
+    by_name: dict[str, list[SkillActivationUse]] = {}
+    by_package: dict[SkillPackageRef, list[SkillActivationUse]] = {}
+    for use in usage:
+        if use.package is None:
+            by_name.setdefault(use.name, []).append(use)
+        else:
+            by_package.setdefault(use.package, []).append(use)
     for entry in entries:
         name = entry["name"]
         owner = entry.get("owner_id")
         if owner:
             users = {owner} | (set(entry.get("shared_with") or ()) - private_owners[name])
-            uses = [use for agent_id, use in by_name.get(name, ()) if agent_id in users]
+            uses = [use for use in by_name.get(name, ()) if use.agent_id in users]
         else:
             excluded = private_users.get(name, set())
-            uses = [use for agent_id, use in by_name.get(name, ()) if agent_id not in excluded]
-        entry["uses"] = sum(use.count for use in uses)
+            uses = [use for use in by_name.get(name, ()) if use.agent_id not in excluded]
+        if entry.get("package") is not None:
+            package = SkillPackageRef.from_dict(entry["package"])
+            uses.extend(by_package.get(package, ()))
+        entry["uses"] = len({use.session_key for use in uses})
         # Canonical UTC timestamps order as text.
         entry["last_used_at"] = max((use.last_activated for use in uses), default=None)
 

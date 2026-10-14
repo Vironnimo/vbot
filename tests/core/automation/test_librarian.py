@@ -30,7 +30,8 @@ from core.automation.librarian import (
 from core.prompts.briefs import librarian_brief
 from core.runs import RunKind
 from core.skills import SkillAuthoringService, SkillWriter
-from core.statistics.skills import SkillUse
+from core.skills.policy import SkillPackageRef
+from core.statistics.skills import SkillActivationUse, SkillUse
 from core.storage import StorageManager
 from core.utils.timestamps import format_canonical_timestamp
 
@@ -65,6 +66,7 @@ class _Harness:
         # Agents whose background review is starting or running.
         self.reviewing: set[str] = set()
         self.usage: dict[tuple[str, str], SkillUse] = {}
+        self.package_usage: list[SkillActivationUse] = []
         # Raised by the next Skill use read, when set.
         self.usage_error: Exception | None = None
         self.usage_reads = 0
@@ -111,11 +113,22 @@ class _Harness:
             ),
         )
 
-        async def skill_usage() -> dict[tuple[str, str], SkillUse]:
+        async def skill_usage() -> tuple[SkillActivationUse, ...]:
             self.usage_reads += 1
             if self.usage_error is not None:
                 raise self.usage_error
-            return dict(self.usage)
+            legacy = [
+                (agent_id, name, use.last_activated)
+                for (agent_id, name), use in self.usage.items()
+                for _ in range(use.count)
+            ]
+            return (
+                *(
+                    SkillActivationUse(index, agent_id, name, stamp)
+                    for index, (agent_id, name, stamp) in enumerate(legacy)
+                ),
+                *self.package_usage,
+            )
 
         self.service = LibrarianService(
             cast("Any", runtime),
@@ -230,6 +243,29 @@ async def test_a_pass_archives_inactive_skills_and_reports_them(
     harness.shared = {
         "main": {"shared-idle": frozenset({"two"}), "shared-used": frozenset({"two"})}
     }
+    # Exact records never transfer another package's use to this home, even
+    # when the consumer owns or is offered a private package with that name.
+    harness.package_usage = [
+        SkillActivationUse(
+            100, "two", "shared-idle", recent, SkillPackageRef("agent", "shared-idle", "two")
+        ),
+        SkillActivationUse(
+            101,
+            "main",
+            "old-human",
+            recent,
+            SkillPackageRef("folder", "old-human", "/project/skills"),
+        ),
+        # The loaded folder, not its frontmatter name or current sharing,
+        # identifies actual use by a former receiver.
+        SkillActivationUse(
+            102,
+            "former-receiver",
+            "alias",
+            recent,
+            SkillPackageRef("agent", "used-recently", "main"),
+        ),
+    ]
     harness.settings["consolidate"] = False
 
     status = await harness.run_pass()
@@ -291,6 +327,13 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     harness.authoring.set_pinned(root, "deploy-db", True, writer=_HUMAN)
     harness.authoring.create(root, "deploy-team", _document("deploy-team"), writer=_AGENT)
     harness.shared = {"main": {"deploy-team": frozenset({"two"})}}
+    stamp = format_canonical_timestamp(harness.now)
+    harness.package_usage = [
+        SkillActivationUse(100, "main", "deploy-web", stamp),
+        SkillActivationUse(
+            100, "main", "deploy-web", stamp, SkillPackageRef("agent", "deploy-web", "main")
+        ),
+    ]
     # Nothing is old enough to age.
     harness.now = datetime.now(UTC)
 
@@ -306,7 +349,9 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
         )
 
     harness.on_run = merge
-    candidates = librarian_candidates(harness.authoring, root, usage={})
+    candidates = librarian_candidates(
+        harness.authoring, root, usage={"deploy-web": SkillUse(last_activated=stamp, count=1)}
+    )
 
     status = await harness.run_pass()
 

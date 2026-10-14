@@ -16,6 +16,7 @@ from html import escape
 from pathlib import Path
 from typing import Any, Protocol
 
+from core.skills.policy import SkillPackageRef
 from core.skills.requirements import (
     AVAILABLE,
     RequirementCheck,
@@ -181,6 +182,7 @@ class SkillMetadata:
     # at load by the registry from its scan-root origins. ``None`` when the loader
     # was given no origins (e.g. a single-directory scan), which renders ungrouped.
     origin: str | None = None
+    package_ref: SkillPackageRef | None = None
 
 
 @dataclass(frozen=True)
@@ -283,6 +285,7 @@ class SkillRegistry:
         environment: Mapping[str, str] | None = None,
         always_allowed: Iterable[str] | None = None,
         origins: Sequence[str | None] | None = None,
+        package_sources: Sequence[tuple[str, str | None]] | None = None,
         excluded_packages: Collection[tuple[Path, str]] | None = None,
         allowlist_exclusions: Iterable[str] | None = None,
         scan: SkillScan | None = None,
@@ -298,6 +301,9 @@ class SkillRegistry:
         ``origins`` is a parallel sequence of origin tags for ``[skills_dir,
         *extra_dirs]``; each loaded skill records the tag of the root it came from
         (missing/short → ``None``), so the catalog can group by scope.
+        ``package_sources`` parallels those roots with internal source/location
+        pairs for recorded activations; the loaded package directory supplies
+        the name. An unspecified source defaults to the resolved folder root.
         ``excluded_packages`` (the packages the Skill Policy turns off) names
         packages by the resolved Skill home directory that contains them and their
         Skill name. Such a package is skipped before it claims its name, so a
@@ -315,7 +321,12 @@ class SkillRegistry:
         exclusion = _PackageExclusion(frozenset(excluded_packages or ()))
         for index, scan_root in enumerate(scan_roots):
             origin = origin_tags[index] if index < len(origin_tags) else None
-            _load_skill_root(scan_root, skills, diagnostics, origin, exclusion, scan)
+            source = (
+                package_sources[index]
+                if package_sources is not None and index < len(package_sources)
+                else ("folder", scan_root.resolve().as_posix())
+            )
+            _load_skill_root(scan_root, skills, diagnostics, origin, exclusion, scan, source)
 
         excluded_skills = exclusion.skipped
         return cls(
@@ -579,6 +590,7 @@ def _load_skill_root(
     origin: str | None = None,
     exclusion: _PackageExclusion | None = None,
     scan: SkillScan | None = None,
+    package_source: tuple[str, str | None] | None = None,
 ) -> None:
     try:
         skill_directories = (
@@ -599,7 +611,9 @@ def _load_skill_root(
         return
 
     for skill_dir in skill_directories:
-        _load_skill_directory(skill_dir, skills, diagnostics, origin, exclusion, scan)
+        _load_skill_directory(
+            skill_dir, skills, diagnostics, origin, exclusion, scan, package_source
+        )
 
 
 def _skill_directories(root: Path) -> tuple[Path, ...]:
@@ -622,6 +636,7 @@ def _load_skill_directory(
     origin: str | None = None,
     exclusion: _PackageExclusion | None = None,
     scan: SkillScan | None = None,
+    package_source: tuple[str, str | None] | None = None,
 ) -> None:
     """Read one skill package directory into the accumulated load state."""
     skill_file = skill_dir / SKILL_FILENAME
@@ -671,7 +686,10 @@ def _load_skill_directory(
         _log_validation_warnings(skill_dir.name, resolved_skill_file, result.warnings)
         return
 
-    skill = replace(skill, origin=origin)
+    source, location = package_source or ("folder", skill_dir.parent.resolve().as_posix())
+    skill = replace(
+        skill, origin=origin, package_ref=SkillPackageRef(source, skill_dir.name, location)
+    )
     if exclusion is not None and exclusion.skips(skill, skill_dir):
         return
     if skill.name in skills:
@@ -803,6 +821,7 @@ def load_project_skill_registry(
     *,
     project_origin: str | None = None,
     bundled_origins: Sequence[str | None] | None = None,
+    bundled_package_sources: Sequence[tuple[str, str | None]] | None = None,
     excluded_packages: Collection[tuple[Path, str]] | None = None,
     scan: SkillScan | None = None,
 ) -> SkillRegistry:
@@ -818,6 +837,13 @@ def load_project_skill_registry(
         extra_dirs=roots[1:],
         environment=environment,
         origins=origins,
+        package_sources=[
+            *(("folder", root.resolve().as_posix()) for root in project_roots),
+            *(
+                bundled_package_sources
+                or [("folder", root.resolve().as_posix()) for root in bundled_scan_roots]
+            ),
+        ],
         excluded_packages=excluded_packages,
         scan=scan,
     )

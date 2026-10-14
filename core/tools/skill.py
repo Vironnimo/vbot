@@ -554,7 +554,7 @@ def make_skill_handler(
                 "skill_read_error",
                 f"Skill '{skill_name}' produced no loadable content.",
             )
-        newly_activated = context.activate_skill(skill_name, activation_content)
+        newly_activated = context.activate_skill(skill_name, activation_content, skill.package_ref)
         if newly_activated is False:
             return _already_active_result(skill_name, notes)
         return _loaded_skill_result(skill_name, data, notes)

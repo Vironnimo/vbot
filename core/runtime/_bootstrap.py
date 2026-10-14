@@ -871,7 +871,7 @@ def _librarian_service(runtime: Runtime) -> LibrarianService:
         runtime,
         authoring=authoring,
         skills_dir=runtime.agent_skills_dir,
-        skill_usage=usage.skill_usage_async,
+        skill_usage=usage.skill_package_usage_async,
         triggered_skill_names=automation.agent_triggered_skill_names,
         shared_skill_receivers=runtime.shared_skill_receivers,
         skills_changed=skills_changed,

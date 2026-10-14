@@ -18,6 +18,7 @@ from core.runs import RunKind
 from core.skills.authoring import (
     SkillAuthoringError,
     SkillAuthoringService,
+    SkillMergeAccessError,
     SkillProtectedError,
     SkillReference,
     SkillWriter,
@@ -162,11 +163,21 @@ SKILL_MANAGE_ABSORBED_INTO_UNKNOWN = (
     "absorbed_into names '{target}', which is not one of your own Skills; nothing changed. "
     "Name one of your own Skills that now holds the instructions of '{name}'."
 )
+SKILL_MANAGE_MERGE_ACCESS_REFUSAL = (
+    "Nothing was changed. Skill '{target}' cannot replace '{name}' for {blocked}. "
+    "Keep '{name}' and name the blocked merge in your reply so the user can resolve "
+    "the Skill access."
+)
+_MERGE_ACCESS_REASONS = {
+    "disabled": "the successor is disabled",
+    "shadowed": "the name loads a different Skill",
+    "unavailable": "the successor's requirements are not met",
+}
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete", "publish")
 # follow_merge(owner_id, name, target, delete) -> the references that could not move.
 SkillMergeFollower = Callable[
-    [str, str, str | None, Callable[[tuple[SkillReference, ...]], Awaitable[bool]]],
+    [str, str, str | None, Callable[[tuple[SkillReference, ...]], bool]],
     Awaitable[tuple[SkillReference, ...]],
 ]
 # Actions that may operate on a Skill shared into the caller (maintained in the
@@ -1365,15 +1376,25 @@ def register_skill_manage_tool(
         results: list[JsonObject] = []
         planned: list[SkillReference] = []
 
-        async def delete(followed: tuple[SkillReference, ...]) -> bool:
-            result = await run_tool_worker(
-                guarded_handler, context, arguments, started, followed, global_changes
-            )
+        def delete(followed: tuple[SkillReference, ...]) -> bool:
+            result = guarded_handler(context, arguments, started, followed, global_changes)
             results.append(result)
             planned.extend(followed)
             return result.get("ok") is True
 
-        failed = await follow_merge(context.skill_subject_id, name, target, delete)
+        try:
+            failed = await follow_merge(context.skill_subject_id, name, target, delete)
+        except SkillMergeAccessError as error:
+            blocked = "; ".join(
+                f"Agent '{agent}'"
+                + (f" in Project '{project}'" if project is not None else "")
+                + f" ({_MERGE_ACCESS_REASONS[reason]})"
+                for agent, project, reason in error.blocked
+            )
+            return tool_failure(
+                "skill_merge_blocked",
+                SKILL_MANAGE_MERGE_ACCESS_REFUSAL.format(name=name, target=target, blocked=blocked),
+            )
         result = results[0]
         if result.get("ok") is True and target is None and failed:
             _note_orphaned(result, name, failed)

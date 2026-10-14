@@ -31,7 +31,7 @@ JsonObject = dict[str, Any]
 _SESSION_STATE_COLUMNS = """
     s.session_key, s.generation_id, s.project_id, s.agent_id, s.session_id, s.state,
     s.created_at, s.archived_at, s.next_seq, s.history_revision, s.state_revision,
-    s.cursor_floor_seq, s.last_activity_at, s.last_entry_id, s.fork_parent_key,
+    s.cursor_floor_seq, s.cursor_floor_revision, s.last_activity_at, s.last_entry_id, s.fork_parent_key,
     s.forked_at, s.fork_point_seq, s.title, s.auto_title, s.auto_title_initialized,
     s.source_channel_id, s.platform, s.platform_conv_id, s.is_subagent,
     s.subagent_parent_id, s.subagent_parent_project_id, s.subagent_parent_agent_id,

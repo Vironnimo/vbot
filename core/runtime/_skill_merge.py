@@ -15,7 +15,8 @@ the deleted Skill, so the caller can say so.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 
 from core.automation import AutomationReferences
@@ -35,7 +36,8 @@ class SkillMergeServices:
     agent_name: Callable[[str], str]
     # Receivers see shared Skills through their registries, which a share move outdates.
     shares_changed: Callable[[], None]
-    agents_with_access: Callable[[str, str], tuple[str, ...]]
+    mutation_guard: Callable[[], AbstractContextManager[None]]
+    prepare_access: Callable[[str, str, str], tuple[str, ...]]
     preserve_access: Callable[[str, str], None]
 
 
@@ -44,7 +46,7 @@ async def follow_skill_merge(
     owner_id: str,
     name: str,
     target: str | None,
-    delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
+    delete: Callable[[tuple[SkillReference, ...]], bool],
 ) -> tuple[SkillReference, ...]:
     """Delete the Skill ``name`` of ``owner_id`` into ``target`` and move what named it there.
 
@@ -54,21 +56,30 @@ async def follow_skill_merge(
     """
     automation = services.automation
     async with automation.lock:
-        receivers = sorted(services.policy.load().shared.get(owner_id, {}).get(name, ()))
         automations = automation.agent_skill_triggers(owner_id, name)
-        shares = tuple(
-            SkillReference("shared", receiver, services.agent_name(receiver))
-            for receiver in receivers
-        )
         triggers = tuple(
             SkillReference(reference.kind, reference.id, reference.name)
             for reference in automations
         )
-        if target is None:
-            return (*shares, *triggers) if await delete(()) else ()
-        permitted = await run_tool_worker(services.agents_with_access, owner_id, name)
-        if not await delete((*shares, *triggers)):
+
+        def prepare_and_delete() -> tuple[tuple[SkillReference, ...], tuple[str, ...], bool]:
+            with services.mutation_guard():
+                receivers = sorted(services.policy.load().shared.get(owner_id, {}).get(name, ()))
+                shares = tuple(
+                    SkillReference("shared", receiver, services.agent_name(receiver))
+                    for receiver in receivers
+                )
+                permitted = (
+                    services.prepare_access(owner_id, name, target) if target is not None else ()
+                )
+                deleted = delete((*shares, *triggers) if target is not None else ())
+                return shares, permitted, deleted
+
+        shares, permitted, deleted = await run_tool_worker(prepare_and_delete)
+        if not deleted:
             return ()
+        if target is None:
+            return (*shares, *triggers)
         failed: list[SkillReference] = []
         if shares:
             try:
