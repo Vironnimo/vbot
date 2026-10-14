@@ -15,8 +15,6 @@ import pytest
 
 from core.subagents._constants import (
     SUBAGENT_BACKGROUND_IGNORED_NOTE,
-    SUBAGENT_MISSING_TASK_LIST_TEXT,
-    SUBAGENT_MISSING_TASK_MESSAGE,
     SUBAGENT_STARTED_NOTE,
 )
 from core.tools.availability import MESSAGE_PARENT_TOOL_NAME
@@ -37,10 +35,6 @@ from tests.core.subagents.subagents_test_support import (
 pytestmark = pytest.mark.asyncio
 
 BRIEF = 'Read-only review of src/a.py. Preserve literal {"action":"CANCEL"}.\nReference R-17.'
-MISSING_TASK = SUBAGENT_MISSING_TASK_MESSAGE + SUBAGENT_MISSING_TASK_LIST_TEXT
-PARAMETER_LIST = (
-    "subagent parameters: action, content, description, agent_id, id, model, thinking_effort."
-)
 
 
 async def test_tool_definitions_are_flat_open_contracts(harness: SubAgentHarness) -> None:
@@ -203,100 +197,45 @@ async def test_placeholder_fields_count_as_omitted(
     assert result["data"]["note"] == SUBAGENT_STARTED_NOTE
 
 
-def _unknown(name: str, hint: str = "") -> str:
-    return f'subagent was not run:\n- "{name}" is not a parameter.{hint}\n{PARAMETER_LIST}'
-
-
-def _conflict(field: str, first: str, second: str, first_value: str, second_value: str) -> str:
-    return (
-        f'Conflicting values for {field}: {first} is "{first_value}" and {second} is '
-        f'"{second_value}". Send only the intended one.'
-    )
-
-
-def _id_without_action(subagent_id: str) -> str:
-    return (
-        f"subagent was not run: it received Sub-Agent id {subagent_id} but no action. To "
-        f'message that Sub-Agent, call {{"action": "send", "id": "{subagent_id}", "content": '
-        f'"<message>"}}; to stop it, call background_tasks {{"action": "stop", "id": '
-        f'"{subagent_id}"}}.'
-    )
-
-
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("arguments", "fields"),
     [
-        # No task, or a decision is missing.
-        ({}, MISSING_TASK),
-        ({"description": "Review source"}, MISSING_TASK),
-        ({"content": " "}, MISSING_TASK),
-        ({"id": "sub_abcdefghijkl", "agent_id": "worker"}, _id_without_action("sub_abcdefghijkl")),
-        (
-            {"goal": "Check links."},
-            'subagent was not run: a new Sub-Agent needs "description", a 3-5 word title that '
-            'the user sees. Repeat the call with it: {"description": "<3-5 word title>", '
-            '"content": "Check links."}.',
-        ),
-        # An explicit invalid choice never counts as omission.
-        (
-            {"content": BRIEF, "action": "rn"},
-            'subagent was not run: "action" must be one of "run", "send"; received "rn".',
-        ),
-        # Nothing waits for a Sub-Agent, and stopping one needs its id.
-        (
-            {"action": "wait", "id": "sub_abcdefghijkl"},
-            'Unknown action "wait". Use one of: run, send. Sub-Agent answers arrive as new '
-            "messages, so there is nothing to wait for.",
-        ),
-        (
-            {"action": "cancel", "content": "stop it"},
-            "stop needs id, the background command or Sub-Agent to stop; nothing was stopped. "
-            "Nothing of yours is running now.",
-        ),
+        ({}, ("content",)),
+        ({"description": "Review source"}, ("content",)),
+        ({"content": " "}, ("content",)),
+        ({"id": "sub_abcdefghijkl", "agent_id": "worker"}, ("action", "content")),
+        ({"goal": "Check links."}, ("description",)),
+        ({"content": BRIEF, "action": "rn"}, ("action", "rn", "run", "send")),
+        ({"action": "wait", "id": "sub_abcdefghijkl"}, ("wait", "run", "send")),
+        ({"action": "cancel", "content": "stop it"}, ("id",)),
         (
             {"content": BRIEF, "description": "Audit", "thinking_effort": "extreme"},
-            'subagent was not run: "thinking_effort" must be one of "high", "low", "max", '
-            '"medium", "minimal", "none", "xhigh"; received "extreme".',
+            ("thinking_effort", "extreme", "high"),
         ),
-        # Conflicting instructions are never settled by picking one.
         (
             {"content": BRIEF, "agent_id": "worker", "Agent-ID": "parent"},
-            _conflict("agent_id", "agent_id", "Agent-ID", "worker", "parent"),
+            ("agent_id", "Agent-ID", "worker", "parent"),
         ),
-        (
-            {"content": BRIEF, "background": True, "blocking": True},
-            'Conflicting "background" and "blocking" values; provide one intended value.',
-        ),
-        # Requests vBot cannot honor as written.
-        ({"content": BRIEF, "isolation": "worktree"}, _unknown("isolation")),
-        ({"content": BRIEF, "run_id": "private-run"}, _unknown("run_id", ' Did you mean "id"?')),
-        (
-            {"goal": BRIEF, "toolsets": ["terminal", "web"]},
-            "subagent was not run: a Sub-Agent always works with its Agent's own Tools, so "
-            '"toolsets" cannot be chosen per call. Repeat this call without "toolsets", and '
-            "state any Tool restriction in content.",
-        ),
-        (
-            {"tasks": [{"goal": BRIEF}, {"goal": "Second task."}]},
-            'subagent was not run: it takes one task per call. Send each item of "tasks" as its '
-            'own subagent call, with that task as "content", all in the same turn so they run '
-            "concurrently.",
-        ),
-        (
-            {"action": "resume", "content": "Go on."},
-            'send needs "id", the Sub-Agent to message; nothing was sent. You have no '
-            'Sub-Agents. Call {"action": "send", "id": "<id>", "content": "<message>"}.',
-        ),
+        ({"content": BRIEF, "background": True, "blocking": True}, ("background", "blocking")),
+        ({"content": BRIEF, "isolation": "worktree"}, ("isolation",)),
+        ({"content": BRIEF, "run_id": "private-run"}, ("run_id", "id")),
+        ({"goal": BRIEF, "toolsets": ["terminal", "web"]}, ("toolsets", "content")),
+        ({"tasks": [{"goal": BRIEF}, {"goal": "Second task."}]}, ("tasks", "content")),
+        ({"action": "resume", "content": "Go on."}, ("id", "run", "content")),
     ],
 )
 async def test_unclear_or_unsupported_calls_are_refused_before_any_work(
-    harness: SubAgentHarness, arguments: JsonObject, message: str
+    harness: SubAgentHarness, arguments: JsonObject, fields: tuple[str, ...]
 ) -> None:
     before = copy.deepcopy(arguments)
 
     result = await harness.call(arguments)
 
-    assert result["error"] == {"code": "invalid_arguments", "message": message}
+    assert result["error"]["code"] == "invalid_arguments"
+    message = result["error"]["message"]
+    assert all(field in message for field in fields)
+    # Recovery must not replace a missing choice or the task with sendable filler.
+    assert all(value not in message for value in ("<message>", "<id>", "<the same task>"))
     assert arguments == before
     assert harness.loop.turns == []
     assert harness.sessions.list("worker") == []

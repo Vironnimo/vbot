@@ -14,44 +14,39 @@ FORWARDED_RUN_KINDS = frozenset({"subagent", "system", "user", "channel"})
 
 # Results of the ``subagent`` Tool.
 SUBAGENT_STARTED_NOTE = (
-    "The Sub-Agent works in the background. vBot sends you each of its answers "
-    "automatically: at your next step while you are working, otherwise in a new turn. "
-    "Continue other work, or end your turn to wait. To give it more instructions, call "
-    'subagent with action "send" and this id.'
+    "Started in the background. Its final answers arrive at your next step, or start a new "
+    "turn if you are idle. Continue other work, or end your turn to wait."
 )
 SUBAGENT_SEND_STEERED_NOTE = (
-    "The Sub-Agent is working; vBot gives it your message at its next step. Its answer "
-    "reaches you automatically."
+    "Sent to the running Sub-Agent for its next step. Its final answers return to you."
 )
 SUBAGENT_SEND_STARTED_NOTE = (
-    "The Sub-Agent was idle and started a new turn with your message. Its answer reaches you "
-    "automatically."
+    "Started a new turn with your message. Its final answers return to you."
 )
 SUBAGENT_SEND_QUEUED_NOTE = (
-    "The Sub-Agent is busy; your message starts its next turn when the current one ends. Its "
-    "answer reaches you automatically."
+    "Queued your message for the Sub-Agent's next turn. Its final answers then return to you."
 )
 SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
     "Activity log of this Sub-Agent: {path}. Read it only if its progress matters."
 )
 
-# Refusals of the ``subagent`` Tool. ``{call}`` placeholders receive compact JSON. The
-# parts naming ``background_tasks`` are left out while the Agent cannot call it.
+# Refusals of the ``subagent`` Tool. The parts naming ``background_tasks`` are
+# left out while the Agent cannot call it; complete stop calls use compact JSON.
 SUBAGENT_MISSING_TASK_MESSAGE = (
-    'subagent was not run: "content" must carry the task for the Sub-Agent. Call '
-    '{"description": "<3-5 word title>", "content": "<self-contained task: goal, relevant '
-    'context, scope, constraints, expected result>"}.'
+    'Nothing was started. run needs "content", a self-contained task: goal, relevant '
+    'context, scope, constraints and expected result. Add it and a title in "description", '
+    "then repeat the call."
 )
 SUBAGENT_MISSING_TASK_LIST_TEXT = (
     ' To see your Sub-Agents instead, call background_tasks {"action": "list"}.'
 )
-SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE = (
-    'subagent was not run: a new Sub-Agent needs "description", a 3-5 word title that the '
-    "user sees. Repeat the call with it: {call}."
+SUBAGENT_MISSING_DESCRIPTION_MESSAGE = (
+    'Nothing was started. Add "description", a 3-5 word title, and repeat the call with '
+    "all other fields unchanged."
 )
 SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE = (
-    "Sub-Agents cannot be nested more than {limit} levels deep, so you cannot start "
-    "another Sub-Agent; nothing was started. Do this task yourself."
+    "Nothing was started. Sub-Agents cannot be nested more than {limit} levels deep. "
+    "Do this task yourself."
 )
 # Active-limit refusals. ``count`` is the limit with its noun, such as "8 Sub-Agents";
 # ``{retry}`` is replaced per action; ``{or_stop}`` is ``SUBAGENT_LIMIT_STOP_TEXT`` or empty.
@@ -66,41 +61,40 @@ _APP_LIMIT_CONTINUATION = (
     "Do this task yourself, or wait until one of your own working Sub-Agents answers, then {retry}."
 )
 _NOTHING_STARTED = "Nothing was started."
-_IDLE_NOT_SENT = "Sub-Agent {id} is idle, so your message would start it again; nothing was sent."
+_IDLE_NOT_SENT = "Nothing was sent. Sub-Agent {id} is idle, so your message would start it again."
 SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE = (
-    f"{_SESSION_LIMIT_TEXT} {_NOTHING_STARTED} "
+    f"{_NOTHING_STARTED} {_SESSION_LIMIT_TEXT} "
     + _SESSION_LIMIT_CONTINUATION.replace("{retry}", "delegate again")
 )
 SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE = (
-    f"{_SESSION_LIMIT_TEXT} {_IDLE_NOT_SENT} "
+    f"{_IDLE_NOT_SENT} {_SESSION_LIMIT_TEXT} "
     + _SESSION_LIMIT_CONTINUATION.replace("{retry}", "send again")
 )
 SUBAGENT_APP_LIMIT_MESSAGE_TEMPLATE = (
-    f"{_APP_LIMIT_TEXT} {_NOTHING_STARTED} "
+    f"{_NOTHING_STARTED} {_APP_LIMIT_TEXT} "
     + _APP_LIMIT_CONTINUATION.replace("{retry}", "delegate again")
 )
 SUBAGENT_SEND_APP_LIMIT_MESSAGE_TEMPLATE = (
-    f"{_APP_LIMIT_TEXT} {_IDLE_NOT_SENT} "
+    f"{_IDLE_NOT_SENT} {_APP_LIMIT_TEXT} "
     + _APP_LIMIT_CONTINUATION.replace("{retry}", "send again")
 )
 # ``target`` is the address the Tool accepts; ``reason`` is the resolver's explanation.
 SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE = (
-    "Agent {target} cannot run: {reason}. Repeating this call fails the same way until "
-    "that is fixed. Delegate to another Agent you are allowed to use instead, or tell "
-    "the user that {target} cannot run and why."
+    "Nothing was started. Agent {target} cannot run: {reason}. Repeating this call fails "
+    "the same way until that is fixed. Delegate to another Agent you are allowed to use "
+    "instead, or tell the user that {target} cannot run and why."
 )
 SUBAGENT_TARGET_CHOICES_TEMPLATE = (
-    "Omit agent_id to delegate to a copy of yourself, or use one of these Agent ids "
-    "exactly: {targets}."
+    "Omit agent_id to use your own Agent, or use one of these Agent ids exactly: {targets}."
 )
 SUBAGENT_NO_TARGET_CHOICES_TEXT = (
-    "Omit agent_id to delegate to a copy of yourself; no other Agents are available to you."
+    "Omit agent_id to use your own Agent; no additional Agents are available to you."
 )
 SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE = (
-    "Agent {target} is not available to you as a Sub-Agent. {choices}"
+    "Nothing was started. Agent {target} is not available to you as a Sub-Agent. {choices}"
 )
 SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE = (
-    "agent_id {name} is not an Agent id, so a copy of you runs this task, as when "
+    "agent_id {name} is not an Agent id, so your own Agent runs this task, as when "
     "agent_id is omitted."
 )
 SUBAGENT_BACKGROUND_IGNORED_NOTE = (
@@ -118,27 +112,38 @@ SUBAGENT_SESSION_NOT_SUBAGENT_MESSAGE_TEMPLATE = (
     "subagent was not run: Session {session_id} is not one of your Sub-Agents. {yours}To "
     'start a new Sub-Agent, repeat this call without "session_id".'
 )
-SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE = "No Sub-Agent with id {id} belongs to you. {yours}"
+SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE = (
+    "Nothing was sent. No Sub-Agent with id {id} belongs to you. {yours}"
+    "Use the id of the intended Sub-Agent from its run result."
+)
 SUBAGENT_YOURS_TEMPLATE = "Your Sub-Agents: {entries}. "
 SUBAGENT_NONE_YOURS_TEXT = "You have no Sub-Agents. "
 # ``{or_stop}`` is ``SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE`` filled in, or empty.
 SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE = (
-    "Sub-Agent {id} was started by your Sub-Agent {parent_id}, so only {parent_id} can send "
-    "it messages; nothing was sent. Send your message to {parent_id}{or_stop}."
+    "Nothing was sent. Sub-Agent {id} was started by your Sub-Agent {parent_id}, so only "
+    "{parent_id} can send it messages. Send your message to {parent_id}{or_stop}."
 )
 SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE = (
     ', or stop {id} with background_tasks {{"action": "stop", "id": "{id}"}}'
 )
 SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE = (
-    'send needs "id", the Sub-Agent to message; nothing was sent. {yours}Call {call}.'
+    'Nothing was sent. send needs "id", the Sub-Agent to message. {yours}{next_step}'
+)
+SUBAGENT_CHOOSE_RECIPIENT_TEXT = (
+    "Choose the intended Sub-Agent from this list, then repeat the call with that id and "
+    "the same content."
+)
+SUBAGENT_START_FIRST_TEXT = (
+    'Start one with action "run", a title in "description" and a self-contained task in "content".'
 )
 SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE = (
-    'send needs "content", the message for Sub-Agent {id}; nothing was sent. Call {call}.'
+    'Nothing was sent. send needs "content", the message for Sub-Agent {id}. Add your '
+    "message and repeat the call with the same id."
 )
 # ``{stop}`` is ``SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE`` filled in, or empty.
 SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE = (
-    "subagent was not run: it received Sub-Agent id {id} but no action. To message that "
-    "Sub-Agent, call {send_call}{stop}."
+    "Nothing was sent. The call supplied Sub-Agent id {id} but no action or message. To "
+    'message it, repeat the call with action "send" and your message in "content"{stop}.'
 )
 SUBAGENT_ID_WITHOUT_ACTION_STOP_TEMPLATE = "; to stop it, call background_tasks {stop_call}"
 SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE = (
@@ -156,10 +161,7 @@ SUBAGENT_SESSION_PROJECT_MISSING_MESSAGE_TEMPLATE = (
 
 # Sections vBot delivers to the Parent Agent.
 FORWARDED_SECTION_TEMPLATE = (
-    "### Sub-Agent {id} — {title}\n"
-    "agent_id {agent_id}, session_id {session_id}, run_id {run_id}. Its turn {outcome}.\n\n"
-    "{answer}\n\n"
-    "{facts}"
+    "### Sub-Agent {id} — {title}\nrun_id {run_id}. Its turn {outcome}.\n\n{answer}\n\n{facts}"
 )
 FORWARDED_ANSWER_TEMPLATE = "#### {kind} {message_id}\n\n{content}"
 FORWARDED_NO_ANSWER_TEXT = "(The turn ended without an answer.)"
