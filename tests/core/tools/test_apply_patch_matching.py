@@ -309,6 +309,59 @@ async def test_old_string_copied_with_errors_resembling_several_places_is_refuse
     assert path.read_bytes() == f"{line}\n{line}\n".encode()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["edit", "apply_patch"])
+@pytest.mark.parametrize(("copied_indent", "file_indent"), [("    ", "    "), ("  ", "\t")])
+async def test_a_copied_rewrite_keeps_its_explicit_indentation(
+    tmp_path, tool_name, copied_indent, file_indent
+):
+    before = (
+        "def receive():\n"
+        "    try:\n"
+        "        output = load_value()\n"
+        "    except ValueError:\n"
+        "        # report the failure through normal handling\n"
+        "        output = None\n"
+        "    return output\n"
+    )
+    after = (
+        "def receive():\n"
+        "    output = None\n"
+        "    for attempt in range(3):\n"
+        "        try:\n"
+        "            output = load_value()\n"
+        "            break\n"
+        "        except ValueError:\n"
+        "            output = None\n"
+        "    return output\n"
+    )
+    old = before.replace("the failure", "the transient failure").replace("    ", copied_indent)
+    new = after.replace("    ", copied_indent)
+    if tool_name == "edit":
+        arguments = {"path": "a.py", "edits": [{"old_string": old, "new_string": new}]}
+    else:
+        body = "\n".join(
+            [*("-" + line for line in old.splitlines()), *("+" + line for line in new.splitlines())]
+        )
+        arguments = {"patch": update("@@\n" + body, "a.py")}
+    path = tmp_path / "a.py"
+    original = before.replace("    ", file_indent).replace("\n", "\r\n").encode()
+    path.write_bytes(original)
+
+    result = await call(tmp_path, arguments, name=tool_name)
+
+    assert result["ok"], result
+    expected = after.replace("    ", file_indent).replace("\n", "\r\n").encode()
+    assert path.read_bytes() == expected
+    compile(path.read_bytes(), "a.py", "exec")
+
+    # A second equally plausible copy remains ambiguous; the spacing repair cannot pick it.
+    path.write_bytes(original + original)
+    refused = await call(tmp_path, arguments, name=tool_name)
+    assert not refused["ok"], refused
+    assert path.read_bytes() == original + original
+
+
 _BUFFER = """fn undo(&mut self) -> bool {
     let ok = self.history.undo(&mut self.text, &mut self.cursor);
     if ok {

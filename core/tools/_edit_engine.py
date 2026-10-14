@@ -40,7 +40,7 @@ from os.path import commonprefix
 from typing import Literal
 
 from core.tools._decorated_insert import place_before_decorators
-from core.tools._patch_syntax import _amid_additions, _Hunk, _PatchError, quoted
+from core.tools._patch_syntax import _amid_additions, _Hunk, _PatchError, _Replacement, quoted
 from core.tools.arguments import (
     TEXT_LINE_BREAK,
     line_number_gutter_candidates,
@@ -51,6 +51,8 @@ from core.tools.copy_match import copy_warnings, match_copied_edit, replace_copi
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
+    _inside_crlf,
+    _replaced,
     dominant_line_ending,
     find_closest_candidates,
     find_closest_passages,
@@ -315,20 +317,11 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
         )
         if isinstance(found, FuzzyReplacement):
             notes.append(_GUTTER_WARNING)
-    escaped = _unicode_escapes(old) if found is None else None
-    if escaped:
-        # The file has the characters that old_string writes as \u escapes.
-        unescaped = replace(replacement, old=_with_characters(old), new=_with_characters(new))
-        found = replace_fuzzy(
-            content,
-            unescaped.old,
-            unescaped.new,
-            replace_all=replace_all,
-            typographic=True,
-        )
+    if found is None:
+        found, interpreted, note = _replace_unicode_escapes(content, replacement)
         if isinstance(found, FuzzyReplacement):
-            hunk = replace(hunk, replacement=unescaped)
-            notes.append(DeviationNote(_escapes_note(escaped)))
+            hunk = replace(hunk, replacement=interpreted)
+            notes.append(DeviationNote(note))
     if isinstance(found, AmbiguousFuzzyMatch):
         details, values = _ambiguity(content, found)
         raise _PatchError(
@@ -389,6 +382,10 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
 # A run of \uXXXX escapes after an even number of backslashes: a backslash
 # written as \\ ends no escape.
 _ESCAPE_RUN = re.compile(r"(?<!\\)((?:\\\\)*)((?:\\u[0-9a-fA-F]{4})+)")
+# Keep a surrogate pair together: neither half is a Unicode character by itself.
+_ESCAPE_CHARACTER = re.compile(
+    r"\\u[dD][89aAbB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}"
+)
 # Only escapes of characters beyond ASCII and its controls are read as those
 # characters: an Agent writes ü as ü, not a quote or a line break.
 _FIRST_ESCAPED = 0xA0
@@ -409,36 +406,131 @@ def _escaped_characters(run: str) -> str | None:
     return characters
 
 
-def _unicode_escapes(text: str) -> dict[str, str]:
-    """Return the \\u escape runs of ``text`` that stand for characters, with those characters."""
-    found: dict[str, str] = {}
-    for match in _ESCAPE_RUN.finditer(text):
-        characters = _escaped_characters(match[2])
-        if characters is not None:
-            found[match[2]] = characters
+def _unicode_escapes(text: str) -> list[tuple[int, int, str, str]]:
+    """Return each non-ASCII escape's span, spelling and character."""
+    found = []
+    for run in _ESCAPE_RUN.finditer(text):
+        for match in _ESCAPE_CHARACTER.finditer(run[2]):
+            characters = _escaped_characters(match[0])
+            if characters is not None:
+                start = run.start(2) + match.start()
+                found.append((start, start + len(match[0]), match[0], characters))
     return found
 
 
-def _with_characters(text: str) -> str:
-    """Return ``text`` with its \\u escapes of characters written as the characters."""
-
-    def character(match: re.Match[str]) -> str:
-        characters = _escaped_characters(match[2])
-        return match[1] + (match[2] if characters is None else characters)
-
-    return _ESCAPE_RUN.sub(character, text)
+def _with_characters(text: str, escaped: dict[str, str]) -> str:
+    """Read only escape spellings whose character form the matched old text proves."""
+    for start, end, spelling, _ in reversed(_unicode_escapes(text)):
+        if spelling in escaped:
+            text = text[:start] + escaped[spelling] + text[end:]
+    return text
 
 
-def _escapes_note(escaped: dict[str, str]) -> str:
+def _replace_unicode_escapes(
+    content: str, replacement: _Replacement
+) -> tuple[_Found, _Replacement, str]:
+    """Match literal and character escape spellings without choosing between targets."""
+    parts = _unicode_escapes(replacement.old)
+    if not parts:
+        return None, replacement, ""
+    pattern: list[str] = []
+    end = 0
+    for start, stop, spelling, characters in parts:
+        pattern.extend(
+            (
+                re.escape(replacement.old[end:start]),
+                f"({re.escape(spelling)}|{re.escape(characters)})",
+            )
+        )
+        end = stop
+    pattern.append(re.escape(replacement.old[end:]))
+    # The alternatives begin with different characters (backslash or non-ASCII),
+    # so a passage has one reading even when it contains many escape spellings.
+    candidates: dict[tuple[int, int], tuple[str, dict[str, str], dict[str, str]]] = {}
+    for match in re.finditer("(?=(" + "".join(pattern) + "))", content):
+        if _inside_crlf(content, match.start(1)) or _inside_crlf(content, match.end(1)):
+            continue
+        changed = {}
+        literal = set()
+        for actual, (_, _, spelling, characters) in zip(match.groups()[1:], parts, strict=True):
+            if actual == spelling:
+                literal.add(spelling)
+            else:
+                changed[spelling] = characters
+        # The same escape can be literal at one position and a character at
+        # another. That proves no single reinterpretation of new_string.
+        evidence = {key: value for key, value in changed.items() if key not in literal}
+        candidates[match.span(1)] = (match[1], evidence, changed)
+    # Retain the established precise whitespace/typography tolerance for a copy
+    # whose escape spellings all stand for characters.
+    decoded = {spelling: characters for _, _, spelling, characters in parts}
+    old = _with_characters(replacement.old, decoded)
+    found = replace_fuzzy(content, old, old, replace_all=True, typographic=True)
+    if isinstance(found, FuzzyReplacement):
+        for span in found.before_spans:
+            candidates.setdefault(span, (old, decoded, decoded))
+    spans = sorted(candidates)
+    if not spans:
+        return None, replacement, ""
+    if len(spans) > 1 and not replacement.replace_all:
+        return (
+            AmbiguousFuzzyMatch(
+                len(spans),
+                [len(TEXT_LINE_BREAK.findall(content[:start])) + 1 for start, _ in spans],
+                tuple(spans),
+            ),
+            replacement,
+            "",
+        )
+    selected: list[tuple[int, int]] = []
+    for span in spans:
+        if not selected or span[0] >= selected[-1][1]:
+            selected.append(span)
+    # A new escape is read as a character only if every changed place proves
+    # that spelling. New escape types and matching literal spellings stay literal.
+    escaped = dict(candidates[selected[0]][1])
+    matched = {}
+    for span in selected:
+        matched.update(candidates[span][2])
+    for span in selected[1:]:
+        escaped = {key: value for key, value in escaped.items() if key in candidates[span][1]}
+    interpreted = replace(
+        replacement,
+        old=candidates[selected[0]][0],
+        new=_with_characters(replacement.new, escaped),
+    )
+    written = {
+        spelling: escaped[spelling]
+        for _, _, spelling, _ in _unicode_escapes(replacement.new)
+        if spelling in escaped
+    }
+    return (
+        _replaced(
+            content,
+            selected,
+            TEXT_LINE_BREAK.sub("\n", interpreted.new),
+            "unicode_escapes",
+            reindent=True,
+            old_string_lf=TEXT_LINE_BREAK.sub("\n", interpreted.old),
+            file_ending=dominant_line_ending(content),
+        ),
+        interpreted,
+        _escapes_note(matched, written),
+    )
+
+
+def _escapes_note(escaped: dict[str, str], written: dict[str, str]) -> str:
     """Say which escapes of old_string the file has as characters, and how new_string was read."""
     shown = list(escaped.items())[:_ESCAPES_SHOWN]
     escapes = ", ".join(escape for escape, _ in shown)
     characters = ", ".join(characters for _, characters in shown)
     more = " and others" if len(escaped) > len(shown) else ""
-    return (
-        f"old_string has {escapes}{more} where the file has {characters}{more}; the \\u "
-        "escapes in new_string were written as the characters they stand for."
-    )
+    note = f"old_string has {escapes}{more} where the file has {characters}{more}. "
+    if not written:
+        return note + "new_string was kept as sent."
+    names = ", ".join(list(written)[:_ESCAPES_SHOWN])
+    extra = " and others" if len(written) > _ESCAPES_SHOWN else ""
+    return note + f"Only {names}{extra} in new_string were written as characters."
 
 
 def _new_text_in_place(content: str, old: str, new: str) -> AlreadyApplied | None:

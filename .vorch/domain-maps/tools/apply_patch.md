@@ -560,7 +560,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   new text up to the file's spelling of misspelled words: kept text in it must
   match the file up to misspellings and spacing, since a difference there may
   be wording the caller meant to write (replay: an intended change inside the
-  old text was dropped). Lines the edit keeps stay as the file has them. The 3
+  old text was dropped). Lines the edit keeps stay as the file has them.
+  Whitespace is ignored when locating a copied passage, but an explicit spacing
+  or indentation change between old and new text is part of the edit, after
+  mapping the replacement to the file's indentation style. Otherwise moving
+  unchanged words into a new block retains their old indentation (Swarm Run
+  2026-10-14: a retry loop gained an empty `try` block despite valid new text).
+  Test: `test_a_copied_rewrite_keeps_its_explicit_indentation` covers both edit
+  dialects, CRLF, tabs and an ambiguous passage that must remain unchanged. The 3
   words or signs on each side of each change must match up to misspellings, and
   within a change other differences need 4 correct words each (a rewrite may
   differ; `3` to `4` where the file says `5` may not); changes separated only by
@@ -613,14 +620,22 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   `test_copy_match.py::test_line_endings_and_indentation_follow_the_file`.
 - An `old_string` replacement that writes characters beyond ASCII as `\uXXXX`
   escapes (after an even run of backslashes; at least U+00A0, surrogate pairs
-  joined, no lone surrogate) is retried after the gutter step with those
-  escapes read as the characters, in `old_string` and `new_string` alike
-  (`_edit_engine._with_characters`), through the precise strategies only; a
-  match writes the characters and a deviation note names the escapes and the
-  characters (Swarm 2026-10-13: `ü` and `°` copied against a JSON and
-  a Python file holding `ü` and `°`, 2 calls, both now apply as their Agents'
-  eventual files have them). The reverse, a character in `old_string` for an
-  escape in the file, is not read: no call showed it.
+  joined, no lone surrogate) is retried after the gutter step. The matcher
+  allows each escape to retain its literal spelling or match its character,
+  collecting actual file spans without enumerating combinations. More than one
+  target is refused unless `replace_all` was requested. Exact literal matches
+  still win before this repair. Only an escape spelling proved as a character
+  at every selected target is converted in `new_string`; newly introduced
+  spellings, matching literal spellings, and a spelling used both ways stay as
+  sent. A fully decoded locator still uses the precise whitespace/typography
+  strategies; its candidate spans join the mixed-spelling candidates before
+  ambiguity is decided. The deviation note names the old-text interpretation
+  and the escape spellings actually converted in `new_string`, or says
+  `new_string was kept as sent.` Evidence: Swarm 2026-10-14 mixed a literal
+  Python source escape with a degree character, so decoding every escape lost
+  the target. Synthetic contracts live in `test_edit_tools.py` ->
+  `test_unicode_escapes_in_old_string_match_the_characters_of_the_file`.
+  The reverse, a character in `old_string` for an escape in the file, is not read.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.

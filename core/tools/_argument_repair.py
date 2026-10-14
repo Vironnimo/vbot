@@ -25,8 +25,6 @@ from core.utils.json_text import escape_inner_quotes
 
 JsonObject = dict[str, Any]
 _JSON_NUMBER_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$")
-# A line break written as a JSON escape: \n or \r after an even run of backslashes.
-_LINE_BREAK_ESCAPE = re.compile(r"(?<!\\)(?:\\\\)*\\[nr]")
 _JSON_WHITESPACE = re.compile(r"[ \t\n\r]*")
 # What can follow a complete value read from argument text: whitespace and
 # closing brackets left over from the call's own nesting, which close nothing.
@@ -343,7 +341,7 @@ def decode_json_argument(text: str, schema: JsonObject) -> Any:
     often because a ``"`` inside the text of one of its fields is not escaped,
     or a line break in it is not written as an escape. When ``text`` is not
     JSON, raw control characters inside its texts are read as themselves
-    (unless it also writes line breaks as escapes) and the stray quotes inside
+    (unless the same string also writes line breaks as escapes) and the stray quotes inside
     the text of the schema's fields are escaped
     (``core.utils.json_text.escape_inner_quotes``), and closing brackets
     after the end of the value are left out; that reading counts only
@@ -415,14 +413,15 @@ def _schema_reading(
 ) -> Any:
     """Return the value of ``schema`` that ``text`` encodes, control characters as text.
 
-    A text that writes line breaks both raw and as escapes has no such value: a
-    raw one there can be a slip of the output, such as a break inside a word.
+    A string that writes line breaks both raw and as escapes has no such value:
+    a raw one there can be a slip of the output, such as a break inside a word.
+    Different strings can use different representations.
     Closing brackets after the end of the value close nothing it opened and are
     left out; any other text there leaves ``text`` without such a value.
     """
     try:
         decoded, text = _value_and_its_text(text)
-        if _LINE_BREAK_ESCAPE.search(text) and _has_raw_line_break(text, decoded):
+        if _has_mixed_line_breaks(text):
             return _NOT_REPAIRED
         value = normalize_schema_value(
             decoded, schema, root_schema=root_schema, root_validator=root_validator
@@ -455,16 +454,26 @@ def _value_and_its_text(text: str) -> tuple[Any, str]:
     return value, text[:end]
 
 
-def _has_raw_line_break(text: str, decoded: Any) -> bool:
-    """Say whether a raw line break stands inside a string of the JSON ``text``.
-
-    Outside strings a line break is whitespace: only one inside a string changes
-    ``decoded``, the value ``text`` encodes, when it becomes a space.
-    """
-    if "\n" not in text and "\r" not in text:
-        return False
-    spaced = text.replace("\r", " ").replace("\n", " ")
-    return bool(json.loads(spaced, strict=False) != decoded)
+def _has_mixed_line_breaks(text: str) -> bool:
+    """Whether one string of decoded JSON mixes raw and escaped line breaks."""
+    inside = escaped = raw_break = escaped_break = False
+    for character in text:
+        if not inside:
+            if character == '"':
+                inside = True
+                raw_break = escaped_break = False
+        elif escaped:
+            escaped_break |= character in "nr"
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == '"':
+            inside = False
+        else:
+            raw_break |= character in "\r\n"
+        if raw_break and escaped_break:
+            return True
+    return False
 
 
 def _schema_field_names(schema: Any, root_schema: JsonObject, depth: int = 0) -> set[str]:
