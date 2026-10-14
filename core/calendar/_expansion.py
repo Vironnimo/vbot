@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from dateutil.rrule import rrule
+from dateutil.rrule import rrulebase
 
 from core.calendar._events import CalendarEvent, EventOccurrence, occurrence_id
 from core.calendar._time import _resolve_zone
@@ -34,7 +34,7 @@ class _Series:
     system_tz: ZoneInfo
     start: datetime
     length: timedelta
-    rule: rrule | None
+    rule: rrulebase | None
 
 
 def event_series(event: CalendarEvent, system_tz: ZoneInfo) -> _Series:
@@ -143,7 +143,7 @@ def occurrence_at(event: CalendarEvent, key: str, system_tz: ZoneInfo) -> EventO
     return _occurrence(series, local_time(key), event.overrides.get(key))
 
 
-def has_key(rule: rrule, key: str, zone: ZoneInfo | None) -> bool:
+def has_key(rule: rrulebase, key: str, zone: ZoneInfo | None) -> bool:
     """Whether ``rule`` produces an occurrence that originally starts at ``key``."""
     try:
         moment = local_time(key)

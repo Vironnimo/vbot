@@ -55,6 +55,7 @@ def test_rule_text_is_stored_in_one_form(
         # dateutil alone would look for a 30 February until the year 9999.
         ("2030-01-10T09:00", "FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30", "produces no occurrence"),
         ("2030-01-10T09:00", "FREQ=DAILY;UNTIL=20300101", "before its first occurrence"),
+        ("2026-03-29T02:30", "FREQ=DAILY;UNTIL=20260329T011500Z", "before its first occurrence"),
     ],
 )
 def test_invalid_rule_is_refused_without_storing(
@@ -164,6 +165,49 @@ def test_start_the_clocks_skip_moves_forward_and_keeps_its_length(
             occurrence_id(event.id, original) for original, _ in expected
         ]
         assert all(item.end_utc - item.start_utc == duration for item in occurrences)
+
+
+@pytest.mark.parametrize(
+    ("start", "rule", "expected"),
+    [
+        ("2026-03-28T02:30", "FREQ=DAILY;UNTIL=20260329T011500Z", ["2026-03-28T02:30:00"]),
+        (
+            "2026-10-24T02:30",
+            "FREQ=DAILY;UNTIL=20261025T011500Z",
+            ["2026-10-24T02:30:00", "2026-10-25T02:30:00"],
+        ),
+        # A shifted 02:30 is too late, but the following 03:00 is still valid.
+        (
+            "2026-03-29T01:00",
+            "FREQ=DAILY;BYHOUR=1,2,3;BYMINUTE=0,30;UNTIL=20260329T011500Z",
+            [
+                "2026-03-29T01:00:00",
+                "2026-03-29T01:30:00",
+                "2026-03-29T02:00:00",
+                "2026-03-29T03:00:00",
+            ],
+        ),
+        (
+            "2026-03-28T02:30",
+            "FREQ=DAILY;UNTIL=20260329T013000Z",
+            ["2026-03-28T02:30:00", "2026-03-29T02:30:00"],
+        ),
+    ],
+)
+def test_utc_until_bounds_resolved_instants_across_dst(
+    service: CalendarService, start: str, rule: str, expected: list[str]
+) -> None:
+    event = service.create_event(title="R", start=start, rrule=rule)
+    lower, upper = service.parse_window(
+        start[:10], (datetime.fromisoformat(start) + timedelta(days=3)).date().isoformat()
+    )
+    for occurrences in (
+        service.occurrences_in_window(lower, upper),
+        list(service.iter_occurrences(event, lower)),
+    ):
+        assert [item.original_start for item in occurrences] == expected
+    for key in expected:
+        assert service.get_occurrence(occurrence_id(event.id, key)).original_start == key
 
 
 @pytest.mark.parametrize(

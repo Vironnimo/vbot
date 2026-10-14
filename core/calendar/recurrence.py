@@ -14,11 +14,12 @@ refused instead of being stored.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, time, timedelta
-from typing import cast
+from typing import cast, override
 from zoneinfo import ZoneInfo
 
-from dateutil.rrule import rrule, rrulestr
+from dateutil.rrule import rrule, rrulebase, rrulestr
 
 from core.calendar.errors import CalendarValidationError
 
@@ -98,7 +99,7 @@ def normalize_rrule(value: object, *, start: datetime, zone: ZoneInfo | None) ->
     return ";".join(f"{key}={item}" for key, item in ordered.items())
 
 
-def build_rule(rule_text: str, start: datetime, zone: ZoneInfo | None) -> rrule:
+def build_rule(rule_text: str, start: datetime, zone: ZoneInfo | None) -> rrulebase:
     """The dateutil rule of a stored RRULE for an event starting at ``start``.
 
     ``start`` and ``zone`` mean what they mean for :func:`normalize_rrule`.
@@ -166,7 +167,7 @@ def _check_whole_number(parts: dict[str, str], key: str, maximum: int) -> None:
         raise CalendarValidationError(f"rrule {key} must be a whole number from 1 to {maximum}")
 
 
-def _build(parts: dict[str, str], start: datetime, zone: ZoneInfo | None) -> rrule:
+def _build(parts: dict[str, str], start: datetime, zone: ZoneInfo | None) -> rrulebase:
     expanded = ";".join(f"{key}={item}" for key, item in parts.items() if key != "UNTIL")
     try:
         rule = cast(rrule, rrulestr(f"{_PREFIX}{expanded}", dtstart=start))
@@ -175,11 +176,41 @@ def _build(parts: dict[str, str], start: datetime, zone: ZoneInfo | None) -> rru
     until = parts.get("UNTIL")
     if until is None:
         return rule
-    return cast(rrule, rule.replace(until=_until(until, zone)))
+    limit = _until(until, zone)
+    if limit.tzinfo is not None:
+        assert zone is not None
+        return _UtcUntilRule(rule, limit, zone)
+    return rule.replace(until=limit)
+
+
+class _UtcUntilRule(rrulebase):
+    """Keep local rule keys, but bound each resolved start by the UTC instant.
+
+    Local order is not UTC order inside a forward gap: an excluded shifted
+    start may precede another valid start. Stop only beyond the largest legal
+    UTC offset, and filter rather than stopping at the first excluded start.
+    """
+
+    def __init__(self, rule: rrule, until: datetime, zone: ZoneInfo) -> None:
+        super().__init__()
+        local_limit = until.replace(tzinfo=None)
+        margin = min(timedelta(days=1), datetime.max - local_limit)
+        self._rule = rule.replace(until=local_limit + margin)
+        self._until = until
+        self._zone = zone
+
+    @override
+    def __iter__(self) -> Iterator[datetime]:
+        count = 0
+        for moment in self._rule:
+            if moment.replace(tzinfo=self._zone, fold=0).astimezone(UTC) <= self._until:
+                count += 1
+                yield moment
+        self._len = count
 
 
 def _until(text: str, zone: ZoneInfo | None) -> datetime:
-    """The last start an UNTIL allows, as a naive local time of the event."""
+    """An inclusive local boundary, or an aware UTC instant for a timed UTC UNTIL."""
     match = _UNTIL.fullmatch(text)
     assert match is not None
     try:
@@ -196,7 +227,7 @@ def _until(text: str, zone: ZoneInfo | None) -> datetime:
     if match.group(3):
         moment = moment.replace(tzinfo=UTC)
         if zone is not None:
-            moment = moment.astimezone(zone)
+            return moment
         moment = moment.replace(tzinfo=None)
     if zone is None:
         # All-day occurrences start at midnight: a time allows its own day.
@@ -205,7 +236,7 @@ def _until(text: str, zone: ZoneInfo | None) -> datetime:
 
 
 def _check_first_occurrence(
-    rule: rrule, parts: dict[str, str], start: datetime, zone: ZoneInfo | None
+    rule: rrulebase, parts: dict[str, str], start: datetime, zone: ZoneInfo | None
 ) -> None:
     """Refuse a rule without any occurrence from the event's start on.
 
@@ -226,7 +257,7 @@ def _check_first_occurrence(
     if first is None:
         raise CalendarValidationError("rrule produces no occurrence")
     first = first.replace(year=first.year - shift)
-    if "UNTIL" in parts and first > _until(parts["UNTIL"], zone):
+    if "UNTIL" in parts and rule.after(first, inc=True) is None:
         raise CalendarValidationError("rrule UNTIL ends the repetition before its first occurrence")
 
 
