@@ -297,7 +297,7 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
     agents.create("coder")
     state.runtime.chat_sessions.create("coder", session_id="work")
-    agents.create(
+    grant_holder = agents.create(
         "manager", "Manager", tools={"subagent": {"allowed_agents": ["coder", "coder@vbot"]}}
     )
 
@@ -313,7 +313,9 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     entry = state.runtime.chat_sessions.archive_ledger.entry(result["archive_entry_id"])
     assert entry is not None and (entry.kind, entry.subject_id) == ("agent", "coder")
     assert (result["session_count"], result["purged"], result["purge_pending"]) == (1, False, False)
-    assert entry.facts["grants"] == [{"agent_id": "manager", "index": 0}]
+    assert entry.facts["grants"] == [
+        {"agent_id": "manager", "agent_created_at": grant_holder.created_at, "index": 0}
+    ]
     # The archived Sessions leave Recall.
     assert state.runtime.recall.removed_agents == ["coder"]
 
