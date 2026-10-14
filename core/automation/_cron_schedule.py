@@ -262,6 +262,21 @@ def _next_cron_fire_local(
         next_local = cast(datetime, schedule.get_next(datetime)).replace(tzinfo=timezone)
         next_utc = next_local.astimezone(UTC)
         if next_utc > reference_utc:
+            # Just after a forward jump, an earlier wall-clock tick can still
+            # be in the future once shifted by the gap (02:30 -> 03:30).
+            # Compare it with the ordinary next tick in UTC, including when
+            # the gap is half an hour or a whole skipped date.
+            offset = reference_local.utcoffset()
+            prior_offset = (reference_utc - timedelta(days=1)).astimezone(timezone).utcoffset()
+            if offset is not None and prior_offset is not None and offset > prior_offset:
+                earlier_wall = wall_clock - (offset - prior_offset)
+                earlier = earlier_wall.replace(tzinfo=timezone)
+                resolved = earlier.astimezone(UTC).astimezone(timezone).replace(tzinfo=None)
+                if resolved > earlier_wall:
+                    gap_tick = cast(datetime, croniter(expression, earlier_wall).get_next(datetime))
+                    gap_utc = gap_tick.replace(tzinfo=timezone).astimezone(UTC)
+                    if gap_tick < wall_clock and reference_utc < gap_utc < next_utc:
+                        next_utc = gap_utc
             # Return the resolved wall time, so projection advances past a gap
             # exactly as the live scheduler does after the shifted fire.
             return next_utc.astimezone(timezone)
