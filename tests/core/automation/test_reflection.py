@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+import core.automation.reflection as reflection_module
 from core.automation.reflection import (
     COUNTER_GENERATION_KEY,
     MEMORY_REFLECTION_TOOL_RESTRICTION,
@@ -271,6 +272,56 @@ async def test_run_end_accounting_writes_metadata_off_the_event_loop() -> None:
     assert _counters(sessions)["turns_since_memory_review"] == 1
     assert sessions.mutation_threads
     assert threading.get_ident() not in sessions.mutation_threads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reset_tool", "expected"),
+    [("memory", (1, 10)), ("skill_manage", (2, 7))],
+)
+async def test_run_end_resets_do_not_erase_later_run_activity(
+    monkeypatch: pytest.MonkeyPatch, reset_tool: str, expected: tuple[int, int]
+) -> None:
+    service, sessions, _loop = _make_service(
+        memory_turn_interval=100, skill_model_step_interval=100
+    )
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls = 0
+
+    async def delayed_worker(function: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await release_first.wait()
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(
+        reflection_module, "_REFLECTION_WORKERS", SimpleNamespace(run=delayed_worker)
+    )
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=3, tool_call_names={reset_tool})),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await first_started.wait()
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=7)),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    # Give the second notification its turn while the first worker is blocked.
+    await asyncio.sleep(0)
+    release_first.set()
+    await _drain(service)
+
+    assert _counters(sessions) == {
+        "turns_since_memory_review": expected[0],
+        "iterations_since_skill_review": expected[1],
+    }
 
 
 # --- notify_run_end inline gates ---------------------------------------------

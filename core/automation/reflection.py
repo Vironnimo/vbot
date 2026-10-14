@@ -136,6 +136,7 @@ class ReflectionService:
         self._librarian_running = librarian_running
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._agents_in_review: set[str] = set()
+        self._accounting_lock = asyncio.Lock()
         self._closed = False
 
     def reviewing(self, agent_id: str) -> bool:
@@ -219,16 +220,20 @@ class ReflectionService:
         skill_manage_called: bool,
         count_run: bool,
     ) -> None:
-        counters = await _REFLECTION_WORKERS.run(
-            self._advance_counters,
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
-            iteration_count=iteration_count,
-            memory_available=memory_available,
-            skill_available=skill_available,
-            memory_tool_called=memory_tool_called,
-            skill_manage_called=skill_manage_called,
-            count_run=count_run,
-        )
+        # Preserve Run-end order across the worker pool: an earlier Tool reset
+        # must not erase activity from a later Run whose settings read was faster.
+        # Only accounting is serialized; reviews keep running independently.
+        async with self._accounting_lock:
+            counters = await _REFLECTION_WORKERS.run(
+                self._advance_counters,
+                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
+                iteration_count=iteration_count,
+                memory_available=memory_available,
+                skill_available=skill_available,
+                memory_tool_called=memory_tool_called,
+                skill_manage_called=skill_manage_called,
+                count_run=count_run,
+            )
         if counters is None:
             return
         # One review at a time per agent: a due Session while a review is already
