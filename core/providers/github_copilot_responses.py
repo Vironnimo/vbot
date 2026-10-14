@@ -6,6 +6,7 @@ future item kinds without reconstructing a lossy approximation."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -234,6 +235,9 @@ def _safe_response_output_items(
         TOOL_CALL_REJECTION_FIELD in tool_call
         or TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD in tool_call
         for tool_call in tool_calls
+    ) and all(
+        item.get("type") != "function_call" or _has_json_object_arguments(item.get("arguments"))
+        for item in response_output
     ):
         return [_replay_item(item) for item in response_output]
 
@@ -253,12 +257,37 @@ def _safe_response_output_items(
         safe_items.append(
             _tool_call_to_function_call(tool_call)
             if TOOL_CALL_REJECTION_FIELD in tool_call
-            else dict(item)
+            else _replay_function_item(item, tool_call)
         )
     safe_items.extend(
         _tool_call_to_function_call(tool_call) for tool_call in tool_calls[tool_call_index:]
     )
     return safe_items
+
+
+def _replay_function_item(item: Mapping[str, Any], tool_call: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep valid wire arguments verbatim; replay intake repairs as valid JSON.
+
+    Empty arguments and unambiguous bare values normalize without a rejection,
+    but their original strings are not valid Responses input. Preserve the
+    item's identity and other Provider fields while repairing only that field.
+    """
+
+    if _has_json_object_arguments(item.get("arguments")):
+        return dict(item)
+    return {
+        **item,
+        "arguments": _serialize_tool_arguments(_function_call_arguments(tool_call)),
+    }
+
+
+def _has_json_object_arguments(arguments: Any) -> bool:
+    if not isinstance(arguments, str):
+        return False
+    try:
+        return isinstance(json.loads(arguments), dict)
+    except ValueError, RecursionError:
+        return False
 
 
 # The readable text blocks of replayed output items, by item type and field.

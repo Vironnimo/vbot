@@ -54,6 +54,36 @@ The current [Go Model table](https://opencode.ai/v2/docs/console/go/) and [infer
 - **Cat Jam:** all `verify_wire_profile.py` checks passed. The wire accepts `low/medium/high/xhigh/max`; raw `none` was rejected, so the exact-id rule maps off to `low`. Responses and history use `reasoning_content`; the Model entry records that carrier and verified date. Replay input counts A/B/C were 621/675/621 inside a Run, 669/723/669 across Runs, and 723/732/736 for the earlier answer turn. B increased the accounted input in every scope; the visible C control did not increase it in the first two scopes, so those controls are inconclusive. The existing `full_history` policy stays. Cat Jam has no image input in the catalog.
 - **Gemini:** send, stream, each advertised effort, sampling, image input, and a real Tool continuation passed through `GeminiCompatibleAdapter`. `thinkingConfig.thinkingLevel` carries effort; off selects the lowest catalog rung. Original parts and Thought Signatures survive normalization and replay. The replay accounting check's A variant intentionally removes signatures and was rejected with HTTP 400 for the missing `thought_signature`; it cannot establish an absent-signature baseline. Keep Gemini's `meta_only` and `full_history` contract, with no blanket verified record from this incomplete matrix. No live audio, video, PDF, maximum-size, or OAuth inference claim is made. Google's [thinking](https://ai.google.dev/gemini-api/docs/thinking) and [function-calling](https://ai.google.dev/gemini-api/docs/function-calling) contracts were read the same day.
 
+### Historical Tool replay recovery (2026-10-14)
+
+Two failed Swarm participants repeatedly received HTTP 400 on Resume. Scoped
+synthetic streaming probes on `api-key` reproduced both failures:
+
+- Muse Spark 1.3 Contributor (`/responses`) rejects a historical function item's
+  `arguments: ""`, but accepts `"{}"`. Intake had already normalized the empty
+  value without rejecting the Call, while Responses replay sent the raw item.
+  Shared Responses replay now encodes repaired arguments as valid JSON and
+  preserves the other item fields (`request-policy.md` -> Reasoning and CoT).
+- Cat Jam Free (`/chat/completions`) rejects `</rfl:parameter>` inside historical
+  Tool argument values with `prompt_rendering_failed`. Ordinary User text and
+  Tool Results containing the same marker work, as do an opening parameter tag,
+  unusual argument keys and conversation delimiters. JSON slash/Unicode escapes
+  preserve the decoded marker and still fail; `&lt;/rfl:parameter&gt;` works.
+  Only this Model enables `request.options.escape_rfl_parameter_end`. The shared
+  Chat codec escapes that exact marker in argument string values, recursively,
+  when rendering history. Property names, other message fields, canonical
+  history and actual Tool execution remain unchanged. This is a visible change
+  to the replayed value, not a lossless JSON encoding.
+
+After the fixes, both synthetic histories completed through the production
+Adapter's streaming path with an answer and no Tool Calls. Existing Sessions use
+the same repair on their next request; no stored data is rewritten. Full Resume
+of the affected live Sessions remains a user acceptance check. Coverage:
+`test_responses_codec_requests.py::test_payload_replays_conversation_as_responses_items`
+and `test_opencode_go_routing.py::test_only_cat_jam_escapes_reserved_markers_in_historical_argument_values`.
+Endpoint contracts: [Go](https://opencode.ai/v2/docs/console/go/) and
+[inference](https://opencode.ai/v2/docs/console/api/inference/), read 2026-10-14.
+
 ### Step 5 Preview Free (2026-10-09)
 
 - The refresh added `step-5-preview-free` (StepFun Step 5 Preview, free for a limited time; the official Go table read 2026-10-09 lists it on Chat with `@ai-sdk/openai-compatible`). The models.dev Go entry supplies Context 1000000, output 65536, text/image/video input, the `low/medium/high` effort ladder and the `reasoning_content` interleaved hint; the name Override supplies `Step 5 Preview Free`. Zen lists the same id but restricts it with its other `-free` ids.

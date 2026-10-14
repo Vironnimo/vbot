@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -295,6 +296,50 @@ def _image_input(data: str) -> dict[str, str]:
             ],
             id="rejected-raw-call-replaced-by-canonical-call",
         ),
+        *[
+            pytest.param(
+                [
+                    {
+                        "role": "assistant",
+                        "reasoning_meta": {
+                            "response_output": [
+                                _REASONING_ITEM,
+                                {
+                                    **_SEARCH_CALL,
+                                    "id": "fc_1",
+                                    "status": "completed",
+                                    "arguments": raw,
+                                },
+                            ]
+                        },
+                        "tool_calls": [{"id": "call_1", "name": "search", "arguments": canonical}],
+                    },
+                    _SEARCH_RESULT,
+                ],
+                [
+                    _REASONING_ITEM,
+                    {
+                        **_SEARCH_CALL,
+                        "id": "fc_1",
+                        "status": "completed",
+                        "arguments": expected,
+                    },
+                    _SEARCH_OUTPUT,
+                ],
+                id=case,
+            )
+            for case, raw, canonical, expected in (
+                ("empty-arguments-without-rejection", "", {}, "{}"),
+                ("null-arguments-without-rejection", None, {}, "{}"),
+                ("bare-value-repaired-at-intake", '{"q": *.py}', {"q": "*.py"}, '{"q":"*.py"}'),
+                (
+                    "valid-raw-argument-format-preserved",
+                    ' { "q" : "docs" }\n',
+                    {"q": "docs"},
+                    ' { "q" : "docs" }\n',
+                ),
+            )
+        ],
         pytest.param(
             [
                 {
@@ -424,6 +469,7 @@ def _image_input(data: str) -> dict[str, str]:
 def test_payload_replays_conversation_as_responses_items(
     messages: list[dict[str, Any]], expected_input: list[dict[str, Any]]
 ) -> None:
+    original = deepcopy(messages)
     payload = build_responses_payload(
         messages,
         model_id="gpt-5.4",
@@ -432,6 +478,7 @@ def test_payload_replays_conversation_as_responses_items(
     )
 
     assert payload["input"] == expected_input
+    assert messages == original
 
 
 def test_payload_maps_an_allowed_document_to_input_file() -> None:
