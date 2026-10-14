@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
 from core.automation import _cron_timing as cron_timing
-from core.automation.cron import CronJob, CronService
+from core.automation.cron import MAX_CONCURRENT_CRON_RUNS, CronJob, CronService
 from tests.core.automation.cron_test_support import make_service
 
 _ZONE = "Europe/Berlin"
@@ -138,6 +139,78 @@ async def test_a_fire_up_to_a_minute_late_starts_without_a_notice(
 
     trigger_service.trigger_run.assert_awaited_once()
     assert "context_note" not in trigger_service.trigger_run.await_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", sorted(_SCHEDULES))
+@pytest.mark.parametrize("wait_stage", ["capacity", "fire-save"])
+async def test_a_fire_delayed_before_admission_reports_its_actual_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    clock: _Clock,
+    kind: Literal["cron", "interval", "once"],
+    wait_stage: str,
+) -> None:
+    service, trigger = make_service(tmp_path, tz=_ZONE)
+    schedules: dict[str, dict[str, Any]] = {
+        "cron": {"cron_expression": "0 8 * * *"},
+        "interval": {"interval_seconds": 7200},
+        "once": {"run_at": "2026-10-05T08:00:00+02:00"},
+    }
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Morning brief",
+        schedule_type=kind,
+        remaining_runs=1,
+        **schedules[kind],
+    )
+    clock.now = datetime(2026, 10, 5, 6, 0, tzinfo=UTC)
+    waiting = asyncio.Event()
+    resume = asyncio.Event()
+    held_slots = 0
+    if wait_stage == "capacity":
+        for _ in range(MAX_CONCURRENT_CRON_RUNS):
+            await service._run_slots.acquire()
+            held_slots += 1
+        acquire = service._run_slots.acquire
+
+        async def observed_acquire() -> bool:
+            waiting.set()
+            return await acquire()
+
+        monkeypatch.setattr(service._run_slots, "acquire", observed_acquire)
+    else:
+        save = service._save_jobs_after_fire
+
+        async def delayed_save(job_id: str) -> bool:
+            if not waiting.is_set():
+                waiting.set()
+                await resume.wait()
+            return await save(job_id)
+
+        monkeypatch.setattr(service, "_save_jobs_after_fire", delayed_save)
+
+    try:
+        service.start()
+        await waiting.wait()
+        trigger.trigger_run.assert_not_awaited()
+        clock.now = datetime(2026, 10, 5, 7, 0, tzinfo=UTC)
+        if held_slots:
+            service._run_slots.release()
+            held_slots -= 1
+        resume.set()
+        await service._job_tasks[job.id]
+
+        trigger.trigger_run.assert_awaited_once()
+        notice = trigger.trigger_run.await_args.kwargs["context_note"]
+        assert "2026-10-05T08:00:00+02:00" in notice
+        assert "2026-10-05T09:00:00+02:00" in notice
+        assert service.get_job(job.id).last_fired_at == "2026-10-05T07:00:00+00:00"
+    finally:
+        resume.set()
+        await service.aclose()
+        for _ in range(held_slots):
+            service._run_slots.release()
 
 
 @pytest.mark.asyncio
