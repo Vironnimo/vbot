@@ -567,22 +567,35 @@ class RunExecution:
                     async with self._dependencies.sessions.write_lock(session_address):
                         await context.session_snapshot.flush_deferred_notes(session)
 
-            # Background reflection accounting. Fire-and-forget on the service's
-            # side; a failure here must never mask the run outcome.
+            # A review forks only after the manager commits this Run. Forking
+            # during executor cleanup would exclude the still-running turn,
+            # including any Compaction checkpoints it just created.
             if (
                 self._reflection_service is not None
                 and request.temporary_binding is None
                 and request.temporary_parent_binding is None
                 and run.execution_owner is None
             ):
-                try:
-                    self._reflection_service.notify_run_end(
-                        run, agent, internal=internal, outcome=outcome
-                    )
-                except Exception:
-                    _LOGGER.warning(
-                        "Reflection run-end notification failed (run=%s)", run.id, exc_info=True
-                    )
+                reflection_service = self._reflection_service
+
+                async def notify_reflection(status: RunStatus) -> None:
+                    try:
+                        reflection_service.notify_run_end(
+                            run,
+                            agent,
+                            internal=internal,
+                            outcome="success"
+                            if status == RunStatus.COMPLETED
+                            else "cancelled"
+                            if status == RunStatus.CANCELLED
+                            else "error",
+                        )
+                    except Exception:
+                        _LOGGER.warning(
+                            "Reflection run-end notification failed (run=%s)", run.id, exc_info=True
+                        )
+
+                run.add_completion_observer(notify_reflection)
 
             await _close_adapter(target.adapter)
 
