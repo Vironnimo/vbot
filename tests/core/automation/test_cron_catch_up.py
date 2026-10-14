@@ -166,3 +166,50 @@ async def test_fires_due_before_activation_or_a_new_schedule_are_not_owed(
     trigger_service.trigger_run.assert_not_awaited()
     next_hour = 6 if change == "enable" else 7
     assert waits == [datetime(2026, 10, 9, next_hour, 0, tzinfo=UTC)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("zone", "created", "resumed", "expression", "due", "next_due"),
+    [
+        (
+            "Europe/Berlin",
+            "2026-10-24T22:00:00+00:00",
+            "2026-10-25T01:15:00+00:00",
+            "30 2 * * *",
+            "2026-10-25T02:30:00+02:00",
+            "2026-10-26T01:30:00+00:00",
+        ),
+        (
+            "Australia/Lord_Howe",
+            "2026-04-04T12:00:00+00:00",
+            "2026-04-04T15:05:00+00:00",
+            "45 1 * * *",
+            "2026-04-05T01:45:00+11:00",
+            "2026-04-05T15:15:00+00:00",
+        ),
+    ],
+)
+async def test_restart_in_the_repeated_hour_catches_up_the_first_occurrence_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    clock: _Clock,
+    zone: str,
+    created: str,
+    resumed: str,
+    expression: str,
+    due: str,
+    next_due: str,
+) -> None:
+    clock.now = datetime.fromisoformat(created)
+    original, _ = make_service(tmp_path, tz=zone)
+    job = await original.create_job(
+        agent_id="agent-one", prompt="Reminder", schedule_type="cron", cron_expression=expression
+    )
+    service, trigger = make_service(tmp_path, tz=zone)
+    clock.now = datetime.fromisoformat(resumed)
+    waits = _stop_at_next_wait(service, job.id, clock, monkeypatch)
+    await _run(service, service.get_job(job.id))
+    trigger.trigger_run.assert_awaited_once()
+    assert due in trigger.trigger_run.await_args.kwargs["context_note"]
+    assert waits == [datetime.fromisoformat(next_due)]

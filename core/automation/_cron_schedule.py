@@ -188,7 +188,16 @@ def _previous_cron_fire_utc(
     when croniter finds no earlier fire within its search horizon.
     """
     # get_prev excludes its start; one microsecond later includes an exact tick.
-    wall_clock = reference_utc.astimezone(timezone).replace(tzinfo=None) + timedelta(microseconds=1)
+    reference_local = reference_utc.astimezone(timezone)
+    wall_clock = reference_local.replace(tzinfo=None)
+    if reference_local.fold:
+        # During the repeated hour, later wall times in its first occurrence
+        # have already elapsed. Include them in the search, then compare UTC.
+        first_offset = reference_local.replace(fold=0).utcoffset()
+        offset = reference_local.utcoffset()
+        if first_offset is not None and offset is not None:
+            wall_clock += first_offset - offset
+    wall_clock += timedelta(microseconds=1)
     schedule = croniter(expression, wall_clock)
     try:
         while True:
