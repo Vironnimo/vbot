@@ -126,6 +126,7 @@ class CompactionRunHost(Protocol):
         self,
         checkpoint: ChatMessage,
         session_messages: list[ChatMessage],
+        session: ChatSession,
     ) -> ChatMessage: ...
 
     async def prepare_prompt_refresh(
@@ -317,6 +318,7 @@ class CompactionRunCoordinator:
             checkpoint = await self._host.finalize_checkpoint(
                 checkpoint,
                 messages,
+                session,
             )
             checkpoint = checkpoint.with_compaction_duration_ms(
                 duration_ms=round((time.perf_counter() - compaction_started_perf) * 1000)
@@ -627,6 +629,7 @@ class CompactionRunCoordinator:
             checkpoint = await self._host.finalize_checkpoint(
                 checkpoint,
                 session_messages,
+                session,
             )
             checkpoint = checkpoint.with_compaction_duration_ms(
                 duration_ms=round((time.perf_counter() - compaction_started_perf) * 1000)

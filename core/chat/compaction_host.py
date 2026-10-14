@@ -21,6 +21,7 @@ from core.chat._run_state import (
     _CompactionPromptRefresh,
     is_subagent_session,
 )
+from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY
 from core.chat._tool_epoch import called_tool_names
 from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
@@ -303,13 +304,19 @@ class ChatCompactionHost:
         self,
         checkpoint: ChatMessage,
         session_messages: list[ChatMessage],
+        session: ChatSession,
     ) -> ChatMessage:
+        announced = await self.sessions.metadata_value_async(
+            session.address, SCRATCH_ANNOUNCED_META_KEY
+        )
+        scratch_note_id = announced.get("note_id") if isinstance(announced, dict) else None
         return cast(
             ChatMessage,
             await self.run_transform(
                 _finalize_compaction_checkpoint,
                 checkpoint,
                 session_messages,
+                scratch_note_id,
             ),
         )
 

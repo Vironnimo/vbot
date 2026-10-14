@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from core.tools.scratch_areas import ScratchFolder
 
 SCRATCH_ANNOUNCED_META_KEY = "scratch_announced"
-SCRATCH_NOTE_PREFIX = "[scratch-area] "
 _FILE_TOOLS = frozenset({"bash", "terminal", "write", "edit", "apply_patch"})
 SCRATCH_RUN_KINDS = frozenset(
     {
@@ -39,49 +38,27 @@ def scratch_note_visible(messages: list[ChatMessage], note_id: object) -> bool:
     )
 
 
-def scratch_note(folder: ScratchFolder, *, cleared: bool, process_tools: bool) -> ChatMessage:
-    content = (
-        f"Your Scratch folder for intermediate work is {folder.own.as_posix()}.\n"
-        f"Scratch Area: {folder.area.as_posix()}. "
-        "Other folders in this area belong to this conversation's Parent or Sub-Agents. "
-        "Within this area, write only in your own folder; read the others when useful. "
-        "When delegating, put the inputs in your own folder and pass their paths; "
-        "let each Sub-Agent keep its intermediate files in its own Scratch folder "
-        "and report its result paths.\n"
+def scratch_note(folder: ScratchFolder) -> ChatMessage:
+    return ChatMessage.note(
+        f"Your Scratch folder is {folder.own.as_posix()}. "
+        "Use it for temporary files such as helper scripts, downloads and intermediate "
+        "results, unless the user requests another location. Save deliverables in the "
+        "working directory or the location requested by the user.\n\n"
+        "Within Scratch, write only in your own folder; you can read the others. "
+        "When delegating, pass input paths and let each Sub-Agent use its own Scratch "
+        "folder for intermediate files."
     )
-    if process_tools:
-        content += (
-            "Temporary files of your processes already go to tmp/ in your folder; "
-            "VBOT_SCRATCH_DIR names your folder in commands.\n"
-        )
-    content += (
-        "vBot deletes this area after 7 days without activity. "
-        "You do not need to clean it up; you can delete files you have finished with.\n"
-        "Scratch is temporary working space, not Memory or a delivery location. "
-        "Put results the user will keep and files you hand to the user in the working "
-        "directory or Workspace; put notes needed in a later conversation in the "
-        "Workspace or Memory."
-    )
-    if cleared:
-        content += (
-            "\nYour Scratch folder has been recreated or changed. "
-            "Do not assume files at earlier Scratch paths still exist; "
-            "use the folder above for new work."
-        )
-    return ChatMessage.note(SCRATCH_NOTE_PREFIX + content)
 
 
 def preserve_scratch_note(
-    checkpoint: ChatMessage, session_messages: list[ChatMessage]
+    checkpoint: ChatMessage, session_messages: list[ChatMessage], note_id: object
 ) -> ChatMessage:
     """Keep the latest announcement verbatim, including across mid-Run Compaction."""
     announcement = next(
         (
             message
             for message in reversed(effective_compaction_messages(session_messages))
-            if message.role == "note"
-            and isinstance(message.content, str)
-            and message.content.startswith(SCRATCH_NOTE_PREFIX)
+            if message.role == "note" and message.id == note_id
         ),
         None,
     )

@@ -13,7 +13,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat._message_history import effective_compaction_messages
-from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY, SCRATCH_NOTE_PREFIX
+from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY
 from core.runs import RunCancelledError, RunInterruptedError, RunKind, RunStatus
 from core.sessions import ChatSession, SessionAddress
 from core.tools import ToolRegistry, tool_success
@@ -64,13 +64,13 @@ def _runtime(tmp_path: Path, *, allowed_tools: list[str] | None = None) -> Any:
     return runtime
 
 
-def _notes(messages: list[ChatMessage]) -> list[ChatMessage]:
+def _notes(tmp_path: Path, messages: list[ChatMessage]) -> list[ChatMessage]:
     return [
         message
         for message in messages
         if message.role == "note"
         and isinstance(message.content, str)
-        and message.content.startswith(SCRATCH_NOTE_PREFIX)
+        and tmp_path.as_posix() in message.content
     ]
 
 
@@ -82,7 +82,7 @@ async def test_scratch_announces_once_and_forks_announce_their_own_folder(tmp_pa
     for _ in range(2):
         run = await loop.start_run("coder", "Work", session_id=session.id)
         await run.wait()
-    [note] = _notes(session.load_active())
+    [note] = _notes(tmp_path, session.load_active())
     record = runtime.chat_sessions.metadata_value(session.address, SCRATCH_ANNOUNCED_META_KEY)
     assert record["note_id"] == note.id
     assert record["incarnation"] == "initial"
@@ -90,16 +90,21 @@ async def test_scratch_announces_once_and_forks_announce_their_own_folder(tmp_pa
     assert Path(record["own"]).as_posix() in note.content
     assert len(runtime.scratch_areas.calls) == 2
     assert all(
-        SCRATCH_NOTE_PREFIX not in str(request["messages"][0]["content"])
+        Path(record["own"]).as_posix() not in str(request["messages"][0]["content"])
         for request in runtime.adapter.requests
     )
-    assert SCRATCH_NOTE_PREFIX in str(runtime.adapter.requests[0]["messages"])
+    assert any(
+        note.content in str(message.get("content", ""))
+        for message in runtime.adapter.requests[0]["messages"]
+    )
+    assert "[scratch-area]" not in str(runtime.adapter.requests)
+    assert SCRATCH_ANNOUNCED_META_KEY not in str(runtime.adapter.requests)
 
     fork = await runtime.chat_sessions.fork(session.address)
     assert runtime.chat_sessions.metadata_value(fork.address, SCRATCH_ANNOUNCED_META_KEY) is None
     run = await loop.start_run("coder", "Continue", session_id=fork.id)
     await run.wait()
-    [fork_note] = _notes(fork.load())
+    [fork_note] = _notes(tmp_path, fork.load())
     assert isinstance(fork_note.content, str)
     assert fork.id in fork_note.content
     assert fork_note.id != note.id
@@ -131,7 +136,7 @@ async def test_optional_scratch_failure_keeps_the_run_working_and_recovers(
     rebuild = loop._requests.rebuild_live_request_state
 
     async def append_notes(current: ChatSession, messages: list[ChatMessage], **kwargs: Any) -> Any:
-        if unavailable and failure_stage == "persistence" and _notes(messages):
+        if unavailable and failure_stage == "persistence" and _notes(tmp_path, messages):
             raise RuntimeError("private Scratch failure details")
         return await append(current, messages, **kwargs)
 
@@ -168,7 +173,7 @@ async def test_optional_scratch_failure_keeps_the_run_working_and_recovers(
     await run.wait()
     assert run.status is RunStatus.COMPLETED
     record = runtime.chat_sessions.metadata_value(session.address, SCRATCH_ANNOUNCED_META_KEY)
-    notes = _notes(session.load_active())
+    notes = _notes(tmp_path, session.load_active())
     assert len(notes) == 2
     assert record["note_id"] == notes[-1].id
     assert record["own"] != initial["own"]
@@ -194,13 +199,13 @@ async def test_optional_scratch_does_not_swallow_run_cancellation(
         await run.wait()
     assert run.status is (RunStatus.INTERRUPTED if interrupted else RunStatus.CANCELLED)
     assert not runtime.adapter.requests
-    assert not _notes(session.load())
+    assert not _notes(tmp_path, session.load())
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["recreated", "intervening_launch", "location"])
 async def test_scratch_announces_a_changed_folder_even_when_old_files_survive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+    tmp_path: Path, change: str
 ) -> None:
     runtime = _runtime(tmp_path)
     session = runtime.chat_sessions.create("coder", session_id="source")
@@ -219,24 +224,15 @@ async def test_scratch_announces_a_changed_folder_even_when_old_files_survive(
     else:
         runtime.scratch_areas.recreated = change == "recreated"
         runtime.scratch_areas.incarnation = "replacement"
-    cleared_values: list[bool] = []
-    from core.chat._run_execution import scratch_note
-
-    def recording_note(folder: Any, *, cleared: bool, process_tools: bool) -> ChatMessage:
-        cleared_values.append(cleared)
-        return scratch_note(folder, cleared=cleared, process_tools=process_tools)
-
-    monkeypatch.setattr("core.chat._run_execution.scratch_note", recording_note)
     run = await loop.start_run("coder", "Continue", session_id=session.id)
     await run.wait()
-    assert cleared_values == [True]
-    assert len(_notes(session.load())) == 2
+    assert len(_notes(tmp_path, session.load())) == 2
     current = runtime.chat_sessions.metadata_value(session.address, SCRATCH_ANNOUNCED_META_KEY)
     assert current["incarnation"] == runtime.scratch_areas.incarnation
     if surviving_file is not None:
         assert current["own"] != initial["own"]
         assert surviving_file.read_text(encoding="utf-8") == "earlier work"
-        latest_content = _notes(session.load())[-1].content
+        latest_content = _notes(tmp_path, session.load())[-1].content
         assert isinstance(latest_content, str)
         assert Path(current["own"]).as_posix() in latest_content
 
@@ -259,7 +255,7 @@ async def test_scratch_is_only_announced_for_ordinary_file_capable_runs(
         RunKind.LIBRARIAN,
         RunKind.LIVE,
     }
-    assert bool(_notes(session.load())) is (kind not in excluded)
+    assert bool(_notes(tmp_path, session.load())) is (kind not in excluded)
     assert bool(runtime.scratch_areas.calls) is (kind not in excluded)
 
 
@@ -276,7 +272,7 @@ async def test_scratch_is_not_created_without_file_tools(tmp_path: Path, denial:
         tool_denial_resolver=(lambda _: "blocked") if denial == "live" else None,
     )
     await run.wait()
-    assert not _notes(session.load())
+    assert not _notes(tmp_path, session.load())
     assert not runtime.scratch_areas.calls
 
 
@@ -287,24 +283,33 @@ async def test_scratch_announces_when_file_tools_become_available_mid_epoch(tmp_
     loop = build_chat_loop(runtime)
     run = await loop.start_run("coder", "Talk", session_id=session.id)
     await run.wait()
-    assert not _notes(session.load())
+    assert not _notes(tmp_path, session.load())
     runtime.agents._agent = replace(runtime.agents.get("coder"), allowed_tools=["bash"])
     run = await loop.start_run("coder", "Work", session_id=session.id)
     await run.wait()
-    assert len(_notes(session.load())) == 1
+    assert len(_notes(tmp_path, session.load())) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retain_note", [False, True])
+@pytest.mark.parametrize("legacy_note", [False, True])
+@pytest.mark.parametrize("manual", [False, True])
 async def test_compaction_preserves_exactly_one_current_scratch_announcement(
-    tmp_path: Path, retain_note: bool
+    tmp_path: Path, retain_note: bool, legacy_note: bool, manual: bool
 ) -> None:
     runtime = compaction_runtime(tmp_path, tools=_tools())
     session = runtime.chat_sessions.create("coder", session_id="source")
-    note = ChatMessage.note(SCRATCH_NOTE_PREFIX + "scratch contract sentinel")
+    note = ChatMessage.note(
+        ("[scratch-area] " if legacy_note else "") + "scratch contract sentinel"
+    )
+    runtime.chat_sessions.mutate_metadata(
+        session.address,
+        lambda metadata: metadata.update({SCRATCH_ANNOUNCED_META_KEY: {"note_id": note.id}}),
+    )
     session.append_many(
         [
             note,
+            ChatMessage.note("[scratch-area] unrelated note without a metadata reference"),
             ChatMessage.user("Work"),
             ChatMessage.assistant(model="openai/gpt-5.2", content="Done"),
         ]
@@ -315,8 +320,14 @@ async def test_compaction_preserves_exactly_one_current_scratch_announcement(
     loop = build_chat_loop(
         runtime, compaction_service=StubCompactionService(should_auto=True, checkpoint=checkpoint)
     )
-    await auto_compact(loop, runtime.agents.get("coder"), session, usage={"input_tokens": 90})
-    [preserved] = _notes(effective_compaction_messages(session.load_active()))
+    if manual:
+        run = await loop.start_compaction_run("coder", session_id=session.id)
+        await run.wait()
+    else:
+        await auto_compact(loop, runtime.agents.get("coder"), session, usage={"input_tokens": 90})
+    effective = effective_compaction_messages(session.load_active())
+    [preserved] = [message for message in effective if message.id == note.id]
+    assert not any("unrelated note" in str(message.content) for message in effective)
     assert preserved.id == note.id
     assert preserved.content == note.content
 
@@ -335,5 +346,5 @@ async def test_run_reannounces_when_a_checkpoint_omitted_the_scratch_note(tmp_pa
     )
     run = await loop.start_run("coder", "Continue", session_id=session.id)
     await run.wait()
-    assert len(_notes(session.load())) == 2
-    assert len(_notes(effective_compaction_messages(session.load_active()))) == 1
+    assert len(_notes(tmp_path, session.load())) == 2
+    assert len(_notes(tmp_path, effective_compaction_messages(session.load_active()))) == 1

@@ -615,7 +615,7 @@ class RunExecution:
             )
             own = str(folder.own)
             prior = announced if isinstance(announced, dict) else {}
-            cleared = bool(prior) and (
+            changed = bool(prior) and (
                 folder.recreated
                 or prior.get("own") != own
                 or prior.get("incarnation") != folder.incarnation
@@ -625,11 +625,9 @@ class RunExecution:
                 context.session_snapshot.active_messages,
                 prior.get("note_id"),
             )
-            if prior and not cleared and visible:
+            if prior and not changed and visible:
                 return True
-            note = scratch_note(
-                folder, cleared=cleared, process_tools=bool(tool_names & {"bash", "terminal"})
-            )
+            note = scratch_note(folder)
             await context.session_snapshot.append(session, [note])
             await sessions.run_async(
                 sessions.mutate_metadata,
