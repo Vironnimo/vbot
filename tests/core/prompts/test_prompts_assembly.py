@@ -66,7 +66,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
         ]
     )
     manager = _manager(tmp_path, tools=tools, skills=skills, channels=channels)
-    agent = _agent(workspace, allowed_tools=["read"], allowed_skills=["agent-cli"])
+    agent = _agent(workspace, allowed_tools=["read", "skill"], allowed_skills=["agent-cli"])
     details: list[dict[str, object]] = []
 
     prompt = manager.build_system_prompt(agent, block_details=details)
@@ -126,7 +126,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "<system-reminder>" in str(anchor["text"])
     assert str(anchor["text"]).strip() in prompt
     # Same agent allowlist drives prompt tools and gate 2's memory-tool check.
-    assert tools.prompt_allowlist_calls[0] == ["read", "memory"]
+    assert set(tools.prompt_allowlist_calls[0] or ()) == {"read", "skill", "memory"}
     assert skills.allowlist == ["agent-cli"]
 
 

@@ -57,6 +57,8 @@ BLOCK_OWNER_IDENTITY = "identity"
 
 BLOCK_OWNER_SUBAGENT_SESSION = "subagent_session"
 
+BLOCK_OWNER_SKILL = "tool:skill"
+
 BLOCK_OWNER_SKILL_MANAGE = f"tool:{SKILL_MANAGE_TOOL_NAME}"
 
 # Custom user blocks exist through their layout entry and override file.

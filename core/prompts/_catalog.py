@@ -14,6 +14,7 @@ from core.prompts._types import (
     AGENT_SCOPE_KEY_PREFIX,
     BLOCK_OWNER_ALWAYS,
     BLOCK_OWNER_IDENTITY,
+    BLOCK_OWNER_SKILL,
     BLOCK_OWNER_SKILL_MANAGE,
     BLOCK_OWNER_SUBAGENT_SESSION,
     CHANNEL_LIST_PRODUCER,
@@ -373,7 +374,7 @@ class PromptBlockCatalog:
             ),
             BlockDefinition(
                 id=CORE_SKILLS_BLOCK_ID,
-                owner=BLOCK_OWNER_ALWAYS,
+                owner=BLOCK_OWNER_SKILL,
                 default_text=self._read_prompt_fragment(prompt_scope, agent_id, "skills.md"),
             ),
             BlockDefinition(

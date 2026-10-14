@@ -22,6 +22,7 @@ from core.tools.tools import ToolPromptBlockRegistry
 from core.utils.paths import model_path
 from tests.core.prompts.prompts_test_support import (
     StubBlockStore,
+    StubSkill,
     StubSkills,
     StubTools,
     _agent,
@@ -176,17 +177,28 @@ def test_provider_subagent_definition_narrows_agent_id_to_self_and_allowed_targe
     ],
     ids=["identity-wildcard", "identity-disallowed", "config-wildcard"],
 )
+@pytest.mark.parametrize("has_skills", [False, True], ids=["empty-catalog", "filled-catalog"])
 def test_skill_tools_follow_the_allowlist_and_authoring_needs_an_identity_agent(
-    workspace: Path, tmp_path: Path, identity: bool, allowed_tools: list[str], offered: set[str]
+    workspace: Path,
+    tmp_path: Path,
+    identity: bool,
+    allowed_tools: list[str],
+    offered: set[str],
+    has_skills: bool,
 ) -> None:
-    manager = _manager(tmp_path, skills=StubSkills([]))
-    agent = _agent(workspace if identity else "", allowed_tools=allowed_tools, allowed_skills=[])
+    skills = StubSkills([StubSkill("example", "Example task")] if has_skills else [])
+    manager = _manager(tmp_path, skills=skills)
+    agent = _agent(workspace if identity else "", allowed_tools=allowed_tools, allowed_skills=["*"])
     details: list[dict[str, Any]] = []
 
     names = {definition["name"] for definition in manager.provider_tool_definitions(agent)}
-    manager.build_system_prompt(agent, block_details=details)
+    prompt = manager.build_system_prompt(agent, block_details=details)
 
     assert names & {"skill", "skill_manage"} == offered
+    # Loader guidance follows Tool availability, including when the catalog is empty.
+    loader = next(block for block in details if block["id"] == "core:skills")
+    assert loader["included"] is ("skill" in offered)
+    assert ("<available_skills>" in prompt) is ("skill" in offered)
     # The skill maintenance block is owned by tool:skill_manage (gate 2).
     maintenance = next(
         (block for block in details if block["id"] == "core:skill_maintenance"), None

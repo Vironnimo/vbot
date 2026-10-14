@@ -104,7 +104,10 @@ def test_participant_selection_overrides_shared_enablement(tmp_path: Path) -> No
             layouts={"default": [LayoutEntry(id="core:tools", enabled=False, source="core")]}
         ),
     )
-    agent = _temporary_agent(tmp_path, ["core:tools", "core:skills"])
+    agent = replace(
+        _temporary_agent(tmp_path, ["core:tools", "core:skills"]),
+        tool_access=ToolAccess(mode="selected", allowed=("skill",)),
+    )
 
     assert manager.build_system_prompt(agent) == "tools-sentinel\n\nskills-sentinel"
     assert "runtime-sentinel" in manager.build_system_prompt(replace(agent, prompt_blocks=None))
@@ -147,7 +150,7 @@ def test_default_scope_layout_and_override_shape_the_prompt(
     manager = _manager(
         tmp_path, skills=StubSkills([StubSkill("agent-cli", "Delegate")]), block_store=store
     )
-    agent = _agent(workspace, allowed_tools=["read"], allowed_skills=["agent-cli"])
+    agent = _agent(workspace, allowed_tools=["read", "skill"], allowed_skills=["agent-cli"])
 
     prompt = manager.build_system_prompt(agent)
 
