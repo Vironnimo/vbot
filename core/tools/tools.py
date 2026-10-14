@@ -1112,6 +1112,7 @@ class ToolExecutor:
                 working_project_id=config.working_project_id,
                 skill_agent_id=config.skill_agent_id,
                 run_kind=config.run_kind,
+                reply_surface=config.reply_surface,
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,
                 cancel_registration_hook=cancel_registration_hook,

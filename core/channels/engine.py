@@ -805,7 +805,7 @@ class ChannelConversationEngine:
             tool_access_kwargs["tool_restriction"] = tool_restriction
         if tool_denial_resolver is not None:
             tool_access_kwargs["tool_denial_resolver"] = tool_denial_resolver
-        reply_surface = self._reply_surface(conversation.kind)
+        reply_surface = self._reply_surface(conversation.kind, reply_plan)
         try:
             # An internal run persists the content as a kernel note instead of a
             # visible user message; it never carries a sender.
@@ -1318,7 +1318,7 @@ class ChannelConversationEngine:
             agent_id=route.agent_id,
             session_id=route.session_id,
             project_id=None,
-            reply_surface=self._reply_surface(conversation.kind),
+            reply_surface=self._reply_surface(conversation.kind, reply_plan),
         )
         try:
             if prepared.execution_mode == "serialized":
@@ -1376,12 +1376,18 @@ class ChannelConversationEngine:
             else:
                 await self._relay_run(command_run.run, reply_plan)
 
-    def _reply_surface(self, conversation_kind: Literal["direct", "group"]) -> ReplySurface:
+    def _reply_surface(
+        self,
+        conversation_kind: Literal["direct", "group"],
+        reply_plan: ReplyPlanFacts | None = None,
+    ) -> ReplySurface:
         return ReplySurface.channel(
             platform=self._config.platform,
             platform_display_name=self._platform_display_name(),
             channel_id=self._config.id,
             conversation_kind=conversation_kind,
+            platform_target=reply_plan.platform_target if reply_plan is not None else None,
+            thread_id=reply_plan.thread_id if reply_plan is not None else None,
         )
 
     def _platform_display_name(self) -> str:

@@ -260,7 +260,12 @@ def test_channels_block_renders_only_with_an_enabled_channel_of_this_agent(
     assert prompt(None) == empty
     assert prompt(StubChannels([_channel("tg-disabled", enabled=False)])) == empty
     assert prompt(StubChannels([_channel("tg-other", agent_id="other-agent")])) == empty
-    assert "enabled-fixture-channel" in prompt(StubChannels([_channel("enabled-fixture-channel")]))
+    enabled = _channel("enabled-fixture-channel")
+    with_channel = prompt(StubChannels([enabled]))
+    assert "- enabled-fixture-channel: telegram" in with_channel.splitlines()
+    # The catalog identifies Channels, not this Session's possible reply targets.
+    for chat_ids in ([], ["222"], ["111", "222"]):
+        assert prompt(StubChannels([replace(enabled, allowed_chat_ids=chat_ids)])) == with_channel
 
 
 def test_subagent_role_block_renders_only_in_a_subagent_session(

@@ -182,11 +182,11 @@ def test_a_call_without_one_clear_channel_is_refused(
         pytest.param(
             [111],
             None,
-            {"message": "Hi", "platform_target": "none"},
+            {"message": "Hi", "platform_target": " "},
             "111",
             None,
             True,
-            id="placeholder-chat",
+            id="empty-chat",
         ),
         pytest.param(
             [111, 222],
@@ -247,6 +247,21 @@ def test_the_call_selects_one_chat(
 @pytest.mark.parametrize(
     ("allowed", "arguments", "message"),
     [
+        *(
+            pytest.param(
+                [111],
+                {"message": "Hi", field: value},
+                ("Nothing was sent", "destination", "omit"),
+                id=f"stand-in-{field}",
+            )
+            for field, value in (
+                ("platform_target", "none"),
+                ("chat_id", "<chat id>"),
+                ("thread_id", "<topic id>"),
+                ("channel", "none"),
+                ("target", "???"),
+            )
+        ),
         pytest.param(
             [111, 222],
             {"message": "Hi"},
@@ -284,13 +299,17 @@ def test_the_call_selects_one_chat(
     ],
 )
 def test_a_call_without_one_clear_chat_is_refused(
-    tmp_path: Path, allowed: list[int], arguments: dict[str, Any], message: str
+    tmp_path: Path, allowed: list[int], arguments: dict[str, Any], message: str | tuple[str, ...]
 ) -> None:
     tool = channel_send(tmp_path, make_channel_config(allowed_chat_ids=allowed))
 
     envelope = tool.call(arguments)
 
-    assert refused(envelope) == message
+    result = refused(envelope)
+    if isinstance(message, tuple):
+        assert all(part in result for part in message)
+    else:
+        assert result == message
     assert tool.sent() == []
 
 

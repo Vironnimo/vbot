@@ -59,11 +59,43 @@ def _workspace_files(workspace: Path) -> None:
         ),
         pytest.param(
             lambda _workspace: {
-                "attachments": [{"media": "note.txt", "name": "A"}, {"path": "b.txt"}]
+                "attachments": [
+                    {"media": "note.txt", "path": "note.txt", "name": ""},
+                    {"path": "b.txt"},
+                ]
             },
             None,
             [("note.txt", "text/plain"), ("b.txt", "text/plain")],
             id="attachment-objects",
+        ),
+        pytest.param(
+            lambda _workspace: {"message": "Caption  \r\n\r\n\r\nMEDIA:note.txt\r\nKeep  this."},
+            "Caption  \r\n\r\n\r\nKeep  this.",
+            [("note.txt", "text/plain")],
+            id="media-marker-keeps-surrounding-payload",
+        ),
+        pytest.param(
+            lambda _workspace: {"message": "```\nMEDIA:note.txt\n```\nMEDIA:b.txt\nEnd"},
+            "```\nMEDIA:note.txt\n```\nEnd",
+            [("b.txt", "text/plain")],
+            id="only-unquoted-marker-is-an-attachment",
+        ),
+        *(
+            pytest.param(
+                lambda _workspace, message=message: {"message": message},
+                message,
+                [],
+                id=f"literal-media-{case}",
+            )
+            for case, message in (
+                ("prose", "Print the literal MEDIA:note.txt in the documentation."),
+                ("quoted", 'The marker is "MEDIA:note.txt".'),
+                ("blockquote", "Quoted:\n> MEDIA:note.txt"),
+                ("indented-code", "Example:\n    MEDIA:note.txt"),
+                ("code-fence", "```text\nMEDIA:note.txt\n```"),
+                ("long-fence", "~~~~\nMEDIA:note.txt\n~~~\nMEDIA:b.txt\n~~~~"),
+                ("unclosed-fence", "```\nMEDIA:note.txt"),
+            )
         ),
         pytest.param(
             lambda _workspace: {"file": "note.txt", "caption": "One file"},
@@ -87,8 +119,8 @@ def test_files_reach_the_channel(
     assert delivered(envelope) == {"channel_id": "tg-main", "platform_target": "111"}
     [(channel_id, sent_message, target, options)] = tool.sent()
     assert (channel_id, sent_message, target) == ("tg-main", message, "111")
-    assert [(item.filename, item.media_type) for item in options["files"]] == files
-    assert [item.data for item in options["files"]] == [
+    assert [(item.filename, item.media_type) for item in options["files"] or []] == files
+    assert [item.data for item in options["files"] or []] == [
         (tool.workspace / name).read_bytes() for name, _type in files
     ]
 
@@ -109,6 +141,20 @@ def test_relative_paths_start_in_the_working_directory(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
+        *(
+            pytest.param(
+                {"attachments": [file_object]},
+                ("Nothing was sent", "local", field),
+                id=f"file-object-{case}",
+            )
+            for case, file_object, field in (
+                ("conflicting-paths", {"path": "note.txt", "url": "b.txt"}, "url"),
+                ("conflicting-spellings", {"path": "note.txt", "Path": "b.txt"}, "Path"),
+                ("filename", {"path": "note.txt", "name": "other.txt"}, "name"),
+                ("caption", {"path": "note.txt", "caption": "Read this"}, "caption"),
+                ("condition", {"path": "note.txt", "private": False}, "private"),
+            )
+        ),
         *(
             pytest.param(
                 {"file_paths": [address]},
@@ -161,7 +207,7 @@ def test_relative_paths_start_in_the_working_directory(tmp_path: Path) -> None:
     ],
 )
 def test_files_that_cannot_be_sent_are_refused(
-    tmp_path: Path, arguments: dict[str, Any], message: str
+    tmp_path: Path, arguments: dict[str, Any], message: str | tuple[str, ...]
 ) -> None:
     tool = channel_send(tmp_path)
     _workspace_files(tool.workspace)
@@ -172,5 +218,9 @@ def test_files_that_cannot_be_sent_are_refused(
     envelope = tool.call(arguments)
 
     missing_path = str(tool.workspace / "missing.pdf")
-    assert refused(envelope) == message.replace("<missing path>", missing_path)
+    result = refused(envelope)
+    if isinstance(message, tuple):
+        assert all(part in result for part in message)
+    else:
+        assert result == message.replace("<missing path>", missing_path)
     assert tool.sent() == []

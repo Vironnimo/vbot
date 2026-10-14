@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, cast, override
 from core.agents import default_workspace_dir
 from core.chat._skill_activation import _active_skill_env_keys
 from core.chat.events import _emit_tool_context_event, _timing_payload
-from core.chat.messages import ChatMessage, JsonObject, ToolCall, ToolCallRejection
+from core.chat.messages import ChatMessage, JsonObject, ReplySurface, ToolCall, ToolCallRejection
 from core.extensions import ExtensionRegistry, HookContext
 from core.performance import measure, session_track
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
@@ -78,6 +78,7 @@ class ToolDispatchContext:
     project_id: str | None = None
     skill_project_id: str | None = None
     skill_registry: SkillRegistry | None = None
+    reply_surface: ReplySurface | None = None
     tool_restriction: Sequence[str] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
     base_allowed_tools: Sequence[str] | None = None
@@ -834,6 +835,7 @@ class ToolRound:
             working_project_id=run.working_project_id,
             skill_agent_id=getattr(agent, "skill_agent_id", None),
             run_kind=run.run_kind,
+            reply_surface=context.reply_surface,
             allowed_tools=_dispatch_allowed_tools(
                 agent,
                 context.registry,

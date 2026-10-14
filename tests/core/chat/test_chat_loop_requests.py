@@ -403,7 +403,7 @@ async def test_internal_run_sends_its_prompt_as_a_reminder_after_the_reply_surfa
     request_messages = runtime.adapter.requests[0]["messages"]
     assert [message["role"] for message in request_messages] == ["system", "user"]
     request_content = request_messages[1]["content"]
-    assert request_content.index("delivered via Telegram") < request_content.index(prompt)
+    assert request_content.index(TELEGRAM.reminder_text()) < request_content.index(prompt)
     assert request_content.endswith(
         _reminder(prompt)["content"] + "\n" + _reminder(completion)["content"]
     )

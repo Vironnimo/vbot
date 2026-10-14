@@ -36,12 +36,7 @@ def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
 
 def _channel_line(channel: ChannelPromptMetadata) -> str:
     """The line the ``core:channels`` block shows for one enabled channel."""
-    target_hint = (
-        "default target available"
-        if len(channel.allowed_chat_ids) == 1
-        else "explicit target required"
-    )
-    return f"- {channel.id}: {channel.platform} ({target_hint})"
+    return f"- {channel.id}: {channel.platform}"
 
 
 def _format_skill_catalog(skills: Sequence[SkillPromptMetadata]) -> str:

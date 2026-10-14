@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
@@ -55,8 +56,8 @@ def _format_interaction_note(conversation: ConversationFacts, event: Interaction
     """Render the neutral kernel note for a run-triggering button tap.
 
     Without a checklist it calls out the tapped button and lists every current
-    button's label and callback data verbatim in row order, so the agent reads the
-    whole keyboard state from the note alone. A checklist keyboard
+    button's label and callback data as quoted records in row order, so the agent
+    reads the whole keyboard state from the note alone. A checklist keyboard
     (``core.channels.checklist``) is reported as the items whose state changed
     since sending, by their ids, so the agent applies only what the user changed.
     """
@@ -65,8 +66,9 @@ def _format_interaction_note(conversation: ConversationFacts, event: Interaction
         lines = ["The checklist you sent to this chat was submitted."]
     else:
         lines = [
-            "A channel button was tapped and is asking you to act on it.",
-            f'Tapped button: "{_tapped_button_label(event)}" ({event.data})',
+            "A button on your message was tapped.",
+            "Tapped button: "
+            + _quote_interaction_data(label=_tapped_button_label(event), data=event.data),
         ]
     if conversation.kind == "group":
         lines.append(
@@ -78,27 +80,48 @@ def _format_interaction_note(conversation: ConversationFacts, event: Interaction
     if changes is None:
         lines.append("Current buttons on the message (top to bottom, left to right):")
         lines.extend(
-            f'- "{button.label}" ({button.data})' for row in event.buttons for button in row
+            "- " + _quote_interaction_data(label=button.label, data=button.data)
+            for row in event.buttons
+            for button in row
         )
-        lines.append("Act on the current button state, then confirm in this chat.")
+        lines.append("Carry out the tapped action, then confirm in this chat.")
         return "\n".join(lines)
 
     changed = len(changes.checked) + len(changes.unchecked)
     if changed:
         lines.append("Checklist items changed since you sent it:")
-        lines.extend(f'- checked: "{item.label}" (id {item.id})' for item in changes.checked)
-        lines.extend(f'- unchecked: "{item.label}" (id {item.id})' for item in changes.unchecked)
+        lines.extend(
+            "- checked: " + _quote_interaction_data(label=item.label, id=item.id)
+            for item in changes.checked
+        )
+        lines.extend(
+            "- unchecked: " + _quote_interaction_data(label=item.label, id=item.id)
+            for item in changes.unchecked
+        )
         lines.append(f"Unchanged items: {changes.unchanged}.")
     else:
         lines.append(f"No checklist item changed since you sent it ({changes.unchanged} items).")
     others = [button for row in event.buttons for button in row if not is_checklist_button(button)]
     if others:
         lines.append("Other buttons on the message:")
-        lines.extend(f'- "{button.label}" ({button.data})' for button in others)
-    lines.append(
-        "Act on these changes, then confirm in this chat." if changed else "Confirm in this chat."
-    )
+        lines.extend(
+            "- " + _quote_interaction_data(label=button.label, data=button.data)
+            for button in others
+        )
+    if event.data != CHECKLIST_DONE_DATA:
+        lines.append("Carry out the tapped action, then confirm in this chat.")
+    else:
+        lines.append(
+            "Act on these changes, then confirm in this chat."
+            if changed
+            else "Confirm in this chat."
+        )
     return "\n".join(lines)
+
+
+def _quote_interaction_data(**values: str) -> str:
+    """Keep message-authored labels and values inside one quoted data record."""
+    return json.dumps(values, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
 
 
 def _restore_bound_interaction_event(
