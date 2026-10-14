@@ -41,7 +41,6 @@ import {
   renameAgentInState,
   supersedeRenamedSessionKey,
   syncQueueFromServer,
-  updateQueuedMessageContent,
   removeQueuedMessage,
   isRecord,
   isRunActive,
@@ -942,10 +941,10 @@ export function createChatController({
         newContent,
         { fileMentions: normalizedFileMentions },
       );
-      invalidateQueueSync(sessionState);
-      updateQueuedMessageContent(sessionState, queuedMessageId, newContent, {
-        editable: normalizedFileMentions.length === 0,
-      });
+      // Acceptance proves this edit was saved, not that it is still current:
+      // another window may have changed or consumed the item before this reply.
+      // The fresh read also retires any Queue read that predates acceptance.
+      await syncSessionQueue(sessionState);
       return true;
     } catch (error) {
       if (await reportQueueItemSteering(sessionState, error)) return false;
