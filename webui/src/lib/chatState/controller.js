@@ -41,7 +41,6 @@ import {
   renameAgentInState,
   supersedeRenamedSessionKey,
   syncQueueFromServer,
-  addServerQueuedMessage,
   updateQueuedMessageContent,
   removeQueuedMessage,
   isRecord,
@@ -324,11 +323,20 @@ export function createChatController({
   }
 
   async function loadCurrentHistory() {
+    syncDisplayedHistoryLoad();
     const agent = selectedAgent(chatState);
     if (!agent?.current_session_id) {
       return false;
     }
     return loadHistoryForSession(agent.id, agent.current_session_id);
+  }
+
+  function syncDisplayedHistoryLoad() {
+    if (displayedHistoryLoad && !displayedHistoryLoad.isDisplayed()) {
+      displayedHistoryLoad = null;
+      chatState.loadingHistory = false;
+      chatState.historyError = '';
+    }
   }
 
   // A selection adopted without navigation still shows its current History.
@@ -348,6 +356,8 @@ export function createChatController({
     return {
       snapshotVersion,
       isLatest: () => historyLoadVersions.get(sessionState.key) === version,
+      isDisplayed: () =>
+        isDisplayedSession(sessionState.agentId, sessionState.sessionId),
     };
   }
 
@@ -644,7 +654,7 @@ export function createChatController({
       if (run?.command_handled) {
         return commandOutcome(run, sessionState.agentId);
       }
-      return admitSend(sessionState, run, previousRunId);
+      return await admitSend(sessionState, run, previousRunId);
     } catch (error) {
       sessionState.actionError = `${t('chat.sendError')} ${errorMessage(error)}`;
       return { kind: 'failed' };
@@ -690,7 +700,7 @@ export function createChatController({
         chatState.actionError = t('chat.sendError');
         return { kind: 'failed' };
       }
-      return { ...admitSend(sessionState, response), sessionState };
+      return { ...(await admitSend(sessionState, response)), sessionState };
     } catch (error) {
       chatState.actionError = `${t('chat.sendError')} ${errorMessage(error)}`;
       return { kind: 'failed' };
@@ -699,10 +709,11 @@ export function createChatController({
 
   // Apply an accepted message to its Session: a queued item joins the Queue,
   // a started Run attaches while the Session is displayed.
-  function admitSend(sessionState, run, previousRunId = undefined) {
+  async function admitSend(sessionState, run, previousRunId = undefined) {
     if (run?.queued === true) {
-      invalidateQueueSync(sessionState);
-      addServerQueuedMessage(sessionState, run.item);
+      // The item may already have run while its send response was in flight.
+      // Read the current Queue; the admission response cannot establish membership.
+      await syncSessionQueue(sessionState);
       return { kind: 'queued' };
     }
     // Live admission may already have moved on to a successor Run.
@@ -1169,6 +1180,7 @@ export function createChatController({
     loadCommandOutput,
     loadCommands,
     loadCurrentHistory,
+    syncDisplayedHistoryLoad,
     loadHistoryForSession,
     loadOlderHistory,
     loadReflectionChanges: reflections.loadChanges,

@@ -496,26 +496,6 @@ export function syncQueueFromServer(sessionState, serverItems) {
   return sessionState.queue;
 }
 
-export function addServerQueuedMessage(sessionState, item) {
-  if (!item || typeof item.id !== 'string' || item.id.length === 0) {
-    return null;
-  }
-
-  const normalizedItem = normalizeServerQueuedItem(item);
-  const existingIndex = sessionState.queue.findIndex(
-    (queuedItem) => queuedItem.id === normalizedItem.id,
-  );
-  if (existingIndex >= 0) {
-    sessionState.queue = sessionState.queue.map((queuedItem, index) =>
-      index === existingIndex ? normalizedItem : queuedItem,
-    );
-    return normalizedItem;
-  }
-
-  sessionState.queue = [...sessionState.queue, normalizedItem];
-  return normalizedItem;
-}
-
 export function updateQueuedMessageContent(
   sessionState,
   itemId,

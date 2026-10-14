@@ -515,6 +515,11 @@
   // `agent@projekt` for a project agent), so sessions of the same agent share
   // one history.
   let composerDraftKey = $derived(target.displayedSessionKey());
+
+  $effect(() => {
+    target.displayedSessionKey();
+    untrack(() => chatController.syncDisplayedHistoryLoad());
+  });
   let composerHistoryKey = $derived.by(() => {
     const separator = composerDraftKey.indexOf('::');
     return separator >= 0 ? composerDraftKey.slice(0, separator) : '';
@@ -795,7 +800,6 @@
 
   const loadAgents = (options = {}) => chatController.loadAgents(options);
 
-  let chatController;
   const runStream = createChatRunStream({
     chatState,
     subscribeRunEvents,
@@ -810,7 +814,7 @@
     onReflectionFinished: (sourceState) =>
       chatController.refreshReflections(sourceState),
   });
-  chatController = createChatController({
+  const chatController = createChatController({
     chatState,
     preserveSessionSelection: untrack(() => preserveSessionSelection),
     runStream,
