@@ -53,7 +53,8 @@ from core.database.errors import (
 )
 from core.database.marker import (
     acquire_operation_lock,
-    maintenance,
+    maintenance_locked,
+    operation_lock,
     read_maintenance,
     require_no_maintenance,
 )
@@ -423,54 +424,66 @@ def capture_config_backup(
     if lock is None:
         raise OperationLockBusyError("another data-store operation holds the operation lock")
     try:
-        contents = _read_configuration(data_dir, barrier)
-        files = {
-            path: ConfigFile(
-                path=path,
-                sha256=hashlib.sha256(content).hexdigest(),
-                file_size=len(content),
-                mode=mode,
-                damaged=_is_damaged(path, content),
-            )
-            for path, (content, mode) in contents.items()
-        }
-        root = config_backup_root(data_dir)
-        # Stored first, so an object altered on disk is repaired even when nothing changed.
-        for path, (content, _mode) in sorted(contents.items()):
-            _store_object(root, files[path].sha256, content)
-        backups, unreadable = _scan(data_dir)
-        if backups and backups[0].files == files:
-            return None
-        moment = datetime.now(UTC) if now is None else now
-        backup = ConfigBackup(
-            backup_id=f"{moment.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}",
-            created_at=format_canonical_timestamp(moment),
-            reason=reason,
-            vbot_version=detect_vbot_version(),
-            files=files,
-        )
-        manifest = _manifest_path(root, backup.backup_id)
-        manifest.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(manifest, json.dumps(_manifest_payload(backup), indent=2) + "\n")
-        fsync_dir(manifest.parent)
-        _prune(root, [backup, *backups], unreadable=unreadable, now=moment)
-        _LOGGER.info(
-            "Created configuration backup (backup=%s files=%d changed=%d reason=%s)",
-            backup.backup_id,
-            len(files),
-            _changed_count(backups[0].files if backups else {}, files),
-            reason,
-        )
-        if damaged := backup.damaged():
-            _LOGGER.warning(
-                "Configuration backup holds JSON documents that do not parse; they are "
-                "never restored from it (backup=%s documents=%s)",
-                backup.backup_id,
-                ",".join(damaged),
-            )
-        return backup
+        require_no_maintenance(data_dir)
+        return _capture_config_backup_locked(data_dir, reason=reason, barrier=barrier, now=now)
     finally:
         lock.release()
+
+
+def _capture_config_backup_locked(
+    data_dir: Path,
+    *,
+    reason: str,
+    barrier: SnapshotBarrier | None = None,
+    now: datetime | None = None,
+) -> ConfigBackup | None:
+    """Capture while the caller holds the data-store operation lock."""
+    contents = _read_configuration(data_dir, barrier)
+    files = {
+        path: ConfigFile(
+            path=path,
+            sha256=hashlib.sha256(content).hexdigest(),
+            file_size=len(content),
+            mode=mode,
+            damaged=_is_damaged(path, content),
+        )
+        for path, (content, mode) in contents.items()
+    }
+    root = config_backup_root(data_dir)
+    # Stored first, so an object altered on disk is repaired even when nothing changed.
+    for path, (content, _mode) in sorted(contents.items()):
+        _store_object(root, files[path].sha256, content)
+    backups, unreadable = _scan(data_dir)
+    if backups and backups[0].files == files:
+        return None
+    moment = datetime.now(UTC) if now is None else now
+    backup = ConfigBackup(
+        backup_id=f"{moment.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}",
+        created_at=format_canonical_timestamp(moment),
+        reason=reason,
+        vbot_version=detect_vbot_version(),
+        files=files,
+    )
+    manifest = _manifest_path(root, backup.backup_id)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(manifest, json.dumps(_manifest_payload(backup), indent=2) + "\n")
+    fsync_dir(manifest.parent)
+    _prune(root, [backup, *backups], unreadable=unreadable, now=moment)
+    _LOGGER.info(
+        "Created configuration backup (backup=%s files=%d changed=%d reason=%s)",
+        backup.backup_id,
+        len(files),
+        _changed_count(backups[0].files if backups else {}, files),
+        reason,
+    )
+    if damaged := backup.damaged():
+        _LOGGER.warning(
+            "Configuration backup holds JSON documents that do not parse; they are "
+            "never restored from it (backup=%s documents=%s)",
+            backup.backup_id,
+            ",".join(damaged),
+        )
+    return backup
 
 
 def _read_configuration(
@@ -634,6 +647,20 @@ def restore_config_backup(
     raises ``DatabaseFormatError``.
     """
     data_dir = Path(data_dir)
+    with operation_lock(data_dir):
+        return _restore_config_backup_locked(
+            data_dir, backup_id, paths=paths, check_only=check_only, now=now
+        )
+
+
+def _restore_config_backup_locked(
+    data_dir: Path,
+    backup_id: str,
+    *,
+    paths: Iterable[str] | None,
+    check_only: bool,
+    now: datetime | None,
+) -> ConfigRestore:
     backup = read_config_backup(data_dir, backup_id)
     operation = _restore_operation(backup_id)
     interrupted = _interrupted_restore(data_dir, operation)
@@ -676,7 +703,7 @@ def restore_config_backup(
     before = _before_restore_backup(data_dir, backup_id, interrupted=interrupted, now=now)
     # An interrupted attempt may have written every file already: entering and
     # leaving the guard finishes it.
-    with maintenance(data_dir, operation, resume=True):
+    with maintenance_locked(data_dir, operation, resume=True):
         for path, (content, item) in restored.items():
             atomic_write_bytes(
                 _data_path(data_dir, path),
@@ -775,7 +802,7 @@ def _before_restore_backup(
         # A repeated restore: the interrupted attempt took the backup already.
         earlier = [backup for backup in list_config_backups(data_dir) if backup.reason == reason]
         return earlier[0].backup_id if earlier else None
-    taken = capture_config_backup(data_dir, reason=reason, now=now)
+    taken = _capture_config_backup_locked(data_dir, reason=reason, now=now)
     if taken is not None:
         return taken.backup_id
     # The current state equals the newest backup, which therefore holds it.

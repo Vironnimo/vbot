@@ -397,48 +397,54 @@ def begin_maintenance(
     if not operation or not operation.strip():
         raise ValueError("maintenance operation must be named")
     with operation_lock(data_dir):
-        current = read_maintenance(data_dir)
-        if current is not None and not (resume and current.operation == operation):
-            raise DatabaseFormatError(
-                f"data maintenance is already incomplete ({current.operation}): "
-                f"{maintenance_guard_path(data_dir)}"
-            )
-        record = MaintenanceOperation(uuid.uuid4().hex, operation, utc_now_timestamp(), os.getpid())
-        payload = {
-            "operation_id": record.operation_id,
-            "operation": record.operation,
-            "started_at": record.started_at,
-            "pid": record.pid,
-        }
-        path = maintenance_guard_path(data_dir)
-        try:
-            atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        except OSError as exc:
-            raise DatabaseUnavailableError(
-                f"data maintenance guard cannot be written: {path}"
-            ) from exc
-        return record
+        return _begin_maintenance_locked(data_dir, operation, resume=resume)
+
+
+def _begin_maintenance_locked(
+    data_dir: Path, operation: str, *, resume: bool
+) -> MaintenanceOperation:
+    current = read_maintenance(data_dir)
+    if current is not None and not (resume and current.operation == operation):
+        raise DatabaseFormatError(
+            f"data maintenance is already incomplete ({current.operation}): "
+            f"{maintenance_guard_path(data_dir)}"
+        )
+    record = MaintenanceOperation(uuid.uuid4().hex, operation, utc_now_timestamp(), os.getpid())
+    payload = {
+        "operation_id": record.operation_id,
+        "operation": record.operation,
+        "started_at": record.started_at,
+        "pid": record.pid,
+    }
+    path = maintenance_guard_path(data_dir)
+    try:
+        atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    except OSError as exc:
+        raise DatabaseUnavailableError(f"data maintenance guard cannot be written: {path}") from exc
+    return record
 
 
 def finish_maintenance(data_dir: Path, record: MaintenanceOperation) -> None:
     """Remove the guard once the operation completed; only the owner's guard."""
     with operation_lock(data_dir):
-        current = read_maintenance(data_dir)
-        if current is None:
-            return
-        if current.operation_id != record.operation_id:
-            raise DatabaseFormatError(
-                f"data maintenance guard belongs to another operation ({current.operation})"
-            )
-        path = maintenance_guard_path(data_dir)
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except OSError as exc:
-            raise DatabaseUnavailableError(
-                f"data maintenance guard cannot be removed: {path}"
-            ) from exc
+        _finish_maintenance_locked(data_dir, record)
+
+
+def _finish_maintenance_locked(data_dir: Path, record: MaintenanceOperation) -> None:
+    current = read_maintenance(data_dir)
+    if current is None:
+        return
+    if current.operation_id != record.operation_id:
+        raise DatabaseFormatError(
+            f"data maintenance guard belongs to another operation ({current.operation})"
+        )
+    path = maintenance_guard_path(data_dir)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise DatabaseUnavailableError(f"data maintenance guard cannot be removed: {path}") from exc
 
 
 @contextlib.contextmanager
@@ -453,6 +459,18 @@ def maintenance(
     record = begin_maintenance(data_dir, operation, resume=resume)
     yield record
     finish_maintenance(data_dir, record)
+
+
+@contextlib.contextmanager
+def maintenance_locked(
+    data_dir: Path, operation: str, *, resume: bool = False
+) -> Iterator[MaintenanceOperation]:
+    """Hold the durable guard while the caller continuously holds the operation lock."""
+    if not operation or not operation.strip():
+        raise ValueError("maintenance operation must be named")
+    record = _begin_maintenance_locked(data_dir, operation, resume=resume)
+    yield record
+    _finish_maintenance_locked(data_dir, record)
 
 
 # ---------------------------------------------------------------------------

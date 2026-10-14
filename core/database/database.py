@@ -561,25 +561,31 @@ def _open_existing(
         identity.update(_verify_identity(connection, spec, expected_database_id, data_dir))
 
     try:
-        writer = runtime.open_writer(verify)
-        declared = _declared(spec)
-        try:
-            _evolve(writer, spec, declared)
-            if spec.after_open is not None:
-                spec.after_open(writer)
-            _probe_structure(writer, spec, declared)
-        except sqlite3.Error as exc:
-            # Evolve and the probe classify their own statements; what remains
-            # unclassified here is the owner's after_open check failing on an
-            # intact file, which is never grounds to restore.
-            translated = classified_error(exc, f"{spec.name}: the database cannot be opened")
-            if translated is None and isinstance(exc, sqlite3.DatabaseError):
-                translated = DatabaseFormatError(
-                    f"the {spec.name} database failed its open check: {exc}"
-                )
-            if translated is None:
-                raise
-            raise translated from exc
+        change = (
+            contextlib.nullcontext()
+            if data_dir is None
+            else member_change(data_dir, held=spec.snapshot_capture == HELD_CAPTURE)
+        )
+        with change:
+            writer = runtime.open_writer(verify)
+            declared = _declared(spec)
+            try:
+                _evolve(writer, spec, declared)
+                if spec.after_open is not None:
+                    spec.after_open(writer)
+                _probe_structure(writer, spec, declared)
+            except sqlite3.Error as exc:
+                # Evolve and the probe classify their own statements; what remains
+                # unclassified here is the owner's after_open check failing on an
+                # intact file, which is never grounds to restore.
+                translated = classified_error(exc, f"{spec.name}: the database cannot be opened")
+                if translated is None and isinstance(exc, sqlite3.DatabaseError):
+                    translated = DatabaseFormatError(
+                        f"the {spec.name} database failed its open check: {exc}"
+                    )
+                if translated is None:
+                    raise
+                raise translated from exc
     except BaseException:
         runtime.close()
         raise

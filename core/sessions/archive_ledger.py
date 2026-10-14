@@ -173,7 +173,7 @@ class SessionArchiveLedger:
         new_agent_id: str,
         session_ids: Sequence[str],
     ) -> int:
-        """Point live Sub-Agent parent links at restored Sessions under their new scope."""
+        """Point live and archived Sub-Agent parent links at the restored scope."""
         return self._store._execute_write(
             lambda connection: _store_archive.retarget_subagent_links(
                 connection,

@@ -359,10 +359,17 @@
     const entry = detail?.entry;
     if (!entry || busy) return;
     busy = true;
+    const request = detailRequest;
     try {
       const result = await restoreArchiveEntry(entry.entry_id);
       await finishRestore(entry, result);
     } catch (error) {
+      if (
+        disposed ||
+        shownEntryId !== entry.entry_id ||
+        request !== detailRequest
+      )
+        return;
       if (
         error?.code === 'archive_restore_conflict' &&
         canRestoreAs(entry, null)

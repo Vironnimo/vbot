@@ -429,6 +429,46 @@ describe('ArchiveEntriesPanel', () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
+  it.each(['domain_error', 'archive_restore_conflict'])(
+    'ignores a late %s restore refusal after opening another entry',
+    async (code) => {
+      const navigation = createStandaloneNavigation();
+      const pending = Promise.withResolvers();
+      listMock.mockResolvedValue(page([CODER, NOTES]));
+      showMock.mockImplementation((id) =>
+        Promise.resolve(detailOf(id === CODER.entry_id ? CODER : NOTES)),
+      );
+      restoreMock
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValue({ warnings: [] });
+      mountView({ navigation });
+      await waitForCondition(() => rowIds().length === 2);
+      navigation.navigate([CODER.entry_id]);
+      await waitForCondition(() =>
+        document.body.textContent.includes('Release chat'),
+      );
+      button(t('archive.action.restore')).click();
+      navigation.up([]);
+      flushSync();
+      navigation.navigate([NOTES.entry_id]);
+      await waitForCondition(
+        () =>
+          showMock.mock.calls.length === 2 &&
+          document.body.textContent.includes('Release chat'),
+      );
+      pending.reject(Object.assign(new Error('refused'), { code }));
+      await waitForCondition(
+        () => !button(t('archive.action.restore')).disabled,
+      );
+      expect(navigation.place).toEqual([NOTES.entry_id]);
+      expect(showMock).toHaveBeenCalledTimes(2);
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      button(t('archive.action.restore')).click();
+      await waitForCondition(() => restoreMock.mock.calls.length === 2);
+      expect(restoreMock).toHaveBeenLastCalledWith(NOTES.entry_id);
+    },
+  );
+
   it('deletes a selection or every matching entry only after a confirmation', async () => {
     listMock.mockResolvedValue(page([CODER, NOTES, LEGACY]));
     purgeMock

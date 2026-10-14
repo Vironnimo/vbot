@@ -821,15 +821,29 @@
     applyArchiveSettings(nextSettings?.archive);
   }
 
-  function commitSettings(nextSettings) {
-    // Each other Settings editor saves its own section. Its full response may
-    // predate a Provider refresh, whose projection has an independent owner.
-    applySettings({
-      ...nextSettings,
-      providers: settings.providers,
-      local_models: settings.local_models,
-    });
+  function commitSettings(nextSettings, sections) {
+    // A save owns only these sections or bindings; unrelated response values
+    // may predate another editor's completed save.
+    const merged = { ...settings };
+    for (const section of sections) {
+      const [key, child] = section.split('.');
+      if (child) {
+        merged[key] = { ...merged[key], [child]: nextSettings[key]?.[child] };
+      } else {
+        merged[key] = nextSettings[key];
+      }
+    }
+    applySettings(merged);
     onSettingsCommit(settings);
+  }
+
+  function commitGeneralSettings(nextSettings, field) {
+    commitSettings(
+      {
+        general: { ...settings.general, [field]: nextSettings.general[field] },
+      },
+      ['general'],
+    );
   }
 
   function commitProviderSettings(nextSettings) {
@@ -898,7 +912,7 @@
       page="preferences"
       {settings}
       {onOpenSetupGuide}
-      onCommit={commitSettings}
+      onCommit={commitGeneralSettings}
       onError={reportSettingsError}
     />
   {:else if panelId === 'providers'}
@@ -933,7 +947,7 @@
   {:else if panelId === 'live_voice_model'}
     <SettingsLiveVoicePanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['model_tasks.live_voice'])}
       onError={(message) => reportSettingsError(message)}
       {onOpenSession}
       {modelsRefreshToken}
@@ -945,21 +959,26 @@
       {active}
       taskTypes={modelTasksBySection[panelId]}
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) =>
+        commitSettings(
+          next,
+          modelTasksBySection[panelId].map((task) => `model_tasks.${task}`),
+        )}
       onError={(message) => reportSettingsError(message)}
       {modelsRefreshToken}
     />
   {:else if panelId === 'session_titles'}
     <SettingsSessionTitlesPanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['session_titles'])}
       onError={(message) => reportSettingsError(message)}
       {modelsRefreshToken}
     />
   {:else if panelId === 'recall'}
     <SettingsRecallPanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) =>
+        commitSettings(next, ['recall', 'model_tasks.text_embedding'])}
       onError={(message) => reportSettingsError(message)}
       {modelsRefreshToken}
       {recallIndexStatus}
@@ -974,40 +993,42 @@
   {:else if panelId === 'transcription_audio'}
     <TranscriptionAudioSettings
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['speech'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'web_fetch'}
     <SettingsWebFetchPanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) =>
+        commitSettings(next, ['web_fetch', 'web_search.services'])}
       {onToast}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'web_search'}
     <SettingsWebSearchPanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) =>
+        commitSettings(next, ['web_search', 'web_fetch.services'])}
       {onToast}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'subagents'}
     <SettingsSubAgentsPanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['subagents'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'reflection'}
     <SettingsReflectionPanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['reflection'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'librarian'}
     <SettingsLibrarianPanel
       {settings}
       {agents}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['librarian'])}
       onError={(message) => reportSettingsError(message)}
       {onOpenSession}
       {modelsRefreshToken}
@@ -1017,19 +1038,19 @@
   {:else if panelId === 'notifications'}
     <SettingsNotificationsPanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['notifications'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'appearance'}
     <SettingsAppearancePanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['appearance'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'archive_retention'}
     <SettingsArchivePanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['archive'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'archive_entries'}
@@ -1047,7 +1068,7 @@
   {:else if panelId === 'debug'}
     <SettingsDebugPanel
       {settings}
-      onCommit={commitSettings}
+      onCommit={(next) => commitSettings(next, ['debug'])}
       onError={(message) => reportSettingsError(message)}
       {onDebugEnabledChange}
     />
@@ -1056,7 +1077,7 @@
       {settings}
       {clientsRefreshToken}
       {onOpenSetupGuide}
-      onCommit={commitSettings}
+      onCommit={commitGeneralSettings}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'desktop_connection'}

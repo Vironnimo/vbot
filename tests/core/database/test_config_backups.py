@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 
 import pytest
 
 from core.database import (
     DatabaseCorruptError,
     DatabaseFormatError,
+    DatabaseUnavailableError,
     OperationLockBusyError,
     capture_config_backup,
     config_backup_root,
@@ -332,3 +335,40 @@ def test_a_backup_does_not_wait_long_for_another_data_store_operation(
         lock.release()
 
     assert capture_config_backup(data_dir, reason="test") is not None
+
+
+def test_restore_holds_the_operation_lock_until_every_file_and_the_guard_are_settled(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(data_dir, ".env", "KEY=old\n")
+    _write(data_dir, "settings.json", _settings("Europe/Berlin"))
+    backup_id = _backup(data_dir)
+    _write(data_dir, ".env", "KEY=new\n")
+    _write(data_dir, "settings.json", _settings("UTC"))
+    writing, finish = Event(), Event()
+    real_write = config_backups_module.atomic_write_bytes
+
+    def hold_last_write(target: Path, *args: object, **kwargs: object) -> None:
+        if target == data_dir / "settings.json":
+            writing.set()
+            assert finish.wait(2)
+        real_write(target, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(config_backups_module, "atomic_write_bytes", hold_last_write)
+    monkeypatch.setattr("core.database.marker.OPERATION_LOCK_TIMEOUT_SECONDS", 0.1)
+    with ThreadPoolExecutor(max_workers=1) as threads:
+        restoring = threads.submit(restore_config_backup, data_dir, backup_id)
+        try:
+            assert writing.wait(2)
+            guard = read_maintenance(data_dir)
+            assert guard is not None
+            with pytest.raises(DatabaseUnavailableError):
+                restore_config_backup(data_dir, backup_id, paths=[".env"])
+            assert read_maintenance(data_dir) == guard
+            with pytest.raises(DatabaseFormatError):
+                capture_config_backup(data_dir, reason="during restore")
+        finally:
+            finish.set()
+        restoring.result(timeout=2)
+    assert read_maintenance(data_dir) is None
+    assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
