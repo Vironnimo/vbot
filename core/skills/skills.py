@@ -79,6 +79,7 @@ def format_skill_activation_context(
     *,
     resource_files: Sequence[str] = (),
     resource_guidance: str = "",
+    resource_directory: str = "",
     environment_access: str = "",
 ) -> str:
     """Render the complete provider-facing context for one activated Skill."""
@@ -86,14 +87,32 @@ def format_skill_activation_context(
     if environment_access:
         lines.extend(["<environment_access>", environment_access, "</environment_access>"])
     if resource_files:
-        if resource_guidance:
-            lines.append(resource_guidance)
-        lines.append("<resources>")
-        lines.extend(f"- {escape(file_path)}" for file_path in resource_files)
-        lines.append("</resources>")
+        lines.append(
+            format_skill_resources(
+                [escape(path) for path in resource_files],
+                resource_guidance,
+                escape(resource_directory),
+            )
+        )
     if content:
         lines.append(content)
     lines.append("</skill_content>")
+    return "\n".join(lines)
+
+
+def format_skill_resources(files: Sequence[str], guidance: str, directory: str = "") -> str:
+    """Present resource paths relative to their directory, including stored script paths.
+
+    Older activation carriers have no directory and retain their original paths.
+    New carriers keep the persisted file meanings and add the directory for presentation.
+    """
+    lines = [guidance] if guidance else []
+    prefix = directory.rstrip("/") + "/" if directory else ""
+    if directory:
+        lines.append(f"Skill directory: {directory}")
+    lines.append("<resources>")
+    lines.extend(f"- {path.removeprefix(prefix) if prefix else path}" for path in files)
+    lines.append("</resources>")
     return "\n".join(lines)
 
 

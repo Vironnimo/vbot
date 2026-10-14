@@ -6,7 +6,7 @@ import inspect
 import json
 import re
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
-from difflib import SequenceMatcher
+from difflib import SequenceMatcher, get_close_matches
 from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -29,7 +29,6 @@ from core.tools._read_text import ReadPosition, render_text_window
 from core.tools.arguments import optional_int
 from core.tools.call_syntax import normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
-from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.shell import format_shell_env_usage
 from core.tools.tools import (
     JsonObject,
@@ -44,6 +43,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.file_status import is_file_strict
 
 # Resolves the skill registry a call should use from its run's effective skill
 # project (``None`` → the global/identity registry) and its identity agent
@@ -139,9 +139,9 @@ SKILL_STATUS_CONTINUED = "continued"
 # directory at activation time.
 SKILL_BASE_DIR_MARKER = "{baseDir}"
 SKILL_RESOURCE_FILES_GUIDANCE = (
-    f"Files of this Skill. Run a scripts/ file by its absolute path with `{SHELL_MODEL_NAME}`; "
-    "read another file with `skill` using this name and its relative file_path only "
-    "when the instructions call for it."
+    "Paths are relative to the Skill directory below. Read text with skill using this name "
+    "and file_path when needed for the task. "
+    "Use scripts and assets as directed by the instructions."
 )
 # Leads a Skill's instructions that exceed one ``read``-sized page (50 KB or
 # 2000 lines); the page ends with the exact call that continues it.
@@ -168,7 +168,7 @@ _SKILL_OFFSET_PARAMETER: JsonObject = {
     "type": "integer",
     "minimum": 1,
     "description": (
-        "Line to start at in the instructions or file_path. Omit to start at the beginning."
+        "1-based line to start at in the instructions or file_path. Omit to start at the beginning."
     ),
 }
 _SKILL_PROPERTIES: JsonObject = {
@@ -478,7 +478,8 @@ def make_skill_handler(
         if not _is_skill_allowed(skill_registry, skill_name, context.allowed_skills):
             return tool_failure(
                 "skill_not_found",
-                f"Skill not found or not allowed for this agent: {skill_name}",
+                f"Skill '{skill_name}' is not allowed for this Agent. "
+                "Call skill without arguments to list the available Skills.",
             )
 
         unavailable_message = _unavailable_skill_message(
@@ -494,16 +495,12 @@ def make_skill_handler(
                 notes.insert(0, SKILL_READ_ONLY_NOTE.format(name=skill_name, mark=mark))
 
         if isinstance(file_path, str):
-            file_path = _package_relative_path(file_path, skill_name, skill.path.parent)
             try:
                 data = await run_tool_worker(
                     load_skill_file, skill_name, skill.path, file_path, position
                 )
             except OSError as error:
-                return tool_failure(
-                    "skill_read_error",
-                    f"Failed to read skill '{skill_name}' file '{file_path}': {error}",
-                )
+                return _skill_read_failure(skill_name, file_path, error)
             except ValueError as error:
                 return tool_failure("skill_read_error", str(error))
             return _loaded_skill_file_result(
@@ -519,10 +516,7 @@ def make_skill_handler(
                     load_skill_instructions_page, skill_name, skill.path, position
                 )
             except OSError as error:
-                return tool_failure(
-                    "skill_read_error",
-                    f"Failed to read skill '{skill_name}': {error}",
-                )
+                return _skill_read_failure(skill_name, "SKILL.md", error)
             except ValueError as error:
                 return tool_failure("skill_read_error", str(error))
             return _continued_skill_result(skill_name, page, notes)
@@ -535,10 +529,7 @@ def make_skill_handler(
                 environment_requirement_names(skill.requirements),
             )
         except OSError as error:
-            return tool_failure(
-                "skill_read_error",
-                f"Failed to read skill '{skill_name}': {error}",
-            )
+            return _skill_read_failure(skill_name, "SKILL.md", error)
         except ValueError as error:
             return tool_failure("skill_read_error", str(error))
 
@@ -552,7 +543,8 @@ def make_skill_handler(
         ):
             return tool_failure(
                 "skill_read_error",
-                f"Skill '{skill_name}' produced no loadable content.",
+                f"Skill '{skill_name}' has no instructions. "
+                "Add instructions to SKILL.md before loading it.",
             )
         newly_activated = context.activate_skill(skill_name, activation_content, skill.package_ref)
         if newly_activated is False:
@@ -668,6 +660,7 @@ def load_skill_content(
         body,
         resource_files=presented_resources,
         resource_guidance=SKILL_RESOURCE_FILES_GUIDANCE,
+        resource_directory=directory,
         environment_access=environment_access,
     )
     result: JsonObject = {
@@ -677,6 +670,7 @@ def load_skill_content(
     if presented_resources:
         result["resource_files"] = {
             "guidance": SKILL_RESOURCE_FILES_GUIDANCE,
+            "directory": directory,
             "files": presented_resources,
         }
     if environment_access:
@@ -707,7 +701,7 @@ def _skill_instructions_window(
     replaced, so an activation's continuation offset addresses the same text.
     """
     directory = skill_file.resolve().parent.as_posix()
-    body = _read_skill_body(skill_file).replace(SKILL_BASE_DIR_MARKER, directory)
+    body = _read_skill_body(skill_name, skill_file).replace(SKILL_BASE_DIR_MARKER, directory)
     return render_text_window(
         body,
         position.line,
@@ -739,12 +733,13 @@ def load_skill_file(
     at *position* (default: the first line), ended by the ``skill`` call that
     continues it.
     """
+    file_path = _package_relative_path(file_path, skill_name, skill_file.parent)
     try:
         normalized = package_path(file_path.replace("\\", "/"))
         if excluded(normalized):
             raise PackageError("Internal or generated package files are not Skill resources.")
     except PackageError as error:
-        raise ValueError(f"Illegal file path for skill '{skill_name}': {file_path}") from error
+        raise ValueError(_invalid_file_message(skill_name, file_path)) from error
     skill_directory = skill_file.resolve().parent
     candidate = skill_directory.joinpath(*PurePosixPath(normalized).parts).resolve()
     try:
@@ -752,13 +747,18 @@ def load_skill_file(
         if excluded(resolved_relative):
             raise ValueError("Internal or generated package files are not Skill resources.")
     except ValueError as error:
-        raise ValueError(f"Illegal file path for skill '{skill_name}': {file_path}") from error
-    if not candidate.is_file():
-        raise ValueError(f"Skill '{skill_name}' file not found: {normalized}")
+        raise ValueError(_invalid_file_message(skill_name, file_path)) from error
+    if not is_file_strict(candidate):
+        raise ValueError(_missing_file_message(skill_name, skill_directory, normalized))
     try:
         content = candidate.read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
-        raise ValueError(f"Skill '{skill_name}' file is not UTF-8 text: {normalized}") from error
+        raise ValueError(
+            f"Skill '{skill_name}' file '{normalized}' is not UTF-8 text. "
+            "skill reads UTF-8 text only. For a binary asset, use the file at "
+            f"'{candidate.as_posix()}' as directed by the Skill; "
+            "for a text file, save it as UTF-8 before reading it again."
+        ) from error
     start = position or ReadPosition(1)
     page, _ = render_text_window(
         content,
@@ -982,13 +982,78 @@ def _unavailable_skill_message(
         return None
     missing = list(getattr(availability, "missing", ()))
     detail = "; ".join(missing) if missing else str(getattr(availability, "state", "unavailable"))
-    return f"Skill '{skill_name}' is unavailable: {detail}"
+    return (
+        f"Skill '{skill_name}' is unavailable: {detail}. "
+        "Resolve these requirements before loading it again, or call skill without "
+        "arguments to choose an available Skill."
+    )
 
 
-def _read_skill_body(skill_file: Path) -> str:
-    content = skill_file.read_text(encoding="utf-8")
+def _read_skill_body(skill_name: str, skill_file: Path) -> str:
+    try:
+        content = skill_file.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(
+            f"Skill '{skill_name}' SKILL.md is not UTF-8 text. "
+            "Save SKILL.md as UTF-8 before loading it again."
+        ) from error
     _, body, _ = split_skill_document(content)
     return body.strip()
+
+
+def _invalid_file_message(skill_name: str, file_path: str) -> str:
+    return (
+        f"Cannot read '{file_path}' from Skill '{skill_name}': "
+        "use a path from this Skill's resource list, relative to its directory, "
+        "without '..' or internal files. To read its instructions, call "
+        f'skill(name={json.dumps(skill_name)}, file_path="SKILL.md").'
+    )
+
+
+def _missing_file_message(skill_name: str, directory: Path, file_path: str) -> str:
+    lead = f"Skill '{skill_name}' file not found: {file_path}."
+    candidates = scan_skill_resources(directory)
+    if is_file_strict(directory / "SKILL.md"):
+        candidates.insert(0, "SKILL.md")
+    suggestions = get_close_matches(file_path, candidates, n=3, cutoff=0.6)
+    if len(suggestions) == 1:
+        return (
+            f"{lead} Did you mean '{suggestions[0]}'? Read it with "
+            f"skill(name={json.dumps(skill_name)}, file_path={json.dumps(suggestions[0])})."
+        )
+    if suggestions:
+        return (
+            f"{lead} Similar files: {', '.join(suggestions)}. Use one as file_path with this name."
+        )
+    if candidates:
+        shown = ", ".join(candidates[:8])
+        more = " See this Skill's resource list for more." if len(candidates) > 8 else ""
+        return f"{lead} Available files: {shown}. Use one as file_path with this name.{more}"
+    return (
+        f"{lead} No readable files were found in this package. "
+        "Restore the Skill's files before retrying."
+    )
+
+
+def _skill_read_failure(skill_name: str, file_path: str, error: OSError) -> JsonObject:
+    lead = f"Cannot read Skill '{skill_name}' file '{file_path}': "
+    if getattr(error, "winerror", None) in {32, 33}:
+        detail = "the file is locked. Close the program using it, then retry."
+    elif isinstance(error, PermissionError):
+        detail = "access was denied. Restore read access to the Skill's files before retrying."
+    elif isinstance(error, FileNotFoundError):
+        detail = (
+            "the file is missing. Restore it or call skill without arguments "
+            "to choose another Skill."
+        )
+    elif isinstance(error, IsADirectoryError):
+        detail = "the path is a directory. Choose a file from the Skill's resource paths."
+    else:
+        detail = (
+            "a filesystem error prevented the read. Retry once; "
+            "if it persists, report the unreadable file to the user."
+        )
+    return tool_failure("skill_read_error", lead + detail)
 
 
 def _present_resource_path(resource: str, directory: str) -> str:

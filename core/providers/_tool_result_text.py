@@ -22,6 +22,8 @@ import textwrap
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from core.skills.skills import format_skill_resources
+
 _ENVELOPE_KEYS = frozenset({"ok", "error", "data", "artifacts"})
 
 # Success data renders its first non-empty string body field verbatim below the
@@ -187,6 +189,20 @@ def render_tool_result_envelope(envelope: Mapping[str, Any]) -> str:
 
 
 def _field(key: str, value: Any) -> str:
+    if key == "resource_files" and isinstance(value, dict):
+        files, guidance, directory = (
+            value.get("files"),
+            value.get("guidance"),
+            value.get("directory", ""),
+        )
+        if (
+            value.keys() <= {"files", "guidance", "directory"}
+            and isinstance(files, list)
+            and all(isinstance(path, str) for path in files)
+            and isinstance(guidance, str)
+            and isinstance(directory, str)
+        ):
+            return format_skill_resources(files, guidance, directory)
     if isinstance(value, str):
         if not value:
             return f'{key}: ""'

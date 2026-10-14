@@ -71,7 +71,7 @@ Bad: `description: Helps with documentation.` It names no situation, so Agents l
 
 ### Support files
 
-- Put depth that only some runs need into `references/<topic>.md`. Extend an existing topic file before adding one. SKILL.md says when to read each file and how: "When the export fails, read `references/export-errors.md` with the `skill` Tool (`name` `<skill-name>`, `file_path` `references/export-errors.md`)."
+- Put depth that only some runs need into `references/<topic>.md`. Extend an existing topic file before adding one. Link each reference directly from SKILL.md and say when to read it: "When the export fails, read [Export errors](references/export-errors.md)." Paths are relative to the Skill directory. Keep reference links one level deep so Agents find the relevant file from SKILL.md without reading unrelated files first.
 - Put a helper into `scripts/` only when its exact content ran successfully, and give the exact command line in SKILL.md. Otherwise describe the method in prose.
 - Put templates the task copies into `assets/`.
 
