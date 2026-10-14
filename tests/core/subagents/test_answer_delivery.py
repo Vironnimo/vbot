@@ -12,8 +12,9 @@ from core.automation import TriggerService
 from core.chat import ChatMessage
 from core.runs import Run, RunAdmission, RunKind
 from core.storage import TemporaryFileManager
-from core.subagents.forwarding import SubAgentActivities, SubAgentForwarding
+from core.subagents import SubAgentCoordinator
 from core.subagents.links import link_session
+from core.tools import ToolContext
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 
 
@@ -68,10 +69,10 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         tool_call_index=0,
     )
     loop = build_chat_loop(runtime)
+    runtime.chat_loop = loop
     service = TriggerService(loop, manager, runtime, sessions=sessions)
-    activities = SubAgentActivities(runtime)
-    forwarding = SubAgentForwarding(runtime, service, activities)
-    forwarding.install(manager)
+    coordinator = SubAgentCoordinator(runtime, service)
+    coordinator.install(manager)
     submitted = asyncio.Queue[asyncio.Future[None]]()
     submit = service.submit_completion
 
@@ -96,23 +97,50 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
             admission=RunAdmission(run_kind=RunKind.SUBAGENT if initial_parent else RunKind.USER),
         )
         await asyncio.wait_for(adapter.entered.wait(), 5)
-        item = await manager.enqueue(
-            child.address,
-            loop.run_executor("Clarify", parent_agent_input=steered_parent),
-            display_content="Clarify",
-            steerable=True,
-            admission=RunAdmission(run_kind=RunKind.SUBAGENT),
-        )
-        assert manager.steer_queued("coder", "child", item.item_id, project_id=None)
+        if steered_parent:
+            result = await coordinator.spawn(
+                ToolContext(
+                    agent_id="coder",
+                    session_id=parent.id,
+                    run_id=parent_run.id,
+                    tool_call_id="send",
+                    tool_name="subagent",
+                    tool_call_index=0,
+                    workspace=tmp_path,
+                    vbot_root=tmp_path,
+                    data_root=tmp_path,
+                ),
+                {
+                    "action": "send",
+                    "id": "sub-review",
+                    "content": "Clarify",
+                    "model": "openai/gpt-5.2",
+                    "thinking_effort": "high",
+                },
+            )
+            assert result["ok"] and result["data"]["status"] == "steered", result
+            [item] = manager.list_queued("coder", "child", project_id=None)
+            stored = await runtime.agent_resolver.session_overrides_async(child.address)
+            assert (stored.model, stored.thinking_effort) == ("openai/gpt-5.2", "high")
+        else:
+            item = await manager.enqueue(
+                child.address,
+                loop.run_executor("Clarify", parent_agent_input=False),
+                display_content="Clarify",
+                steerable=True,
+                admission=RunAdmission(run_kind=RunKind.SUBAGENT),
+            )
+            assert manager.steer_queued("coder", "child", item.item_id, project_id=None)
         adapter.release.set()
         assert (await run.wait()).content == "ADDENDUM"
         assert await item.future is run
         receipt = await asyncio.wait_for(submitted.get(), 5)
         assert not receipt.done()
-        activity = await activities.ensure(child.address)
-        assert activity is not None
-        await activities.drain()
-        before = activity.path.read_text(encoding="utf-8")
+        [state] = await coordinator.subagents(parent.address)
+        assert state.activity_file is not None
+        activity_path = Path(state.activity_file)
+        await coordinator.drain_activity()
+        before = activity_path.read_text(encoding="utf-8")
         assert "Pending:" in before and "Delivered:" not in before
         assert service.deliver_background_completions(parent_run, parent)
         await asyncio.wait_for(receipt, 5)
@@ -130,8 +158,8 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         summary = sessions.summary(child.address)
         assert summary is not None
         assert summary["has_unread_completion"] is (not steered_parent)
-        await activities.drain()
-        log = activity.path.read_text(encoding="utf-8")
+        await coordinator.drain_activity()
+        log = activity_path.read_text(encoding="utf-8")
         assert "Delivered: stored in the Parent Session." in log
         assert all(
             log.count(answer.id) == 2 * int(forwarded)
@@ -156,7 +184,7 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         parent_release.set()
         await manager.aclose()
         await service.aclose()
-        await activities.drain()
+        await coordinator.drain_activity()
         sessions.close()
 
 
