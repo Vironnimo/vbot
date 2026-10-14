@@ -236,7 +236,10 @@ class AttachmentStore:
         stored_filename = _filename_with_extension(filename, canonical_extension)
 
         stored_at = datetime.now(UTC).isoformat()
-        self._attachments_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._attachments_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise AttachmentError("Cannot create the attachment folder") from exc
 
         def claim(candidate: str) -> bool:
             # The exclusively created sidecar is the id's only uniqueness claim and

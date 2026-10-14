@@ -3,7 +3,8 @@
 Web addresses go through the guarded public transport of web_fetch
 (``_public_http.fetch_public``), so private and local network addresses stay
 unreachable. Downloads run concurrently and are stored as attachments only after
-every requested image arrived as an image; a failed call leaves nothing behind.
+every requested image arrived as an image; failed downloads store nothing.
+If saving fails afterward, earlier stored attachments remain, with no analysis started.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 from urllib.parse import unquote, unquote_to_bytes, urlparse
 
 from core.attachments import AttachmentError, sniff_media_type
+from core.model_tasks.artifacts import os_error_reason
 from core.tools._public_http import PublicFetchError, fetch_public
 
 _IMAGE_ACCEPT = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
@@ -130,7 +132,10 @@ def _not_an_image(url: str | None, declared: str, sniffed: str, data: bytes) -> 
     if not data:
         if url:
             return f"{url} returned an empty response, not an image. Try another source."
-        return f"{_DATA_URL_SUBJECT} holds no data."
+        return (
+            f"{_DATA_URL_SUBJECT} holds no data. "
+            "Pass the complete data: URL or an image file's path."
+        )
     if "svg" in declared or _looks_like(data, b"<svg"):
         subject = f"{url} is" if url else f"{_DATA_URL_SUBJECT} holds"
         return (
@@ -138,7 +143,10 @@ def _not_an_image(url: str | None, declared: str, sniffed: str, data: bytes) -> 
         )
     if "html" in declared or _looks_like(data, b"<!doctype html", b"<html"):
         if not url:
-            return f"{_DATA_URL_SUBJECT} holds a web page, not an image."
+            return (
+                f"{_DATA_URL_SUBJECT} holds a web page, not an image. "
+                "Pass the image's data: URL or its file path."
+            )
         return (
             f"{url} returned a web page, not an image. Pass the address of the image file "
             "itself, not of a page that shows it; the site may also show an access check "
@@ -212,10 +220,19 @@ async def download_images(
             record = await attachment_store.store_async(image.filename, image.data)
         except AttachmentError as error:
             prefix = f"{field}[{index}]: " if several else ""
+            cause: BaseException | None = error.__cause__
+            while cause is not None and not isinstance(cause, OSError):
+                cause = cause.__cause__
+            reason = (
+                os_error_reason(cause)
+                if isinstance(cause, OSError)
+                else "local storage is unavailable"
+            )
             raise ImageDownloadError(
                 "storage_error",
-                f"{prefix}The downloaded image could not be saved ({error}). Check available "
-                "disk space and retry.",
+                f"{prefix}No image analysis was started. The downloaded image could not be "
+                f"saved locally: {reason}. Tell the user to resolve the storage problem "
+                "before retrying.",
             ) from error
         stored[index] = (Path(record.file_path), record.filename)
     return stored

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import inspect
 import io
+import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -47,6 +48,7 @@ from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 JsonObject = JsonObject
 _LOGGER = get_logger("image")
@@ -134,6 +136,37 @@ class ImageOutcomeUnknownError(ImageExecutionError):
         super().__init__(message)
 
 
+class ImageAnalysisEmptyError(ImageExecutionError):
+    """The analysis completed without text and without a reported refusal."""
+
+    code = "empty_analysis"
+
+    def __init__(self, *, output_truncated: bool = False) -> None:
+        self.output_truncated = output_truncated
+        super().__init__(
+            "Image-understanding model returned no text analysis", retryable=not output_truncated
+        )
+
+
+class ImageAnalysisRefusedError(ImageExecutionError):
+    """The Provider explicitly declined an image analysis."""
+
+    code = "analysis_refused"
+
+    def __init__(self, reason: str | None = None) -> None:
+        self.reason = reason
+        super().__init__(reason or "Image analysis was refused without a reason")
+
+
+class ImageAnalysisFilteredError(ImageAnalysisRefusedError):
+    """The content filter stopped the analysis before any text was returned."""
+
+    code = "analysis_filtered"
+
+    def __init__(self) -> None:
+        super().__init__("The provider's content filter stopped the analysis before any text")
+
+
 class ImageRefusedError(ImageExecutionError):
     """Raised when the provider declined to create the requested image."""
 
@@ -158,6 +191,21 @@ class ImageInputError(ImageError):
     """Raised when a local source image cannot be loaded."""
 
     code = "image_read_error"
+
+    def __init__(
+        self, message: str, *, image_index: int | None = None, source_path: Path | None = None
+    ) -> None:
+        self.detail = message
+        self.image_index = image_index
+        self.source_path = source_path
+        subject = f"Image {image_index + 1}" if image_index is not None else "Source image"
+        if source_path is not None:
+            subject += f" ({model_path(source_path)})"
+        super().__init__(
+            f"{subject}: {message}"
+            if image_index is not None or source_path is not None
+            else message
+        )
 
 
 class ImageNotFoundError(ImageInputError):
@@ -493,10 +541,14 @@ class ImageService:
                 usage = normalized.get("usage")
                 await accounting.update(call_id, usage)
                 analysis = normalized.get("content")
-                if not isinstance(analysis, str) or not analysis.strip():
-                    raise ImageExecutionError("Image-understanding model returned no text analysis")
-                text = "\n".join([*preparation_notes, analysis.strip()])
                 outcome = terminal_outcome_from_response(normalized)
+                if not isinstance(analysis, str) or not analysis.strip():
+                    if outcome == TERMINAL_OUTCOME_CONTENT_FILTERED:
+                        raise ImageAnalysisFilteredError()
+                    raise ImageAnalysisEmptyError(
+                        output_truncated=outcome == TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+                    )
+                text = "\n".join([*preparation_notes, analysis.strip()])
                 if incomplete := _INCOMPLETE_ANALYSIS_NOTES.get(outcome):
                     text = f"{text}\n\n{incomplete}"
             return ImageUnderstandingResult(
@@ -514,6 +566,9 @@ class ImageService:
                 _safe_target_label(target_ref),
                 safe_error,
             )
+            if isinstance(exc, ProviderContentRefusedError):
+                reason = _safe_error_text(exc.reason, target_ref) if exc.reason else None
+                raise ImageAnalysisRefusedError(reason) from exc
             raise ImageExecutionError(
                 safe_error,
                 retryable=bool(getattr(exc, "retryable", False)),
@@ -535,7 +590,7 @@ class ImageService:
         prepared_images: list[PreparedImage] = []
         for _attempt in range(2):
             prepared_images = []
-            for image, ceiling in zip(images, ceilings, strict=True):
+            for index, (image, ceiling) in enumerate(zip(images, ceilings, strict=True)):
                 try:
                     prepared_images.append(
                         await self._image_converter.convert(
@@ -546,12 +601,17 @@ class ImageService:
                         )
                     )
                 except ImageConversionError as exc:
-                    message = f"Image {image.filename}: {exc}"
+                    message = str(exc)
+                    if exc.reason == "unsupported_target":
+                        raise ImageUnderstandingUnavailableError(
+                            "The selected model cannot receive images in any available "
+                            "output format"
+                        ) from exc
                     if exc.reason in {"image_too_large", "output_too_large"}:
-                        raise ImageTooLargeError(message) from exc
+                        raise ImageTooLargeError(message, image_index=index) from exc
                     if exc.reason == "invalid_image":
-                        raise ImageReadError(message) from exc
-                    raise ImageUnsupportedMediaTypeError(message) from exc
+                        raise ImageReadError(message, image_index=index) from exc
+                    raise ImageUnsupportedMediaTypeError(message, image_index=index) from exc
             total = sum(len(prepared.data) for prepared in prepared_images)
             if total <= DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES:
                 break
@@ -647,7 +707,7 @@ def _safe_target_label(target_ref: TaskModelTargetRef) -> str:
     return f"{target_ref.provider_id}/{target_ref.model_id}"
 
 
-def _safe_error_text(error: BaseException, target_ref: TaskModelTargetRef) -> str:
+def _safe_error_text(error: BaseException | str, target_ref: TaskModelTargetRef) -> str:
     text = str(error).replace(target_ref.target, _safe_target_label(target_ref))
     if target_ref.account_id:
         text = text.replace(target_ref.account_id, "[REDACTED]")
@@ -686,38 +746,64 @@ def _load_image_inputs(
 
     inputs: list[ImageInput] = []
     total_bytes = 0
-    for source_path in source_paths:
-        path = Path(source_path).expanduser().resolve()
-        if not path.exists():
-            raise ImageNotFoundError(f"Source image not found: {path}")
-        if not path.is_file():
-            raise ImageReadError(f"Source image path is not a file: {path}")
+    for index, source_path in enumerate(source_paths):
+        path = Path(source_path).expanduser()
         try:
-            reported_size = path.stat().st_size
+            path = path.resolve()
+            status = path.stat()
+            if not stat.S_ISREG(status.st_mode):
+                raise ImageReadError("This path is not an image file. Pass a readable image file.")
+            reported_size = status.st_size
             if reported_size > max_size_bytes:
                 raise ImageTooLargeError(
-                    f"Source image exceeds size limit {max_size_bytes} bytes: {path}"
+                    f"The file exceeds the {max_size_bytes:,} byte per-image limit. "
+                    "Crop the relevant area or pass a smaller copy."
                 )
             reported_total_bytes = total_bytes + reported_size
             _ensure_analysis_total_size(reported_total_bytes, max_total_bytes)
             with path.open("rb") as source_file:
                 data = source_file.read(max_size_bytes + 1)
-        except OSError as exc:
-            raise ImageReadError(f"Cannot read source image {path}: {exc}") from exc
-        if len(data) > max_size_bytes:
-            raise ImageTooLargeError(
-                f"Source image exceeds size limit {max_size_bytes} bytes: {path}"
-            )
-        total_bytes += len(data)
-        _ensure_analysis_total_size(total_bytes, max_total_bytes)
+            if len(data) > max_size_bytes:
+                raise ImageTooLargeError(
+                    f"The file exceeds the {max_size_bytes:,} byte per-image limit. "
+                    "Crop the relevant area or pass a smaller copy."
+                )
+            total_bytes += len(data)
+            _ensure_analysis_total_size(total_bytes, max_total_bytes)
 
-        media_type = sniff_media_type(data, path.name)
-        # Generation/video/music clients own their distinct upload contracts.
-        # Preserve their existing accepted inputs; only analysis opts into the
-        # newly decoded formats and converts against its actual Chat target.
-        directly_supported = media_type in {"image/png", "image/jpeg", "image/gif", "image/webp"}
-        if not media_type.startswith("image/") or not (directly_supported or allow_conversion):
-            raise ImageUnsupportedMediaTypeError(f"Source file is not a supported image: {path}")
+            media_type = sniff_media_type(data, path.name)
+            # Only analysis converts formats; generation retains its upload contract.
+            directly_supported = media_type in {
+                "image/png",
+                "image/jpeg",
+                "image/gif",
+                "image/webp",
+            }
+            if not media_type.startswith("image/") or not (directly_supported or allow_conversion):
+                advice = (
+                    "Render the required pages to PNG or JPEG and pass those paths."
+                    if media_type == "application/pdf"
+                    else "Pass an image file, or export the original as PNG or JPEG."
+                )
+                raise ImageUnsupportedMediaTypeError(
+                    f"The file contains {media_type} content, which cannot be used as an image "
+                    f"for this request. {advice}"
+                )
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            raise ImageNotFoundError(
+                "The file was not found. Check its path or obtain a fresh copy.",
+                image_index=index,
+                source_path=path,
+            ) from exc
+        except OSError as exc:
+            raise ImageReadError(
+                f"The file could not be read: {os_error_reason(exc)}. Pass a readable copy, "
+                "or ask the user to restore access.",
+                image_index=index,
+                source_path=path,
+            ) from exc
+        except ImageInputError as exc:
+            raise type(exc)(exc.detail, image_index=index, source_path=path) from exc
         inputs.append(
             ImageInput(
                 filename=_input_filename(path, media_type),

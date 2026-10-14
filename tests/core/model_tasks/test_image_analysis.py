@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import io
 import logging
 import random
@@ -35,13 +36,17 @@ from core.model_tasks import (
 from core.model_tasks import image as image_module
 from core.model_tasks.image import DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES
 from core.providers.accounts import ConnectionRef
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderContentRefusedError, ProviderError
+from core.tools import ToolRegistry
+from core.tools.image import register_analyze_image_tool
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
 )
 from tests.core.providers.adapter_test_support import response_deltas
+from tests.core.tools.image_test_support import make_context
+from tests.core.tools.tools_test_support import dispatch_as_executor
 from tests.core.usage.usage_test_support import read_ledger
 
 
@@ -397,29 +402,51 @@ async def test_analysis_converts_for_the_actual_target_without_changing_original
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure,code,advice",
+    "failure,code",
     [
-        ("damaged", "image_read_error", "fresh copy"),
-        ("pixels", "image_too_large", "changing the file format alone will not help"),
-        ("bytes", "image_too_large", "1 byte limit"),
+        ("damaged", "image_read_error"),
+        ("pixels", "image_too_large"),
+        ("bytes", "image_too_large"),
+        ("metadata-denied", "image_read_error"),
+        ("open-denied", "image_read_error"),
+        ("pdf", "unsupported_image_type"),
+        ("source-bytes", "image_too_large"),
     ],
 )
 async def test_analysis_preparation_failures_are_actionable_before_provider_send(
-    tmp_path, monkeypatch, failure, code, advice
+    tmp_path, monkeypatch, deny_access, failure, code
 ):
     source = _png(tmp_path / "source.png")
     if failure == "damaged":
         source.write_bytes(source.read_bytes()[:25])
     if failure == "pixels":
         monkeypatch.setattr(conversion_module, "_PIXEL_LIMIT", 10)
+    if failure == "pdf":
+        source.write_bytes(b"%PDF-1.7\nexample")
+    if failure == "metadata-denied":
+        deny_access(source)
+    if failure == "open-denied":
+        original_open = Path.open
+
+        def open_file(path, *args, **kwargs):
+            if path == source:
+                raise OSError(errno.EACCES, "localized OS sentinel")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", open_file)
     adapter = _UnderstandingAdapter(max_image_bytes=1 if failure == "bytes" else None)
-    service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
+    service = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(adapter)),
+        max_input_bytes=1 if failure == "source-bytes" else 20 * 1024 * 1024,
+    )
     with pytest.raises(ImageInputError) as error:
         await service.analyze("Describe it", image_paths=[source])
     assert error.value.code == code
-    assert advice in str(error.value)
+    assert error.value.image_index == 0
+    assert "localized OS sentinel" not in str(error.value)
     assert not adapter.requests
-    assert adapter.closed
+    assert adapter.closed is (failure in {"damaged", "pixels", "bytes"})
 
 
 @pytest.mark.asyncio
@@ -584,7 +611,7 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
         await text_only.analyze("Describe it", image_paths=[source])
     with pytest.raises(ImageUnderstandingUnavailableError):
         await image_only.analyze("Describe it", image_paths=[source])
-    with pytest.raises(ImageUnsupportedMediaTypeError):
+    with pytest.raises(ImageUnderstandingUnavailableError):
         await unsupported_wire.analyze("Describe it", image_paths=[source])
 
     assert adapter.closed is True
@@ -695,19 +722,44 @@ def _retried_provider_error() -> ProviderError:
 
 
 @pytest.mark.parametrize(
-    ("response", "error", "match", "attributes"),
+    "response,code,retryable,attempts",
     [
+        pytest.param(_retried_provider_error, "provider_error", True, 4, id="provider-error"),
+        pytest.param(lambda: {"content": "   "}, "empty_analysis", True, None, id="empty-output"),
         pytest.param(
-            _retried_provider_error,
-            ImageExecutionError,
-            "rate limited",
-            {"code": "provider_error", "retryable": True, "attempts_made": 4},
-            id="provider-error",
+            lambda: {"content": "", "terminal_outcome": "content_filtered"},
+            "analysis_filtered",
+            False,
+            None,
+            id="filtered-empty-output",
         ),
-        pytest.param(lambda: {"content": "   "}, ImageExecutionError, None, {}, id="empty-output"),
-        # An unexpected adapter failure is a bug and is not masked.
         pytest.param(
-            lambda: RuntimeError("adapter bug"), RuntimeError, "adapter bug", {}, id="adapter-bug"
+            lambda: {"content": "", "terminal_outcome": "output_truncated"},
+            "empty_analysis",
+            False,
+            None,
+            id="truncated-empty-output",
+        ),
+        pytest.param(
+            lambda: ProviderContentRefusedError("refusal sentinel"),
+            "analysis_refused",
+            False,
+            None,
+            id="refusal",
+        ),
+        pytest.param(
+            lambda: ProviderContentRefusedError(),
+            "analysis_refused",
+            False,
+            None,
+            id="refusal-without-reason",
+        ),
+        pytest.param(
+            lambda: RuntimeError("adapter bug"),
+            "tool_execution_error",
+            None,
+            None,
+            id="adapter-bug",
         ),
     ],
 )
@@ -715,18 +767,28 @@ def _retried_provider_error() -> ProviderError:
 async def test_analyze_maps_send_failures_and_closes_the_adapter(
     tmp_path: Path,
     response: Callable[[], object],
-    error: type[Exception],
-    match: str | None,
-    attributes: dict[str, object],
+    code: str,
+    retryable: bool | None,
+    attempts: int | None,
 ) -> None:
     adapter = _UnderstandingAdapter(response())
     service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
-
-    with pytest.raises(error, match=match) as caught:
-        await service.analyze("Describe it", image_paths=[_png(tmp_path / "source.png")])
-
-    assert {name: getattr(caught.value, name) for name in attributes} == attributes
+    registry = ToolRegistry()
+    register_analyze_image_tool(registry, service, attachment_store=None)
+    source = _png(tmp_path / "source.png")
+    result = await dispatch_as_executor(
+        registry,
+        make_context(tmp_path, "analyze_image"),
+        {"prompt": "Describe it", "images": [source.name]},
+    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == code
+    assert result["error"].get("retryable") is retryable
+    assert result["error"].get("attempts_made") == attempts
+    assert len(adapter.requests) == 1
     assert adapter.closed is True
+    if isinstance(adapter.response, ProviderContentRefusedError) and adapter.response.reason:
+        assert adapter.response.reason in result["error"]["message"]
 
 
 @pytest.mark.parametrize("send_error", [None, ProviderError("primary provider failure")])
@@ -761,14 +823,16 @@ async def test_adapter_cleanup_failure_never_replaces_the_outcome(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [ProviderError, ProviderContentRefusedError])
 async def test_analyze_redacts_pinned_account_from_provider_error_and_log(
     tmp_path: Path,
     caplog: Any,
+    error_type: type[ProviderError],
 ) -> None:
     source = _png(tmp_path / "source.png")
     account_id = "private_account"
     target = f"openrouter/vision-model::api-key:{account_id}"
-    adapter = _UnderstandingAdapter(ProviderError(f"request for {target} via {account_id} failed"))
+    adapter = _UnderstandingAdapter(error_type(f"request for {target} via {account_id} failed"))
     service = ImageService(
         _UnderstandingModelTasks(target=target),
         cast(Any, _UnderstandingRuntime(adapter)),

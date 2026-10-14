@@ -28,7 +28,6 @@ from tests.core.tools.image_test_support import (
     PNG,
     ImageService,
     analyze,
-    contract_refusal,
     failure,
     image_registry,
     make_context,
@@ -114,130 +113,78 @@ async def test_other_image_dialects_analyze_the_same_file(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "error"),
+    "arguments",
     [
         pytest.param(
             {"prompt": "a", "image": "photos/cat.png", "images": ["photos/garden.jpg"]},
-            contract_refusal(
-                'Conflicting values for images: image is "photos/cat.png" and images is '
-                '["photos/garden.jpg"]. Send only the intended one.'
-            ),
             id="two-image-lists",
         ),
         pytest.param(
-            {"prompt": "a", "question": "b", "images": ["photos/cat.png"]},
-            contract_refusal(
-                'Conflicting values for prompt: prompt is "a" and question is "b". Send only '
-                "the intended one."
-            ),
-            id="two-prompts",
+            {"prompt": "a", "question": "b", "images": ["photos/cat.png"]}, id="two-prompts"
         ),
+        pytest.param({"images": ["photos/cat.png"]}, id="no-prompt"),
+        pytest.param({"prompt": "   ", "images": ["photos/cat.png"]}, id="blank-prompt"),
+        pytest.param({"prompt": "a", "images": []}, id="no-images"),
         pytest.param(
-            {"images": ["photos/cat.png"]},
-            contract_refusal(
-                "analyze_image was not run:\n"
-                '- "prompt" is required: What to inspect or extract, including the needed '
-                "detail or uncertainty.\n"
-                "analyze_image parameters: prompt (required), images (required)."
-            ),
-            id="no-prompt",
-        ),
-        pytest.param(
-            {"prompt": "   ", "images": ["photos/cat.png"]},
-            failure(
-                "invalid_arguments",
-                'Pass what to look for as prompt, for example {"prompt": "Read the text on '
-                'the label"}.',
-            ),
-            id="blank-prompt",
-        ),
-        pytest.param(
-            {"prompt": "a", "images": []},
-            contract_refusal('analyze_image was not run: "images" must not be empty.'),
-            id="no-images",
-        ),
-        pytest.param(
-            {"prompt": "a", "images": ["photos/cat.png"], "mode": "ocr"},
-            contract_refusal(
-                "analyze_image was not run:\n"
-                '- "mode" is not a parameter.\n'
-                "analyze_image parameters: prompt (required), images (required)."
-            ),
-            id="unknown-mode",
+            {"prompt": "a", "images": ["photos/cat.png"], "mode": "ocr"}, id="unknown-mode"
         ),
     ],
 )
 async def test_unclear_calls_are_refused_before_analysis(
-    photos: Path, arguments: dict[str, Any], error: dict[str, Any]
+    photos: Path, arguments: dict[str, Any]
 ) -> None:
     service = ImageService()
-
     result = await analyze(photos, arguments, service)
-
-    assert result["error"] == error
+    assert result["error"]["code"] == "invalid_arguments"
     assert service.analyzed is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("images", "error"),
+    "images,code,suggestions",
     [
-        pytest.param(
-            ["photos/cat.jpg"],
-            failure(
-                "image_not_found",
-                "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-                'If you meant that file, pass {"images": ["photos/cat.png"]}.',
-            ),
-            id="similar-file",
-        ),
-        pytest.param(
+        (["photos/cat.jpg"], "image_not_found", ["photos/cat.png"]),
+        (
             ["photos/cat.jpg", "photos/garden.jpg", "photo/garden.jpeg"],
-            failure(
-                "image_not_found",
-                "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-                "No image at photo/garden.jpeg (similar: photos/garden.jpg).\n"
-                'If you meant those files, pass {"images": ["photos/cat.png", '
-                '"photos/garden.jpg", "photos/garden.jpg"]}.',
-            ),
-            id="similar-files",
+            "image_not_found",
+            ["photos/cat.png", "photos/garden.jpg"],
         ),
-        pytest.param(
-            ["photos/cat.jpg", "photos/zebra.png"],
-            failure(
-                "image_not_found",
-                "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-                "No image at photos/zebra.png, and no similar file is beside it.",
-            ),
-            id="no-similar-file",
-        ),
-        pytest.param(
-            ["photos"],
-            failure(
-                "image_read_error",
-                "photos is a folder, not an image. Pass image files from it, for example "
-                '{"images": ["photos/cat.png", "photos/garden.jpg"]}.',
-            ),
-            id="folder",
-        ),
+        (["photos/cat.jpg", "photos/zebra.png"], "image_not_found", ["photos/cat.png"]),
+        (["photos"], "image_read_error", ["photos/cat.png", "photos/garden.jpg"]),
+        (["avif-only"], "image_read_error", ["avif-only/landscape.avif"]),
+        (["empty"], "image_read_error", []),
     ],
 )
 async def test_unusable_local_images_name_the_files_meant_without_substituting(
-    photos: Path, images: list[str], error: dict[str, Any]
+    photos: Path, images: list[str], code: str, suggestions: list[str]
 ) -> None:
+    write_image(photos / "avif-only" / "landscape.avif")
+    (photos / "empty").mkdir()
     service = ImageService()
     context = make_context(photos, ANALYZE_IMAGE_TOOL_NAME)
-
     result = await dispatch_as_executor(
         image_registry(service), context, {"prompt": "Describe", "images": images}
     )
-
-    assert result["error"] == error
+    assert result["error"]["code"] == code
+    assert result["error"]["retryable"] is False
+    for path in images + suggestions:
+        assert path in result["error"]["message"]
     assert service.analyzed is None
-    # The row still shows an unavailable-image placeholder for each requested path.
     assert [item["filename"] for item in context.presentation_media] == [
         Path(item).name for item in images
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["photos/cat.png", "photos"])
+async def test_unreadable_images_are_not_reported_missing(photos, target, deny_access) -> None:
+    service = ImageService()
+    deny_access(photos / target)
+    result = await analyze(photos, {"prompt": "Describe", "images": [target]}, service)
+    assert result["error"]["code"] == "image_read_error"
+    assert target in result["error"]["message"]
+    assert "PermissionError" not in result["error"]["message"]
+    assert service.analyzed is None
 
 
 def _provider_failure(

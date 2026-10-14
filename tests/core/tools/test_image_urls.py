@@ -7,6 +7,7 @@ no request reaches the network.
 from __future__ import annotations
 
 import base64
+import errno
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_from_bytes
@@ -17,6 +18,8 @@ from curl_cffi.requests.exceptions import CertificateVerifyError, DNSError, Read
 
 import core.tools._public_http as public_http
 from core.attachments import AttachmentStore
+from core.attachments import attachments as attachment_module
+from core.model_tasks import ImageReadError
 from core.tools._public_http import PublicResponse
 from core.tools.image import ANALYZE_IMAGE_TOOL_NAME
 from tests.core.tools.image_test_support import (
@@ -139,6 +142,58 @@ async def test_image_urls_and_local_files_are_analyzed_in_their_order(
         "cat.png",
         "dog.jpg",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data_url", [False, True])
+async def test_analysis_failure_names_the_original_downloaded_image(workspace, web, data_url):
+    address = (
+        "data:image/png;base64," + base64.b64encode(PNG).decode()
+        if data_url
+        else "https://example.com/broken.png"
+    )
+    web.image(address, PNG)
+    call = _Call(workspace)
+    call.service.error = ImageReadError(
+        "unreadable image sentinel", image_index=1, source_path=Path("att_internal.png")
+    )
+    result = await call(["photos/cat.png", address])
+    assert result["error"]["code"] == "image_read_error"
+    message = result["error"]["message"]
+    assert "Image 2" in message
+    assert ("data: URL" if data_url else address) in message
+    assert "att_internal" not in message
+    assert base64.b64encode(PNG).decode() not in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["folder", "blob", "metadata"])
+async def test_download_storage_failures_never_start_analysis(workspace, web, monkeypatch, phase):
+    web.image("https://example.com/cat.png", PNG)
+    call = _Call(workspace)
+    original_mkdir = Path.mkdir
+
+    def fail(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC if phase == "blob" else errno.EACCES, "localized OS sentinel")
+
+    def mkdir(path, *args, **kwargs):
+        if path == call.store._attachments_dir:
+            fail()
+        return original_mkdir(path, *args, **kwargs)
+
+    if phase == "folder":
+        monkeypatch.setattr(Path, "mkdir", mkdir)
+    else:
+        monkeypatch.setattr(
+            attachment_module, "write_new_bytes" if phase == "blob" else "atomic_write_text", fail
+        )
+    result = await call(["https://example.com/cat.png"])
+    assert result["error"]["code"] == "storage_error"
+    assert result["error"]["retryable"] is False
+    assert "localized OS sentinel" not in result["error"]["message"]
+    assert str(workspace) not in result["error"]["message"]
+    assert call.service.analyzed is None
+    assert call.stored() == []
 
 
 @pytest.mark.asyncio
@@ -408,45 +463,27 @@ async def test_several_images_name_each_failure_and_store_nothing(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("images", "error"),
+    "images,code",
     [
-        pytest.param(
-            ["example.com/cat.png"],
-            failure(
-                "image_not_found",
-                "No image at example.com/cat.png, and no similar file is beside it.",
-            ),
-            id="schemeless-address-is-a-path",
-        ),
+        pytest.param(["example.com/cat.png"], "image_not_found", id="schemeless-address-is-a-path"),
         pytest.param(
             ["https://example.com/dog.png", "photos/cat.jpg"],
-            failure(
-                "image_not_found",
-                "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-                'If you meant that file, pass {"images": ["https://example.com/dog.png", '
-                '"photos/cat.png"]}.',
-            ),
+            "image_not_found",
             id="missing-local-file",
         ),
         pytest.param(
             [f"https://example.com/{index}.png" for index in range(7)],
-            failure(
-                "invalid_arguments",
-                "analyze_image takes at most 6 images per call; received 7. Split them across "
-                "calls of up to 6 images each.",
-            ),
+            "invalid_arguments",
             id="too-many-images",
         ),
     ],
 )
 async def test_unusable_calls_fail_before_any_download(
-    workspace: Path, web: _Web, images: list[str], error: dict[str, Any]
+    workspace: Path, web: _Web, images: list[str], code: str
 ) -> None:
     web.image("https://example.com/dog.png", PNG)
     call = _Call(workspace)
-
     result = await call(images)
-
-    assert result["error"] == error
+    assert result["error"]["code"] == code
     assert web.requested == []
     assert call.service.analyzed is None

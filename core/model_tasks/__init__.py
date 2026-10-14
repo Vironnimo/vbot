@@ -30,6 +30,9 @@ if TYPE_CHECKING:
     from core.model_tasks.embeddings_local import LocalEmbeddingExecutor
     from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
     from core.model_tasks.image import (
+        ImageAnalysisEmptyError,
+        ImageAnalysisFilteredError,
+        ImageAnalysisRefusedError,
         ImageConfigurationError,
         ImageError,
         ImageExecutionError,
@@ -118,6 +121,9 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "ImageAnalysisEmptyError": "core.model_tasks.image",
+    "ImageAnalysisFilteredError": "core.model_tasks.image",
+    "ImageAnalysisRefusedError": "core.model_tasks.image",
     "MusicArtifact": "core.model_tasks.music",
     "MusicRefusedError": "core.model_tasks.music",
     "VideoProfile": "core.model_tasks.video",
@@ -227,6 +233,9 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "ImageAnalysisEmptyError",
+    "ImageAnalysisFilteredError",
+    "ImageAnalysisRefusedError",
     "MusicArtifact",
     "MusicRefusedError",
     "VideoProfile",
