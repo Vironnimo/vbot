@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,6 +30,7 @@ from core.tools import (
     tool_failure,
     tool_failure_for_exception,
 )
+from core.tools.tools import run_tool_worker
 
 
 def _skill_md(
@@ -118,9 +119,9 @@ class _Harness:
         owner_id: str,
         name: str,
         target: str | None,
-        delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
+        delete: Callable[[tuple[SkillReference, ...]], bool],
     ) -> tuple[SkillReference, ...]:
-        deleted = await delete(self.references)
+        deleted = await run_tool_worker(delete, self.references)
         self.merges.append((owner_id, name, target, deleted))
         if not deleted:
             return ()

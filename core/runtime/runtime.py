@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -657,7 +657,7 @@ class Runtime:
         owner_id: str,
         name: str,
         target: str | None,
-        delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
+        delete: Callable[[tuple[SkillReference, ...]], bool],
     ) -> tuple[SkillReference, ...]:
         """Delete an Identity Agent's Skill and move what named it to ``target``, if any.
 
@@ -671,7 +671,8 @@ class Runtime:
             automation=self.automation_references,
             agent_name=self._agent_name,
             shares_changed=lambda: self.invalidate_agent_skills(None),
-            agents_with_access=self._skill_operations().agents_with_skill_access,
+            mutation_guard=self._skill_operations().merge_guard,
+            prepare_access=self._skill_operations().prepare_skill_merge,
             preserve_access=self._skill_operations().preserve_merged_skill_access,
         )
         return await follow_skill_merge(services, owner_id, name, target, delete)

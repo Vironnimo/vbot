@@ -586,6 +586,17 @@ class ProjectStore:
             return self._sessions
 
     @contextmanager
+    def configuration_guard(self) -> Iterator[None]:
+        """Keep scoped capability checks with their synchronous dependent write.
+
+        Skill merges use this to keep Project Context grants and source choices
+        stable through deletion. Like a Project mutation, admit the document
+        change before taking the store lock; never hold it across an await.
+        """
+        with self._change():
+            yield
+
+    @contextmanager
     def _change(self) -> Iterator[None]:
         """Admit a change of the Project documents, then hold the store lock.
 

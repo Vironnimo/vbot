@@ -13,11 +13,12 @@ import pytest
 from core.runtime.runtime import Runtime
 from core.skills import authoring as authoring_module
 from core.skills.authoring import HUMAN_WRITER
+from core.skills.policy import SkillPackageRef
 from core.tools import SKILL_MANAGE_TOOL_NAME, ToolContext
 from core.utils.config import Config
 from server.events import ServerEventBus
 from server.rpc import agent_methods
-from tests.core.runtime.runtime_test_support import call_rpc
+from tests.core.runtime.runtime_test_support import call_rpc, write_agent_skill
 
 
 async def _change_owner(state: Any, operation: str) -> Any:
@@ -238,4 +239,98 @@ async def test_lifecycle_cancellation_preserves_admission_and_invalidation(
             reference_lock.release()
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["disable", "edit", "rename", "project"])
+async def test_merge_keeps_its_access_check_with_deletion(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    release = threading.Event()
+    tasks: list[asyncio.Task[Any]] = []
+    try:
+        data = runtime.storage.data_dir
+        write_agent_skill(data, "main", "deploy-web", "Old playbook.")
+        target = write_agent_skill(data, "main", "deploy", "Successor.") / "SKILL.md"
+        runtime.projects.create("p", "P", tmp_path / "repo")
+        context = ToolContext(
+            agent_id="main",
+            session_id="merge",
+            run_id="merge",
+            tool_call_id="merge",
+            tool_name=SKILL_MANAGE_TOOL_NAME,
+            tool_call_index=0,
+            workspace=tmp_path,
+            cwd=tmp_path,
+            vbot_root=tmp_path,
+            data_root=data,
+        )
+        loop = asyncio.get_running_loop()
+        prepared = asyncio.Event()
+        attempted = asyncio.Event()
+        skills = runtime._skill_operations()
+        prepare = skills.prepare_skill_merge
+
+        def pause_after_check(owner: str, name: str, successor: str) -> tuple[str, ...]:
+            permitted = prepare(owner, name, successor)
+            loop.call_soon_threadsafe(prepared.set)
+            assert release.wait(10)
+            return permitted
+
+        monkeypatch.setattr(skills, "prepare_skill_merge", pause_after_check)
+        write = asyncio.create_task(
+            runtime.tools.dispatch(
+                context,
+                {"action": "delete", "name": "deploy-web", "absorbed_into": "deploy"},
+                [SKILL_MANAGE_TOOL_NAME],
+            )
+        )
+        tasks.append(write)
+        await asyncio.wait_for(prepared.wait(), 10)
+
+        def change() -> None:
+            lock = {
+                "disable": runtime.skill_policy._lock,
+                "edit": runtime.skill_authoring._write_lock,
+                "rename": runtime.agents._write_lock,
+                "project": runtime.projects._write_lock,
+            }[operation]
+            acquired = lock.acquire(blocking=False)
+            if acquired:
+                lock.release()
+            loop.call_soon_threadsafe(attempted.set)
+            assert not acquired
+            if operation == "disable":
+                runtime.skill_policy.set_package_disabled(
+                    SkillPackageRef("agent", "deploy", "main"), disabled=True
+                )
+            elif operation == "edit":
+                runtime.skill_authoring.edit(
+                    target.parent.parent,
+                    "deploy",
+                    target.read_text(encoding="utf-8").replace("Successor.", "Updated successor."),
+                    writer=HUMAN_WRITER,
+                )
+            elif operation == "rename":
+                runtime.agents.rename("main", "renamed")
+            else:
+                runtime.projects.update("p", skills_global_enabled=["deploy-web"])
+
+        concurrent = asyncio.create_task(asyncio.to_thread(change))
+        tasks.append(concurrent)
+        await asyncio.wait_for(attempted.wait(), 10)
+        assert not concurrent.done()
+        release.set()
+        assert (await write)["ok"] is True
+        await concurrent
+        owner = "renamed" if operation == "rename" else "main"
+        home = runtime.agent_skills_dir(owner)
+        assert not (home / "deploy-web").exists()
+        assert runtime.skill_authoring.archived_skill(home, "deploy-web") is not None
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await runtime.aclose()

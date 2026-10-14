@@ -112,6 +112,18 @@ class SkillProtectedError(SkillAuthoringError):
         self.reason = reason
 
 
+class SkillMergeAccessError(SkillAuthoringError):
+    """A merge would remove access to the instructions it is meant to preserve.
+
+    Each blocker names an Agent, its optional Project Context, and the reason.
+    Names are display names; this exception does not persist references.
+    """
+
+    def __init__(self, blocked: Sequence[tuple[str, str | None, str]]) -> None:
+        super().__init__("The merged Skill would not be accessible to its previous users.")
+        self.blocked = tuple(blocked)
+
+
 class SkillRevertConflictError(SkillAuthoringError):
     """A later revision changed the same part of the Skill as a reverted one."""
 

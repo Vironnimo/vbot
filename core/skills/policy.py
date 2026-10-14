@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -339,6 +340,16 @@ class SkillPolicyService:
         """Return the current effective policy (empty when missing or invalid)."""
         policy, _ = self._read_policy()
         return policy
+
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Keep a merge's access check and deletion ahead of policy changes.
+
+        Use only for synchronous worker operations, after the Agent lifecycle
+        and Skill authoring guards; never hold this lock across an await.
+        """
+        with self._lock:
+            yield
 
     def validation_diagnostics(self) -> list[str]:
         """Return human-readable diagnostics from the most recent load."""
