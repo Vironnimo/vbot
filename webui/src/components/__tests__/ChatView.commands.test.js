@@ -10,6 +10,7 @@ import {
   flushSync,
   handledCommand,
   historyReads,
+  listQueueMock,
   message,
   rpcCalls,
   rpcMock,
@@ -416,16 +417,18 @@ describe('ChatView slash commands', () => {
       'queues Skill triggers and messages while /stop bypasses the Queue (command catalog unavailable: %s)',
       async (commandsError) => {
         const skillTrigger = '/debugging investigate this run';
+        const skillAdmission = queuedItem('queued-skill', skillTrigger);
+        const messageAdmission = queuedItem(
+          'queued-message',
+          'Queue this while running',
+        );
         rpcMock.mockImplementation(
           createChatRpcMock({
             commandsError,
             streamHandler: streamResponses({
               'Start a long run': runningRun('run-1'),
-              [skillTrigger]: queuedItem('queued-skill', skillTrigger),
-              'Queue this while running': queuedItem(
-                'queued-message',
-                'Queue this while running',
-              ),
+              [skillTrigger]: skillAdmission,
+              'Queue this while running': messageAdmission,
               '/stop': handledCommand('Run cancelled.'),
             }),
           }),
@@ -434,8 +437,12 @@ describe('ChatView slash commands', () => {
 
         sendComposerMessage('Start a long run');
         await waitForCondition(() => Boolean(findCancelRunButton()));
+        listQueueMock.mockResolvedValue({ items: [skillAdmission.item] });
         sendComposerMessage(skillTrigger);
         await waitForCondition(() => queuedTexts().length === 1);
+        listQueueMock.mockResolvedValue({
+          items: [skillAdmission.item, messageAdmission.item],
+        });
         sendComposerMessage('Queue this while running');
         await waitForCondition(() => queuedTexts().length === 2);
         sendComposerMessage('/stop');
@@ -490,14 +497,15 @@ describe('ChatView slash commands', () => {
 
     it('explains when a server restart discards a locally shown queued message', async () => {
       const parent = createChatViewParentHarness();
+      const admission = queuedItem(
+        'queued-before-restart',
+        'Queue before restart',
+      );
       rpcMock.mockImplementation(
         createChatRpcMock({
           streamHandler: streamResponses({
             'Start before restart': runningRun('run-before-restart'),
-            'Queue before restart': queuedItem(
-              'queued-before-restart',
-              'Queue before restart',
-            ),
+            'Queue before restart': admission,
           }),
         }),
       );
@@ -505,8 +513,10 @@ describe('ChatView slash commands', () => {
 
       sendComposerMessage('Start before restart');
       await waitForCondition(() => Boolean(findCancelRunButton()));
+      listQueueMock.mockResolvedValue({ items: [admission.item] });
       sendComposerMessage('Queue before restart');
       await waitForCondition(() => queuedTexts().length === 1);
+      listQueueMock.mockResolvedValue({ items: [] });
       parent.setConnectionSnapshot({
         type: 'connection_ready',
         epoch: 'epoch-after-restart',

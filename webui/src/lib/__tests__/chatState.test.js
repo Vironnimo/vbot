@@ -103,20 +103,26 @@ describe('Queue projection', () => {
       steering: false,
     };
 
+    const oldItem = { id: 'queue-old', content: 'Old' };
+    const newItem = { id: 'queue-new', content: 'New' };
     const startChatRun = vi
       .fn()
       .mockResolvedValueOnce({
         queued: true,
-        item: { id: 'queue-old', content: 'Old' },
+        item: oldItem,
       })
       .mockResolvedValueOnce({
         queued: true,
-        item: { id: 'queue-new', content: 'New' },
+        item: newItem,
       });
     const { chatState, controller } = setupController({
       operationOverrides: {
         startChatRun,
-        listQueue: vi.fn().mockResolvedValue({ items: [first, second] }),
+        listQueue: vi
+          .fn()
+          .mockResolvedValueOnce({ items: [oldItem] })
+          .mockResolvedValueOnce({ items: [oldItem, newItem] })
+          .mockResolvedValue({ items: [first, second] }),
         updateQueueItem: vi.fn().mockResolvedValue({ ok: true }),
       },
     });
@@ -161,9 +167,12 @@ describe('Queue projection', () => {
     const { chatState, controller } = setupController({
       operationOverrides: {
         startChatRun: vi.fn().mockResolvedValue({ queued: true, item: queued }),
-        listQueue: vi.fn().mockResolvedValue({
-          items: [queued, { id: 'queue-later', content: 'Later' }],
-        }),
+        listQueue: vi
+          .fn()
+          .mockResolvedValueOnce({ items: [queued] })
+          .mockResolvedValue({
+            items: [queued, { id: 'queue-later', content: 'Later' }],
+          }),
       },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
