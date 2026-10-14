@@ -513,7 +513,6 @@ def bootstrap(runtime: Runtime) -> None:
             lambda: runtime.system_prompts,
             runtime.project_context_skills,
             runtime._file_state,
-            runtime._tool_prompt_blocks,
         )
         runtime._temporary_agents = TemporaryAgentRegistry(
             runtime._chat_sessions,

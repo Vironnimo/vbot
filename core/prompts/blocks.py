@@ -526,6 +526,15 @@ FILE_READ_HINT = (
 )
 
 
+@dataclass(frozen=True)
+class PromptFileIssue:
+    """Why an automatic file load omitted content; the caller owns its presentation."""
+
+    path: Path
+    name: str
+    reason: Literal["missing", "access_denied", "not_file", "encoding", "unreadable", "too_large"]
+
+
 def render_prompt_file(
     path: Path,
     name: str,
@@ -533,6 +542,7 @@ def render_prompt_file(
     tool_available: ToolAvailability,
     on_read: Callable[[Path], None] | None = None,
     warn_missing: bool = False,
+    on_issue: Callable[[PromptFileIssue], None] | None = None,
 ) -> str | None:
     """Return one file as a ``<file name="…">`` block for a Model's Context.
 
@@ -553,6 +563,7 @@ def render_prompt_file(
     loads whole again, never on every render, and never with file content.
     *on_read*, when given, receives the resolved absolute path only when the
     content is inlined whole, so the caller can stamp it as read-before-write.
+    *on_issue* reports omitted content without changing fail-soft rendering.
     """
     # Keyed with the missing-file policy, so a file that is both included and
     # auto-loaded cannot flip one condition between logged and silent on every build.
@@ -568,6 +579,8 @@ def render_prompt_file(
             else raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         )
     except FileNotFoundError:
+        if on_issue is not None:
+            on_issue(PromptFileIssue(path, name, "missing"))
         if not warn_missing:
             # An optional file that does not exist yet is normal, not a condition.
             _FILE_CONDITIONS.ended(condition)
@@ -579,8 +592,21 @@ def render_prompt_file(
         # directory, binary/non-UTF-8, a malformed path).
         if _FILE_CONDITIONS.started(condition, type(exc).__name__):
             _LOGGER.warning("Skipped unreadable prompt file (path=%s): %s", path, exc)
+        if on_issue is not None:
+            reason: Literal["access_denied", "not_file", "encoding", "unreadable"] = "unreadable"
+            if isinstance(exc, IsADirectoryError) or (
+                isinstance(exc, PermissionError) and path.is_dir()
+            ):
+                reason = "not_file"
+            elif isinstance(exc, PermissionError):
+                reason = "access_denied"
+            elif isinstance(exc, UnicodeError):
+                reason = "encoding"
+            on_issue(PromptFileIssue(path, name, reason))
         return None
     if content is None:
+        if on_issue is not None:
+            on_issue(PromptFileIssue(path, name, "too_large"))
         if _FILE_CONDITIONS.started(condition, "too_large"):
             _LOGGER.warning(
                 "Replaced oversized prompt file with a notice (path=%s bytes=%d limit=%d)",
@@ -985,6 +1011,7 @@ __all__ = [
     "OverrideResolver",
     "OwnerActivity",
     "PromptError",
+    "PromptFileIssue",
     "RenderedBlock",
     "ResolvedBlock",
     "apply_replacements",

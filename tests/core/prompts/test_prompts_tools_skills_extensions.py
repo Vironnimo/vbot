@@ -342,7 +342,7 @@ def test_subagent_block_stays_visible_without_additional_targets(
     assert prompt != denied
 
 
-def test_project_block_lists_projects_only_for_identity_agent_with_tool(
+def test_project_choices_belong_to_the_tool_not_the_system_prompt(
     workspace: Path, tmp_path: Path
 ) -> None:
     repo = tmp_path / "repo"
@@ -357,7 +357,6 @@ def test_project_block_lists_projects_only_for_identity_agent_with_tool(
         lambda: cast(Any, None),
         lambda _project_id: [],
         FileReadState(),
-        prompt_blocks,
     )
     manager = _manager(
         tmp_path,
@@ -373,13 +372,34 @@ def test_project_block_lists_projects_only_for_identity_agent_with_tool(
 
     prompt = manager.build_system_prompt(identity)
 
-    line = f'<project id="vbot" name="vBot" project_path="{model_path(repo.resolve())}" />'
-    assert f"Registered Projects:\n\n{line}" in prompt
-    assert "unless it is the Project in the Working Project section" in prompt
-    # The list depends on no Agent, so an unrooted Identity Agent sees the same block.
-    assert line in manager.build_system_prompt(replace(identity, root_project_id=None))
-    assert '<project id="vbot"' not in manager.build_system_prompt(denied)
-    assert '<project id="vbot"' not in manager.build_system_prompt(config_agent)
+    definition = next(
+        t for t in manager.provider_tool_definitions(identity) if t["name"] == "project"
+    )
+    parameter = definition["parameters"]["properties"]["project_id"]
+    assert "- vbot: vBot" in parameter["description"]
+    assert model_path(repo.resolve()) not in str(definition)
+    assert "enum" not in parameter
+    assert "- vbot: vBot" not in prompt
+    assert "Registered Projects:" not in prompt
+    assert "tool:project" not in {block.id for block in prompt_blocks.block_definitions()}
+    assert manager.provider_tool_definitions(
+        replace(identity, root_project_id=None)
+    ) == manager.provider_tool_definitions(identity)
+    assert not any(t["name"] == "project" for t in manager.provider_tool_definitions(denied))
+    assert not any(t["name"] == "project" for t in manager.provider_tool_definitions(config_agent))
+
+    projects.update("vbot", cwd=tmp_path / "moved")
+    unchanged = next(
+        t for t in manager.provider_tool_definitions(identity) if t["name"] == "project"
+    )
+    assert unchanged == definition
+    projects.update("vbot", display_name="Renamed Project")
+    changed = next(t for t in manager.provider_tool_definitions(identity) if t["name"] == "project")
+    assert (
+        "- vbot: Renamed Project"
+        in changed["parameters"]["properties"]["project_id"]["description"]
+    )
+    assert model_path(tmp_path / "moved") not in str(changed)
 
 
 def test_enabled_tools_list_block_names_tools_as_the_model_sees_them(

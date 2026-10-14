@@ -22,7 +22,6 @@ _BUNDLED_LAYOUT = [
     "core:tools",
     "core:system_reminders",
     "core:subagent_role",
-    "tool:project",
     "tool:subagent",
     "core:tools_list",
     "tool:load_tools",

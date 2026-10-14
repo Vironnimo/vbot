@@ -58,7 +58,7 @@ def test_render_project_skills_lists_only_names_and_descriptions(tmp_path: Path)
         ),
     ]
 
-    rendered = manager.render_project_skills("vBot", skills)
+    rendered = manager.render_project_skills("vBot", skills, tool_available=lambda _name: True)
 
     assert "vBot" in rendered
     assert "deploy" in rendered
@@ -67,7 +67,7 @@ def test_render_project_skills_lists_only_names_and_descriptions(tmp_path: Path)
     assert "SKILL.md" not in rendered
     # Sorted by name: audit before deploy.
     assert rendered.index("audit") < rendered.index("deploy")
-    assert manager.render_project_skills("vBot", []) == ""
+    assert manager.render_project_skills("vBot", [], tool_available=lambda _name: True) == ""
 
 
 def test_render_skill_catalog_snapshots_text(tmp_path: Path) -> None:

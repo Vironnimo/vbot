@@ -29,7 +29,7 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
-from core.config_validation import load_validated_json_file
+from core.config_validation import JsonConfigValidationError, load_validated_json_file
 from core.database import SnapshotBarrier
 from core.json_documents import (
     JsonDocumentWriteError,
@@ -56,6 +56,7 @@ from core.settings import (
     is_valid_project_id,
 )
 from core.utils.atomic import atomic_write_bytes
+from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.ids import has_id_entry, is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
@@ -248,19 +249,28 @@ class ProjectStore:
         """Return all persisted projects sorted by id.
 
         A single corrupt ``project.json`` is skipped with a logged warning
-        rather than aborting the whole listing; strict access stays in
-        :meth:`get`.
+        rather than aborting the whole listing. Storage failures propagate so
+        callers can distinguish an unavailable catalog from an empty one.
         """
         with self._write_lock:
             projects_dir = self._data_dir / _PROJECTS_DIRNAME
-            if not projects_dir.exists():
+            if not is_dir_strict(projects_dir):
                 return []
 
             projects: list[Project] = []
-            for config_path in sorted(projects_dir.glob(f"*/{_PROJECT_CONFIG_FILENAME}")):
+            for project_dir in sorted(projects_dir.iterdir()):
+                if not is_dir_strict(project_dir):
+                    continue
+                config_path = project_dir / _PROJECT_CONFIG_FILENAME
+                if not is_file_strict(config_path):
+                    continue
                 try:
                     projects.append(self._read_project(config_path))
                 except ProjectError as error:
+                    if isinstance(error.__cause__, JsonConfigValidationError) and isinstance(
+                        error.__cause__.__cause__, OSError
+                    ):
+                        raise
                     _LOGGER.warning("Skipping invalid project config %s: %s", config_path, error)
             return sorted(projects, key=lambda project: project.project_id)
 
@@ -619,7 +629,7 @@ class ProjectStore:
         the stored ``vbot`` Anchor for ``VBOT``; that different id names no Project.
         """
         project_dir = self._project_dir(project_id)
-        if not has_id_entry(project_dir.parent, project_id) or not project_dir.is_dir():
+        if not has_id_entry(project_dir.parent, project_id) or not is_dir_strict(project_dir):
             return None
         return project_dir
 
@@ -629,7 +639,7 @@ class ProjectStore:
         if project_dir is None:
             return None
         config_path = project_dir / _PROJECT_CONFIG_FILENAME
-        return config_path if config_path.is_file() else None
+        return config_path if is_file_strict(config_path) else None
 
     def _reject_duplicate_cwd(self, cwd: str, *, exclude_project_id: str | None) -> None:
         target_key = cwd_identity_key(cwd)

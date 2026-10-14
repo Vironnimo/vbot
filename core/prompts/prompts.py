@@ -86,6 +86,7 @@ from core.prompts.blocks import (
     LayoutEntry,
     OwnerActivity,
     PromptError,
+    PromptFileIssue,
     RenderedBlock,
     ToolAvailability,
     apply_replacements,
@@ -851,6 +852,7 @@ class SystemPromptManager:
         *,
         tool_available: ToolAvailability,
         on_read: Callable[[Path], None] | None = None,
+        on_issue: Callable[[PromptFileIssue], None] | None = None,
     ) -> str:
         """Render the project's auto-loaded files as ``<file>``-wrapped blocks.
 
@@ -865,13 +867,20 @@ class SystemPromptManager:
         ``on_read``, when given, is called with the resolved absolute path of every
         file actually inlined, so the caller can stamp it as read-before-write —
         used both for prompt assembly and the explicit ``project`` Tool.
+        ``on_issue`` reports omissions so the Tool can explain partial loads.
         """
         if project_context is None:
             return ""
-        return "\n".join(self._project_file_blocks(project_context, tool_available, on_read))
+        return "\n".join(
+            self._project_file_blocks(project_context, tool_available, on_read, on_issue)
+        )
 
     def render_project_skills(
-        self, project_name: str, skills: Sequence[ProjectContextSkill]
+        self,
+        project_name: str,
+        skills: Sequence[ProjectContextSkill],
+        *,
+        tool_available: ToolAvailability,
     ) -> str:
         """Render a Project's Skills in its explicit Tool-result context section.
 
@@ -883,7 +892,8 @@ class SystemPromptManager:
         """
         if not skills:
             return ""
-        lines = [f"Skills from project '{project_name}' — load one by name with the `skill` Tool:"]
+        guidance = " - load one by name with the `skill` Tool" if tool_available("skill") else ""
+        lines = [f"Skills from Project '{project_name}'{guidance}:"]
         lines.extend(
             f"- {skill.name}: {skill.description}"
             for skill in sorted(skills, key=lambda item: item.name)
@@ -895,6 +905,7 @@ class SystemPromptManager:
         project_context: ProjectPromptContext,
         tool_available: ToolAvailability,
         on_read: Callable[[Path], None] | None,
+        on_issue: Callable[[PromptFileIssue], None] | None = None,
     ) -> list[str]:
         """Return each existing auto-load file as a ``<file>`` block, in list order.
 
@@ -904,9 +915,9 @@ class SystemPromptManager:
         the project ``cwd`` at any subfolder depth, an absolute path is read as-is.
         There is deliberately **no location restriction** — the auto-load list is
         the user's own config naming the user's own files (project philosophy:
-        maximum agency, minimal restrictions). A missing file is skipped silently
-        (the seeded AGENTS.md may not exist yet); every other rule is
-        :func:`render_prompt_file`'s.
+        maximum agency, minimal restrictions). Missing files are omitted (the
+        seeded AGENTS.md may not exist yet); the optional issue observer lets
+        callers explain omissions. Every other rule is :func:`render_prompt_file`'s.
         """
         blocks: list[str] = []
         for filename in project_context.auto_load:
@@ -915,6 +926,7 @@ class SystemPromptManager:
                 model_path(filename),
                 tool_available=tool_available,
                 on_read=on_read,
+                on_issue=on_issue,
             )
             if block is not None:
                 blocks.append(block)

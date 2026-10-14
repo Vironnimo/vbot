@@ -75,7 +75,6 @@ from core.tools.model_names import (
     registry_tool_name,
 )
 from core.tools.project import (
-    PROJECT_PROMPT_BLOCK_HEADER,
     PROJECT_TOOL_DESCRIPTION,
     PROJECT_TOOL_NAME,
     PROJECT_TOOL_PARAMETERS,
@@ -231,7 +230,6 @@ __all__ = [
     "MEMORY_TOOL_DESCRIPTION",
     "MEMORY_TOOL_NAME",
     "MEMORY_TOOL_PARAMETERS",
-    "PROJECT_PROMPT_BLOCK_HEADER",
     "PROJECT_TOOL_DESCRIPTION",
     "PROJECT_TOOL_NAME",
     "PROJECT_TOOL_PARAMETERS",
