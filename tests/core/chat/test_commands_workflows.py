@@ -417,7 +417,7 @@ class _ReflectSessions:
         return None
 
     def get_metadata(self, address: SessionAddress) -> dict[str, Any]:
-        return {}
+        return dict(self.stored)
 
     def set_metadata(self, address: SessionAddress, data: dict[str, Any]) -> None:
         self.metadata_writes.append((address.session_id, data))

@@ -845,20 +845,36 @@ async def test_successful_review_preserves_activity_recorded_while_it_runs() -> 
 
 
 @pytest.mark.asyncio
-async def test_manual_reset_during_review_preserves_activity_after_reset() -> None:
+@pytest.mark.parametrize("manual_finishes_first", [True, False])
+async def test_overlapping_reviews_consume_their_shared_activity_only_once(
+    manual_finishes_first: bool,
+) -> None:
     service, sessions, loop = _make_service(memory_turn_interval=1)
-    loop.wait_gate = asyncio.Event()
+    automatic_gate = asyncio.Event()
+    loop.wait_gate = automatic_gate
 
     service.notify_run_end(
         cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
     )
     await loop.run_started.wait()
 
-    service.reset_counters("main", "s1")
+    manual_gate = asyncio.Event()
+    loop.wait_gate = manual_gate
+    loop.run_started.clear()
+    manual = asyncio.create_task(service.run_review("main", "s1", consume_counters=True))
+    await loop.run_started.wait()
     await _account_during_review(service, _FakeRun())
-    assert _counters(sessions)["turns_since_memory_review"] == 1
+    assert _counters(sessions)["turns_since_memory_review"] == 2
 
-    loop.wait_gate.set()
+    if manual_finishes_first:
+        manual_gate.set()
+        await manual
+    else:
+        automatic_gate.set()
+        await _drain(service)
+    manual_gate.set()
+    automatic_gate.set()
+    await manual
     await _drain(service)
 
     assert _counters(sessions)["turns_since_memory_review"] == 1
@@ -1031,14 +1047,16 @@ _TOOL_PARAMETERS: dict[str, Any] = {
 }
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("scope", "expected"),
-    [("combined", (0, 0)), ("memory", (0, 12)), ("skill", (7, 0))],
+    [("combined", (1, 2)), ("memory", (1, 14)), ("skill", (8, 2))],
 )
-def test_reset_counters_zeroes_the_reviewed_dimensions(
+async def test_manual_review_consumes_only_covered_activity_in_its_dimensions(
     scope: str, expected: tuple[int, int]
 ) -> None:
-    service, sessions, _loop = _make_service()
+    service, sessions, loop = _make_service(memory_turn_interval=100, skill_model_step_interval=100)
+    loop.wait_gate = asyncio.Event()
     sessions.metadata["s1"] = {
         "title": "kept",
         REFLECTION_COUNTERS_META_KEY: {
@@ -1047,7 +1065,13 @@ def test_reset_counters_zeroes_the_reviewed_dimensions(
         },
     }
 
-    service.reset_counters("main", "s1", review_scope=cast("Any", scope))
+    review = asyncio.create_task(
+        service.run_review("main", "s1", review_scope=cast("Any", scope), consume_counters=True)
+    )
+    await loop.run_started.wait()
+    await _account_during_review(service, _FakeRun(iteration_count=2))
+    loop.wait_gate.set()
+    await review
 
     assert sessions.metadata["s1"]["title"] == "kept"
     assert _counters(sessions) == {

@@ -333,13 +333,7 @@ async def _execute_reflect(
         focus=argument,
         on_fork_created=report_fork,
         reply_surface=context.reply_surface,
-    )
-    await _COMMAND_WORKERS.run(
-        reflection.reset_counters,
-        context.agent_id,
-        context.session_id,
-        context.project_id,
-        result.scope,
+        consume_counters=True,
     )
     return CommandOutcome(
         command="reflect",
