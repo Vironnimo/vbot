@@ -145,7 +145,7 @@ def test_bundled_provider_configs_expose_their_connections(shared_runtime: Runti
 
     zen_config = providers.get("opencode-zen")
     assert zen_config.adapter == "opencode_zen"
-    assert zen_config.base_url == "https://opencode.ai/zen/v1"
+    assert zen_config.base_url == "https://opencode.ai/inference/v1"
     assert [connection.id for connection in zen_config.connections] == ["api-key", "account"]
     zen_api_key = zen_config.get_connection("api-key")
     assert zen_api_key.auth.credential_key == "OPENCODE_API_KEY"
