@@ -155,6 +155,25 @@ def refusal_message(reason: str | None, *, task: str) -> str:
     )
 
 
+def analysis_refusal_message(reason: str | None, *, filtered: bool = False) -> str:
+    """Explain a declined analysis without suggesting a different image to generate."""
+    if filtered:
+        return (
+            "No analysis was returned because the provider's content filter stopped it. "
+            "Repeating the unchanged request will not help. Tell the user which part "
+            "could not be analyzed."
+        )
+    cause = (
+        f"Its reason: {_shortened(' '.join(reason.split()))}" if reason else "It gave no reason."
+    )
+    if not cause.endswith((".", "!", "?")):
+        cause += "."
+    return (
+        f"The provider declined this analysis request. {cause} Repeating the unchanged "
+        "request will not help. Tell the user which part could not be analyzed."
+    )
+
+
 def outcome_unknown_message(*, task: str, product: str) -> str:
     """Say that a billed request ended without a readable answer and what that means."""
     return (

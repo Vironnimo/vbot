@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from core.model_tasks.artifacts import os_error_reason
 from core.tools._image_downloads import ImageDownloadError, download_images, image_address
 from core.tools._path_suggestions import corrected_paths
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import ToolContract
 from core.tools.search import display_search_path
 from core.tools.tools import ToolContext
+from core.utils.file_status import stat_or_none
 from core.utils.paths import file_url_path
 
 # Names other image Tools and Agents use for analyze_image fields.
@@ -87,7 +90,7 @@ _ITEM_KEYS = frozenset(
 # Keys that describe an item without naming another image.
 _ITEM_DECORATION = frozenset({"type", "detail", "alt"})
 _IMAGE_SUFFIXES = frozenset(
-    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif"}
 )
 _FOLDER_EXAMPLES = 6
 # A suggestion must share most of the missing file's name, not only its extension.
@@ -138,6 +141,14 @@ def image_list(value: Any) -> Any:
     if isinstance(value, list):
         return [_item(item) for item in value]
     return value
+
+
+def analysis_image_label(items: list[str], index: int) -> str:
+    """Name the original input, never a download's internal file or encoded payload."""
+    text = items[index].strip()
+    address = image_address(text)
+    source = "data: URL" if address and address[:5].casefold() == "data:" else address or text
+    return f"Image {index + 1} ({source})"
 
 
 def normalize_analyze_image_arguments(contract: ToolContract, arguments: Any) -> Any:
@@ -240,11 +251,17 @@ def _folder_problem(
             for entry in folder.iterdir()
             if entry.suffix.casefold() in _IMAGE_SUFFIXES and entry.is_file()
         )[:_FOLDER_EXAMPLES]
-    except OSError:
-        images = []
+    except OSError as error:
+        return UnusableImageError(
+            "image_read_error",
+            f"{label} is a folder whose contents could not be read: {os_error_reason(error)}. "
+            "Pass the path of a readable image file.",
+        )
     if not images:
         return UnusableImageError(
-            "image_read_error", f"{label} is a folder with no image files, not an image."
+            "image_read_error",
+            f"{label} is a folder with no image files, not an image. "
+            "Pass the path of an image file instead.",
         )
     example = _call(field, [display_search_path(image, cwd=cwd) for image in images], single)
     files = "an image file" if single else "image files"
@@ -307,10 +324,23 @@ def _check_local(
     cwd = context.resolve_path(".")
     missing: list[tuple[int, str, list[Path]]] = []
     for index, path in local.items():
-        if path.is_dir():
+        try:
+            status = stat_or_none(path)
+        except OSError as error:
+            raise UnusableImageError(
+                "image_read_error",
+                f"{items[index]} could not be checked: {os_error_reason(error)}. "
+                "Pass a readable copy, or ask the user to restore access.",
+            ) from error
+        if status is not None and stat.S_ISDIR(status.st_mode):
             raise _folder_problem(path, items[index], field, cwd, single)
-        if not path.exists():
+        if status is None:
             missing.append((index, items[index], _similar_images(path, cwd)))
+        elif not stat.S_ISREG(status.st_mode):
+            raise UnusableImageError(
+                "image_read_error",
+                f"{items[index]} is not an image file. Pass the path of a readable image file.",
+            )
     if missing:
         raise UnusableImageError(
             "image_not_found", _missing_message(items, missing, field, cwd, single)
@@ -399,4 +429,6 @@ def _missing_message(
         call = _call(field, corrected, single)
         meant = "that file" if len(missing) == 1 else "those files"
         lines.append(f"If you meant {meant}, pass {call}.")
+    else:
+        lines.append("Check the missing paths or obtain readable copies, then pass their paths.")
     return "\n".join(lines)
