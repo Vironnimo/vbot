@@ -936,7 +936,7 @@ class CronService:
                     self._timezone, _timing._utc_now(), current
                 ) or _schedule.OwedFire(due_at=due_at)
 
-            await self._trigger_job_run(current, late=self._late_fire(owed))
+            await self._trigger_job_run(current, owed=owed)
             if job.id in self._pending_restarts:
                 return
 
@@ -968,7 +968,6 @@ class CronService:
             if owed is not None:
                 await self._trigger_job_run(
                     current,
-                    late=self._late_fire(_schedule.OwedFire(due_at=owed.due_at)),
                     event_due=owed,
                 )
                 # An event edit during admission may move an open occurrence
@@ -999,7 +998,6 @@ class CronService:
         deleted, leaving every trigger attempt to fail).
         """
         failed_fire_attempts = 0
-        late: _LateFire | None = None
         while True:
             current = self._jobs.get(job.id)
             if current is None or current.status != "active" or current.schedule_type != "once":
@@ -1011,10 +1009,6 @@ class CronService:
             latest = self._jobs.get(job.id)
             if latest is None or latest.status != "active" or latest.schedule_type != "once":
                 return
-            if failed_fire_attempts == 0:
-                # Retries of a failed fire keep the first attempt's late notice.
-                late = self._late_fire(_schedule.OwedFire(due_at=run_at_utc))
-
             claimed_at = _timing._utc_now_iso()
             try:
                 await self._claim_once_fire(latest, claimed_at)
@@ -1035,7 +1029,9 @@ class CronService:
             if job.id in self._pending_restarts:
                 await self._remove_claim(job.id)
                 return
-            succeeded = await self._trigger_job_run(latest, late=late)
+            succeeded = await self._trigger_job_run(
+                latest, owed=_schedule.OwedFire(due_at=run_at_utc)
+            )
             if job.id in self._pending_restarts:
                 await self._remove_claim(job.id)
                 return
@@ -1208,7 +1204,7 @@ class CronService:
         self,
         job: CronJob,
         *,
-        late: _LateFire | None = None,
+        owed: _schedule.OwedFire | None = None,
         event_due: _events.EventDue | None = None,
     ) -> bool:
         self._executing_jobs.add(job.id)
@@ -1223,7 +1219,7 @@ class CronService:
                     if prepared is None:
                         return False
                     latest, event_due = prepared
-                    late = self._late_fire(_schedule.OwedFire(due_at=event_due.due_at))
+                    owed = _schedule.OwedFire(due_at=event_due.due_at)
                 else:
                     latest.last_attempt_at = _timing._utc_now_iso()
                     latest.last_error = None
@@ -1234,6 +1230,9 @@ class CronService:
                 latest = self._jobs.get(job.id)
                 if latest is None or latest.status != "active" or job.id in self._pending_restarts:
                     return False
+                # Capacity and claim persistence can delay even an on-time fire.
+                # Keep its due-time evidence until all pre-admission waits settle.
+                late = self._late_fire(owed) if owed is not None else None
                 _LOGGER.info(
                     "Cron job fired (job=%s agent=%s session=%s%s%s)",
                     latest.id,
