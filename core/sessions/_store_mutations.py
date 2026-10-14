@@ -346,6 +346,12 @@ def move(connection: sqlite3.Connection, source: SessionAddress, target: Session
         "working_project_id = ?, state_revision = state_revision + 1 WHERE session_key = ?",
         (*_store_values._scope(target), _carried_working_project(state, target), session_key),
     )
+    if target.project_id is not None:
+        # Entering a live Project selects that incarnation, even when an old
+        # Working Project association happened to use the same public id.
+        connection.execute(
+            "DELETE FROM session_working_project_archives WHERE session_key = ?", (session_key,)
+        )
     _store_prompts.carry_prompt_state(
         connection, source=state, target_key=session_key, same_scope=_same_scope(source, target)
     )
@@ -444,6 +450,12 @@ def fork(
     if cursor.lastrowid is None:
         raise SessionStoreCorruptError("SQLite did not return a forked Session key")
     fork_key = int(cursor.lastrowid)
+    if target.project_id is None:
+        connection.execute(
+            "INSERT INTO session_working_project_archives (session_key, archive_id) "
+            "SELECT ?, archive_id FROM session_working_project_archives WHERE session_key = ?",
+            (fork_key, source_key),
+        )
     _store_lineage.create_fork_lineage(
         connection,
         source_key=source_key,
@@ -615,23 +627,6 @@ def retarget_identity_agent(
         "WHERE project_id = '' AND agent_id = ? AND state = 'live'",
         (new_agent_id, old_agent_id),
     )
-
-
-def retarget_working_project(
-    connection: sqlite3.Connection, old_project_id: str, new_project_id: str, archived_at: str
-) -> int:
-    """Move Sessions that worked in a Project archived at *archived_at* to its new id.
-
-    Live and archived Sessions created before that archive follow the Project;
-    a Session created later works in another Project that took the old id.
-    Returns how many Sessions changed.
-    """
-    cursor = connection.execute(
-        "UPDATE sessions SET working_project_id = ?, state_revision = state_revision + 1 "
-        "WHERE working_project_id = ? AND created_at < ?",
-        (new_project_id, old_project_id, _store_values._timestamp(archived_at, "Archive time")),
-    )
-    return int(cursor.rowcount)
 
 
 def retarget_metadata_value(

@@ -291,15 +291,6 @@ class SessionStore:
             )
         )
 
-    def retarget_working_project(
-        self, old_project_id: str, new_project_id: str, archived_at: str
-    ) -> int:
-        return self._execute_write(
-            lambda connection: _store_mutations.retarget_working_project(
-                connection, old_project_id, new_project_id, archived_at
-            )
-        )
-
     def retarget_metadata_value(
         self, agent_id: str, key: str, old_value: str, new_value: str
     ) -> int:

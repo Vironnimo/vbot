@@ -61,6 +61,13 @@ def session_database_spec(
             # column and keeps using the Agent's root Project.
             Migration("sessions.0002_session_working_projects", apply=adopt_root_projects),
             Migration("sessions.0003_subagent_reply_targets", apply=_adopt_subagent_reply_targets),
+            # Older Session writes do not maintain ownership provenance. Refuse
+            # their opens rather than letting a downgrade leave trusted stale links.
+            Migration(
+                "sessions.0004_restore_provenance",
+                breaks_older=True,
+                apply=_adopt_parent_generations,
+            ),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,
@@ -79,4 +86,25 @@ def _adopt_subagent_reply_targets(connection: sqlite3.Connection) -> None:
         "WHERE subagent_parent_id IS NOT NULL "
         "AND json_type(metadata_json, '$.subagent_taken_over_at') = 'text' "
         "AND json_type(metadata_json, '$.subagent_reply_target') IS NULL"
+    )
+
+
+def _adopt_parent_generations(connection: sqlite3.Connection) -> None:
+    """Identify legacy Parents only when their address has exactly one generation.
+
+    Ambiguous addresses stay unproven: history creation times do not prove when
+    a link or Working Project association was made. In particular, no migration
+    guesses Working Project users for Projects that were already archived.
+    """
+    connection.execute(
+        "WITH parents AS MATERIALIZED ("
+        "SELECT project_id, agent_id, session_id, MIN(generation_id) AS generation_id "
+        "FROM sessions GROUP BY project_id, agent_id, session_id HAVING COUNT(*) = 1) "
+        "UPDATE sessions AS child SET subagent_parent_generation_id = parent.generation_id "
+        "FROM parents AS parent "
+        "WHERE child.subagent_parent_generation_id IS NULL "
+        "AND child.subagent_parent_session_id IS NOT NULL "
+        "AND parent.project_id = COALESCE(child.subagent_parent_project_id, '') "
+        "AND parent.agent_id = child.subagent_parent_agent_id "
+        "AND parent.session_id = child.subagent_parent_session_id"
     )

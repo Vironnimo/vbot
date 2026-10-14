@@ -164,27 +164,6 @@ class SessionArchiveLedger:
             lambda connection: _store_archive.finish_restore(connection, entry_key)
         )
 
-    def retarget_subagent_links(
-        self,
-        *,
-        old_project_id: str | None,
-        old_agent_id: str,
-        new_project_id: str | None,
-        new_agent_id: str,
-        session_ids: Sequence[str],
-    ) -> int:
-        """Point live and archived Sub-Agent parent links at the restored scope."""
-        return self._store._execute_write(
-            lambda connection: _store_archive.retarget_subagent_links(
-                connection,
-                old_project_id=old_project_id,
-                old_agent_id=old_agent_id,
-                new_project_id=new_project_id,
-                new_agent_id=new_agent_id,
-                session_ids=session_ids,
-            )
-        )
-
     # -- Purge -------------------------------------------------------------------
 
     def begin_purge(self, entry_id: str) -> ArchiveEntry:
@@ -240,6 +219,12 @@ class SessionArchiveLedger:
         )
 
     # -- Reads -------------------------------------------------------------------
+
+    def unproven_parent_link_count(self, entry_key: int) -> int:
+        """Count children whose original Parent incarnation cannot be established."""
+        return self._store._read(
+            lambda connection: _store_archive.unproven_parent_link_count(connection, entry_key)
+        )
 
     def entry(self, entry_id: str) -> ArchiveEntry | None:
         return self._store._read(

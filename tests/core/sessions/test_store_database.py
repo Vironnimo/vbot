@@ -7,6 +7,7 @@ import re
 import shutil
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from core.database import (
     DatabaseUnavailableError,
     create_data_snapshot,
     data_store_status,
+    open_database,
     read_marker,
 )
 from core.database.snapshots import SNAPSHOT_MANIFEST_NAME
@@ -152,6 +154,53 @@ def test_the_store_refuses_a_database_of_a_newer_generation(tmp_path: Path) -> N
     with pytest.raises(DatabaseFormatError, match="newer than this vBot supports"):
         SessionStore(database)
     assert database.read_bytes() == original
+
+
+def test_restore_provenance_refuses_older_session_writers_without_changing_data(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "sessions.db"
+    manager = ChatSessionManager(tmp_path)
+    manager.create("coder", session_id="retained").append(ChatMessage.user("Keep this history"))
+    manager.close()
+    # Exercise normal migration application, not just a fresh database's ledger.
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "DELETE FROM kernel_migrations WHERE name = 'sessions.0004_restore_provenance'"
+        )
+        connection.commit()
+    ChatSessionManager(tmp_path).close()
+    spec = session_database_spec(database)
+    older_spec = replace(
+        spec,
+        migrations=tuple(
+            migration
+            for migration in spec.migrations
+            if migration.name != "sessions.0004_restore_provenance"
+        ),
+    )
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(DatabaseFormatError):
+        open_database(older_spec).close()
+
+    # A format refusal must not mutate history, the marker, or recovery state.
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+    manager = ChatSessionManager(tmp_path)
+    try:
+        assert [message.content for message in manager.get(_address("retained")).load()] == [
+            "Keep this history"
+        ]
+    finally:
+        manager.close()
 
 
 def test_a_populated_database_keeps_every_row_when_tables_are_added(tmp_path: Path) -> None:
@@ -414,5 +463,57 @@ def test_subagent_reply_routing_upgrades_existing_sessions_once(tmp_path: Path) 
     try:
         assert manager.get_metadata(old)["subagent_reply_target"] == "parent"
         assert manager.get(old).load()[-1].subagent_reply_target == "parent"
+    finally:
+        manager.close()
+
+
+@pytest.mark.asyncio
+async def test_restore_provenance_adopts_only_unambiguous_legacy_parent_generations(
+    tmp_path: Path,
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    unique = manager.create("coder", session_id="unique").address
+    reused = manager.create("coder", session_id="reused").address
+    children = []
+    for parent in (unique, reused):
+        child = manager.create("worker", session_id=parent.session_id).address
+        manager.set_metadata(
+            child, {"subagent_parent": {"agent_id": "coder", "session_id": parent.session_id}}
+        )
+        children.append(child)
+    unique_entry = await manager.archive(unique)
+    reused_entry = await manager.archive(reused)
+    manager.create("coder", session_id="reused")
+    manager.close()
+    # Simulate the previous additive schema; normal open must reconcile it.
+    with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection:
+        connection.execute("DROP INDEX sessions_by_parent_generation")
+        connection.execute("DROP INDEX sessions_by_unproven_parent")
+        connection.execute("ALTER TABLE sessions DROP COLUMN subagent_parent_generation_id")
+        connection.execute("DROP TABLE session_working_project_archives")
+        connection.execute(
+            "DELETE FROM kernel_migrations WHERE name = 'sessions.0004_restore_provenance'"
+        )
+        connection.commit()
+    manager = ChatSessionManager(tmp_path)
+    try:
+        ledger = manager.archive_ledger
+        ledger.begin_restore(unique_entry.entry_id, {"target_id": "unique-restored"})
+        ledger.commit_restore(unique_entry.entry_key, session_id="unique-restored")
+        ledger.begin_restore(reused_entry.entry_id, {"target_id": "reused-restored"})
+        ledger.commit_restore(reused_entry.entry_key, session_id="reused-restored")
+        assert manager.subagent_children(_address("unique-restored")) == [children[0]]
+        assert manager.subagent_children(_address("reused-restored")) == []
+        assert manager.subagent_children(reused) == [children[1]]
+        # Editing another field cannot silently identify an ambiguous legacy link.
+        manager.mutate_metadata(
+            children[1], lambda metadata: metadata.update(title="Still ambiguous")
+        )
+    finally:
+        manager.close()
+    manager = ChatSessionManager(tmp_path)
+    try:
+        assert manager.subagent_children(_address("unique-restored")) == [children[0]]
+        assert manager.subagent_children(reused) == [children[1]]
     finally:
         manager.close()

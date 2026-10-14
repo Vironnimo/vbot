@@ -24,8 +24,10 @@ from core.prompts.pinned_context import (
 )
 from core.runs import RunKind
 from core.sessions import (
+    ARCHIVE_KIND_PROJECT,
     FORK_SOURCE_META_KEY,
     SESSION_WORKING_PROJECT_META_KEY,
+    ArchiveScope,
     ChatSessionManager,
     SessionAddress,
 )
@@ -181,30 +183,59 @@ def test_move_and_fork_keep_working_where_the_source_worked(
     assert _working_project(manager, result.address) == expected
 
 
+@pytest.mark.parametrize("operation", ["move", "fork"])
 def test_a_project_restored_under_a_new_id_takes_only_its_own_sessions(
-    manager, monkeypatch: pytest.MonkeyPatch
+    manager: ChatSessionManager, operation: str
 ) -> None:
-    clock = iter(f"2026-08-13T21:00:0{second}.000000Z" for second in range(10))
-    monkeypatch.setattr("core.sessions._store_mutations.utc_now_timestamp", lambda: next(clock))
-    manager.create("coder", session_id="live", working_project_id="alpha")
+    live = manager.create("coder", session_id="live", working_project_id="alpha")
     archived = manager.create("coder", session_id="archived", working_project_id="alpha")
     manager.create("coder", session_id="other", working_project_id="beta")
-    archived_at = next(clock)
-    # A later Project that took the old id keeps its Sessions.
+    old = manager.create("coder", session_id="old", working_project_id="alpha")
+    workspace = manager.create("coder", session_id="workspace", working_project_id=None)
+    ledger = manager.archive_ledger
+    entry = ledger.begin(ARCHIVE_KIND_PROJECT, subject_id="alpha", project_id="alpha")
+    ledger.commit_scope(entry.entry_key, ArchiveScope(project_id="alpha"))
+    # Forking the original association keeps it, even after the archive.
+    original_fork = asyncio.run(manager.fork(live.address))
     manager.create("coder", session_id="later", working_project_id="alpha")
+    # Both a new fork with old inherited history and an old Session deliberately
+    # entering the replacement Project must keep that replacement association.
+    replacements = []
+    for source in (workspace, old):
+        if operation == "fork":
+            project = asyncio.run(manager.fork(source.address, target_project_id="alpha"))
+            result = asyncio.run(manager.fork(project.address, target_project_id=None))
+        else:
+            project = asyncio.run(
+                manager.move(source.address, _address("coder", source.id, "alpha"))
+            )
+            result = asyncio.run(manager.move(project.address, _address("coder", source.id)))
+        replacements.append(result.address)
     asyncio.run(manager.archive(archived.address))
-
-    assert manager.retarget_working_project("alpha", "alpha-2", archived_at) == 2
-    assert manager.retarget_working_project("alpha", "alpha-2", archived_at) == 0
+    # A second archive of the same public Project id cannot steal the first
+    # archive's associations, and restores remain independent in either order.
+    replacement = ledger.begin(ARCHIVE_KIND_PROJECT, subject_id="alpha", project_id="alpha")
+    ledger.commit_scope(replacement.entry_key, ArchiveScope(project_id="alpha"))
+    ledger.begin_restore(entry.entry_id, {"target_id": "alpha-2"})
+    ledger.commit_restore(entry.entry_key, project_id="alpha-2")
 
     with sqlite3.connect(manager._store.path) as connection:
         stored = dict(connection.execute("SELECT session_id, working_project_id FROM sessions"))
-    assert stored == {
+    assert {name: stored[name] for name in ("live", "archived", "other", "later")} == {
         "live": "alpha-2",
         "archived": "alpha-2",
         "other": "beta",
         "later": "alpha",
     }
+    assert _working_project(manager, original_fork.address) == "alpha-2"
+    assert [_working_project(manager, address) for address in replacements] == ["alpha", "alpha"]
+    ledger.begin_restore(replacement.entry_id, {"target_id": "alpha-3"})
+    ledger.commit_restore(replacement.entry_key, project_id="alpha-3")
+    assert _working_project(manager, original_fork.address) == "alpha-2"
+    assert [_working_project(manager, address) for address in replacements] == [
+        "alpha-3",
+        "alpha-3",
+    ]
 
 
 _AGENT_RENDERED_PINS = {

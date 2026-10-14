@@ -630,10 +630,12 @@ def test_archive_entry_reads_and_transitions_use_their_indexes(manager) -> None:
             _store_archive.members(recorder, ref.entry_key, None)
             _store_archive.holds_one_session(recorder, ref.entry_key)
             _store_archive.taken_addresses(recorder, ref.entry_key, session_id="renamed")
+            _store_archive.unproven_parent_link_count(recorder, ref.entry_key)
 
         # Review forks are found from their source, and members from each other.
         archived = plans(archive_session)
         assert any("sessions_by_fork_parent" in detail for detail in archived), archived
+        assert any("sessions_by_unproven_parent" in detail for detail in archived), archived
         # Startup repair reads archived rows through the archived-address index only.
         repair = plans(
             _store_archive_backfill.adopt_unrecorded_archived_rows,

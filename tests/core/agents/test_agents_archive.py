@@ -4,6 +4,7 @@ import errno
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ import pytest
 
 from core.agents import AgentAlreadyExistsError, AgentError, AgentStore, InvalidAgentIdError
 from core.utils import tree_move
-from tests.core.agents.agents_test_support import persisted
+from tests.core.agents.agents_test_support import persisted, rewrite
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
 
@@ -122,14 +123,15 @@ def test_archive_files_keeps_the_agent_when_the_move_cannot_complete(
     assert not _payload(store).exists()
 
 
+@pytest.mark.parametrize("target_id", ["coder", "coder-restored"])
 def test_delegation_grants_are_recorded_before_removal_and_return_at_their_position(
-    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch, target_id: str
 ) -> None:
     store.create("coder", "Coder")
     # A qualified address names a Project's Team Agent, not the archived one.
-    store.create("beta", "Beta", tools={"subagent": {"allowed_agents": ["a", "coder", "b"]}})
+    beta = store.create("beta", "Beta", tools={"subagent": {"allowed_agents": ["a", "coder", "b"]}})
     store.create("gamma", "Gamma", tools={"subagent": {"allowed_agents": ["coder@project"]}})
-    store.create("delta", "Delta", tools={"subagent": {"allowed_agents": ["coder"]}})
+    delta = store.create("delta", "Delta", tools={"subagent": {"allowed_agents": ["coder"]}})
     write_agent = store._write_agent
 
     def fail_delta(agent: Any) -> None:
@@ -153,13 +155,107 @@ def test_delegation_grants_are_recorded_before_removal_and_return_at_their_posit
     assert store.remove_delegation_grants("coder", record) == ("beta",)
     monkeypatch.setattr(store, "_write_agent", write_agent)
 
-    assert recorded == [[{"agent_id": "beta", "index": 1}, {"agent_id": "delta", "index": 0}]]
+    assert recorded == [
+        [
+            {"agent_id": "beta", "agent_created_at": beta.created_at, "index": 1},
+            {"agent_id": "delta", "agent_created_at": delta.created_at, "index": 0},
+        ]
+    ]
     assert store.get("beta").tools["subagent"]["allowed_agents"] == ["a", "b"]
     assert store.get("gamma").tools["subagent"]["allowed_agents"] == ["coder@project"]
     assert store.get("delta").tools["subagent"]["allowed_agents"] == ["coder"]
-    assert store.restore_delegation_grants("coder", recorded[0]) == ("beta",)
-    assert store.get("beta").tools["subagent"]["allowed_agents"] == ["a", "coder", "b"]
-    assert store.get("delta").tools["subagent"]["allowed_agents"] == ["coder"]
+    expected_changed = ("beta",) if target_id == "coder" else ("beta", "delta")
+    assert store.restore_delegation_grants(target_id, recorded[0]) == expected_changed
+    assert store.get("beta").tools["subagent"]["allowed_agents"] == ["a", target_id, "b"]
+    assert store.get("delta").tools["subagent"]["allowed_agents"] == (
+        ["coder"] if target_id == "coder" else [target_id, "coder"]
+    )
+    assert store.restore_delegation_grants(target_id, recorded[0]) == ()
+
+
+@pytest.mark.parametrize(
+    ("holder_state", "problem"),
+    [
+        ("live", None),
+        ("restored", None),
+        ("replaced", "holder_replaced"),
+        ("missing", "holder_missing"),
+        ("legacy", "holder_unproven"),
+        ("legacy-replaced", "holder_unproven"),
+        ("legacy-missing", "holder_missing"),
+        ("invalid-stamp", "holder_unproven"),
+        ("holder-stamp-missing", "holder_unproven"),
+        ("invalid-holder-config", "holder_unproven"),
+        ("unavailable-holder-config", "holder_unproven"),
+    ],
+)
+def test_delegation_grants_restore_only_the_recorded_holder_incarnation(
+    store: AgentStore,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    holder_state: str,
+    problem: str | None,
+) -> None:
+    monkeypatch.setattr(
+        "core.agents.agents.utc_now_timestamp", lambda: "2026-01-01T00:00:00.000000Z"
+    )
+    store.create("coder")
+    beta = store.create("beta", tools={"subagent": {"allowed_agents": ["a", "coder", "b"]}})
+    recorded: list[Any] = []
+    assert store.remove_delegation_grants("coder", recorded.extend) == ("beta",)
+
+    missing = holder_state in {"missing", "legacy-missing"}
+    if holder_state in {"restored", "replaced", "legacy-replaced"} or missing:
+        holder_payload = _payload(store).with_name("beta")
+        with store.archive_files("beta", holder_payload):
+            pass
+        if holder_state == "restored":
+            with store.restore_files(holder_payload, "beta", workspace=None, root_project_id=None):
+                pass
+            assert store.get("beta").created_at == beta.created_at
+        elif holder_state in {"replaced", "legacy-replaced"}:
+            monkeypatch.setattr(
+                "core.agents.agents.utc_now_timestamp", lambda: "2026-01-02T00:00:00.000000Z"
+            )
+            replacement = store.create("beta", tools={"subagent": {"allowed_agents": ["a", "b"]}})
+            assert replacement.created_at != beta.created_at
+    if holder_state in {"legacy", "legacy-replaced", "legacy-missing"}:
+        recorded[0].pop("agent_created_at")
+    elif holder_state == "invalid-stamp":
+        recorded[0]["agent_created_at"] = "not-a-timestamp"
+        rewrite(store, "beta", created_at="not-a-timestamp")
+    elif holder_state == "holder-stamp-missing":
+        rewrite(store, "beta", "created_at")
+    elif holder_state == "invalid-holder-config":
+        rewrite(store, "beta", name=123)
+
+    holder_config = store.data_dir / "agents" / "beta" / "agent.json"
+    holder_soul = Path(store.default_workspace("beta")) / "SOUL.md"
+    if not missing:
+        # Checking must not seed the Workspace or repair a dangling Session pointer.
+        rewrite(store, "beta", "workspace", current_session_id="gone")
+        holder_soul.unlink()
+        before = holder_config.read_bytes()
+    unavailable = holder_state == "unavailable-holder-config"
+    if unavailable:
+        deny_access(holder_config)
+    assert store.delegation_grant_problem(recorded[0]) == problem
+    if not missing:
+        if not unavailable:
+            assert holder_config.read_bytes() == before
+        assert not holder_soul.exists()
+
+    restored = problem is None
+    assert store.restore_delegation_grants("coder-restored", recorded) == (
+        ("beta",) if restored else ()
+    )
+    if unavailable:
+        monkeypatch.undo()
+        assert holder_config.read_bytes() == before
+    if not missing:
+        assert persisted(store, "beta")["tools"]["subagent"]["allowed_agents"] == (
+            ["a", "coder-restored", "b"] if restored else ["a", "b"]
+        )
 
 
 def test_restore_files_rewrites_the_payload_to_the_target_and_keeps_unknown_fields(

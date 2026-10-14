@@ -211,7 +211,16 @@ async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_nex
     if id_reused:
         assert (allowed, entry.facts.get("grants")) == (["coder"], None)
     else:
-        assert (allowed, entry.facts["grants"]) == ([], [{"agent_id": "manager", "index": 0}])
+        assert (allowed, entry.facts["grants"]) == (
+            [],
+            [
+                {
+                    "agent_id": "manager",
+                    "agent_created_at": world.agents.get("manager").created_at,
+                    "index": 0,
+                }
+            ],
+        )
 
 
 @pytest.mark.asyncio

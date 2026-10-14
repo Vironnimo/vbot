@@ -2,10 +2,11 @@
 
 Blocking steps for the Session database's pool. A restore claims the entry
 (``restoring``), moves the payload back and makes the Sessions live in one
-transaction (``restored``); a failure before that commit moves the files back
-and returns the entry to ``archived``. The follow-up (roster, grants, roots,
-Sub-Agent links, empty payload directories) is idempotent, runs again from
-startup recovery after a crash, and deletes the entry last. Startup recovery
+transaction (``restored``), including proven Parent links and Working Project
+associations; a failure before that commit moves the files back and returns the
+entry to ``archived``. The follow-up (roster, grants, roots, empty payload
+directories) is idempotent, runs again from startup recovery after a crash,
+and deletes the entry last. Startup recovery
 never moves files that are live again back into the archive: it finishes such a
 restore or leaves them in place (:func:`settle_interrupted`).
 """
@@ -175,13 +176,11 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
 def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]:
     """Finish a ``restored`` entry, then delete it.
 
-    Roster position, delegation grants, default Projects, the working Project
-    of Sessions, Sub-Agent links and empty payload directories. Returns the
-    Agents whose delegation lists name a restored Agent again.
+    Roster position, delegation grants, default Projects and empty payload
+    directories. Returns the Agents whose delegation lists name a restored Agent again.
     """
     ledger = services.sessions.archive_ledger
     target = _restore_target(entry)
-    renamed = target != entry.subject_id
     facts = entry.facts
     grant_agent_ids: tuple[str, ...] = ()
     if entry.kind == ARCHIVE_KIND_AGENT:
@@ -191,15 +190,8 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]
         )
         grants = [grant for grant in facts.get("grants") or () if isinstance(grant, Mapping)]
         grant_agent_ids = services.agents.restore_delegation_grants(target, grants)
-        if renamed:
-            _retarget_links(services, None, entry.subject_id, None, target)
     elif entry.kind == ARCHIVE_KIND_PROJECT:
         reroot_agents(services, facts.get("unrooted_agents") or (), target, entry.archived_at)
-        if renamed:
-            for agent_id in services.sessions.list_agent_ids(target):
-                _retarget_links(services, entry.subject_id, agent_id, target, agent_id)
-            # Identity Sessions that worked in the Project work in it under its new id.
-            services.sessions.retarget_working_project(entry.subject_id, target, entry.archived_at)
     for tree in entry.trees:
         path = stored_path(services, tree.path)
         if not path.exists():
@@ -337,6 +329,19 @@ def _plan(services: ArchiveServices, entry: ArchiveEntry, target_id: str | None)
         # Whatever else the check finds belongs to the operation that holds the entry.
         _block_busy(entry, findings)
         return _Plan(_checked(entry, target, findings), entry)
+    if target != entry.subject_id:
+        unproven_children = services.sessions.archive_ledger.unproven_parent_link_count(
+            entry.entry_key
+        )
+        if unproven_children:
+            findings.warn(
+                "subagent_parent_unproven",
+                f"{unproven_children} child Sessions have no provable Parent generation. "
+                "Their links are left unchanged and may still name a replacement at the "
+                "old address. Start fresh delegations instead of resuming them as "
+                "restored children.",
+                session_count=unproven_children,
+            )
     if entry.kind == ARCHIVE_KIND_AGENT:
         return _plan_agent(services, entry, target, findings)
     if entry.kind == ARCHIVE_KIND_PROJECT:
@@ -453,10 +458,27 @@ def _plan_agent(
         _check_addresses(services, entry, findings, **({"agent_id": target} if renamed else {}))
     for grant in entry.facts.get("grants") or ():
         holder = grant.get("agent_id") if isinstance(grant, Mapping) else None
-        if isinstance(holder, str) and holder != target and not services.agents.exists(holder):
+        if not isinstance(holder, str) or holder == target:
+            continue
+        problem = services.agents.delegation_grant_problem(grant)
+        if problem == "holder_missing":
             findings.warn(
                 "grant_target_missing",
                 f"Agent {holder} no longer exists; its delegation grant is not restored",
+                agent_id=holder,
+            )
+        elif problem == "holder_unproven":
+            findings.warn(
+                "grant_holder_unproven",
+                f"The archived grant for Agent {holder} has no provable holder identity. "
+                "Its policy is left unchanged; review its delegation allow-list explicitly.",
+                agent_id=holder,
+            )
+        elif problem == "holder_replaced":
+            findings.warn(
+                "grant_holder_replaced",
+                f"Agent {holder} is a replacement, not the original grant holder. "
+                "Its policy is left unchanged; review its delegation allow-list explicitly.",
                 agent_id=holder,
             )
     if agent is None or source is None:
@@ -561,6 +583,15 @@ def _plan_project(
         project = inspected.project
     target_problem = services.projects.restore_target_problem(target)
     renamed = target != entry.subject_id
+    if renamed and entry.facts.get("working_project_provenance") is not True:
+        findings.warn(
+            "working_project_association_unproven",
+            "This archive has no recorded Working Project associations. Identity Sessions "
+            "are left unchanged because the old Project id may name a replacement; move "
+            "or fork affected Sessions into the restored Project explicitly.",
+            project_id=entry.subject_id,
+            target_id=target,
+        )
     if target_problem == "invalid_target_id":
         findings.block("invalid_target_id", f"{target} is not a valid Project id")
     elif renamed and is_reserved_name(target):
@@ -698,26 +729,6 @@ def _abort(services: ArchiveServices, plan: _Plan) -> None:
         _LOGGER.exception(
             "Could not reopen the entry of a failed restore (entry=%s)", plan.entry.entry_id
         )
-
-
-def _retarget_links(
-    services: ArchiveServices,
-    old_project_id: str | None,
-    old_agent_id: str,
-    new_project_id: str | None,
-    new_agent_id: str,
-) -> None:
-    session_ids = [
-        address.session_id
-        for address in services.sessions.list_addresses(new_project_id, agent_id=new_agent_id)
-    ]
-    services.sessions.archive_ledger.retarget_subagent_links(
-        old_project_id=old_project_id,
-        old_agent_id=old_agent_id,
-        new_project_id=new_project_id,
-        new_agent_id=new_agent_id,
-        session_ids=session_ids,
-    )
 
 
 def _restore_target(entry: ArchiveEntry) -> str:

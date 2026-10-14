@@ -40,7 +40,7 @@ _SESSION_STATE_COLUMNS = """
     s.list_visibility_mask, s.latest_completion_run_key, s.latest_completion_status,
     s.latest_completion_at, s.read_completion_run_key, s.prompt_cache_affinity_id,
     s.seen_skills_initialized, s.compaction_policy_json, s.metadata_json,
-    s.agent_overrides_json, s.working_project_id
+    s.agent_overrides_json, s.working_project_id, s.subagent_parent_generation_id
 """
 # Derived facade values: the direct fork source's address and the Run kinds.
 _DERIVED_METADATA_COLUMNS = """
@@ -712,11 +712,34 @@ def _metadata_storage_of(state: sqlite3.Row) -> _MetadataStorage:
 def _write_metadata_storage(
     connection: sqlite3.Connection, session_key: int, storage: _MetadataStorage
 ) -> None:
+    previous = _state_by_key(connection, session_key)
+    parent_columns = tuple(column for _key, column in _SUBAGENT_PARENT_FIELDS)
+    parent = tuple(
+        storage.columns[_METADATA_WRITE_COLUMNS.index(column)] for column in parent_columns
+    )
+    old_parent = tuple(previous[column] for column in parent_columns)
+    generation = previous["subagent_parent_generation_id"]
+    if parent != old_parent:
+        values = dict(zip(parent_columns, parent, strict=True))
+        row = connection.execute(
+            "SELECT generation_id FROM sessions WHERE project_id = ? AND agent_id = ? "
+            "AND session_id = ? AND state = 'live'",
+            (
+                values["subagent_parent_project_id"] or "",
+                values["subagent_parent_agent_id"],
+                values["subagent_parent_session_id"],
+            ),
+        ).fetchone()
+        # Empty means an explicitly written link with no provable Parent, not a
+        # legacy link that a migration may still identify.
+        generation = (
+            None if all(value is None for value in parent) else ("" if row is None else row[0])
+        )
     connection.execute(
         "UPDATE sessions SET "
         + ", ".join(f"{column} = ?" for column in _METADATA_WRITE_COLUMNS)
-        + ", state_revision = state_revision + 1 WHERE session_key = ?",
-        (*storage.columns, session_key),
+        + ", subagent_parent_generation_id = ?, state_revision = state_revision + 1 WHERE session_key = ?",
+        (*storage.columns, generation, session_key),
     )
 
 
