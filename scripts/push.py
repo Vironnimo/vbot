@@ -7,8 +7,9 @@ the result. There, in this order: whether this Python runs the SQLite the packag
 bundle, Ruff format check and lint, mypy for Windows and Linux as the commit hook
 runs it, the complete pytest suite on every core of the machine's test core pool,
 and the WebUI's format check, lint, Vitest and build.
-On Windows the complete pytest suite also runs on Linux in WSL, alongside the WebUI
-checks (``scripts/linux/push_tests.sh``); without a working WSL that step fails.
+On Windows the complete pytest suite also runs on Linux in WSL, using the ordinary
+local worker budget inside a 3 GiB memory limit, alongside the WebUI checks
+(``scripts/linux/push_tests.sh``); without WSL and a systemd user manager it fails.
 Every step runs, whatever failed before it. Backend tests that fail run once more
 alone; those that pass then are reported as flaky without blocking.
 
@@ -72,6 +73,13 @@ WSL_BOOTSTRAP = (
     "set -e; cache=$HOME/.cache/vbot-push; mkdir -p $cache; exec 9>$cache/lock; flock 9; "
     "rm -rf $cache/checkout; mkdir $cache/checkout; tar -x -C $cache/checkout; "
     "exec bash $cache/checkout/scripts/linux/push_tests.sh $cache/checkout"
+)
+# WSL can report a user-session startup timeout even though the user manager
+# becomes ready shortly afterwards. Wait for its bus before requesting a scope.
+WSL_USER_READY = (
+    "for attempt in {1..150}; do "
+    "systemctl --user show-environment >/dev/null 2>&1 && exit 0; sleep 0.2; done; "
+    "echo linux tests: WSL systemd user manager did not become ready; exit 1"
 )
 FLAKY_PREFIX = "flaky: "
 
@@ -222,14 +230,43 @@ def _linux_pytest_step(checkout: Path, log: TextIO) -> Step:
             False,
             0.0,
             "WSL is not installed; the Linux tests need it. Install a distribution with "
-            "python3 and its venv module (`wsl --install -d Ubuntu`) and run again.",
+            "python3, its venv module and systemd (`wsl --install -d Ubuntu`) and run again.",
         )
+    # Let WSL finish booting before connecting to its systemd user manager. On a
+    # cold start the first invocation can precede the user's D-Bus socket.
+    for boot_command in (
+        [wsl, "--exec", "true"],
+        [wsl, "--exec", "bash", "-c", WSL_USER_READY],
+    ):
+        boot = _run(boot_command, checkout)
+        boot.stdout = boot.stdout.replace("\x00", "")
+        if boot.stdout or boot.returncode:
+            _log(log, label, boot_command, boot.returncode, time.monotonic() - start, boot.stdout)
+        if boot.returncode:
+            return Step(label, False, time.monotonic() - start, _excerpt(boot.stdout))
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / "commit.tar"
         packed = _git(checkout, "archive", "--format=tar", "-o", str(archive), "HEAD")
         if packed.returncode != 0:
             return Step(label, False, 0.0, f"git archive failed: {packed.stderr.strip()}")
-        command = [wsl, "--exec", "bash", "-c", WSL_BOOTSTRAP]
+        # Include setup, every worker and their file cache in one budget. Reclaim
+        # cache above 2.5 GiB; at 3 GiB kill the whole scope rather than hiding an
+        # OOM behind the ordinary retry of failed tests. No global WSL limit.
+        command = [
+            wsl,
+            "--exec",
+            "systemd-run",
+            "--user",
+            "--scope",
+            "--quiet",
+            "--property=MemoryHigh=2560M",
+            "--property=MemoryMax=3G",
+            "--property=MemorySwapMax=0",
+            "--property=OOMPolicy=kill",
+            "bash",
+            "-c",
+            WSL_BOOTSTRAP,
+        ]
         with archive.open("rb") as stdin:
             try:
                 result = subprocess.run(

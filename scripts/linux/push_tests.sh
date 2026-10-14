@@ -79,9 +79,10 @@ except (OSError, ValueError):
     pass'
 }
 
-# As push.py on Windows: every core of the machine's test core pool, not the two
-# `-n auto` asks for there.
-workers=$("$python" -c 'from tests import cpu_pool; print(cpu_pool.pool_size())') \
+# Each worker loads the full suite and its dependencies into the WSL VM. Use the
+# ordinary local worker budget (two), rather than multiplying that RAM by every
+# available core. The complete suite and the shared core pool still apply.
+workers=$("$python" -c 'from tests import cpu_pool; print(min(cpu_pool.LOCAL_AUTO_WORKERS, cpu_pool.pool_size()))') \
     || fail "the test core pool size could not be read"
 status=0
 "$python" -m pytest -n "$workers" -rfE -q --no-header || status=$?

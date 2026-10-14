@@ -173,6 +173,19 @@ def test_linux_step_runs_the_checked_commit_in_wsl_and_never_skips(
     def fake_run(command: list[str], **options: object) -> subprocess.CompletedProcess[object]:
         if command[0] == "git":
             return run(command, **options)  # type: ignore[call-overload,no-any-return]
+        if command in (
+            ["wsl.exe", "--exec", "true"],
+            ["wsl.exe", "--exec", "bash", "-c", push.WSL_USER_READY],
+        ):
+            return subprocess.CompletedProcess(command, 0, "")
+        # The budget covers the unpack, setup and tests, including child processes
+        # and file cache, without limiting other WSL workloads.
+        assert command[:5] == ["wsl.exe", "--exec", "systemd-run", "--user", "--scope"]
+        assert "--property=MemoryHigh=2560M" in command
+        assert "--property=MemoryMax=3G" in command
+        assert "--property=MemorySwapMax=0" in command
+        assert "--property=OOMPolicy=kill" in command
+        assert command[-3:] == ["bash", "-c", push.WSL_BOOTSTRAP]
         stdin = options["stdin"]
         with tarfile.open(fileobj=stdin, mode="r|") as archive:  # type: ignore[call-overload]
             received.extend(member.name for member in archive)
