@@ -338,6 +338,9 @@ pin that revision. A create or update whose written text holds a `[[target]]` or
 `#wiki/target` link that names no page by number or stored ID gets a note naming up
 to 5 such links and the page's own link as the form that works: Agents wrote
 `[[page-slug]]` links that open nothing (Swarm run 2026-10-13).
+The advisory ignores inline, fenced and indented code and escaped link markers,
+using the Wiki editor's existing code-span and fence recognition; a literal in
+inline code otherwise triggered a broken-link note (Swarm run 2026-10-14).
 Repairs that cannot change the effect run with a
 note: `read` without `page_id` lists pages, a pasted link or quoted ID yields its
 page reference, read-only calls resolve a page title or a unique close stored id
@@ -464,6 +467,11 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   applies; 2 calls of one
   Agent sent such labels and were refused (Swarm run 2026-10-12). Two different values
   for one field, across wrapper levels, fail naming both by the path they were sent at.
+  A canonical Board action with one trailing double quote runs as that action;
+  a value containing recognizable collapsed parameter markup remains refused,
+  with the action and embedded field named separately instead of only the enum
+  choices (27 malformed actions in the Swarm run of 2026-10-14: one trailing
+  quote, 26 collapsed-field values). Payloads are never reconstructed from markup.
   An action that belongs to another Swarm
   Tool fails with a message naming that Tool, also when the action is that Tool's
   name (`"action": "swarm_state"`). Another `swarm_board` action written like a Tool
@@ -510,6 +518,8 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   `message_id` fails. An Agent sent `before: "#46"` while `#45` was newest
   (Sessions, 2026-09). It never corrects a write target (`reply_to`, a post's `discussion_id`,
   recipients); those fail before any effect with the exact corrected call.
+  A reply reference that exactly names a discussion is refused with guidance to
+  use `discussion_id` for a new post there; it never redirects the write.
 - `_board_view.py` renders results as plain text: one header line per post
   (`[#N] Author (in ...; reply to #M; to ...)`), then its verbatim
   text, its Opening in delivered text, or on a read page the compact form of a post
@@ -1335,7 +1345,9 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `cursor {value} does not continue a list, so this lists from the start.` | Replaces the invalid-cursor error on list: listing has no effect, so the call runs. One Agent sent `"cursor": "d1"` and got only an error (F5, Sessions, 2026-10). |
 | `swarm_wiki` list: `No page contains "{query}" as written; pages containing all of its words, most recently changed first ({count} shown).` and `No page contains "{query}" or all of its words.` | Agents also send keywords where the search takes a phrase: the only missed search of one Run was a three-word query (F3, F6, Sessions, 2026-10). The fallback turns such a miss into a result instead of another search; the header says the phrase missed, so the Agent does not take the pages for exact matches. |
 | `swarm_wiki` read: `No line contains "{query}" as written; lines containing all of its words, ignoring case:` and `No line of this revision contains "{query}" or all of its words. To search all pages, use {call}` | The list fallback for one page: every multi-word read `query` of one Swarm run missed, while lines with all its words held the passage (F3, F6, Swarm run 2026-10-13). Same header form as list. |
-| `swarm_wiki` create and update note: `{links} names no page, so it links nowhere. Link a page by its ID, as this page's link does: {link}` (and the plural) | Agents wrote wiki-style `[[page-slug]]` links that open nothing (F3, Swarm run 2026-10-13). The page's own link shows the working form, so the Agent can fix the links in one update. |
+| `swarm_wiki` create and update note: `{links} names no page, so it links nowhere. Link a page by its ID, as this page's link does: {link}` (and the plural) | Agents wrote wiki-style `[[page-slug]]` links that open nothing (F3, Swarm run 2026-10-13). The page's own link shows the working form, so the Agent can fix the links in one update. Code and escaped link markers receive no note: a literal code example triggered an irrelevant warning (F4, Swarm run 2026-10-14). |
+| `Nothing was run. action contains merged Tool-call fields instead of one action. Send action as {action} and {field} as a separate parameter; keep its value and the other parameters unchanged.` | 26 collapsed-field Board calls repeatedly received only the valid action list (F2, F5, Swarm run 2026-10-14). Naming the separate fields gives the correction without reconstructing or executing embedded targets or content. |
+| `Nothing was saved. {value} names a discussion, not a post. To post there, use discussion_id: {discussion} and omit message_id and reply_to. To answer a post, use its post ID instead.` | A post sent a discussion number as `message_id`; the error called it a missing `reply_to` post and suggested searching posts (F3, F5, Swarm run 2026-10-14). The message identifies the exact reference kind and both possible intents without redirecting the write. |
 
 ## Repository Profiles
 

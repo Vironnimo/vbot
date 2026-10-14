@@ -25,9 +25,11 @@ from core.tools.contracts import ToolContract
 
 from ._store_values import post_number
 from .agent_text import (
+    BOARD_ACTION_FIELDS_MERGED,
     BOARD_FILE_PATH,
     BOARD_FOREIGN_ACTIONS,
     BOARD_OTHER_TOOL,
+    BOARD_PARAMETERS,
     INBOX_ONLY_RECEIVE,
     STATE_ONLY_STATUS,
 )
@@ -138,6 +140,8 @@ _BOARD_ELSEWHERE = {
 _TOOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 # A file path means the call was meant for a Tool that works with files.
 _BOARD_FILE_FIELDS = frozenset({"path", "filepath"})
+_BOARD_ACTION_VALUES = frozenset(BOARD_PARAMETERS["properties"]["action"]["enum"])
+_MERGED_ACTION = re.compile(r'^(\w+)"\s+([a-z_]+)">\s*')
 
 _WIKI_FIELDS = SpellingAliases(
     {
@@ -266,7 +270,7 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
         contract,
         value,
         fields=_BOARD_FIELDS["message_id" if is_post else "text"],
-        actions=_action_normalizer(_BOARD_ACTIONS, _BOARD_ELSEWHERE, other_tool=BOARD_OTHER_TOOL),
+        actions=_board_action,
         optional=("discussion_id", "message_id", "reply_to", "before", "cursor", "limit"),
         # A placeholder beside the real text, such as "message": "placeholder", asks for
         # nothing; two different texts are refused as conflicting values.
@@ -285,6 +289,26 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
         if implied is not None:
             normalized["action"] = implied
     return normalized
+
+
+def _board_action(action: Any) -> Any:
+    if isinstance(action, str):
+        # One extra closing quote cannot change a complete canonical action. Do not
+        # strip punctuation generally: a suffix can contain other requested fields.
+        if action.endswith('"') and action[:-1] in _BOARD_ACTION_VALUES:
+            return action[:-1]
+        merged = _MERGED_ACTION.match(action)
+        if (
+            merged
+            and merged[1] in _BOARD_ACTION_VALUES
+            and merged[2] in BOARD_PARAMETERS["properties"]
+        ):
+            # Diagnose the Provider's collapsed parameter markup without reconstructing
+            # or executing the embedded target or message.
+            raise ToolContractError(
+                BOARD_ACTION_FIELDS_MERGED.format(action=json.dumps(merged[1]), field=merged[2])
+            )
+    return _action_normalizer(_BOARD_ACTIONS, _BOARD_ELSEWHERE, other_tool=BOARD_OTHER_TOOL)(action)
 
 
 def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:

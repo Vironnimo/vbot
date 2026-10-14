@@ -21,6 +21,7 @@ from ._board_view import call_text, spoken_list
 from ._extension_values import AgentCallError, Json, _call_request_id
 from ._store_values import wiki_number, wiki_ref
 from ._store_wiki import _FIELDS, _MAX_EDITS, MUTATIONS, query_words
+from ._wiki_emphasis import _FENCE, _code_spans
 from .agent_text import FIELD_IGNORED, LIMIT_CLAMPED, REPLAYED
 from .store import SwarmStore, SwarmStoreError
 
@@ -37,6 +38,8 @@ _PAGE_ID = re.compile(r"wpg_[A-Za-z0-9]+")
 # A wiki-style "[[target]]" link, or a "#wiki/<page>" link target; only page numbers and
 # stored page IDs open a page.
 _LINK_TARGET = re.compile(r"\[\[([^\[\]\n]+)\]\]|#wiki/([^\s)\]>\"'`]+)")
+_ESCAPED_LINK_MARKER = re.compile(r"\\[\\\[\]#]")
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 _UNKNOWN_LINKS = 5
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _CLOSE_MATCH = 0.85
@@ -123,7 +126,7 @@ class WikiCall:
 
         targets = {
             match.group(0): match.group(1) or match.group(2)
-            for match in _LINK_TARGET.finditer(written)
+            for match in _LINK_TARGET.finditer(_link_prose(written))
         }
         if not targets:
             return
@@ -922,6 +925,40 @@ def _lines_with(content: str, terms: list[str]) -> tuple[list[str], tuple[int, i
             hits.append(text.WIKI_READ_FOUND_LINE.format(line=number, offset=offset, text=clipped))
         offset += len(line) + 1
     return hits, first
+
+
+def _link_prose(written: str) -> str:
+    """Hide Markdown code and escaped link markers from the link advisory only.
+
+    Reuse the Wiki editor's fence and code-span recognition. Keep newlines so
+    separate paragraphs cannot turn unmatched backticks into a code span.
+    """
+
+    lines = []
+    fence = ""
+    for raw in written.splitlines(keepends=True):
+        marker = _FENCE.match(raw.rstrip("\r\n"))
+        hidden = bool(fence or marker or raw.startswith(("    ", "\t")))
+        if marker:
+            found = marker[1]
+            if not fence:
+                fence = found
+            elif found[0] == fence[0] and len(found) >= len(fence) and not marker[2].strip():
+                fence = ""
+        lines.append(re.sub(r"[^\r\n]", " ", raw) if hidden else raw)
+    prose = "".join(lines)
+    parts: list[str] = []
+    start = 0
+    for boundary in [*(_PARAGRAPH_BREAK.finditer(prose)), None]:
+        end = boundary.end() if boundary is not None else len(prose)
+        paragraph = prose[start:end]
+        offset = 0
+        for begin, finish in _code_spans(paragraph):
+            parts.extend((paragraph[offset:begin], " " * (finish - begin)))
+            offset = finish
+        parts.append(paragraph[offset:])
+        start = end
+    return _ESCAPED_LINK_MARKER.sub("  ", "".join(parts))
 
 
 def _named_page(value: str, pages: list[Json]) -> Json | None:
