@@ -677,9 +677,7 @@ async def _subagent_holders(
     if subagents is None or all(info.attachment in (None, owner) for info in terminals):
         return {}
     return {
-        subagent.session: subagent.id
-        for subagent in await subagents.subagents(_address(owner))
-        if subagent.within_takeover is None
+        subagent.session: subagent.id for subagent in await subagents.subagents(_address(owner))
     }
 
 

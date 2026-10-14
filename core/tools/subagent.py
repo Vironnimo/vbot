@@ -37,7 +37,7 @@ from core.tools.tools import (
 SUBAGENT_TOOL_DESCRIPTION = (
     "Delegate tasks to Sub-Agents and send them messages. A Sub-Agent is a copy of yourself or "
     "an Agent listed under Sub-Agents in the System Prompt; it works in its own Session, and "
-    "vBot delivers its answers to you."
+    "vBot delivers its answers to you unless the user writes to it."
 )
 
 SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
@@ -63,12 +63,14 @@ NO_ADDITIONAL_SUBAGENTS_TEXT = (
 )
 EXECUTION_GUIDANCE = (
     "Each `run` starts a Sub-Agent in the background and returns its id at once. vBot "
-    "delivers every answer of a Sub-Agent to you automatically: during your current turn if "
+    "delivers a Sub-Agent's answers to you automatically unless the user writes to it: "
+    "during your current turn if "
     "you are still working, otherwise in a new turn right after yours ends. An answer from a "
     "Sub-Agent that is not finished is a status report, and vBot ends each answer with a line "
     "naming what of that Sub-Agent is still running. Continue other work, or end your turn to "
     "wait; do not poll for completion. To correct or extend a Sub-Agent's work, use "
-    "`send` instead of starting a new Sub-Agent."
+    "`send` instead of starting a new Sub-Agent. If the user has written to it, messaging "
+    "in either direction resumes its answers to you."
 )
 # Names the target list when vBot tells the Model that it changed mid-Session.
 SUBAGENT_CATALOG_TITLE = "The Agent ids under Sub-Agents"
@@ -129,7 +131,8 @@ MESSAGE_PARENT_TOOL_DESCRIPTION = (
     "your turn. Use it to ask what only your Parent Agent can decide while you continue "
     "other work, to report a finding that changes what your Parent Agent or its other "
     "Sub-Agents are doing, and to answer its messages. Results and status reports belong in "
-    "your final answer, which vBot sends to your Parent Agent."
+    "your final answer. This call also directs your final answers to your Parent Agent "
+    "until the user writes again."
 )
 MESSAGE_PARENT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",

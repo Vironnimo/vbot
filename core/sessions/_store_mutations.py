@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from datetime import UTC, datetime
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
@@ -23,7 +23,7 @@ from core.sessions._types import (
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_TITLE_KEY,
     SUBAGENT_PARENT_META_KEY,
-    SUBAGENT_TAKEN_OVER_AT_META_KEY,
+    SUBAGENT_REPLY_TARGET_META_KEY,
     JsonObject,
     SessionIdentityReferenceUpdate,
     ToolResultFacts,
@@ -182,16 +182,16 @@ def mutate_metadata(
     return previous, updated
 
 
-def record_subagent_takeover(connection: sqlite3.Connection, address: SessionAddress) -> None:
-    """Record the user's takeover of a linked Sub-Agent Session, once, as ISO 8601 UTC.
-
-    A Session without a Parent link stays unchanged.
-    """
-    stamp = datetime.now(UTC).isoformat()
+def record_subagent_reply_target(
+    connection: sqlite3.Connection, address: SessionAddress, target: str
+) -> None:
+    """Change only a linked Session's answer destination, in the caller's transaction."""
+    if target not in {"parent", "user"}:
+        raise ChatSessionError("Sub-Agent reply target must be parent or user")
 
     def update(metadata: JsonObject) -> None:
         if isinstance(metadata.get(SUBAGENT_PARENT_META_KEY), dict):
-            metadata.setdefault(SUBAGENT_TAKEN_OVER_AT_META_KEY, stamp)
+            metadata[SUBAGENT_REPLY_TARGET_META_KEY] = target
 
     mutate_metadata(connection, address, update)
 
@@ -267,7 +267,9 @@ def append_messages(
     seq = int(state["next_seq"])
     floor = int(state["cursor_floor_seq"])
     keys: list[int] = []
+    reply_target = _store_values.subagent_reply_target(state)
     for message in messages:
+        message = replace(message, subagent_reply_target=reply_target)
         entry_key = _store_codec.insert_entry(
             connection, session_key, seq, message, run_key=run_key
         )

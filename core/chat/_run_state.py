@@ -54,7 +54,7 @@ from core.providers.reasoning import (
 from core.runs import Run, RunStatus
 from core.sessions import (
     SUBAGENT_PARENT_META_KEY,
-    SUBAGENT_TAKEN_OVER_AT_META_KEY,
+    SUBAGENT_REPLY_TARGET_META_KEY,
     ChatSession,
     PromptEpoch,
     SeenSkillsUpdate,
@@ -190,8 +190,8 @@ class ChatLoopDependencies:
     get_command_manager: Callable[[], CommandManager | None]
     usage_recorder: UsageRecorder | None = None
     scratch_areas: ScratchAreas | None = None
-    # Called once the user's first message in a Sub-Agent Session is persisted.
-    subagent_taken_over: Callable[[SessionAddress], None] | None = None
+    # Called when a persisted user input switches a Sub-Agent's answer destination.
+    subagent_reply_to_user: Callable[[SessionAddress, str], None] | None = None
 
 
 def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -> bool:
@@ -199,29 +199,37 @@ def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -
     return isinstance(sessions.metadata_value(address, SUBAGENT_PARENT_META_KEY), dict)
 
 
-async def takes_over_subagent_session(
-    context: _RunExecutionContext, request: _RunRequest, sessions: ChatSessionManager
+def subagent_input_reply_target(context: _RunExecutionContext, request: _RunRequest) -> str | None:
+    """Destination selected by this input; internal continuations keep the current one."""
+    if not context.subagent_session or request.internal or request.input_already_persisted:
+        return None
+    return "parent" if request.parent_agent_input else "user"
+
+
+async def switches_subagent_reply_to_user(
+    context: _RunExecutionContext, target: str | None, sessions: ChatSessionManager
 ) -> bool:
-    """Return whether persisting *request* is the user's takeover of a Sub-Agent Session.
-
-    Call it under the Session's write lock and persist the input with
-    ``subagent_takeover`` set, so the takeover commits with the user's message.
-    """
-    if not context.subagent_session or request.parent_agent_input or request.internal:
-        return False
-    taken_over_at = await _CHAT_TRANSFORM_WORKERS.run(
-        sessions.metadata_value, context.session.address, SUBAGENT_TAKEN_OVER_AT_META_KEY
+    """Read under the Session write lock, before persisting the input and its destination."""
+    return (
+        target == "user"
+        and await sessions.metadata_value_async(
+            context.session.address, SUBAGENT_REPLY_TARGET_META_KEY
+        )
+        != "user"
     )
-    return taken_over_at is None
 
 
-def report_subagent_takeover(dependencies: ChatLoopDependencies, address: SessionAddress) -> None:
-    """Report a takeover once its transaction committed the user's message and the mark."""
-    if dependencies.subagent_taken_over is not None:
+def report_subagent_user_input(
+    dependencies: ChatLoopDependencies, address: SessionAddress, message_id: str
+) -> None:
+    """Tell the Parent after the input and its answer destination committed together."""
+    if dependencies.subagent_reply_to_user is not None:
         try:
-            dependencies.subagent_taken_over(address)
+            dependencies.subagent_reply_to_user(address, message_id)
         except Exception:
-            _LOGGER.warning("Sub-Agent takeover report failed for %s", address, exc_info=True)
+            _LOGGER.warning(
+                "Sub-Agent reply destination report failed for %s", address, exc_info=True
+            )
 
 
 @dataclass(frozen=True)
@@ -384,14 +392,14 @@ class _SessionSnapshot:
         *,
         seen_skills: SeenSkillsUpdate | None = None,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
-        subagent_takeover: bool = False,
+        subagent_reply_target: str | None = None,
     ) -> None:
         """Persist *messages* and advance past them in the same transaction.
 
         *tool_results* reports how each appended Tool Result's call ended.
         *seen_skills* commits in that transaction too, so a Skill is marked
         seen exactly when the note announcing it persists, and so does
-        *subagent_takeover*, the user's takeover of a Sub-Agent Session.
+        *subagent_reply_target*, the destination for the Sub-Agent's next answers.
         """
         if not messages:
             raise ValueError("a snapshot append requires Messages")
@@ -402,7 +410,7 @@ class _SessionSnapshot:
                 messages,
                 seen_skills=seen_skills,
                 tool_results=tool_results,
-                subagent_takeover=subagent_takeover,
+                subagent_reply_target=subagent_reply_target,
             ),
         )
 
@@ -412,18 +420,18 @@ class _SessionSnapshot:
         messages: list[ChatMessage],
         *,
         seen_skills: SeenSkillsUpdate | None = None,
-        subagent_takeover: bool = False,
+        subagent_reply_target: str | None = None,
     ) -> None:
         """Commit the admitted edit with its replacement *messages* in one transaction.
 
-        *subagent_takeover* commits in that transaction too. The snapshot is
+        *subagent_reply_target* commits in that transaction too. The snapshot is
         replaced by the Session's state after the edit.
         """
         target = self.pending_edit_message_id
         if target is None:
             raise ValueError("no history edit was admitted")
         batch = await session.apply_edit_async(
-            target, messages, seen_skills=seen_skills, subagent_takeover=subagent_takeover
+            target, messages, seen_skills=seen_skills, subagent_reply_target=subagent_reply_target
         )
         self.pending_edit_message_id = None
         self.messages = list(batch.messages)

@@ -20,7 +20,7 @@ from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
 from core.runs import ChatRunManager, RunAdmission, RunKind
-from core.sessions import SUBAGENT_TAKEN_OVER_AT_META_KEY, ChatSession, SessionAddress
+from core.sessions import SUBAGENT_REPLY_TARGET_META_KEY, ChatSession, SessionAddress
 from core.settings.normalizers import normalize_compaction_settings
 from core.skills import SkillAuthoringService
 from core.subagents.links import link_session
@@ -464,9 +464,7 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
         )
     history.sessions.mutate_metadata(
         SessionAddress(project_id=None, agent_id="coder", session_id="session-taken"),
-        lambda metadata: metadata.__setitem__(
-            SUBAGENT_TAKEN_OVER_AT_META_KEY, "2026-10-12T09:00:00+00:00"
-        ),
+        lambda metadata: metadata.__setitem__(SUBAGENT_REPLY_TARGET_META_KEY, "user"),
     )
     commands.add("cmd_child", "running", session_id="session-child")
     commands.add("cmd_grandchild", "failed", "vite (pid 9)", session_id="session-grandchild")
@@ -492,6 +490,12 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     assert sorted(first["subagent_background_commands"], key=lambda entry: entry["command_id"]) == [
         {
             "subagent_id": "sub_child",
+            "session_id": "session-below-taken",
+            "command_id": "cmd_below_taken",
+            "label": "label of cmd_below_taken",
+        },
+        {
+            "subagent_id": "sub_child",
             "session_id": "session-child",
             "command_id": "cmd_child",
             "label": "label of cmd_child",
@@ -501,6 +505,12 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
             "session_id": "session-grandchild",
             "command_id": "cmd_grandchild",
             "label": "label of cmd_grandchild",
+        },
+        {
+            "subagent_id": "sub_child",
+            "session_id": "session-taken",
+            "command_id": "cmd_taken",
+            "label": "label of cmd_taken",
         },
     ]
 

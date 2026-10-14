@@ -193,7 +193,8 @@ class Turn:
 class ScriptedLoop:
     """Chat loop double: a turn answers ``answer to <content>`` unless held or scripted."""
 
-    def __init__(self) -> None:
+    def __init__(self, sessions: ChatSessionManager) -> None:
+        self.sessions = sessions
         self.turns: list[Turn] = []
         self.gates: dict[str, asyncio.Event] = {}
         self.answers: dict[str, str] = {}
@@ -216,6 +217,13 @@ class ScriptedLoop:
 
         async def execute(run: Run) -> ChatMessage:
             turn.run = run
+            session = await self.sessions.get_async(
+                address(run.agent_id, run.session_id, run.project_id)
+            )
+            target = (
+                "parent" if parent_agent_input else "user" if run.run_kind == RunKind.USER else None
+            )
+            await session.append_many_async([], subagent_reply_target=target)
             gate = self.gates.get(content)
             if gate is not None:
                 await gate.wait()
@@ -244,7 +252,7 @@ class SubAgentHarness:
             write_bootstrap_marker(data_dir)
         self.sessions = ChatSessionManager(data_dir)
         self.manager = ChatRunManager(persistence=self.sessions)
-        self.loop = ScriptedLoop()
+        self.loop = ScriptedLoop(self.sessions)
         self.storage = FakeStorage(data_dir)
         agents = FakeAgents({"parent", "worker"})
         self.resolver = FakeAgentResolver(agents, self.sessions)

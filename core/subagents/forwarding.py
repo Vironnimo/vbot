@@ -1,16 +1,14 @@
 """Deliver the answers of Sub-Agent Sessions to their Parent Sessions.
 
-Every Run that the Parent or a delivery started in a linked Sub-Agent Session is
-followed: its activity reaches the Session's activity file, and when it ends its
-complete answers go to the Parent Session through the completion coordinator,
-with a line that names what of the Sub-Agent is still running. Runs the user
-started never forward, and nothing forwards once the user took the Session over.
+Follow Runs in linked Sub-Agent Sessions and deliver only answers whose persisted
+recipient is the Parent. Steering changes future answers without redirecting old
+ones or changing the durable tree.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from core.projects import format_agent_address
@@ -31,7 +29,7 @@ from core.subagents._constants import (
     FORWARDED_NO_ANSWER_TEXT,
     FORWARDED_RUN_KINDS,
     FORWARDED_SECTION_TEMPLATE,
-    TAKEN_OVER_NOTICE_TEMPLATE,
+    REPLY_TO_USER_NOTICE_TEMPLATE,
     USER_CANCEL_REASON,
 )
 from core.subagents.activity import SubAgentActivity
@@ -130,9 +128,9 @@ class SubAgentForwarding:
         """Return the Runs currently followed for forwarding."""
         return [run for run, _task in self._followed.values()]
 
-    def taken_over(self, address: SessionAddress) -> None:
-        """Tell the Parent once that the user took over its Sub-Agent's Session."""
-        task = asyncio.create_task(self._notify_takeover(address))
+    def reply_to_user(self, address: SessionAddress, message_id: str) -> None:
+        """Tell the Parent when a user input redirects the Sub-Agent's answers."""
+        task = asyncio.create_task(self._notify_user_reply(address, message_id))
         task.add_done_callback(_log_task_failure)
 
     def _on_run_started(self, run: Run) -> None:
@@ -151,14 +149,17 @@ class SubAgentForwarding:
         sessions = self._runtime.chat_sessions
         address = _run_address(run)
         link = await sessions.run_async(read_link, sessions, address)
-        if link is None or link.taken_over_at is not None:
+        if link is None:
             return
         activity = await self._activities.ensure(address)
         if activity is not None:
             activity.follow(run)
-        outcome, answer, answer_ids = await _turn_outcome(self._runtime, run)
+        result = await _turn_outcome(self._runtime, run)
+        if result is None:
+            return
+        outcome, answer, answer_ids, mark_read = result
         link = await sessions.run_async(read_link, sessions, address)
-        if link is None or link.taken_over_at is not None or run.id in self._silenced:
+        if link is None or run.id in self._silenced:
             return
         if not await sessions.run_async(sessions.exists, link.parent):
             _LOGGER.info(
@@ -191,7 +192,7 @@ class SubAgentForwarding:
             body=body,
             project_id=parent.project_id,
             execution_owner=run.execution_owner,
-            on_persisted=lambda: self._mark_read(address, run.id),
+            on_persisted=(lambda: self._mark_read(address, run.id)) if mark_read else None,
         )
         delivery.add_done_callback(lambda done: _log_delivery(done, link, run.id))
         if activity is not None:
@@ -208,13 +209,13 @@ class SubAgentForwarding:
 
         A sibling counts while it works or while a followed Run of it has not yet
         handed its answer to delivery. ``None`` when the Parent has no other
-        Sub-Agent that is not taken over.
+        Sub-Agent whose answers currently go to it.
         """
         sessions = self._runtime.chat_sessions
         siblings = [
             sibling
             for sibling in await sessions.run_async(children, sessions, link.parent)
-            if sibling.id != link.id and sibling.taken_over_at is None
+            if sibling.id != link.id and sibling.reply_target == "parent"
         ]
         if not siblings:
             return None
@@ -243,18 +244,22 @@ class SubAgentForwarding:
                 exc_info=True,
             )
 
-    async def _notify_takeover(self, address: SessionAddress) -> None:
+    async def _notify_user_reply(self, address: SessionAddress, message_id: str) -> None:
         sessions = self._runtime.chat_sessions
         link = await sessions.run_async(read_link, sessions, address)
-        if link is None or not await sessions.run_async(sessions.exists, link.parent):
+        if (
+            link is None
+            or link.reply_target != "user"
+            or not await sessions.run_async(sessions.exists, link.parent)
+        ):
             return
         parent = link.parent
         delivery = self._trigger_service.submit_completion(
             parent.agent_id,
             parent.session_id,
-            notice_id=f"subagent-takeover:{link.id}",
-            origin_run_id=f"subagent-takeover:{link.id}",
-            body=TAKEN_OVER_NOTICE_TEMPLATE.format(id=link.id, title=link.title or link.id),
+            notice_id=f"subagent-user-reply:{message_id}",
+            origin_run_id=f"subagent-user-reply:{message_id}",
+            body=REPLY_TO_USER_NOTICE_TEMPLATE.format(id=link.id, title=link.title or link.id),
             project_id=parent.project_id,
             wake=False,
         )
@@ -265,8 +270,7 @@ async def running_entries(runtime: RuntimeServices, address: SessionAddress) -> 
     """Return what of the Sub-Agent at *address* is still running, as of now.
 
     Its unfinished background commands, attached terminals, and its own
-    Sub-Agents that are working (a Run or queued input) and not taken over by
-    the user.
+    Sub-Agents that are working (a Run or queued input).
     """
     entries: list[RunningEntry] = []
     command_manager = runtime.command_manager
@@ -286,7 +290,7 @@ async def running_entries(runtime: RuntimeServices, address: SessionAddress) -> 
             entries.append(RunningEntry("terminal", info.terminal_id, _single_line(label)))
     sessions = runtime.chat_sessions
     for link in await sessions.run_async(children, sessions, address):
-        if link.taken_over_at is None and is_working(runtime, link.session):
+        if is_working(runtime, link.session):
             entries.append(RunningEntry("Sub-Agent", link.id, _single_line(link.title)))
     return entries
 
@@ -308,7 +312,9 @@ def is_working(runtime: RuntimeServices, address: SessionAddress) -> bool:
     )
 
 
-async def _turn_outcome(runtime: RuntimeServices, run: Run) -> tuple[str, str, tuple[str, ...]]:
+async def _turn_outcome(
+    runtime: RuntimeServices, run: Run
+) -> tuple[str, str, tuple[str, ...], bool] | None:
     """Return the Run's outcome and every complete answer, in persistence order.
 
     Steering can continue a Run after a complete answer. Its return value is
@@ -337,20 +343,40 @@ async def _turn_outcome(runtime: RuntimeServices, run: Run) -> tuple[str, str, t
     if outcome.startswith("was cancelled") and progression and _is_complete_answer(progression[-1]):
         # Stop during Compaction after the final answer does not make it partial.
         outcome = "completed"
-    answers = [m for m in messages if _is_complete_answer(m)]
+    # Each entry keeps the destination at its own commit. A later Run or a later
+    # steering message cannot redirect earlier answers. The footer snapshots the
+    # terminal destination even when a Run failed without Assistant output.
+    final_target = next(
+        (
+            m.subagent_reply_target
+            for m in reversed(messages)
+            if m.subagent_reply_target is not None
+        ),
+        "parent" if run.run_kind.value in {"subagent", "system"} else "user",
+    )
+    answers = [
+        m for m in messages if _is_complete_answer(m) and m.subagent_reply_target == "parent"
+    ]
     latest = next(
         (m for m in reversed(messages) if m.role == "assistant" and _message_text(m)), None
     )
     # Normal Runs persist their return value. Keep the returned text as a
     # fallback for executors that return an answer without persisting it.
-    if result is not None and _message_text(result):
-        latest = result
+    if (
+        result is not None
+        and _message_text(result)
+        and not any(m.id == result.id for m in messages)
+    ):
+        latest = replace(result, subagent_reply_target=final_target)
     if (
         latest is not None
+        and latest.subagent_reply_target == "parent"
         and all(m.id != latest.id for m in answers)
         and (_is_complete_answer(latest) or outcome != "completed")
     ):
         answers.append(latest)
+    if not answers and final_target != "parent":
+        return None
     sections = [
         FORWARDED_ANSWER_TEMPLATE.format(
             kind="Answer" if _is_complete_answer(m) else "Partial answer",
@@ -359,7 +385,12 @@ async def _turn_outcome(runtime: RuntimeServices, run: Run) -> tuple[str, str, t
         )
         for m in answers
     ]
-    return outcome, "\n\n".join(sections) or fallback, tuple(m.id for m in answers)
+    return (
+        outcome,
+        "\n\n".join(sections) or fallback,
+        tuple(m.id for m in answers),
+        final_target == "parent",
+    )
 
 
 def _is_complete_answer(message: ChatMessage) -> bool:

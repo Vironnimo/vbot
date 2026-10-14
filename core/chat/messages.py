@@ -84,18 +84,20 @@ LIVE_VOICE_SYSTEM_REMINDER = (
 # Precede input the Parent Agent sends into its Sub-Agent's Session.
 PARENT_AGENT_INPUT_SYSTEM_REMINDER = (
     "The following message is from your Parent Agent, the Agent that delegated work to you. "
-    "It is not from the user."
+    "It is not from the user. Your final answers now go to your Parent Agent."
 )
 PARENT_AGENT_STEERING_SYSTEM_REMINDER = (
     "The following message from your Parent Agent, the Agent that delegated work to you, "
     "arrived while you were working. It is not from the user. Apply its corrections and "
     "additional instructions to your current task. If it asks a question or requests a "
-    "status update, answer it with `message_parent` and then resume any unfinished work."
+    "status update, answer it with `message_parent` and then resume any unfinished work. "
+    "Your final answers now go to your Parent Agent."
 )
-# Precede the first message the user writes in a Sub-Agent Session.
-SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER = (
-    "The user wrote the following message in this Session. From now on vBot no longer sends "
-    "your answers to your Parent Agent: you work for the user, and your answers go to the user."
+# Precede a user message that switches a Sub-Agent's answer destination.
+SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER = (
+    "The user wrote the following message in this Session. Your final answers now go to the "
+    "user. You remain connected to your Parent Agent: when it writes to you or you send it "
+    "a message with `message_parent`, your final answers go to it again."
 )
 ERROR_KIND_RATE_LIMIT = "rate_limit"
 ERROR_KIND_TIMEOUT = "timeout"
@@ -410,6 +412,8 @@ class ChatMessage:
     interruption_cause: str | None = None
     output_files: list[AssistantFileReference] | None = None
     model_fallback: ModelFallback | None = None
+    # Internal destination captured by Sessions when this entry is persisted.
+    subagent_reply_target: str | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -737,6 +741,7 @@ class ChatMessage:
             "timestamp": self.timestamp,
             "role": self.role,
         }
+        _add_if_not_none(message, "subagent_reply_target", self.subagent_reply_target)
         _add_if_not_none(message, "model", self.model)
         if self.content is not None:
             if isinstance(self.content, list):
@@ -857,6 +862,9 @@ class ChatMessage:
             id=_message_validation._require_string(data, "id"),
             timestamp=_message_validation._require_string(data, "timestamp"),
             role=role,
+            subagent_reply_target=_message_validation._optional_string(
+                data, "subagent_reply_target"
+            ),
             content=_message_validation._parse_content(data),
             model=_message_validation._optional_string(data, "model"),
             reasoning=_message_validation._optional_string(data, "reasoning"),

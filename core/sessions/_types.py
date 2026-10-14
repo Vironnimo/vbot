@@ -116,8 +116,9 @@ FORK_SOURCE_META_KEY = "fork_source"
 # The Sub-Agent Session marker and its Parent link (``subagent_parent``).
 SUBAGENT_SESSION_META_KEY = "is_subagent_session"
 SUBAGENT_PARENT_META_KEY = "subagent_parent"
-# Open key the Sub-Agent coordinator sets when the user writes in a linked Session.
+# Historical metadata, retained and stripped on forks.
 SUBAGENT_TAKEN_OVER_AT_META_KEY = "subagent_taken_over_at"
+SUBAGENT_REPLY_TARGET_META_KEY = "subagent_reply_target"
 SESSION_RUN_KINDS_META_KEY = "run_kinds"
 # The Session's working Project: its address Project, or for a Session of an
 # Identity Agent the Project chosen when it was created (absent: the Workspace).
@@ -145,6 +146,7 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         SUBAGENT_SESSION_META_KEY,
         SUBAGENT_PARENT_META_KEY,
         SUBAGENT_TAKEN_OVER_AT_META_KEY,
+        SUBAGENT_REPLY_TARGET_META_KEY,
         "reflection_counters",
         "scratch_announced",
         SESSION_RUN_KINDS_META_KEY,

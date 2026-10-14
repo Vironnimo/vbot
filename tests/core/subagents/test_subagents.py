@@ -32,10 +32,9 @@ from core.runs import (
 from core.sessions import (
     SESSION_WORKING_PROJECT_META_KEY,
     SUBAGENT_PARENT_META_KEY,
-    SUBAGENT_TAKEN_OVER_AT_META_KEY,
+    SUBAGENT_REPLY_TARGET_META_KEY,
     SessionAddress,
 )
-from core.subagents import SubAgentState
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
     FACTS_NOTHING_RUNNING_TEXT,
@@ -302,6 +301,18 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     bodies = [notice.body for notice in harness.triggers.to(harness.parent)]
     assert len(bodies) == 2
     assert "answer to background result arrived" in bodies[1]
+
+    await harness.start_turn(child, "user background result")
+    await harness.settle()
+    assert len(harness.triggers.to(harness.parent)) == 2
+    assert (await harness.call({"action": "send", "id": data["id"], "content": "resume"}))["ok"]
+    await harness.settle()
+    await harness.start_turn(child, "parent background result")
+    await harness.settle()
+    bodies = [notice.body for notice in harness.triggers.to(harness.parent)]
+    assert len(bodies) == 4
+    assert "answer to resume" in bodies[2]
+    assert "answer to parent background result" in bodies[3]
 
 
 @pytest.mark.parametrize(
@@ -933,108 +944,38 @@ async def test_parallel_starts_respect_the_active_limit_with_a_stale_count(
     assert len(harness.loop.turns) == 1
 
 
-def _take_over(harness: SubAgentHarness, session: SessionAddress) -> None:
-    """Mark *session* taken over, as the user's first message in it does."""
-    harness.sessions.mutate_metadata(
-        session,
-        lambda metadata: metadata.__setitem__(
-            SUBAGENT_TAKEN_OVER_AT_META_KEY, "2026-10-07T12:00:00+00:00"
-        ),
-    )
-    harness.coordinator.subagent_taken_over(session)
-
-
-async def test_takeover_hands_the_subagent_and_its_work_to_the_user(
-    harness: SubAgentHarness, commands: CommandHarness, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("stop_all", [False, True])
+async def test_user_input_keeps_the_complete_subagent_tree_controllable(
+    harness: SubAgentHarness, commands: CommandHarness, stop_all: bool
 ) -> None:
-    harness.loop.hold("review")
     data = await harness.spawn("review")
     child = harness.subagent_session(data["id"])
     deep = await harness.spawn("deep", child)
+    await harness.settle()
     serve = await _background_command(commands, child, "Serve")
     tests = await _background_command(commands, harness.subagent_session(deep["id"]), "Test")
-    # The tree as a call read it just before the user took over.
-    stale = await harness.coordinator.subagents(harness.parent)
-
-    _take_over(harness, child)
-    # The takeover notice is independent of the Run's answer forwarding.
-    await harness.triggers.wait_for_notice(f"subagent-takeover:{data['id']}")
-    await harness.finished("review")
-
-    [notice] = harness.triggers.to(harness.parent)
-    assert notice.wake is False
-    assert "The user took over this Sub-Agent" in notice.body
-    refused = await harness.call({"action": "send", "id": data["id"], "content": "more"})
-    assert refused["error"]["code"] == "subagent_taken_over"
-    gone = await harness.message_parent("question", child)
-    assert gone["error"]["code"] == "subagent_taken_over"
-
-    # Another Sub-Agent of the Parent, whose own Sub-Agent the user took over and works in.
-    outer = await harness.spawn("outer")
-    outer_session = harness.subagent_session(outer["id"])
-    inner = await harness.spawn("inner", outer_session)
-    inner_session = harness.subagent_session(inner["id"])
-    await harness.settle()
-    _take_over(harness, inner_session)
     harness.loop.hold("user work")
-    user_run = await harness.start_turn(inner_session, "user work", kind=RunKind.USER)
-    build = await _background_command(commands, outer_session, "Build")
-    watch = await _background_command(commands, inner_session, "Watch")
+    user_run = await harness.start_turn(child, "user work", kind=RunKind.USER)
+    await harness.until(
+        lambda: harness.sessions.metadata_value(child, SUBAGENT_REPLY_TARGET_META_KEY) == "user"
+    )
 
-    # The Parent keeps the taken-over Sub-Agents' rows; what their Sessions run, and the
-    # Sub-Agents below them, work for the user.
-    listed = await harness.background_tasks({"action": "list"})
-    assert [(row["id"], row["status"]) for row in listed["data"]["tasks"]] == [
-        (data["id"], "taken over by the user"),
-        (outer["id"], "idle"),
-        (inner["id"], "taken over by the user"),
-        (build, "running"),
-    ]
-    shown = await harness.background_tasks({"action": "status", "id": data["id"]})
-    assert "running" not in shown["data"]
-    # Each refusal names the task and the Sub-Agents up to the one the user took over, and
-    # offers no call: what happens to the task is the user's to decide. No Agent above
-    # stops a Sub-Agent the user took over.
-    for task_id, action, named in [
-        (serve, "stop", (serve, data["id"])),
-        (tests, "status", (tests, deep["id"], data["id"])),
-        (deep["session_id"], "stop", (deep["id"], data["id"])),
-        (data["id"], "stop", (data["id"],)),
-        (inner["id"], "stop", (inner["id"],)),
-        (watch, "stop", (watch, inner["id"])),
-    ]:
-        refusal = await harness.background_tasks({"action": action, "id": task_id})
-        assert refusal["error"]["code"] == "subagent_taken_over"
-        message = refusal["error"]["message"]
-        assert all(name in message for name in named), message
-        assert "{" not in message
-    # A stop that read the tree before the takeover is refused all the same.
-    stale_reads: list[list[SubAgentState]] = []
-    current_tree = harness.coordinator.subagents
-
-    async def stale_once(caller: SessionAddress) -> list[SubAgentState]:
-        return stale_reads.pop() if stale_reads else await current_tree(caller)
-
-    monkeypatch.setattr(harness.coordinator, "subagents", stale_once)
-    for raced, named in [(data["id"], (data["id"],)), (deep["id"], (deep["id"], data["id"]))]:
-        stale_reads.append(stale)
-        refusal = await harness.background_tasks({"action": "stop", "id": raced})
-        assert refusal["error"]["code"] == "subagent_taken_over"
-        assert all(name in refusal["error"]["message"] for name in named)
-    assert [commands.manager.status(task) for task in (serve, tests, watch)] == ["running"] * 3
-
-    # Stopping a Sub-Agent above a takeover stops its own work and ends there.
-    stopped = await harness.background_tasks({"action": "stop", "id": outer["id"]})
-    assert stopped["data"]["status"] == "stopped"
-    assert inner["id"] in stopped["data"]["notes"][-1]
-    assert (await commands.finish(build)).stop_reason == "scope"
-    # Nor does the Parent's Stop all reach the user's Sub-Agents.
-    await harness.coordinator.stop_tree(harness.parent)
-    assert [commands.manager.status(task) for task in (serve, tests, watch)] == ["running"] * 3
-    assert user_run.cancel_requested is False
-
-    # The user's Stop all in the Session the user took over stops everything below it.
-    await harness.coordinator.stop_tree(child)
+    listed = (await harness.background_tasks({"action": "list"}))["data"]["tasks"]
+    assert {row["id"] for row in listed} == {data["id"], deep["id"], serve, tests}
+    assert next(row for row in listed if row["id"] == data["id"])["reply_to"] == "user"
+    for task_id in (data["id"], deep["id"], serve, tests):
+        assert (await harness.background_tasks({"action": "status", "id": task_id}))["ok"]
+    sent = await harness.call({"action": "send", "id": data["id"], "content": "continue"})
+    assert sent["ok"], sent
+    if stop_all:
+        await harness.coordinator.stop_tree(harness.parent)
+    else:
+        stopped = await harness.background_tasks({"action": "stop", "id": data["id"]})
+        assert stopped["ok"] and stopped["data"]["status"] == "stopped"
+    assert user_run.cancel_requested
+    assert not harness.manager.list_queued(
+        child.agent_id, child.session_id, project_id=child.project_id
+    )
     for command_id in (serve, tests):
         assert (await commands.finish(command_id)).stop_reason == "scope"
 
@@ -1047,7 +988,9 @@ async def test_message_parent_reaches_the_parent_while_the_subagent_works(
     data = await harness.spawn("review")
     child = harness.subagent_session(data["id"])
 
+    await harness.sessions.get(child).append_many_async([], subagent_reply_target="user")
     result = await harness.message_parent("Which branch?", child)
+    assert harness.sessions.metadata_value(child, SUBAGENT_REPLY_TARGET_META_KEY) == "parent"
 
     assert result["ok"], result
     [notice] = harness.triggers.to(harness.parent)
@@ -1074,9 +1017,11 @@ async def test_message_parent_reaches_the_parent_while_the_subagent_works(
         return refused
 
     monkeypatch.setattr(harness.triggers, "submit_completion", reject)
+    await harness.sessions.get(child).append_many_async([], subagent_reply_target="user")
     refused = await harness.message_parent("More context", child)
     assert not refused["ok"]
     assert refused["error"]["code"] == "delivery_unavailable"
+    assert harness.sessions.metadata_value(child, SUBAGENT_REPLY_TARGET_META_KEY) == "user"
     assert len(harness.triggers.to(harness.parent)) == 1
 
 

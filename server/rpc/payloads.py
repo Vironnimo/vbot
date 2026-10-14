@@ -522,6 +522,7 @@ def remove_opaque_provider_metadata(value: Any, *, file_delivery: Any | None = N
                 "media_files",
                 "reasoning_meta",
                 "reasoning_scope",
+                "subagent_reply_target",
             }
         }
     if isinstance(value, list):

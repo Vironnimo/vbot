@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime
 
 from core.chat.errors import ChatSessionError
@@ -193,6 +194,7 @@ def finish_run(
             _store_values._timestamp(completion.timing.get("completed_at", ""), "Run completion")
         ),
     )
+    summary = replace(summary, subagent_reply_target=_store_values.subagent_reply_target(state))
     summary.validate()
     timing, timing_extra, _present = _store_codec._timing_fields(summary.timing)
     completed_at = _store_values._timestamp(str(timing["completed_at"]), "Run completion")

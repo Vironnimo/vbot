@@ -8,9 +8,9 @@ SUBAGENT_STATUS_CHANGED_EVENT = "subagent_status_changed"
 USER_CANCEL_REASON = "user"
 PARENT_AGENT_CANCEL_REASON = "parent_agent"
 SUBAGENT_SESSION_TITLE_MAX_CHARACTERS = 48
-# Run kinds whose final answer reaches the Parent: Runs the Parent started and
-# Runs started by deliveries (background commands, terminals, nested Sub-Agents).
-FORWARDED_RUN_KINDS = frozenset({"subagent", "system"})
+# Conversational Runs can switch recipient while running, including user Runs
+# whose message_parent call restores Parent-directed final answers.
+FORWARDED_RUN_KINDS = frozenset({"subagent", "system", "user", "channel"})
 
 # Results of the ``subagent`` Tool.
 SUBAGENT_STARTED_NOTE = (
@@ -129,11 +129,6 @@ SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE = (
 SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE = (
     ', or stop {id} with background_tasks {{"action": "stop", "id": "{id}"}}'
 )
-SUBAGENT_TAKEN_OVER_MESSAGE_TEMPLATE = (
-    "The user took over Sub-Agent {id} by writing in its Session; it works for the user and "
-    "takes no messages from you, so nothing was sent. Delegate the work to a new Sub-Agent "
-    "instead."
-)
 SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE = (
     'send needs "id", the Sub-Agent to message; nothing was sent. {yours}Call {call}.'
 )
@@ -174,10 +169,11 @@ FACTS_NOTHING_RUNNING_TEXT = "Nothing is still running for this Sub-Agent."
 # Only when the Parent has other Sub-Agents, so it knows whether more answers follow.
 FACTS_SIBLINGS_PENDING_TEMPLATE = "Answers still to come from your other Sub-Agents: {entries}."
 FACTS_NO_SIBLINGS_PENDING_TEXT = "No answers from your other Sub-Agents are still to come."
-TAKEN_OVER_NOTICE_TEMPLATE = (
+REPLY_TO_USER_NOTICE_TEMPLATE = (
     "### Sub-Agent {id} — {title}\n"
-    "The user took over this Sub-Agent by writing in its Session. vBot no longer sends you its "
-    'answers, and subagent action "send" to it is refused. Its earlier answers stay valid.'
+    "The user wrote in this Sub-Agent's Session; its final answers now go to the user. "
+    "You can still message it, check its work and stop it. Its answers return to you when "
+    "you message it or it messages you."
 )
 PARENT_MESSAGE_SECTION_TEMPLATE = (
     "### Message from Sub-Agent {id} — {title}\n"
@@ -189,7 +185,8 @@ PARENT_MESSAGE_SECTION_TEMPLATE = (
 # The ``message_parent`` Tool.
 MESSAGE_PARENT_QUEUED_NOTE = (
     "Queued for delivery. Your Parent Agent reads it at its next step, or in a new turn if it is "
-    "idle. Continue your work."
+    "idle. Your final answers now go to your Parent Agent until the user writes again. "
+    "Continue your work."
 )
 MESSAGE_PARENT_DELIVERY_UNAVAILABLE_MESSAGE = (
     "message_parent was not queued: delivery to the Parent Session is unavailable. "
@@ -197,10 +194,6 @@ MESSAGE_PARENT_DELIVERY_UNAVAILABLE_MESSAGE = (
 )
 MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE = (
     "message_parent was not sent: this Session has no Parent Agent. Reply to the user instead."
-)
-MESSAGE_PARENT_TAKEN_OVER_MESSAGE = (
-    "message_parent was not sent: the user took over this Session, so you work for the user "
-    "and your Parent Agent no longer reads your messages. Reply to the user instead."
 )
 MESSAGE_PARENT_PARENT_GONE_MESSAGE = (
     "message_parent was not sent: your Parent Agent's Session no longer exists. Finish the "

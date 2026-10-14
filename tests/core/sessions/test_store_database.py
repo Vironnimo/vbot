@@ -372,3 +372,47 @@ def test_explicit_search_coverage_checks_retain_evidence_without_writes(tmp_path
         == "healthy"
     )
     assert path.read_bytes() == original
+
+
+def test_subagent_reply_routing_upgrades_existing_sessions_once(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    old = manager.create("worker", session_id="old").address
+    resumed = manager.create("worker", session_id="resumed").address
+    plain = manager.create("worker", session_id="plain").address
+    for address in (old, resumed, plain):
+        metadata = {"subagent_taken_over_at": "2026-10-12T09:00:00+00:00", "future": {"keep": True}}
+        if address != plain:
+            metadata["subagent_parent"] = {
+                "id": address.session_id,
+                "agent_id": "lead",
+                "session_id": "parent",
+            }
+        if address == resumed:
+            metadata["subagent_reply_target"] = "parent"
+        manager.set_metadata(address, metadata)
+    manager.close()
+    # Simulate the previous schema and unapplied migration, then use normal open.
+    with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection:
+        connection.execute("ALTER TABLE entries DROP COLUMN subagent_reply_target")
+        connection.execute(
+            "DELETE FROM kernel_migrations WHERE name = 'sessions.0003_subagent_reply_targets'"
+        )
+        connection.commit()
+    manager = ChatSessionManager(tmp_path)
+    try:
+        assert manager.get_metadata(old)["subagent_reply_target"] == "user"
+        assert manager.get_metadata(old)["future"] == {"keep": True}
+        assert manager.get_metadata(resumed)["subagent_reply_target"] == "parent"
+        assert "subagent_reply_target" not in manager.get_metadata(plain)
+        session = manager.get(old)
+        session.append_many([ChatMessage.user("Resume")], subagent_reply_target="parent")
+        session.append(ChatMessage.assistant(model="fixture", content="Report"))
+        assert session.load()[-1].subagent_reply_target == "parent"
+    finally:
+        manager.close()
+    manager = ChatSessionManager(tmp_path)
+    try:
+        assert manager.get_metadata(old)["subagent_reply_target"] == "parent"
+        assert manager.get(old).load()[-1].subagent_reply_target == "parent"
+    finally:
+        manager.close()
