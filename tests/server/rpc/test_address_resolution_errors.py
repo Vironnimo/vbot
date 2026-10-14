@@ -38,7 +38,7 @@ async def _resolution_state(tmp_path: Path) -> Any:
 
 def _params(method: str, address: str) -> dict[str, Any]:
     if method == "chat.send":
-        return {"agent_id": address, "session_id": "default", "content": "Hi"}
+        return {"agent_id": address, "new_session": {}, "content": "Hi"}
     return {"agent_id": address}
 
 
