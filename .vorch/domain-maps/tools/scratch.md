@@ -11,14 +11,20 @@ not an Agent-callable Tool. Shared vocabulary: GLOSSARY -> Scratch Area.
 removes complete areas. `TemporaryFileManager` does not sweep this tree.
 
 ```
-scratch/<root-generation>/
-  <participant-generation>/
+scratch/sc_<12 base32 characters>/
+  main/                        root Session's folder
     tmp/                       process TEMP, TMP and TMPDIR
+  sub1/                        first allocated Sub-Agent folder
+    tmp/
+  sub2/
+    tmp/
 
-scratch-state/<root-generation>/
+scratch-state/<area-name>/
+  .owner                       root Session generation
+  .participants                Sub-Agent generation -> subN folder names
   .activity                    last activity, stored as filesystem mtime
   .retire                      pending archive removal, when present
-  <participant>.incarnation     token and directory filesystem identities
+  <folder-name>.incarnation     token and directory filesystem identities
 ```
 
 `DataDirectoryLayout.scratch_state_temporary` names the separate disposable
@@ -28,13 +34,34 @@ is required system state. Older `.activity` and `.incarnation` files there are
 inert Agent files: arbitrary contents, replacement or deletion do not affect
 setup. Agents may empty or remove their entire folder.
 
+New area names use the shared `new_id("sc", claim=...)` allocator; exclusive
+directory creation claims each candidate and retries collisions. Each Session
+generation has one stable folder within the area: `main` for its root and `subN`
+for Sub-Agents, numbered in allocation order, regardless of tree depth. Assigned
+names stay reserved even when their folders are removed. The names are actual
+filesystem paths, not display aliases or truncated Session ids.
+
 The globally unique Session generation, not its scope-local public Session id,
-keys both directories. Identity lookup and nearest-first ancestry lookup are
-injected. The farthest live ancestor determines the area; a missing ancestor ends
-the live tree. A surviving Child therefore starts a fresh area after its ancestor
-is archived. Resolution is not cached: archive, restore and address reuse can
-change the live tree. Agent rename and Agent Takeover keep the generation and
-folder; forks have a fresh generation and no Parent link.
+keys the external assignment records. They are written atomically and survive
+restarts. An in-memory index of area assignments is rebuilt from `.owner` records
+on first use; known ownership is repaired when disposable state disappears.
+Missing or malformed participant mappings allocate unused folders, leaving
+unidentified existing work in place rather than adopting another Session's files.
+An area whose ownership record is lost across a restart is left for normal
+retention; the Session receives a fresh area.
+
+Existing generation-named areas keep their exact paths, including newly joining
+Sub-Agents, until normal retention or archive removes the area. No active files
+are moved, and previously announced paths keep working. The next area uses short
+names. This preserves existing references while keeping internal 32-character
+generation ids out of newly allocated Agent-facing paths (user review 2026-10-14).
+
+Identity lookup and nearest-first ancestry lookup are injected. The farthest live
+ancestor determines the area; a missing ancestor ends the live tree. A surviving
+Child therefore starts a fresh area after its ancestor is archived. Tree
+resolution is not cached: archive, restore and address reuse can change it.
+Agent rename and Agent Takeover keep the generation and folder; forks have a fresh
+generation and no Parent link.
 
 `folder_for(address)` runs filesystem and Session lookups on a bounded worker pool,
 ensures the own folder and `tmp/`, touches `.activity`, and returns `ScratchFolder`
@@ -74,7 +101,8 @@ and get a fresh folder when needed. No retry loop waits for a quiet server, the
 counter lock holds no filesystem I/O, and admission records are cleared after the
 last outstanding sweep settles.
 
-Creation, touch and retirement serialize per root. Retirement renames the area to
+Creation, touch and retirement serialize per root generation, including when the
+directory has a short name. Retirement renames the area to
 a private trash entry while holding the lock, then deletes it outside the lock.
 Sweeps retry leftover trash. Shared `core/utils/tree_move.py::remove_tree` removes
 symlinks and Windows junctions as links and clears read-only attributes without
@@ -85,7 +113,7 @@ details are DEBUG and cleanup failures WARN.
 Archive captures root generation ids with `roots_for_archive(addresses)` before
 changing Session liveness, then calls `remove_areas(root_ids)` after success.
 Before the rename, archive removal writes an empty `.retire` marker in its external
-state directory. Legacy `.retire-<root-generation>` entries beside the areas are
+state directory. Legacy `.retire-<area-name>` entries beside the areas are
 adopted there, preserving pending removal on upgrade. A Windows open-file handle
 can refuse the rename itself;
 this marker survives restart and makes the next sweep retry regardless of age or
