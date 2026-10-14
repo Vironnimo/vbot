@@ -180,7 +180,7 @@ PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
         id="opencode-go",
         name="OpenCode Go",
         adapter="opencode_go",
-        base_url="https://opencode.ai/zen/go/v1",
+        base_url="https://opencode.ai/inference/go/v1",
         connections=[_api_key_connection("OPENCODE_API_KEY")],
         extra_headers={"User-Agent": "vBot"},
     ),

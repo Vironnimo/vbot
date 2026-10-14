@@ -29,10 +29,14 @@ HELLO = [{"role": "user", "content": "hello"}]
 CHAT_MODEL = "deepseek-v4-flash"
 MESSAGES_MODEL = "minimax-m3"
 RESPONSES_MODEL = "gpt-5.6-luna"
+GEMINI_MODEL = "gemini-4-argon-contributor"
+GEMINI_URL = f"{BASE_URL}/models/{GEMINI_MODEL}:generateContent"
+GEMINI_STREAM_URL = f"{BASE_URL}/models/{GEMINI_MODEL}:streamGenerateContent?alt=sse"
 WIRES = {
     "chat": (CHAT_MODEL, CHAT_URL),
     "messages": (MESSAGES_MODEL, MESSAGES_URL),
     "responses": (RESPONSES_MODEL, RESPONSES_URL),
+    "gemini": (GEMINI_MODEL, GEMINI_URL),
 }
 
 CLOSED_TOOL = {
@@ -47,6 +51,7 @@ CLOSED_TOOL = {
 }
 
 _LEVELS: dict[str, tuple[str, ...]] = {
+    GEMINI_MODEL: ("low", "medium", "high"),
     "gpt-5.6-luna": ("none", "low", "medium", "high", "xhigh", "max"),
     "muse-spark-1.3-contributor": ("minimal", "low", "medium", "high", "xhigh"),
     "grok-4.6": ("low", "medium", "high", "xhigh"),
@@ -55,6 +60,7 @@ _LEVELS: dict[str, tuple[str, ...]] = {
 
 # The catalog protocol hint (models.dev AI SDK package) of the hinted entries.
 _NPM: dict[str, str] = {
+    GEMINI_MODEL: "@ai-sdk/google",
     "minimax-m2.7": "@ai-sdk/anthropic",
     "minimax-m3": "@ai-sdk/anthropic",
     "gpt-5.6-luna": "@ai-sdk/openai",
@@ -67,6 +73,7 @@ _NPM: dict[str, str] = {
 # shaping comes from the bundled wire profile (``resources/wire/opencode-go.json``).
 CATALOG_IDS = frozenset(
     {
+        GEMINI_MODEL,
         "minimax-m2.7",
         "minimax-m3",
         "deepseek-v4-flash",
@@ -194,9 +201,19 @@ _COMPLETED_BODIES: dict[str, dict[str, Any]] = {
         "stop_reason": "end_turn",
     },
     "responses": RESPONSES_COMPLETED,
+    "gemini": {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "ok", "thoughtSignature": "opaque"}]},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 1},
+    },
 }
 
 _STREAM_BODIES: dict[str, str] = {
+    "gemini": "data: " + json.dumps(_COMPLETED_BODIES["gemini"]) + "\n\n",
     "chat": (
         'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
     ),
@@ -213,7 +230,7 @@ _STREAM_BODIES: dict[str, str] = {
 
 
 def success_response(wire: str, *, streaming: bool) -> httpx.Response:
-    """A completed reply on ``wire`` ("chat", "messages" or "responses")."""
+    """A completed reply on ``wire`` ("chat", "messages", "responses" or "gemini")."""
 
     if streaming:
         return httpx.Response(

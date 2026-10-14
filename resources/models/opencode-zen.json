@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-09T15:57:23.011281+00:00",
+  "fetched_at": "2026-10-14T09:37:07.172018+00:00",
   "models": {
     "claude-fable-5": {
       "capabilities": {
@@ -812,56 +812,6 @@
         "source": "models.dev:opencode/deepseek-v4-flash"
       }
     },
-    "deepseek-v4-flash-vision-exp": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "high",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 1000000,
-      "family": "deepseek-flash",
-      "max_output_tokens": 384000,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "deepseek-v4-flash-vision-exp",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.028,
-          "input": 0.14,
-          "output": 0.28
-        },
-        "source": "models.dev:opencode/deepseek-v4-flash-vision-exp"
-      }
-    },
     "deepseek-v4-pro": {
       "capabilities": {
         "input_modalities": [
@@ -1344,6 +1294,59 @@
           "output": 7.5
         },
         "source": "models.dev:opencode/gemini-3.8-flash"
+      }
+    },
+    "gemini-4-argon": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
+      "name": "gemini-4-argon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:opencode/gemini-4-argon"
       }
     },
     "glm-5.1": {
@@ -3107,6 +3110,55 @@
           "output": 1.2
         },
         "source": "models.dev:opencode/minimax-m3"
+      }
+    },
+    "mistral-large-4": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 524288,
+      "family": "mistral-large",
+      "max_output_tokens": 262144,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/mistral"
+        }
+      },
+      "name": "mistral-large-4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.07,
+          "input": 0.68,
+          "output": 2.09
+        },
+        "source": "models.dev:opencode/mistral-large-4"
       }
     },
     "muse-spark-1.2": {

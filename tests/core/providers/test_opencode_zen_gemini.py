@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any, override
 
 import httpx
@@ -13,6 +14,7 @@ import respx
 from core.chat.streaming import StreamingAccumulator
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
+from core.providers.wire_profiles import WireProfiles, bundled_wire_profile_files
 from core.tools import tool_failure, tool_success
 from core.utils.retry import caller_owns_retries
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE, estimate_structured_tokens
@@ -24,6 +26,7 @@ from .opencode_zen_test_support import (
     gemini_sse,
     gemini_stream,
     zen_adapter,
+    zen_model,
 )
 
 _DONE = {"candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}]}
@@ -287,14 +290,29 @@ async def test_gemini_rejects_invalid_requests_before_network(
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.asyncio
 async def test_gemini_enforces_the_inline_request_size_limit(
-    monkeypatch: pytest.MonkeyPatch,
     media_type: str | None,
     streaming: bool,
 ) -> None:
     adapter = zen_adapter()
     # Zen documents a 20 MB inline request body; a small limit keeps the test fast.
     assert adapter.request_body_limit(GEMINI_MODEL) == 20_000_000
-    monkeypatch.setattr(adapter, "request_body_limit", lambda _model_id: 100)
+    files = dict(bundled_wire_profile_files())
+    profile = files["opencode-zen"]
+    gemini = profile.protocols["gemini"]
+    files["opencode-zen"] = replace(
+        profile,
+        protocols={
+            **profile.protocols,
+            "gemini": {**gemini, "media": {**gemini["media"], "request_max_bytes": 100}},
+        },
+    )
+    profiles = WireProfiles(
+        files=files,
+        protocol_support=lambda _provider: adapter.WIRE_PROTOCOLS,
+        model_resolver=lambda _provider, model: zen_model(model),
+        report=lambda issue: pytest.fail(issue),
+    )
+    adapter.bind_wire_profiles(profiles.bind("opencode-zen", "api-key"))
     messages = [
         {
             "role": "user",

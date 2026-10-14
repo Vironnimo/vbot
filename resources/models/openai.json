@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-09T15:57:17.176437+00:00",
+  "fetched_at": "2026-10-14T09:37:05.245852+00:00",
   "models": {
     "gpt-5.2": {
       "capabilities": {
@@ -412,7 +412,7 @@
       "connections": [
         "subscription"
       ],
-      "context_window": 272000,
+      "context_window": 500000,
       "family": "gpt-sol",
       "max_output_tokens": 128000,
       "name": "GPT-6.1-Sol",

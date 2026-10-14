@@ -1,6 +1,6 @@
 # Mistral Provider
 
-OpenAI-style runtime provider with Mistral-specific reasoning and model catalog normalization.
+OpenAI-style runtime Provider with Mistral-specific catalog normalization and wire-profile controls. Typed response content is handled by the shared Chat Completions codec, including when Mistral is served through a gateway.
 
 ## Interfaces
 
@@ -30,9 +30,11 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 
 ## Response Normalization
 
-- Normal OpenAI-style responses use the generic normalizer.
+- Both string and typed content use the shared Chat Completions normalizer; `MistralAdapter` owns only its catalog specialization.
 - If Mistral returns a content-block list, `text` blocks become `content` and `thinking` blocks become visible `reasoning` while usage, tool calls, and reasoning metadata use shared OpenAI-compatible helpers.
-- A `thinking` block's payload is itself a chunk list on current reasoning models (`{"type": "thinking", "thinking": [{"type": "text", "text": ...}], "closed": true}`); `_flatten_thinking` flattens both that nested form and the older magistral plain-string form to reasoning text. The earlier string-only parse silently dropped reasoning from the current models.
+- A `thinking` block's payload is itself a chunk list on current reasoning models (`{"type": "thinking", "thinking": [{"type": "text", "text": ...}], "closed": true}`); `_chat_content_chunk_text` in `_chat_completions_wire.py` flattens both that nested form and the older magistral plain-string form to reasoning text. The earlier string-only parse silently dropped reasoning from the current models.
+
+The 2026-10-14 gateway integration moved the existing typed-content handling into the shared codec and fixed mixed streams: after thinking chunks, a plain-string answer is emitted and retained as a text chunk for replay. Tests cover both the direct Adapter and Zen Mistral Large 4. Live evidence for the latter (including full-history input accounting) belongs to `opencode-zen.md`; it does not re-verify the direct API.
 
 ## Prompt Caching
 

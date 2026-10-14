@@ -36,6 +36,7 @@ from core.providers.anthropic_compatible import (
     AnthropicCompatibleAdapter,
 )
 from core.providers.errors import NetworkError, ProviderError
+from core.providers.gemini_compatible import GeminiCompatibleAdapter
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     build_responses_payload,
@@ -161,19 +162,41 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
         )
 
 
+class _OpenCodeGoGeminiAdapter(GeminiCompatibleAdapter):
+    """Go's Gemini route carries its Session affinity and subscription policy."""
+
+    @override
+    def _request_headers_from_kwargs(self, request_kwargs: dict[str, Any]) -> dict[str, str]:
+        return _opencode_request_headers(request_kwargs)
+
+    @override
+    def _classify_http_status(
+        self, status_code: int, *, detail: str, response_headers: httpx.Headers
+    ) -> None:
+        _raise_if_upstream_json_failure(status_code, detail, response_headers)
+        _raise_if_permanent_rate_limit(status_code, detail)
+        super()._classify_http_status(status_code, detail=detail, response_headers=response_headers)
+
+
 class OpenCodeGoAdapter(OpenAICompatibleAdapter):
-    """Adapter for the OpenCode Go gateway's three wires.
+    """Adapter for the OpenCode Go gateway's four wires.
 
     The wire profile (``resources/wire/opencode-go.json``) routes each Model to
     Chat Completions (the inherited codec), Anthropic Messages (an inner
-    Messages adapter sharing this Adapter's client and wire profiles) or
-    stateless Responses (``/responses``), and shapes its reasoning, parameters,
-    media and replay. Every wire carries the ``x-opencode-session`` prompt-cache
+    Messages adapter sharing this Adapter's client and wire profiles), native
+    Gemini (another shared-client adapter), or stateless Responses (``/responses``),
+    and shapes its reasoning, parameters, media and replay. Every wire carries
+    the ``x-opencode-session`` prompt-cache
     affinity header and the gateway's error classification, and resolves this
     Adapter's output limit when it builds a payload.
     """
 
-    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages", "responses")
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = (
+        "chat_completions",
+        "messages",
+        "responses",
+        "gemini",
+    )
 
     def __init__(
         self,
@@ -220,15 +243,27 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             stamp_output_limit=self._apply_model_output_limit,
         )
         self._messages.bind_wire_profiles(self.wire)
+        self._gemini = _OpenCodeGoGeminiAdapter(
+            config,
+            self._token_getter,
+            base_url=base_url,
+            auth_config=AuthConfig(header="x-goog-api-key", prefix=""),
+            model_lookup=model_lookup,
+            debug_recorder=debug_recorder,
+            client=self._client,
+        )
+        self._gemini.bind_wire_profiles(self.wire)
 
     @override
     def bind_wire_profiles(self, binding: WireBinding) -> None:
         super().bind_wire_profiles(binding)
         self._messages.bind_wire_profiles(binding)
+        self._gemini.bind_wire_profiles(binding)
 
     @override
     async def aclose(self) -> None:
         await self._messages.aclose()
+        await self._gemini.aclose()
         await super().aclose()
 
     @override
@@ -271,6 +306,10 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         """Estimate the rendered request for the model-selected OpenCode Go wire."""
 
         protocol = self.wire_profile(model_id).protocol
+        if protocol == "gemini":
+            return self._gemini.estimate_request_input_tokens(
+                messages, model_id=model_id, tools=tools
+            )
         if protocol == "responses":
             return estimate_responses_input_tokens(
                 [dict(message) for message in messages],
@@ -296,6 +335,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         protocol = self.wire_profile(model_id).protocol
+        if protocol == "gemini":
+            return await self._gemini.send(messages, model_id=model_id, **kwargs)
         if protocol == "messages":
             return await self._messages.send(messages, model_id=model_id, **kwargs)
         if protocol == "responses":
@@ -331,6 +372,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         protocol = self.wire_profile(model_id).protocol
+        if protocol == "gemini":
+            return self._gemini.stream(messages, model_id=model_id, **kwargs)
         if protocol == "messages":
             return self._messages.stream(messages, model_id=model_id, **kwargs)
         if protocol == "responses":
@@ -361,11 +404,15 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         if model_id is not None:
             protocol = self.wire_profile(model_id).protocol
+            if protocol == "gemini":
+                return self._gemini.normalize_response(response, model_id=model_id)
             if protocol == "messages":
                 return self._messages.normalize_response(response, model_id=model_id)
             if protocol == "responses":
                 return normalize_responses_response(response)
             return super().normalize_response(response, model_id=model_id)
+        if "candidates" in response or "promptFeedback" in response:
+            return self._gemini.normalize_response(response)
         if "choices" in response:
             return super().normalize_response(response, model_id=model_id)
         if isinstance(response.get("output"), list):
