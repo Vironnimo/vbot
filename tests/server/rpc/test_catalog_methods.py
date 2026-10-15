@@ -13,7 +13,7 @@ from core.chat import CommandDispatcher, CommandOutcome
 from core.projects import AgentResolver, build_project
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runs import ChatRunManager
-from core.sessions import SessionAddress, SessionNotFoundError
+from core.sessions import SessionAddress, SessionNotFoundError, SessionWorkingProject
 from core.tools import ToolRegistry, tool_success
 from core.tools.load_tools import register_load_tools_tool
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
@@ -52,14 +52,13 @@ class _SessionProjects:
     def __init__(self, projects: dict[str, str | None]) -> None:
         self._projects = projects
 
-    def metadata_value(self, address: SessionAddress, key: str) -> str | None:
-        assert key == "working_project_id"
+    def working_project(self, address: SessionAddress) -> SessionWorkingProject:
         if address.session_id not in self._projects:
             raise SessionNotFoundError(f"session does not exist: {address.session_id}")
-        return address.project_id or self._projects[address.session_id]
+        return SessionWorkingProject(address.project_id or self._projects[address.session_id])
 
-    async def metadata_value_async(self, address: SessionAddress, key: str) -> str | None:
-        return self.metadata_value(address, key)
+    async def working_project_async(self, address: SessionAddress) -> SessionWorkingProject:
+        return self.working_project(address)
 
 
 def _working_projects(

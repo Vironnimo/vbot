@@ -27,7 +27,7 @@ from core.prompts import (
     PromptAgentStore,
     SystemPromptManager,
 )
-from core.sessions import SessionNotFoundError
+from core.sessions import SessionAddress, SessionNotFoundError, SessionWorkingProject
 from core.tools import ToolAccess, ToolRegistry
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.tools import ToolPromptBlockRegistry
@@ -243,10 +243,10 @@ class _SessionProjects:
     def __init__(self, projects: dict[str, str | None]) -> None:
         self._projects = projects
 
-    def metadata_value(self, address: Any, key: str) -> str | None:
+    def working_project(self, address: SessionAddress) -> SessionWorkingProject:
         if address.session_id not in self._projects:
             raise SessionNotFoundError(f"session does not exist: {address.session_id}")
-        return address.project_id or self._projects[address.session_id]
+        return SessionWorkingProject(address.project_id or self._projects[address.session_id])
 
 
 def _preview_state(

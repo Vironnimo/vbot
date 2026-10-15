@@ -27,7 +27,7 @@ from core.chat.file_mentions import (
     resolve_mention_root,
 )
 from core.projects import AgentResolutionError, AgentResolver, WorkingProjectMissingError
-from core.sessions import SessionAddress, SessionNotFoundError
+from core.sessions import SessionAddress, SessionNotFoundError, SessionWorkingProject
 from core.tools.file_state import FileReadState
 from tests.directory_links import link_directory
 
@@ -332,10 +332,10 @@ class _SessionProjects:
     def __init__(self, projects: dict[str, str | None]) -> None:
         self._projects = projects
 
-    def metadata_value(self, address: SessionAddress, key: str) -> str | None:
+    def working_project(self, address: SessionAddress) -> SessionWorkingProject:
         if address.session_id not in self._projects:
             raise SessionNotFoundError(f"session does not exist: {address.session_id}")
-        return self._projects[address.session_id]
+        return SessionWorkingProject(address.project_id or self._projects[address.session_id])
 
 
 class _FakeResolver:
