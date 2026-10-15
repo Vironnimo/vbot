@@ -1,7 +1,4 @@
-import {
-  pruneRunEventsPersistedInHistory,
-  runProjectionPersistedInHistory,
-} from '../chatTimeline.js';
+import { loadTimelineItems } from '../chatTimeline.js';
 import {
   CHAT_STATUS_IDLE,
   isRecord,
@@ -26,48 +23,27 @@ export function loadHistory(sessionState, messages, options = {}) {
   const runs = incremental ? { ...sessionState.historyRuns } : {};
   for (const run of options.runs ?? []) runs[run.run_id] = run;
   sessionState.historyRuns = runs;
-  const activeRunId = isRunActive(sessionState)
-    ? sessionState.currentRun?.runId
-    : null;
-  const keepGeneration = (event) =>
-    !changedGeneration &&
-    (!options.reset || event.run_id === options.activeRunId);
   const retainedRunEvents = changedGeneration
     ? []
-    : pruneRunEventsPersistedInHistory(
-        sessionState.runEvents.filter(keepGeneration),
-        runs,
-        activeRunId,
+    : sessionState.runEvents.filter(
+        (event) =>
+          (!options.reset || event.run_id === options.activeRunId) &&
+          (event.run_id === options.activeRunId ||
+            !runs[event.run_id]?.complete),
       );
-  const retainedStreamingRunEvents = changedGeneration
-    ? []
-    : sessionState.streamingRunEvents
-        .filter(keepGeneration)
-        .filter(
-          (event) =>
-            event.run_id === activeRunId ||
-            !runProjectionPersistedInHistory(runs, event.run_id),
-        );
   const retainLiveRunProjection =
     !changedGeneration &&
     (isRunActive(sessionState) ||
-      retainedRunEvents.length > 0 ||
-      retainedStreamingRunEvents.length > 0);
-  const retainedStreamingPhase = retainLiveRunProjection
-    ? sessionState.streamingPhase
-    : 0;
-  const retainedRunIds = new Set([
-    activeRunId,
-    ...retainedRunEvents.map((event) => event.run_id),
-    ...retainedStreamingRunEvents.map((event) => event.run_id),
-  ]);
-  const retainedSeenStreamingEventKeys = retainLiveRunProjection
-    ? new Set(
-        [...sessionState.seenStreamingEventKeys].filter((key) =>
-          retainedRunIds.has(key.split(':').slice(0, -2).join(':')),
-        ),
-      )
-    : new Set();
+      (sessionState.currentRun &&
+        !runs[sessionState.currentRun.runId]?.complete &&
+        sessionState.timelineItems.some(
+          (item) => item.runId === sessionState.currentRun.runId,
+        )));
+  loadTimelineItems(sessionState, options.items, {
+    ...options,
+    incremental,
+    reset: changedGeneration || options.reset,
+  });
   sessionState.messages = visibleMessages;
   if (
     changedGeneration ||
@@ -90,9 +66,6 @@ export function loadHistory(sessionState, messages, options = {}) {
         : '';
   }
   sessionState.runEvents = retainedRunEvents;
-  sessionState.streamingRunEvents = retainedStreamingRunEvents;
-  sessionState.streamingPhase = retainedStreamingPhase;
-  sessionState.seenStreamingEventKeys = retainedSeenStreamingEventKeys;
   sessionState.error = null;
   if (!retainLiveRunProjection) {
     sessionState.status = CHAT_STATUS_IDLE;
@@ -189,13 +162,16 @@ function recordKey(message) {
 export function hasRetainedTerminalRunProjection(sessionState) {
   const runId = sessionState?.currentRun?.runId;
   const runStatus = sessionState?.currentRun?.status ?? sessionState?.status;
-  if (!runId || !TERMINAL_RUN_STATUSES.has(runStatus)) {
+  if (
+    !runId ||
+    !TERMINAL_RUN_STATUSES.has(runStatus) ||
+    sessionState.historyRuns?.[runId]?.complete === true
+  ) {
     return false;
   }
-  return [
-    ...(sessionState.runEvents ?? []),
-    ...(sessionState.streamingRunEvents ?? []),
-  ].some((event) => event?.run_id === runId);
+  return (sessionState.timelineItems ?? []).some(
+    (item) => item.runId === runId,
+  );
 }
 
 export function attachableHistoryRun(sessionState, activeRun) {
@@ -213,6 +189,7 @@ export function attachableHistoryRun(sessionState, activeRun) {
 }
 
 export function prependHistory(sessionState, messages, options = {}) {
+  loadTimelineItems(sessionState, options.items, { ...options, prepend: true });
   for (const run of options.runs ?? [])
     sessionState.historyRuns[run.run_id] = run;
   const existingIds = new Set((sessionState.messages ?? []).map(recordKey));
@@ -254,11 +231,14 @@ export function truncateSessionForEdit(sessionState, messageId, acceptedRunId) {
   sessionState.runEvents = sessionState.runEvents.filter(
     (event) => acceptedRunId && event.run_id === acceptedRunId,
   );
-  if (!acceptedRunId || sessionState.currentRun?.runId !== acceptedRunId) {
-    sessionState.streamingRunEvents = [];
-    sessionState.streamingPhase = 0;
-    sessionState.seenStreamingEventKeys = new Set();
-  }
+  const itemIndex = sessionState.timelineItems.findIndex(
+    (item) =>
+      item.message?.id === messageId ||
+      item.items?.some((child) => child.message?.id === messageId),
+  );
+  if (itemIndex >= 0)
+    sessionState.timelineItems = sessionState.timelineItems.slice(0, itemIndex);
+  sessionState.timelineSequences = {};
   sessionState.usage = findLastUsage(sessionState.messages);
   sessionState.contextUsage = null;
   return true;

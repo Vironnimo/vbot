@@ -256,7 +256,7 @@ class _RunRequest:
         return (
             not self.internal
             and self.sender is None
-            and (self.reply_surface is None or self.reply_surface.kind == "webui")
+            and (self.reply_surface is None or self.reply_surface.kind in {"webui", "tui"})
             and self.tool_restriction is None
             and self.tool_denial_resolver is None
             and self.max_tool_iterations is None

@@ -79,6 +79,7 @@ async def _run_response(
         "controls": run.controls(),
         "controls_sequence": run.last_sequence,
         "events": [event.to_dict() for event in events],
+        "timeline_url": f"/api/runs/{run.id}/timeline",
     }
     if final_message is not None:
         response["message"] = final_message.to_dict()

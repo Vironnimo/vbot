@@ -57,6 +57,15 @@ function roster() {
         connected_at: '2026-06-20T12:00:00+00:00',
         status: 'connected',
       },
+      {
+        id: 'reg-4',
+        connection_id: 'terminal-1',
+        accessor: 'tui',
+        browser: 'vBot',
+        os: 'Linux',
+        connected_at: '2026-06-20T13:00:00+00:00',
+        status: 'connected',
+      },
     ],
   };
 }
@@ -107,6 +116,7 @@ describe('SettingsGeneralPanel', () => {
       t('settings.general.clients.accessor.browser'),
       t('settings.general.clients.accessor.desktop'),
       t('settings.general.clients.accessor.tray'),
+      t('settings.general.clients.accessor.tui'),
     ]);
     expect(document.body.querySelectorAll('.s-client-row--own')).toHaveLength(
       1,

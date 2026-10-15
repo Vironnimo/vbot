@@ -2,30 +2,39 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  appendEvents,
   flushSync,
   setupChatTimelineSuite,
   timelineSession,
-  toolResult,
-  toolStarted,
   waitForCondition,
 } from './ChatTimeline.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { createChatState } from '../../lib/chatState.js';
+import {
+  assistantRun,
+  reasoningItem,
+  toolItem,
+} from './timelineItems.support.js';
 
 // One Run whose Reasoning and two Tool calls form a compact Working group;
 // the running bash call offers a cancel action.
 function sessionWithWork(sessionId, runId, chatState) {
   const sessionState = timelineSession(sessionId, chatState);
-  appendEvents(sessionState, runId, [
-    {
-      type: 'reasoning',
-      payload: { message: { role: 'assistant', reasoning: 'Look first' } },
-    },
-    toolStarted('call-read', 'read', { path: 'notes.md' }),
-    toolResult('call-read', 'read', { ok: true, data: { content: 'notes' } }),
-    toolStarted('call-bash', 'bash', { command: 'sleep 60' }),
-  ]);
+  sessionState.timelineItems = [
+    assistantRun(runId, [
+      reasoningItem('Look first'),
+      toolItem({
+        id: 'call-read',
+        name: 'read',
+        arguments: { path: 'notes.md' },
+        result: { ok: true, data: { content: 'notes' } },
+      }),
+      toolItem({
+        id: 'call-bash',
+        name: 'bash',
+        arguments: { command: 'sleep 60' },
+      }),
+    ]),
+  ];
   return sessionState;
 }
 

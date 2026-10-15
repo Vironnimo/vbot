@@ -775,6 +775,35 @@ def _add_archive_filter_arguments(parser: argparse.ArgumentParser, *, selects: s
     )
 
 
+def _add_tui_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = subparsers.add_parser(
+        "tui",
+        help="Open the interactive full-screen terminal chat",
+        description=(
+            "Open the full-screen terminal chat for conversations and background activity. "
+            "Requires an interactive terminal. Use vbot chat for one message or piped input. "
+            "Closing the TUI leaves server Runs running. Example: vbot tui --agent coder@vbot"
+        ),
+    )
+    parser.add_argument(
+        "--agent",
+        metavar="<agent>",
+        help="Agent as agent or agent@project. Omit to select an Agent in the TUI.",
+    )
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument(
+        "--session",
+        metavar="<session-id>",
+        help="Open an existing Session. Omit to select or start a conversation in the TUI.",
+    )
+    target.add_argument(
+        "--project",
+        metavar="<project-id>",
+        help="Working Project for a new conversation. Omit for the Agent's default Project.",
+    )
+    _add_target_arguments(parser)
+
+
 def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     chat_parser = subparsers.add_parser(
         "chat",

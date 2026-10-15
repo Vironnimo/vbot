@@ -1,3 +1,4 @@
+import { assistantRun, toolItem } from './timelineItems.support.js';
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 
@@ -56,7 +57,7 @@ const builderReply = {
 // Project History Agent addresses (`agent@project`) Chat has read.
 const projectHistoryAgents = () => [
   ...new Set(
-    rpcCalls('chat.history')
+    rpcCalls('chat.timeline')
       .map((params) => params.agent_id)
       .filter((agentId) => agentId.includes('@')),
   ),
@@ -80,7 +81,7 @@ describe('ChatView Projects', () => {
       expect(allAgentsTrigger().getAttribute('aria-haspopup')).toBe('tree');
       expect(selectedAgentName()).toBe('Alpha');
       expect(showProjectMock).not.toHaveBeenCalled();
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'alpha',
         session_id: 'session-1',
         limit: 100,
@@ -123,7 +124,7 @@ describe('ChatView Projects', () => {
         'builder@vbot',
         expect.objectContaining({ limit: 1, includeSubagents: false }),
       );
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'builder@vbot',
         session_id: 'builder-session',
         limit: 100,
@@ -585,7 +586,7 @@ describe('ChatView Projects', () => {
       );
 
       // The override wins the display although a Project Agent is active.
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'worker@vbot',
         session_id: 'worker-session',
         limit: 100,
@@ -600,6 +601,34 @@ describe('ChatView Projects', () => {
       listedSessions(builderSession);
       rpcMock.mockImplementation(
         createChatRpcMock({
+          sessionItems: {
+            'builder-session': [
+              assistantRun(
+                'builder-spawn',
+                [
+                  toolItem({
+                    id: 'call-worker',
+                    name: 'subagent',
+                    arguments: {
+                      action: 'run',
+                      agent_id: 'worker',
+                      content: 'Do the work',
+                    },
+                    result: {
+                      ok: true,
+                      data: {
+                        agent_id: 'worker',
+                        session_id: 'worker-session',
+                        run_id: 'worker-run',
+                        status: 'completed',
+                      },
+                    },
+                  }),
+                ],
+                { source: 'history', status: 'completed' },
+              ),
+            ],
+          },
           sessionMessages: {
             'builder-session': [
               message('builder-user', 'Spawn a worker', 'user'),
@@ -695,7 +724,7 @@ describe('ChatView Projects', () => {
       findButtonByText('Older builder topic').click();
 
       await waitForText('Older builder reply');
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'builder@vbot',
         session_id: 'builder-old',
         limit: 100,
@@ -731,7 +760,7 @@ describe('ChatView Projects', () => {
         }
         if (
           deleted &&
-          method === 'chat.history' &&
+          method === 'chat.timeline' &&
           params.session_id === 'builder-session'
         ) {
           throw new Error('Session not found: builder-session');

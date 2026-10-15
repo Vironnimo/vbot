@@ -14,7 +14,7 @@ from core.attachments import AttachmentStore
 from core.chat._queued_input import STEERING_SYSTEM_REMINDER
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
-from core.chat.messages import ChatMessage, InputOrigin
+from core.chat.messages import ChatMessage, InputOrigin, ReplySurface
 from core.chat.wire_shaping import system_reminder_request_message
 from core.model_tasks.speech import SpeechError
 from core.providers.errors import NetworkError
@@ -105,11 +105,19 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
     runtime.chat_sessions.create("coder", session_id="one")
     loop = build_chat_loop(runtime)
-    run = await loop.start_run("coder", "Original", session_id="one")
+    run = await loop.start_run(
+        "coder", "Original", session_id="one", reply_surface=ReplySurface.webui()
+    )
     await asyncio.wait_for(adapter.entered.wait(), 5)
     ordinary = await loop.queue_run("coder", "Later", session_id="one")
     items = [
-        await loop.queue_run("coder", content, session_id="one", input_origin=origin)
+        await loop.queue_run(
+            "coder",
+            content,
+            session_id="one",
+            input_origin=origin,
+            reply_surface=ReplySurface.tui(),
+        )
         for content in ["Steer one", "Steer two"]
     ]
     for item in reversed(items):
@@ -124,6 +132,13 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
     assert runtime.chat_run_manager.list_queued("coder", "one", project_id=None) == []
     session = runtime.chat_sessions.get(session_address("coder", "one"))
     history = session.load()
+    surfaces = [
+        m for m in history if m.role == "note" and str(m.content).startswith("[reply-surface]")
+    ]
+    assert len(surfaces) == 2 and '"tui"' in str(surfaces[-1].content)
+    assert history.index(surfaces[-1]) < next(
+        i for i, m in enumerate(history) if m.content == "Steer one"
+    )
     visible = [m for m in history if m.role in {"user", "assistant", "tool"}]
     assert [m.role for m in visible] == (
         ["user", "assistant", "tool", "tool", "user", "user", "assistant"]
@@ -149,7 +164,9 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
         assert sent[index]["role"] == "user"
         assert sent[index - 1]["role"] == "user"
         assert sent[index - 1]["content"].endswith(reminder)
-        assert sent[index - 1]["content"].count("<system-reminder>") == 1 + bool(origin)
+        assert sent[index - 1]["content"].count("<system-reminder>") == 1 + bool(origin) + (
+            content == "Steer one"
+        )
     assert not any(
         reminder in str(message.get("content")) for message in adapter.requests[0]["messages"]
     )

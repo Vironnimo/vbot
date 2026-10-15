@@ -73,8 +73,11 @@ def test_every_pin_names_the_one_python_version_the_packages_bundle() -> None:
     locks = sorted((ROOT / "scripts").glob("*/requirements-*.lock"))
     assert len(locks) == 5
     for lock in locks:
-        header = lock.read_text(encoding="utf-8").splitlines()[1]
+        locked = lock.read_text(encoding="utf-8")
+        header = locked.splitlines()[1]
         assert f" --python-version {PYTHON_VERSION} " in header, lock.name
+        assert " --extra cli " in header, lock.name
+        assert "\ntextual==" in locked, lock.name
 
     workflows = sorted(
         [

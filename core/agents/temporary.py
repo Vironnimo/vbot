@@ -905,6 +905,7 @@ class TemporaryExecutionGroups:
                 after=query.get("after"),
                 excluded_roles=("note", "history_edit"),
                 complete_run_segment=True,
+                complete_runs=True,
             )
 
         result = await self._sessions.run_async(read)

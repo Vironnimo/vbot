@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -115,6 +116,7 @@ def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(
         "agent_id": "coder",
         "session_id": "kept",
         "working_project_id": None,
+        "agent_overrides": {"thinking_effort_default": True},
     }
     assert renamed["result"]["id"] == "researcher"
     assert agents["researcher"]["current_session_id"] == "kept"
@@ -330,7 +332,10 @@ def test_startup_checks_the_runtime_model_db_before_the_local_catalog_sweep(
     assert calls == ["restore check", "local sweep"]
 
 
-def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: Path) -> None:
+@pytest.mark.parametrize("timeline", [False, True])
+def test_extension_run_events_streams_only_the_current_owned_page_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeline: bool
+) -> None:
     run = Run(run_id="run-a", agent_id="participant", session_id="session-a")
     run.emit("model.response", {"text": "visible"})
     identity = ExtensionRegistrationIdentity("alpha", "epoch-a")
@@ -371,6 +376,19 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
     groups = Groups()
     registry = Registry()
     app = create_app(runtime=ServerStubRuntime(tmp_path / "data", extensions=registry))
+    if timeline:
+
+        async def projected_events(state: Any, selected: Any, **kwargs: Any) -> AsyncIterator[str]:
+            assert state is app.state
+            assert selected is run
+            assert kwargs["include_file_urls"] is True
+            yield 'event: timeline_snapshot\ndata: {"items":[],"file_urls":[]}\n\n'
+            # A reload while the projector awaits its next snapshot must close
+            # the capability stream before that retired projection is exposed.
+            registry.current = False
+            yield 'event: timeline_update\ndata: {"retired":true}\n\n'
+
+        monkeypatch.setattr("server.timeline.sse_timeline", projected_events)
 
     with TestClient(app) as client:
         url = app.state.file_delivery.open_extension_run(
@@ -380,6 +398,7 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
             group_id="group-a",
             run_id="run-a",
             after_sequence=0,
+            timeline=timeline,
         )["url"]
         response = client.get(url)
         registry.current = False
@@ -394,8 +413,13 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
     assert response.status_code == 200
     assert groups.calls == 2
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert "event: model.response" in response.text
-    assert '"text":"visible"' in response.text
+    if timeline:
+        assert "event: timeline_snapshot" in response.text
+        assert "timeline_update" not in response.text
+        assert "retired" not in response.text
+    else:
+        assert "event: model.response" in response.text
+        assert '"text":"visible"' in response.text
     assert '"file_urls":[]' in response.text
     assert stale_response.status_code == 404
     assert reloading_response.status_code == 404

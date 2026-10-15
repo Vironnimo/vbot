@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Set as AbstractSet
 from typing import Any, Literal, cast
 
-from core.chat import ChatError
+from core.chat import ChatError, ReplySurface
 from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
 from core.chat.model_resolution import parse_model_with_connection
 from core.projects import (
@@ -25,6 +25,16 @@ CHAT_INPUT_ORIGINS = frozenset(
     (CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION, CHAT_INPUT_ORIGIN_LIVE_VOICE)
 )
 ChatInputOrigin = Literal["speech_transcription", "live_voice"]
+
+
+def _chat_reply_surface(params: JsonObject) -> ReplySurface:
+    """Read the destination of this submission, independent of the Session's past."""
+    value = params.get("reply_surface", "webui")
+    if value == "webui":
+        return ReplySurface.webui()
+    if value == "tui":
+        return ReplySurface.tui()
+    raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.reply_surface must be webui or tui")
 
 
 def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock]:

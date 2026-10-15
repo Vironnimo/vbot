@@ -319,7 +319,7 @@ describe('ChatView Session settings', () => {
       await waitForCondition(
         () => session()?.compactionPolicy?.enabled === true,
       );
-      const historyReads = rpcCalls('chat.history').length;
+      const historyReads = rpcCalls('chat.timeline').length;
       effective = { ...effective, enabled: false };
       props.sessionInvalidations = [
         { id: 1, scope: { agent_id: 'alpha', session_id: 'session-1' } },
@@ -327,7 +327,7 @@ describe('ChatView Session settings', () => {
       await waitForCondition(
         () => session()?.compactionPolicy?.enabled === false,
       );
-      expect(rpcCalls('chat.history')).toHaveLength(historyReads);
+      expect(rpcCalls('chat.timeline')).toHaveLength(historyReads);
     });
 
     it('keeps an older Session when another view changes the remembered start values', async () => {

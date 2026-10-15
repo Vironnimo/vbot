@@ -284,6 +284,7 @@ def chat_history_snapshot(
     complete_run_segment: bool,
     background_tool_names: Sequence[str] = (),
     background_note_marker: str | None = None,
+    complete_runs: bool = False,
     after: tuple[str, int] | None = None,
     skip_unchanged: bool = False,
 ) -> Callable[[], SessionChatHistorySnapshot]:
@@ -327,6 +328,42 @@ def chat_history_snapshot(
             excluded_roles=excluded_roles,
             complete_run_segment=complete_run_segment,
         )
+    if complete_runs and batch.rows:
+        # A semantic element replaces its entire Run. Expand either page edge
+        # to the visible Run boundaries in this same database snapshot; a
+        # client never joins partial children or overwrites a newer Run tail
+        # with an older page. The requested record limit is a soft boundary.
+        keys = {
+            int(row["run_key"])
+            for row in (batch.rows[0], batch.rows[-1])
+            if row["run_key"] is not None
+        }
+        floor = int(batch.rows[0]["seq"])
+        ceiling = int(batch.rows[-1]["seq"]) + 1
+        for key in keys:
+            first = _store_history.view_seq(
+                connection, ranges, where="e.run_key = ?", params=(key,), newest=False
+            )
+            last = _store_history.view_seq(connection, ranges, where="e.run_key = ?", params=(key,))
+            if first is not None:
+                floor = min(floor, first)
+            if last is not None:
+                ceiling = max(ceiling, last + 1)
+        where, params = _role_filter(excluded_roles)
+        batch = _store_history.view_batch(
+            connection, ranges, where=where, params=params, lower=floor, upper=ceiling
+        )
+        through = max(through, ceiling)
+        takeover = latest_takeover(connection, ranges)
+        editable = frozenset(
+            str(row["entry_id"]) for row in batch.rows if _editable(batch, row, takeover)
+        )
+        if not incremental:
+            page_floor = floor
+            has_more = (
+                _store_history.view_seq(connection, ranges, where=where, params=params, upper=floor)
+                is not None
+            )
     usage = _store_history.session_usage(connection, state)
     context = _context_batch(connection, ranges)
     background = _background_records(

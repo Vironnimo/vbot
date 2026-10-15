@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -460,7 +460,26 @@ def create_app(
             },
         )
 
+    @app.get("/api/runs/{run_id}/timeline")
+    async def run_timeline(request: Request, run_id: str) -> StreamingResponse:
+        from server.timeline import TimelineStreamingResponse, sse_timeline
+
+        try:
+            run = _app_chat_runs(request.app.state).get(run_id)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return TimelineStreamingResponse(
+            sse_timeline(
+                request.app.state,
+                run,
+                shutdown_event=request.app.state.shutdown_event,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/api/extension-runs/{token}/events")
+    @app.get("/api/extension-runs/{token}/timeline")
     async def extension_run_events(request: Request, token: str) -> StreamingResponse:
         """Stream only a Run still owned by the page identity in its capability."""
         delivery = request.app.state.file_delivery
@@ -493,6 +512,38 @@ def create_app(
                 raise ValueError("Extension Run is not live")
         except KeyError, ValueError, ExtensionUnavailableError:
             raise HTTPException(status_code=404, detail="Extension Run is unavailable") from None
+        if request.url.path.endswith("/timeline"):
+            from server.timeline import TimelineStreamingResponse, sse_timeline
+
+            async def projected_events() -> AsyncGenerator[str]:
+                async with aclosing(
+                    sse_timeline(
+                        request.app.state,
+                        inspection.run,
+                        shutdown_event=request.app.state.shutdown_event,
+                        include_file_urls=True,
+                    )
+                ) as stream:
+                    async for chunk in stream:
+                        # Projection awaits History and file capabilities. A reload
+                        # or disable in that time must retire the stream too.
+                        try:
+                            current = (
+                                request.app.state.runtime.extensions is registry
+                                and registry.current_page(identity, claims["page"]) is not None
+                                and registry.host_for(identity).temporary_agents is not None
+                            )
+                        except KeyError, ValueError, ExtensionUnavailableError:
+                            break
+                        if not current:
+                            break
+                        yield chunk
+
+            return TimelineStreamingResponse(
+                projected_events(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
         return StreamingResponse(
             _sse_run_events(
                 inspection.run,

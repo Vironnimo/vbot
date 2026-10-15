@@ -13,7 +13,7 @@ import {
   listQueue as requestListQueue,
   listSessionActivity as requestListSessionActivity,
   listSessions as requestListSessions,
-  loadChatHistory as requestLoadChatHistory,
+  loadChatTimeline as requestLoadChatHistory,
   loadCommandOutput as requestLoadCommandOutput,
   loadLearningChanges as requestLoadLearningChanges,
   loadReflectionRuns as requestLoadReflectionRuns,
@@ -29,6 +29,7 @@ import {
   undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 import { t } from '../i18n.js';
+import { mergeTimelineItems } from '../chatTimeline.js';
 import { createChatActivity } from './activity.js';
 import { createChatChildTasks } from './childTasks.js';
 import { createChatReflections } from './reflections.js';
@@ -68,6 +69,9 @@ const HISTORY_OLDER_LIMIT = 50;
 // null) whenever it was read.
 function historyLoadOptions(history) {
   return {
+    items: history?.items,
+    replaceRunIds: history?.replace_run_ids,
+    timelineSequence: history?.timeline_sequence,
     hasMore: history?.has_more === true,
     nextBefore: history?.next_before,
     nextAfter: history?.next_after,
@@ -393,6 +397,13 @@ export function createChatController({
           next_before: result.next_before,
           history_reset: result.history_reset,
           messages: [...(result.messages ?? []), ...(page.messages ?? [])],
+          items: mergeTimelineItems(result.items, page.items),
+          replace_run_ids: [
+            ...new Set([
+              ...(result.replace_run_ids ?? []),
+              ...(page.replace_run_ids ?? []),
+            ]),
+          ],
           runs: mergeHistoryRuns(result.runs, page.runs),
           background_command_statuses: mergeBackgroundStatuses(
             result.background_command_statuses,
@@ -591,6 +602,9 @@ export function createChatController({
         return false;
       }
       prependHistory(sessionState, history?.messages ?? [], {
+        items: history?.items,
+        replaceRunIds: history?.replace_run_ids,
+        runs: history?.runs,
         hasMore: history?.has_more === true,
         nextBefore: history?.next_before,
       });

@@ -680,6 +680,7 @@ class StreamingAccumulator:
             return None
         self._open_tool_slot = stream_slot
 
+        had_fragments = stream_slot in self._tool_calls
         fragments = self._tool_calls.setdefault(
             stream_slot,
             _ToolCallFragments(
@@ -687,8 +688,10 @@ class StreamingAccumulator:
                 synthetic_id_suffix=synthetic_id_suffix,
             ),
         )
+        previous_id = fragments.tool_call_id
         fragments.accept_provider_id(provider_id)
-        if not name_delta and not arguments_delta:
+        id_changed = had_fragments and previous_id != fragments.tool_call_id
+        if not name_delta and not arguments_delta and not id_changed:
             return None
         fragments.append(name_delta=name_delta, arguments_delta=arguments_delta)
 
@@ -698,6 +701,8 @@ class StreamingAccumulator:
         # arrived. This keeps public Run-event order unchanged while allowing a
         # late Provider id to become canonical.
         payload: JsonObject = {"tool_call_id": fragments.tool_call_id}
+        if id_changed:
+            payload["previous_tool_call_id"] = previous_id
         if name_delta:
             # Displays use registry names; a name split across deltas is
             # corrected when the finished Tool Call replaces the transient row.

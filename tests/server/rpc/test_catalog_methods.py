@@ -323,6 +323,7 @@ async def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
         name="workflow",
         description="Run the workflow.",
         handler=lambda _context, _argument: CommandOutcome(command="workflow"),
+        unavailable_surfaces={"tui"},
     )
     state = _state(global_names=[], command_dispatcher=dispatcher)
 
@@ -336,6 +337,8 @@ async def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
         "argument": "optional",
         "output": "toast",
     }
+    tui_result = await _list_commands(state, {"reply_surface": "tui"})
+    assert "workflow" not in [item["name"] for item in tui_result["items"]]
 
 
 @pytest.mark.asyncio

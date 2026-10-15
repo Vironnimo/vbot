@@ -1,0 +1,34 @@
+# Shared Conversation Timeline
+
+Read this when changing conversation ordering, History/live overlap, semantic Run projection, timeline paging or the interactive streaming protocol. WebUI presentation remains in `webui/chat.md`; terminal interaction in `cli/tui.md`.
+
+## Ownership
+
+`core/runs/_timeline.py::RunTimeline` folds provider-neutral Run events at emission, before bounded raw replay can discard them. It retains current semantic elements, not another event log. `core/chat/timeline.py::history_timeline` adapts public canonical History records into the same reducer. Sessions remain the only durable source; no timeline database or format migration exists.
+
+The active Run owns the projection and a change signal. Snapshot copies are cached by sequence so multiple readers share the captured version. Settlement releases the Run's reference; an attached stream retains its projection through terminal delivery, while a later subscriber loads that exact Run's durable records. Raw event streams and their retention contracts remain available to one-shot CLI and other consumers.
+
+`server/timeline.py` owns public snapshot/patch transport and file projection. `server/rpc/chat_methods.py` exposes `chat.timeline` through the existing Chat History read boundary, preserving address, generation, paging, Queue/activity and Usage ownership. Extension page adapters reuse this owner behind their page capability.
+
+## Semantic contract
+
+The server supplies ordered, stable `id` values for User messages, Assistant Runs and their children: readable Reasoning, Assistant output, Tool calls/results, delivered Steer, Compaction and fallback notices. Agent takeover and visible errors retain their chronology. Reused Provider Tool-call ids in later Model steps denote separate occurrences. Failed stream attempts discard only their transient phase; completed output remains visible. Terminal Runs settle unfinished Tools as cancelled/interrupted rather than leaving them running.
+
+History pages include whole Run segments even when the requested message count falls inside one. Active History captures overlay the complete in-memory Run, so late attachment works beyond the raw replay window. Older pages do not splice the current Run into the past. `history_generation`, reset flags and `replace_run_ids` make edits, generation changes and complete-Run replacement explicit. Clients do not infer overlap from text or neighboring roles.
+
+## Transport
+
+`chat.timeline` returns `timeline_version: 1`, semantic `items`, paging and Session facts. It retains public `messages` for the existing edit and History bookkeeping callers. An active response supplies its `timeline_sequence` and `active_run.timeline_url`.
+
+`GET /api/runs/{id}/timeline` starts every connection with `timeline_snapshot`, followed by `timeline_update`. A snapshot replaces its named Run; an update has `run_id`, `sequence` and exact `base_sequence`, changed Run fields, keyed new/replaced children, child field updates and append-only text suffixes, removals and explicit order when needed. Updates are batched at most every 50 ms. They do not re-read durable History or transmit the whole transcript per token. A client with a mismatched base obtains a new snapshot rather than guessing or replaying its own semantic reducer. Heartbeats carry transport liveness only.
+
+Public projection recursively removes opaque Provider fields and internal file references, signs allowed file links and keeps displayed text consistent with its canonical Message. Extension streams additionally grant only verified file URLs and recheck the current owner/page registration after awaited work. Stream responses explicitly close their generators and pending waits on disconnect, send failure and shutdown.
+
+WebUI and TUI own formatting, local drafts, scroll/selection, disclosure and navigation. `/ws` remains the lifecycle/activity/invalidation channel; high-volume transcript content uses the selected Run's timeline stream. Closing either accessor detaches from server work.
+
+## Source and verification
+
+- Reducer and durable adapter: `core/runs/_timeline.py` (incremental Tool-argument previews in `_timeline_arguments.py`), `core/chat/timeline.py`; contracts in `tests/core/runs/test_runs_timeline.py` and `tests/core/chat/test_timeline.py`.
+- Public stream, bounded updates and file sanitization: `server/timeline.py`, `server/app.py`; `tests/server/test_timeline.py`.
+- Complete-Run paging and exact durable lookup: `core/sessions/_store_timeline.py`, `session.py`, `store.py`; Session timeline and Chat History tests.
+- Extension capability integration: `server/rpc/extensions_methods.py`; `tests/server/rpc/test_extensions_methods.py`, `tests/server/test_app.py`, `tests/server/test_file_delivery.py`.

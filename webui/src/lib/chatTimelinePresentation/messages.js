@@ -6,7 +6,17 @@ import { toolNameForRunTool } from './toolFacts.js';
 import { timestampToMs, formatDurationMs } from './time.js';
 import { getAttachmentUrl, isSpeechPlaybackUrl } from '$lib/api.js';
 import { toolDisplayRecordsError } from '$lib/chatToolDetails.js';
-import { toolResultCancelledByUser } from '$lib/chatTimeline/runChildren.js';
+// Rendering a cancelled Tool result uses the server's stable failure code.
+function toolResultCancelledByUser(result) {
+  if (typeof result === 'string') {
+    try {
+      result = JSON.parse(result);
+    } catch {
+      return false;
+    }
+  }
+  return result?.error?.code === 'cancelled_by_user';
+}
 
 export const isUserItem = (item) =>
   item.type === 'assistant_run'

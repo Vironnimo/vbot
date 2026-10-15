@@ -1,8 +1,9 @@
 """In-memory presence registry of connected app clients.
 
-Only ``/ws`` connections register here — browser tabs, the Desktop shell and
-the Windows tray. The CLI holds no persistent ``/ws`` connection (it is
-request/response RPC) and channels (Telegram/Discord) are not app clients, so
+Only ``/ws`` connections register here — browser tabs, the Desktop shell,
+the terminal TUI and the Windows tray. Other CLI commands hold no persistent
+``/ws`` connection (they are request/response RPC) and channels (Telegram/Discord)
+are not app clients, so
 neither appears: the roster answers "which app clients are connected", not
 "every way in". The roster itself is momentary in-memory state; logical
 presence boundaries go through structured logging, while the registry stores no
@@ -25,8 +26,9 @@ LOGGER_NAME = "vbot.server.clients"
 ACCESSOR_BROWSER = "browser"
 ACCESSOR_DESKTOP = "desktop"
 ACCESSOR_TRAY = "tray"
+ACCESSOR_TUI = "tui"
 ACCESSOR_UNKNOWN = "unknown"
-_ALLOWED_ACCESSORS = frozenset({ACCESSOR_BROWSER, ACCESSOR_DESKTOP, ACCESSOR_TRAY})
+_ALLOWED_ACCESSORS = frozenset({ACCESSOR_BROWSER, ACCESSOR_DESKTOP, ACCESSOR_TRAY, ACCESSOR_TUI})
 
 UNKNOWN_LABEL = "Unknown"
 CLIENT_LOG_ID_LENGTH = 8
@@ -177,6 +179,8 @@ def _accessor_label(accessor: str) -> str:
         return "Desktop"
     if accessor == ACCESSOR_TRAY:
         return "Tray"
+    if accessor == ACCESSOR_TUI:
+        return "TUI"
     return UNKNOWN_LABEL
 
 
@@ -210,7 +214,7 @@ def _browser_and_os(user_agent: str) -> tuple[str, str]:
 
 def _browser_from_user_agent(user_agent: str) -> str:
     agent = user_agent or ""
-    if agent.startswith("vBot-Tray/"):
+    if agent.startswith(("vBot-Tray/", "vBot-TUI/")):
         return "vBot"
     # Order matters: Edge/Opera UAs also carry "Chrome", Chrome also carries
     # "Safari", so the more specific token has to win first.

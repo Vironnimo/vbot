@@ -131,7 +131,7 @@ describe('ChatView Agent activity', () => {
         betaPill.click();
 
         await waitForCondition(() => selectedAgentName() === 'Beta');
-        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: 'beta',
           session_id: 'session-beta',
           limit: 100,
@@ -304,7 +304,10 @@ describe('ChatView Agent activity', () => {
     ])(
       'acknowledges a displayed result only once the %s page is attended again',
       async (_case, unattended, regainAttention) => {
-        rpcMock.mockImplementation(createChatRpcMock());
+        const messages = [message('assistant-one', 'Hello')];
+        rpcMock.mockImplementation(
+          createChatRpcMock({ sessionMessages: { 'session-1': messages } }),
+        );
         await chat.mountChat({
           sharedAgents: [createAgent()],
           sharedSelectedAgentId: 'alpha',
@@ -323,6 +326,8 @@ describe('ChatView Agent activity', () => {
             output: { status: 'running' },
           }),
         );
+        // Reconciliation after the lifecycle event observes the durable result.
+        messages.push(runSummary('unseen-summary', 'run-unseen'));
         testRunStreamRefs[0].handleServerEvent(
           runServerEvent('run_completed', {
             ...run,
@@ -439,7 +444,7 @@ describe('ChatView Agent activity', () => {
         await waitForCondition(() => teamMemberIsUnread('Explorer'));
 
         await openTeamMember('Explorer', 'Explorer unread result');
-        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: 'explorer@vbot',
           session_id: 'explorer-unread',
           limit: 100,

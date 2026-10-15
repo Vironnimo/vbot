@@ -391,7 +391,6 @@ export default Object.freeze({
     'This Session records a Live voice call. Only the call writes to it.',
   'chat.returnToParentSession': 'Return to parent session',
   'chat.returnToCurrentSession': 'Return to current session',
-  'chat.runError': 'Run failed.',
   'chat.errorDetails': 'Details',
   'chat.compactingCurrentConversation': 'Compacting current conversation…',
   'chat.compacted': 'Context compacted',

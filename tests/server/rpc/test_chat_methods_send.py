@@ -50,28 +50,32 @@ WEBUI = ReplySurface.webui()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "agent_address", "agent_id", "project_id"),
+    ("method", "agent_address", "agent_id", "project_id", "surface"),
     [
-        ("chat.send", "builder", "builder", None),
-        ("chat.send", "builder@vbot", "builder", "vbot"),
-        ("chat.stream", "tester", "tester", None),
-        ("chat.stream", "tester@vbot", "tester", "vbot"),
+        ("chat.send", "builder", "builder", None, None),
+        ("chat.send", "builder@vbot", "builder", "vbot", "webui"),
+        ("chat.stream", "tester", "tester", None, None),
+        ("chat.stream", "tester@vbot", "tester", "vbot", "tui"),
+        ("chat.send", "builder", "builder", None, "tui"),
     ],
 )
 async def test_submission_starts_the_run_for_the_addressed_agent(
-    method: str, agent_address: str, agent_id: str, project_id: str | None
+    method: str, agent_address: str, agent_id: str, project_id: str | None, surface: str | None
 ) -> None:
     loop = _RecordingLoop()
     state = chat_state(loop)
 
-    response = await call(state, method, agent_id=agent_address, session_id="s1", content="hi")
+    params = {} if surface is None else {"reply_surface": surface}
+    response = await call(
+        state, method, agent_id=agent_address, session_id="s1", content="hi", **params
+    )
 
     assert loop.start_calls == [
         {
             "agent_id": agent_id,
             "content": "hi",
             "session_id": "s1",
-            "reply_surface": WEBUI,
+            "reply_surface": ReplySurface.tui() if surface == "tui" else WEBUI,
             "project_id": project_id,
         }
     ]
@@ -148,6 +152,8 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
     ("method", "params", "named_field"),
     [
         ("chat.send", {"session_id": "s1", "dry_run": True}, "dry_run"),
+        ("chat.stream", {"session_id": "s1", "reply_surface": "channel"}, "reply_surface"),
+        ("chat.stream", {"session_id": "s1", "reply_surface": None}, "reply_surface"),
         ("chat.stream", {"new_session": {}, "dry_run": True}, "dry_run"),
         ("chat.send", {"session_id": "s1", "content": 123}, None),
         (
@@ -258,15 +264,20 @@ async def test_user_message_makes_the_identity_session_current(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "origin"),
-    [("chat.send", None), ("chat.stream", "speech_transcription")],
+    ("method", "origin", "surface"),
+    [("chat.send", None, "webui"), ("chat.stream", "speech_transcription", "tui")],
 )
 async def test_busy_session_queues_the_message_and_signals_the_queue(
-    method: str, origin: str | None
+    method: str, origin: str | None, surface: str
 ) -> None:
     loop = _RecordingLoop(busy=True)
     state = chat_state(loop)
-    params: JsonObject = {"agent_id": "builder@vbot", "session_id": "s1", "content": "Queued"}
+    params: JsonObject = {
+        "agent_id": "builder@vbot",
+        "session_id": "s1",
+        "content": "Queued",
+        "reply_surface": surface,
+    }
     if origin is not None:
         params["input_origin"] = origin
 
@@ -284,7 +295,7 @@ async def test_busy_session_queues_the_message_and_signals_the_queue(
             "content": "Queued",
             "session_id": "s1",
             **expected_origin,
-            "reply_surface": WEBUI,
+            "reply_surface": ReplySurface.tui() if surface == "tui" else WEBUI,
             "project_id": "vbot",
         }
     ]
@@ -328,7 +339,8 @@ async def test_cancelled_enqueue_is_a_run_cancelled_error(method: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_edit_starts_an_idle_run() -> None:
+@pytest.mark.parametrize("surface", ["webui", "tui"])
+async def test_edit_starts_an_idle_run(surface: str) -> None:
     loop = _RecordingLoop()
     state = chat_state(loop)
 
@@ -339,6 +351,7 @@ async def test_edit_starts_an_idle_run() -> None:
         session_id="session-1",
         message_id="message-1",
         content="edited request",
+        reply_surface=surface,
     )
 
     assert response["result"]["run_id"] == "run-edit"
@@ -349,7 +362,7 @@ async def test_edit_starts_an_idle_run() -> None:
             "content": "edited request",
             "session_id": "session-1",
             "message_id": "message-1",
-            "reply_surface": WEBUI,
+            "reply_surface": ReplySurface.tui() if surface == "tui" else WEBUI,
             "project_id": "vbot",
         }
     ]
@@ -503,6 +516,7 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
             "working_project_id": "vbot",
         },
         content="Hi",
+        reply_surface="tui",
     )
 
     result = response["result"]
@@ -519,6 +533,7 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
     # The first Run already uses the overrides, which stay on the Session.
     [request] = adapter.requests or adapter.stream_requests
     assert request["model_id"] == "gpt-4.1-mini"
+    assert any("terminal TUI" in str(message.get("content")) for message in request["messages"])
     assert state.runtime.agent_resolver.session_overrides(address).model == "openai/gpt-4.1-mini"
     # The Session works in the chosen Project for its whole life.
     assert sessions.metadata_value(address, "working_project_id") == "vbot"
@@ -680,7 +695,15 @@ def test_http_send_persists_the_run_and_serves_its_timeline_and_history(
 
     assert create_response.json() == {
         "ok": True,
-        "result": {"agent_id": "coder", "session_id": "session-one", "working_project_id": None},
+        "result": {
+            "agent_id": "coder",
+            "session_id": "session-one",
+            "working_project_id": None,
+            "agent_overrides": {
+                "model": "openai/gpt-5.2",
+                "thinking_effort_default": True,
+            },
+        },
     }
     assert send_result["message"]["content"] == "Lookup complete."
     # The finished Run's response and SSE replay hold only its settled ending.

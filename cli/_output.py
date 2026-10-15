@@ -54,10 +54,10 @@ def with_command_output[**P](function: Callable[P, int]) -> Callable[P, int]:
             path = parsed._command_path
             with (
                 ProgressPrinter(stream=sys.stderr) as progress,
-                current_progress.set(progress if parsed.area != "update" else None),
+                current_progress.set(progress if parsed.area not in {"update", "tui"} else None),
             ):
                 # chat reports its own progress between streamed answer text.
-                if output_mode.get() != "plain" and parsed.area not in {"update", "chat"}:
+                if output_mode.get() != "plain" and parsed.area not in {"update", "chat", "tui"}:
                     progress.track(f"Waiting for {path}")
                 try:
                     code = function(*args, **kwargs)
@@ -91,6 +91,7 @@ def with_command_output[**P](function: Callable[P, int]) -> Callable[P, int]:
                 "update",
                 "doctor",
                 "chat",
+                "tui",
             }:
                 result = _last_result.get()
                 attention = result.attention if result else ()

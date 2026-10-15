@@ -335,6 +335,7 @@
       params.group_id.length > 0 &&
       typeof params.run_id === 'string' &&
       params.run_id.length > 0 &&
+      (params.timeline === undefined || typeof params.timeline === 'boolean') &&
       (params.after_sequence === undefined ||
         (Number.isInteger(params.after_sequence) && params.after_sequence >= 0))
     );
@@ -450,6 +451,7 @@
           data.params.group_id,
           data.params.run_id,
           data.params.after_sequence ?? 0,
+          { timeline: data.params.timeline === true },
         );
         if (frameContext !== context) return;
         const url = opened?.stream?.url;
@@ -472,6 +474,7 @@
                 data.params.group_id,
                 data.params.run_id,
                 afterSequence,
+                { timeline: data.params.timeline === true },
               ),
             onResync: () => {
               noteExtensionPageInvalidation('run_stream_recovered');
@@ -516,6 +519,7 @@
             live: true,
             subscription_id: data.id,
             replay_through_sequence: opened.replay_through_sequence,
+            timeline_version: opened.stream?.timeline_version,
           };
         } else result = { live: false };
       } else if (

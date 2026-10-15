@@ -1,3 +1,4 @@
+import { assistantRun, messageItem } from './timelineItems.support.js';
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 
@@ -77,7 +78,7 @@ describe('ChatView', () => {
       await chat.mountChat(props);
       const loads = () => [
         rpcCalls('agent.list').length,
-        rpcCalls('chat.history').length,
+        rpcCalls('chat.timeline').length,
         listSessionActivityMock.mock.calls.length,
       ];
       const loadsBefore = loads();
@@ -140,9 +141,12 @@ describe('ChatView', () => {
 
       // The displayed Session streams its new Run; the rest waits.
       expect(subscribeRunEventsMock).toHaveBeenCalledExactlyOnceWith(
-        '/api/runs/run-displayed/events',
+        '/api/runs/run-displayed/timeline',
         expect.any(Object),
-        { afterSequence: 1 },
+        {
+          eventTypes: ['timeline_snapshot', 'timeline_update'],
+          closeOnTerminal: false,
+        },
       );
       expect(backgroundSession()).toBeUndefined();
 
@@ -179,7 +183,7 @@ describe('ChatView', () => {
       });
       await chat.mountChat(props, { ready: null });
       await waitForCondition(() =>
-        rpcCalls('chat.history').some(
+        rpcCalls('chat.timeline').some(
           (params) => params.session_id === 'session-1',
         ),
       );
@@ -219,7 +223,7 @@ describe('ChatView', () => {
       let resolveHistory;
       const defaultRpc = createChatRpcMock();
       rpcMock.mockImplementation((method, params) =>
-        method === 'chat.history'
+        method === 'chat.timeline'
           ? new Promise((resolve) => {
               resolveHistory = resolve;
             })
@@ -515,9 +519,11 @@ describe('ChatView', () => {
           },
         };
         const error = `Rate limited: 429 ${JSON.stringify(body)}`;
+        const sessionItems = { 'session-1': [] };
         rpcMock.mockImplementation(
           createChatRpcMock({
             sessionMessages: { 'session-1': [] },
+            sessionItems,
             streamResponse: runningRun('failed-run'),
           }),
         );
@@ -530,11 +536,22 @@ describe('ChatView', () => {
           () => subscribeRunEventsMock.mock.calls.length === 1,
         );
         const events = runEventSource('failed-run');
-        if (persisted)
-          events.emit('error_message_persisted', {
-            message: { id: 'test-error', role: 'error', content: error },
-          });
-        events.emit('run_failed', { status: 'failed', error });
+        sessionItems['session-1'] = [
+          assistantRun('failed-run', [], { status: 'failed' }),
+          messageItem(
+            {
+              id: persisted ? 'test-error' : 'run-failure-failed-run',
+              role: 'error',
+              content: error,
+            },
+            { runId: 'failed-run' },
+          ),
+        ];
+        events.emit('timeline_snapshot', {
+          items: sessionItems['session-1'],
+          state: { status: 'failed' },
+          terminal: true,
+        });
         await waitForCondition(() => document.querySelector('.error-details'));
         expect(document.querySelectorAll('.error-details')).toHaveLength(1);
         const details = document.querySelector('.error-details');

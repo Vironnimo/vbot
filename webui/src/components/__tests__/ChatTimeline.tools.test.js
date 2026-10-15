@@ -2,7 +2,6 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
-  appendEvents,
   detailRow,
   detailText,
   flushSync,
@@ -10,11 +9,10 @@ import {
   setupChatTimelineSuite,
   stubClipboard,
   timelineSession,
-  toolResult,
-  toolStarted,
 } from './ChatTimeline.support.js';
 // After the support module, which points `svelte/store` at its client build.
 import { fromStore, writable } from 'svelte/store';
+import { assistantRun, toolItem } from './timelineItems.support.js';
 import { toolDetailMedia } from '../../lib/chatToolDetails.js';
 import { t } from '../../lib/i18n.js';
 import {
@@ -24,7 +22,7 @@ import {
 
 function sessionWithTool(events) {
   const sessionState = timelineSession();
-  appendEvents(sessionState, 'run-tool', events);
+  sessionState.timelineItems = [assistantRun('run-tool', events)];
   return sessionState;
 }
 
@@ -142,7 +140,9 @@ describe('ChatTimeline Tools', () => {
         { shows = [], hides = [], args: detail },
       ) => {
         timeline.render(
-          sessionWithTool([toolStarted('call', name, args, payload)]),
+          sessionWithTool([
+            toolItem({ id: 'call', name: name, arguments: args, ...payload }),
+          ]),
         );
 
         const line = summaryLine();
@@ -165,13 +165,13 @@ describe('ChatTimeline Tools', () => {
         'powershell -Command "Get-Item C:\\Users\\Viro\\.vbot\\workspace-main\\todo-v2\\* | Select-Object FullName,Length,LastWriteTime"';
       timeline.render(
         sessionWithTool([
-          toolStarted('call-long', 'bash', { command }),
-          toolResult(
-            'call-long',
-            'bash',
-            { ok: true, data: { content: 'listed files' } },
-            { timing: { duration_ms: 1234 } },
-          ),
+          toolItem({
+            id: 'call-long',
+            name: 'bash',
+            arguments: { command },
+            result: { ok: true, data: { content: 'listed files' } },
+            ...{ timing: { duration_ms: 1234 } },
+          }),
         ]),
       );
 
@@ -206,7 +206,11 @@ describe('ChatTimeline Tools', () => {
       ['missing arguments as no data', undefined, null],
       ['an empty object as no data', {}, null],
     ])('renders Args %s', (_case, args, expected) => {
-      timeline.render(sessionWithTool([toolStarted('call', 'probe', args)]));
+      timeline.render(
+        sessionWithTool([
+          toolItem({ id: 'call', name: 'probe', arguments: args }),
+        ]),
+      );
       openDisclosures('.tool-event');
 
       expect(detailText('chat.toolArgs')).toBe(expected ?? noData());
@@ -251,8 +255,7 @@ describe('ChatTimeline Tools', () => {
     ])('renders the Result of %s', (_case, name, result, expected) => {
       timeline.render(
         sessionWithTool([
-          toolStarted('call', name, {}),
-          toolResult('call', name, result),
+          toolItem({ id: 'call', name: name, arguments: {}, result: result }),
         ]),
       );
 
@@ -263,12 +266,17 @@ describe('ChatTimeline Tools', () => {
     it('marks a failed Result envelope as an error', () => {
       timeline.render(
         sessionWithTool([
-          toolStarted('call-grep', 'grep', { pattern: 'TODO', path: 'src' }),
-          toolResult('call-grep', 'grep', {
-            ok: false,
-            error: {
-              code: 'invalid_regex',
-              message: 'Invalid regular expression',
+          toolItem({
+            id: 'call-grep',
+            name: 'grep',
+            arguments: { pattern: 'TODO', path: 'src' },
+            status: 'failed',
+            result: {
+              ok: false,
+              error: {
+                code: 'invalid_regex',
+                message: 'Invalid regular expression',
+              },
             },
           }),
         ]),
@@ -326,13 +334,13 @@ describe('ChatTimeline Tools', () => {
       });
       timeline.render(
         sessionWithTool([
-          toolStarted('call', 'apply_patch', { patch: '*** Begin Patch' }),
-          toolResult(
-            'call',
-            'apply_patch',
-            { ok: true, data: { content: 'Updated.' } },
-            { display },
-          ),
+          toolItem({
+            id: 'call',
+            name: 'apply_patch',
+            arguments: { patch: '*** Begin Patch' },
+            result: { ok: true, data: { content: 'Updated.' } },
+            ...{ display },
+          }),
         ]),
       );
 
@@ -415,8 +423,13 @@ describe('ChatTimeline Tools', () => {
       });
       timeline.render(
         sessionWithTool([
-          toolStarted('call', 'session_search', { query: 'ship' }),
-          toolResult('call', 'session_search', '{"ok": true}', { display }),
+          toolItem({
+            id: 'call',
+            name: 'session_search',
+            arguments: { query: 'ship' },
+            result: '{"ok": true}',
+            ...{ display },
+          }),
         ]),
       );
 
@@ -465,8 +478,13 @@ describe('ChatTimeline Tools', () => {
       });
       timeline.render(
         sessionWithTool([
-          toolStarted('call', 'memory', { action: 'replace' }),
-          toolResult('call', 'memory', '{"ok": true}', { display }),
+          toolItem({
+            id: 'call',
+            name: 'memory',
+            arguments: { action: 'replace' },
+            result: '{"ok": true}',
+            ...{ display },
+          }),
         ]),
       );
 
@@ -520,13 +538,16 @@ describe('ChatTimeline Tools', () => {
       });
       timeline.render(
         sessionWithTool([
-          toolStarted('call', 'bash', { command: 'npm test' }),
-          toolResult(
-            'call',
-            'bash',
-            JSON.stringify({ ok: true, data: { output: '{"passed": 3}' } }),
-            { display },
-          ),
+          toolItem({
+            id: 'call',
+            name: 'bash',
+            arguments: { command: 'npm test' },
+            result: JSON.stringify({
+              ok: true,
+              data: { output: '{"passed": 3}' },
+            }),
+            ...{ display },
+          }),
         ]),
       );
 
@@ -577,7 +598,9 @@ describe('ChatTimeline Tools', () => {
     ])('omits large %s from the Tool row', (_case, name, createArgs, args) => {
       const large = '<main>large generated document</main>\n'.repeat(2000);
       timeline.render(
-        sessionWithTool([toolStarted('call', name, createArgs(large))]),
+        sessionWithTool([
+          toolItem({ id: 'call', name: name, arguments: createArgs(large) }),
+        ]),
       );
 
       openDisclosures('.tool-event');
@@ -610,22 +633,18 @@ describe('ChatTimeline Tools', () => {
     it('renders structured values without JSON punctuation', () => {
       timeline.render(
         sessionWithTool([
-          toolStarted(
-            'call-grep',
-            'grep',
-            { pattern: 'VERSION_[A-Z_]+', path: 'src' },
-            { display: describedGrep([]) },
-          ),
-          toolResult(
-            'call-grep',
-            'grep',
-            { ok: true, data: { content: 'src/version.py:1' } },
-            {
+          toolItem({
+            id: 'call-grep',
+            name: 'grep',
+            arguments: { pattern: 'VERSION_[A-Z_]+', path: 'src' },
+            ...{ display: describedGrep([]) },
+            result: { ok: true, data: { content: 'src/version.py:1' } },
+            ...{
               display: describedGrep([
                 { kind: 'count', value: 10, unit: 'matches', at_least: false },
               ]),
             },
-          ),
+          }),
         ]),
       );
 
@@ -669,12 +688,12 @@ describe('ChatTimeline Tools', () => {
     ])('renders %s', (_case, facts, expected) => {
       timeline.render(
         sessionWithTool([
-          toolStarted(
-            'call',
-            'read',
-            { path: 'notes.txt' },
-            { display: structuredDisplay({ summary: 'notes.txt', facts }) },
-          ),
+          toolItem({
+            id: 'call',
+            name: 'read',
+            arguments: { path: 'notes.txt' },
+            ...{ display: structuredDisplay({ summary: 'notes.txt', facts }) },
+          }),
         ]),
       );
 
@@ -690,62 +709,49 @@ describe('ChatTimeline Tools', () => {
 
     it('loads the final structured presentation snapshot from History', () => {
       const sessionState = timelineSession();
-      sessionState.messages = [
-        { id: 'user-history', role: 'user', content: 'Search versions' },
-        {
-          id: 'assistant-history',
-          role: 'assistant',
-          tool_calls: [
-            {
+      sessionState.timelineItems = [
+        assistantRun(
+          'history',
+          [
+            toolItem({
               id: 'call-grep',
               name: 'grep',
               arguments: { pattern: 'VERSION', path: 'src' },
-            },
-            {
+              result: { ok: true, data: { content: 'src/a.py:1' } },
+              display: structuredDisplay({
+                summary: 'version variables',
+                primary: [
+                  {
+                    kind: 'description',
+                    value: 'version variables',
+                    full_value: 'version variables',
+                    truncate: 'end',
+                    max_characters: 64,
+                    quote: true,
+                  },
+                ],
+                facts: [
+                  { kind: 'count', value: 3, unit: 'matches', at_least: true },
+                ],
+              }),
+            }),
+            toolItem({
               id: 'call-write',
               name: 'write',
               arguments: { path: 'new.txt', content: 'one\ntwo\n' },
-            },
+              result: { ok: true, data: { message: 'written' } },
+              display: structuredDisplay({
+                summary: 'new.txt',
+                hidden_argument_keys: ['content'],
+                facts: [
+                  { kind: 'line_change', change: 'added', value: 2 },
+                  { kind: 'line_change', change: 'removed', value: 0 },
+                ],
+              }),
+            }),
           ],
-        },
-        {
-          id: 'tool-grep',
-          role: 'tool',
-          tool_call_id: 'call-grep',
-          name: 'grep',
-          content: '{"ok":true,"data":{"content":"src/a.py:1"}}',
-          tool_display: structuredDisplay({
-            summary: 'version variables',
-            primary: [
-              {
-                kind: 'description',
-                value: 'version variables',
-                full_value: 'version variables',
-                truncate: 'end',
-                max_characters: 64,
-                quote: true,
-              },
-            ],
-            facts: [
-              { kind: 'count', value: 3, unit: 'matches', at_least: true },
-            ],
-          }),
-        },
-        {
-          id: 'tool-write',
-          role: 'tool',
-          tool_call_id: 'call-write',
-          name: 'write',
-          content: '{"ok":true,"data":{"message":"written"}}',
-          tool_display: structuredDisplay({
-            summary: 'new.txt',
-            hidden_argument_keys: ['content'],
-            facts: [
-              { kind: 'line_change', change: 'added', value: 2 },
-              { kind: 'line_change', change: 'removed', value: 0 },
-            ],
-          }),
-        },
+          { source: 'history', status: 'completed' },
+        ),
       ];
       timeline.render(sessionState);
 
@@ -767,11 +773,11 @@ describe('ChatTimeline Tools', () => {
         'C:/Development/projects/vBot/webui/src/components/chat/ChatAssistantRun.svelte';
       timeline.render(
         sessionWithTool([
-          toolStarted(
-            'call-read',
-            'read',
-            { path: fullPath },
-            {
+          toolItem({
+            id: 'call-read',
+            name: 'read',
+            arguments: { path: fullPath },
+            ...{
               display: structuredDisplay({
                 summary: fullPath,
                 primary: [
@@ -787,7 +793,7 @@ describe('ChatTimeline Tools', () => {
                 ],
               }),
             },
-          ),
+          }),
         ]),
       );
 
@@ -877,8 +883,13 @@ describe('ChatTimeline Tools', () => {
       onTestFinished(() => playback.forEach((spy) => spy.mockRestore()));
       timeline.render(
         sessionWithTool([
-          toolStarted('call', 'generate_video', { prompt: 'a cat' }),
-          toolResult('call', 'generate_video', result, { display }),
+          toolItem({
+            id: 'call',
+            name: 'generate_video',
+            arguments: { prompt: 'a cat' },
+            result: result,
+            ...{ display },
+          }),
         ]),
       );
 
@@ -957,31 +968,18 @@ describe('ChatTimeline Tools', () => {
               : [],
         };
         const live = timelineSession(`preview-${name}`);
-        appendEvents(live, 'image-run', [
-          { type: 'tool_call_started', payload: { tool_call: toolCall } },
-          {
-            type: 'tool_call_result',
-            payload: { tool_call: toolCall, result, display },
-          },
-        ]);
+        live.timelineItems = [
+          assistantRun('image-run', [
+            toolItem({ ...toolCall, result, display }),
+          ]),
+        ];
         const reloaded = timelineSession(`reloaded-${name}`);
-        reloaded.messages = [
-          {
-            id: 'assistant-images',
-            role: 'assistant',
-            content: '',
-            timestamp: '2026-09-05T10:00:00Z',
-            tool_calls: [toolCall],
-          },
-          {
-            id: 'result-images',
-            role: 'tool',
-            name,
-            tool_call_id: toolCall.id,
-            timestamp: '2026-09-05T10:00:01Z',
-            content: JSON.stringify(result),
-            tool_display: display,
-          },
+        reloaded.timelineItems = [
+          assistantRun(
+            'image-run',
+            [toolItem({ ...toolCall, result, display })],
+            { source: 'history', status: 'completed' },
+          ),
         ];
         const expectedSource =
           name === 'web_fetch'
@@ -1065,18 +1063,21 @@ describe('ChatTimeline Tools', () => {
           ],
         },
       };
-      state.messages = [
-        {
-          id: 'assistant',
-          role: 'assistant',
-          content: '',
-          timestamp: '2026-09-05T10:00:00Z',
-          tool_calls: [
-            { id: 'read-call', name: 'read', arguments: { path: 'front.png' } },
+      const row = (display) =>
+        assistantRun(
+          'image',
+          [
+            toolItem({
+              id: 'read-call',
+              name: 'read',
+              arguments: { path: 'front.png' },
+              result: JSON.parse(result.content),
+              display,
+            }),
           ],
-        },
-        result,
-      ];
+          { source: 'history', status: 'completed' },
+        );
+      state.timelineItems = [row(result.tool_display)];
       const session = fromStore(writable(state));
       timeline.mount({
         get sessionState() {
@@ -1091,21 +1092,17 @@ describe('ChatTimeline Tools', () => {
 
       session.current = {
         ...state,
-        messages: [
-          state.messages[0],
-          {
-            ...result,
-            tool_display: {
-              version: 1,
-              media: [
-                {
-                  filename: 'front.png',
-                  url: '/api/files/second.signature',
-                  kind: 'image',
-                },
-              ],
-            },
-          },
+        timelineItems: [
+          row({
+            version: 1,
+            media: [
+              {
+                filename: 'front.png',
+                url: '/api/files/second.signature',
+                kind: 'image',
+              },
+            ],
+          }),
         ],
       };
       flushSync();
@@ -1158,26 +1155,30 @@ describe('ChatTimeline Tools', () => {
     it('rejects path, remote URL, and non-image candidates and leaves text read results plain', () => {
       timeline.render(
         sessionWithTool([
-          toolResult('invalid-image-call', 'read', {
-            ok: true,
-            data: { content: 'ordinary text' },
-            artifacts: [
-              {
-                kind: 'read_media',
-                attachment_id: '../../secret.png',
-                media_type: 'image/png',
-              },
-              {
-                kind: 'read_media',
-                attachment_id: 'https://example.com/pixel',
-                media_type: 'image/png',
-              },
-              {
-                kind: 'read_media',
-                attachment_id: 'a1234567-1234-4234-8234-123456789abc',
-                media_type: 'text/plain',
-              },
-            ],
+          toolItem({
+            id: 'invalid-image-call',
+            name: 'read',
+            result: {
+              ok: true,
+              data: { content: 'ordinary text' },
+              artifacts: [
+                {
+                  kind: 'read_media',
+                  attachment_id: '../../secret.png',
+                  media_type: 'image/png',
+                },
+                {
+                  kind: 'read_media',
+                  attachment_id: 'https://example.com/pixel',
+                  media_type: 'image/png',
+                },
+                {
+                  kind: 'read_media',
+                  attachment_id: 'a1234567-1234-4234-8234-123456789abc',
+                  media_type: 'text/plain',
+                },
+              ],
+            },
           }),
         ]),
       );

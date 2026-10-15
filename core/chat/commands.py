@@ -64,7 +64,7 @@ CommandNavigationKind = Literal[
 # message has created the Session.
 CommandNewSessionMode = Literal["session_less", "create_session", "needs_session"]
 CommandRunRole = Literal["primary", "follow_up"]
-CommandSurfaceKind = Literal["webui", "channel"]
+CommandSurfaceKind = Literal["webui", "tui", "channel"]
 
 _LOGGER = get_logger("chat.commands")
 _COMMAND_WORKERS = BoundedWorkerPool(name="command", max_workers=4)
@@ -660,10 +660,10 @@ class CommandDispatcher:
             or any(not isinstance(surface, str) for surface in unavailable_surfaces)
         ):
             raise ValueError(
-                "unavailable_surfaces must be a collection containing webui and/or channel"
+                "unavailable_surfaces must be a collection containing webui, tui or channel"
             )
         normalized_surfaces = frozenset(unavailable_surfaces)
-        invalid_surfaces = normalized_surfaces - {"webui", "channel"}
+        invalid_surfaces = normalized_surfaces - {"webui", "tui", "channel"}
         if invalid_surfaces:
             names = ", ".join(sorted(invalid_surfaces))
             raise ValueError(f"unavailable_surfaces contains unsupported values: {names}")
@@ -1056,7 +1056,11 @@ class CommandDispatcher:
         self, context: CommandExecutionContext | NewSessionCommandContext, argument: str | None
     ) -> CommandOutcome:
         lines = ["Slash commands:"]
-        lines.extend(f"/{spec.name} - {spec.description}" for spec in self.catalog())
+        lines.extend(
+            f"/{spec.name} - {spec.description}"
+            for spec in self.catalog()
+            if context.reply_surface.kind not in spec.unavailable_surfaces
+        )
         lines.extend(
             [
                 "",
@@ -1076,7 +1080,7 @@ class CommandDispatcher:
         initiator = (
             f"channel_command:{surface.channel_id}"
             if surface.kind == "channel"
-            else "webui_command"
+            else f"{surface.kind}_command"
         )
         if argument is not None:
             if argument.strip().casefold() != "all" or self._stop_all is None:

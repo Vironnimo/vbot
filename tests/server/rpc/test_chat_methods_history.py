@@ -91,8 +91,8 @@ class _History:
     def session(self, session_id: str = "session-one", **kwargs: Any) -> ChatSession:
         return self.sessions.create("coder", session_id=session_id, **kwargs)
 
-    async def read(self, **params: Any) -> dict[str, Any]:
-        response = await call(self.state, "chat.history", **{"agent_id": "coder", **params})
+    async def read(self, *, method: str = "chat.history", **params: Any) -> dict[str, Any]:
+        response = await call(self.state, method, **{"agent_id": "coder", **params})
         assert response["ok"] is True, response
         result: dict[str, Any] = response["result"]
         return result
@@ -581,7 +581,10 @@ async def test_history_pages_newest_first_without_loading_the_whole_session(
 
 
 @pytest.mark.asyncio
-async def test_history_cursor_is_positional_when_message_ids_repeat(history: _History) -> None:
+@pytest.mark.parametrize("method", ["chat.history", "chat.timeline"])
+async def test_history_cursor_is_positional_when_message_ids_repeat(
+    history: _History, method: str
+) -> None:
     history.session().append_many(
         [
             replace(ChatMessage.user("zero"), id="zero"),
@@ -592,10 +595,13 @@ async def test_history_cursor_is_positional_when_message_ids_repeat(history: _Hi
         ]
     )
 
-    first = await history.read(limit=2)
-    second = await history.read(limit=2, before=first["next_before"])
+    first = await history.read(limit=2, method=method)
+    second = await history.read(limit=2, before=first["next_before"], method=method)
 
     assert [message["content"] for message in second["messages"]] == ["older duplicate", "two"]
+    if method == "chat.timeline":
+        ids = [item["id"] for page in (first, second) for item in page["items"]]
+        assert len(ids) == len(set(ids))
 
 
 @pytest.mark.asyncio
@@ -799,8 +805,9 @@ async def test_history_rejects_an_unknown_cursor_or_an_oversized_page(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.history", "chat.timeline"])
 async def test_history_includes_the_active_run_descriptor(
-    history: _History, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    history: _History, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
     session = history.session()
     started = asyncio.Event()
@@ -840,7 +847,7 @@ async def test_history_includes_the_active_run_descriptor(
 
     monkeypatch.setattr(history.state.file_delivery, "project_message", checked_projection)
     try:
-        result = await history.read()
+        result = await history.read(method=method)
     finally:
         release.set()
         await active_run.wait()
@@ -852,15 +859,27 @@ async def test_history_includes_the_active_run_descriptor(
     assert descriptor["session_id"] == "session-one"
     assert descriptor["status"] == "running"
     assert descriptor["sse_url"] == f"/api/runs/{active_run.id}/events"
-    assert [event["type"] for event in descriptor["events"]] == ["run_started", "tool_call_result"]
-    assert descriptor["events"][1]["payload"]["display"]["media"][0]["url"].startswith(
-        "/api/files/"
-    )
+    if method == "chat.history":
+        assert [event["type"] for event in descriptor["events"]] == [
+            "run_started",
+            "tool_call_result",
+        ]
+        assert descriptor["events"][1]["payload"]["display"]["media"][0]["url"].startswith(
+            "/api/files/"
+        )
+    else:
+        assert "events" not in descriptor
+        assert descriptor["timeline_url"] == f"/api/runs/{active_run.id}/timeline"
+        [row] = result["items"]
+        assert row["status"] == "running"
+        assert row["items"][0]["display"]["media"][0]["url"].startswith("/api/files/")
+        assert result["replace_run_ids"] == [active_run.id]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.history", "chat.timeline"])
 async def test_history_never_pairs_an_earlier_page_with_a_later_idle_state(
-    history: _History, monkeypatch: pytest.MonkeyPatch
+    history: _History, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
     session = history.session()
     release = asyncio.Event()
@@ -885,7 +904,7 @@ async def test_history_never_pairs_an_earlier_page_with_a_later_idle_state(
 
     monkeypatch.setattr(history.sessions, "run_async", complete_during_the_durable_read)
     try:
-        result = await history.read()
+        result = await history.read(method=method)
         assert injected
         assert result.get("active_run", {}).get("run_id") == run.id or any(
             message.get("content") == "Completed answer" for message in result["messages"]

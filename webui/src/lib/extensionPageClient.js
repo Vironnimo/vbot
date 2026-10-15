@@ -367,11 +367,17 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     // its components with `provideNavigation({ registerLayer })` in its root,
     // so the shared Modal and ContextMenu register themselves.
     registerLayer,
-    subscribeRun: (groupId, runId, afterSequence = 0) =>
+    subscribeRun: (
+      groupId,
+      runId,
+      afterSequence = 0,
+      { timeline = false } = {},
+    ) =>
       call('run.subscribe', {
         group_id: groupId,
         run_id: runId,
         after_sequence: afterSequence,
+        ...(timeline ? { timeline: true } : {}),
       }),
     unsubscribeRun: (id) => call('run.unsubscribe', { id }),
     cancelToolCall: (groupId, runId, toolCallId) =>

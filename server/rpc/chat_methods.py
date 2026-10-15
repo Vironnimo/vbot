@@ -77,6 +77,7 @@ from server.rpc.runtime_access import (
 )
 from server.rpc.validation import (
     ChatInputOrigin,
+    _chat_reply_surface,
     _optional_agent_overrides,
     _optional_chat_input_origin,
     _optional_file_mentions,
@@ -95,8 +96,6 @@ MAX_CHAT_HISTORY_LIMIT = 500
 # ``@``-mention expansion. Session reads run on the Session database's pool.
 _CHAT_RPC_WORKERS = BoundedWorkerPool(name="chat-rpc", max_workers=4)
 _LOGGER = get_logger("server.rpc.chat")
-
-WEBUI_REPLY_SURFACE = ReplySurface.webui()
 
 
 @dataclass(frozen=True)
@@ -167,7 +166,7 @@ async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
     return response
 
 
-async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
+async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = False) -> JsonObject:
     """Read one History page of a Session.
 
     Without ``before`` or ``after`` the response is the newest page with the
@@ -210,7 +209,12 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 _current_session_id, state, agent_id
             )
             if session_id is None:
-                return _empty_chat_history(agent_id)
+                empty_response = _empty_chat_history(agent_id)
+                if timeline:
+                    from server.timeline import project_timeline_history
+
+                    return project_timeline_history(empty_response)
+                return empty_response
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         chat_runs = _state_chat_runs(state)
         while True:
@@ -237,6 +241,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 after=after,
                 active_reviews=active_reviews,
                 subagent_walk=subagent_walk,
+                complete_runs=timeline,
             )
             latest_run = chat_runs.active_run(
                 agent_id=agent_id, session_id=session_id, project_id=project_id
@@ -245,6 +250,11 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 break
         # Freeze the live projection at the same boundary as durable history.
         # A completion during projection must not turn an earlier page into idle history.
+        live_timeline = None
+        if timeline and active_run_object is not None and before is None:
+            from server.timeline import capture_run_timeline
+
+            live_timeline = capture_run_timeline(active_run_object)
         active_run = (
             await _run_response(
                 active_run_object,
@@ -318,7 +328,23 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         response["compaction_policy"] = read.compaction_policy
     if active_run is not None:
         response["active_run"] = active_run
+    if timeline:
+        from server.rpc.payloads import remove_opaque_provider_metadata_async
+        from server.timeline import project_timeline_history
+
+        if live_timeline is not None:
+            live_timeline = await remove_opaque_provider_metadata_async(
+                live_timeline, file_delivery=state.file_delivery
+            )
+        if active_run is not None:
+            active_run.pop("events", None)
+        return await _CHAT_RPC_WORKERS.run(project_timeline_history, response, live_timeline)
     return response
+
+
+async def _chat_timeline(state: Any, params: JsonObject) -> JsonObject:
+    """Read authoritative semantic conversation elements and Session facts."""
+    return await _chat_history(state, params, timeline=True)
 
 
 def _read_chat_history(
@@ -330,6 +356,7 @@ def _read_chat_history(
     after: str | None,
     active_reviews: list[Run] | None,
     subagent_walk: bool,
+    complete_runs: bool = False,
 ) -> _ChatHistoryRead:
     """Read one History page and the Session facts it carries in one Session-pool hop.
 
@@ -342,6 +369,7 @@ def _read_chat_history(
         after=after,
         excluded_roles=("note", "history_edit"),
         complete_run_segment=True,
+        complete_runs=complete_runs,
         background_tool_names=COMMAND_STATUS_TOOL_NAMES if before is None else (),
         background_note_marker=COMMAND_STATUS_NOTE_MARKER if before is None else None,
         skip_unchanged=True,
@@ -690,6 +718,7 @@ async def _execute_chat_command(
     prepared: PreparedCommand,
     *,
     project_id: str | None = None,
+    reply_surface: ReplySurface,
 ) -> Run | JsonObject:
     dispatcher = _state_command_dispatcher(state)
     on_change = _command_change_publisher(state)
@@ -700,7 +729,7 @@ async def _execute_chat_command(
                 agent_id=agent_id,
                 session_id=session_id,
                 project_id=project_id,
-                reply_surface=WEBUI_REPLY_SURFACE,
+                reply_surface=reply_surface,
                 on_change=on_change,
             ),
         )
@@ -730,6 +759,7 @@ async def _execute_new_session_chat_command(
     target: _NewSessionTarget,
     *,
     project_id: str | None,
+    reply_surface: ReplySurface,
 ) -> Run | JsonObject:
     """Run a command sent for a new Session; the command decides whether it creates one."""
     on_change = _command_change_publisher(state)
@@ -739,7 +769,7 @@ async def _execute_new_session_chat_command(
             NewSessionCommandContext(
                 agent_id=agent_id,
                 project_id=project_id,
-                reply_surface=WEBUI_REPLY_SURFACE,
+                reply_surface=reply_surface,
                 agent_overrides=target.agent_overrides,
                 working_project_id=target.working_project_id,
                 on_change=on_change,
@@ -866,20 +896,34 @@ async def _submit_chat(
 
     _reject_unsupported(
         params,
-        {"agent_id", "session_id", "new_session", "content", "input_origin", "file_mentions"},
+        {
+            "agent_id",
+            "session_id",
+            "new_session",
+            "content",
+            "input_origin",
+            "file_mentions",
+            "reply_surface",
+        },
         method,
     )
     agent_id, project_id = _required_agent_address(params, "agent_id")
     target = _chat_target(params, project_id)
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
+    reply_surface = _chat_reply_surface(params)
     file_mentions = _optional_file_mentions(params)
 
     prepared_command = _state_command_dispatcher(state).prepare(content)
     if isinstance(target, _NewSessionTarget):
         if prepared_command is not None:
             return await _execute_new_session_chat_command(
-                state, agent_id, prepared_command, target, project_id=project_id
+                state,
+                agent_id,
+                prepared_command,
+                target,
+                project_id=project_id,
+                reply_surface=reply_surface,
             )
         return await _start_chat_in_new_session(
             state,
@@ -889,6 +933,7 @@ async def _submit_chat(
             target,
             input_origin=input_origin,
             file_mentions=file_mentions,
+            reply_surface=reply_surface,
         )
     session_id = target
     if prepared_command is not None:
@@ -898,6 +943,7 @@ async def _submit_chat(
             session_id,
             prepared_command,
             project_id=project_id,
+            reply_surface=reply_surface,
         )
 
     content = await _expand_content_file_mentions(
@@ -919,7 +965,7 @@ async def _submit_chat(
                 agent_id,
                 content,
                 session_id=session_id,
-                reply_surface=WEBUI_REPLY_SURFACE,
+                reply_surface=reply_surface,
                 project_id=project_id,
             )
         else:
@@ -928,7 +974,7 @@ async def _submit_chat(
                 content,
                 session_id=session_id,
                 input_origin=input_origin,
-                reply_surface=WEBUI_REPLY_SURFACE,
+                reply_surface=reply_surface,
                 project_id=project_id,
             )
     except ActiveRunError:
@@ -938,7 +984,7 @@ async def _submit_chat(
                     agent_id,
                     content,
                     session_id=session_id,
-                    reply_surface=WEBUI_REPLY_SURFACE,
+                    reply_surface=reply_surface,
                     project_id=project_id,
                 )
             else:
@@ -947,7 +993,7 @@ async def _submit_chat(
                     content,
                     session_id=session_id,
                     input_origin=input_origin,
-                    reply_surface=WEBUI_REPLY_SURFACE,
+                    reply_surface=reply_surface,
                     project_id=project_id,
                 )
             started_run = _run_started_during_enqueue(queued_item)
@@ -1005,6 +1051,7 @@ async def _start_chat_in_new_session(
     *,
     input_origin: ChatInputOrigin | None,
     file_mentions: list[str],
+    reply_surface: ReplySurface,
 ) -> Run:
     """Create the Session of a new conversation with its first Run, or nothing.
 
@@ -1034,7 +1081,7 @@ async def _start_chat_in_new_session(
             working_project_id=target.working_project_id,
             actor="rpc",
             input_origin=input_origin,
-            reply_surface=WEBUI_REPLY_SURFACE,
+            reply_surface=reply_surface,
             project_id=project_id,
         )
     except Exception as exc:
@@ -1081,13 +1128,14 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
 async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"agent_id", "session_id", "message_id", "content"},
+        {"agent_id", "session_id", "message_id", "content", "reply_surface"},
         "chat.edit",
     )
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     message_id = _required_string(params, "message_id")
     content = _required_string(params, "content")
+    reply_surface = _chat_reply_surface(params)
 
     try:
         run = await _chat_loop(state).edit_run(
@@ -1095,7 +1143,7 @@ async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:
             content,
             session_id=session_id,
             message_id=message_id,
-            reply_surface=WEBUI_REPLY_SURFACE,
+            reply_surface=reply_surface,
             project_id=project_id,
         )
         if project_id is None:
@@ -1151,7 +1199,10 @@ async def _chat_work(state: Any, params: JsonObject) -> JsonObject:
     session_id = _required_string(params, "session_id")
     address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
     try:
-        return cast(JsonObject, await state.runtime.subagents.work_snapshot(address))
+        return cast(
+            JsonObject,
+            await state.runtime.subagents.work_snapshot(address, include_entries=True),
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -1325,7 +1376,15 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
 async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"agent_id", "session_id", "item_id", "content", "input_origin", "file_mentions"},
+        {
+            "agent_id",
+            "session_id",
+            "item_id",
+            "content",
+            "input_origin",
+            "file_mentions",
+            "reply_surface",
+        },
         "chat.queue_update",
     )
 
@@ -1334,6 +1393,7 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
     item_id = _required_string(params, "item_id")
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
+    reply_surface = _chat_reply_surface(params) if "reply_surface" in params else None
     # An edit replaces the queued content wholesale, so mentions are re-expanded
     # against the edited text — a fresh snapshot at edit time.
     content = await _expand_content_file_mentions(
@@ -1372,6 +1432,7 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
             queued_item,
             input_origin=input_origin,
             project_id=project_id,
+            reply_surface=reply_surface,
         )
         updated = chat_runs.update_queued(
             agent_id,
@@ -1426,6 +1487,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "chat.history": _chat_history,
+        "chat.timeline": _chat_timeline,
         "chat.run_result": _chat_run_result,
         "chat.reflections": _chat_reflections,
         "chat.send": _send_chat,

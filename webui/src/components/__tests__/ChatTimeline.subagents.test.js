@@ -2,14 +2,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  appendEvents,
   flushSync,
   setupChatTimelineSuite,
   timelineSession,
-  toolResult,
-  toolStarted,
 } from './ChatTimeline.support.js';
-import { loadHistory } from '../../lib/chatState.js';
+import { assistantRun, toolItem } from './timelineItems.support.js';
 import { t } from '../../lib/i18n.js';
 
 const RUN_ARGUMENTS = {
@@ -21,18 +18,24 @@ const RUN_ARGUMENTS = {
 // A Sub-Agent whose start names Child Run `sub-run`.
 function subAgentSession() {
   const sessionState = timelineSession();
-  appendEvents(sessionState, 'run-parent', [
-    toolStarted('call-subagent', 'subagent', RUN_ARGUMENTS),
-    toolResult('call-subagent', 'subagent', {
-      ok: true,
-      data: {
-        agent_id: 'beta',
-        session_id: 'sub-session',
-        run_id: 'sub-run',
-        status: 'running',
-      },
-    }),
-  ]);
+  sessionState.timelineItems = [
+    assistantRun('run-parent', [
+      toolItem({
+        id: 'call-subagent',
+        name: 'subagent',
+        arguments: RUN_ARGUMENTS,
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session',
+            run_id: 'sub-run',
+            status: 'running',
+          },
+        },
+      }),
+    ]),
+  ];
   return sessionState;
 }
 
@@ -80,24 +83,30 @@ describe('ChatTimeline sub-agent rows', () => {
     'renders a %s call as an ordinary Tool call',
     (_action, args, data, label) => {
       const sessionState = timelineSession();
-      appendEvents(sessionState, 'run-subagent-call', [
-        toolStarted('call-subagent', 'subagent', {
-          action: 'run',
-          agent_id: 'beta',
-          content: 'Inspect the logs',
-        }),
-        toolResult('call-subagent', 'subagent', {
-          ok: true,
-          data: {
-            id: 'sub_work_1',
-            agent_id: 'beta',
-            session_id: 'sub-session-1',
-            status: 'running',
-          },
-        }),
-        toolStarted('call-subagent-other', 'subagent', args),
-        toolResult('call-subagent-other', 'subagent', { ok: true, data }),
-      ]);
+      sessionState.timelineItems = [
+        assistantRun('run-subagent-call', [
+          toolItem({
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: RUN_ARGUMENTS,
+            result: {
+              ok: true,
+              data: {
+                id: 'sub_work_1',
+                agent_id: 'beta',
+                session_id: 'sub-session-1',
+                status: 'running',
+              },
+            },
+          }),
+          toolItem({
+            id: 'call-subagent-other',
+            name: 'subagent',
+            arguments: args,
+            result: { ok: true, data },
+          }),
+        ]),
+      ];
       timeline.render(sessionState);
 
       const subagentRows = document.querySelectorAll(
@@ -121,34 +130,34 @@ describe('ChatTimeline sub-agent rows', () => {
   it('renders a message to an existing Sub-Agent with a link to its Session and no cancel', () => {
     const onNavigateToSubAgent = vi.fn();
     const sessionState = timelineSession();
-    appendEvents(sessionState, 'run-subagent-send', [
-      toolStarted('call-send', 'subagent', {
-        action: 'send',
-        id: 'sub_work_1',
-        content: 'Also check the tests',
-      }),
-      {
-        type: 'subagent_session_started',
-        payload: {
-          tool_call: { id: 'call-send', index: 0, name: 'subagent' },
-          data: {
+    sessionState.timelineItems = [
+      assistantRun('run-subagent-send', [
+        toolItem({
+          id: 'call-send',
+          name: 'subagent',
+          arguments: {
+            action: 'send',
+            id: 'sub_work_1',
+            content: 'Also check the tests',
+          },
+          subAgentSession: {
             id: 'sub_work_1',
             agent_id: 'beta',
             session_id: 'sub-session-1',
             status: 'running',
           },
-        },
-      },
-      toolResult('call-send', 'subagent', {
-        ok: true,
-        data: {
-          id: 'sub_work_1',
-          agent_id: 'beta',
-          session_id: 'sub-session-1',
-          status: 'steered',
-        },
-      }),
-    ]);
+          result: {
+            ok: true,
+            data: {
+              id: 'sub_work_1',
+              agent_id: 'beta',
+              session_id: 'sub-session-1',
+              status: 'steered',
+            },
+          },
+        }),
+      ]),
+    ];
     // The Sub-Agent's own work shows on the row that started it; the send row
     // reports its delivery.
     timeline.render(sessionState, {
@@ -210,16 +219,13 @@ describe('ChatTimeline sub-agent rows', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-05T18:00:06.000Z'));
     const sessionState = timelineSession();
-    appendEvents(sessionState, 'run-parent', [
-      {
-        ...toolStarted('call-subagent', 'subagent', RUN_ARGUMENTS),
-        timestamp: '2026-08-05T18:00:00.000Z',
-      },
-      {
-        ...toolResult(
-          'call-subagent',
-          'subagent',
-          {
+    sessionState.timelineItems = [
+      assistantRun('run-parent', [
+        toolItem({
+          id: 'call-subagent',
+          name: 'subagent',
+          arguments: RUN_ARGUMENTS,
+          result: {
             ok: true,
             data: {
               agent_id: 'beta',
@@ -228,11 +234,10 @@ describe('ChatTimeline sub-agent rows', () => {
               status: 'running',
             },
           },
-          { timing: { duration_ms: 50 } },
-        ),
-        timestamp: '2026-08-05T18:00:00.050Z',
-      },
-    ]);
+          timing: { duration_ms: 50 },
+        }),
+      ]),
+    ];
     timeline.render(sessionState, {
       subAgentStatuses: {
         'run:sub-run': 'running',
@@ -251,45 +256,45 @@ describe('ChatTimeline sub-agent rows', () => {
   it.each([
     [
       'its spawn result',
-      toolResult('call-subagent', 'subagent', {
-        ok: true,
-        data: {
-          agent_id: 'beta',
-          session_id: 'sub-session-1',
-          status: 'running',
+      {
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session-1',
+            status: 'running',
+          },
         },
-      }),
+      },
       'sub-session-1',
     ],
     [
       'the Session start before the Tool result',
       {
-        type: 'subagent_session_started',
-        payload: {
-          tool_call: { id: 'call-subagent', index: 0, name: 'subagent' },
-          data: {
-            agent_id: 'beta',
-            session_id: 'sub-session-running',
-            run_id: 'sub-run-running',
-            status: 'running',
-          },
+        subAgentSession: {
+          agent_id: 'beta',
+          session_id: 'sub-session-running',
+          run_id: 'sub-run-running',
+          status: 'running',
         },
       },
       'sub-session-running',
     ],
   ])(
     'navigates to the sub-agent Session named by %s',
-    (_case, targetEvent, sessionId) => {
+    (_case, target, sessionId) => {
       const onNavigateToSubAgent = vi.fn();
       const sessionState = timelineSession();
-      appendEvents(sessionState, 'run-subagent-link', [
-        toolStarted('call-subagent', 'subagent', {
-          action: 'run',
-          agent_id: 'beta',
-          content: 'Inspect the logs',
-        }),
-        targetEvent,
-      ]);
+      sessionState.timelineItems = [
+        assistantRun('run-subagent-link', [
+          toolItem({
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: RUN_ARGUMENTS,
+            ...target,
+          }),
+        ]),
+      ];
       timeline.render(sessionState, { onNavigateToSubAgent });
 
       expect(document.querySelector('.subagent-tool-event').open).toBe(false);
@@ -305,14 +310,11 @@ describe('ChatTimeline sub-agent rows', () => {
 
   it('renders a Sub-Agent call cancelled before its result as cancelled after History reload', () => {
     const sessionState = timelineSession();
-    loadHistory(sessionState, [
-      { id: 'user-1', role: 'user', content: 'Research the APIs' },
-      {
-        id: 'assistant-subagent',
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          {
+    sessionState.timelineItems = [
+      assistantRun(
+        'run-parent',
+        [
+          toolItem({
             id: 'call-subagent',
             name: 'subagent',
             arguments: {
@@ -320,17 +322,12 @@ describe('ChatTimeline sub-agent rows', () => {
               agent_id: 'researcher',
               content: 'Research the APIs',
             },
-          },
+            status: 'cancelled',
+          }),
         ],
-      },
-      {
-        id: 'summary-1',
-        role: 'run_summary',
-        run_id: 'run-parent',
-        status: 'cancelled',
-        timestamp: '2026-07-27T09:14:23Z',
-      },
-    ]);
+        { status: 'cancelled', source: 'history' },
+      ),
+    ];
     timeline.render(sessionState);
 
     const subAgentRow = document.querySelector('.subagent-tool-event');
@@ -343,22 +340,26 @@ describe('ChatTimeline sub-agent rows', () => {
   it.each([
     [
       'a sub-agent before its Session target',
-      toolStarted('call-subagent', 'subagent', RUN_ARGUMENTS),
+      toolItem({
+        id: 'call-subagent',
+        name: 'subagent',
+        arguments: RUN_ARGUMENTS,
+      }),
     ],
     [
       'a streamed sub-agent call that is still preparing',
-      {
-        type: 'tool_call_delta',
-        payload: {
-          tool_call_id: 'call-subagent',
-          name_delta: 'subagent',
-          arguments_delta: '{"agent_id":"beta"',
-        },
-      },
+      toolItem({
+        id: 'call-subagent',
+        name: 'subagent',
+        status: 'preparing',
+        streaming: true,
+        partialArgumentsText: '{"agent_id":"beta"',
+        startedEvent: null,
+      }),
     ],
   ])('renders no sub-agent card for %s', (_case, event) => {
     const sessionState = timelineSession();
-    appendEvents(sessionState, 'run-no-card', [event]);
+    sessionState.timelineItems = [assistantRun('run-no-card', [event])];
     timeline.render(sessionState);
 
     expect(

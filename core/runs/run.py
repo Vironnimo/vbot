@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from core.event_stream import ReplayEventStream
 from core.runs._errors import detached_error
+from core.runs._timeline import RunTimeline
 from core.utils.errors import VBotError
 
 JsonObject = dict[str, Any]
@@ -355,6 +356,11 @@ class Run:
         self.expected_session_generation_id = expected_session_generation_id
         self.status = RunStatus.RUNNING
         self.created_at = datetime.now(UTC).isoformat()
+        # The current semantic output must survive bounded raw-event replay.
+        # Attached readers may retain this object through settlement; late
+        # readers reconstruct the finished Run from canonical Session history.
+        self.timeline: RunTimeline | None = RunTimeline(run_id, timestamp=self.created_at)
+        self._timeline_changed = asyncio.Event()
         self.updated_at = self.created_at
         self.result: Any | None = None
         self.error: BaseException | None = None
@@ -696,6 +702,10 @@ class Run:
             payload=dict(payload or {}),
         )
         self._next_sequence += 1
+        if self.timeline is not None:
+            self.timeline.apply(event.to_dict())
+        changed, self._timeline_changed = self._timeline_changed, asyncio.Event()
+        changed.set()
         self._event_stream.publish(event)
         self.updated_at = event.timestamp
         if self.compaction_state != "unavailable":
@@ -705,6 +715,12 @@ class Run:
                 self._user_compaction_requested = False
                 self.set_compaction_state("idle")
         return event
+
+    async def wait_timeline_change(self, after_sequence: int) -> None:
+        """Wait for newer semantic output without retaining a queue of deltas."""
+        while self.last_sequence <= after_sequence:
+            changed = self._timeline_changed
+            await changed.wait()
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[RunEvent]:
         """Replay retained events, then stream live events until a terminal event.
@@ -781,6 +797,7 @@ class Run:
             limit=FINISHED_RUN_REPLAY_LIMIT,
             keep=lambda event: event.type not in TRANSIENT_EVENT_TYPES,
         )
+        self.timeline = None
         self._done.set()
 
     # Terminal bookkeeping below is the single log owner of a Run's outcome:

@@ -182,6 +182,7 @@ def test_sender_tag_parts_are_sanitized(sender: MessageSender, expected: str) ->
 
 def test_reply_surface_notes_round_trip_and_render_reminders() -> None:
     webui = ReplySurface.webui()
+    tui = ReplySurface.tui()
     telegram = ReplySurface.channel(
         platform="telegram",
         platform_display_name="Telegram",
@@ -196,7 +197,8 @@ def test_reply_surface_notes_round_trip_and_render_reminders() -> None:
         conversation_kind="group",
     )
     notes = {
-        surface: ChatMessage.note(surface.to_note_content()) for surface in (webui, telegram, group)
+        surface: ChatMessage.note(surface.to_note_content())
+        for surface in (webui, tui, telegram, group)
     }
 
     for surface, note in notes.items():
@@ -222,12 +224,18 @@ def test_reply_surface_notes_round_trip_and_render_reminders() -> None:
     assert "direct" in channel_text
     assert "WebUI" in webui.reminder_text() and "Desktop" in webui.reminder_text()
     assert "file:<filesystem-path>" in webui.reminder_text()
+    tui_text = _embed_notes_into_request([notes[tui]])[0]["content"]
+    assert "terminal TUI" in tui_text and "file:<filesystem-path>" in tui_text
+    assert "not embedded" in tui_text and "WebUI" not in tui_text
+    assert tui.identity != webui.identity
     direct = ReplySurface.channel(
         platform="discord", platform_display_name="Discord", channel_id="discord-main"
     )
     assert direct.identity != group.identity
     with pytest.raises(ChatError):
         ReplySurface(kind="webui", channel_id="tg-main")
+    with pytest.raises(ChatError):
+        ReplySurface(kind="tui", channel_id="tg-main")
 
 
 _SHELL_DEFINITION = {

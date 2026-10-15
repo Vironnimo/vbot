@@ -2,13 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   appendRunEvent,
   ensureSessionState,
-  highestContiguousRunEventSequence,
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
 import { ApiClientError } from '../api/transport.js';
 import { t } from '../i18n.js';
 import {
+  assistantRun,
+  toolItem,
+} from '../../components/__tests__/timelineItems.support.js';
+import {
+  applyOutputSnapshot,
   countTimelineTextOccurrences,
   deferred,
   setupController,
@@ -154,12 +158,7 @@ describe('send and edit admission', () => {
         sequence: 1,
         type: 'run_started',
       });
-      appendRunEvent(session, {
-        run_id: 'one',
-        sequence: 2,
-        type: 'assistant_output_delta',
-        payload: { content_delta: 'Reply' },
-      });
+      applyOutputSnapshot(session, 'one', 2, 'Reply');
       const terminal = {
         run_id: 'one',
         sequence: 3,
@@ -210,12 +209,7 @@ describe('send and edit admission', () => {
       sequence: 1,
       type: 'run_started',
     });
-    appendRunEvent(session, {
-      run_id: 'two',
-      sequence: 2,
-      type: 'assistant_output_delta',
-      payload: { content_delta: 'New' },
-    });
+    applyOutputSnapshot(session, 'two', 2, 'New');
     response.resolve({
       run_id: 'one',
       status: 'running',
@@ -312,12 +306,7 @@ describe('send and edit admission', () => {
       sequence: 1,
       type: 'run_started',
     });
-    appendRunEvent(session, {
-      run_id: 'edit',
-      sequence: 2,
-      type: 'assistant_output_delta',
-      payload: { content_delta: 'Reply' },
-    });
+    applyOutputSnapshot(session, 'edit', 2, 'Reply');
     response.resolve({
       run_id: 'edit',
       status: 'running',
@@ -325,8 +314,8 @@ describe('send and edit admission', () => {
       events: [],
     });
     await editing;
-    // The replay cursor still covers the Run start that preceded the response.
-    expect(highestContiguousRunEventSequence(session)).toBe(2);
+    // The accepted Run start remains present after the edit acknowledgement.
+    expect(session.currentRun.runId).toBe('edit');
     expect(
       countTimelineTextOccurrences(
         visibleTimelineItemsForRender(session),
@@ -366,12 +355,7 @@ describe('send and edit admission', () => {
       sequence: 1,
       type: 'run_started',
     });
-    appendRunEvent(session, {
-      run_id: 'next',
-      sequence: 2,
-      type: 'assistant_output_delta',
-      payload: { content_delta: 'Successor output' },
-    });
+    applyOutputSnapshot(session, 'next', 2, 'Successor output');
     response.resolve({
       run_id: 'edit',
       status: 'running',
@@ -955,6 +939,26 @@ describe('Run controls and cancellation', () => {
     const loadChatHistory = vi.fn().mockResolvedValue({
       runs: [{ run_id: 'run-cancelled', status: 'cancelled', complete: true }],
       active_run: null,
+      items: [
+        assistantRun(
+          'run-cancelled',
+          [
+            toolItem({
+              id: 'call-one',
+              name: 'bash',
+              arguments: { command: 'first command' },
+              status: 'cancelled',
+            }),
+            toolItem({
+              id: 'call-two',
+              name: 'bash',
+              arguments: { command: 'second command' },
+              status: 'cancelled',
+            }),
+          ],
+          { status: 'cancelled', source: 'history' },
+        ),
+      ],
       messages: [
         {
           id: 'assistant-tools',

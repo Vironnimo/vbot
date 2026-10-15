@@ -83,7 +83,7 @@ describe('ChatView Sessions', () => {
     ];
     const fallback = createChatRpcMock({ agents });
     rpcMock.mockImplementation((method, params) =>
-      method === 'chat.history' ? pending : fallback(method, params),
+      method === 'chat.timeline' ? pending : fallback(method, params),
     );
     const parent = createChatViewParentHarness();
     await chat.mountChat(parent.props(['agent'], { sharedAgents: agents }), {
@@ -274,9 +274,12 @@ describe('ChatView Sessions', () => {
           .find((agent) => agent.id === 'alpha').current_session_id,
       ).toBe('created-alpha');
       expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-        '/api/runs/run-one/events',
+        '/api/runs/run-one/timeline',
         expect.any(Object),
-        { afterSequence: 0 },
+        {
+          eventTypes: ['timeline_snapshot', 'timeline_update'],
+          closeOnTerminal: false,
+        },
       );
       await waitForCondition(() => composerInput().value === '');
 
@@ -455,7 +458,7 @@ describe('ChatView Sessions', () => {
           await waitForCondition(
             () => (document.activeElement === composerInput()) === !mobile,
           );
-          expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+          expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
             agent_id: 'alpha',
             session_id: 'session-2',
             limit: 100,
@@ -492,7 +495,7 @@ describe('ChatView Sessions', () => {
       rpcMock.mockImplementation(async (method, params) => {
         if (
           pending &&
-          method === 'chat.history' &&
+          method === 'chat.timeline' &&
           params.session_id === 'session-2'
         ) {
           pending = false;
@@ -650,13 +653,13 @@ describe('ChatView Sessions', () => {
           sharedSelectedAgentId: 'alpha',
         }),
       );
-      const historyCallsBefore = rpcCalls('chat.history').length;
+      const historyCallsBefore = rpcCalls('chat.timeline').length;
 
       // A Sessions signal refreshes the Session list only ("stay put").
       parent.bumpSessionsRefreshToken();
       flushSync();
 
-      expect(rpcCalls('chat.history')).toHaveLength(historyCallsBefore);
+      expect(rpcCalls('chat.timeline')).toHaveLength(historyCallsBefore);
       expect(document.body.textContent).toContain('Hello');
     });
 
@@ -694,7 +697,7 @@ describe('ChatView Sessions', () => {
           document.body.textContent.includes('History message 20') &&
           messages.scrollTop === 400,
       );
-      expect(rpcCalls('chat.history')).toEqual([
+      expect(rpcCalls('chat.timeline')).toEqual([
         { agent_id: 'alpha', session_id: 'session-1', limit: 100 },
         {
           agent_id: 'alpha',
@@ -713,7 +716,7 @@ describe('ChatView Sessions', () => {
       const baseMock = createChatRpcMock();
       rpcMock.mockImplementation(async (method, params) => {
         if (
-          method === 'chat.history' &&
+          method === 'chat.timeline' &&
           params?.session_id === 'sub-session-1'
         ) {
           await childHistoryGate;
@@ -838,7 +841,7 @@ describe('ChatView Sessions', () => {
         await mountOverride(scenario);
         const { override, current } = scenario;
 
-        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: override.agentId,
           session_id: override.sessionId,
           limit: 100,
@@ -862,7 +865,7 @@ describe('ChatView Sessions', () => {
             document.body.textContent.includes(current.text) &&
             !document.body.textContent.includes(SUB_AGENT_NOTICE()),
         );
-        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: current.agentId,
           session_id: current.sessionId,
           limit: 100,
@@ -906,9 +909,12 @@ describe('ChatView Sessions', () => {
           () => subscribeRunEventsMock.mock.calls.length === 1,
         );
         expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-          '/api/runs/child-run-continue/events',
+          '/api/runs/child-run-continue/timeline',
           expect.any(Object),
-          { afterSequence: 0 },
+          {
+            eventTypes: ['timeline_snapshot', 'timeline_update'],
+            closeOnTerminal: false,
+          },
         );
       },
     );
@@ -1024,7 +1030,7 @@ describe('ChatView Sessions', () => {
           document.body.textContent.includes('Root history') &&
           !document.body.textContent.includes(SUB_AGENT_NOTICE()),
       );
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'alpha',
         session_id: 'root-session',
         limit: 100,
@@ -1068,7 +1074,7 @@ describe('ChatView Sessions', () => {
       );
 
       // The Librarian is not in the Agent roster; the Agent bar names it.
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'librarian',
         session_id: 'lib-1',
         limit: 100,
@@ -1151,7 +1157,7 @@ describe('ChatView Sessions', () => {
         });
         rpcMock.mockImplementation(async (method, params) => {
           const result = await baseRpc(method, params);
-          return method === 'chat.history' && params.session_id === 'session-1'
+          return method === 'chat.timeline' && params.session_id === 'session-1'
             ? {
                 ...result,
                 reflection_runs: [
@@ -1182,7 +1188,7 @@ describe('ChatView Sessions', () => {
         expect(reviewLink.getAttribute('aria-label')).toContain('Completed');
         reviewLink.click();
         await waitForText('Restored review result');
-        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: address,
           session_id: 'review-session',
           limit: 100,
@@ -1222,7 +1228,7 @@ describe('ChatView Sessions', () => {
         'Original research',
       );
       await waitForText('Original Session history');
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'alpha',
         session_id: 'source-session',
         limit: 100,

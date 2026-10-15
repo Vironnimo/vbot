@@ -1,9 +1,3 @@
-import {
-  RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
-  RUN_EVENT_REASONING_DELTA,
-  RUN_EVENT_TOOL_CALL_OUTPUT,
-} from '../api.js';
-
 export const CHAT_STATUS_IDLE = 'idle';
 
 export const CHAT_STATUS_RUNNING = 'running';
@@ -34,12 +28,6 @@ export const TERMINAL_RUN_STATUSES = new Set([
   CHAT_STATUS_FAILED,
   CHAT_STATUS_CANCELLED,
   CHAT_STATUS_INTERRUPTED,
-]);
-
-export const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
-  RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
-  RUN_EVENT_REASONING_DELTA,
-  RUN_EVENT_TOOL_CALL_OUTPUT,
 ]);
 
 export const isRecord = (value) =>
@@ -203,15 +191,14 @@ export function ensureSessionState(state, agentId, sessionId) {
       agentId,
       sessionId,
       messages: [],
+      timelineItems: [],
+      timelineSequences: {},
       historyLoaded: false,
       historySnapshotVersion: 0,
       historyGeneration: '',
       historyRuns: {},
       historyAfter: '',
       runEvents: [],
-      streamingRunEvents: [],
-      streamingPhase: 0,
-      seenStreamingEventKeys: new Set(),
       // Finished Runs whose live events were released while the Session was
       // neither displayed nor History-loaded (bounded, newest last).
       releasedRunIds: [],
@@ -540,7 +527,7 @@ export function isSessionEmpty(sessionState) {
     !sessionState.currentRun &&
     (sessionState.messages ?? []).length === 0 &&
     (sessionState.runEvents ?? []).length === 0 &&
-    (sessionState.streamingRunEvents ?? []).length === 0 &&
+    (sessionState.timelineItems ?? []).length === 0 &&
     (sessionState.queue ?? []).length === 0,
   );
 }
@@ -610,8 +597,5 @@ export function resetStaleRun(sessionState) {
   sessionState.streamError = '';
   sessionState.currentRun = null;
   sessionState.runEvents = [];
-  sessionState.streamingRunEvents = [];
-  sessionState.streamingPhase = 0;
-  sessionState.seenStreamingEventKeys = new Set();
   return sessionState;
 }

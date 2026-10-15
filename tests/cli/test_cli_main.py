@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -27,6 +29,55 @@ DEFAULT_TARGET = {"host": "127.0.0.1", "port": None, "data_dir": None}
 CONFLICT = "port occupied by non-vBot process"
 VBOT_HEALTH = HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
 FOREIGN_HEALTH = HealthProbeResult(reachable=True, is_vbot=False, status_code=200)
+
+
+@pytest.mark.parametrize("interactive", [True, False])
+def test_tui_opens_only_in_an_interactive_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    interactive: bool,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    instance = make_instance(tmp_path)
+
+    async def open_tui(**kwargs: Any) -> int:
+        calls.append(kwargs)
+        return 0
+
+    monkeypatch.setitem(sys.modules, "cli.tui", SimpleNamespace(run_tui=open_tui))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: interactive)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: interactive)
+    result = cli_main.run(
+        ["tui", "--agent", "coder@vbot", "--session", "session-one"],
+        resolve=lambda **_kwargs: instance,
+    )
+    output = capsys.readouterr()
+    if interactive:
+        assert result == 0
+        assert calls == [
+            {
+                "target": instance,
+                "agent_id": "coder@vbot",
+                "session_id": "session-one",
+                "project_id": None,
+            }
+        ]
+        assert not output.out and not output.err
+    else:
+        assert result == 2 and not calls
+        assert "interactive terminal" in output.out and "vbot chat" in output.out
+
+
+def test_tui_help_keeps_interaction_separate_from_one_shot_chat(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli_main.run(["tui", "--help"])
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "full-screen" in output and "vbot chat" in output
+    assert "--agent" in output and "--session" in output and "--project" in output
 
 
 @pytest.mark.parametrize("prefix", [False, True])

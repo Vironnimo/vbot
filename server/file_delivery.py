@@ -253,6 +253,7 @@ class FileDelivery:
         group_id: str,
         run_id: str,
         after_sequence: int = 0,
+        timeline: bool = False,
     ) -> JsonObject:
         """Mint a short-lived parent-origin SSE capability for one owned Run.
 
@@ -285,6 +286,11 @@ class FileDelivery:
             )
         )
         token = f"{encoded}.{signature}"
+        if timeline:
+            return {
+                "url": f"{EXTENSION_RUN_URL_PREFIX}{token}/timeline",
+                "timeline_version": 1,
+            }
         return {"url": f"{EXTENSION_RUN_URL_PREFIX}{token}/events"}
 
     def extension_run_claims(self, token: str) -> JsonObject:

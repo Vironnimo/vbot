@@ -414,8 +414,10 @@ async def test_internal_run_sends_its_prompt_as_a_reminder_after_the_reply_surfa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("edit_surface", [None, ReplySurface.tui()], ids=["preserved", "tui-edit"])
 async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
     tmp_path: Path,
+    edit_surface: ReplySurface | None,
 ) -> None:
     class QueueEditAdapter(StubAdapter):
         def __init__(self) -> None:
@@ -472,7 +474,7 @@ async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
         tool_restriction=("memory",),
     )
     resolved_session_id, updated_executor, updated_display = await loop.build_queue_update(
-        "coder", "session-one", "edited channel text", queued
+        "coder", "session-one", "edited channel text", queued, reply_surface=edit_surface
     )
     assert runtime.chat_runs.update_queued(
         "coder",
@@ -500,8 +502,12 @@ async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
     )
     assert edited_user.sender == sender
     surface_note = str(_surface_notes(messages)[-1].content)
-    assert "telegram" in surface_note
-    assert '"conversation_kind":"group"' in surface_note
+    if edit_surface is None:
+        assert "telegram" in surface_note
+        assert '"conversation_kind":"group"' in surface_note
+    else:
+        assert '"kind":"tui"' in surface_note
+        assert edit_surface.reminder_text() in str(adapter.requests[1]["messages"])
     assert weather_calls == []
     assert weather_result["error"]["code"] == "tool_not_allowed"
 

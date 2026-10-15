@@ -265,6 +265,7 @@ export default Object.freeze({
   'settings.general.clients.accessor.browser': 'Browser',
   'settings.general.clients.accessor.desktop': 'Desktop',
   'settings.general.clients.accessor.tray': 'vBot tray',
+  'settings.general.clients.accessor.tui': 'Terminal',
   'settings.general.clients.accessor.unknown': 'Unknown',
   'settings.defaults.model': 'Model',
   'settings.defaults.modelDescription': 'Used when an agent model is empty.',

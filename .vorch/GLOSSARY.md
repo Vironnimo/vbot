@@ -36,7 +36,7 @@ One Session execution with a durable identity and lifecycle: an initiating reque
 Moving the current Session, with its id and full history, to another Agent via `/agent <addr> [task]`; the target owns it from then on and runs the optional task (`subagents.md`). Not Handoff (`/handoff`), which writes a summary into a fresh Session.
 
 ## Accessor
-A client-facing interface to vBot (WebUI, Desktop, CLI, or Channels), communicating with the server, not directly with Providers. Not a Provider or Adapter.
+A client-facing interface to vBot (WebUI, Desktop, CLI including its TUI, or Channels), communicating with the server, not directly with Providers. Not a Provider or Adapter.
 
 ## Streaming
 Incremental output from an executing Run as the server delivers it to Accessors. Same Run and semantics as a normal send, delivered while it happens; not a separate chat system.

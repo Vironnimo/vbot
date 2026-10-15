@@ -267,6 +267,11 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+    if args.area == "tui":
+        from cli._dispatch_tui import dispatch_tui_command
+
+        return dispatch_tui_command(args, instance)
+
     if args.area == "agent":
         result = dispatch_agent_command(
             args,

@@ -3,7 +3,6 @@ import {
   TERMINAL_RUN_EVENTS,
   updateSessionUsage,
   CHAT_STATUS_IDLE,
-  TERMINAL_VISIBLE_DRAFT_EVENT_TYPES,
   CHAT_STATUS_COMPLETED,
   CHAT_STATUS_FAILED,
   CHAT_STATUS_CANCELLED,
@@ -12,18 +11,6 @@ import {
 } from './sessionState.js';
 import { t } from '../i18n.js';
 import { qualifyAgentAddress } from '../agentAddress.js';
-import {
-  RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
-  RUN_EVENT_TOOL_CALL_DELTA,
-} from '../api.js';
-import {
-  isStreamingDeltaRunEvent,
-  appendCompressedStreamingRunEvent,
-  streamingDeltaEventKey,
-  advanceStreamingPhase,
-  discardStreamingAttempt,
-} from './streamingEvents.js';
-
 export function startRun(sessionState, run) {
   const current = sessionState.currentRun;
   if (current?.runId === run.run_id) {
@@ -59,7 +46,6 @@ export function startRun(sessionState, run) {
   sessionState.error = null;
   sessionState.streamError = '';
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
-  sessionState.streamingPhase = 0;
   appendRunEvents(sessionState, run.events ?? []);
   const terminal = sessionState.runEvents.find(
     (event) =>
@@ -74,17 +60,17 @@ export function appendRunEvent(sessionState, event) {
   if (!normalizedEvent) {
     return null;
   }
-  if (isStreamingDeltaRunEvent(normalizedEvent.type)) {
-    const eventKey = streamingDeltaEventKey(normalizedEvent);
-    if (eventKey && sessionState.seenStreamingEventKeys.has(eventKey)) {
-      return normalizedEvent;
-    }
-    if (eventKey) {
-      sessionState.seenStreamingEventKeys.add(eventKey);
-    }
-    appendCompressedStreamingRunEvent(sessionState, normalizedEvent);
+  // Output semantics arrive through the timeline transport. App-wide events
+  // retain lifecycle, activity, usage and controls only.
+  if (
+    [
+      'assistant_output_delta',
+      'reasoning_delta',
+      'tool_call_delta',
+      'tool_call_output',
+    ].includes(normalizedEvent.type)
+  )
     return normalizedEvent;
-  }
   const previousRunEvents = sessionState.runEvents;
   const retainedKeys = runEventKeyIndex(previousRunEvents);
   const eventKey = runEventKey(normalizedEvent);
@@ -105,9 +91,6 @@ export function appendRunEvent(sessionState, event) {
       sessionState.contextUsage,
       normalizedEvent.payload.context_usage,
     );
-  }
-  if (normalizedEvent.type === RUN_EVENT_STREAM_ATTEMPT_RESTARTED) {
-    discardStreamingAttempt(sessionState, normalizedEvent.run_id);
   }
   if (normalizedEvent.type === 'run_started') {
     beginRunFromEvent(sessionState, normalizedEvent);
@@ -134,14 +117,13 @@ export function appendRunEvent(sessionState, event) {
     applyModelStepUsage(sessionState, normalizedEvent.payload);
   }
   if (
-    normalizedEvent.type === 'user_message_persisted' &&
+    ['user_message_persisted', 'run_started'].includes(normalizedEvent.type) &&
     normalizedEvent.payload?.queue_item_id
   ) {
     sessionState.queue = sessionState.queue.filter(
       (item) => item.id !== normalizedEvent.payload.queue_item_id,
     );
   }
-  advanceStreamingPhase(sessionState, normalizedEvent);
   if (TERMINAL_RUN_EVENTS.has(normalizedEvent.type)) {
     finishRun(sessionState, normalizedEvent);
   }
@@ -195,25 +177,11 @@ export function releaseFinishedRunEvents(sessionState, runId) {
       (event) => !belongsToRun(event),
     );
   }
-  if (sessionState.streamingRunEvents.some(belongsToRun)) {
-    sessionState.streamingRunEvents = sessionState.streamingRunEvents.filter(
-      (event) => !belongsToRun(event),
-    );
-  }
-  for (const key of sessionState.seenStreamingEventKeys) {
-    if (streamingEventKeyRunId(key) === runId) {
-      sessionState.seenStreamingEventKeys.delete(key);
-    }
-  }
   return sessionState;
 }
 
 export function isReleasedRun(sessionState, runId) {
   return Boolean(runId) && (sessionState?.releasedRunIds ?? []).includes(runId);
-}
-
-function streamingEventKeyRunId(key) {
-  return typeof key === 'string' ? key.split(':').slice(0, -2).join(':') : '';
 }
 
 export function applyRunControls(sessionState, run) {
@@ -287,7 +255,6 @@ function beginRunFromEvent(sessionState, event) {
   if (isSameRun) {
     return;
   }
-  sessionState.streamingPhase = 0;
 }
 
 function finishRun(sessionState, event) {
@@ -314,30 +281,6 @@ function finishRun(sessionState, event) {
   sessionState.status = status ?? terminalStatus(type);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
   sessionState.streamError = '';
-  const cancelledToolPreviews =
-    type === 'run_cancelled'
-      ? sessionState.streamingRunEvents.filter(
-          (streamingEvent) => streamingEvent.type === RUN_EVENT_TOOL_CALL_DELTA,
-        )
-      : [];
-  if (cancelledToolPreviews.length > 0) {
-    sessionState.runEvents = [
-      ...sessionState.runEvents,
-      ...cancelledToolPreviews,
-    ];
-  }
-  sessionState.streamingRunEvents = sessionState.streamingRunEvents.filter(
-    (streamingEvent) =>
-      TERMINAL_VISIBLE_DRAFT_EVENT_TYPES.has(streamingEvent.type),
-  );
-  // The terminal lifecycle summary can arrive over WebSocket before the
-  // canonical Assistant output reaches this client over SSE. Keep the
-  // compressed text deltas as the visible fallback until stable output,
-  // History, or the next Run replaces them. A cancelled Run promotes Tool
-  // previews into the stable projection: sibling calls can be persisted before
-  // the execution limit has dispatched each one, so dropping those previews
-  // makes known calls vanish until History is reloaded. Promotion also keeps
-  // them visible if a queued follow-up Run starts before that reconciliation.
   if (type === 'run_failed') {
     sessionState.error = event?.payload?.error ?? 'Run failed';
   }

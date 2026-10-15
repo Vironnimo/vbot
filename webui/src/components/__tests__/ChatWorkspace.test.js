@@ -1,3 +1,4 @@
+import { assistantRun, outputItem, toolItem } from './timelineItems.support.js';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -612,7 +613,7 @@ describe('ChatWorkspace', () => {
         }
         if (
           deleted &&
-          method === 'chat.history' &&
+          method === 'chat.timeline' &&
           params.session_id === 'session-1'
         ) {
           throw new Error('Session not found: session-1');
@@ -691,7 +692,7 @@ describe('ChatWorkspace', () => {
     const deletedHistoryReads = () =>
       rpcMock.mock.calls.filter(
         ([method, params]) =>
-          method === 'chat.history' && params.session_id === 'session-1',
+          method === 'chat.timeline' && params.session_id === 'session-1',
       ).length;
 
     it.each([
@@ -829,7 +830,7 @@ describe('ChatWorkspace', () => {
       expect(
         rpcMock.mock.calls.filter(
           ([method, params]) =>
-            method === 'chat.history' && params.session_id === 'session-2',
+            method === 'chat.timeline' && params.session_id === 'session-2',
         ),
       ).toEqual([]);
     });
@@ -1000,6 +1001,34 @@ describe('ChatWorkspace', () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         agents,
+        sessionItems: {
+          'session-2': [
+            assistantRun(
+              'delegation',
+              [
+                toolItem({
+                  id: 'child-call',
+                  name: 'subagent',
+                  arguments: {
+                    action: 'run',
+                    agent_id: 'beta',
+                    content: 'Review the work',
+                  },
+                  result: {
+                    ok: true,
+                    data: {
+                      agent_id: 'beta',
+                      session_id: 'child-session',
+                      status: 'completed',
+                    },
+                  },
+                }),
+                outputItem('Second-area parent history'),
+              ],
+              { source: 'history', status: 'completed' },
+            ),
+          ],
+        },
         sessionMessages: {
           'session-2': [
             {
@@ -1077,7 +1106,7 @@ describe('ChatWorkspace', () => {
     await waitForCondition(() =>
       pane(1).textContent.includes('Child history sentinel'),
     );
-    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+    expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
       agent_id: 'beta',
       session_id: 'child-session',
       limit: 100,

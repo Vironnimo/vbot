@@ -83,16 +83,29 @@ export function createExtensionRunStream({
           if (!current(value)) return;
           attempt = 0;
           armWatchdog(value);
+          const timeline = result?.stream?.timeline_version === 1;
           const sequence = event.data?.sequence;
           if (Number.isInteger(sequence)) {
-            if (sequence <= cursor) return;
+            if (!timeline && sequence <= cursor) return;
             cursor = sequence;
           }
           onEvent(event);
-          if (TERMINAL_EVENTS.has(event.type)) close();
+          if (
+            TERMINAL_EVENTS.has(event.type) ||
+            (timeline && event.data?.terminal)
+          )
+            close();
         },
       },
-      { afterSequence: cursor },
+      {
+        afterSequence: cursor,
+        ...(result?.stream?.timeline_version === 1
+          ? {
+              eventTypes: ['timeline_snapshot', 'timeline_update'],
+              closeOnTerminal: false,
+            }
+          : {}),
+      },
     );
   }
 
