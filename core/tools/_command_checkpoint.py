@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.logging import get_logger
 
 from ._command_types import (
@@ -45,6 +45,17 @@ class CommandCheckpointStore(Protocol):
     def background_command_delete(self, command_id: str) -> None: ...
 
     def background_command_delivered(self, command_id: str, body: str) -> bool: ...
+
+    def generation_address(self, generation_id: str) -> SessionAddress | None: ...
+
+    def append_notes_once(
+        self,
+        address: SessionAddress,
+        delivery_id: str,
+        notes: Sequence[str],
+        *,
+        generation_id: str,
+    ) -> None: ...
 
     async def run_async[Result](
         self, function: Callable[..., Result], *args: Any, **kwargs: Any
@@ -353,6 +364,12 @@ class CommandCheckpoints:
                 return
             if not entry.pending:
                 return
+            if entry.execution_owner is not None:
+                # A restored execution epoch can never be admitted again. Keep
+                # its result in the same canonical Session without starting a
+                # Run or reviving the Extension's old group.
+                await self._persist_owned_result(entry)
+                return
             target = entry.report.owner
             entry.submitted_to = target
             try:
@@ -394,6 +411,41 @@ class CommandCheckpoints:
                 entry.pending = False
                 self._save(entry)
                 return
+
+    async def _persist_owned_result(self, entry: _Recovered) -> None:
+        assert entry.body is not None
+        generation_id = self._generations[entry.report.command_id]
+        while entry.pending:
+            target = await self.store.run_async(self.store.generation_address, generation_id)
+            if target is None:
+                # Its Session was deleted or archived; never create a target.
+                entry.pending = False
+                self._save(entry)
+                return
+            if not entry.pending:
+                return
+            try:
+                await self.store.run_async(
+                    self.store.append_notes_once,
+                    target,
+                    f"command:{entry.report.command_id}",
+                    [entry.body],
+                    generation_id=generation_id,
+                )
+            except SessionNotFoundError:
+                # A move between resolution and commit changed only the address.
+                # Resolve the same generation again; deletion ends it above.
+                continue
+            except Exception:
+                _LOGGER.warning(
+                    "Persisting recovered owned command failed (command=%s)",
+                    entry.report.command_id,
+                    exc_info=True,
+                )
+                return
+            entry.pending = False
+            self._save(entry)
+            return
 
 
 def _report(row: dict[str, Any]) -> CommandReport:

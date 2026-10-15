@@ -56,6 +56,11 @@ notices retain normal delivery behavior (`automation.py`,
 `tests/core/automation/test_automation_completion.py`,
 `tests/core/runtime/test_runtime_extension_host.py`).
 
+Shell crash recovery does not submit an obsolete Extension execution epoch to
+this coordinator. Its durable command checkpoint authorizes only an outcome Note
+in the same live Session generation, committed with a canonical receipt through
+Sessions; it never admits a Run or revives the old group (`tools/shell.md`).
+
 Once-Cron claim writes join the in-flight execution guard: edits wait for the
 write to settle, then withdraw its unadmitted claim before the replacement task
 starts. Cancellation during the claim write also removes that known-unadmitted

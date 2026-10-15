@@ -734,6 +734,9 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
         "replaced_session",
         "expired",
         "moved_before_handoff",
+        "owned_running",
+        "owned_ended",
+        "owned_delivered",
     ],
 )
 async def test_background_checkpoint_recovers_once_after_restart(
@@ -747,20 +750,26 @@ async def test_background_checkpoint_recovers_once_after_restart(
     sessions.create(OWNER.agent_id, OWNER.session_id, OWNER.project_id)
     generation_id = sessions.get(OWNER).generation_id
     assert generation_id is not None
+    execution_owner = (
+        RunExecutionOwner("ext", "closed-group", "participant", generation_id, "old-epoch")
+        if outcome.startswith("owned_")
+        else None
+    )
+    running_outcomes = {"running", "moved", "owned_running"}
     restored_owner = OWNER
     try:
         async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
             await harness.manager.wait_recovered()
-            command_id, process = await harness.launch()
+            command_id, process = await harness.launch(execution_owner=execution_owner)
             if outcome == "moved_before_handoff":
                 restored_owner = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
                 await sessions.move(OWNER, restored_owner)
             await harness.manager.to_background_durably(command_id, deliver=True)
-            if outcome not in {"running", "moved"}:
+            if outcome not in running_outcomes:
                 process.exit(0)
                 await harness.finish(command_id)
                 await eventually(lambda: bool(harness.sink.submissions))
-            if outcome == "delivered":
+            if outcome in {"delivered", "owned_delivered"}:
                 # The Session commit succeeded, but its acknowledgement did not
                 # get back to the checkpoint before the server disappeared.
                 await sessions.get(OWNER).add_note_async(harness.sink.bodies[0])
@@ -796,7 +805,9 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 assert restored.manager.commands([OWNER]) == []
                 assert sessions.background_command_read() == []
                 return
-            expected_delivery = outcome not in {"delivered", "withdrawn"}
+            expected_delivery = (
+                outcome not in {"delivered", "withdrawn"} and execution_owner is None
+            )
             submission_count = int(expected_delivery)
             if expected_delivery:
                 await eventually(lambda: bool(restored.sink.submissions))
@@ -823,10 +834,20 @@ async def test_background_checkpoint_recovers_once_after_restart(
                     restored.sink.futures[-1].set_result(None)
             await restored.manager.wait_recovered()
             assert len(restored.sink.submissions) == submission_count
+            if execution_owner is not None:
+                # The old group epoch must never enter TriggerService or start
+                # another Run. Its one outcome stays in the original Session.
+                notes = [
+                    message
+                    for message in sessions.get(restored_owner).load()
+                    if message.role == "note"
+                ]
+                assert len(notes) == 1
+                assert command_id in str(notes[0].content)
             report = restored.manager.report(command_id)
             assert report.finished
             assert report.owner == restored_owner
-            assert report.status == ("stopped" if outcome in {"running", "moved"} else "completed")
+            assert report.status == ("stopped" if outcome in running_outcomes else "completed")
             assert restored.manager.busy_addresses() == set()
             assert restored.launcher.processes == []
             assert not sessions.background_command_read()[0]["checkpoint"]["pending"]
@@ -834,6 +855,17 @@ async def test_background_checkpoint_recovers_once_after_restart(
         async with command_harness(tmp_path, checkpoint_store=sessions) as again:
             await again.manager.wait_recovered()
             assert again.sink.submissions == []
+            if execution_owner is not None:
+                assert (
+                    len(
+                        [
+                            message
+                            for message in sessions.get(restored_owner).load()
+                            if message.role == "note"
+                        ]
+                    )
+                    == 1
+                )
             assert (
                 sessions.background_command_read()[0]["checkpoint"]["retained_until"]
                 == retained_until

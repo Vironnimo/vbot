@@ -676,7 +676,7 @@ def bootstrap(runtime: Runtime) -> None:
             temporary_files=runtime._storage.temporary_files,
             checkpoint_store=runtime._chat_sessions,
         )
-        runtime._command_manager.start()
+        runtime._command_manager.start(recover=runtime.safe_startup_mode is None)
         runtime._bootstrap_service = BootstrapService(
             runtime._trigger_service,
             runtime._storage.data_dir,

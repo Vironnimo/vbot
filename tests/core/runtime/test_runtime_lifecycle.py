@@ -43,6 +43,7 @@ from core.statistics.index import StatisticsIndex
 from core.storage.layout import DataDirectoryLayout
 from core.storage.storage import StorageManager
 from core.storage.temp_files import TemporaryFileManager
+from core.tools._command_checkpoint import CommandCheckpoints
 from core.tools.command_manager import CommandManager
 from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.update_handoff import HANDOFF_DIRECTORY, UPDATE_HANDOFF_FILE_RETENTION
@@ -96,6 +97,8 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
         "load",
         Mock(side_effect=AssertionError("safe startup must not load executable extensions")),
     )
+    recovery = AsyncMock()
+    monkeypatch.setattr(CommandCheckpoints, "recover", recovery)
     # ``verification`` and ``test`` share every safe-startup branch.
     runtime = Runtime(config, safe_startup_mode="verification")
     for name in (
@@ -121,6 +124,7 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
         await runtime.aclose()
         reset_for_tests()
     assert not performance.monitoring
+    recovery.assert_not_awaited()
 
 
 @pytest.mark.asyncio

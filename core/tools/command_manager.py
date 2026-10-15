@@ -194,8 +194,8 @@ class CommandManager:
 
     # Manager lifecycle
 
-    def start(self) -> None:
-        """Start forgetting finished commands after their retention (needs an Event Loop)."""
+    def start(self, *, recover: bool = True) -> None:
+        """Start retention; normal startup also restores durable background work."""
         if self._sweeper is not None and not self._sweeper.done():
             return
         try:
@@ -203,7 +203,7 @@ class CommandManager:
         except RuntimeError:
             return
         self._sweeper = asyncio.create_task(self._sweep_loop(), name="command-manager-sweep")
-        if self._checkpoints is not None and self._recovery_task is None:
+        if recover and self._checkpoints is not None and self._recovery_task is None:
             self._recovery_task = asyncio.create_task(
                 self._checkpoints.recover(self._services.trigger_service, self._recovered_report),
                 name="command-recovery",
