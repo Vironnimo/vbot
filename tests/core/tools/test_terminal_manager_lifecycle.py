@@ -47,14 +47,6 @@ from tests.core.tools.terminal_manager_helpers import clocked_manager as clocked
 from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
 
 
-@pytest.fixture
-def terminate_directly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stop a fake adapter directly instead of signalling a process tree."""
-    monkeypatch.setattr(
-        terminal_backend, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
-    )
-
-
 def _manager(adapter_factory: Any) -> TerminalManager:
     return TerminalManager(
         adapter_factory=adapter_factory,
@@ -182,7 +174,6 @@ async def test_live_terminal_capacity_is_owner_scoped_and_globally_bounded(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("terminate_directly")
 async def test_pending_starts_reserve_owner_and_global_capacity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -231,7 +222,6 @@ async def test_pending_starts_reserve_owner_and_global_capacity(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("terminate_directly")
 async def test_waiting_reader_does_not_block_input_resize_or_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -266,7 +256,6 @@ async def test_waiting_reader_does_not_block_input_resize_or_stop(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("terminate_directly")
 @pytest.mark.parametrize("paused_at", ["process", "log"])
 async def test_cancelled_start_waits_for_child_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, paused_at: str
@@ -348,7 +337,6 @@ async def test_cancelled_start_waits_for_child_cleanup(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("terminate_directly")
 async def test_shutdown_waits_for_pending_start_and_closes_its_child(tmp_path: Path) -> None:
     entered = threading.Event()
     release = threading.Event()
@@ -551,7 +539,6 @@ async def test_shutdown_attempts_other_terminals_and_retains_failed_tree_for_ret
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("terminate_directly")
 async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_transfer(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
@@ -572,7 +559,6 @@ async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_tr
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("terminate_directly")
 async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path: Path) -> None:
     started = threading.Event()
     release = threading.Event()
