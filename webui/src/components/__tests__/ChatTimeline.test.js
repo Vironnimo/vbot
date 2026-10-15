@@ -842,47 +842,85 @@ describe('ChatTimeline messages', () => {
       );
     });
 
-    it('edits only server-approved User messages inline and restarts from them', async () => {
-      const onEditMessage = vi.fn().mockResolvedValue(true);
-      timeline.render(
-        sessionWithMessages([
-          userMessage('Channel-originated request', { id: 'user-channel' }),
-          userMessage('Original request', { id: 'user-edit', editable: true }),
-        ]),
-        { onEditMessage },
-      );
+    it.each([false, true])(
+      'edits only server-approved User messages, including steered: %s',
+      async (steered) => {
+        const onEditMessage = vi.fn().mockResolvedValue(true);
+        timeline.render(
+          sessionWithMessages([
+            userMessage('Channel-originated request', { id: 'user-channel' }),
+            ...(steered
+              ? [
+                  {
+                    id: 'assistant-before-edit',
+                    role: 'assistant',
+                    content: 'Working',
+                    history_run_id: 'run-edit',
+                  },
+                ]
+              : []),
+            userMessage('Original request', {
+              id: 'user-edit',
+              editable: true,
+              history_run_id: 'run-edit',
+            }),
+          ]),
+          { onEditMessage },
+        );
 
-      const editButtons = document.querySelectorAll('.message-edit');
-      expect(editButtons).toHaveLength(1);
-      editButtons[0].click();
-      await flushAsync();
+        const editButtons = document.querySelectorAll('.message-edit');
+        expect(editButtons).toHaveLength(1);
+        editButtons[0].click();
+        await flushAsync();
 
-      const editor = document.querySelector('.message-edit-form textarea');
-      expect(editor.value).toBe('Original request');
-      editor.value = 'Edited request';
-      editor.dispatchEvent(new Event('input', { bubbles: true }));
-      document.querySelector('.message-edit-actions .btn-primary').click();
-      await flushAsync();
+        const editor = document.querySelector('.message-edit-form textarea');
+        expect(editor.value).toBe('Original request');
+        editor.value = 'Edited request';
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        document.querySelector('.message-edit-actions .btn-primary').click();
+        await flushAsync();
 
-      expect(onEditMessage).toHaveBeenCalledWith('user-edit', 'Edited request');
-    });
+        expect(onEditMessage).toHaveBeenCalledWith(
+          'user-edit',
+          'Edited request',
+        );
+      },
+    );
 
-    it('explains why editable User messages cannot be edited right now', async () => {
-      vi.useFakeTimers();
-      timeline.render(
-        sessionWithMessages([
-          userMessage('Original request', { id: 'user-edit', editable: true }),
-        ]),
-        { messageEditingDisabledReason: t('chat.editUnavailableRunning') },
-      );
+    it.each([false, true])(
+      'explains why editable User messages cannot be edited, including steered: %s',
+      async (steered) => {
+        vi.useFakeTimers();
+        timeline.render(
+          sessionWithMessages([
+            ...(steered
+              ? [
+                  userMessage('First request'),
+                  {
+                    id: 'assistant-before-edit',
+                    role: 'assistant',
+                    content: 'Working',
+                    history_run_id: 'run-edit',
+                  },
+                ]
+              : []),
+            userMessage('Original request', {
+              id: 'user-edit',
+              editable: true,
+              history_run_id: 'run-edit',
+            }),
+          ]),
+          { messageEditingDisabledReason: t('chat.editUnavailableRunning') },
+        );
 
-      const edit = document.querySelector('.message-edit');
-      expect(edit.disabled).toBe(true);
-      edit.parentElement.dispatchEvent(new Event('pointerenter'));
-      await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
-      expect(document.getElementById('app-tooltip').textContent).toBe(
-        t('chat.editUnavailableRunning'),
-      );
-    });
+        const edit = document.querySelector('.message-edit');
+        expect(edit.disabled).toBe(true);
+        edit.parentElement.dispatchEvent(new Event('pointerenter'));
+        await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+        expect(document.getElementById('app-tooltip').textContent).toBe(
+          t('chat.editUnavailableRunning'),
+        );
+      },
+    );
   });
 });

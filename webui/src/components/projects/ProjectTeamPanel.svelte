@@ -278,9 +278,11 @@
       {#if projectsState.activeReport && !projectsState.activeReport.clean}
         <Banner variant="warn" role="status">
           <span>
-            {t('projects.report.findingCount', {
-              count: projectsState.activeReport.findingCount,
-            })}
+            {projectsState.activeReport.findingCount === 1
+              ? t('projects.report.findingCountOne')
+              : t('projects.report.findingCountMany', {
+                  count: projectsState.activeReport.findingCount,
+                })}
           </span>
           <Button
             variant="tertiary"

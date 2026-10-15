@@ -127,34 +127,57 @@ describe('Subagent rows', () => {
     });
   });
 
-  it('settles a reloaded Subagent row from live events once inspection found its child Run', async () => {
-    const inspectSubAgentWork = vi.fn().mockResolvedValue({
-      id: 'sub-live-work',
-      agent_id: 'worker',
-      session_id: 'child-session',
-      run_id: 'child-run',
-      status: 'running',
-    });
-    const { chatState, controller } = setupController({
-      operationOverrides: { inspectSubAgentWork },
-    });
-    const tool = reloadedRow('sub-live-work');
-    const items = [{ type: 'assistant_run', items: [tool] }];
+  it.each([false, true])(
+    'keeps a terminal Subagent Run when inspection arrives late: %s',
+    async (late) => {
+      const pending = deferred();
+      const inspectSubAgentWork = vi.fn().mockReturnValue(pending.promise);
+      const inspection = {
+        id: 'sub-live-work',
+        agent_id: 'worker',
+        session_id: 'child-session',
+        run_id: 'child-run',
+        status: 'running',
+        timing: { duration_ms: 100 },
+        tool_name: 'read',
+      };
+      const { chatState, controller } = setupController({
+        operationOverrides: { inspectSubAgentWork },
+      });
+      const tool = reloadedRow('sub-live-work');
+      const items = [{ type: 'assistant_run', items: [tool] }];
 
-    controller.reconcileSubAgentRows(items);
-    await vi.waitFor(() =>
-      expect(chatState.subAgentStatuses).toMatchObject({
-        'run:child-run': 'running',
-        'workRun:sub-live-work': 'child-run',
-      }),
-    );
+      controller.reconcileSubAgentRows(items);
+      if (late) {
+        controller.applySubAgentStatusUpdates({
+          'run:child-run': 'completed',
+          'runDuration:child-run': 4200,
+          'runTool:child-run': 'write',
+        });
+      }
+      pending.resolve(inspection);
+      await vi.waitFor(() =>
+        expect(chatState.subAgentStatuses).toMatchObject({
+          'run:child-run': late ? 'completed' : 'running',
+          'workRun:sub-live-work': 'child-run',
+        }),
+      );
 
-    controller.applySubAgentStatusUpdates({ 'run:child-run': 'completed' });
-    controller.reconcileSubAgentRows(items);
+      controller.applySubAgentStatusUpdates({ 'run:child-run': 'completed' });
+      controller.reconcileSubAgentRows(items);
 
-    expect(subAgentDotStatus(tool, chatState.subAgentStatuses)).toBe('success');
-    expect(inspectSubAgentWork).toHaveBeenCalledOnce();
-  });
+      expect(subAgentDotStatus(tool, chatState.subAgentStatuses)).toBe(
+        'success',
+      );
+      expect(inspectSubAgentWork).toHaveBeenCalledOnce();
+      if (late) {
+        expect(chatState.subAgentStatuses).toMatchObject({
+          'runDuration:child-run': 4200,
+          'runTool:child-run': 'write',
+        });
+      }
+    },
+  );
 
   it.each([
     ['cancels the Run it finds working', 'running', true],

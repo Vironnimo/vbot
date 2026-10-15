@@ -846,7 +846,8 @@ export default Object.freeze({
   'projects.team.customizeCompaction': 'Customize for this agent',
   'projects.team.agentTargetsRepoOwned':
     'Defined by the repository Agent config and read-only in vBot. Even full access stays inside this Project Team.',
-  'projects.report.findingCount': '{count} issues found',
+  'projects.report.findingCountOne': '1 issue found',
+  'projects.report.findingCountMany': '{count} issues found',
   'projects.report.showDetails': 'Show details',
   'projects.report.hideDetails': 'Hide details',
   'projects.report.group.slug_collision': 'Name collisions',

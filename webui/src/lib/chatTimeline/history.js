@@ -40,15 +40,29 @@ export function historyTimelineItems(messages, reuse = null) {
   };
   let activeAssistantRun = null;
   let activeRunSources = [];
+  let trailingErrors = [];
   let previousVisibleRole = '';
   let activeRecordRunId;
   const pushActiveRun = () => {
     pushActiveAssistantRun(push, activeAssistantRun, activeRunSources);
     activeAssistantRun = null;
     activeRunSources = [];
+    for (const error of trailingErrors) {
+      push(historyMessageItem(error), [error]);
+    }
+    trailingErrors = [];
   };
 
   for (const message of messages ?? []) {
+    // Errors remain separate rows after their Run, but its following summary
+    // still owns the final status and timing. Do not keep this association
+    // across another visible message or a different canonical Run.
+    if (
+      trailingErrors.length &&
+      !['error', 'run_summary'].includes(message?.role)
+    ) {
+      pushActiveRun();
+    }
     // Missing terminal persistence must not merge two canonical executions.
     // Keep the existing within-Run presentation, including text-only rows.
     if (
@@ -105,6 +119,11 @@ export function historyTimelineItems(messages, reuse = null) {
         push(terminalRunSummaryItem(message, timelineItems.length), [message]);
       }
       previousVisibleRole = 'run_summary';
+      continue;
+    }
+
+    if (message?.role === 'error' && activeAssistantRun) {
+      trailingErrors.push(message);
       continue;
     }
 
