@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, override
 
 import pytest
 
@@ -44,6 +45,63 @@ def _model(model_id: str, name: str, **fields: Any) -> Model:
 # ---------------------------------------------------------------------------
 # model.list / model.get
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["model.list", "model.get"])
+async def test_model_read_keeps_credential_state_until_its_projection_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    await rpc_result(
+        state, "provider.set_key", provider_id="openai", connection_id="openai:api-key", value="key"
+    )
+    entered = asyncio.Event()
+    mutation_waiting = asyncio.Event()
+    release = threading.Event()
+    event_loop = asyncio.get_running_loop()
+    snapshot = model_methods._model_access_snapshot
+
+    class ObservedLock(asyncio.Lock):
+        @override
+        async def acquire(self) -> Literal[True]:
+            if self.locked():
+                mutation_waiting.set()
+            return await super().acquire()
+
+    def read_snapshot(runtime: Any, provider_ids: set[str]) -> Any:
+        event_loop.call_soon_threadsafe(entered.set)
+        assert release.wait(2)
+        return snapshot(runtime, provider_ids)
+
+    state._settings_mutation_lock = ObservedLock()
+    monkeypatch.setattr(model_methods, "_model_access_snapshot", read_snapshot)
+    model_id = state.runtime.models._models["openai"][0].model_id
+    params = {"model": f"openai/{model_id}"} if method == "model.get" else {}
+    read = asyncio.create_task(rpc_result(state, method, **params))
+    remove: asyncio.Task[Any] | None = None
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        remove = asyncio.create_task(
+            rpc_result(
+                state, "provider.unset_key", provider_id="openai", connection_id="openai:api-key"
+            )
+        )
+        await asyncio.wait_for(mutation_waiting.wait(), 1)
+        assert not remove.done()
+        release.set()
+        result = await read
+        if method == "model.get":
+            assert result["model"]["usable_connections"] == ["api-key"]
+        else:
+            assert any(model["provider_id"] == "openai" for model in result["models"])
+        assert (await remove)["removed"]
+    finally:
+        release.set()
+        await asyncio.gather(
+            read, *([remove] if remove is not None else []), return_exceptions=True
+        )
 
 
 @pytest.mark.asyncio

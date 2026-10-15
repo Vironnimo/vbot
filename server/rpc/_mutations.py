@@ -1,4 +1,4 @@
-"""Serialize RPC mutations through persistence, live refresh and publication."""
+"""Keep RPC persistence, live publication and dependent read projections coherent."""
 
 from __future__ import annotations
 
@@ -17,15 +17,30 @@ MutationHandler = Callable[[Any, JsonObject], Awaitable[JsonObject]]
 _LOGGER = get_logger("server.rpc.mutations")
 
 
+def state_lock(state: Any, lock_attribute: str) -> asyncio.Lock:
+    """Return the Event Loop lock shared by one state's mutation and read surfaces."""
+    lock: asyncio.Lock | None = getattr(state, lock_attribute, None)
+    if lock is None:
+        lock = asyncio.Lock()
+        setattr(state, lock_attribute, lock)
+    return lock
+
+
+def serialized_read(handler: MutationHandler, *, lock_attribute: str) -> MutationHandler:
+    """Keep one read projection on the same published configuration across awaits."""
+
+    async def run(state: Any, params: JsonObject) -> JsonObject:
+        async with state_lock(state, lock_attribute):
+            return await handler(state, params)
+
+    return run
+
+
 def serialized_mutation(handler: MutationHandler, *, lock_attribute: str) -> MutationHandler:
     """Keep a state's mutation sequence intact even when its caller is cancelled."""
 
     async def run(state: Any, params: JsonObject) -> JsonObject:
-        lock = getattr(state, lock_attribute, None)
-        if lock is None:
-            lock = asyncio.Lock()
-            setattr(state, lock_attribute, lock)
-        async with lock:
+        async with state_lock(state, lock_attribute):
             # Keep the lock until refresh/publication catch up with any write,
             # including when the caller requests cancellation more than once.
             return await settle_before_cancelling(

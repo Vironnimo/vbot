@@ -23,7 +23,9 @@ from core.settings.normalizers import (
 )
 from core.utils.errors import ConfigError
 from core.utils.ids import is_reserved_name, reserved_name_message
+from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MODELS, RESOURCE_KIND_PROVIDERS
+from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -47,6 +49,7 @@ from server.rpc.validation import _reject_unsupported, _required_string
 JsonObject = dict[str, Any]
 
 _LOGGER = logging.getLogger("vbot.server.rpc.connection_methods")
+_CONNECTION_WORKERS = BoundedWorkerPool(name="connection-rpc", max_workers=2)
 
 
 async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
@@ -77,17 +80,23 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
             )
         connection = _provider_connection(runtime, provider_id, connection_id)
         public_connection_id = compose_connection_id(provider_id, connection.id)
-        was_enabled = runtime.provider_credentials.is_connection_enabled(
-            provider_id, public_connection_id
+        was_enabled = await _CONNECTION_WORKERS.run(
+            runtime.provider_credentials.is_connection_enabled, provider_id, public_connection_id
         )
-        runtime.storage.set_provider_connection_enabled(public_connection_id, enabled)
+        await _CONNECTION_WORKERS.run(
+            runtime.storage.set_provider_connection_enabled, public_connection_id, enabled
+        )
 
         reachable: bool | None = None
         if enabled and getattr(connection, "auto_refresh", False):
             await runtime.maybe_refresh_local_catalogs(force=True)
             reachable = _connection_reachability(runtime, public_connection_id)
-        configured = runtime.provider_credentials.has_credentials(provider_id, public_connection_id)
-        usable = runtime.provider_credentials.is_usable(provider_id, public_connection_id)
+        configured = await _CONNECTION_WORKERS.run(
+            runtime.provider_credentials.has_credentials, provider_id, public_connection_id
+        )
+        usable = await _CONNECTION_WORKERS.run(
+            runtime.provider_credentials.is_usable, provider_id, public_connection_id
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -114,13 +123,13 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
     return response
 
 
-def _list_connections(state: Any, params: JsonObject) -> JsonObject:
+async def _list_connections(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "connection.list does not accept params")
     try:
         runtime = state.runtime
         connections = [
-            _connection_response(runtime, provider_id, connection)
+            await _CONNECTION_WORKERS.run(_connection_response, runtime, provider_id, connection)
             for provider_id in runtime.providers.list_ids()
             for connection in runtime.providers.get(provider_id).connections
         ]
@@ -156,13 +165,13 @@ def custom_provider_items(runtime: Any) -> list[JsonObject]:
     return items
 
 
-def _list_custom_providers(state: Any, params: JsonObject) -> JsonObject:
+async def _list_custom_providers(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "provider.custom_list does not accept params")
-    return {"providers": custom_provider_items(state.runtime)}
+    return {"providers": await _CONNECTION_WORKERS.run(custom_provider_items, state.runtime)}
 
 
-def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
+async def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params, {"provider", "api_key", "expected_revision"}, "provider custom-save"
     )
@@ -200,7 +209,7 @@ def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
         )
 
     runtime = state.runtime
-    existing_custom = runtime.storage.load_custom_providers_settings()
+    existing_custom = await _CONNECTION_WORKERS.run(runtime.storage.load_custom_providers_settings)
     if provider_id not in existing_custom:
         try:
             existing_provider = runtime.providers.get(provider_id)
@@ -220,19 +229,27 @@ def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
 
     previous = existing_custom.get(provider_id)
     try:
-        runtime.storage.save_custom_provider_settings(
-            provider_id, provider, expected_revision=expected_revision
+        await _CONNECTION_WORKERS.run(
+            runtime.storage.save_custom_provider_settings,
+            provider_id,
+            provider,
+            expected_revision=expected_revision,
         )
-        runtime.reload_custom_providers()
+        await runtime.reload_custom_providers_async()
         if api_key is not None:
-            runtime.storage.set_data_dir_credential(
+            await _CONNECTION_WORKERS.run(
+                runtime.storage.set_data_dir_credential,
                 custom_provider_credential_key(provider_id),
                 api_key.strip(),
             )
         elif previous is not None and previous["auth"] == "api_key" and provider["auth"] == "none":
-            _remove_custom_provider_credentials(runtime, provider_id)
-        runtime.reload_environment_credentials()
-        item = next(item for item in custom_provider_items(runtime) if item["id"] == provider_id)
+            await _CONNECTION_WORKERS.run(_remove_custom_provider_credentials, runtime, provider_id)
+        await runtime.reload_environment_credentials_async()
+        item = next(
+            item
+            for item in await _CONNECTION_WORKERS.run(custom_provider_items, runtime)
+            if item["id"] == provider_id
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -266,7 +283,7 @@ def _reject_ignored_wire_entries(provider_id: str, provider: JsonObject) -> None
         )
 
 
-def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:
+async def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"provider_id"}, "provider custom-delete")
     try:
         provider_id = normalize_custom_provider_id(_required_string(params, "provider_id"))
@@ -275,15 +292,19 @@ def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:
 
     runtime = state.runtime
     try:
-        removed = runtime.storage.delete_custom_provider_settings(provider_id)
+        removed = await _CONNECTION_WORKERS.run(
+            runtime.storage.delete_custom_provider_settings, provider_id
+        )
         if removed is None:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
                 f"Custom Provider '{provider_id}' does not exist",
             )
-        credentials_removed = _remove_custom_provider_credentials(runtime, provider_id)
-        runtime.reload_custom_providers()
-        runtime.reload_environment_credentials()
+        credentials_removed = await _CONNECTION_WORKERS.run(
+            _remove_custom_provider_credentials, runtime, provider_id
+        )
+        await runtime.reload_custom_providers_async()
+        await runtime.reload_environment_credentials_async()
     except RpcError:
         raise
     except Exception as exc:
@@ -349,7 +370,7 @@ def _effective_account_id(
     return DEFAULT_ACCOUNT_ID
 
 
-def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
+async def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params, {"provider_id", "connection_id", "value", "account"}, "provider set-key"
     )
@@ -368,17 +389,21 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
         account_id = _effective_account_id(provider_id, connection_id, account)
         public_connection_id = compose_connection_id(provider_id, connection.id)
         credential_key = derive_credential_key(connection.auth.credential_key, account_id)
-        environment = runtime.storage.load_environment()
+        environment = await _CONNECTION_WORKERS.run(runtime.storage.load_environment)
         previous_value = environment.get(credential_key)
-        runtime.storage.set_data_dir_credential(credential_key, value)
+        await _CONNECTION_WORKERS.run(
+            runtime.storage.set_data_dir_credential, credential_key, value
+        )
         for key in environment:
             if key != credential_key and (
                 account_id_from_credential_key(connection.auth.credential_key, key) == account_id
             ):
-                runtime.storage.remove_data_dir_credential(key)
-        runtime.reload_environment_credentials()
+                await _CONNECTION_WORKERS.run(runtime.storage.remove_data_dir_credential, key)
+        await runtime.reload_environment_credentials_async()
         account_connection_id = compose_connection_id(provider_id, connection.id, account_id)
-        usable = runtime.provider_credentials.is_usable(provider_id, account_connection_id)
+        usable = await _CONNECTION_WORKERS.run(
+            runtime.provider_credentials.is_usable, provider_id, account_connection_id
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -400,7 +425,7 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
-def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
+async def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"provider_id", "connection_id", "account"}, "provider unset-key")
 
     provider_id = _required_string(params, "provider_id")
@@ -418,22 +443,30 @@ def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
         credential_key = derive_credential_key(connection.auth.credential_key, account_id)
         credential_keys = {credential_key} | {
             key
-            for key in runtime.storage.load_environment()
+            for key in await _CONNECTION_WORKERS.run(runtime.storage.load_environment)
             if account_id_from_credential_key(connection.auth.credential_key, key) == account_id
         }
         removed = (
             sum(
-                bool(runtime.storage.remove_data_dir_credential(key))
-                for key in sorted(credential_keys)
+                [
+                    bool(
+                        await _CONNECTION_WORKERS.run(
+                            runtime.storage.remove_data_dir_credential, key
+                        )
+                    )
+                    for key in sorted(credential_keys)
+                ]
             )
             > 0
         )
-        runtime.reload_environment_credentials()
-        configured = runtime.provider_credentials.has_credentials(
+        await runtime.reload_environment_credentials_async()
+        configured = await _CONNECTION_WORKERS.run(
+            runtime.provider_credentials.has_credentials,
             provider_id,
             compose_connection_id(provider_id, connection.id, account_id),
         )
-        usable = runtime.provider_credentials.is_usable(
+        usable = await _CONNECTION_WORKERS.run(
+            runtime.provider_credentials.is_usable,
             provider_id,
             compose_connection_id(provider_id, connection.id, account_id),
         )
@@ -506,7 +539,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
-def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
+async def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"provider_id", "connection_id", "account"}, "provider disconnect")
 
     provider_id = _required_string(params, "provider_id")
@@ -518,12 +551,16 @@ def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
         account_id = _effective_account_id(provider_id, connection_id, account)
         token_store = _runtime_token_store(state.runtime)
         # Existence, not a load: disconnect must also remove a token file that fails to load.
-        had_token = token_store.exists(provider_id, connection.id, account_id=account_id)
+        had_token = await _CONNECTION_WORKERS.run(
+            token_store.exists, provider_id, connection.id, account_id=account_id
+        )
         engine = getattr(state, "device_flow_engine", None)
         flow_active = _device_flow_active(engine, provider_id, connection.id, account_id)
-        token_store.delete(provider_id, connection.id, account_id=account_id)
         if engine is not None:
-            engine.cancel_flow(provider_id, connection.id, account_id)
+            await engine.cancel_flow_and_wait(provider_id, connection.id, account_id)
+        await _CONNECTION_WORKERS.run(
+            token_store.delete, provider_id, connection.id, account_id=account_id
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -543,7 +580,7 @@ def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
-def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
+async def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params, {"provider_id", "connection_id", "account"}, "provider connection status"
     )
@@ -557,7 +594,9 @@ def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
         account_id = _effective_account_id(provider_id, connection_id, account)
         token_store = _runtime_token_store(state.runtime)
         engine = getattr(state, "device_flow_engine", None)
-        connected = token_store.has_valid_token(provider_id, connection.id, account_id=account_id)
+        connected = await _CONNECTION_WORKERS.run(
+            token_store.has_valid_token, provider_id, connection.id, account_id=account_id
+        )
         flow_active = _device_flow_active(engine, provider_id, connection.id, account_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -574,14 +613,34 @@ def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the registered connection RPC handlers."""
     return {
-        "connection.list": _list_connections,
-        "connection.set_enabled": _set_connection_enabled,
-        "provider.custom_list": _list_custom_providers,
-        "provider.custom_save": _save_custom_provider,
-        "provider.custom_delete": _delete_custom_provider,
-        "provider.set_key": _set_provider_key,
-        "provider.unset_key": _unset_provider_key,
-        "provider.connect": _connect_provider,
-        "provider.disconnect": _disconnect_provider,
-        "provider.connection_status": _provider_connection_status,
+        "connection.list": serialized_read(
+            _list_connections, lock_attribute="_settings_mutation_lock"
+        ),
+        "connection.set_enabled": serialized_mutation(
+            _set_connection_enabled, lock_attribute="_settings_mutation_lock"
+        ),
+        "provider.custom_list": serialized_read(
+            _list_custom_providers, lock_attribute="_settings_mutation_lock"
+        ),
+        "provider.custom_save": serialized_mutation(
+            _save_custom_provider, lock_attribute="_settings_mutation_lock"
+        ),
+        "provider.custom_delete": serialized_mutation(
+            _delete_custom_provider, lock_attribute="_settings_mutation_lock"
+        ),
+        "provider.set_key": serialized_mutation(
+            _set_provider_key, lock_attribute="_settings_mutation_lock"
+        ),
+        "provider.unset_key": serialized_mutation(
+            _unset_provider_key, lock_attribute="_settings_mutation_lock"
+        ),
+        "provider.connect": serialized_mutation(
+            _connect_provider, lock_attribute="_settings_mutation_lock"
+        ),
+        "provider.disconnect": serialized_mutation(
+            _disconnect_provider, lock_attribute="_settings_mutation_lock"
+        ),
+        "provider.connection_status": serialized_read(
+            _provider_connection_status, lock_attribute="_settings_mutation_lock"
+        ),
     }

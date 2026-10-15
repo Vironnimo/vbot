@@ -56,6 +56,11 @@ class StubDeviceFlowEngine:
     def is_flow_active(self, provider_id: str, connection_id: str, account_id: str) -> bool:
         return (provider_id, connection_id, account_id) in self.active
 
+    async def cancel_flow_and_wait(
+        self, provider_id: str, connection_id: str, account_id: str = "default"
+    ) -> None:
+        self.cancel_flow(provider_id, connection_id, account_id)
+
     def cancel_flow(
         self,
         provider_id: str,
