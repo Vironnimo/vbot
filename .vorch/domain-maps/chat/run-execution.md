@@ -49,6 +49,12 @@ Sibling Tool Calls from one Assistant turn execute concurrently by default withi
 
 Auto-compaction runs only at safe completed Model boundaries. Summary+Tail may compact after a complete Tool cycle or final Assistant response; Continuation waits for a final Assistant response so it does not split work whose next action is still unknown. The Session write lock ends at the durable Assistant/Tool boundary before Compaction planning or Model I/O begins. Automatic checkpoint persistence is a later cursor-validated conditional append; notes that out-of-band writers append meanwhile are carried into the checkpoint, any other concurrent entry aborts the stale checkpoint, and a same-Run path then rebuilds its uncompacted request from current Session history before the next Model step. Compaction mechanics and policy live in `compaction.md`.
 
+Tool-requested completion, including an Extension reconciliation that ends the
+Run, still persists and streams changed file statistics and projects Context
+usage after the entire Tool round. It then ends without another Model request
+or auto-compaction. The bounded finalization-violation exit follows the same
+accounting boundary.
+
 ## Reasoning/content normalization
 
 `StreamingAccumulator.finalize_assistant_fields` and `finalize_partial_fields` split inline Reasoning from their original accumulated deltas. The two completed-`send` fallbacks use `streaming.py::finalize_model_response`, which copies the Adapter response before changing fields. Message construction (`wire_shaping.py::_assistant_message_from_response`) only validates and sanitizes the finalized fields; it does not split again. Chat, Compaction, Session titles and other `stream_model_response` consumers therefore share the same boundary.

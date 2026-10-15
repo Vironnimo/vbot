@@ -146,8 +146,9 @@ async def test_read_tool_batch_persists_each_result_and_counts_one_iteration_per
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["reply", "tool", "finalization"])
 async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
-    start_runtime: StartRuntime, monkeypatch: pytest.MonkeyPatch
+    start_runtime: StartRuntime, monkeypatch: pytest.MonkeyPatch, ending: str
 ) -> None:
     adapter = FakeAdapter(
         [
@@ -174,8 +175,31 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
             {"content": "Both files written.", "tool_calls": None},
         ]
     )
+    assert isinstance(adapter.response, list)
+    if ending == "tool":
+        adapter.response[1]["tool_calls"].append(
+            {"id": "call_finish", "name": "finish", "arguments": {}}
+        )
+        adapter.response.pop()
+    elif ending == "finalization":
+        adapter.response[2:] = [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": f"call_refused_{index}", "name": "apply_patch", "arguments": {}}
+                ],
+            }
+            for index in range(3)
+        ]
 
     with start_runtime(adapter) as runtime:
+        if ending == "tool":
+
+            def finish(context: Any, _arguments: Any) -> Any:
+                context.request_turn_end()
+                return tool_success({"ended": True})
+
+            runtime.tools.register("finish", "Finish the request", {"type": "object"}, finish)
         timelines = RunTimelines(runtime.chat_run_manager)
         agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
         workspace = Path(agent.workspace)
@@ -199,10 +223,15 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
 
         monkeypatch.setattr(store, "record_run_changes", record)
 
-        await build_chat_loop(runtime).send("coder", "Write files", session_id="session-one")
+        await build_chat_loop(runtime, max_tool_iterations=2).send(
+            "coder", "Write files", session_id="session-one"
+        )
 
         # Live and terminal diffs run off the Event Loop; finalization computes once.
-        assert [len(calls) for calls in threads.values()] == [2, 1]
+        assert [len(calls) for calls in threads.values()] == [
+            5 if ending == "finalization" else 2,
+            1,
+        ]
         assert threading.get_ident() not in [*threads["peek_run_stats"], *threads["take_run_stats"]]
         messages = history(runtime)
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))
@@ -233,6 +262,15 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
         assert stored == live_stats
         assert run.terminal_payload_extras["change_stats"] == live_stats[-1]
         assert messages[-1].change_stats == live_stats[-1]
+        if ending != "reply":
+            assistant = next(
+                message for message in reversed(messages) if message.role == "assistant"
+            )
+            assert assistant.usage is not None
+            assert (
+                run.terminal_payload_extras["context_usage"]["tokens"]
+                > assistant.usage["context_usage"]["tokens"]
+            )
 
 
 @pytest.mark.asyncio
