@@ -25,7 +25,7 @@ from core.chat.messages import (
     ChatMessage,
     InputOrigin,
 )
-from core.runs import USER_MESSAGE_EVENT, ChatRunManager, QueuedRunItem, Run
+from core.runs import USER_MESSAGE_EVENT, QueuedRunItem, Run
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
@@ -67,25 +67,11 @@ class QueuedChatInput:
         )
 
 
-async def transcribe_steering_audio(
-    run_manager: ChatRunManager, run: Run, requests: RequestBuilder
-) -> None:
-    """Run speech-to-text of selected voice input before the Session lock is taken.
-
-    The append under the lock then reuses each attachment's cached transcription
-    instead of holding the lock through speech-to-text.
-    """
-    for item in run_manager.pending_steering(run):
-        executor = item.executor
-        if isinstance(executor, QueuedChatInput) and isinstance(executor.request.content, list):
-            await requests.transcribe_user_audio(executor.request.content)
-
-
 async def persist_steering_input(
     context: _RunExecutionContext,
     item: QueuedRunItem,
     dependencies: ChatLoopDependencies,
-    requests: RequestBuilder,
+    content: str | list[ContentBlock],
 ) -> None:
     """Append one user input before the Queue relinquishes it."""
     executor = item.executor
@@ -94,7 +80,6 @@ async def persist_steering_input(
     request = executor.request
     if request.content is None:
         raise ChatError("steering requires user content")
-    content = await requests.transcribe_user_audio(request.content)
     session = context.session
     await context.session_snapshot.refresh(session)
     reply_target = subagent_input_reply_target(context, request)

@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING
 from core.chat._boundaries import _finish_visible_boundary
 from core.chat._effort_epoch import thinking_effort
 from core.chat._queued_input import (
+    QueuedChatInput,
     persist_steering_input,
     rebuild_after_steering,
-    transcribe_steering_audio,
 )
 from core.chat._request_history import _prepare_request_context, _prepare_tool_context
 from core.chat._run_state import RequestState, _AssistantStep, resolve_run_agent
@@ -347,17 +347,23 @@ class AgenticProgression:
             build_started = context.request_build_started or time.perf_counter()
             context.request_build_started = None
             run.raise_if_cancelled()
-            await transcribe_steering_audio(self._dependencies.run_manager, run, self._requests)
-            async with self._dependencies.sessions.write_lock(session_address):
 
-                async def persist_input(item: QueuedRunItem) -> None:
-                    await persist_steering_input(context, item, self._dependencies, self._requests)
+            async def persist_input(item: QueuedRunItem) -> None:
+                executor = item.executor
+                if not isinstance(executor, QueuedChatInput) or executor.request.content is None:
+                    raise ChatError("steering requires queued Chat input")
+                # Keep speech-to-text cancellable and outside the Session lock.
+                # Pass its result directly: failed attempts have no cached text
+                # and must not retry inside the protected persistence boundary.
+                content = await self._requests.transcribe_user_audio(executor.request.content)
+                async with self._dependencies.sessions.write_lock(session_address):
+                    await _finish_visible_boundary(
+                        persist_steering_input(context, item, self._dependencies, content),
+                        run,
+                        True,
+                    )
 
-                delivered = await _finish_visible_boundary(
-                    self._dependencies.run_manager.deliver_steering(run, persist_input),
-                    run,
-                    True,
-                )
+            delivered = await self._dependencies.run_manager.deliver_steering(run, persist_input)
             if awaiting_steering and not delivered:
                 # The selected input was withdrawn before delivery. Without new
                 # User input, the persisted final answer remains the Run result.
