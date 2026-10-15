@@ -115,6 +115,7 @@ def test_a_snapshot_captures_every_registered_database_as_one_standalone_member_
         notes.close()
 
     assert snapshot is not None
+    assert b"\r" not in (snapshot / "manifest.json").read_bytes()
     assert sorted(path.name for path in snapshot.iterdir()) == [
         "manifest.json",
         "notes.db",

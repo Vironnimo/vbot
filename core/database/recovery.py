@@ -255,7 +255,9 @@ def _write_json_durably(path: Path, payload: Mapping[str, Any], *, what: str) ->
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+        )
         fsync_file(temporary)
         os.replace(temporary, path)
         fsync_dir(path.parent)
