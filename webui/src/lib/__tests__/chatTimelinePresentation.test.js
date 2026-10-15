@@ -8,6 +8,7 @@ import {
   groupTransientCards,
   imageReferenceLabel,
   isToolPreparing,
+  isFailedToolEvent,
   labelForEvent,
   labelForMessage,
   takeoverSeparatorLabel,
@@ -627,6 +628,29 @@ describe('Tool row presentation', () => {
       t('chat.toolFact.failure', { count: '1' }),
     ]);
   });
+
+  it.each(['result', 'message'])(
+    'labels a user-cancelled Tool result from %s as cancelled',
+    (source) => {
+      const result = {
+        ok: false,
+        error: { code: 'cancelled_by_user', message: 'Stopped.' },
+      };
+      const event = {
+        type: 'tool_call_result',
+        payload: {
+          tool_call: { id: 'call', name: 'search_files' },
+          ...(source === 'result'
+            ? { result }
+            : { message: { role: 'tool', content: JSON.stringify(result) } }),
+        },
+      };
+      const tool = toolRowFromEvent(event);
+      expect(toolStatus(tool)).toBe('cancelled');
+      expect(toolStatusLabel(tool)).toBe(t('chat.toolCancelled'));
+      expect(isFailedToolEvent(event)).toBe(false);
+    },
+  );
 
   it('labels a partial Tool result independently of failure', () => {
     const tool = toolRowFromEvent({

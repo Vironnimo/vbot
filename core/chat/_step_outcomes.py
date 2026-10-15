@@ -290,7 +290,9 @@ def _tool_message_failure_code(message: ChatMessage) -> str | None:
 
 
 # Failure codes that mean the Tool call was cancelled rather than failed.
-_CANCELLED_TOOL_CODES = frozenset({"cancelled", "tool_cancelled", "user_cancelled"})
+_CANCELLED_TOOL_CODES = frozenset(
+    {"cancelled", "tool_cancelled", "user_cancelled", "cancelled_by_user"}
+)
 
 
 def tool_result_facts(tool_messages: Sequence[ChatMessage]) -> dict[str, ToolResultFacts]:

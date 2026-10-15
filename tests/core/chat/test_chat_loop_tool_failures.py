@@ -507,3 +507,15 @@ def test_tool_result_facts_skip_messages_that_are_not_tool_results() -> None:
     messages = [ChatMessage.user("Run it"), stray, _tool_message(call, tool_success({}))]
 
     assert tool_result_facts(messages) == {"call": ToolResultFacts(status="completed", ok=True)}
+
+
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [("cancelled_by_user", "cancelled"), ("tool_cancelled", "cancelled"), ("io_error", "failed")],
+)
+def test_tool_result_facts_distinguish_cancellation_from_failure(code: str, status: str) -> None:
+    call = ToolCall(id="call", name="probe", arguments={})
+    facts = tool_result_facts([_tool_message(call, tool_failure(code, "Stopped."))])["call"]
+    assert facts.status == status
+    assert facts.ok is False
+    assert facts.error_code == code

@@ -3,6 +3,7 @@ import {
   toolNameForEvent,
   hasToolResultError,
   hasToolResultPartial,
+  hasToolResultCancellation,
 } from './messages.js';
 import {
   toolDisplayFromEvent,
@@ -71,11 +72,13 @@ export const toolRowFromEvent = (event) => {
     result: resultEvent?.payload?.result,
     timing: resultEvent?.payload?.timing ?? null,
     status: resultEvent
-      ? hasToolResultError(event)
-        ? 'failed'
-        : hasToolResultPartial(event)
-          ? 'partial'
-          : 'success'
+      ? hasToolResultCancellation(event)
+        ? 'cancelled'
+        : hasToolResultError(event)
+          ? 'failed'
+          : hasToolResultPartial(event)
+            ? 'partial'
+            : 'success'
       : 'running',
   };
 };

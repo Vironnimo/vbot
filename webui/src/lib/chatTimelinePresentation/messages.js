@@ -6,6 +6,7 @@ import { toolNameForRunTool } from './toolFacts.js';
 import { timestampToMs, formatDurationMs } from './time.js';
 import { getAttachmentUrl, isSpeechPlaybackUrl } from '$lib/api.js';
 import { toolDisplayRecordsError } from '$lib/chatToolDetails.js';
+import { toolResultCancelledByUser } from '$lib/chatTimeline/runChildren.js';
 
 export const isUserItem = (item) =>
   item.type === 'assistant_run'
@@ -632,20 +633,18 @@ function hasErrorResult(result) {
 }
 
 export function hasToolResultError(event) {
+  if (hasToolResultCancellation(event)) {
+    return false;
+  }
   if (event.payload?.error) {
     return true;
   }
 
-  const content = messageFromEvent(event)?.content;
-  if (!content) {
-    return false;
-  }
+  return hasErrorResult(parseJsonValue(toolResultValueForEvent(event)));
+}
 
-  try {
-    return hasErrorResult(JSON.parse(content));
-  } catch {
-    return false;
-  }
+export function hasToolResultCancellation(event) {
+  return toolResultCancelledByUser(toolResultValueForEvent(event));
 }
 
 export function hasToolResultPartial(event) {

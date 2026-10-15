@@ -72,6 +72,8 @@ A finished review row with an `outcome` adds one quiet line (user requirement: b
 
 ## Timeline and Queue
 
+- A `cancelled_by_user` Tool Result is cancelled in both canonical Run rows and legacy event/message rows; it contributes no failure indicator.
+
 - A delayed Sub-Agent inspection cannot change a concrete terminal Run back to running or queued, or replace its terminal duration and Tool facts. The inspection can still establish the Sub-Agent-to-Run mapping (`chatState.child-work.test.js`).
 - A persisted error stays a separate timeline row while the following Run Summary sets its preceding Run group's status and timing. A new canonical Run or another visible message ends that association (`chatTimeline.test.js`).
 - Steered User messages receive the same edit callback and disabled reason as standalone User messages, through `ChatAssistantRun` (`ChatTimeline.test.js`).
