@@ -162,7 +162,15 @@ async def test_known_limit_tries_lossless_alternative_before_jpeg_or_resizing():
 
 
 @pytest.mark.asyncio
-async def test_native_oversize_image_fits_limit_and_reports_resampling():
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_output_bytes": 512},
+        {"max_dimension": 32},
+        {"max_output_bytes": 512, "max_dimension": 32},
+    ],
+)
+async def test_native_oversize_image_fits_limit_and_reports_resampling(limits):
     source = Image.frombytes("RGB", (128, 64), random.Random(3).randbytes(128 * 64 * 3))
     stream = io.BytesIO()
     source.save(stream, format="PNG")
@@ -173,10 +181,13 @@ async def test_native_oversize_image_fits_limit_and_reports_resampling():
         original,
         "image/png",
         frozenset({"image/png"}),
-        max_output_bytes=512,
+        **limits,
     )
     assert unbounded.data is original
-    assert len(bounded.data) <= 512
+    if "max_output_bytes" in limits:
+        assert len(bounded.data) <= limits["max_output_bytes"]
+    if "max_dimension" in limits:
+        assert max(bounded.size) <= limits["max_dimension"]
     assert bounded.reencoded and bounded.size != bounded.original_size
     assert bounded.original_size == (128, 64)
     with Image.open(io.BytesIO(bounded.data)) as actual:
