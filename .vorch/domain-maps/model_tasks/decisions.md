@@ -32,4 +32,4 @@ The former `decisions` database (`<data-dir>/decisions.db`) is listed in `core/r
 - `tests/core/model_tasks/test_decisions.py`: one bounded request per item in item order, partial failure, oversized items, nothing sent for invalid calls or a missing binding.
 - `tests/core/model_tasks/test_decision_{types,providers}.py`: validation and the wire (exact request, auth, no ambiguous replay, shared connection).
 - `tests/core/model_tasks/test_task_usage.py`: `decision` Usage per request.
-- `tests/core/runtime/test_runtime_lifecycle.py::test_only_a_normal_start_releases_retired_core_databases`.
+- `tests/core/runtime/test_runtime_lifecycle.py::test_a_start_removes_killed_staging_and_only_a_normal_one_releases_retired_databases`.
