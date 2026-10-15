@@ -20,6 +20,7 @@ from core.automation import (
     AutomationReferences,
     BootstrapService,
     CronService,
+    GoalService,
     LearningChanges,
     LibrarianService,
     ReflectionService,
@@ -137,6 +138,7 @@ from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager, observe_process_tree
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
+from core.tools.update_goal import register_update_goal_tool
 from core.usage import UsageRecorder
 from core.utils.tls import prewarm_outbound_http
 from core.utils.tokens import prewarm_estimation_encoding
@@ -677,6 +679,15 @@ def bootstrap(runtime: Runtime) -> None:
             checkpoint_store=runtime._chat_sessions,
         )
         runtime._command_manager.start(recover=runtime.safe_startup_mode is None)
+        runtime._goal_service = GoalService(
+            sessions=runtime._chat_sessions,
+            run_manager=runtime._chat_run_manager,
+            chat_loop=runtime._chat_loop,
+            work_pending=partial(_goal_work_pending, runtime),
+        )
+        # No Run is active yet: goals a previous Runtime left active pause here.
+        runtime._goal_service.pause_after_restart()
+        runtime._goal_service.install()
         runtime._bootstrap_service = BootstrapService(
             runtime._trigger_service,
             runtime._storage.data_dir,
@@ -722,6 +733,7 @@ def bootstrap(runtime: Runtime) -> None:
             automation_references=runtime._automation_references,
             snapshot_barrier=runtime._snapshot_barrier,
             stop_all=lambda address: runtime.subagents.stop_tree(address),
+            goals=runtime._goal_service,
         )
         if runtime._extensions is not None:
             runtime._extensions.apply_commands(runtime._command_dispatcher)
@@ -738,6 +750,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._trigger_service.set_completion_run_relay(
             runtime._channel_service.relay_completion_run
         )
+        runtime._goal_service.set_run_relay(runtime._channel_service.relay_completion_run)
         runtime._channel_service._notify_tool_registration_changed_hook = (
             runtime._reload_channel_tool_if_started
         )
@@ -778,6 +791,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._subagent_coordinator,
             runtime._tool_prompt_blocks,
         )
+        register_update_goal_tool(runtime._tools, runtime._goal_service)
         register_background_tasks_tool(
             runtime._tools,
             runtime._command_manager,
@@ -857,6 +871,22 @@ def _agent_default_project(agents: AgentStore, agent_id: str) -> str | None:
     """Return the default Project of an Identity Agent, ``None`` for none or no Agent."""
     agent = agents.find(agent_id)
     return None if agent is None else agent.root_project_id
+
+
+async def _goal_work_pending(runtime: Runtime, address: SessionAddress) -> bool:
+    """Whether work runs whose result wakes the Session: a Sub-Agent or a delivering command."""
+    sessions = runtime._chat_sessions
+    runs = runtime._chat_run_manager
+    if sessions is None or runs is None:
+        return False
+    children = await sessions.run_async(sessions.subagent_children, address)
+    if any(
+        runs.has_activity_for_session(child.agent_id, child.session_id, project_id=child.project_id)
+        for child in children
+    ):
+        return True
+    commands = runtime._command_manager
+    return commands is not None and commands.has_pending_delivery(address)
 
 
 def _librarian_service(runtime: Runtime) -> LibrarianService:

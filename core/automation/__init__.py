@@ -13,6 +13,7 @@ from core.automation.cron import (
     validate_cron_jobs_data,
     validate_cron_jobs_file,
 )
+from core.automation.goals import GoalService
 from core.automation.learning import (
     LaterChange,
     LearningChange,
@@ -67,6 +68,7 @@ __all__ = [
     "ReflectionResult",
     "ReflectionService",
     "TriggerService",
+    "GoalService",
     "load_validated_cron_jobs_json",
     "validate_cron_jobs_data",
     "validate_cron_jobs_file",

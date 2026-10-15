@@ -75,7 +75,7 @@ HOME_ASSISTANT_TOOLS = ["ha_call_service", "ha_get_state", "ha_list_entities", "
 COMPUTER_USE_TOOLS = ["computer", "computer_apps", "computer_batch"]
 
 # Built-in Tools that only a Session grant or a Live call offers; they stay out of the catalog.
-SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent", "vbot_request"]
+SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent", "update_goal", "vbot_request"]
 CANONICAL_REGISTERED_TOOLS = sorted(
     CANONICAL_BUILTIN_TOOLS
     + list(LIVE_TOOL_NAMES)

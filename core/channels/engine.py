@@ -1329,11 +1329,14 @@ class ChannelConversationEngine:
     async def _send_command_unavailability(
         self, reply_plan: ReplyPlanFacts, unavailable: CommandUnavailability
     ) -> None:
-        await self._send_ingress_reply(
-            reply_plan,
-            f"The {unavailable.command} command is not available through "
-            f"{self._platform_display_name()}.",
-        )
+        if unavailable.conversation == "group":
+            text = f"The {unavailable.command} command is not available in group chats."
+        else:
+            text = (
+                f"The {unavailable.command} command is not available through "
+                f"{self._platform_display_name()}."
+            )
+        await self._send_ingress_reply(reply_plan, text)
 
     async def _execute_prepared_command(
         self,

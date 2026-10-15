@@ -29,7 +29,7 @@ from core.chat._request_history import (
 from core.chat._request_media import RequestMedia
 from core.chat._request_targets import RequestTargets
 from core.chat._run_state import RequestBuildInputs, _RequestState
-from core.chat._scratch_context import preserve_scratch_note
+from core.chat._scratch_context import latest_goal_note_id, preserve_notes
 from core.chat._tool_epoch import (
     LiveToolCatalog,
     ToolChange,
@@ -73,6 +73,7 @@ from core.sessions import (
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     SUBAGENT_SESSION_TOOL_NAMES,
+    UPDATE_GOAL_TOOL_NAME,
     EditDialect,
     Tool,
     ToolAccess,
@@ -99,24 +100,31 @@ def _finalize_compaction_checkpoint(
     checkpoint: ChatMessage,
     session_messages: list[ChatMessage],
     scratch_note_id: object,
+    goal_open: bool,
 ) -> ChatMessage:
     ordinal = sum(message.role == "compaction_checkpoint" for message in session_messages) + 1
-    return preserve_scratch_note(
-        finalize_checkpoint_guidance(checkpoint, ordinal=ordinal), session_messages, scratch_note_id
+    kept_note_ids = [scratch_note_id]
+    if goal_open:
+        kept_note_ids.append(latest_goal_note_id(session_messages))
+    return preserve_notes(
+        finalize_checkpoint_guidance(checkpoint, ordinal=ordinal), session_messages, kept_note_ids
     )
 
 
 def _live_session_tool_grants(
-    session_capability: Any | None, *, subagent_session: bool
+    session_capability: Any | None, *, subagent_session: bool, goal_session: bool
 ) -> tuple[str, ...]:
     """Return the session-scoped Tools the Session grants now.
 
     A temporary Session grants its capability's Tools; a Sub-Agent Session grants
-    the Tools a Sub-Agent uses to reach its Parent Agent.
+    the Tools a Sub-Agent uses to reach its Parent Agent; a Session with an open
+    goal grants the Tool that ends its automatic turns.
     """
     grants = tuple(session_capability.tool_names) if session_capability is not None else ()
     if subagent_session:
         grants = (*grants, *SUBAGENT_SESSION_TOOL_NAMES)
+    if goal_session:
+        grants = (*grants, UPDATE_GOAL_TOOL_NAME)
     return grants
 
 
@@ -485,7 +493,9 @@ class RequestBuilder:
                 inputs.temporary_binding, self._dependencies.tools
             )
         live_tool_grants = _live_session_tool_grants(
-            session_capability, subagent_session=inputs.subagent_session
+            session_capability,
+            subagent_session=inputs.subagent_session,
+            goal_session=inputs.goal_session,
         )
         effective_input_modalities = (
             inputs.input_modalities
@@ -690,7 +700,9 @@ class RequestBuilder:
         return await self._live_tool_catalog(
             context.agent,
             session_tool_grants=_live_session_tool_grants(
-                capability, subagent_session=context.subagent_session
+                capability,
+                subagent_session=context.subagent_session,
+                goal_session=context.goal_session,
             ),
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,

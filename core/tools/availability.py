@@ -20,6 +20,8 @@ MESSAGE_PARENT_TOOL_NAME = "message_parent"
 # Tools every Sub-Agent Session grants: the Sub-Agent's line to its Parent Agent.
 SUBAGENT_SESSION_TOOL_NAMES = (MESSAGE_PARENT_TOOL_NAME,)
 SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent"})
+# Granted by a Session with an open goal (``core/automation/goals.py``).
+UPDATE_GOAL_TOOL_NAME = "update_goal"
 SUBAGENT_TOOL_SETTINGS_KEY = "subagent"
 SUBAGENT_ALLOWED_AGENTS_KEY = "allowed_agents"
 DEFAULT_SUBAGENT_ALLOWED_AGENTS: tuple[str, ...] = ("*",)
@@ -396,6 +398,7 @@ __all__ = [
     "SUBAGENT_TOOL_SETTINGS_KEY",
     "SUBAGENT_TOOL_NAMES",
     "TOOL_ACCESS_MODE_ALL",
+    "UPDATE_GOAL_TOOL_NAME",
     "TOOL_ACCESS_MODE_NONE",
     "TOOL_ACCESS_MODE_SELECTED",
     "TOOL_ACCESS_MODES",

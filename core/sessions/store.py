@@ -239,6 +239,15 @@ class SessionStore:
             lambda connection: _store_queries.subagent_session(connection, subagent_id)
         )
 
+    def live_addresses_with_metadata_field(
+        self, key: str, field: str, value: str
+    ) -> list[SessionAddress]:
+        return self._read(
+            lambda connection: _store_queries.live_addresses_with_metadata_field(
+                connection, key, field, value
+            )
+        )
+
     def require_live(self, address: SessionAddress) -> str:
         """Return the live generation id, or raise ``SessionNotFoundError``."""
         return self._read(

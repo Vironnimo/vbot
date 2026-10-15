@@ -48,6 +48,8 @@ from core.providers.reasoning import (
 )
 from core.runs import Run, RunStatus
 from core.sessions import (
+    SESSION_GOAL_META_KEY,
+    SESSION_GOAL_OPEN_STATUSES,
     SUBAGENT_PARENT_META_KEY,
     SUBAGENT_REPLY_TARGET_META_KEY,
     ChatSession,
@@ -194,6 +196,12 @@ def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -
     return isinstance(sessions.metadata_value(address, SUBAGENT_PARENT_META_KEY), dict)
 
 
+def has_open_goal(sessions: ChatSessionManager, address: SessionAddress) -> bool:
+    """Return whether *address* has a goal that grants ``update_goal``. Blocking."""
+    goal = sessions.metadata_value(address, SESSION_GOAL_META_KEY)
+    return isinstance(goal, dict) and goal.get("status") in SESSION_GOAL_OPEN_STATUSES
+
+
 def subagent_input_reply_target(context: _RunExecutionContext, request: _RunRequest) -> str | None:
     """Destination selected by this input; internal continuations keep the current one."""
     if not context.subagent_session or request.internal or request.input_already_persisted:
@@ -317,6 +325,8 @@ class _RunExecutionContext:
     session_snapshot: _SessionSnapshot
     # The Session is linked to a Parent Agent (a Sub-Agent Session).
     subagent_session: bool = False
+    # The Session has an open goal, which grants ``update_goal`` for this Run.
+    goal_session: bool = False
     request_state: _RequestState | None = None
     image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
     context_usage: RequestContextUsage = field(default_factory=RequestContextUsage)
@@ -548,6 +558,8 @@ class RequestBuildInputs:
     # The Session is linked to a Parent Agent: the System Prompt shows the
     # Sub-Agent role and the Session grants the Sub-Agent's own Tools.
     subagent_session: bool = False
+    # The Session has an open goal and grants ``update_goal``.
+    goal_session: bool = False
     # Start a new prompt epoch's Tool pin and dynamic block pin from the current
     # Tools and blocks instead of reading the Session's pins; the caller persists
     # them (Compaction commit).
@@ -594,6 +606,7 @@ class RequestBuildInputs:
             image_budget=context.image_budget,
             temporary_binding=context.request.temporary_binding,
             subagent_session=context.subagent_session,
+            goal_session=context.goal_session,
             list_announced_tools=(
                 target is not context.primary_target or not target.unlisted_tool_calls
             ),
@@ -847,6 +860,9 @@ async def create_run_execution_context(
         subagent_session = await _CHAT_TRANSFORM_WORKERS.run(
             is_subagent_session, dependencies.sessions, session_address
         )
+        goal_session = await _CHAT_TRANSFORM_WORKERS.run(
+            has_open_goal, dependencies.sessions, session_address
+        )
         session.activated_skill_contents(session_snapshot.active_messages)
         context = _RunExecutionContext(
             run=run,
@@ -867,6 +883,7 @@ async def create_run_execution_context(
             prompt_cache_affinity_id=prompt_cache_affinity_id,
             session_snapshot=session_snapshot,
             subagent_session=subagent_session,
+            goal_session=goal_session,
             # The Session's newest measurement still anchors this Run's Context.
             context_usage=RequestContextUsage.resume(
                 session_snapshot.active_messages, dependencies.usage_recorder

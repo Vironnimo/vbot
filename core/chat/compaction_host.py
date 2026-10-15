@@ -18,6 +18,7 @@ from core.chat._run_state import (
     RequestBuildInputs,
     RequestState,
     _CompactionPromptRefresh,
+    has_open_goal,
     is_subagent_session,
 )
 from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY
@@ -283,6 +284,9 @@ class ChatCompactionHost:
                 subagent_session=await self.run_transform(
                     is_subagent_session, self._dependencies.sessions, session.address
                 ),
+                goal_session=await self.run_transform(
+                    has_open_goal, self._dependencies.sessions, session.address
+                ),
                 list_announced_tools=adapter.list_announced_tools(model_id),
             )
             state = await self._requests.build_request_state(agent, session, inputs=inputs)
@@ -324,6 +328,7 @@ class ChatCompactionHost:
             session.address, SCRATCH_ANNOUNCED_META_KEY
         )
         scratch_note_id = announced.get("note_id") if isinstance(announced, dict) else None
+        goal_open = await self.run_transform(has_open_goal, self.sessions, session.address)
         return cast(
             ChatMessage,
             await self.run_transform(
@@ -331,6 +336,7 @@ class ChatCompactionHost:
                 checkpoint,
                 session_messages,
                 scratch_note_id,
+                goal_open,
             ),
         )
 

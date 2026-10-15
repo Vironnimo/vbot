@@ -124,6 +124,13 @@ SESSION_RUN_KINDS_META_KEY = "run_kinds"
 # Identity Agent the Project chosen when it was created (absent: the Workspace).
 # Sessions manage it; a metadata write may repeat it but never change it.
 SESSION_WORKING_PROJECT_META_KEY = "working_project_id"
+# The Session goal the user set with /goal (owner: ``core/automation/goals.py``).
+# Chat grants the ``update_goal`` Tool while its status is an open one.
+SESSION_GOAL_META_KEY = "goal"
+SESSION_GOAL_OPEN_STATUSES = frozenset({"active", "blocked", "paused"})
+# The System Reminder that sets the goal; Chat keeps the latest one across
+# Compaction while the goal is open.
+SESSION_GOAL_NOTE_PREFIX = "The user set a goal for this session with /goal:"
 
 
 class WorkingProjectDefault(Enum):
@@ -150,6 +157,7 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         "reflection_counters",
         "scratch_announced",
         SESSION_RUN_KINDS_META_KEY,
+        SESSION_GOAL_META_KEY,
     }
 )
 # Prompt pin slots rendered from the Session's Agent: its Skill catalog, SOUL
