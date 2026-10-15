@@ -88,6 +88,75 @@ def test_canonical_output_settles_streamed_phase_in_place_after_early_tool_compl
     assert previous["items"][1]["content"] == "Inspecting"
 
 
+@pytest.mark.parametrize(
+    ("chunks", "reasoning", "content"),
+    [
+        (
+            [
+                ("reasoning", "First thought. "),
+                ("assistant_output", "Answer."),
+                ("reasoning", "More thought."),
+            ],
+            "First thought. More thought.",
+            "Answer.",
+        ),
+        ([("assistant_output", "<think>Plan</think>")], "Plan", None),
+        ([("reasoning", "discarded"), ("assistant_output", "Answer.")], None, "Answer."),
+        ([("assistant_output", "discarded")], None, ""),
+    ],
+)
+def test_canonical_message_replaces_only_its_transient_text_sections(
+    chunks: list[tuple[str, str]], reasoning: str | None, content: str | None
+) -> None:
+    timeline = RunTimeline("run")
+    emit(timeline, "assistant_output", {"message": {"id": "earlier", "content": "Earlier step"}})
+    earlier = block(timeline)["items"][0]
+    for kind, text in chunks:
+        emit(
+            timeline,
+            f"{kind}_delta",
+            {"reasoning_delta" if kind == "reasoning" else "content_delta": text},
+        )
+    previous = block(timeline)
+    message = {
+        "id": "final",
+        "role": "assistant",
+        "reasoning": reasoning,
+        "content": content,
+        "interrupted": True,
+    }
+    if reasoning:
+        emit(timeline, "reasoning", {"message": message})
+    emit(timeline, "assistant_output", {"message": message})
+    items = block(timeline)["items"]
+    assert items[0] == earlier
+    expected = [
+        (kind, text)
+        for kind, text in (("reasoning", reasoning), ("assistant_output", content))
+        if text
+    ]
+    assert [(item["type"], item["content"]) for item in items[1:]] == expected
+    assert all(not item["streaming"] and item["interrupted"] for item in items[1:])
+    assert any(item["streaming"] for item in previous["items"][1:])
+    for item in items[1:]:
+        previous_match = next(
+            (row for row in previous["items"][1:] if row["type"] == item["type"]), None
+        )
+        if previous_match:
+            assert item["id"] == previous_match["id"]
+    emit(timeline, "reasoning_delta", {"reasoning_delta": "Following step"})
+    emit(
+        timeline,
+        "assistant_output",
+        {"message": {"id": "following", "reasoning": "Following step"}},
+    )
+    emit(timeline, "reasoning_delta", {"reasoning_delta": "Abandoned step"})
+    emit(timeline, "stream_attempt_restarted")
+    emit(timeline, "reasoning_delta", {"reasoning_delta": "Retry step"})
+    retained = block(timeline)["items"]
+    assert len({item["id"] for item in retained}) == len(retained)
+
+
 def test_reasoning_and_outputs_remain_separate_across_tool_steps() -> None:
     timeline = RunTimeline("run")
     for step in (1, 2):

@@ -7,6 +7,7 @@ import {
   createChatState,
   ensureSessionState,
   loadHistory,
+  prependHistory,
 } from '../../../../webui/src/lib/chatState.js';
 import { untrack } from 'svelte';
 import { failureText } from './failureText.js';
@@ -379,6 +380,7 @@ export function createSwarmPageActivity(host) {
     const request = activityRequest;
     const read = ++historyRequest;
     const selected = history;
+    const snapshotVersion = projection.historySnapshotVersion;
     historyLoading = true;
     try {
       const data = await host.model.client.readHistory(
@@ -392,24 +394,43 @@ export function createSwarmPageActivity(host) {
       if (
         host.model.disposed ||
         request !== activityRequest ||
-        read !== historyRequest
+        read !== historyRequest ||
+        snapshotVersion !== projection.historySnapshotVersion
       )
         return;
+      if (
+        data.history_generation &&
+        data.history_generation !== projection.historyGeneration
+      ) {
+        void inspectParticipant(inspectedParticipant, {
+          activate: false,
+          preserve: true,
+          catchUp: true,
+        });
+        return;
+      }
+      prependHistory(projection, data.messages, {
+        items: data.items,
+        replaceRunIds: data.replace_run_ids,
+        activeRunId:
+          projection.currentRun?.runId ?? selected.data.active_run?.run_id,
+        timelineSequence: data.timeline_sequence,
+        runs: data.runs,
+        hasMore: data.has_more,
+        nextBefore: data.next_before,
+      });
       historyPageCount += 1;
       history = {
         ...selected,
         data: {
           ...history.data,
-          messages: [...(data.messages ?? []), ...selected.data.messages],
-          items: mergeTimelineItems(selected.data.items, data.items, {
-            prepend: true,
-          }),
-          runs: [...(data.runs ?? []), ...(selected.data.runs ?? [])],
+          messages: projection.messages,
+          items: projection.timelineItems,
+          runs: Object.values(projection.historyRuns),
           has_more: data.has_more,
           next_before: data.next_before,
         },
       };
-      adoptHistory(history.data);
     } catch (cause) {
       if (
         !host.model.disposed &&

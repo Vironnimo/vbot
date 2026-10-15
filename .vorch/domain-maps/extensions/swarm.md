@@ -1272,7 +1272,7 @@ flushes live updates in 33 ms batches. Initial replay is buffered through the
 server-reported `replay_through_sequence` before replacing displayed History;
 opening a long-running Session therefore does not visibly replay its old steps.
 The shared Chat Timeline uses explicit complete Run descriptors to retire retained live output; stale History or active
-snapshots cannot erase newer output or restart a settled subscription. In-flight
+snapshots cannot erase newer output or restart a settled subscription. Older pages prepend into the current live projection, using the active Run identity/sequence from Extension History; late pages from an earlier selection or History generation are discarded. In-flight
 inspection survives peer invalidations, and Thinking disclosure state belongs to
 the inspected Session. Tests: `SwarmPage.streaming.test.js` and
 `SwarmPage.activity.test.js`. The generic bridge only relays the replay
