@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from typing import Any, override
 
 from core.channels import (
     ALLOWED_CHANNEL_DM_SCOPES,
@@ -420,6 +421,27 @@ EXTENSIONS_HELP = {
 }
 
 
+class _TargetArgument(argparse.Action):
+    """A repeated instance selector must name the same target."""
+
+    @override
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> None:
+        supplied = getattr(namespace, "_target_arguments", {})
+        if self.dest in supplied and supplied[self.dest] != values:
+            raise argparse.ArgumentError(
+                self,
+                f"{option_string} was given conflicting values; pass one value for {option_string}",
+            )
+        namespace._target_arguments = {**supplied, self.dest: values}
+        setattr(namespace, self.dest, values)
+
+
 def _add_target_arguments(
     parser: argparse.ArgumentParser,
     *,
@@ -427,6 +449,7 @@ def _add_target_arguments(
 ) -> None:
     parser.add_argument(
         "--host",
+        action=_TargetArgument,
         default=default_host,
         help=(
             f"Server host (default: {default_host})"
@@ -436,11 +459,13 @@ def _add_target_arguments(
     )
     parser.add_argument(
         "--port",
+        action=_TargetArgument,
         type=int,
         help="Server port; normally --port > VBOT_SERVER_PORT > local Settings > 8420",
     )
     parser.add_argument(
         "--data-dir",
+        action=_TargetArgument,
         help="Local instance configuration directory; does not redirect RPC state on the server",
     )
 

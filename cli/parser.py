@@ -163,7 +163,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Start with vbot <area> --help, then vbot <area> <command> --help. "
             "Use vbot config list [prefix] to discover Settings and vbot config describe <path> "
-            "to inspect a setting before changing it. Append target options after the command; "
+            "to inspect a setting before changing it. Put --host, --port and --data-dir before "
+            "the area or after the action, where that command accepts them; "
             "keep the same target on follow-up calls. Read mutation results for saved state "
             "and pending work; exit 0 alone does not prove runtime readiness."
         ),
@@ -209,17 +210,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse vBot CLI arguments without prompting for input."""
     parser = build_parser()
     tokens = list(sys.argv[1:] if argv is None else argv)
-    root_output = None
-    while tokens and (tokens[0] == "--output" or tokens[0].startswith("--output=")):
-        option = tokens.pop(0)
-        if option == "--output":
-            if not tokens:
-                parser.error("--output requires auto, human, or plain")
-            root_output = tokens.pop(0)
-        else:
-            root_output = option.split("=", 1)[1]
-        if root_output not in {"auto", "human", "plain"}:
-            parser.error("--output requires auto, human, or plain")
+    root_output, root_target = _take_root_options(parser, tokens)
     if tokens and tokens[0] == "help":
         tokens = [*tokens[1:], "--help"]
     if tokens and tokens[0] in AREA_ALIASES:
@@ -227,13 +218,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if tokens and tokens[0] in {"--server", "--restart", "--start", "--stop"}:
         parser.error(
             "Use an area followed by an action, for example: vbot server restart. "
-            "Put options after the action (e.g. --port 8420). "
+            "Put target options before the area or after the action (e.g. --port 8420). "
             "Server lifecycle commands run on the machine that owns the server."
         )
-    operation_args = _extension_operation_args(tokens, parser)
-    if operation_args is None and _is_command_group(parser, tokens):
+    if _is_command_group(parser, tokens):
         tokens.append("--help")
     selected = parser
+    command_end = 0
     for token in tokens:
         commands = next(
             (a for a in selected._actions if isinstance(a, argparse._SubParsersAction)), None
@@ -241,10 +232,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         if commands is None or token not in commands.choices:
             break
         selected = commands.choices[token]
+        command_end += 1
+    # Let the selected command own validation and defaults. Inserting before its
+    # positionals also keeps Extension operation payloads after their own boundary.
+    if tokens[command_end : command_end + 1] in (["--help"], ["-h"]):
+        command_end += 1
+    tokens[command_end:command_end] = root_target
     if isinstance(parser, _CliParser):
         parser._error_help_path = selected.prog
         if isinstance(selected, _CliParser):
             parser._selected_parser = selected
+    operation_args = _extension_operation_args(tokens, parser)
     args = operation_args if operation_args is not None else parser.parse_args(tokens)
     if getattr(args, "area", None) == "extensions":
         action = getattr(args, "command", None)
@@ -280,6 +278,29 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if getattr(args, "area", None) == "archive" and args.command == "purge":
         _check_archive_purge_selection(parser, args)
     return args
+
+
+def _take_root_options(
+    parser: argparse.ArgumentParser, tokens: list[str]
+) -> tuple[str | None, list[str]]:
+    output = None
+    target: list[str] = []
+    while tokens:
+        option, separator, value = tokens[0].partition("=")
+        if option not in {"--output", "--host", "--port", "--data-dir"}:
+            break
+        tokens.pop(0)
+        if not separator:
+            if not tokens:
+                parser.error(f"{option} requires a value")
+            value = tokens.pop(0)
+        if option == "--output":
+            if value not in {"auto", "human", "plain"}:
+                parser.error("--output requires auto, human, or plain")
+            output = value
+        else:
+            target.extend([f"{option}={value}"] if separator else [option, value])
+    return output, target
 
 
 def _check_archive_purge_selection(

@@ -56,7 +56,7 @@ Read a template with the `skill` Tool using `name: "vbot-docs"` and its relative
 
 ## Keep the target and path roles clear
 
-Management commands need a running server. Append `--host <host> --port <port>` after the command when selecting an explicit target, and repeat them on follow-up calls. `--data-dir <path>` selects the CLI's local instance configuration; it does not redirect RPC state on an already selected server. Read `references/server.md` for defaults and command-specific exceptions.
+Management commands need a running server. Put `--host <host> --port <port>` before the area or after the action when selecting an explicit target, and repeat them on follow-up calls. `--data-dir <path>` selects the CLI's local instance configuration; it does not redirect RPC state on an already selected server. Read `references/server.md` for defaults and command-specific exceptions.
 
 `home`, `server`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` operate locally; `data-store` commands have both local and RPC operations. Run lifecycle work on the server machine. Do not interpret local filesystem reports as evidence about a remote server.
 

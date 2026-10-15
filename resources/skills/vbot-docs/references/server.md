@@ -4,7 +4,7 @@ These commands run locally. Management commands in other areas normally contact 
 
 ## Select the instance
 
-- For RPC-backed management commands, append `--host <host> --port <port>` after the command to select the server. Keep those options on subsequent calls; the CLI does not remember a target from the previous command.
+- For RPC-backed management commands, put `--host <host> --port <port>` before the area or after the action to select the server. Repeating a target option with a different value is refused. Keep those options on subsequent calls; the CLI does not remember a target from the previous command.
 - Host normally defaults to `127.0.0.1`. Port resolves from `--port`, then `VBOT_SERVER_PORT`, then the selected local Settings, then `8420`.
 - The local data directory resolves from `--data-dir`, then `VBOT_DATA_DIR`, then an applicable checkout/worktree marker, then `~/.vbot`. Use `vbot home [--data-dir <path>]` to inspect it. `--data-dir` selects local configuration and lifecycle state; it is not sent to the server to redirect a management request.
 - An installation with its own server (shape `server` or `server-desktop` in `vbot application status`) replaces both resolution chains: omitted options select its recorded host, port and data directory. Its `server` and `autostart` commands always act on that recorded server and reject a `--host`, `--port` or `--data-dir` that names another target.
