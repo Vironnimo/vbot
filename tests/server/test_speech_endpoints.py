@@ -16,6 +16,7 @@ from starlette.requests import ClientDisconnect  # type: ignore[import-not-found
 
 import server.app as server_app
 from core.model_tasks import (
+    SpeechArtifactNotFoundError,
     SpeechConfigurationError,
     SpeechError,
     SpeechExecutionError,
@@ -74,6 +75,8 @@ def test_synthesize_answers_audio_or_a_progress_stream_with_the_artifact(tmp_pat
         playback_event = next(event for event in events if event["type"] == "playback")
         playback = client.get(playback_event["url"])
         unavailable = client.get("/api/speech/playback/expired")
+        missing_artifact = client.get("/api/speech/artifacts/aud_missing")
+        assert missing_artifact.status_code == 404
 
     assert audio.headers["content-type"].startswith("audio/mpeg")
     assert audio.content == b"audio"
@@ -311,6 +314,9 @@ class _Speech:
 
     def preload_configured(self) -> None:
         return None
+
+    def get_artifact(self, artifact_id: str) -> Any:
+        raise SpeechArtifactNotFoundError("Speech artifact not found")
 
     async def transcribe(
         self,

@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     )
     from core.model_tasks.speech import (
         SpeechArtifact,
+        SpeechArtifactNotFoundError,
         SpeechConfigurationError,
         SpeechError,
         SpeechExecutionError,
@@ -200,6 +201,7 @@ _EXPORT_MODULES = {
     "option_schema_for": "core.model_tasks.options",
     "validate_task_model_options": "core.model_tasks.options",
     "SpeechArtifact": "core.model_tasks.speech",
+    "SpeechArtifactNotFoundError": "core.model_tasks.speech",
     "SpeechConfigurationError": "core.model_tasks.speech",
     "SpeechError": "core.model_tasks.speech",
     "SpeechExecutionError": "core.model_tasks.speech",
@@ -290,6 +292,7 @@ __all__ = [
     "SPEECH_TASK_TYPES",
     "SUPPORTED_TASK_TYPES",
     "SpeechArtifact",
+    "SpeechArtifactNotFoundError",
     "SpeechConfigurationError",
     "SpeechError",
     "SpeechExecutionError",

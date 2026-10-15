@@ -16,6 +16,7 @@ import pytest
 
 from core.model_tasks import (
     LocalSpeechExecutor,
+    SpeechArtifactNotFoundError,
     SpeechConfigurationError,
     SpeechExecutionError,
     SpeechOutcomeUnknownError,
@@ -73,6 +74,11 @@ async def test_synthesize_artifact_persists_metadata(tmp_path: Path) -> None:
     assert (
         service.get_artifact(artifact.id).to_dict()["url"] == f"/api/speech/artifacts/{artifact.id}"
     )
+    with pytest.raises(SpeechArtifactNotFoundError):
+        service.get_artifact("aud_missing")
+    artifact.file_path.unlink()
+    with pytest.raises(SpeechArtifactNotFoundError):
+        service.get_artifact(artifact.id)
 
 
 @pytest.mark.asyncio
