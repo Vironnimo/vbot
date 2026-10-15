@@ -242,18 +242,14 @@ class SwarmExtension:
     async def close(self) -> None:
         # The host drains this owner (``_quiesce``) before it runs shutdown
         # handlers, so no Swarm Run is left to stop here.
-        if self._cleanup_tasks:
-            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
-        # A pending title request keeps the stored local title; never delay close.
-        for task in self._title_tasks:
-            task.cancel()
-        if self._title_tasks:
-            await asyncio.gather(*self._title_tasks, return_exceptions=True)
         self._pacing.close()
-        for task in self._wake_tasks.values():
+        # Wake schedulers await shielded workers; cancel both before awaiting
+        # either. A pending title request keeps the stored local title.
+        tasks = (*self._cleanup_tasks, *self._title_tasks, *self._wake_tasks.values())
+        for task in tasks:
             task.cancel()
-        if self._wake_tasks:
-            await asyncio.gather(*self._wake_tasks.values(), return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if self.store is not None:
             await self.store.close()
             self.store = None

@@ -26,6 +26,30 @@ from tests.resources.extensions.swarm.swarm_test_support import (
 
 
 @pytest.mark.asyncio
+async def test_close_cancels_pending_wake_schedulers_and_their_shielded_workers(
+    lifecycle, monkeypatch
+):
+    started = asyncio.Event()
+    pending = asyncio.get_running_loop().create_future()
+
+    async def drain(_swarm_id):
+        started.set()
+        await pending
+
+    service = lifecycle.service
+    monkeypatch.setattr(service, "_drain_wakes", drain)
+    service._enqueue_wakes("running")
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
+        await started.wait()
+        service._enqueue_wakes("not-started")
+        await service.close()
+    assert pending.cancelled()
+    assert not service._cleanup_tasks
+    assert not service._wake_tasks
+    assert service.store is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("finish_first_run", [False, True])
 async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
     lifecycle, tmp_path, finish_first_run
