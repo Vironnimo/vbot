@@ -193,7 +193,10 @@ async def test_placeholder_fields_count_as_omitted(
     assert result["data"]["agent_id"] == target
     assert [turn.content for turn in harness.loop.turns] == [BRIEF]
     child = harness.subagent_session(result["data"]["id"])
-    assert harness.sessions.metadata_value(child, "agent_overrides") is None
+    assert harness.sessions.metadata_value(child, "agent_overrides") == {
+        "model": "fixture/model",
+        "thinking_effort_default": True,
+    }
     assert result["data"]["note"] == SUBAGENT_STARTED_NOTE
 
 
