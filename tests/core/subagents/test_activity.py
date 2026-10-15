@@ -85,8 +85,18 @@ async def test_activity_streams_assistant_and_safe_tool_summary_without_duplicat
     # The follower subscribes on its first step, while the child Run still works.
     await asyncio.sleep(0)
 
-    run.emit(USER_MESSAGE_EVENT, {"message": {"content": "private user prompt"}})
-    run.emit(REASONING_EVENT, {"message": {"reasoning": "hidden chain"}})
+    run.emit(
+        USER_MESSAGE_EVENT,
+        {"message": ChatMessage.user(content="private user prompt").to_dict()},
+    )
+    run.emit(
+        REASONING_EVENT,
+        {
+            "message": ChatMessage.assistant(
+                model="test", content="", reasoning="hidden chain"
+            ).to_dict()
+        },
+    )
     run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "Hello"})
     run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": " world"})
     run.emit(
