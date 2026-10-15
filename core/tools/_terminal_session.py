@@ -72,9 +72,9 @@ _REPLAY_PIECE_BYTES = 1 << 20
 _REPLAY_LOCKED_BYTES = 1 << 16
 # A failed redraw is tried again after twice the quiet period, doubling up
 # to this many seconds.
-_REDRAW_RETRY_MAX_SECONDS = 300.0
+_REDRAW_RETRY_MAX_SECONDS = 5.0
 # Once the program has ended, its final screen is drawn anew for at most this long.
-_FINAL_REDRAW_SECONDS = 10.0
+_FINAL_REDRAW_SECONDS = 1.0
 # The latest clears of the screen recorded for acknowledgements that arrive late.
 _CLEARS_KEPT = 64
 # Failures that persist across chunks or polls, keyed by (terminal id, kind):
@@ -1301,7 +1301,7 @@ class TerminalSession:
                     exc_info=failures == 0,
                 )
             failures += 1
-            delay = services.activity_quiet_seconds * 2**failures
+            delay = services.activity_quiet_seconds * 2 ** min(failures, 10)
             await services.sleep(min(delay, _REDRAW_RETRY_MAX_SECONDS))
 
     async def _redraw_once(self) -> bool:
