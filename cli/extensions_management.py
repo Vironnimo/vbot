@@ -472,7 +472,7 @@ def _format_waiting(extension: dict[str, object]) -> str:
     return (
         f"waiting for configuration{suffix}: "
         f"run 'vbot extensions show {name}' to see its settings, then "
-        f"'vbot extensions set {name} <field> <value>' (or Settings > Extensions)"
+        f"'vbot extensions set {name} <field> <value>' (or Settings > Integrations > Extensions)"
     )
 
 

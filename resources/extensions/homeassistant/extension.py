@@ -318,11 +318,11 @@ def _failure_result(
 ) -> JsonObject:
     """Return a failed request's result; ``effect`` names a service call that may have run."""
     status, detail = failure.status, failure.detail
-    settings = "the server URL in Settings -> Extensions"
+    settings = "the server URL in Settings -> Integrations -> Extensions"
     if status in (401, 403):
         message = (
             f"Home Assistant rejected the access token (HTTP {status}). Tell the user to check "
-            "the Home Assistant token in Settings -> Extensions."
+            "the Home Assistant token in Settings -> Integrations -> Extensions."
         )
     elif failure.invalid_json:
         message = (
@@ -367,7 +367,7 @@ def _unexpected(hass_url: str, path: str) -> JsonObject:
     return tool_failure(
         "home_assistant_error",
         f"Home Assistant at {hass_url} answered {path} in an unexpected format. Check that the "
-        "server URL in Settings -> Extensions points to Home Assistant.",
+        "server URL in Settings -> Integrations -> Extensions points to Home Assistant.",
         retryable=False,
     )
 
@@ -863,7 +863,8 @@ _URL_CONFIG_KEY = "url"
 # Shown by tool.list for the four not-ready HA tools until the token is set.
 # Server-delivered English text (plain ASCII), like a tool description — not i18n.
 _HASS_READINESS_HINT = (
-    "Requires a Home Assistant connection - set the server URL and token in Settings -> Extensions."
+    "Requires a Home Assistant connection - set the server URL and token "
+    "in Settings -> Integrations -> Extensions."
 )
 
 
@@ -887,7 +888,7 @@ def _missing_token_failure() -> JsonObject:
     return tool_failure(
         "home_assistant_error",
         "Home Assistant is not connected: no access token is set. Tell the user to set it in "
-        "Settings -> Extensions.",
+        "Settings -> Integrations -> Extensions.",
         retryable=False,
     )
 
