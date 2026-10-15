@@ -174,7 +174,8 @@ def test_extensions_list_marks_tools_waiting_for_configuration(
     assert "ha_get_state" in lines[2] and "ha_call_service" in lines[2]
     assert (
         "run 'vbot extensions show homeassistant' to see its settings, then "
-        "'vbot extensions set homeassistant <field> <value>' (or Settings > Extensions)"
+        "'vbot extensions set homeassistant <field> <value>' "
+        "(or Settings > Integrations > Extensions)"
     ) in lines[2]
     # The capability tool list marks each not-ready tool inline.
     assert "ha_get_state (waiting)" in lines[3] and "ha_call_service (waiting)" in lines[3]

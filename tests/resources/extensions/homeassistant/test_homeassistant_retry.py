@@ -52,7 +52,7 @@ async def test_unreachable_server_is_retried_then_reported_as_retryable(
     assert error["message"] == (
         f"Could not reach Home Assistant at {HASS_URL} (ConnectError: fixture transport "
         "failure) after 3 attempts. Check that Home Assistant is running and that the server "
-        "URL in Settings -> Extensions is right, then try again later."
+        "URL in Settings -> Integrations -> Extensions is right, then try again later."
     )
 
 
@@ -124,7 +124,7 @@ async def test_rejected_token_is_not_retried_and_goes_to_the_user(status_code: i
     assert len(route.calls) == 1
     assert error["message"] == (
         f"Home Assistant rejected the access token (HTTP {status_code}). Tell the user to "
-        "check the Home Assistant token in Settings -> Extensions."
+        "check the Home Assistant token in Settings -> Integrations -> Extensions."
     )
 
 

@@ -60,7 +60,7 @@ Both are read **live on every call** - nothing is captured at register time:
 - token = `api.resolve_credential("HASS_TOKEN").strip()`.
 - url = `str(api.get_config().get("url") or "").strip()` or the default, with a trailing-slash strip (`rstrip("/")`) because the URL is user-typed in the form; endpoint paths are joined with a leading `/`.
 
-So setting/changing the token or URL through Settings -> Extensions takes effect on the next call with **no restart** (design decisions 3-4).
+So setting/changing the token or URL through Settings -> Integrations -> Extensions takes effect on the next call with **no restart** (design decisions 3-4).
 
 ## Readiness
 
@@ -84,7 +84,7 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 | Other HA HTTP error, unreachable server, non-JSON answer | `home_assistant_error` |
 | Empty token at call time (handler guard) | `home_assistant_error` ("Home Assistant is not connected: ...") |
 
-Every message names the next call or tells the Agent what to tell the user (token rejected -> Settings -> Extensions). Retry signalling (inside `error`): an exhausted retryable status or transport error sets `retryable=True` with `attempts_made`; other failures set `retryable=False`. The registry's dispatch-time safety net returns `tool_not_ready` when the predicate is false at call time.
+Every message names the next call or tells the Agent what to tell the user (token rejected -> Settings -> Integrations -> Extensions). Retry signalling (inside `error`): an exhausted retryable status or transport error sets `retryable=True` with `attempts_made`; other failures set `retryable=False`. The registry's dispatch-time safety net returns `tool_not_ready` when the predicate is false at call time.
 
 ## Constraints & Gotchas
 

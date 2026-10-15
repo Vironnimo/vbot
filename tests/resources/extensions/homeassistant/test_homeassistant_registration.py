@@ -54,7 +54,7 @@ def test_extension_loads_from_the_bundled_root_with_settings_and_one_tool_family
         assert tool.extension == EXTENSION_NAME
         assert tool.readiness_hint == (
             "Requires a Home Assistant connection - set the server URL and token "
-            "in Settings -> Extensions."
+            "in Settings -> Integrations -> Extensions."
         )
     assert tools.get(HA_GET_STATE_NAME).display.summary_fields == ("entity_id",)
     assert tools.get(HA_CALL_SERVICE_NAME).display.summary_fields == (
@@ -155,7 +155,7 @@ async def test_handler_refuses_without_a_request_when_the_token_is_removed_mid_f
     error = assert_failure_envelope(result, "home_assistant_error")
     assert error["message"] == (
         "Home Assistant is not connected: no access token is set. Tell the user to set it in "
-        "Settings -> Extensions."
+        "Settings -> Integrations -> Extensions."
     )
     assert route.called is False
 
