@@ -223,6 +223,12 @@ _INVERTED = {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"}
     [
         pytest.param("statistics.report", {"bogus": 1}, "bogus", id="unknown-field"),
         pytest.param("statistics.report", {"since": "not-a-date"}, "since", id="malformed"),
+        pytest.param(
+            "statistics.report",
+            {"since": "2026-06-01T12:00:00", "timezone": "Europe/Berlin"},
+            "explicit offset",
+            id="report-offset-required",
+        ),
         pytest.param("statistics.report", _INVERTED, "since", id="inverted"),
         pytest.param("statistics.report", {"timezone": "Mars/Olympus"}, "timezone", id="zone"),
         pytest.param("statistics.report", {"sections": ["bogus"]}, "bogus", id="section"),
@@ -236,6 +242,12 @@ _INVERTED = {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"}
             id="activity-open-window",
         ),
         pytest.param("statistics.run_activity", _INVERTED, "since", id="activity-inverted"),
+        pytest.param(
+            "statistics.run_activity",
+            {"since": "2026-06-01T12:00:00Z", "until": "2026-06-01T14:00:00"},
+            "explicit offset",
+            id="activity-offset-required",
+        ),
     ],
 )
 async def test_invalid_statistics_requests_are_rejected(
