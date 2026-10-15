@@ -289,9 +289,11 @@ async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) 
         # Bootstrap changes its jobs synchronously on the Event Loop.
         services.bootstrap.retarget_agent(job_id, target)
     terminals = services.terminals
-    terminal_count = 0 if terminals is None else terminals.transfer_agent_scope(source, target)
+    terminal_count = (
+        0 if terminals is None else await terminals.transfer_agent_scope(source, target)
+    )
     commands = services.commands
-    command_count = 0 if commands is None else commands.transfer_agent_scope(source, target)
+    command_count = 0 if commands is None else await commands.transfer_agent_scope(source, target)
     return _References(
         channel_ids=channel_ids,
         cron_job_ids=cron_job_ids,

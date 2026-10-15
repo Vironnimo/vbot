@@ -958,17 +958,21 @@ class TerminalManager:
         """Apply Terminal lifecycle and attachment cleanup for a removed Project."""
         return await self._close_matching(lambda scope: scope.project_id == project_id)
 
-    def transfer_scope(self, source: TerminalOwner, target: TerminalOwner) -> int:
+    async def transfer_scope(self, source: TerminalOwner, target: TerminalOwner) -> int:
         """Transfer lifecycle and attachment scopes after a successful Session move."""
+        await self._settle_transfers(lambda owner: owner == source)
         return sum(session.transfer(source, target) for session in self._sessions.values())
 
-    def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
+    async def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
         """Move every lifecycle and attachment scope of a renamed Identity Agent to its new id.
 
         Each scope keeps its Session id, and a pending delivery follows the
         attachment; immutable provenance keeps the old id. Returns how many
         Terminal Sessions changed.
         """
+        await self._settle_transfers(
+            lambda owner: owner.project_id is None and owner.agent_id == agent_id
+        )
         moved = 0
         for session in list(self._sessions.values()):
             scopes = {
@@ -980,6 +984,16 @@ class TerminalManager:
                 session.transfer(scope, replace(scope, agent_id=new_agent_id))
             moved += bool(scopes)
         return moved
+
+    async def _settle_transfers(self, matches: Callable[[TerminalOwner], bool]) -> None:
+        while pending := [
+            task
+            for task, owner in self._pending_spawns.items()
+            if not task.done() and owner is not None and matches(owner)
+        ]:
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in pending), return_exceptions=True
+            )
 
     async def _close_matching(self, matches: Callable[[TerminalOwner], bool]) -> int:
         """Fence matching launches, drain them and stop only matching lifecycle owners."""

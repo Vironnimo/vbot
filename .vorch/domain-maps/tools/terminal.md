@@ -28,6 +28,10 @@ New Terminal Session ids use `term_` plus 12 lowercase base32 characters, alloca
 
 ## Agent Tool contract
 
+Agent rename and Session move await matching admitted launches before transferring
+lifecycle and attachment scopes. A process still starting follows the new owner
+and is included in the transfer count, just like an already published Terminal.
+
 Agent `start` calls resolve `ScratchAreas.folder_for` immediately before spawn
 and pass `TEMP`, `TMP`, `TMPDIR` (the own folder's `tmp/`) plus `VBOT_SCRATCH_DIR`
 (the own folder) through the terminal environment overlay. Each launch repairs

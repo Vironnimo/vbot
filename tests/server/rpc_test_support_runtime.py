@@ -352,10 +352,10 @@ class StubTerminalManager:
     async def close_project_scope(self, _project_id: str) -> None:
         return None
 
-    def transfer_scope(self, _source: Any, _target: Any) -> int:
+    async def transfer_scope(self, _source: Any, _target: Any) -> int:
         return 0
 
-    def transfer_agent_scope(self, _agent_id: str, _new_agent_id: str) -> int:
+    async def transfer_agent_scope(self, _agent_id: str, _new_agent_id: str) -> int:
         return 0
 
     def add_changed_callback(self, _callback: Callable[[str], None]) -> Callable[[], None]:

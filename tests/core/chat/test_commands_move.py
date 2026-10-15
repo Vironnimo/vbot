@@ -11,6 +11,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -198,16 +199,20 @@ class _MoveHarness:
             terminal_manager=cast(
                 Any,
                 SimpleNamespace(
-                    transfer_scope=lambda source, target: self.terminal_transfers.append(
-                        (source, target)
+                    transfer_scope=AsyncMock(
+                        side_effect=lambda source, target: self.terminal_transfers.append(
+                            (source, target)
+                        )
                     )
                 ),
             ),
             command_manager=cast(
                 Any,
                 SimpleNamespace(
-                    transfer_scope=lambda source, target: self.command_transfers.append(
-                        (source, target)
+                    transfer_scope=AsyncMock(
+                        side_effect=lambda source, target: self.command_transfers.append(
+                            (source, target)
+                        )
                     )
                 ),
             ),

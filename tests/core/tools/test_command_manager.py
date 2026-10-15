@@ -824,7 +824,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
                     if outcome == "move_after_restart":
                         target = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
                         await sessions.move(restored_owner, target)
-                        assert restored.manager.transfer_scope(restored_owner, target) == 1
+                        assert await restored.manager.transfer_scope(restored_owner, target) == 1
                         restored_owner = target
                         await eventually(lambda: len(restored.sink.submissions) == 2)
                         assert restored.sink.futures[0].cancelled()
@@ -1045,10 +1045,10 @@ async def test_transferred_commands_deliver_to_their_new_session(harness: Harnes
     submitted.exit(0)
     await harness.finish(submitted_id)
 
-    assert harness.manager.transfer_scope(OWNER, OTHER) == 2
+    assert await harness.manager.transfer_scope(OWNER, OTHER) == 2
     identity = SessionAddress(None, "agent-old", "session-i")
     identity_id, identity_process = await harness.launch(owner=identity)
-    assert harness.manager.transfer_agent_scope("agent-old", "agent-new") == 1
+    assert await harness.manager.transfer_agent_scope("agent-old", "agent-new") == 1
     process.exit(0)
     identity_process.exit(0)
     await harness.finish(command_id)
@@ -1067,6 +1067,69 @@ async def test_transferred_commands_deliver_to_their_new_session(harness: Harnes
 
 
 # --- Runs, capacity, shutdown, retention -----------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_rename", [False, True])
+async def test_transfer_includes_a_command_still_starting(
+    harness: Harness,
+    agent_rename: bool,
+) -> None:
+    source = SessionAddress(None, "agent-old", "session-a")
+    target = SessionAddress(None, "agent-new", "session-a" if agent_rename else "session-b")
+    harness.launcher.gate = asyncio.Event()
+    starting = asyncio.create_task(harness.launch(owner=source))
+    await turns()
+    moving = asyncio.create_task(
+        harness.manager.transfer_agent_scope("agent-old", "agent-new")
+        if agent_rename
+        else harness.manager.transfer_scope(source, target)
+    )
+    await turns()
+    assert not moving.done()
+    harness.launcher.gate.set()
+    assert await moving == 1
+    command_id, process = await starting
+    assert harness.manager.report(command_id).owner == target
+    assert await harness.manager.close_scope(target) == 1
+    assert process.tree.terminations == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_stop", [False, True])
+async def test_process_handles_stay_open_until_a_kill_is_confirmed(
+    tmp_path: Path,
+    cancel_stop: bool,
+) -> None:
+    confirming = asyncio.Event()
+    confirm = asyncio.Event()
+
+    async def run_blocking(function: Callable[..., object], /, *args: object) -> object:
+        result = function(*args)
+        if getattr(function, "__func__", None) is FakeTree.terminate:
+            confirming.set()
+            await confirm.wait()
+            tree = getattr(function, "__self__", None)
+            assert isinstance(tree, FakeTree)
+            assert not tree.closed
+        return result
+
+    async with command_harness(tmp_path, run_blocking=run_blocking) as harness:
+        command_id, process = await harness.launch()
+        stopping = asyncio.create_task(harness.manager.stop(command_id, "user"))
+        try:
+            await confirming.wait()
+            if cancel_stop:
+                stopping.cancel()
+                await asyncio.gather(stopping, return_exceptions=True)
+            await harness.finish(command_id)
+            assert not process.tree.closed and not process.released
+        finally:
+            confirm.set()
+        if not cancel_stop:
+            assert (await stopping).status == "stopped"
+        await turns()
+        assert process.tree.closed and process.released
 
 
 @pytest.mark.asyncio

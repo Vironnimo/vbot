@@ -599,13 +599,14 @@ class CommandManager:
         """``close_scope`` for every Session of a Project."""
         return await self._close_matching(lambda scope: scope.project_id == project_id)
 
-    def transfer_scope(self, source: CommandOwner, target: CommandOwner) -> int:
+    async def transfer_scope(self, source: CommandOwner, target: CommandOwner) -> int:
         """Move commands to another Session after a Session move; returns how many moved.
 
         Results go to the new Session: one submitted to the old Session and not
         yet delivered is withdrawn there and submitted again, unless its
         delivery already claimed it.
         """
+        await self._settle_transfers(lambda owner: owner == source)
         moved = sum(record.transfer(source, target) for record in self._records.values())
         if self._checkpoints is not None:
             moved += self._checkpoints.transfer(source, target)
@@ -615,11 +616,14 @@ class CommandManager:
                 self._notify(command_id)
         return moved
 
-    def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
+    async def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
         """Move the commands of a renamed Identity Agent to its new id; returns how many.
 
         Results follow as in ``transfer_scope``.
         """
+        await self._settle_transfers(
+            lambda owner: owner.project_id is None and owner.agent_id == agent_id
+        )
         moved = 0
         for record in self._records.values():
             owner = record.owner
@@ -636,6 +640,14 @@ class CommandManager:
                 )
                 self._notify(command_id)
         return moved
+
+    async def _settle_transfers(self, matches: Callable[[CommandOwner], bool]) -> None:
+        while pending := [
+            task
+            for task, launch in self._pending.items()
+            if not task.done() and matches(launch.owner)
+        ]:
+            await _settle(pending)
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
         """Whether a command of the execution owner is launching or still running."""

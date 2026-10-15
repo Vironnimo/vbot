@@ -462,7 +462,7 @@ async def _execute_agent(
                     )
 
                 if terminal_manager is not None:
-                    terminal_manager.transfer_scope(
+                    await terminal_manager.transfer_scope(
                         TerminalOwner(
                             context.project_id,
                             context.agent_id,
@@ -475,7 +475,7 @@ async def _execute_agent(
                         ),
                     )
                 if command_manager is not None:
-                    command_manager.transfer_scope(source_address, target_address)
+                    await command_manager.transfer_scope(source_address, target_address)
 
                 if context.project_id is None:
                     await _COMMAND_WORKERS.run(
