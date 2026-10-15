@@ -21,7 +21,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import shutil
 import sqlite3
@@ -73,7 +72,7 @@ from core.database.spec import (
     canonical_database_path,
     validate_database_name,
 )
-from core.utils.atomic import atomic_write_text
+from core.utils.atomic import atomic_write_text, replace_path
 from core.utils.file_status import exists_strict, is_file_strict
 from core.utils.timestamps import (
     is_canonical_timestamp,
@@ -929,7 +928,7 @@ def create_data_snapshot(
         if cancelled is not None and cancelled():
             raise _SnapshotCancelledError
         final = root / snapshot_id
-        os.replace(partial, final)
+        replace_path(partial, final)
         partial = None
         fsync_dir(root)
         _prune_snapshots(data_dir, protected_snapshot=final)
