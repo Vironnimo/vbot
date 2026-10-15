@@ -354,6 +354,19 @@ describe('ChatTimeline virtualization', () => {
         },
       ],
       [
+        'keyboard focus on a removed control',
+        'edit-user',
+        (row) => {
+          const focused = control(row, 'chat.editMessage');
+          focused.focus();
+          return () => {
+            // DOM removal can move focus to body without a focusout event.
+            focused.remove();
+            expect(document.activeElement).toBe(document.body);
+          };
+        },
+      ],
+      [
         'a playing speech result',
         'history-run-speech-call',
         (row) => {

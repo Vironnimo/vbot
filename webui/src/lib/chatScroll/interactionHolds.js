@@ -11,6 +11,12 @@ export function trackInteractionHolds(container, content, hold) {
   let releaseFocus = null;
   // row id -> release
   const selectionHolds = new Map();
+  // Removing a focused descendant need not dispatch focusout. Observe only
+  // while a focus hold exists, and release it when focus leaves the content.
+  const focusObserver =
+    typeof MutationObserver === 'function'
+      ? new MutationObserver(() => holdFocus(rowIdOf(document.activeElement)))
+      : null;
 
   function rowIdOf(node) {
     const element = node instanceof Element ? node : node?.parentElement;
@@ -25,8 +31,12 @@ export function trackInteractionHolds(container, content, hold) {
       return;
     }
     releaseFocus?.();
+    focusObserver?.disconnect();
     focusRowId = id;
     releaseFocus = id ? hold(id) : null;
+    if (id) {
+      focusObserver?.observe(content, { childList: true, subtree: true });
+    }
   }
 
   function selectedRowIds() {
