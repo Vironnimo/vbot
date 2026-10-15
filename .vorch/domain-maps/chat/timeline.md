@@ -14,6 +14,8 @@ The active Run owns the projection and a change signal. Snapshot copies are cach
 
 The server supplies ordered, stable `id` values for User messages, Assistant Runs and their children: readable Reasoning, Assistant output, Tool calls/results, delivered Steer, Compaction and fallback notices. Agent takeover and visible errors retain their chronology. Reused Provider Tool-call ids in later Model steps denote separate occurrences. Failed stream attempts discard only their transient phase; completed output remains visible. Terminal Runs settle unfinished Tools as cancelled/interrupted rather than leaving them running.
 
+Canonical Assistant Messages finalize all transient text sections of their Model step, including interleaved Reasoning/output and content normalized to empty. Earlier completed steps remain intact. Older-page consumers prepend into their current projection, preserving a newer live sequence; Extension History supplies the active Run identity and timeline sequence required for that comparison.
+
 History pages include whole Run segments even when the requested message count falls inside one. Active History captures overlay the complete in-memory Run, so late attachment works beyond the raw replay window. Older pages do not splice the current Run into the past. `history_generation`, reset flags and `replace_run_ids` make edits, generation changes and complete-Run replacement explicit. Clients do not infer overlap from text or neighboring roles.
 
 ## Transport

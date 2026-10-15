@@ -216,6 +216,60 @@ describe('Swarm streaming continuity', () => {
     expect(bridge.unsubscribeRun).toHaveBeenCalledWith('stream');
     expect(document.querySelector('.history')).toBeNull();
   });
+
+  it('merges an older page into current live output without resetting the patch base', async () => {
+    const { bridge } = streamingBridge();
+    let finishOlder;
+    const initial = snapshot('run-stream', 2, 'Live prefix');
+    bridge.readHistory.mockImplementation(
+      async (_swarm, _participant, query) =>
+        query.before
+          ? new Promise((resolve) => {
+              finishOlder = resolve;
+            })
+          : {
+              messages: [],
+              items: initial.items,
+              active_run: { run_id: 'run-stream' },
+              timeline_sequence: 2,
+              history_generation: 'generation',
+              has_more: true,
+              next_before: 'older',
+            },
+    );
+    await openActivity(bridge);
+    bridge.emitRun('stream', initial);
+    button(t('swarm.loadOlderMessages')).click();
+    await vi.waitFor(() => expect(finishOlder).toBeTypeOf('function'));
+    const append = (sequence, content) =>
+      bridge.emitRun('stream', {
+        type: 'timeline_update',
+        run_id: 'run-stream',
+        sequence,
+        base_sequence: sequence - 1,
+        run: { id: 'assistant-run-run-stream' },
+        child_updates: [{ id: 'output-one', append: { content } }],
+      });
+    append(3, ' during read');
+    await vi.waitFor(() =>
+      expect(historyText()).toContain('Live prefix during read'),
+    );
+    const older = { id: 'older', role: 'user', content: 'Earlier request' };
+    finishOlder({
+      messages: [older],
+      items: [messageItem(older), ...initial.items],
+      replace_run_ids: ['run-stream'],
+      history_generation: 'generation',
+      has_more: false,
+    });
+    await vi.waitFor(() => expect(historyText()).toContain('Earlier request'));
+    expect(historyText()).toContain('Live prefix during read');
+    append(4, ' after read');
+    await vi.waitFor(() =>
+      expect(historyText()).toContain('Live prefix during read after read'),
+    );
+    expect(bridge.readHistory).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('Swarm Run subscriptions across refreshes', () => {

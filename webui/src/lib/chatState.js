@@ -21,7 +21,7 @@ export {
   resetStaleRun,
 } from './chatState/sessionState.js';
 export { createChatController } from './chatState/controller.js';
-export { loadHistory } from './chatState/history.js';
+export { loadHistory, prependHistory } from './chatState/history.js';
 export {
   startRun,
   appendRunEvent,

@@ -304,7 +304,12 @@ async def test_command_for_a_new_session_names_a_session_only_when_it_created_on
     )
 
     response = await call(
-        state, "chat.stream", agent_id="coder", new_session={}, content=content, reply_surface="tui"
+        state,
+        "chat.stream",
+        agent_id="coder",
+        new_session={"session_id": "client-first-send"},
+        content=content,
+        reply_surface="tui",
     )
 
     result = response["result"]
@@ -312,6 +317,7 @@ async def test_command_for_a_new_session_names_a_session_only_when_it_created_on
     listed = [session.id for session in sessions.list("coder")]
     if creates:
         assert listed == [result["session_id"]]
+        assert result["session_id"] == "client-first-send"
         # The Identity Agent's new Session becomes its current one, as after a message.
         assert state.runtime.agents.get("coder").current_session_id == result["session_id"]
         assert [change["kind"] for change in resource_changes(state)] == ["sessions", "agents"]

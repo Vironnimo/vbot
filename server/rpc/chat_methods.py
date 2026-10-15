@@ -25,6 +25,7 @@ from core.projects import AgentOverrides, AgentResolutionError, format_agent_add
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
+    SESSION_ID_PATTERN,
     ChatSession,
     SessionAddress,
     SessionChatHistorySnapshot,
@@ -750,6 +751,7 @@ class _NewSessionTarget:
 
     agent_overrides: AgentOverrides
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
+    session_id: str | None = None
 
 
 async def _execute_new_session_chat_command(
@@ -773,6 +775,7 @@ async def _execute_new_session_chat_command(
                 agent_overrides=target.agent_overrides,
                 working_project_id=target.working_project_id,
                 on_change=on_change,
+                session_id=target.session_id,
             ),
         )
     except Exception as exc:
@@ -1015,7 +1018,8 @@ def _chat_target(params: JsonObject, project_id: str | None) -> str | _NewSessio
 
     ``session_id`` names an existing Session and is returned. ``new_session``
     is an object asking for a new Session that the submission creates; its
-    optional ``agent_overrides`` and ``working_project_id`` (validated like
+    optional ``session_id`` supplies a new, unused address. Its
+    ``agent_overrides`` and ``working_project_id`` (validated like
     ``session.create``'s) are what the new Session starts with.
     """
     session_id = _optional_string(params, "session_id")
@@ -1031,14 +1035,24 @@ def _chat_target(params: JsonObject, project_id: str | None) -> str | _NewSessio
     if not isinstance(new_session, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.new_session must be an object")
     _reject_unsupported(
-        new_session, {"agent_overrides", "working_project_id"}, "params.new_session"
+        new_session, {"session_id", "agent_overrides", "working_project_id"}, "params.new_session"
     )
+    requested_id = new_session.get("session_id")
+    if "session_id" in new_session and (
+        not isinstance(requested_id, str) or SESSION_ID_PATTERN.fullmatch(requested_id) is None
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.new_session.session_id must be 1-128 ASCII letters, digits, hyphen, "
+            "or underscore, starting with a letter or digit",
+        )
     overrides = _optional_agent_overrides(
         new_session, allow_clear=False, label="params.new_session"
     )
     return _NewSessionTarget(
         AgentOverrides(**overrides) if overrides else AgentOverrides(),
         _optional_working_project(new_session, project_id, label="params.new_session"),
+        requested_id,
     )
 
 
@@ -1060,8 +1074,9 @@ async def _start_chat_in_new_session(
     Agent's current one, like a message to an existing Session does.
     """
     # A file snapshot stamps the Session that read the file, so the id comes first.
-    session_id = new_session_id() if file_mentions else None
-    if session_id is not None:
+    session_id = target.session_id or (new_session_id() if file_mentions else None)
+    if file_mentions:
+        assert session_id is not None
         content = await _expand_content_file_mentions(
             state,
             agent_id,

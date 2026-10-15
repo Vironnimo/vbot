@@ -272,7 +272,11 @@ async def test_move_directions_relocate_and_re_home_pointers(
         {"kind": change.kind, **({"scope": dict(change.scope)} if change.scope else {})}
         for change in harness.changes
     ]
-    source_scope = {"agent_id": "builder", "session_id": "s1"}
+    source_scope = {
+        "agent_id": "builder",
+        "session_id": "s1",
+        "moved_to_agent_id": format_agent_address(target_agent, target_project),
+    }
     if source_project is not None:
         source_scope["project_id"] = source_project
     target_scope = {"agent_id": target_agent, "session_id": "s1"}

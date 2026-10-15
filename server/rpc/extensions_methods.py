@@ -545,6 +545,12 @@ def _temporary_history_projection(
         if active_snapshot is not None
         else None
     )
+    if active is not None:
+        response["active_run"] = {
+            "run_id": active["run_id"],
+            "status": active["state"]["status"],
+            "started_at": active["state"]["started_at"],
+        }
     projection = project_timeline_history(response, active)
     projection["file_urls"] = projected_file_urls(
         {"messages": messages, "items": projection["items"]}, delivery

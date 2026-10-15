@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import uuid
 from collections.abc import Callable, Coroutine
 from typing import Any, override
 from urllib.parse import quote
@@ -20,6 +21,14 @@ from textual.worker import Worker
 
 from cli.tui import composer
 from cli.tui.dialogs import ExtensionDialog, Picker, TextDialog
+from cli.tui.drafts import (
+    DraftStore,
+    draft_record,
+    readdress_saved_inputs,
+    restore_draft,
+    saved_input_record,
+)
+from cli.tui.mentions import resolve_mentions, retained_mentions
 from cli.tui.rendering import (
     TimelineEntry,
     content_text,
@@ -29,6 +38,9 @@ from cli.tui.rendering import (
 )
 from cli.tui.state import Conversation, JsonObject, TimelineGapError
 from cli.tui.transport import ClientError, TerminalClient
+from core.utils.ids import new_id
+
+_sleep = asyncio.sleep
 
 
 class ConversationApp(App[int]):
@@ -61,6 +73,8 @@ class ConversationApp(App[int]):
         Binding("f9", "commands", "Commands", priority=True),
         Binding("ctrl+x", "stop", "Stop Run", priority=True),
         Binding("f10", "stop_all", "Stop all", priority=True),
+        Binding("f11", "conversation_actions", "Actions", priority=True),
+        Binding("f12", "latest", "Latest", show=False, priority=True),
         Binding("ctrl+q", "detach", "Detach", priority=True),
         Binding("ctrl+r", "refresh", "Reconnect", show=False, priority=True),
         Binding("ctrl+o", "older", "Older history", show=False, priority=True),
@@ -79,6 +93,8 @@ class ConversationApp(App[int]):
         agent_id: str | None = None,
         session_id: str | None = None,
         project_id: str | None = None,
+        draft_store: DraftStore | None = None,
+        restored_drafts: dict[str, JsonObject] | None = None,
     ) -> None:
         super().__init__()
         self.client = client
@@ -106,6 +122,139 @@ class ConversationApp(App[int]):
         self.queue_items: list[JsonObject] = []
         self.last_notice = "Connecting…"
         self._render_lock = asyncio.Lock()
+        self.draft_store = draft_store
+        self._draft_lock = asyncio.Lock()
+        self._draft_save_scheduled = False
+        self.recovered_drafts: dict[str, JsonObject] = {}
+        for identifier, record in (restored_drafts or {}).items():
+            if recovery := record.get("edit_recovery"):
+                self.saved_drafts.append(
+                    {
+                        **{
+                            key: copy.deepcopy(record[key])
+                            for key in (
+                                "agent",
+                                "session",
+                                "project",
+                                "project_selected",
+                                "attachments",
+                                "mentions",
+                            )
+                        },
+                        **recovery,
+                        "text": record["draft"],
+                        "draft_id": identifier,
+                    }
+                )
+                continue
+            restored = restore_draft(identifier, record)
+            if restored.key in self.views:
+                self.recovered_drafts[identifier] = record
+            else:
+                self.views[restored.key] = restored
+
+    def _view_changed(self, view: Conversation | None) -> None:
+        """Schedule a local draft checkpoint; neither this nor restore sends input."""
+        if self.draft_store is not None and not self._draft_save_scheduled:
+            self._draft_save_scheduled = True
+            self.set_timer(0.75, self._save_drafts_later)
+
+    def _save_drafts_later(self) -> None:
+        self._draft_save_scheduled = False
+        self._start(self.persist_drafts, group="draft-save")
+
+    async def persist_drafts(self) -> None:
+        if self.draft_store is None:
+            return
+        from core.utils.workers import finish_despite_cancel
+
+        async with self._draft_lock:
+            records = copy.deepcopy(self.recovered_drafts)
+            for saved in self.saved_drafts:
+                records[saved["draft_id"]] = saved_input_record(saved)
+            for view in self.views.values():
+                record = draft_record(view)
+                if record is not None:
+                    records[view.draft_id] = record
+            remapped = await finish_despite_cancel(
+                asyncio.to_thread(self.draft_store.save, records)
+            )
+            for view in self.views.values():
+                view.draft_id = remapped.get(view.draft_id, view.draft_id)
+            for saved in self.saved_drafts:
+                saved["draft_id"] = remapped.get(saved["draft_id"], saved["draft_id"])
+            self.recovered_drafts = {
+                remapped.get(identifier, identifier): record
+                for identifier, record in self.recovered_drafts.items()
+            }
+
+    async def _restore_draft(self) -> None:
+        self._save_view()
+        choices: list[tuple[str, tuple[str, str]]] = []
+        for view in self.views.values():
+            if draft_record(view) is not None:
+                choices.append(
+                    (
+                        f"{view.agent} · {view.session or 'New conversation'} · {view.draft[:100]}",
+                        ("view", view.draft_id),
+                    )
+                )
+        records = dict(self.recovered_drafts)
+        records.update(
+            {
+                value["draft_id"]: saved_input_record(value)
+                for value in self.saved_drafts
+                if value.get("operation") != "chat.edit"
+            }
+        )
+        choices.extend(
+            (
+                f"{record['agent']} · {record.get('session') or 'New conversation'} · "
+                f"{record['draft'][:100]}",
+                ("saved", identifier),
+            )
+            for identifier, record in records.items()
+        )
+        if not choices:
+            self._notice("No saved drafts on this server.")
+            return
+        selection = await self.push_screen_wait(
+            Picker("Restore a local draft · nothing is sent", choices)
+        )
+        if selection is None:
+            return
+        kind, identifier = selection
+        if kind == "view":
+            selected_view = next(
+                (value for value in self.views.values() if value.draft_id == identifier), None
+            )
+            if selected_view is None:
+                return
+            view = selected_view
+        else:
+            current_record = self.recovered_drafts.get(identifier)
+            if current_record is None:
+                saved = next(
+                    (value for value in self.saved_drafts if value["draft_id"] == identifier), None
+                )
+                if saved is None:
+                    return
+                current_record = saved_input_record(saved)
+            record = current_record
+            view = restore_draft(identifier, record)
+            previous = self.views.get(view.key)
+            if previous is not None and previous is not view:
+                self._save_view()
+                previous_record = draft_record(previous)
+                if previous_record is not None:
+                    self.recovered_drafts[previous.draft_id] = previous_record
+            self.recovered_drafts.pop(identifier, None)
+            self.saved_drafts = [
+                value for value in self.saved_drafts if value["draft_id"] != identifier
+            ]
+            self.views[view.key] = view
+        await self._open(view)
+        self._view_changed(view)
 
     @override
     def compose(self) -> ComposeResult:
@@ -226,6 +375,7 @@ class ConversationApp(App[int]):
             timeline = self.query_one("#timeline", VerticalScroll)
             self.conversation.scroll_y = timeline.scroll_y
             self.conversation.follow_tail = timeline.is_vertical_scroll_end
+            self._view_changed(self.conversation)
 
     async def _open(self, view: Conversation, *, remember: bool = True) -> None:
         self._save_view()
@@ -241,9 +391,10 @@ class ConversationApp(App[int]):
             self.queue_items = []
             await timeline.remove_children()
             self.rows.clear()
+        self._view_changed(view)
         self.query_one("#composer", TextArea).load_text(view.draft)
         self._header()
-        if view.session:
+        if view.session or (view.uncertain and view.pending_session_id):
             await self._refresh(view)
             await self._render()
         else:
@@ -256,24 +407,126 @@ class ConversationApp(App[int]):
             self._notice("Ready")
         self.query_one("#composer", TextArea).focus()
 
+    async def _read_timeline(self, view: Conversation, revision: int) -> Conversation | None:
+        """Drain a read snapshot without publishing a partial or stale catch-up."""
+        key = view.key
+        candidate = copy.copy(view)
+        candidate.facts = dict(view.facts)
+        after = view.facts.get("next_after")
+        while True:
+            params = {**view.params(), "limit": 100}
+            if after:
+                params["after"] = after
+            response = await self.client.rpc("chat.timeline", params)
+            if view.refresh_revision != revision or view.key != key or not view.available:
+                return None
+            candidate.page(response)
+            if not response.get("has_newer"):
+                return candidate
+            next_after = response.get("next_after")
+            if not next_after or next_after == after:
+                raise ClientError("History catch-up did not advance. Reconnect to try again.")
+            after = next_after
+
+    async def _recover_submission(self, view: Conversation) -> bool:
+        """Find a pre-addressed first admission through reads only, never by replay."""
+        target = view.pending_session_id
+        if view.session or not target or not view.uncertain or id(view) in self.pending:
+            return False
+        key = view.key
+        params = {"agent_id": view.agent, "session_id": target}
+        try:
+            history = await self.client.rpc("chat.timeline", {**params, "limit": 100})
+        except ClientError as exc:
+            if exc.code in {"session_not_found", "agent_not_found", "project_not_found"}:
+                return False
+            raise
+        if view.key != key or view.pending_session_id != target or not view.uncertain:
+            return False
+        confirmed = bool(
+            history.get("active_run")
+            or history.get("runs")
+            or history.get("messages")
+            or history.get("items")
+        )
+        self._move_view(view, view.agent, target)
+        view.pending_session_id = None
+        if confirmed:
+            self._accept_submission(view, view.uncertain_submission or {})
+        if self.conversation is view:
+            async with self._render_lock:
+                await self.query_one("#timeline", VerticalScroll).remove_children()
+                self.rows.clear()
+        self._view_changed(view)
+        self._notice(
+            "Earlier message found in its Session; reconnected without resending."
+            if confirmed
+            else (
+                "The proposed Session exists. "
+                "Inspect the earlier Command's outcome before continuing."
+            )
+        )
+        return True
+
+    def _accept_submission(self, view: Conversation, original: JsonObject) -> None:
+        view.uncertain = False
+        view.uncertain_submission = None
+        if view.draft == original.get("text"):
+            view.draft = ""
+            if self.conversation is view:
+                self.query_one("#composer", TextArea).load_text("")
+        submitted_ids = {item["attachment_id"] for item in original.get("attachments", [])}
+        view.attachments = [
+            item for item in view.attachments if item["attachment_id"] not in submitted_ids
+        ]
+        view.mentions = [item for item in view.mentions if item not in original.get("mentions", [])]
+        self._view_changed(view)
+
+    def _saved_input(self, view: Conversation) -> JsonObject:
+        return {
+            "text": view.draft,
+            "attachments": copy.deepcopy(view.attachments),
+            "mentions": list(view.mentions),
+            "agent": view.agent,
+            "session": view.session,
+            "project": view.project,
+            "project_selected": view.project_selected,
+            "draft_id": str(uuid.uuid4()),
+        }
+
+    def _move_view(self, view: Conversation, agent: str, session: str) -> None:
+        self.views.pop(view.key, None)
+        view.refresh_revision += 1
+        view.agent, view.session = agent, session
+        if (
+            (previous := self.views.get(view.key)) is not None
+            and previous is not view
+            and (previous.draft or previous.attachments)
+        ):
+            self.saved_drafts.append(self._saved_input(previous))
+        self.views[view.key] = view
+        view.available = True
+        self._view_changed(view)
+
     async def _refresh(self, view: Conversation) -> None:
-        if not view.session:
+        if not view.available:
+            return
+        if not view.session and not await self._recover_submission(view):
             return
         view.refresh_revision += 1
         revision = view.refresh_revision
+        key = view.key
         captured_sequence, captured_run = view.sequence, view.stream_run
-        params = {**view.params(), "limit": 100}
-        if view.facts.get("next_after"):
-            params["after"] = view.facts["next_after"]
-        response, summary, queue = await asyncio.gather(
-            self.client.rpc("chat.timeline", params),
+        candidate, summary, queue = await asyncio.gather(
+            self._read_timeline(view, revision),
             self.client.rpc("session.get", view.params()),
             self.client.rpc("chat.queue_list", view.params()),
         )
-        if revision != view.refresh_revision:
+        if candidate is None or revision != view.refresh_revision or key != view.key:
             return
-        response_sequence = response.get("timeline_sequence")
-        response_run = (response.get("active_run") or {}).get("run_id")
+        response = candidate.facts
+        response_sequence = candidate.sequence
+        response_run = candidate.stream_run
         if (
             response_run == view.stream_run
             and isinstance(response_sequence, int)
@@ -288,12 +541,23 @@ class ConversationApp(App[int]):
         ):
             self._schedule_refresh()
             return
-        view.page(response)
+        view.items, view.facts = candidate.items, candidate.facts
+        view.sequence, view.stream_run = candidate.sequence, candidate.stream_run
+        view.next_before = candidate.next_before
         session = summary.get("session") or {}
-        view.title = session.get("title") or session.get("auto_title") or view.session
+        view.title = (
+            session.get("title") or session.get("auto_title") or view.session or "Conversation"
+        )
         view.project = session.get("working_project_id")
         view.overrides = session.get("agent_overrides") or {}
         view.parent = session.get("subagent_parent") or view.parent
+        view.completion_run_id = (
+            session.get("latest_completion_run_id")
+            if session.get("has_unread_completion") is True
+            else None
+        )
+        view.completion_read_failed = None
+        self._view_changed(view)
         if self.conversation is not view:
             return
         self.queue_items = queue.get("items", [])
@@ -310,9 +574,6 @@ class ConversationApp(App[int]):
                 else None
             )
         self._header()
-        completed = session.get("latest_completion_run_id")
-        if completed and session.get("has_unread_completion") is True:
-            await self.client.rpc("session.mark_read", {**view.params(), "run_id": completed})
 
     async def _follow(self, view: Conversation, path: str) -> None:
         delay = 0.5
@@ -334,24 +595,31 @@ class ConversationApp(App[int]):
             except TimelineGapError:
                 continue
             # Read the authoritative state before opening another stream. Never resubmit.
-            await asyncio.sleep(delay)
+            await _sleep(delay)
             delay = min(10, delay * 2)
             try:
+                view.refresh_revision += 1
                 revision = view.refresh_revision
-                params = {**view.params(), "limit": 100}
-                if view.facts.get("next_after"):
-                    params["after"] = view.facts["next_after"]
-                response = await self.client.rpc("chat.timeline", params)
+                captured_sequence, captured_run = view.sequence, view.stream_run
+                candidate = await self._read_timeline(view, revision)
             except ClientError:
                 continue
             if self.conversation is not view:
                 return
-            if revision != view.refresh_revision:
+            if candidate is None or revision != view.refresh_revision:
+                continue
+            if (candidate.stream_run == view.stream_run and candidate.sequence < view.sequence) or (
+                candidate.stream_run is None
+                and captured_run == view.stream_run
+                and captured_sequence != view.sequence
+            ):
                 continue
             view.refresh_revision += 1
-            view.page(response)
+            view.items, view.facts = candidate.items, candidate.facts
+            view.stream_run, view.sequence = candidate.stream_run, candidate.sequence
+            view.next_before = candidate.next_before
             self.render_dirty = True
-            active = response.get("active_run") or {}
+            active = view.facts.get("active_run") or {}
             next_path = active.get("timeline_url")
             if not isinstance(next_path, str):
                 self.stream_path = None
@@ -369,6 +637,8 @@ class ConversationApp(App[int]):
                         self.last_notice = "Ready"
                     delay = 0.5
                     kind = event.get("type", "")
+                    if kind == "resource_changed":
+                        await self._resource_changed(event.get("payload") or {})
                     if (
                         kind in {"connection_ready", "connected", "connection", "state", "snapshot"}
                         or "snapshot" in kind
@@ -394,7 +664,7 @@ class ConversationApp(App[int]):
                 self._notice(f"Event connection lost. Reconnecting to {self.client.url}.")
             self.connected = False
             self._header()
-            await asyncio.sleep(delay)
+            await _sleep(delay)
             delay = min(10, delay * 2)
 
     def _schedule_refresh(self) -> None:
@@ -404,9 +674,81 @@ class ConversationApp(App[int]):
 
     async def _refresh_scheduled(self) -> None:
         self.refresh_pending = False
-        if self.conversation and self.conversation.session:
+        if self.conversation and (
+            self.conversation.session
+            or (self.conversation.uncertain and self.conversation.pending_session_id)
+        ):
             view = self.conversation
             self._start(lambda: self._refresh(view), group="refresh", exclusive=True)
+
+    async def _resource_changed(self, payload: JsonObject) -> None:
+        scope = payload.get("scope") or {}
+        old, new = scope.get("old_agent_id"), scope.get("new_agent_id")
+        if payload.get("kind") == "agents" and old and new:
+            if readdress_saved_inputs(self.saved_drafts, self.recovered_drafts, old, new):
+                self._view_changed(self.conversation)
+            views = {id(view): view for view in [*self.views.values(), *self.backstack]}
+            if self.conversation:
+                views[id(self.conversation)] = self.conversation
+            for view in views.values():
+                if view.agent == old:
+                    self.views.pop(view.key, None)
+                    view.refresh_revision += 1
+                    view.agent = new
+                    previous = self.views.get(view.key)
+                    if (
+                        previous is not None
+                        and previous is not view
+                        and (previous.draft or previous.attachments)
+                    ):
+                        self.saved_drafts.append(self._saved_input(previous))
+                    self.views[view.key] = view
+                    self._view_changed(view)
+                if (
+                    view.parent
+                    and view.parent.get("agent_id") == old
+                    and not view.parent.get("project_id")
+                ):
+                    view.parent = {**view.parent, "agent_id": new}
+                    self._view_changed(view)
+            self._header()
+        if payload.get("kind") != "sessions":
+            return
+        agent = scope.get("agent_id")
+        if scope.get("project_id"):
+            agent = f"{agent}@{scope['project_id']}"
+        deleted = scope.get("deleted_session_id")
+        moved_to = scope.get("moved_to_agent_id")
+        if agent and moved_to and scope.get("session_id"):
+            if readdress_saved_inputs(
+                self.saved_drafts,
+                self.recovered_drafts,
+                agent,
+                moved_to,
+                session=scope["session_id"],
+            ):
+                self._view_changed(self.conversation)
+            for view in list(self.views.values()):
+                if view.agent == agent and view.session == scope["session_id"]:
+                    self._move_view(view, moved_to, scope["session_id"])
+            self._header()
+            return
+        if not agent or not deleted:
+            return
+        for view in list(self.views.values()):
+            if view.agent != agent or view.session != deleted:
+                continue
+            view.refresh_revision += 1
+            view.available = False
+            view.facts = {key: value for key, value in view.facts.items() if key != "active_run"}
+            if view.draft or view.attachments:
+                self.saved_drafts.append(self._saved_input(view))
+            self._view_changed(view)
+            if self.conversation is view:
+                await self._open(Conversation(agent, session=scope.get("next_session_id")))
+                self._notice(
+                    "Conversation archived. Its unsent input is retained in input history."
+                )
 
     async def _load_requests(self) -> None:
         response = await self.client.rpc("extensions.requests")
@@ -414,6 +756,7 @@ class ConversationApp(App[int]):
         self._header()
 
     def _render_if_dirty(self) -> None:
+        self._completion_if_visible()
         if (
             self.render_dirty
             and not self.rendering
@@ -433,11 +776,17 @@ class ConversationApp(App[int]):
             return
         self.rendering = True
         self.render_dirty = False
-        items = copy.deepcopy(view.items)
+        items = view.items
         timeline = self.query_one("#timeline", VerticalScroll)
         follow = timeline.is_vertical_scroll_end if self.rows else view.follow_tail
         scroll = timeline.scroll_y if self.rows else view.scroll_y
         try:
+            if not follow and any(
+                str(item["id"]) not in self.rows or self.rows[str(item["id"])].item is not item
+                for item in items
+            ):
+                view.unread_output = True
+            previous_order = tuple(self.rows)
             wanted = {str(item["id"]) for item in items}
             for key in list(self.rows):
                 if key not in wanted:
@@ -447,20 +796,78 @@ class ConversationApp(App[int]):
                 if key not in self.rows:
                     widget = self.rows[key] = TimelineEntry()
                     await timeline.mount(widget)
-                await self.rows[key].update_item(item)
-            for index, item in enumerate(items):
-                widget = self.rows[str(item["id"])]
-                if index == 0:
-                    timeline.move_child(widget, before=0)
-                else:
-                    timeline.move_child(widget, after=self.rows[str(items[index - 1]["id"])])
+                if self.rows[key].item is not item:
+                    await self.rows[key].update_item(item)
+            order = tuple(str(item["id"]) for item in items)
+            if order != previous_order:
+                for index, key in enumerate(order):
+                    widget = self.rows[key]
+                    if index == 0:
+                        timeline.move_child(widget, before=0)
+                    else:
+                        timeline.move_child(widget, after=self.rows[order[index - 1]])
+                self.rows = {key: self.rows[key] for key in order}
             if follow:
                 self.call_after_refresh(timeline.scroll_end, animate=False)
             else:
                 self.call_after_refresh(timeline.scroll_to, y=scroll, animate=False)
             self._header()
+            self._rendered_frame = (view, items)
+            self.call_after_refresh(self._completion_if_visible)
         finally:
             self.rendering = False
+
+    def _completion_if_visible(self) -> None:
+        view = self.conversation
+        frame = getattr(self, "_rendered_frame", None)
+        timeline = next(
+            (widget for widget in self.query(VerticalScroll) if widget.id == "timeline"), None
+        )
+        if (
+            view is None
+            or not view.available
+            or not view.session
+            or isinstance(self.screen, ModalScreen)
+            or not self.app_focus
+            or timeline is None
+            or not timeline.is_vertical_scroll_end
+            or frame is None
+            or frame[0] is not view
+            or frame[1] is not view.items
+        ):
+            return
+        completed = view.completion_run_id
+        if not completed or completed in {
+            view.completion_read,
+            view.completion_read_pending,
+            view.completion_read_failed,
+        }:
+            return
+        if view.facts.get("has_newer") or not any(
+            (
+                row.get("runId", row.get("run_id")) == completed
+                and row.get("status") in {"completed", "failed", "cancelled", "interrupted"}
+            )
+            for row in view.items
+        ):
+            return
+        view.completion_read_pending = completed
+        self._start(lambda: self._mark_completion_read(view, completed), group="read-receipt")
+
+    async def _mark_completion_read(self, view: Conversation, run_id: str) -> None:
+        key = view.key
+        try:
+            if self.conversation is not view or isinstance(self.screen, ModalScreen):
+                return
+            await self.client.rpc("session.mark_read", {**view.params(), "run_id": run_id})
+            if view.key == key:
+                view.completion_read = run_id
+        except ClientError:
+            view.completion_read_failed = run_id
+            raise
+        finally:
+            if view.completion_read_pending == run_id:
+                view.completion_read_pending = None
 
     def _header(self) -> None:
         view = self.conversation
@@ -477,6 +884,8 @@ class ConversationApp(App[int]):
         usage = view.facts.get("session_usage") or {}
         context = view.facts.get("context_usage") or {}
         details = [self.last_notice]
+        if view.unread_output:
+            details.append("New output · F12 latest")
         if active:
             details.append(f"Run {active.get('status', 'working')}")
         if view.overrides.get("model"):
@@ -534,6 +943,11 @@ class ConversationApp(App[int]):
     def draft_changed(self, event: TextArea.Changed) -> None:
         if self.conversation:
             self.conversation.draft = event.text_area.text
+            mentions = retained_mentions(self.conversation.draft, self.conversation.mentions)
+            if mentions != self.conversation.mentions:
+                self.conversation.mentions = mentions
+                self._header()
+            self._view_changed(self.conversation)
 
     @on(Markdown.LinkClicked)
     def link_clicked(self, event: Markdown.LinkClicked) -> None:
@@ -548,50 +962,58 @@ class ConversationApp(App[int]):
         view = self.conversation
         if view is None or id(view) in self.pending:
             return
+        if not view.available:
+            self._notice("This conversation is no longer available. Choose a live Session first.")
+            return
         text = self.query_one("#composer", TextArea).text
         if view.uncertain:
+            if await self._guard(self._recover_submission(view)):
+                await self._guard(self._refresh(view))
+                return
             original = view.uncertain_submission or {
                 "text": text,
                 "attachments": [],
                 "mentions": [],
             }
+            choices = [
+                ("Return to conversation", "return"),
+                ("Review the exact earlier submission", "review"),
+                ("The earlier message was accepted", "accepted"),
+                ("It was not accepted: restore the earlier draft", "restore"),
+            ]
+            if not view.session and str(original.get("text", "")).lstrip().startswith("/"):
+                choices.append(("The Command completed without a Session", "sessionless"))
             choice = await self.push_screen_wait(
                 Picker(
                     "Previous send has an unknown outcome. Inspect the Session and Queue first.",
-                    [
-                        ("Return to conversation", "return"),
-                        ("Review the exact earlier submission", "review"),
-                        ("The earlier message was accepted", "accepted"),
-                        ("It was not accepted: restore the earlier draft", "restore"),
-                    ],
+                    choices,
                 )
             )
+            if self.conversation is not view:
+                return
             if choice == "review":
                 await self.push_screen_wait(
                     TextDialog("Submission with unknown outcome", pretty(original), read_only=True)
                 )
                 return
-            if choice == "accepted":
-                view.uncertain = False
-                view.uncertain_submission = None
-                if view.draft == original["text"]:
-                    view.draft = ""
-                    self.query_one("#composer", TextArea).load_text("")
-                submitted_ids = {item["attachment_id"] for item in original["attachments"]}
-                view.attachments = [
-                    item for item in view.attachments if item["attachment_id"] not in submitted_ids
-                ]
-                view.mentions = [item for item in view.mentions if item not in original["mentions"]]
+            if choice in {"accepted", "sessionless"}:
+                if choice == "accepted" and not view.session:
+                    self._notice(
+                        "The created Session is not confirmed yet. "
+                        "Reconnect or select it before continuing."
+                    )
+                    return
+                if choice == "sessionless":
+                    view.pending_session_id = None
+                self._accept_submission(view, original)
                 self._header()
                 return
             if choice != "restore":
                 return
-            later_draft = {
-                "text": view.draft,
-                "attachments": copy.deepcopy(view.attachments),
-                "mentions": list(view.mentions),
-            }
-            if later_draft != original:
+            later_draft = self._saved_input(view)
+            if any(
+                later_draft[key] != original.get(key) for key in ("text", "attachments", "mentions")
+            ):
                 self.saved_drafts.append(later_draft)
             view.draft = original["text"]
             view.attachments = original["attachments"]
@@ -599,12 +1021,16 @@ class ConversationApp(App[int]):
             view.uncertain = False
             view.uncertain_submission = None
             self.query_one("#composer", TextArea).load_text(view.draft)
+            self._view_changed(view)
             self._notice("Earlier draft restored. Later draft is in input history (Alt+Up).")
             return
         if not text.strip() and not view.attachments:
             return
         request = view.submission(text)
-        submitted = {
+        if view.session is None:
+            view.pending_session_id = view.pending_session_id or new_id("ses")
+            request["new_session"]["session_id"] = view.pending_session_id
+        submitted: JsonObject = {
             "text": text,
             "attachments": copy.deepcopy(view.attachments),
             "mentions": list(view.mentions),
@@ -612,17 +1038,46 @@ class ConversationApp(App[int]):
         submitted_attachments = {item["attachment_id"] for item in view.attachments}
         submitted_mentions = set(view.mentions)
         self.pending.add(id(view))
+        self._view_changed(view)
+        mutation_started = False
         try:
+            mention_params = view.params(draft=True)
+            request_agent = view.agent
+            mention_paths = await resolve_mentions(self.client, mention_params, text)
+            if not view.available or view.agent != request_agent:
+                self._notice(
+                    "The conversation changed while resolving files. Your draft is retained."
+                )
+                return
+            if mention_paths:
+                request["file_mentions"] = mention_paths
+            submitted["request"] = copy.deepcopy(request)
+            view.uncertain = True
+            view.uncertain_submission = submitted
+            try:
+                await self.persist_drafts()
+            except (OSError, ValueError) as exc:
+                view.uncertain = False
+                view.uncertain_submission = None
+                self._view_changed(view)
+                self._notice(
+                    f"The pending submission could not be saved: {exc}. Your message was not sent.",
+                    error=True,
+                )
+                return
+            mutation_started = True
             result = await self.client.rpc("chat.stream", request)
         except ClientError as exc:
-            view.uncertain = exc.state == "unknown"
-            if view.uncertain:
-                view.uncertain_submission = submitted
+            view.uncertain = mutation_started and exc.state == "unknown"
+            view.uncertain_submission = submitted if view.uncertain else None
+            self._view_changed(view)
             self._notice(str(exc) + " Your draft is retained.", error=True)
             self._schedule_refresh()
             return
         finally:
             self.pending.discard(id(view))
+        view.uncertain = False
+        view.uncertain_submission = None
         if text:
             self.history.append(text)
             self.history = self.history[-100:]
@@ -637,11 +1092,15 @@ class ConversationApp(App[int]):
         if result.get("session_id") and view.session is None:
             self.views.pop(view.key, None)
             view.session = result["session_id"]
+            view.pending_session_id = None
             self.views[view.key] = view
             if self.conversation is view:
                 async with self._render_lock:
                     await self.query_one("#timeline", VerticalScroll).remove_children()
                     self.rows.clear()
+        elif view.session is None:
+            view.pending_session_id = None
+        self._view_changed(view)
         if result.get("command_handled") and self.conversation is view:
             await self._command_result(view, result)
         else:
@@ -669,9 +1128,13 @@ class ConversationApp(App[int]):
         elif data.get("session_id") and (
             data["session_id"] != view.session or data.get("agent_id", view.agent) != view.agent
         ):
-            await self._open(
-                Conversation(data.get("agent_id", view.agent), session=data["session_id"])
-            )
+            if data["session_id"] == view.session:
+                self._move_view(view, data.get("agent_id", view.agent), data["session_id"])
+                self._header()
+            else:
+                await self._open(
+                    Conversation(data.get("agent_id", view.agent), session=data["session_id"])
+                )
         if result.get("reply"):
             await self.push_screen_wait(
                 TextDialog("Command result", result["reply"], read_only=True)
@@ -682,7 +1145,10 @@ class ConversationApp(App[int]):
         await self._guard(self._select_session())
 
     async def _select_session(self) -> None:
+        origin = self.conversation
         await self._load_roster()
+        if self.conversation is not origin:
+            return
         addresses = [address for _, address in self.roster]
         if not addresses:
             self._notice("No Agents are configured. Create one with vbot agent create.")
@@ -699,6 +1165,8 @@ class ConversationApp(App[int]):
                 if cursors[index]:
                     params["cursor"] = cursors[index]
                 response = await self.client.rpc("session.list", params)
+                if self.conversation is not origin:
+                    return
                 for row in response.get("sessions", []):
                     active = "● " if row.get("has_active_run") else ""
                     unread = "• " if row.get("has_unread_completion") is True else ""
@@ -715,12 +1183,16 @@ class ConversationApp(App[int]):
             row = await self.push_screen_wait(
                 Picker("Sessions · search title, Agent or Project", choices)
             )
+            if self.conversation is not origin:
+                return
             if row == "older":
                 continue
             if isinstance(row, dict):
                 view = Conversation(
                     row["agent_address"], session=row["id"], parent=row.get("subagent_parent")
                 )
+                if known := self.views.get(view.key):
+                    known.available = True
                 await self._open(view)
             return
 
@@ -729,9 +1201,12 @@ class ConversationApp(App[int]):
         await self._guard(self._new())
 
     async def _new(self) -> None:
+        origin = self.conversation
         await self._load_roster()
+        if self.conversation is not origin:
+            return
         agent = await self.push_screen_wait(Picker("New conversation · choose Agent", self.roster))
-        if not agent:
+        if not agent or self.conversation is not origin:
             return
         project: str | None = None
         selected = False
@@ -750,7 +1225,7 @@ class ConversationApp(App[int]):
             choice = await self.push_screen_wait(
                 Picker("Working Project · server filesystem", choices)
             )
-            if choice is None:
+            if choice is None or self.conversation is not origin:
                 return
             selected, project = choice
         # Keep an existing unsent draft instead of replacing its text silently.
@@ -781,70 +1256,9 @@ class ConversationApp(App[int]):
         await self._guard(self._model())
 
     async def _model(self) -> None:
-        view = self.conversation
-        if view is None:
-            return
-        operation = await self.push_screen_wait(
-            Picker(
-                "Session settings",
-                [
-                    ("Choose Model", "model"),
-                    ("Choose thinking effort", "thinking_effort"),
-                    ("Inspect context and Usage", "usage"),
-                ],
-            )
-        )
-        if operation == "usage":
-            await self.push_screen_wait(
-                TextDialog(
-                    "Context and Usage",
-                    pretty(
-                        {
-                            key: view.facts.get(key)
-                            for key in ("context_usage", "session_usage", "compaction_policy")
-                        }
-                    ),
-                    read_only=True,
-                )
-            )
-            return
-        if operation == "model":
-            response = await self.client.rpc("model.list", {"task": "chat"})
-            choices = [
-                (
-                    f"{row.get('name', row['model_id'])} · {row['provider_id']}/{row['model_id']}",
-                    f"{row['provider_id']}/{row['model_id']}",
-                )
-                for row in response.get("models", [])
-            ]
-        elif operation == "thinking_effort":
-            choices = [("Provider default", "")] + [
-                (value, value)
-                for value in ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-            ]
-        else:
-            return
-        value = await self.push_screen_wait(
-            Picker(f"Choose {operation.replace('_', ' ')}", choices)
-        )
-        if value is None:
-            return
-        changes = {operation: value}
-        if operation == "thinking_effort":
-            changes = {"thinking_effort": value or None, "thinking_effort_default": not bool(value)}
-        if view.session:
-            result = await self.client.rpc(
-                "session.set_agent_overrides",
-                {**view.params(), "agent_overrides": changes},
-            )
-            view.overrides = result.get("agent_overrides") or {}
-        else:
-            for key, replacement in changes.items():
-                if replacement is None:
-                    view.overrides.pop(key, None)
-                else:
-                    view.overrides[key] = replacement
-        self._notice("Session setting saved" if view.session else "Draft setting selected")
+        from cli.tui.models import menu
+
+        await menu(self)
 
     @work(group="queue", exclusive=True, exit_on_error=False)
     async def action_queue(self) -> None:
@@ -852,9 +1266,12 @@ class ConversationApp(App[int]):
 
     async def _queue(self) -> None:
         view = self.conversation
-        if view is None or not view.session:
+        if view is None or not view.session or not view.available:
             return
+        key = view.key
         response = await self.client.rpc("chat.queue_list", view.params())
+        if self.conversation is not view or view.key != key or not view.available:
+            return
         self.queue_items = response.get("items", [])
         self._header()
         choices = [
@@ -865,7 +1282,7 @@ class ConversationApp(App[int]):
             self._notice("The Queue is empty.")
             return
         item = await self.push_screen_wait(Picker("Queue · shared with every accessor", choices))
-        if not item:
+        if not item or self.conversation is not view or view.key != key or not view.available:
             return
         actions = [("Remove from Queue", "remove")]
         if item.get("steerable") and not item.get("steering"):
@@ -873,17 +1290,27 @@ class ConversationApp(App[int]):
         if item.get("editable"):
             actions.insert(1, ("Edit queued message", "update"))
         action = await self.push_screen_wait(Picker("Queued message", actions))
-        if not action:
+        if not action or self.conversation is not view or view.key != key or not view.available:
             return
         params = {**view.params(), "item_id": item["id"]}
         if action == "update":
             text = await self.push_screen_wait(
                 TextDialog("Edit queued message", content_text(item.get("content")))
             )
-            if text is None:
+            if (
+                text is None
+                or self.conversation is not view
+                or view.key != key
+                or not view.available
+            ):
                 return
             params["content"] = text
             params["reply_surface"] = "tui"
+            mentions = await resolve_mentions(self.client, view.params(), text)
+            if self.conversation is not view or view.key != key or not view.available:
+                return
+            if mentions:
+                params["file_mentions"] = mentions
         await self.client.rpc(f"chat.queue_{action}", params)
         await self._refresh(view)
 
@@ -897,13 +1324,16 @@ class ConversationApp(App[int]):
 
     async def _stop(self, all_work: bool) -> None:
         view = self.conversation
-        if view is None or not view.session:
+        if view is None or not view.session or not view.available:
             return
+        key = view.key
         if all_work:
             await self.client.rpc("chat.stop_all", view.params())
             self._notice("Stop all requested. This Session's queued messages remain queued.")
         else:
             current = await self.client.rpc("chat.timeline", {**view.params(), "limit": 1})
+            if self.conversation is not view or view.key != key or not view.available:
+                return
             run = current.get("active_run") or {}
             run_id = run.get("run_id", run.get("id"))
             if not run_id:
@@ -933,16 +1363,26 @@ class ConversationApp(App[int]):
             return
         timeline = self.query_one("#timeline", VerticalScroll)
         old_height, scroll = timeline.virtual_size.height, timeline.scroll_y
+        key, revision = view.key, view.refresh_revision
+        generation = view.facts.get("history_generation")
         page = await self.client.rpc(
             "chat.timeline", {**view.params(), "limit": 100, "before": view.next_before}
         )
+        if self.conversation is not view or key != view.key or revision != view.refresh_revision:
+            return
+        if generation and page.get("history_generation", generation) != generation:
+            self._schedule_refresh()
+            return
         view.page(page, older=True)
         await self._render()
-        self.call_after_refresh(
-            lambda: timeline.scroll_to(
-                y=scroll + timeline.virtual_size.height - old_height, animate=False
-            )
-        )
+
+        def restore_scroll() -> None:
+            if self.conversation is view and view.key == key and view.refresh_revision == revision:
+                timeline.scroll_to(
+                    y=scroll + timeline.virtual_size.height - old_height, animate=False
+                )
+
+        self.call_after_refresh(restore_scroll)
 
     @work(group="requests", exclusive=True, exit_on_error=False)
     async def action_requests(self) -> None:
@@ -968,18 +1408,40 @@ class ConversationApp(App[int]):
         )
         if not request:
             return
-        response = await self.push_screen_wait(ExtensionDialog(request))
-        if response is None:
+        values: JsonObject = {}
+        problem = ""
+        outcome_unknown = False
+        while True:
+            dialog = ExtensionDialog(
+                request,
+                values=values,
+                problem=problem,
+                outcome_unknown=outcome_unknown,
+            )
+            response = await self.push_screen_wait(dialog)
+            if response is None:
+                return
+            try:
+                await self.client.rpc(
+                    "extensions.operation",
+                    {
+                        "name": request["extension"],
+                        "operation": request["response_operation"],
+                        "arguments": {"request_id": request["id"], "response": response},
+                    },
+                )
+            except ClientError as exc:
+                values = dialog.form_values
+                outcome_unknown = exc.state == "unknown"
+                problem = (
+                    "The previous response outcome is unknown. No retry was sent; check that "
+                    "this request is still pending before responding again.\n" + str(exc)
+                    if outcome_unknown
+                    else str(exc)
+                )
+                continue
+            await self._load_requests()
             return
-        await self.client.rpc(
-            "extensions.operation",
-            {
-                "name": request["extension"],
-                "operation": request["response_operation"],
-                "arguments": {"request_id": request["id"], "response": response},
-            },
-        )
-        await self._load_requests()
 
     @work(group="activity", exclusive=True, exit_on_error=False)
     async def action_activity(self) -> None:
@@ -987,9 +1449,12 @@ class ConversationApp(App[int]):
 
     async def _activity(self) -> None:
         view = self.conversation
-        if not view or not view.session:
+        if not view or not view.session or not view.available:
             return
+        key = view.key
         work_state = await self.client.rpc("chat.work", view.params())
+        if self.conversation is not view or view.key != key or not view.available:
+            return
         choices: list[tuple[str, Any]] = []
         seen: set[str] = set()
         for item in flatten(view.items):
@@ -1046,7 +1511,7 @@ class ConversationApp(App[int]):
         selected = await self.push_screen_wait(
             Picker("Activity · selected conversation and its Sub-Agents", choices)
         )
-        if not selected:
+        if not selected or self.conversation is not view or view.key != key or not view.available:
             return
         kind, data = selected
         if kind == "subagent":
@@ -1057,12 +1522,16 @@ class ConversationApp(App[int]):
                 "subagent.inspect",
                 {"agent_id": child, "session_id": data["session_id"], "id": data["id"]},
             )
+            if self.conversation is not view or view.key != key or not view.available:
+                return
             choices = [
                 ("Open Sub-Agent Session", "open"),
                 ("Inspect work and outcome", "detail"),
                 ("Stop this Sub-Agent and its background work", "stop"),
             ]
             action = await self.push_screen_wait(Picker("Sub-Agent", choices))
+            if self.conversation is not view or view.key != key or not view.available:
+                return
             target = result.get("agent_id", data.get("agent_id"))
             project = result.get("project_id", data.get("project_id"))
             if project and "@" not in target:
@@ -1090,7 +1559,7 @@ class ConversationApp(App[int]):
                     [("Read current output", "command_output"), ("Stop command", "stop_command")],
                 )
             )
-            if action:
+            if action and self.conversation is view and view.key == key and view.available:
                 result = await self.client.rpc(
                     f"chat.{action}",
                     {
@@ -1124,6 +1593,19 @@ class ConversationApp(App[int]):
     async def action_files(self) -> None:
         await self._guard(composer.files(self))
 
+    @work(group="conversation-actions", exclusive=True, exit_on_error=False)
+    async def action_conversation_actions(self) -> None:
+        from cli.tui import actions
+
+        await self._guard(actions.menu(self))
+
+    def action_latest(self) -> None:
+        if self.conversation:
+            self.conversation.follow_tail = True
+            self.conversation.unread_output = False
+            self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+            self._header()
+
     @work(group="find", exclusive=True, exit_on_error=False)
     async def action_find(self) -> None:
         await self._guard(composer.find(self))
@@ -1140,5 +1622,15 @@ class ConversationApp(App[int]):
     async def action_help(self) -> None:
         await self._guard(composer.help(self))
 
-    def action_detach(self) -> None:
+    @work(group="detach", exclusive=True, exit_on_error=False)
+    async def action_detach(self) -> None:
+        self._save_view()
+        try:
+            await self.persist_drafts()
+        except (OSError, ValueError) as exc:
+            self._notice(
+                f"Drafts could not be saved: {exc}. Copy them before leaving or retry Ctrl+Q.",
+                error=True,
+            )
+            return
         self.exit(0)

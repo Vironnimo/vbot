@@ -201,7 +201,8 @@ class NewSessionCommandContext:
     ``agent_overrides`` are the Agent overrides the new Session starts with and
     ``working_project_id`` the working Project a Session of an Identity Agent
     starts in (a Project id, ``None`` for the Workspace, or the Agent's default
-    Project).
+    Project). An optional ``session_id`` names the Session to create when the
+    Command needs a new one; Commands that run without a Session ignore it.
     """
 
     agent_id: str
@@ -210,6 +211,7 @@ class NewSessionCommandContext:
     agent_overrides: AgentOverrides = field(default_factory=AgentOverrides)
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     on_change: CommandChangeObserver | None = None
+    session_id: str | None = None
 
     def report_change(self, change: CommandResourceChange) -> None:
         if self.on_change is not None:
@@ -836,6 +838,7 @@ class CommandDispatcher:
         )
         session = await sessions.create_async(
             context.agent_id,
+            session_id=context.session_id,
             project_id=context.project_id,
             actor="command",
             metadata=context.agent_overrides.session_metadata() or None,

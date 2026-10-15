@@ -831,9 +831,15 @@ async def test_extension_page_history_projects_only_its_canonical_live_run(
     assert ("test-owned live content" in items) is not older_page
     if not older_page:
         assert result["timeline_sequence"] == active.last_sequence
+        assert result["active_run"] == {
+            "run_id": active.id,
+            "status": "running",
+            "started_at": result["items"][0]["startTimestamp"],
+        }
         assert result["items"][0]["status"] == "running"
     else:
         assert "timeline_sequence" not in result
+        assert "active_run" not in result
 
 
 # ---------------------------------------------------------------------------

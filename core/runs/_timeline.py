@@ -128,17 +128,15 @@ class RunTimeline:
             )
             self._text(child_type, text, event, streaming=True)
         elif kind in {"reasoning", "assistant_output"}:
-            if message.get("reasoning"):
-                self._text("reasoning", message["reasoning"], event, streaming=False)
+            if message:
+                self._finalize_text(message, event)
             if kind == "assistant_output":
                 if message.get("interrupted"):
                     self._drop_tool_drafts()
-                self._text(
-                    "assistant_output",
-                    message.get("content") or payload.get("content", ""),
-                    event,
-                    streaming=False,
-                )
+                if not message:
+                    self._text(
+                        "assistant_output", payload.get("content", ""), event, streaming=False
+                    )
                 for index, call in enumerate(message.get("tool_calls") or []):
                     self._tool(
                         {
@@ -222,6 +220,44 @@ class RunTimeline:
                 "events": [copy.deepcopy(event)],
             }
         )
+
+    def _finalize_text(self, message: JsonObject, event: JsonObject) -> None:
+        """Replace this Model step's transient sections with its canonical text.
+
+        Providers may interleave answer and Reasoning, or normalize streamed
+        answer text into Reasoning only. Earlier, settled Model steps belong to
+        different messages and must survive either kind of finalization.
+        """
+        items = self.run["items"]
+        message_id = message.get("id")
+        phase = [
+            item
+            for item in items
+            if item["type"] in {"reasoning", "assistant_output"}
+            and (item.get("streaming") or (message_id and item.get("messageId") == message_id))
+        ]
+        position = items.index(phase[0]) if phase else len(items)
+        phase_ids = {item["id"] for item in phase}
+        self.run["items"] = [item for item in items if item["id"] not in phase_ids]
+        canonical = []
+        for kind, content in (
+            ("reasoning", message.get("reasoning")),
+            ("assistant_output", message.get("content")),
+        ):
+            if not isinstance(content, str) or not content:
+                continue
+            child = next((item for item in phase if item["type"] == kind), None)
+            if child is not None:
+                child["messageId"] = message_id
+                child["streaming"] = True
+                self.run["items"].append(child)
+            self._text(kind, content, event, streaming=False)
+            canonical.append(self.run["items"].pop())
+        self.run["items"][position:position] = canonical
+        retained_ids = {item["id"] for item in canonical}
+        for child_id in phase_ids - retained_ids:
+            self._text_parts.pop(child_id, None)
+            self._dirty_children.discard(child_id)
 
     def _text(self, kind: str, content: Any, event: JsonObject, *, streaming: bool) -> None:
         if not isinstance(content, str) or not content:
@@ -533,7 +569,16 @@ class RunTimeline:
 
     def _recount_text_slots(self) -> None:
         for kind in ("reasoning", "assistant_output", "tool_call"):
-            self._counts[kind] = sum(item["type"] == kind for item in self.run["items"])
+            # Canonical text can remove an interleaved section, leaving gaps.
+            # Counted rows would reuse an id still held by a later settled step.
+            self._counts[kind] = 1 + max(
+                (
+                    int(item["id"].rsplit("-", 1)[1])
+                    for item in self.run["items"]
+                    if item["type"] == kind
+                ),
+                default=-1,
+            )
         retained = {item["id"] for item in self.run["items"]}
         self._text_parts = {
             key: value for key, value in self._text_parts.items() if key in retained

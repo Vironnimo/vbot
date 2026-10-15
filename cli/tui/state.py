@@ -7,6 +7,7 @@ complete semantic rows and explicit keyed replacements/removals.
 from __future__ import annotations
 
 import copy
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +16,37 @@ type JsonObject = dict[str, Any]
 
 class TimelineGapError(Exception):
     """A suffix patch requires a fresh authoritative stream snapshot."""
+
+
+def _run_id(item: JsonObject) -> str | None:
+    return item.get("runId", item.get("run_id"))
+
+
+def _reuse(previous: Any, incoming: Any) -> Any:
+    """Reuse equal snapshot subtrees; published timeline objects stay immutable."""
+    if previous is incoming:
+        return previous
+    if isinstance(previous, dict) and isinstance(incoming, dict):
+        values = {key: _reuse(previous.get(key), value) for key, value in incoming.items()}
+        if previous.keys() == values.keys() and all(values[key] is previous[key] for key in values):
+            return previous
+        return values
+    if isinstance(previous, list) and isinstance(incoming, list):
+        entries = [
+            _reuse(previous[index] if index < len(previous) else None, value)
+            for index, value in enumerate(incoming)
+        ]
+        if len(previous) == len(entries) and all(
+            left is right for left, right in zip(previous, entries, strict=True)
+        ):
+            return previous
+        return entries
+    return previous if type(previous) is type(incoming) and previous == incoming else incoming
+
+
+def _snapshot_items(previous: list[JsonObject], incoming: list[JsonObject]) -> list[JsonObject]:
+    known = {item["id"]: item for item in previous}
+    return [_reuse(known.get(item["id"]), copy.deepcopy(item)) for item in incoming]
 
 
 @dataclass
@@ -30,8 +62,10 @@ class Conversation:
     overrides: JsonObject = field(default_factory=dict)
     scroll_y: float = 0
     follow_tail: bool = True
+    unread_output: bool = False
     uncertain: bool = False
     uncertain_submission: JsonObject | None = None
+    pending_session_id: str | None = None
     items: list[JsonObject] = field(default_factory=list)
     facts: JsonObject = field(default_factory=dict)
     sequence: int = -1
@@ -39,6 +73,12 @@ class Conversation:
     next_before: str | None = None
     parent: JsonObject | None = None
     refresh_revision: int = 0
+    completion_run_id: str | None = None
+    completion_read: str | None = None
+    completion_read_pending: str | None = None
+    completion_read_failed: str | None = None
+    available: bool = True
+    draft_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     @property
     def key(self) -> tuple[str, str | None, bool, str | None]:
@@ -64,6 +104,8 @@ class Conversation:
         result["reply_surface"] = "tui"
         if self.session is None:
             result["new_session"] = {}
+            if self.pending_session_id:
+                result["new_session"]["session_id"] = self.pending_session_id
             if self.project_selected and "@" not in self.agent:
                 result["new_session"]["working_project_id"] = self.project
             if self.overrides:
@@ -85,8 +127,6 @@ class Conversation:
             result["content"] = blocks
         else:
             result["content"] = text
-        if self.mentions:
-            result["file_mentions"] = list(self.mentions)
         return result
 
     def page(self, response: JsonObject, *, older: bool = False) -> None:
@@ -95,23 +135,31 @@ class Conversation:
             current_run = active.get("run_id")
             if current_run != self.stream_run:
                 self.stream_run, self.sequence = current_run, -1
-        incoming = copy.deepcopy(response.get("items", []))
+        incoming = _snapshot_items(self.items, response.get("items", []))
         if older:
             known = {item["id"] for item in self.items}
             self.items = [item for item in incoming if item["id"] not in known] + self.items
-        elif response.get("incremental") and not response.get("history_reset"):
+        elif (
+            response.get("incremental")
+            and not response.get("history_reset")
+            and (
+                not self.facts.get("history_generation")
+                or response.get("history_generation", self.facts["history_generation"])
+                == self.facts["history_generation"]
+            )
+        ):
             replaced = set(response.get("replace_run_ids", []))
             ids = {item["id"] for item in incoming}
             positions = [
                 index
                 for index, item in enumerate(self.items)
-                if item.get("run_id") in replaced or item["id"] in ids
+                if _run_id(item) in replaced or item["id"] in ids
             ]
             position = positions[0] if positions else len(self.items)
             self.items = [
                 item
                 for item in self.items
-                if item.get("run_id") not in replaced and item["id"] not in ids
+                if _run_id(item) not in replaced and item["id"] not in ids
             ]
             self.items[position:position] = incoming
             self.facts.update(response)
@@ -120,7 +168,7 @@ class Conversation:
             self.sequence = response.get("timeline_sequence", self.sequence)
         else:
             self.items = incoming
-            self.facts = response
+            self.facts = {**response}
             self.sequence = response.get("timeline_sequence", -1)
         if older or not response.get("incremental"):
             self.next_before = response.get("next_before") if response.get("has_more") else None
@@ -135,7 +183,7 @@ class Conversation:
             if self.stream_run == run_id and sequence < self.sequence:
                 return False
             self.stream_run, self.sequence = run_id, sequence
-            replacement = copy.deepcopy(payload.get("items", []))
+            replacement = _snapshot_items(self.items, payload.get("items", []))
             ids = {item["id"] for item in replacement}
             first = next(
                 (
@@ -159,26 +207,26 @@ class Conversation:
             raise TimelineGapError
         self.stream_run, self.sequence = run_id, sequence
         removed = set(payload.get("remove", []))
-        self.items = [item for item in self.items if item["id"] not in removed]
+        items = [item for item in self.items if item["id"] not in removed]
+        positions = {item["id"]: index for index, item in enumerate(items)}
         for entry in payload.get("upsert", []):
-            existing = next(
-                (index for index, item in enumerate(self.items) if item["id"] == entry["id"]), None
-            )
+            existing = positions.get(entry["id"])
             if existing is None:
-                self.items.append(copy.deepcopy(entry))
+                positions[entry["id"]] = len(items)
+                items.append(copy.deepcopy(entry))
             else:
-                self.items[existing] = copy.deepcopy(entry)
+                items[existing] = _reuse(items[existing], copy.deepcopy(entry))
         run = next(
             (
                 item
-                for item in self.items
+                for item in items
                 if item.get("type") == "assistant_run"
                 and item.get("runId", item.get("run_id")) == run_id
             ),
             None,
         )
         if run is not None:
-            run.update(copy.deepcopy(payload.get("run") or {}))
+            updated_run = {**run, **copy.deepcopy(payload.get("run") or {})}
             children = {item["id"]: item for item in run.get("items", [])}
             for item_id in payload.get("remove_children", []):
                 children.pop(item_id, None)
@@ -187,11 +235,15 @@ class Conversation:
             for change in payload.get("child_updates", []):
                 child = children.get(change["id"])
                 if child is not None:
+                    child = dict(child)
                     for key, suffix in change.get("append", {}).items():
                         child[key] = str(child.get(key, "")) + suffix
                     child.update(copy.deepcopy(change.get("set", {})))
+                    children[change["id"]] = child
             order = payload.get("order", list(children))
-            run["items"] = [children[item_id] for item_id in order if item_id in children]
+            updated_run["items"] = [children[item_id] for item_id in order if item_id in children]
+            items[positions[run["id"]]] = updated_run
+        self.items = items
         if "item_order" in payload:
             group = {item["id"]: item for item in self.items if item["id"] in payload["item_order"]}
             first = next(

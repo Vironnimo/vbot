@@ -23,6 +23,7 @@ from core.chat import (
     NewSessionCommandContext,
     ReplySurface,
 )
+from core.chat.errors import ChatSessionError
 from core.chat.messages import ChatMessage
 from core.projects import AgentOverrides, ModelConfigurationError
 from core.runs import ChatRunManager
@@ -125,7 +126,7 @@ async def test_session_less_commands_answer_without_creating_a_session(
     reply: str,
 ) -> None:
     result = await dispatcher.execute_for_new_session(
-        _prepared(dispatcher, message), _context(**overrides)
+        _prepared(dispatcher, message), replace(_context(**overrides), session_id="caller-session")
     )
 
     assert result.session_id is None
@@ -157,8 +158,12 @@ async def test_commands_that_work_on_a_session_wait_for_its_first_message(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("uses_session", [True, False], ids=["used", "unused"])
+@pytest.mark.parametrize("requested_id", [None, "caller-session"])
 async def test_a_creating_command_keeps_its_session_only_when_it_used_it(
-    dispatcher: CommandDispatcher, sessions: ChatSessionManager, uses_session: bool
+    dispatcher: CommandDispatcher,
+    sessions: ChatSessionManager,
+    uses_session: bool,
+    requested_id: str | None,
 ) -> None:
     observed: list[str] = []
 
@@ -177,12 +182,16 @@ async def test_a_creating_command_keeps_its_session_only_when_it_used_it(
 
     result = await dispatcher.execute_for_new_session(
         _prepared(dispatcher, "/workflow"),
-        _context(working_project_id="vbot", model="openai/gpt-mini"),
+        replace(
+            _context(working_project_id="vbot", model="openai/gpt-mini"), session_id=requested_id
+        ),
     )
 
     # The handler ran in a Session created with the new Session's overrides and
     # working Project.
     [session_id] = observed
+    if requested_id is not None:
+        assert session_id == requested_id
     if uses_session:
         assert result.session_id == session_id
         address = SessionAddress(None, "coder", session_id)
@@ -194,6 +203,13 @@ async def test_a_creating_command_keeps_its_session_only_when_it_used_it(
             "agent_id": "coder",
             "session_id": session_id,
         }
+        if requested_id is not None:
+            with pytest.raises(ChatSessionError):
+                await dispatcher.execute_for_new_session(
+                    _prepared(dispatcher, "/workflow"),
+                    replace(_context(), session_id=requested_id),
+                )
+            assert observed == [requested_id]
     else:
         # A Session the command left without History is removed and not named.
         assert result.session_id is None
