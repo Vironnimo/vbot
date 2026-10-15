@@ -76,6 +76,9 @@ it absent; public address or Run-id reuse never proves historical ownership.
   The v2 cursor replays retained own audit once to enrich old exact
   `usage_call_id` matches with missing Session generation provenance. Historical
   auxiliary calls without such evidence remain unassociated.
+  Entries without counters, costs or an embedded call id are skipped: captions and
+  interrupted drafts alone do not establish a Model request. Skipped entries still
+  advance the import cursor.
   Embedded `usage_call_id` deduplicates requests and recovers missing counters
   or replaces estimates with measured Session evidence after restore. Existing
   measurements, Provider costs, attribution and failed/cancelled outcomes remain
