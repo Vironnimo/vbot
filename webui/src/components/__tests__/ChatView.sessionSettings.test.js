@@ -273,6 +273,34 @@ describe('ChatView Session settings', () => {
   });
 
   describe('existing Session', () => {
+    it('refreshes the displayed Compaction Policy after a scoped change without reading History again', async () => {
+      rpcMock.mockImplementation(settingsRpcMock());
+      let effective = { enabled: true, strategy: 'summary_tail' };
+      getSessionMock.mockImplementation(async () => ({
+        session: {
+          id: 'session-1',
+          agent_overrides: {},
+          working_project_id: null,
+          compaction_policy_effective: structuredClone(effective),
+        },
+      }));
+      const props = reactiveProps({ projects: PROJECTS });
+      await chat.mountChat(props);
+      const session = () => testChatStateRefs[0].sessions['alpha::session-1'];
+      await waitForCondition(
+        () => session()?.compactionPolicy?.enabled === true,
+      );
+      const historyReads = rpcCalls('chat.history').length;
+      effective = { ...effective, enabled: false };
+      props.sessionInvalidations = [
+        { id: 1, scope: { agent_id: 'alpha', session_id: 'session-1' } },
+      ];
+      await waitForCondition(
+        () => session()?.compactionPolicy?.enabled === false,
+      );
+      expect(rpcCalls('chat.history')).toHaveLength(historyReads);
+    });
+
     it.each([
       ...['model-first', 'effort-first'].flatMap((order) =>
         ['model', 'effort', null].map((failed) => ({ order, failed })),

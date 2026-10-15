@@ -263,6 +263,11 @@ export function createSessionSettings(context) {
       if (!isRecord(session)) {
         return;
       }
+      context.chatController.applySessionCompactionPolicy(
+        shown.agentAddress,
+        shown.sessionId,
+        session.compaction_policy_effective,
+      );
       rows = {
         ...rows,
         [shown.key]: {
