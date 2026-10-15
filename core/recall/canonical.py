@@ -91,9 +91,8 @@ SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
 # as ``role="tool"`` messages. Indexing or returning those results creates a
 # feedback loop where every search matches its own prior output, so they are
 # excluded from recall (the canonical scan and semantic
-# index). This duplicates the Tool names from ``core.tools.session_search``
-# because recall is a lower layer than tools and cannot import it without an
-# import cycle; a test in ``test_session_search`` asserts the two stay in sync.
+# index). Keep the retired ``session_read`` name for historical results too.
+# Recall owns this stored-history policy rather than importing the Tool layer.
 RECALL_TOOL_RESULT_NAMES = frozenset({"session_search", "session_read"})
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
