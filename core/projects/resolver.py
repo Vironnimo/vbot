@@ -69,7 +69,7 @@ if TYPE_CHECKING:
     from core.projects.store import ProjectStore
     from core.providers.providers import ProviderRegistry
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
-    from core.sessions import SessionAddress, WorkingProjectChoice
+    from core.sessions import SessionAddress, SessionWorkingProject, WorkingProjectChoice
 
 __all__ = [
     "AGENT_OVERRIDE_FIELDS",
@@ -120,12 +120,14 @@ TEAM_WORKING_PROJECT_MESSAGE = (
     "A Session of Team Agent {agent_id}@{project_id} works in Project {project_id}; "
     "it cannot work in another Project."
 )
-# What a Session read finds when the Session does not exist (yet).
-_NO_SESSION = object()
 
 
 class SessionMetadataStore(Protocol):
     """The Session metadata operations the resolver needs for Agent overrides and bindings."""
+
+    def working_project(self, address: SessionAddress) -> SessionWorkingProject: ...
+
+    async def working_project_async(self, address: SessionAddress) -> SessionWorkingProject: ...
 
     def metadata_value(self, address: SessionAddress, key: str) -> Any: ...
 
@@ -418,8 +420,8 @@ class AgentResolver:
         """
         if project_id is None:
             stored = self._stored_working_project(agent.id, session_id)
-            if stored is not _NO_SESSION:
-                return self._require_session_project(cast("str | None", stored))
+            if stored is not None:
+                return self._require_session_project(stored)
         return self.new_session_working_project(project_id, agent, requested)
 
     async def resolve_working_project_async(
@@ -437,10 +439,8 @@ class AgentResolver:
         """
         if project_id is None:
             stored = await self._stored_working_project_async(agent.id, session_id)
-            if stored is not _NO_SESSION:
-                return await _RESOLUTION_WORKERS.run(
-                    self._require_session_project, cast("str | None", stored)
-                )
+            if stored is not None:
+                return await _RESOLUTION_WORKERS.run(self._require_session_project, stored)
         return await _RESOLUTION_WORKERS.run(
             self.new_session_working_project, project_id, agent, requested
         )
@@ -488,43 +488,44 @@ class AgentResolver:
         if address.project_id is not None:
             return address.project_id
         stored = await self._stored_working_project_async(address.agent_id, address.session_id)
-        if stored is _NO_SESSION:
+        if stored is None:
             return None
-        return await _RESOLUTION_WORKERS.run(
-            self._require_session_project, cast("str | None", stored)
-        )
+        return await _RESOLUTION_WORKERS.run(self._require_session_project, stored)
 
-    def _require_session_project(self, project_id: str | None) -> str | None:
-        """Return a Session's stored working Project once it is known to exist."""
-        if project_id is not None and not self._projects.exists(project_id):
+    def _require_session_project(self, binding: SessionWorkingProject) -> str | None:
+        """Require the bound Project, never a replacement reusing its public id."""
+        project_id = binding.project_id
+        if project_id is not None and (binding.archived or not self._projects.exists(project_id)):
             raise WorkingProjectMissingError(project_id)
         return project_id
 
-    def _stored_working_project(self, agent_id: str, session_id: str | None) -> object:
-        """Return the working Project a Session stores, or ``_NO_SESSION`` without one."""
+    def _stored_working_project(
+        self, agent_id: str, session_id: str | None
+    ) -> SessionWorkingProject | None:
+        """Return the Session's Working Project binding, or ``None`` without a Session."""
         if session_id is None or self._sessions is None:
-            return _NO_SESSION
-        from core.sessions import SESSION_WORKING_PROJECT_META_KEY, SessionNotFoundError
+            return None
+        from core.sessions import SessionNotFoundError
 
         try:
-            return self._sessions.metadata_value(
-                _session_address(None, agent_id, session_id), SESSION_WORKING_PROJECT_META_KEY
-            )
+            return self._sessions.working_project(_session_address(None, agent_id, session_id))
         except SessionNotFoundError:
-            return _NO_SESSION
+            return None
 
-    async def _stored_working_project_async(self, agent_id: str, session_id: str | None) -> object:
+    async def _stored_working_project_async(
+        self, agent_id: str, session_id: str | None
+    ) -> SessionWorkingProject | None:
         """Event-Loop-safe :meth:`_stored_working_project`."""
         if session_id is None or self._sessions is None:
-            return _NO_SESSION
-        from core.sessions import SESSION_WORKING_PROJECT_META_KEY, SessionNotFoundError
+            return None
+        from core.sessions import SessionNotFoundError
 
         try:
-            return await self._sessions.metadata_value_async(
-                _session_address(None, agent_id, session_id), SESSION_WORKING_PROJECT_META_KEY
+            return await self._sessions.working_project_async(
+                _session_address(None, agent_id, session_id)
             )
         except SessionNotFoundError:
-            return _NO_SESSION
+            return None
 
     def session_overrides(self, address: SessionAddress) -> AgentOverrides:
         """Return the Agent overrides *address* stores (none for a missing Session)."""
