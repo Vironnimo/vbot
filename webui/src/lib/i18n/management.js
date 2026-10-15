@@ -1003,6 +1003,14 @@ export default Object.freeze({
     'Included when enabled and non-empty.',
   'systemPrompt.blockList.ownerHint.tool':
     'Requires the {name} Tool to be available.',
+  'systemPrompt.blockList.ownerHint.toolPrefix':
+    'Requires an available Tool whose name starts with {prefix}.',
+  'systemPrompt.blockList.ownerHint.identity':
+    'Requires an Identity Agent with a Workspace.',
+  'systemPrompt.blockList.ownerHint.subagent_session':
+    'Included in Sessions linked to a Parent Agent.',
+  'systemPrompt.blockList.ownerHint.builtin':
+    'Included for the built-in {name} Agent.',
   'systemPrompt.blockList.ownerHint.extension':
     'Requires the {name} Extension to be active.',
   'systemPrompt.blockList.ownerHint.memory':
