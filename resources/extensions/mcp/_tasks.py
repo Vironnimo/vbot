@@ -58,6 +58,7 @@ TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 _sleep = asyncio.sleep
 _clock = time.monotonic
 _INPUT_REQUEST: TypeAdapter[types.InputRequest] = TypeAdapter(types.InputRequest)
+_INPUT_RESPONSE: TypeAdapter[types.InputResponse] = TypeAdapter(types.InputResponse)
 
 
 class TaskEndedError(ValueError):
@@ -91,6 +92,10 @@ class TaskRun:
     legacy: bool
     # When the task was received (``_clock``); its time-to-live counts from here.
     seen: float = field(default_factory=lambda: _clock())
+    received_at: float = field(default_factory=time.time)
+    receipt_id: str | None = None
+    # Persist input answers before sending them, so reconnect/restart reuses them.
+    checkpoint: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     # The answers given to its input requests, by the server's key.
     answers: dict[str, types.InputResponse] = field(default_factory=dict)
     # Set by the caller when the connection was lost: the call resumes the task on
@@ -421,6 +426,8 @@ async def _answer(wire: TaskWire, run: TaskRun, *, resend: bool) -> None:
     except* MCPError as refused:
         raise refused.exceptions[0] from None
     run.answers.update(responses)
+    if run.checkpoint is not None:
+        await run.checkpoint()
     await wire.answer(state.task_id, responses)
 
 
