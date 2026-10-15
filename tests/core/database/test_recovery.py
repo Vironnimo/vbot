@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import threading
 from collections.abc import Callable
 from datetime import timedelta
@@ -280,8 +281,9 @@ def test_a_newer_or_unreadable_database_is_never_replaced(
     assert not quarantine_root(data_dir).exists()
 
 
+@pytest.mark.parametrize("read_only_snapshot", [False, True])
 def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, read_only_snapshot: bool
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
     database = open_database(notes_spec(data_dir))
@@ -289,16 +291,24 @@ def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
     database.close()
     path = notes_spec(data_dir).path
     original = path.read_bytes()
+    source = snapshot / path.name
+    source_mode = source.stat().st_mode
+    if read_only_snapshot:
+        source.chmod(stat.S_IREAD)
 
-    with monkeypatch.context() as patched:
-        patched.setattr(
-            os,
-            "replace",
-            _failing_replace(lambda _source, target: _into_quarantine(target), PermissionError),
-        )
-        with pytest.raises(DatabaseUnavailableError):
-            restore_data_snapshot(data_dir, snapshot)
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(
+                os,
+                "replace",
+                _failing_replace(lambda _source, target: _into_quarantine(target), PermissionError),
+            )
+            with pytest.raises(DatabaseUnavailableError):
+                restore_data_snapshot(data_dir, snapshot)
+    finally:
+        source.chmod(source_mode)
     assert path.read_bytes() == original
+    assert not list(path.parent.glob(f".{path.name}.restore.*.tmp"))
     pending = read_incident(data_dir, "notes")
     assert pending is not None
     assert pending["verification"] == "pending"

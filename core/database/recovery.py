@@ -92,6 +92,7 @@ from core.database.spec import (
 )
 from core.utils.file_status import exists_strict
 from core.utils.timestamps import is_canonical_timestamp, utc_now_timestamp
+from core.utils.tree_move import remove_tree
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -609,7 +610,7 @@ def _install_member(
         ) from exc
     finally:
         with suppress(OSError):
-            temporary.unlink()
+            remove_tree(temporary, within=data_dir)
 
 
 def _restore_member_locked(
