@@ -1903,9 +1903,8 @@ def _hint_permission_denied(failure: _Failure) -> str | None:
         return None
     if _POWERSHELL:
         return (
-            "Permission denied: another program holds the file open, or your user cannot "
-            "write to the path. Close that program or use another location; if the task needs "
-            "elevated rights, ask the user to run the command."
+            "Access to the path was denied. Check the path's type and access permissions; "
+            "on Windows, reading a directory as a file can cause this error."
         )
     return (
         "Permission denied: your user cannot access the target path. Check its owner and "
