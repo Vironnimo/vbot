@@ -991,6 +991,7 @@
         onSessionNavigation={handleChatSessionNavigation}
         {runEvents}
         {commandStatuses}
+        {terminalsRefreshToken}
         {connectionSnapshot}
         {sessionsRefreshToken}
         {sessionInvalidations}

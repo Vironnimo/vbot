@@ -346,6 +346,25 @@ export function cancelRun(runId, options = {}, rpcOptions = {}) {
   return rpc('chat.cancel', params, rpcOptions);
 }
 
+// Complete live work of a Session and its descendants, independent of History.
+export function getSessionWork(agentId, sessionId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'chat.work',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'chat.work',
+  );
+  return rpc(
+    'chat.work',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
 // Stops a Session's Run, its background commands and terminals, and every
 // Sub-Agent below it. Resolves to `{ ok, stopped }`.
 export function stopAll(agentId, sessionId, options = {}) {

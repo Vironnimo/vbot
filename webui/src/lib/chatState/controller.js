@@ -4,6 +4,7 @@ import {
   controlRun as requestControlRun,
   editChatMessage as requestEditChatMessage,
   getSession as requestGetSession,
+  getSessionWork as requestGetSessionWork,
   getSessionChangeStats as requestGetSessionChangeStats,
   inspectSubAgentWork as requestInspectSubAgentWork,
   listAgents as requestListAgents,
@@ -31,6 +32,7 @@ import { t } from '../i18n.js';
 import { createChatActivity } from './activity.js';
 import { createChatChildTasks } from './childTasks.js';
 import { createChatReflections } from './reflections.js';
+import { createChatWork } from './work.js';
 import { formatAgentAddress, parseAgentAddress } from '../agentAddress.js';
 import {
   setAgents,
@@ -116,6 +118,7 @@ function defaultChatOperations() {
     listSessionActivity: (...args) => requestListSessionActivity(...args),
     listSessions: (...args) => requestListSessions(...args),
     getSession: (...args) => requestGetSession(...args),
+    getSessionWork: (...args) => requestGetSessionWork(...args),
     getSessionChangeStats: (...args) => requestGetSessionChangeStats(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
     loadCommandOutput: (...args) => requestLoadCommandOutput(...args),
@@ -169,6 +172,7 @@ export function createChatController({
   const earlyRunStarts = new Set();
 
   let displayedHistoryLoad = null;
+  const work = createChatWork({ operations });
   const childTasks = createChatChildTasks({
     chatState,
     operations,
@@ -830,6 +834,7 @@ export function createChatController({
       return { kind: 'failed' };
     } finally {
       sessionState.stoppingAll = false;
+      work.refresh(sessionState);
     }
   }
 
@@ -1159,6 +1164,7 @@ export function createChatController({
     queueSyncVersions.clear();
     childTasks.dispose();
     activity.dispose();
+    work.destroy();
     displayedHistoryLoad = null;
     chatState.loadingHistory = false;
   }
@@ -1212,6 +1218,7 @@ export function createChatController({
     stopCommand,
     stopSubAgentWork,
     syncAgentActivity,
+    syncSessionWork: work.sync,
     syncSessionQueue,
     undoReflection: reflections.undo,
     updateQueued,

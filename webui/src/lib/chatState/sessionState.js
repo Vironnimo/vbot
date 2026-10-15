@@ -208,6 +208,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       cancellingRunIds: [],
       // True while a Stop all request for this Session is in flight.
       stoppingAll: false,
+      // Complete server work projection, independent of the loaded History.
+      workProjection: null,
       queue: [],
       status: CHAT_STATUS_IDLE,
       error: null,
