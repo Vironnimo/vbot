@@ -32,6 +32,7 @@ A change to the base dependencies or the `server`, `cli`, `application`, or `des
 
 - Blocking: a mypy error blocks when it is in a staged file or in a file without uncommitted changes; one in unstaged or untracked work is reported without blocking. A mypy note goes with the error it follows; a note alone never blocks.
 - Authorship: `scripts/commit_authorship.py` enforces the authorship rule of `AGENTS.md` -> Git from four hooks: `pre-commit` and `pre-merge-commit` refuse an AI tool author or committer (`identity`), `commit-msg` strips `Co-Authored-By`, `Claude-Session` and "Generated with" lines (`message`), `pre-push` refuses to push commits that carry either (`push`); CI's `authorship` job checks all of HEAD's history (`history`). The tracked `.claude/settings.json` turns off Claude Code's attribution, pins the git identity through `env`, and enables `core.hooksPath` at session start, so Claude Code sessions in this repository, cloud sessions included, follow it without local setup.
+- Attribution stripping matches standalone trailers and footers, preserving prose that mentions them. If stripping would empty a non-empty message, the hook refuses the commit and leaves the original file intact.
 - The `dev` extra pins Ruff and mypy exactly so the hook and CI agree; upgrade them deliberately, together with the fixes a new version requires.
 
 ## Push check
