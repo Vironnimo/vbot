@@ -596,6 +596,7 @@ def _render_path(
         nonlocal current_source_line_has_content
         nonlocal current_selected_line_started
         nonlocal line_limited
+        nonlocal rendered_bytes
         nonlocal selected_lines_completed
         nonlocal selected_window_complete
         nonlocal source_character
@@ -625,7 +626,9 @@ def _render_path(
                     target_character_reached = True
                 if not current_selected_line_started:
                     current_selected_line_started = True
-                    rendered_lines.append(_line_gutter(source_line, required_character))
+                    gutter = _line_gutter(source_line, required_character)
+                    rendered_lines.append(gutter)
+                    rendered_bytes += len(gutter.encode("utf-8"))
                 if not append_bounded(selected_fragment) or rendered_bytes > MAX_FILE_BYTES:
                     byte_limited = True
                     return False

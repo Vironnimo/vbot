@@ -612,6 +612,27 @@ async def test_line_windows_name_the_call_that_continues_them(
 
 
 @pytest.mark.asyncio
+async def test_short_lines_count_their_gutters_against_the_page_budget(tmp_path: Path) -> None:
+    source = "\n" * 50_000
+    tmp_path.joinpath("short.txt").write_bytes(source.encode())
+    offset = 1
+    shown: list[int] = []
+
+    while True:
+        result = await read(tmp_path, {"path": "short.txt", "offset": offset, "limit": 50_000})
+        page = content(result)
+        assert len(page.encode("utf-8")) <= 50 * 1024
+        shown.extend(int(match[1]) for match in re.finditer(r"(?m)^(\d+)\| \n", page))
+        next_offset = result["data"].get("next_offset")
+        if next_offset is None:
+            break
+        assert next_offset == shown[-1] + 1
+        offset = next_offset
+
+    assert shown == list(range(1, 50_001))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("encoding", [None, "utf-16", "utf-16-be"])
 async def test_a_line_cut_at_the_byte_limit_continues_at_its_character(
     tmp_path: Path, encoding: str | None
