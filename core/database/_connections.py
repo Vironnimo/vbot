@@ -134,14 +134,15 @@ class _TrackingMixin:
     _vbot_tracked_path: str | None = None
 
     def close(self) -> None:  # type: ignore[override]
+        # SQLite can wait here for a statement running on another thread. Keep
+        # the connection tracked until it actually closes, without blocking
+        # registry operations for every other database in the process.
+        super().close()  # type: ignore[misc]
         with _live_lock:
             path = getattr(self, "_vbot_tracked_path", None)
-            try:
-                super().close()  # type: ignore[misc]
-            finally:
-                if path is not None:
-                    self._vbot_tracked_path = None  # type: ignore[attr-defined]
-                    _untrack(path)
+            if path is not None:
+                self._vbot_tracked_path = None  # type: ignore[attr-defined]
+                _untrack(path)
 
 
 class TrackedConnection(_TrackingMixin, sqlite3.Connection):
