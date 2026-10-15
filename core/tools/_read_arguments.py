@@ -251,7 +251,8 @@ def _one_file(arguments: dict[str, Any]) -> dict[str, Any]:
             calls = ", ".join(_read_call(_item_fields(item)) for item in items)
             raise ValueError(f"read shows one file per call. Send one call per file: {calls}.")
         for field, value in (_item_fields(items[0]) if items else {}).items():
-            _set(result, field, value, field)
+            source = f"{key}[0].{field}" if isinstance(items[0], dict) else f"{key}[0]"
+            _set(result, field, value, (source, value))
     return result
 
 
@@ -302,9 +303,9 @@ def _translate_line_window(arguments: dict[str, Any]) -> dict[str, Any]:
                 )
             result["offset"] = int(position[1])
             if int(position[2]) > 1:
-                _set(result, "character", int(position[2]), "character")
+                _set(result, "character", int(position[2]), ("offset", offset))
         elif _RANGE.fullmatch(offset):
-            _set(result, "lines", offset, "offset")
+            _set(result, "lines", offset, ("offset", offset))
             del result["offset"]
         else:
             raise ValueError(
@@ -438,9 +439,11 @@ def _is_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _set(result: dict[str, Any], field: str, value: Any, source: str) -> None:
+def _set(result: dict[str, Any], field: str, value: Any, source: tuple[str, Any]) -> None:
     if field in result and result[field] != value:
-        raise ToolContractError(f"Conflicting values for {source}; provide one intended value.")
+        raise ToolContractError.conflicting_values(
+            field, (field, result[field]), source, tool_name=READ_TOOL_NAME
+        )
     result[field] = value
 
 

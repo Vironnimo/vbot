@@ -41,6 +41,7 @@ from core.tools._session_recall_results import (
     _serialized_result_bytes,
     _SessionSearchError,
 )
+from core.tools.contracts import ToolContractError
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -450,7 +451,9 @@ def _normalize_search_arguments(arguments: Any, zone: _Zone = _UTC_ZONE) -> Json
         topk="limit",
     )
     normalized: JsonObject = {}
+    supplied: dict[str, tuple[str, Any]] = {}
     for key, value in entries:
+        given = value
         spelling = str(key).strip().casefold().replace("_", "").replace("-", "").replace(" ", "")
         if spelling in {"action", "operation"}:
             if isinstance(value, str) and value.strip().casefold() == "search":
@@ -482,9 +485,15 @@ def _normalize_search_arguments(arguments: Any, zone: _Zone = _UTC_ZONE) -> Json
             value = int(value.strip())
         if field in normalized and normalized[field] != value:
             raise _SessionSearchError(
-                "invalid_arguments", f"Conflicting values for {field}; provide one intended value."
+                "invalid_arguments",
+                str(
+                    ToolContractError.conflicting_values(
+                        field, supplied[field], (key, given), tool_name="session_search"
+                    )
+                ),
             )
         normalized[field] = value
+        supplied.setdefault(field, (key, given))
     # Empty known selections have an owner-defined omission meaning, but only
     # after every alias has been compared. Unknown effects remain present.
     for field in fields:

@@ -209,6 +209,10 @@ def test_a_tuple_schema_stays_rejected_after_its_json_twin_compiled() -> None:
             'sample was not run:\n- "thread_id" is not a parameter.\n'
             '- "message" is not a parameter.\nsample parameters: count (required), label.',
         ),
+        *[
+            ({"count": "2", field: "important extra content"}, {field})
+            for field in ("subject", "title", "caption", "description", "heading", "summary")
+        ],
         # Content or call fields under any name: text with a line break, an object.
         (
             {"count": "2", "retext": "## Correction\nThe parser stays."},
@@ -230,7 +234,7 @@ def test_a_tuple_schema_stays_rejected_after_its_json_twin_compiled() -> None:
 )
 async def test_dispatch_rejects_invalid_arguments_before_handler(
     arguments: JsonObject,
-    message: str,
+    message: str | set[str],
 ) -> None:
     calls = 0
 
@@ -245,7 +249,10 @@ async def test_dispatch_rejects_invalid_arguments_before_handler(
     with pytest.raises(ToolContractError) as exc_info:
         await registry.dispatch(make_context("sample"), arguments, ["sample"])
 
-    assert str(exc_info.value) == message
+    if isinstance(message, set):
+        assert all(f'"{field}"' in str(exc_info.value) for field in message)
+    else:
+        assert str(exc_info.value) == message
     assert calls == 0
 
 

@@ -142,11 +142,14 @@ _DECISIVE_WORDS = frozenset(
         # Contents.
         "attachment",
         "body",
+        "caption",
         "code",
         "command",
         "content",
         "data",
+        "description",
         "diff",
+        "heading",
         "image",
         "input",
         "instruction",
@@ -158,7 +161,10 @@ _DECISIVE_WORDS = frozenset(
         "prompt",
         "replacement",
         "script",
+        "subject",
+        "summary",
         "text",
+        "title",
         "value",
     }
 )
@@ -740,6 +746,8 @@ def _describe_problem(root_schema: Any, error: ValidationError) -> list[str]:
     if keyword == "uniqueItems":
         return [f"{subject} must not repeat items."]
     if keyword == "pattern":
+        if expected == r".*\S.*":
+            return [f"{subject} must not be blank; received {_received(instance)}."]
         return [f"{subject} must match the pattern {expected}; received {_received(instance)}."]
     message = error.message.rstrip(".")
     return [f"{subject}: {message}." if field else f"{message}."]

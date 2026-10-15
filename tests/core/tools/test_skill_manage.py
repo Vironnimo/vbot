@@ -677,7 +677,7 @@ _MESSAGE_HEADER = "---\nname: new\ndescription: <what it covers and when to load
         pytest.param(
             {"action": "patch", "old_string": "- Never deploy on Fridays.", "new_string": "A"}
             | {"content": "B"},
-            "Conflicting values for new_string: content and new_string differ; give one text.",
+            'new_string is "A" and content is "B"',
             id="patch-with-two-texts",
         ),
         pytest.param(
@@ -709,11 +709,8 @@ def test_calls_that_cannot_apply_as_given_are_refused_before_writing(
 
     result = harness.run({"name": "demo", **arguments})
 
-    assert (result["ok"], result["error"]["code"], result["error"]["message"]) == (
-        False,
-        "invalid_arguments",
-        message,
-    )
+    assert (result["ok"], result["error"]["code"]) == (False, "invalid_arguments")
+    assert message in result["error"]["message"]
     assert skill_file.read_bytes() == before
     assert [path.name for path in harness.home("main").iterdir()] == ["demo"]
     assert [path.name for path in skill_file.parent.iterdir()] == ["SKILL.md"]
@@ -1005,6 +1002,16 @@ def test_delete_names_the_skill_that_absorbed_it(
             {"action": "delete"},
             ["is shared with you", "only its owner or the user can delete it"],
         ),
+        (
+            "global",
+            {"action": "delete"},
+            ["is a global Skill", "only the user can delete"],
+        ),
+        (
+            "external",
+            {"action": "edit", "content": _skill_md(name="foreign")},
+            ["comes from a skill folder or an Extension", "read-only"],
+        ),
     ],
 )
 def test_foreign_skill_names_report_their_scope_instead_of_not_found(
@@ -1018,8 +1025,16 @@ def test_foreign_skill_names_report_their_scope_instead_of_not_found(
     assert (error["code"], error["retryable"]) == ("skill_write_rejected", False)
     assert all(fragment in error["message"] for fragment in fragments)
     assert "not found" not in error["message"]
-    # create is not blocked: it writes the caller's own shadowing copy.
-    assert harness.create(name="foreign")["ok"] is True
+    # Neither an attended call nor an unattended Reflection can hide the
+    # visible Skill by creating a same-named private copy.
+    for run_kind in (None, RunKind.REFLECTION):
+        created = harness.run(
+            {"action": "create", "name": "foreign", "content": _skill_md("foreign")},
+            run_kind=run_kind,
+        )
+        assert created["error"]["code"] == "skill_write_rejected"
+        assert not harness.document("foreign").exists()
+    assert not harness.invalidated
 
 
 def test_unknown_name_keeps_plain_not_found(tmp_path: Path) -> None:
@@ -1368,10 +1383,10 @@ def test_create_and_delete_never_target_a_shared_package(tmp_path: Path) -> None
         {"action": "create", "name": "deploy", "content": _skill_md("deploy", "My own copy.")}
     )
 
-    # create writes the caller's own shadowing copy; delete refuses the shared one.
+    # Neither operation can replace the shared package with a private copy.
     assert deleted["error"]["code"] == "skill_write_rejected"
-    assert created["ok"] is True
-    assert harness.document("deploy").is_file()
+    assert created["error"]["code"] == "skill_write_rejected"
+    assert not harness.document("deploy").exists()
     assert shared.read_bytes() == before
 
 

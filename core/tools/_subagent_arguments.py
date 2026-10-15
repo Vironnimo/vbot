@@ -238,15 +238,23 @@ def _merge_context(arguments: dict[str, Any]) -> None:
 def _read_delivery_mode(arguments: dict[str, Any]) -> None:
     """Fold ``blocking`` into ``background`` and read true/false words as booleans."""
     requested: list[Any] = []
+    supplied: list[tuple[str, Any]] = []
     for key in [key for key in arguments if spelling(key) in (BACKGROUND_FIELD, _BLOCKING)]:
-        value = _boolean(arguments.pop(key))
+        given = arguments.pop(key)
+        value = _boolean(given)
         if spelling(key) == _BLOCKING and isinstance(value, bool):
             value = not value
         requested.append(value)
+        supplied.append((key, given))
     values = _distinct(requested)
     if len(values) > 1:
-        raise ToolContractError(
-            'Conflicting "background" and "blocking" values; provide one intended value.'
+        second = next(
+            index
+            for index, value in enumerate(requested)
+            if value != requested[0] or type(value) is not type(requested[0])
+        )
+        raise ToolContractError.conflicting_values(
+            BACKGROUND_FIELD, supplied[0], supplied[second], tool_name="subagent"
         )
     if values:
         arguments[BACKGROUND_FIELD] = values[0]

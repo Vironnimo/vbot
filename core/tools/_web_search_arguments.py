@@ -9,6 +9,7 @@ reason before anything is searched.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -252,13 +253,17 @@ def _domain(item: str) -> str:
     return mark + host.removeprefix("*.").lstrip(".")
 
 
-def _domains(value: Any) -> Any:
+def _domains(value: Any, field: str = "domains") -> Any:
     if isinstance(value, str):
         value = [part for part in re.split(r"[\s,;|]+", value) if part]
+    if isinstance(value, int | float | bool):
+        raise _domain_type_error(field, value)
     if not isinstance(value, list):
         return value
     domains: list[Any] = []
-    for item in value:
+    for index, item in enumerate(value):
+        if isinstance(item, int | float | bool):
+            raise _domain_type_error(f"{field}[{index}]", item)
         domain = _domain(item) if isinstance(item, str) else item
         if domain == "":
             continue
@@ -267,15 +272,24 @@ def _domains(value: Any) -> Any:
     return domains or None
 
 
+def _domain_type_error(field: str, value: Any) -> ToolContractError:
+    return ToolContractError(
+        f'web_search was not run: "{field}" must be a site name such as example.com; '
+        f"received {json.dumps(value, ensure_ascii=False)}."
+    )
+
+
 def _recency(value: Any) -> Any:
     if isinstance(value, str) and _value_key(value) in _NO_RECENCY | {""}:
         return None
     return recency_token(value) or value
 
 
-def _set_once(arguments: dict[str, Any], field: str, value: Any) -> None:
+def _set_once(arguments: dict[str, Any], field: str, value: Any, source: tuple[str, Any]) -> None:
     if field in arguments and arguments[field] != value:
-        raise ToolContractError(f"Conflicting values for {field}; provide one intended value.")
+        raise ToolContractError.conflicting_values(
+            field, (field, arguments[field]), source, tool_name="web_search"
+        )
     arguments[field] = value
 
 
@@ -292,13 +306,13 @@ def _settle_result_age(arguments: dict[str, Any]) -> None:
                 f'date_after must be a date such as 2026-09-01; received "{after}".'
             )
         del arguments["date_after"]
-        _set_once(arguments, "recency", token)
+        _set_once(arguments, "recency", token, ("date_after", after))
     recency = arguments.get("recency")
     if isinstance(recency, str) and recency.endswith("d") and recency not in RECENCY_VALUES:
         with_days = re.fullmatch(r"\d+(?:\.\d+)?d", recency)
         if with_days:
             del arguments["recency"]
-            _set_once(arguments, "days", float(recency[:-1]))
+            _set_once(arguments, "days", float(recency[:-1]), ("recency", recency))
 
 
 def _settle_domains(arguments: dict[str, Any]) -> None:
@@ -340,7 +354,7 @@ def normalize_web_search_arguments(contract: ToolContract, arguments: Any) -> An
         field_normalizers={
             "query": _query,
             "domains": _domains,
-            "exclude_domains": _domains,
+            "exclude_domains": lambda value: _domains(value, "exclude_domains"),
             "recency": _recency,
         },
         empty_as_omitted=(

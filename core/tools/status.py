@@ -123,8 +123,6 @@ _ID_MESSAGE_TEMPLATE = (
     'as "session_id", with "agent_id" for another Agent\'s Session, or omit both to check '
     "your current Session."
 )
-_ID_SESSION_CONFLICT_MESSAGE = "Conflicting values for session_id; provide one intended value."
-
 _FIELD_ALIASES = SpellingAliases(
     {"session_id": ("session", "session_key"), "agent_id": ("agent", "agent_name")}
 )
@@ -190,7 +188,12 @@ def _read_id_field(arguments: dict[str, Any]) -> None:
         if spelling(key) == "id" and isinstance(text, str) and text.startswith(_SESSION_ID_PREFIX):
             session_id = arguments.get("session_id")
             if not is_placeholder(session_id, _CURRENT_SESSION_WORDS) and session_id != text:
-                raise ToolContractError(_ID_SESSION_CONFLICT_MESSAGE)
+                raise ToolContractError.conflicting_values(
+                    "session_id",
+                    ("session_id", session_id),
+                    (key, value),
+                    tool_name=STATUS_TOOL_NAME,
+                )
             arguments["session_id"] = text
             continue
         raise ToolContractError(_ID_MESSAGE_TEMPLATE.format(value=json.dumps(value)))

@@ -544,7 +544,7 @@ def test_status_tool_reads_clear_targets_written_other_ways(
         (
             {"id": "ses_abcdefghijkl", "session_id": "ses_zzzzzzzzzzzz"},
             True,
-            "Conflicting values for session_id; provide one intended value.",
+            'session_id is "ses_zzzzzzzzzzzz" and id is "ses_abcdefghijkl"',
         ),
         (
             {"session_id": "ses_abcdefghijkl", "session": "ses_zzzzzzzzzzzz"},
