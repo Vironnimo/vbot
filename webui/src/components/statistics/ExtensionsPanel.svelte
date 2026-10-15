@@ -17,12 +17,10 @@
     tokenTooltip,
     totalTokens,
   } from '$lib/statisticsView.js';
-  import {
-    costValue,
-    kpiTile,
-    modelCell,
-    tokenValue,
-  } from './ReportPrimitives.svelte';
+  import CostValue from './report/CostValue.svelte';
+  import KpiTile from './report/KpiTile.svelte';
+  import ModelCell from './report/ModelCell.svelte';
+  import TokenValue from './report/TokenValue.svelte';
 
   let { section } = $props();
 
@@ -151,13 +149,17 @@
   ]);
 </script>
 
+{#snippet modelCell(row, column)}
+  <ModelCell {row} {column} />
+{/snippet}
+
 {#snippet participantTokens(row)}
-  {@render tokenValue(activityTokens(row.activity))}
+  <TokenValue value={activityTokens(row.activity)} />
 {/snippet}
 
 {#snippet participantCost(row)}
   {@const costs = row.activity?.totals}
-  {@render costValue(costs?.cost_usd, costTooltip(costs, locale))}
+  <CostValue amount={costs?.cost_usd} basis={costTooltip(costs, locale)} />
 {/snippet}
 
 <div class="stats-panel">
@@ -179,7 +181,7 @@
       </div>
       <div class="stats-tiles stats-tiles--6">
         {#each activityTiles(extension.activity, extension.total_groups) as tile (tile.label)}
-          {@render kpiTile(tile)}
+          <KpiTile {tile} />
         {/each}
       </div>
       {#if extension.groups_truncated}
@@ -239,7 +241,7 @@
               <div class="stats-group__body">
                 <div class="stats-tiles stats-tiles--5">
                   {#each activityTiles(group.activity, null) as tile (tile.label)}
-                    {@render kpiTile(tile)}
+                    <KpiTile {tile} />
                   {/each}
                 </div>
                 <DataTable

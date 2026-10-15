@@ -8,7 +8,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import ModelId from '../ui/ModelId.svelte';
-  import { agentName } from './ReportPrimitives.svelte';
+  import AgentName from './report/AgentName.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import {
     clearProviderUsageHistory,
@@ -616,7 +616,7 @@
                     <li>
                       <div class="limit-run__head">
                         <div>
-                          <strong>{@render agentName(run.agent_id)}</strong>
+                          <strong><AgentName agentId={run.agent_id} /></strong>
                           <span use:tooltip={sessionTooltip(run)}
                             >{run.session_title ?? run.session_id}</span
                           >

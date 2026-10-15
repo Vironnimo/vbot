@@ -18,12 +18,10 @@
     skillOriginLabel,
     toolRejectionTooltip,
   } from '$lib/statisticsView.js';
-  import {
-    agentName,
-    dateCell,
-    nameCell,
-    kpiTile,
-  } from './ReportPrimitives.svelte';
+  import AgentName from './report/AgentName.svelte';
+  import DateCell from './report/DateCell.svelte';
+  import NameCell from './report/NameCell.svelte';
+  import KpiTile from './report/KpiTile.svelte';
 
   let { tools = null, skills = null } = $props();
 
@@ -192,6 +190,14 @@
   ]);
 </script>
 
+{#snippet dateCell(row, column)}
+  <DateCell {row} {column} />
+{/snippet}
+
+{#snippet nameCell(row, column)}
+  <NameCell {row} {column} />
+{/snippet}
+
 {#snippet rejectionCell(row)}
   {@const content = toolRejectionTooltip(row, locale)}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the rejection codes here.) -->
@@ -203,7 +209,7 @@
 {/snippet}
 
 {#snippet agentCell(row)}
-  {@render agentName(row.agent_id)}
+  <AgentName agentId={row.agent_id} />
 {/snippet}
 
 {#snippet skillNameCell(row)}
@@ -238,7 +244,7 @@
   {#if tools}
     <div class="stats-tiles stats-tiles--4">
       {#each toolTiles as tile (tile.label)}
-        {@render kpiTile(tile)}
+        <KpiTile {tile} />
       {/each}
     </div>
     <section class="stats-block">
@@ -298,7 +304,7 @@
   {#if skills}
     <div class="stats-tiles stats-tiles--4">
       {#each skillTiles as tile (tile.label)}
-        {@render kpiTile(tile)}
+        <KpiTile {tile} />
       {/each}
     </div>
     <section class="stats-block">

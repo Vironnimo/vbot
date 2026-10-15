@@ -32,17 +32,15 @@
     usageDimensionLabel,
     usageRowLabel,
   } from '$lib/statisticsView.js';
-  import {
-    agentName,
-    costValue,
-    dateCell,
-    kpiTile,
-    modelCell,
-    modelName,
-    originName,
-    sessionWithAgent,
-    tokenValue,
-  } from './ReportPrimitives.svelte';
+  import AgentName from './report/AgentName.svelte';
+  import CostValue from './report/CostValue.svelte';
+  import DateCell from './report/DateCell.svelte';
+  import KpiTile from './report/KpiTile.svelte';
+  import ModelCell from './report/ModelCell.svelte';
+  import ModelName from './report/ModelName.svelte';
+  import OriginName from './report/OriginName.svelte';
+  import SessionWithAgent from './report/SessionWithAgent.svelte';
+  import TokenValue from './report/TokenValue.svelte';
 
   let {
     section,
@@ -270,15 +268,23 @@
   }
 </script>
 
+{#snippet dateCell(row, column)}
+  <DateCell {row} {column} />
+{/snippet}
+
+{#snippet modelCell(row, column)}
+  <ModelCell {row} {column} />
+{/snippet}
+
 {#snippet breakdownName(row)}
   {#if activeDimension === 'agent'}
-    {@render agentName(row.key)}
+    <AgentName agentId={row.key} />
   {:else if activeDimension === 'origin'}
-    {@render originName(row.key)}
+    <OriginName origin={row.key} />
   {:else if activeDimension === 'project' && !row.key}
     <span class="stats-muted">{usageRowLabel('project', row.key)}</span>
   {:else if activeDimension === 'model' && row.key}
-    {@render modelName(row.key)}
+    <ModelName id={row.key} />
   {:else}
     <span
       class="stats-name"
@@ -291,33 +297,33 @@
 {/snippet}
 
 {#snippet inputCell(row)}
-  {@render tokenValue(row.input_tokens)}
+  <TokenValue value={row.input_tokens} />
 {/snippet}
 
 {#snippet outputCell(row)}
-  {@render tokenValue(row.output_tokens)}
+  <TokenValue value={row.output_tokens} />
 {/snippet}
 
 {#snippet tokensCell(row)}
-  {@render tokenValue(totalTokens(row))}
+  <TokenValue value={totalTokens(row)} />
 {/snippet}
 
 <!-- A call's own counts; whether they are estimated shows with its cost. -->
 {#snippet callTokensCell(row, column)}
-  {@render tokenValue(row[column.id])}
+  <TokenValue value={row[column.id]} />
 {/snippet}
 
 {#snippet costCell(row)}
-  {@render costValue(row.cost_usd, costTooltip(row, locale))}
+  <CostValue amount={row.cost_usd} basis={costTooltip(row, locale)} />
 {/snippet}
 
 {#snippet sessionCell(row)}
-  {@render sessionWithAgent(row)}
+  <SessionWithAgent {row} />
 {/snippet}
 
 {#snippet callSessionCell(row)}
   {#if row.session_id}
-    {@render sessionWithAgent(row)}
+    <SessionWithAgent {row} />
   {:else}
     <span class="stats-stack">
       <span class="stats-muted">{t('statistics.cost.withoutSession')}</span>
@@ -352,7 +358,7 @@
 <div class="stats-panel">
   <div class="stats-tiles stats-tiles--6">
     {#each tiles as tile (tile.label)}
-      {@render kpiTile(tile)}
+      <KpiTile {tile} />
     {/each}
   </div>
 
