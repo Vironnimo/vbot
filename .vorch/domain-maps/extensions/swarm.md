@@ -363,7 +363,9 @@ the suggested page number, and an explicit `page_id` is never overridden. A pass
 `update` (`old_text` with `new_text`) without `page_id` runs on the one live page whose
 current content holds its exact `old_text` (`SwarmStore.wiki_pages(containing=...)`),
 with the same checks inside that page as with its `page_id`, and notes the page it
-used; the text is the Agent's own evidence for its page. Such calls failed 18 times in
+used; the text is the Agent's own evidence for its page. The note reports the chosen
+page without claiming it changed: an update may leave the revision unchanged.
+Such calls failed 18 times in
 two days, and in one Swarm Run all 9 retries repeated the update with the one page the
 error named (Sessions, 2026-09). With several such pages the call fails naming them
 (newest change first, at most 3); with none, or a whole-content `update` without

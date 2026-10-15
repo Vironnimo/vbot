@@ -1049,9 +1049,15 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
     unnamed = await invoke(board, {"action": "update", "old_text": "Body", "new_text": "Body text"})
     assert (unnamed["data"]["page_id"], unnamed["data"]["revision"]) == ("w1", 2)
     assert unnamed["data"]["note"] == (
-        'page_id was omitted; old_text occurs only in w1 ("Release plan"), so that page was '
-        "updated."
+        'page_id was omitted; old_text occurs only in w1 ("Release plan"), so this call used '
+        "that page."
     )
+    unchanged = await invoke(
+        board, {"action": "update", "old_text": "Body text", "new_text": "Body text"}
+    )
+    assert unchanged["data"]["revision"] == 2
+    assert unchanged["data"]["status"].startswith("Nothing changed:")
+    assert unchanged["data"]["note"] == unnamed["data"]["note"]
     assert (await stored(board, "w1"))["content"] == "Body text"
     # Several pages or none: the update names them, newest change first, and changes nothing.
     for old_text, named in (

@@ -185,7 +185,8 @@ WIKI_LINKS_UNKNOWN = {
 WIKI_OFFSET_FROM_END = "Read offset {value} as counting back from the end of the page."
 WIKI_SINCE_IGNORES = "{field} has no effect with since_revision and was ignored."
 WIKI_PAGE_FROM_TEXT = (
-    'page_id was omitted; old_text occurs only in {page_id} ("{title}"), so that page was updated.'
+    'page_id was omitted; old_text occurs only in {page_id} ("{title}"), so this call used '
+    "that page."
 )
 
 # Failures.
