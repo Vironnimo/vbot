@@ -350,7 +350,7 @@ describe('ChatTimeline scrolling', () => {
   it.each([
     ['an earlier image grows inside the same Run', 'image', 900],
     ['the same long paragraph wraps onto more lines', 'wrapping', 800],
-    ['Markdown rebuilds the paragraph with new inline nodes', 'markdown', 900],
+    ['Markdown updates the paragraph with new inline nodes', 'markdown', 900],
     [
       'a Session switch remounts the Run after its layout changes',
       'session',
@@ -412,7 +412,7 @@ describe('ChatTimeline scrolling', () => {
               3,
             );
             flushSync();
-            expect(originalParagraph.isConnected).toBe(false);
+            expect(layout.paragraph()).toBe(originalParagraph);
             expect(layout.paragraph().querySelector('strong')).not.toBeNull();
           }
           timeline.notifyContentResize();
