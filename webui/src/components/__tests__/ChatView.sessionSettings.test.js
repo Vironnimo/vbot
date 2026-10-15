@@ -180,7 +180,7 @@ describe('ChatView Session settings', () => {
           expect(rpcCalls('chat.stream')).toEqual([]);
           await choose('Project', 'vBot');
           await choose('Model', SONNET);
-          await choose('Thinking effort', 'high');
+          expect(pickerText('Thinking effort')).toBe('high');
           // Leaving and returning while the original lookup is pending must
           // not replace either its settings or the newer draft choices.
           agentPill('Beta').click();
@@ -626,15 +626,16 @@ describe('ChatView Session settings', () => {
         'high',
       ]);
 
-      await choose('Thinking effort', 'high');
-      expect(pickerText('Thinking effort')).toBe('high');
-      // The Agent default names the Agent's Model; the Session's high is
-      // offered by it too, so only the Model returns to the Agent's.
+      await choose('Thinking effort', 'medium');
+      expect(pickerText('Thinking effort')).toBe('medium');
+      // Returning to the Agent's Model snaps medium to its nearest level and
+      // saves that effort in the same override write.
       await choose('Model', R1);
       await waitForCondition(
         () => rpcCalls('session.set_agent_overrides').length === 2,
       );
       expect(pickerText('Model')).toBe(R1);
+      expect(pickerText('Thinking effort')).toBe('high');
       expect(await pickerOptions('Thinking effort')).toEqual([
         'Provider default',
         'high',
@@ -650,12 +651,12 @@ describe('ChatView Session settings', () => {
         {
           agent_id: 'alpha',
           session_id: 'session-1',
-          agent_overrides: { thinking_effort: 'high' },
+          agent_overrides: { thinking_effort: 'medium' },
         },
         {
           agent_id: 'alpha',
           session_id: 'session-1',
-          agent_overrides: { model: null },
+          agent_overrides: { model: null, thinking_effort: 'high' },
         },
         {
           agent_id: 'alpha',

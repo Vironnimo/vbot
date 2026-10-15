@@ -1,9 +1,6 @@
 import { untrack } from 'svelte';
 
-import {
-  effortOptionsForReasoning,
-  reasoningForModelValue,
-} from '$lib/agentForm.js';
+import { effortForReasoning, reasoningForModelValue } from '$lib/agentForm.js';
 import { parseAgentAddress } from '$lib/agentAddress.js';
 import { t } from '$lib/i18n.js';
 import { takeSessionInvalidations } from '$lib/sessionInvalidation.js';
@@ -386,19 +383,6 @@ export function createSessionSettings(context) {
     void writeOverrides(shown, changes);
   }
 
-  // Whether `modelValue` offers the thinking effort `effort`. Without the
-  // catalog nothing is known against it.
-  function offersEffort(modelValue, effort) {
-    if (!catalog) {
-      return true;
-    }
-    const reasoning = reasoningForModelValue(modelValue, catalog.models);
-    return (
-      reasoning?.supported !== false &&
-      effortOptionsForReasoning(reasoning).includes(effort)
-    );
-  }
-
   // An Identity Agent rename keeps its Sessions' and drafts' settings under
   // the new id.
   function renameAgent(oldAgentId, newAgentId) {
@@ -430,13 +414,17 @@ export function createSessionSettings(context) {
       }
       updateDraft(shown.key, { workingProjectId: value || null });
     },
-    // '' returns to the Agent's Model or thinking effort. A chosen effort
-    // the next Model does not offer returns to the Agent's as well.
+    // '' returns to the Agent's Model. Keep an explicit effort on the nearest
+    // level the next Model offers, saving both choices in the same write.
     selectModel(value) {
       const changes = { model: value };
       const effort = view?.thinkingEffort ?? '';
-      if (effort && !offersEffort(value || view.defaultModel, effort)) {
-        changes.thinking_effort = '';
+      const nextEffort = effortForReasoning(
+        effort,
+        reasoningForModelValue(value || view?.defaultModel, catalog?.models),
+      );
+      if (nextEffort !== effort) {
+        changes.thinking_effort = nextEffort;
       }
       selectOverrides(changes);
     },

@@ -12,6 +12,7 @@
     AGENT_FORM_MODE_CREATE,
     createAgentFormValues,
     effortOptionsForReasoning,
+    effortForReasoning,
     normalizeAgentForm,
     reasoningForModelValue,
   } from '$lib/agentForm.js';
@@ -130,6 +131,13 @@
     formValues.model = modelSelectionValue(
       selection.model,
       selection.connectionLocalId,
+    );
+    formValues.thinking_effort = effortForReasoning(
+      formValues.thinking_effort,
+      reasoningForModelValue(
+        formValues.model || defaultValueText('model'),
+        availableModels,
+      ),
     );
   }
 

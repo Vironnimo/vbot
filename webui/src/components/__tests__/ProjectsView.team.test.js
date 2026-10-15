@@ -476,7 +476,35 @@ describe('ProjectsView Team', () => {
     });
   });
 
-  it('gates the thinking-effort override options by the member effective model', async () => {
+  it('gates the effort options and snaps the override when the model changes', async () => {
+    const coordinator = createAutosaveCoordinator();
+    const savedOverrides = {};
+    setOverrideMock.mockImplementation(
+      async (_project, _agent, field, value) => {
+        savedOverrides[field] = value;
+        return {
+          project: project({ project_id: 'demo' }),
+          scan: cleanScan({
+            team: [
+              member({
+                agent_id: 'builder',
+                overrides: { ...savedOverrides },
+                effective: effective(
+                  { value: savedOverrides.model, source: 'override' },
+                  null,
+                  {
+                    value: savedOverrides.thinking_effort ?? 'medium',
+                    source: savedOverrides.thinking_effort
+                      ? 'override'
+                      : 'agent',
+                  },
+                ),
+              }),
+            ],
+          }),
+        };
+      },
+    );
     serveProject(
       {},
       {
@@ -484,7 +512,11 @@ describe('ProjectsView Team', () => {
           member({
             agent_id: 'builder',
             display_name: 'Builder',
-            effective: effective({ value: 'openai/reasoner', source: 'agent' }),
+            effective: effective(
+              { value: 'openai/previous', source: 'agent' },
+              null,
+              { value: 'medium', source: 'agent' },
+            ),
           }),
         ],
       },
@@ -493,17 +525,31 @@ describe('ProjectsView Team', () => {
       models: [
         {
           id: 'openai/reasoner',
+          provider_id: 'openai',
           name: 'Reasoner',
+          context_window: 200000,
           capabilities: {
+            tools: true,
             reasoning: { supported: true, levels: ['low', 'high'] },
           },
         },
       ],
+      connections: [
+        { id: 'openai:api-key', provider_id: 'openai', usable: true },
+      ],
     });
-    view.mount();
+    view.mount({}, coordinator);
     await selectDemo();
     await expandMember('builder');
 
+    inputById('project-override-model-builder').click();
+    flushSync();
+    await waitForCondition(() => optionByText('openai/reasoner'));
+    optionByText('openai/reasoner').click();
+    flushSync();
+    expect(
+      inputById('project-override-thinking-builder').textContent.trim(),
+    ).toBe('low');
     inputById('project-override-thinking-builder').click();
     flushSync();
     await waitForCondition(() => optionByText('low'));
@@ -513,6 +559,13 @@ describe('ProjectsView Team', () => {
     expect(labels).toEqual(expect.arrayContaining(['low', 'high', 'none']));
     expect(labels).not.toContain('medium');
     expect(labels).not.toContain('max');
+    inputById('project-override-thinking-builder').click();
+    flushSync();
+    await expect(coordinator.flushPending()).resolves.toBe(true);
+    expect(savedOverrides).toEqual({
+      model: 'openai/reasoner::api-key',
+      thinking_effort: 'low',
+    });
   });
 
   it('starts a member Compaction Policy override from the global policy', async () => {

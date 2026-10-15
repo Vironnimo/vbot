@@ -52,11 +52,8 @@ const PROVIDER_DEFAULT = () => t('inherit.optionProviderDefault');
 
 function reasoningModel(reasoning) {
   return {
-    id: 'openai/gpt-5.2',
-    provider_id: 'openai',
-    model_id: 'gpt-5.2',
-    name: 'GPT-5.2',
-    capabilities: { reasoning },
+    ...openaiModel(),
+    capabilities: { tools: true, reasoning },
   };
 }
 
@@ -443,14 +440,15 @@ describe('AgentsView models', () => {
     ).toContain(t('agents.form.thinkingEffortUnsupported'));
   });
 
-  it('offers exactly the reasoning ladder of the model and applies a selected effort', async () => {
+  it('offers the model ladder and saves the nearest effort when switching models', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [
-          { ...baseAgent(), model: 'openai/gpt-5.2', thinking_effort: '' },
+          { ...baseAgent(), model: ANTHROPIC_MODEL, thinking_effort: 'medium' },
         ],
         models: [
           reasoningModel({ supported: true, levels: ['high', 'xhigh'] }),
+          anthropicModel(),
         ],
       }),
     );
@@ -458,7 +456,12 @@ describe('AgentsView models', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
+    await waitForCondition(() => modelTriggerLabel() === ANTHROPIC_MODEL, 100);
+    expect(thinkingTriggerLabel()).toBe('medium');
+    await openSearchableDropdown('agent-model');
+    selectSearchableOption('agent-model', 'openai/gpt-5.2');
+    await flushAsyncUpdates();
+    expect(thinkingTriggerLabel()).toBe('high');
     expect(getSimpleTrigger('agent-thinking-effort').disabled).toBe(false);
 
     openSimpleDropdown('agent-thinking-effort');
@@ -472,8 +475,13 @@ describe('AgentsView models', () => {
       'xhigh',
     ]);
 
-    selectSimpleOption('agent-thinking-effort', 'high');
-    await waitForCondition(() => thinkingTriggerLabel() === 'high', 100);
+    getSimpleTrigger('agent-thinking-effort').click();
+    flushSync();
+    const update = await submitAndReadUpdate();
+    expect(update).toMatchObject({
+      model: 'openai/gpt-5.2::api-key',
+      thinking_effort: 'high',
+    });
   });
 
   it('labels the model and thinking inherit options from the effective global default', async () => {

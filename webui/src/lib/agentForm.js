@@ -231,6 +231,32 @@ export function effortOptionsForReasoning(reasoning) {
   return offered.filter((option) => allowed.has(option));
 }
 
+// Keep a Model change on the nearest available effort, using the same rank
+// distance and lower-on-ties rule as providers.reasoning.snap_effort. Inherit
+// stays inherit; active reasoning never becomes "none". Unknown capabilities
+// keep the full ladder, while an unsupported Model has no effort to select.
+export function effortForReasoning(effort, reasoning) {
+  if (!effort || reasoning?.supported === false) return '';
+  const options = effortOptionsForReasoning(reasoning);
+  if (options.includes(effort)) return effort;
+  if (effort === 'none' || !THINKING_EFFORT_OPTIONS.includes(effort)) return '';
+
+  const rank = THINKING_EFFORT_OPTIONS.indexOf(effort);
+  let nearest = '';
+  let distance = Infinity;
+  for (const option of options) {
+    if (!option || option === 'none') continue;
+    const nextDistance = Math.abs(
+      THINKING_EFFORT_OPTIONS.indexOf(option) - rank,
+    );
+    if (nextDistance < distance) {
+      nearest = option;
+      distance = nextDistance;
+    }
+  }
+  return nearest;
+}
+
 function normalizeValues(values = {}) {
   return {
     id: asText(values.id).trim(),
