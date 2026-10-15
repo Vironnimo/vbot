@@ -50,7 +50,7 @@ LIVE_CALLS_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
 
 def _initialize_app_state(
-    app: FastAPIType, runtime: Runtime, *, server_bind: ServerBindState
+    app: FastAPIType, runtime: Runtime, *, server_bind: ServerBindState, log_viewer: LogViewer
 ) -> None:
     app.state.runtime = runtime
     app.state.chat_runs = runtime.chat_run_manager
@@ -95,7 +95,7 @@ def _initialize_app_state(
     )
     app.state.chat_loop = runtime.chat_loop
     app.state.command_dispatcher = runtime.command_dispatcher
-    app.state.log_viewer = LogViewer(runtime.storage.data_dir)
+    app.state.log_viewer = log_viewer
     # One lock for every reference check and reference edit, shared with the
     # Tools and commands that select Sessions for automations.
     app.state.agent_delete_lock = runtime.automation_references.lock

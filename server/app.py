@@ -313,7 +313,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
-        _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        from server._log_sources import build_log_viewer
+
+        _initialize_app_state(
+            app,
+            app_runtime,
+            server_bind=resolved_server_bind,
+            log_viewer=await build_log_viewer(app_runtime.storage.data_dir),
+        )
         app.state.shutdown_event = shutdown_event if shutdown_event is not None else asyncio.Event()
         oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
         if oauth_redirects is not None:
