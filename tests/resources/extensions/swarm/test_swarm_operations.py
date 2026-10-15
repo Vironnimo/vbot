@@ -90,11 +90,26 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     assert snapshot["swarm"]["created_at"] == swarms["entries"][0]["created_at"]
     assert snapshot["swarm"]["main_discussion_id"] == board.swarm["main_discussion_id"]
     assert snapshot["swarm"]["newest_wiki_page_number"] is None
+    refreshed = await operations.invoke(
+        "swarms.get", {"swarm_id": board.swarm["id"], "include_snapshot": False}
+    )
+    # A refresh keeps all mutable state without retransmitting immutable text.
+    assert refreshed["swarm"] == {
+        key: value
+        for key, value in snapshot["swarm"].items()
+        if key not in {"prompt", "profile_snapshot", "effective_configuration"}
+    }
     posted = await operations.invoke(
         "board.post",
         {"swarm_id": board.swarm["id"], "text": "operator note", "request_id": "operator"},
     )
     assert posted["discussion_id"] == board.swarm["main_discussion_id"]
+    before_replay = list(changes)
+    await operations.invoke(
+        "board.post",
+        {"swarm_id": board.swarm["id"], "text": "operator note", "request_id": "operator"},
+    )
+    assert changes == before_replay
     await operations.invoke(
         "wiki",
         {
@@ -136,7 +151,7 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     )
     # Each mutation names what changed, so the page reloads only what shows it.
     assert {(resource, tuple(ids)) for resource, ids, _revision in changes} == {
-        ("posts", (board.swarm["id"],)),
+        ("discussion_posts", (f"{board.swarm['id']}/{posted['discussion_id']}",)),
         ("wiki", (board.swarm["id"],)),
         ("profiles", (saved["profile"]["id"],)),
     }

@@ -86,7 +86,10 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
     "swarms.list": _PAGE,
     "swarms.get": {
         "type": "object",
-        "properties": {"swarm_id": {"type": "string", "minLength": 1}},
+        "properties": {
+            "swarm_id": {"type": "string", "minLength": 1},
+            "include_snapshot": {"type": "boolean"},
+        },
         "required": ["swarm_id"],
         "additionalProperties": False,
     },
