@@ -12,11 +12,16 @@ vBot owns call interpretation, roots, ordering, paging, rendering and diagnostic
 Its private modules are implementation units of the Tools owner, not public
 services:
 
-- `core/tools/search_files.py`: registration, the owner normalizer
-  (`normalize_search_arguments`), `interpret_search_call` (the provider probes use
-  it too), root resolution, scopes, orchestration (`_search`), the handler and its
-  bound failure texts (`_bound_failure`), the display, the help text and the
-  definition.
+- `core/tools/search_files.py`: registration, scopes, orchestration (`_search`),
+  the handler and its bound failure texts (`_bound_failure`), and the display.
+  It re-exports the definition and call-reading entry points used by callers.
+- `core/tools/_search_arguments.py`: the owner normalizer
+  (`normalize_search_arguments`) and `interpret_search_call` (the provider probes
+  use it too), translating call dialects into the named fields and `args`.
+- `core/tools/_search_roots.py`: root resolution, path/glob interpretation and
+  missing-path diagnostics.
+- `core/tools/_search_definition.py`: the Tool schema, description and help
+  reference shared by registration and call reading.
 - `core/tools/_search_query.py`: `interpret` turns the named fields and `args`
   into one `SearchQuery`, with mode, patterns, roots, globs, the rg arguments,
   context, page and notes.
