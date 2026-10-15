@@ -36,7 +36,7 @@ from core.models.assembly import (
 )
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text, replace_path
-from core.utils.file_status import exists_strict
+from core.utils.file_status import exists_strict, is_dir_strict, is_file_strict
 
 MODEL_DATABASE_DIRECTORY_NAME = "models"
 MODEL_DATABASE_MANIFEST_FILE_NAME = "manifest.json"
@@ -356,7 +356,7 @@ def _select_catalogs(
     runtime_catalogs: dict[str, datetime] = {}
     for name, fetched_at in runtime_manifest.catalogs.items():
         runtime_path = runtime_models_dir / name
-        if not runtime_path.is_file():
+        if not is_file_strict(runtime_path):
             continue
         system_fetched_at = system_catalogs.get(name)
         if name in selected and system_fetched_at is not None and system_fetched_at >= fetched_at:
@@ -369,12 +369,12 @@ def _select_catalogs(
 def _catalog_paths(models_dir: Path) -> dict[str, Path]:
     """Return the generated catalog files of one root by file name."""
 
-    if not models_dir.is_dir():
+    if not is_dir_strict(models_dir):
         return {}
     return {
         path.name: path
-        for path in models_dir.glob(f"*{_JSON_SUFFIX}")
-        if _is_catalog_file_name(path.name) and path.is_file()
+        for path in models_dir.iterdir()
+        if _is_catalog_file_name(path.name) and is_file_strict(path)
     }
 
 
