@@ -33,7 +33,8 @@ CREATE TABLE usage_calls (
     connection_id TEXT,
     session_title TEXT,
     owner_name TEXT,
-    group_id TEXT
+    group_id TEXT,
+    session_generation_id TEXT
 ) STRICT;
 
 -- Statistics reconciles changed calls, including updates to cumulative Usage.

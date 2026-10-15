@@ -177,6 +177,10 @@ async def test_history_import_deduplicates_calls_and_retains_archive_and_fork_sp
         recorder.import_session_history(sessions)
         revision, records = read_ledger(recorder)
         assert len(records) == 2
+        assert (
+            next(record for record in records if record.id == call_id).session_generation_id
+            == sessions.list_history_versions([fork.address])[fork.address][0]
+        )
         assert sum(record.usage.get("input_tokens", 0) for record in records) == 17
         recorder.import_session_history(sessions)
         assert read_ledger(recorder, revision) == (revision, ())

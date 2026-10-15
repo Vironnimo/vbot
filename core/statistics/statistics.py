@@ -530,6 +530,7 @@ def _live_sessions(
             sessions.append(
                 LiveSession(
                     session_key=indexed.session_key,
+                    generation_id=indexed.generation_id,
                     display_key=scope.display_key,
                     address=SessionAddress(scope.project_id, scope.agent_id, session_id),
                     title=_title(indexed.summary),

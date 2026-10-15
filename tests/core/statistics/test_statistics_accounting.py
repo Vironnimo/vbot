@@ -41,7 +41,7 @@ def accounting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[tuple[StatisticsService, ChatSessionManager, UsageRecorder]]:
     """A service over ``index`` whose durable Usage ledger starts every call at BASE."""
-    recorder = UsageRecorder(tmp_path / "model-usage.db")
+    recorder = UsageRecorder(tmp_path / "model-usage.db", session_source=manager)
     monkeypatch.setattr(
         "core.usage.usage.utc_now_timestamp", lambda: format_canonical_timestamp(BASE)
     )
@@ -402,8 +402,11 @@ async def test_group_usage_includes_tasks_only_in_the_owned_run_with_bounded_wor
 
 
 @pytest.mark.asyncio
-async def test_takeover_keeps_saved_run_usage_without_reassigning_durable_calls(accounting):
-    service, manager, recorder = accounting
+async def test_takeover_keeps_all_run_usage_without_reassigning_durable_calls(
+    accounting, statistics, index
+):
+    _service, manager, recorder = accounting
+    service = statistics(("before", "main"), usage_recorder=recorder, index=index)
     binding = manager.create_bound_temporary_session(
         SessionAddress(None, "temporary", "participant"),
         owner_name="swarm",
@@ -412,6 +415,7 @@ async def test_takeover_keeps_saved_run_usage_without_reassigning_durable_calls(
         config={},
     )
     session = manager.create("before")
+    manager.set_title(session.address, "Original title")
     owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "epoch")
     await manager.start_run(
         Run(run_id="owned", agent_id="before", session_id=session.id, execution_owner=owner)
@@ -430,25 +434,82 @@ async def test_takeover_keeps_saved_run_usage_without_reassigning_durable_calls(
     )
     for agent, identifier, tokens in [("before", session.id, 10), ("main", "unrelated", 100)]:
         call = await recorder.start(
-            model="task/m", kind="decision", agent_id=agent, session_id=identifier, run_id="owned"
+            model="task/m",
+            kind="decision",
+            agent_id=agent,
+            session_id=identifier,
+            run_id="owned",
+            session_title="Saved unavailable title" if identifier == "unrelated" else None,
         )
         await recorder.finish(call, {"input_tokens": tokens, "output_tokens": 2})
     service.report()
 
-    await manager.move(session.address, SessionAddress(None, "main", session.id))
+    moved_address = SessionAddress(None, "main", session.id)
+    await manager.move(session.address, moved_address)
+    manager.set_title(moved_address, "Moved title")
+    # Group-only reconciliation must retire the old address even though it
+    # deliberately keeps unrelated index scopes.
+    group = await service.group_usage(owner_name="swarm", group_id="group")
+    assert group["activity"]["totals"]["input_tokens"] == 15
+    with sqlite3.connect(index.index_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM stat_sessions WHERE session_id = ?", (session.id,)
+        ).fetchone() == (1,)
+        assert connection.execute("SELECT SUM(calls) FROM agg_usage").fetchone() == (3,)
 
     activity = service.run_activity(since=BASE, until=BASE + timedelta(seconds=3))
     assert activity.runs[0].agent_id == "main"
-    assert activity.runs[0].measured_input_tokens == 5
-    assert activity.runs[0].measured_output_tokens == 1
-    assert activity.runs[0].models == ["chat/m"]
+    assert activity.runs[0].measured_input_tokens == 15
+    assert activity.runs[0].measured_output_tokens == 3
+    assert activity.runs[0].models == ["chat/m", "task/m"]
     group = await service.group_usage(owner_name="swarm", group_id="group")
-    assert group["activity"]["totals"]["calls"] == 1
-    assert group["activity"]["totals"]["input_tokens"] == 5
+    assert group["activity"]["totals"]["calls"] == 2
+    assert group["activity"]["totals"]["input_tokens"] == 15
     usage = _usage(service)
     assert (usage["totals"]["calls"], usage["totals"]["input_tokens"]) == (3, 115)
     chat = next(row for row in usage["recent_calls"] if row["model"] == "chat/m")
-    assert chat["agent_id"] == "before"
+    assert (chat["agent_id"], chat["session_title"]) == ("before", "Moved title")
+
+    # Reusing the old address and Run id creates no association with the moved
+    # generation, even when new requests have no saved Assistant Usage.
+    replacement = manager.create("before", session_id=session.id)
+    manager.set_title(replacement.address, "Replacement title")
+    await manager.start_run(Run(run_id="owned", agent_id="before", session_id=session.id))
+    call = await recorder.start(
+        model="task/new", kind="decision", agent_id="before", session_id=session.id, run_id="owned"
+    )
+    await recorder.finish(call, {"input_tokens": 7})
+    complete_run(
+        replacement.for_run("owned"),
+        _run_summary(
+            status="completed", at=BASE + timedelta(seconds=2), duration_ms=2000, run_id="owned"
+        ),
+    )
+    rows = {
+        row.agent_id: row
+        for row in service.run_activity(since=BASE, until=BASE + timedelta(seconds=3)).runs
+    }
+    assert (rows["main"].measured_input_tokens, rows["before"].measured_input_tokens) == (15, 7)
+    assert rows["before"].models == ["task/new"]
+
+    # Missing provenance cannot borrow a later Session at that public address.
+    unrelated = manager.create("main", session_id="unrelated")
+    manager.set_title(unrelated.address, "Unrelated replacement")
+    usage = _usage(service)
+    unknown = next(row for row in usage["recent_calls"] if row["session_id"] == "unrelated")
+    assert unknown["session_title"] == "Saved unavailable title"
+    titles = {
+        row["model"]: row["session_title"]
+        for row in usage["recent_calls"]
+        if row["session_id"] == session.id
+    }
+    assert titles["chat/m"] == titles["task/m"] == "Moved title"
+    assert titles["task/new"] == "Replacement title"
+    related = [row for row in usage["top_sessions"] if row["session_id"] == session.id]
+    assert {(row["session_title"], row["input_tokens"]) for row in related} == {
+        ("Moved title", 15),
+        ("Replacement title", 7),
+    }
 
 
 @pytest.mark.asyncio

@@ -125,7 +125,9 @@ def _runs(rows: Rows) -> dict[tuple[str, str], Row]:
     return {(row["address"][2], row["run_id"]): row for row in rows["agg_runs"]}
 
 
-def _move_call(ledger: UsageRecorder, call_id: str, address: SessionAddress, run_id: str) -> None:
+def _move_call(
+    ledger: UsageRecorder, call_id: str, address: SessionAddress, run_id: str, generation_id: str
+) -> None:
     """Re-attribute a recorded call under a new ledger revision."""
 
     def move(connection: sqlite3.Connection) -> None:
@@ -133,9 +135,10 @@ def _move_call(ledger: UsageRecorder, call_id: str, address: SessionAddress, run
             "UPDATE usage_revision SET revision = revision + 1 RETURNING revision"
         ).fetchone()[0]
         connection.execute(
-            "UPDATE usage_calls SET agent_id = ?, session_id = ?, run_id = ?, revision = ? "
+            "UPDATE usage_calls SET agent_id = ?, session_id = ?, run_id = ?, revision = ?, "
+            "session_generation_id = ? "
             "WHERE id = ?",
-            (address.agent_id, address.session_id, run_id, revision, call_id),
+            (address.agent_id, address.session_id, run_id, revision, generation_id, call_id),
         )
 
     ledger.database.write(move)
@@ -269,7 +272,7 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
             _run_summary(status="completed", at=_at(33), duration_ms=3000, run_id="a2"),
         ],
     )
-    gamma = SessionAddress(None, "main", "gamma")
+    gamma = manager.create("main", session_id="gamma").address
     await _call(ledger, {"input_tokens": 5, "output_tokens": 5}, address=gamma, run_id="g1")
     check()
     _admit(manager, gamma, "g1", "channel")
@@ -287,7 +290,13 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     check()
 
     # A call that moves to another Session and Run.
-    _move_call(ledger, pending, beta.address, "b1")
+    _move_call(
+        ledger,
+        pending,
+        beta.address,
+        "b1",
+        manager.list_history_versions([beta.address])[beta.address][0],
+    )
     check()
 
     # A history edit rebuilds a Session's facts from its start.
@@ -354,6 +363,7 @@ async def test_paged_revisions_and_new_run_origins_equal_a_full_rebuild(
     final_fresh = replace(
         fresh,
         session_id="beta",
+        session_generation_id=manager.list_history_versions([beta.address])[beta.address][0],
         run_id="next",
         usage={"input_tokens": 7, "output_tokens": 2},
         revision=revision + 5,

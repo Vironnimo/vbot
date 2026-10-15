@@ -12,7 +12,7 @@ Units and their tables:
 
 - A Run (``agg_runs``, one row): its canonical Run record, its own records
   (Model steps, Tool calls, Compactions, errors) and its requests. Requests
-  are the ledger requests recorded for its Session address and Run id; a Run
+  are the ledger requests recorded for its Session generation and Run id; a Run
   without any uses the usage saved in its own records instead.
 - A Session's per-hour cubes over its own records: Tool calls (``agg_tools``
   and ``agg_tool_latency``, a duration histogram with
@@ -78,17 +78,17 @@ class RollupChanges:
     Runs and per-Session cubes whole (also after its removal);
     ``fact_sessions`` recompute the cubes when historical Tool origins changed;
     ``appends`` adds only the tail beginning at its first sequence.
-    ``addresses`` recompute the ledger units at a Session address, whose requests
-    take their origin from that Session. ``runs`` are ``(session_key, run_id)``;
+    ``generations`` recompute the ledger units tied to a Session generation,
+    whose requests take their origin from that Session. ``runs`` are ``(session_key, run_id)``;
     ``units`` are ledger unit keys; ``unit_runs`` are ``(unit_key, run_id)`` of changed requests,
-    which recompute the Run at that unit's address. Changed requests stage their
+    which recompute the Run in that unit's Session generation. Changed requests stage their
     original contributions once, before mutation; maintenance adds their final
     difference unless their whole unit is already being recomputed.
     """
 
     rebuild: bool = False
     sessions: set[int] = field(default_factory=set)
-    addresses: set[SessionKey] = field(default_factory=set)
+    generations: set[str] = field(default_factory=set)
     runs: set[tuple[int, str]] = field(default_factory=set)
     fact_sessions: set[int] = field(default_factory=set)
     appends: dict[int, int] = field(default_factory=dict)
@@ -96,10 +96,10 @@ class RollupChanges:
     unit_runs: set[tuple[int, str]] = field(default_factory=set)
     usage_changed: bool = False
 
-    def session(self, session_key: int, address: SessionKey) -> None:
+    def session(self, session_key: int, generation_id: str) -> None:
         """A Session's facts were replaced, added or removed, or its flags changed."""
         self.sessions.add(session_key)
-        self.addresses.add(address)
+        self.generations.add(generation_id)
 
     def session_runs(self, session_key: int, run_ids: Iterable[str]) -> None:
         self.runs.update((session_key, run_id) for run_id in run_ids)
@@ -134,10 +134,11 @@ class RollupChanges:
             ).fetchone():
                 self.fact_sessions.add(session_key)
             for (seq,) in connection.execute(
-                "SELECT r.seq FROM stat_usage_units u CROSS JOIN stat_usage_records r "
-                "ON r.session_key = u.session_key WHERE u.project_id = ? "
-                "AND u.agent_id = ? AND u.session_id = ? AND r.run_id = ?",
-                (*address, run_id),
+                "SELECT r.seq FROM stat_sessions s CROSS JOIN stat_usage_units u "
+                "ON u.session_generation_id = s.generation_id AND u.session_generation_id <> '' "
+                "CROSS JOIN stat_usage_records r "
+                "ON r.session_key = u.session_key WHERE s.session_key = ? AND r.run_id = ?",
+                (session_key, run_id),
             ):
                 self.usage_record(connection, int(seq))
 
@@ -178,7 +179,7 @@ class RollupChanges:
         return self.rebuild or any(
             (
                 self.sessions,
-                self.addresses,
+                self.generations,
                 self.runs,
                 self.fact_sessions,
                 self.appends,
@@ -196,7 +197,7 @@ _WORK_TABLES = {
     "rollup_fact_sessions": "session_key INTEGER",
     "rollup_appends": "session_key INTEGER, first_seq INTEGER",
     "rollup_units": "unit_key INTEGER",
-    "rollup_addresses": "project_id TEXT, agent_id TEXT, session_id TEXT",
+    "rollup_generations": "generation_id TEXT",
     "rollup_unit_runs": "unit_key INTEGER, run_id TEXT",
 }
 
@@ -263,7 +264,7 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
         ),
     )
     insert("rollup_units", ((key,) for key in changes.units))
-    insert("rollup_addresses", changes.addresses)
+    insert("rollup_generations", ((generation,) for generation in changes.generations))
     insert("rollup_unit_runs", changes.unit_runs)
     # Whole Sessions recompute every current Run; changed requests recompute
     # the Run of their unit's Session; a changed Session recomputes the
@@ -276,14 +277,13 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
     connection.execute(
         "INSERT OR IGNORE INTO temp.rollup_runs SELECT s.session_key, d.run_id "
         "FROM temp.rollup_unit_runs d CROSS JOIN stat_usage_units u ON u.session_key = d.unit_key "
-        "CROSS JOIN stat_sessions s ON s.project_id = u.project_id "
-        "AND s.agent_id = u.agent_id AND s.session_id = u.session_id"
+        "CROSS JOIN stat_sessions s ON s.generation_id = u.session_generation_id "
+        "AND u.session_generation_id <> ''"
     )
     connection.execute(
         "INSERT OR IGNORE INTO temp.rollup_units SELECT u.session_key "
-        "FROM temp.rollup_addresses a CROSS JOIN stat_usage_units u "
-        "ON u.project_id = a.project_id AND u.agent_id = a.agent_id "
-        "AND u.session_id = a.session_id"
+        "FROM temp.rollup_generations g CROSS JOIN stat_usage_units u "
+        "ON u.session_generation_id = g.generation_id"
     )
     for table in ("agg_runs", "agg_run_models"):
         connection.execute(
@@ -548,8 +548,8 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
             {_RUN_MODEL_SQL}
         FROM temp.rollup_runs d
         CROSS JOIN stat_sessions s ON s.session_key = d.session_key
-        CROSS JOIN stat_usage_units u ON u.project_id = s.project_id
-            AND u.agent_id = s.agent_id AND u.session_id = s.session_id
+        CROSS JOIN stat_usage_units u ON u.session_generation_id = s.generation_id
+            AND u.session_generation_id <> ''
         CROSS JOIN stat_usage_records r ON r.session_key = u.session_key AND r.run_id = d.run_id
         CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq
         GROUP BY d.session_key, d.run_id, c.model_key, c.has_model, c.purpose
@@ -821,8 +821,8 @@ def _usage_select(source: str, where: str, *, sequence: bool = False) -> str:
         FROM {source}
         CROSS JOIN stat_usage_units u ON u.session_key = r.session_key
         CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq
-        LEFT JOIN stat_sessions s ON s.project_id = u.project_id AND s.agent_id = u.agent_id
-            AND s.session_id = u.session_id
+        LEFT JOIN stat_sessions s ON s.generation_id = u.session_generation_id
+            AND u.session_generation_id <> ''
         LEFT JOIN stat_run_records rr ON rr.session_key = s.session_key AND rr.run_id = r.run_id
         WHERE {where}
         GROUP BY {"r.seq, " if sequence else ""}hour, r.session_key, origin,

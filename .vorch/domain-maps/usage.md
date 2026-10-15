@@ -18,6 +18,11 @@ Statistics.
 No request/response payloads, Tool arguments or credentials are stored.
 Optional Agent, Project, Session, Run and Extension/group references are
 attribution snapshots without foreign keys to removable domain records.
+The optional `session_generation_id` identifies the exact canonical Session for
+Run diagnostics after moves; it never rewrites those accounting snapshots.
+Runtime injects Sessions into the recorder so `start` captures that generation
+off the Event Loop before dispatch. Requests without a resolvable Session keep
+it absent; public address or Run-id reuse never proves historical ownership.
 
 ## Interfaces
 
@@ -60,7 +65,7 @@ attribution snapshots without foreign keys to removable domain records.
   incrementally; a restore changes it, so a projection rebuilds even when newly
   recorded calls have already caught up to its previous revision.
 - `import_session_history(source)` incrementally ingests retained Session own
-  audit, including archives and superseded entries. The named `session-history-v1`
+  audit, including archives and superseded entries. The named `session-history-v2`
   cursor (the last imported entry key) commits together with the imported rows
   and with the source's `database_id` and `restore_id`. An import resumes from
   that cursor, also after a restart; another Session database or a new restore
@@ -68,6 +73,9 @@ attribution snapshots without foreign keys to removable domain records.
   replay of an empty source records the new identity with cursor 0. A restore
   of `model-usage.db` itself rewinds rows and cursor together, so resuming stays
   correct.
+  The v2 cursor replays retained own audit once to enrich old exact
+  `usage_call_id` matches with missing Session generation provenance. Historical
+  auxiliary calls without such evidence remain unassociated.
   Embedded `usage_call_id` deduplicates requests and recovers missing counters
   or replaces estimates with measured Session evidence after restore. Existing
   measurements, Provider costs, attribution and failed/cancelled outcomes remain
