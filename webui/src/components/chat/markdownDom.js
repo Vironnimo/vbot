@@ -20,6 +20,14 @@ function createMarkdownDom(target) {
   }
 
   function reconcile(parent, previous, sources) {
+    // A host can replace text with richer references (for example Swarm's
+    // post links). On a changed subtree, rebuild children whose original
+    // nodes no longer belong here instead of updating detached nodes. An
+    // unchanged subtree never reaches this path and keeps its decorations.
+    if (previous.some((record) => record.node.parentNode !== parent)) {
+      parent.replaceChildren();
+      previous = [];
+    }
     const next = [];
     for (let index = 0; index < sources.length; index += 1) {
       const source = sources[index];

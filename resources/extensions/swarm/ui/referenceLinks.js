@@ -200,6 +200,8 @@ export function referenceLinks(
 
   const observer = new MutationObserver((records) => {
     for (const record of records) {
+      if (record.type === 'characterData' && node.contains(record.target))
+        decorate(record.target);
       for (const removed of record.removedNodes) release(removed);
       for (const added of record.addedNodes)
         if (added.isConnected && node.contains(added)) decorate(added);
@@ -208,7 +210,11 @@ export function referenceLinks(
     observer.takeRecords();
   });
   decorate(node);
-  observer.observe(node, { childList: true, subtree: true });
+  observer.observe(node, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
   node.addEventListener('pointerover', prepare, true);
   node.addEventListener('focusin', prepare, true);
   return {

@@ -131,10 +131,10 @@ function wikiBridge() {
   });
   return {
     ...fixture,
-    peerEdit() {
+    peerEdit(content = 'Peer evidence') {
       page = {
         ...page,
-        content: 'Peer evidence',
+        content,
         revision: page.revision + 1,
         current_revision: page.revision + 1,
       };
@@ -519,6 +519,33 @@ describe('Swarm Wiki drafts and refresh', () => {
     });
     await vi.waitFor(() => expect(wikiContent()).toContain('Peer evidence'));
     expect(reads()).toBe(count + 1);
+    expect(
+      document.querySelector('.wiki-page__body a[href="#post/1"]'),
+    ).toBeNull();
+
+    // A later edit can introduce a reference into the retained text node.
+    // It becomes a link just as it did when the page first rendered.
+    fixture.peerEdit('Peer evidence from #1');
+    const lists = wikiCalls(fixture, 'list').length;
+    fixture.bridge.invalidate({
+      resource: 'wiki',
+      ids: ['swr-a'],
+      revision: 3,
+    });
+    await vi.waitFor(() =>
+      expect(wikiCalls(fixture, 'list')).toHaveLength(lists + 1),
+    );
+    finishList({
+      entries: [{ page_id: 'wpg-one', title: 'Shared research', revision: 3 }],
+    });
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('.wiki-page__body a[href="#post/1"]')
+          ?.textContent,
+      ).toBe('#1'),
+    );
+    expect(wikiContent()).toContain('Peer evidence from #1');
+    expect(reads()).toBe(count + 2);
   });
 
   it('keeps the pages loaded with Load more when the Wiki refreshes', async () => {
