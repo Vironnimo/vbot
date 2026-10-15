@@ -464,7 +464,7 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     list_parser = _add_command_parser(
         memory_subparsers, "list", MEMORY_HELP["list"], example="memory list assistant"
     )
-    _add_memory_agent_argument(list_parser)
+    _add_memory_agent_argument(list_parser, scope_default=None)
 
     add_parser = _add_command_parser(
         memory_subparsers,
@@ -563,13 +563,19 @@ def _add_librarian_parsers(
     run_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
 
 
-def _add_memory_agent_argument(parser: argparse.ArgumentParser) -> None:
+def _add_memory_agent_argument(
+    parser: argparse.ArgumentParser, *, scope_default: str | None = "agent"
+) -> None:
     parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
     parser.add_argument(
         "--scope",
         choices=("agent", "user"),
-        default="agent",
-        help="Memory file to operate on (default: agent)",
+        default=scope_default,
+        help=(
+            "Memory scope to show. Omit to show both scopes."
+            if scope_default is None
+            else "Memory file to operate on (default: agent)"
+        ),
     )
 
 

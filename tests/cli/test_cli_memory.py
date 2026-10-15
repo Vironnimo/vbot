@@ -21,20 +21,19 @@ def memory_response(entry: dict[str, Any] | None = None) -> dict[str, Any]:
     return result
 
 
-def test_memory_list_prints_both_scopes(rpc: FakeRpc, run_cli: RunCli) -> None:
+@pytest.mark.parametrize("scope", [None, "agent", "user"])
+def test_memory_list_prints_only_the_requested_scopes(rpc: FakeRpc, run_cli: RunCli, scope) -> None:
     rpc.reply("memory.list", memory_response())
 
-    code, out, _err = run_cli("memory", "list", "assistant")
+    code, out, _err = run_cli("memory", "list", "assistant", *(["--scope", scope] if scope else []))
 
     assert code == 0
     assert rpc.calls == [("memory.list", {"agent_id": "assistant"})]
-    assert out.splitlines() == [
-        "pinned memory for assistant:",
-        "agent scope:",
-        "  #1: Keep answers short",
-        "user scope:",
-        "  (no entries)",
-    ]
+    assert out.splitlines()[0] == "pinned memory for assistant:"
+    assert ("agent scope:" in out) == (scope in (None, "agent"))
+    assert ("Keep answers short" in out) == (scope in (None, "agent"))
+    assert ("user scope:" in out) == (scope in (None, "user"))
+    assert ("  (no entries)" in out) == (scope in (None, "user"))
 
 
 def test_memory_add_defaults_to_the_agent_scope_and_reports_the_entry(

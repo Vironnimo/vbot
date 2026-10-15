@@ -298,7 +298,7 @@ def dispatch_memory_command(
             instance=instance,
         )
     if args.command == "list":
-        return memory_list(instance, args.agent)
+        return memory_list(instance, args.agent, args.scope)
     if args.command == "add":
         return memory_add(instance, args.agent, args.scope, content or "")
     if args.command == "replace":
