@@ -569,6 +569,15 @@ export function createChatScrollController(
   function renderPlan(items, sessionId = currentSessionId) {
     const { model, window: rowWindow } = layoutFor(sessionId || '');
     model.sync(items);
+    if (model.setWidth(content?.getBoundingClientRect().width)) {
+      measureMountedRows(model);
+      const viewport = viewportFor(sessionId);
+      if (viewport.pinned) rowWindow.showTail();
+      else if (viewport.anchorId)
+        rowWindow.showAround(viewport.anchorId, viewport.anchorDelta);
+      else rowWindow.showOffset(viewport.fallbackTop);
+      correctedLayoutKey = null;
+    }
     if (!virtualActive) {
       plannedLayoutKey = null;
       return stableEntries(items.map((item) => ({ key: item.id, item })));
@@ -690,6 +699,17 @@ export function createChatScrollController(
 
   function handleResize(entries) {
     const layoutReady = hasLayout();
+    const widthChanged =
+      layoutReady &&
+      layout.model.setWidth(content?.getBoundingClientRect().width);
+    if (widthChanged) {
+      // ResizeObserver need not include every row in this delivery. Seed the
+      // new width from all mounted rows and discard every offscreen height.
+      measureMountedRows(layout.model);
+      // Keep the row/text anchor while spacer estimates change. The normal
+      // post-render correction applies against the new layout before paint.
+      aimWindow(viewportFor(currentSessionId));
+    }
     for (const entry of entries) {
       const row = observedRows.get(entry.target);
       if (!row || !layoutReady) {
@@ -705,6 +725,15 @@ export function createChatScrollController(
       activate();
     }
     queueContentChanged();
+  }
+
+  function measureMountedRows(model) {
+    for (const [element, row] of observedRows) {
+      if (row.model === model && element.isConnected) {
+        model.setMeasured(row.id, element.getBoundingClientRect().height);
+      }
+    }
+    model.refreshEstimates();
   }
 
   // Content y of the top spacer, which starts the row list.

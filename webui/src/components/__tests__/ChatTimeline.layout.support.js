@@ -19,6 +19,7 @@ const PATCHES = [
 
 export function installFakeLayout({
   viewportHeight = 500,
+  viewportWidth = 600,
   rowHeight = () => 100,
 } = {}) {
   const originals = PATCHES.map(([target, name]) => [
@@ -130,8 +131,8 @@ export function installFakeLayout({
         top: elementBox.top,
         bottom: elementBox.top + elementBox.height,
         left: 0,
-        right: 600,
-        width: 600,
+        right: viewportWidth,
+        width: viewportWidth,
         height: elementBox.height,
       };
     },
@@ -202,8 +203,8 @@ export function installFakeLayout({
       const entries = [];
       for (const [target, reported] of observer.targets) {
         const height = target.isConnected ? (box(target)?.height ?? 0) : 0;
-        if (height !== reported) {
-          observer.targets.set(target, height);
+        if (height !== reported?.height || viewportWidth !== reported?.width) {
+          observer.targets.set(target, { height, width: viewportWidth });
           entries.push({ target, borderBoxSize: [{ blockSize: height }] });
         }
       }
@@ -233,6 +234,9 @@ export function installFakeLayout({
       }
       scrollTop = top;
       container.dispatchEvent(new Event('scroll'));
+    },
+    resizeWidth(width) {
+      viewportWidth = width;
     },
     scrollTop: currentScrollTop,
     maxScrollTop: () => flow().height - viewportHeight,
