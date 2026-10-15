@@ -251,7 +251,17 @@ describe('ChatView Sessions', () => {
 
       await waitForCondition(() => alphaSessionId() === 'created-alpha');
       expect(rpcCalls('chat.stream')).toEqual([
-        { agent_id: 'alpha', new_session: {}, content: 'First message' },
+        {
+          agent_id: 'alpha',
+          new_session: {
+            working_project_id: null,
+            agent_overrides: {
+              model: 'openrouter/anthropic/claude-sonnet-4',
+              thinking_effort_default: true,
+            },
+          },
+          content: 'First message',
+        },
       ]);
       // The created Session replaces the draft's history entry.
       expect(onSessionNavigation).toHaveBeenLastCalledWith(

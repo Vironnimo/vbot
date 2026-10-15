@@ -426,21 +426,17 @@ export default Object.freeze({
   'chat.sessionSettings.providerDefault': 'Provider default',
   'chat.sessionSettings.projectUnavailable': 'Unavailable',
   'chat.sessionSettings.projectDraftHint':
-    'Where the new Session works: its files, commands and Skills. A Session keeps its Project.',
+    'Where this and future new Sessions of this Agent work. Existing Sessions keep their Project.',
   'chat.sessionSettings.projectFixedHint':
     'Where this Session works. A Session keeps its Project.',
   'chat.sessionSettings.teamProjectHint':
     'A Project team Agent always works in its Project.',
   'chat.sessionSettings.projectMissing':
     'This Project is no longer registered.',
-  'chat.sessionSettings.modelDefaultHint':
-    'The Agent’s Model. Another choice applies to this Session only.',
-  'chat.sessionSettings.modelOverrideHint':
-    'Chosen for this Session only; the Agent keeps its Model.',
-  'chat.sessionSettings.effortDefaultHint':
-    'The Agent’s thinking effort. Another choice applies to this Session only.',
-  'chat.sessionSettings.effortOverrideHint':
-    'Chosen for this Session only; the Agent keeps its thinking effort.',
+  'chat.sessionSettings.modelHint':
+    'The Model for this Session. Changes also become the start value for new Sessions of this Agent; other Sessions keep their choices.',
+  'chat.sessionSettings.effortHint':
+    'The thinking effort for this Session. Changes also become the start value for new Sessions of this Agent; other Sessions keep their choices.',
   'chat.sessionSettings.saveError': 'The Session setting could not be saved.',
   'chat.activity.parentSession': 'Parent Session',
   'chat.activity.openParentSession': 'Open parent Session · {session}',

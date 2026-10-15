@@ -254,6 +254,7 @@ export function setSessionAgentOverrides(
   agentOverrides,
   options = {},
 ) {
+  const { remember = false, ...transportOptions } = options;
   requireNonEmptyString(
     agentId,
     'Agent id must be a non-empty string',
@@ -275,8 +276,9 @@ export function setSessionAgentOverrides(
       agent_id: agentId,
       session_id: sessionId,
       agent_overrides: agentOverrides,
+      ...(remember ? { remember: true } : {}),
     },
-    options,
+    transportOptions,
   );
 }
 

@@ -64,8 +64,8 @@ Review labels such as "Review B12" name the reviews of 2026-10-12: `tools/shell/
 | `agent_id`: `For run, an Agent id listed under Sub-Agents. Omit to use your own Agent.` | Names the available targets and self-delegation without suggesting copied conversation history. |
 | `id`: `Sub-Agent id from a run result. Required for send.` | Agents constructed ids or passed Session ids. |
 | `model`: `Model override as <provider>/<model-id>, kept for later messages.` | Weak Models used bare Model names; the override persists beyond one call. |
-| `model`: `Omit on run to use the target Agent's Model; omit on send to keep the current choice.` | The former text promised Agent defaults for a follow-up although stored overrides remain in force. |
-| `thinking_effort`: `Thinking effort override, kept for later messages.` and its run/send omission rule | Same persistence and omission distinction as `model`. |
+| `model`: `Omit on run to use your current Model for your own Agent, or another Agent's Model; omit on send to keep the current choice.` | Self-delegation captures the running Parent's Model, including a Session choice or fallback; another Agent keeps its own configuration. Follow-ups retain the child's stored choice. |
+| `thinking_effort`: `Thinking effort override, kept for later messages.` and its run/send omission rule | Self-delegation also captures the running Parent's effort, including Provider default. Explicit choices win; another Agent uses its own effort. |
 | `message_parent`: `Send a message to your Parent Agent ... without ending your turn.` | Reaches the Parent before the final answer. |
 | `message_parent`: `Use it to ask what only your Parent Agent can decide while you continue other work, ... and to answer its messages.` | Questions while blocked belong in the final answer (role block, `subagents.md`); immediate findings are limited to ones that change the Parent's or sibling work, avoiding wakeups for every observation. |
 | `message_parent`: `Return the task result in your final answer.` | Avoids duplicate delivery of the task result. |

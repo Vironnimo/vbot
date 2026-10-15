@@ -120,8 +120,15 @@ class AgentOverrides:
     thinking_effort: str | None = None
     temperature: float | None = None
     top_p: float | None = None
+    # An additive stored flag distinguishes a captured Provider default from
+    # an omitted effort, which continues to inherit the Agent's setting.
+    thinking_effort_default: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.thinking_effort_default, bool):
+            raise ValueError("thinking_effort_default must be a boolean")
+        if self.thinking_effort_default and self.thinking_effort is not None:
+            raise ValueError("thinking_effort_default cannot accompany a thinking_effort")
         if self.model is not None and (not isinstance(self.model, str) or not self.model):
             raise ValueError("model must be a non-empty string")
         if self.thinking_effort is not None:
@@ -148,24 +155,55 @@ class AgentOverrides:
             return cls()
         if not isinstance(value, dict):
             raise ValueError("Session agent_overrides must be an object")
-        return cls(**{name: value.get(name) for name in AGENT_OVERRIDE_FIELDS})
+        return cls(
+            **{name: value.get(name) for name in AGENT_OVERRIDE_FIELDS},
+            # Older writers preserve the unknown flag when setting an effort.
+            # An explicit stored effort takes precedence on a later upgrade.
+            thinking_effort_default=(
+                value.get("thinking_effort_default", False)
+                if value.get("thinking_effort") is None
+                else False
+            ),
+        )
+
+    def capture(self, agent: RuntimeAgent) -> AgentOverrides:
+        """Keep this Session's Model and effort independently of later Agent edits."""
+        from dataclasses import replace
+
+        effort = self.thinking_effort
+        if effort is None and not self.thinking_effort_default:
+            effort = agent.thinking_effort or None
+        return replace(
+            self,
+            model=self.model or agent.model or None,
+            thinking_effort=effort,
+            thinking_effort_default=effort is None,
+        )
 
     @property
     def is_empty(self) -> bool:
         """Return whether this value replaces no Agent setting."""
-        return all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
+        return not self.thinking_effort_default and all(
+            getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS
+        )
 
     def as_dict(self) -> dict[str, Any]:
         """Return only the replaced settings as stored, keyed by field name."""
-        return {
+        values = {
             name: getattr(self, name)
             for name in AGENT_OVERRIDE_FIELDS
             if getattr(self, name) is not None
         }
+        if self.thinking_effort_default:
+            values["thinking_effort_default"] = True
+        return values
 
     def agent_changes(self) -> dict[str, Any]:
         """Return the runtime Agent fields these overrides replace, keyed by field name."""
-        return self.as_dict()
+        values = self.as_dict()
+        if values.pop("thinking_effort_default", False) and self.thinking_effort is None:
+            values["thinking_effort"] = ""
+        return values
 
     def session_metadata(self) -> dict[str, Any]:
         """Return the Session metadata that stores these overrides (empty for none)."""

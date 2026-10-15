@@ -100,15 +100,17 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "Model override as <provider>/<model-id>, kept for later messages. Omit on "
-                "run to use the target Agent's Model; omit on send to keep the current choice."
+                "run to use your current Model for your own Agent, or another Agent's Model; "
+                "omit on send to keep the current choice."
             ),
         },
         "thinking_effort": {
             "type": "string",
             "enum": sorted(e for e in ALLOWED_THINKING_EFFORTS if e),
             "description": (
-                "Thinking effort override, kept for later messages. Omit on run to use the "
-                "Agent's setting; omit on send to keep the current choice."
+                "Thinking effort override, kept for later messages. Omit on run to use your "
+                "current effort for your own Agent, or another Agent's setting; omit on send "
+                "to keep the current choice."
             ),
         },
     },

@@ -1,36 +1,110 @@
-import { untrack } from 'svelte';
+import { onDestroy, untrack } from 'svelte';
 
 import { effortForReasoning, reasoningForModelValue } from '$lib/agentForm.js';
 import { parseAgentAddress } from '$lib/agentAddress.js';
 import { t } from '$lib/i18n.js';
 import { takeSessionInvalidations } from '$lib/sessionInvalidation.js';
 import { renameAgentInKey, renameAgentInKeys } from '$lib/chatState.js';
+import { updateAgent, setOverride } from '$lib/api.js';
+import {
+  createAutosaveParticipant,
+  useAutosaveContext,
+} from '$lib/autosave.js';
 
 // The Session settings the composer footer shows for the displayed
 // conversation: the Project it works in, and the Model and thinking effort it
-// uses instead of its Agent's (Session Agent overrides; the Agent itself never
-// changes).
+// uses. Explicit choices also become the Agent's start values for new Sessions.
 //
 // - A draft holds its choices per draft key, so each Chat area keeps them
 //   across navigation like the draft text. Its first message sends them as
 //   the new Session's `working_project_id` and `agent_overrides`; the next
-//   draft then starts from the defaults again.
+//   draft starts from the remembered values.
 // - An existing Session reads its Project and overrides from its `session.get`
 //   row and writes a Model or effort change through
-//   `session.set_agent_overrides`. A change shows at once and settles to the
-//   server's answer.
+//   `session.set_agent_overrides` with `remember`. Opening a Session only reads
+//   its choices. Autosave serializes edits, retains failed saves, and flushes
+//   before a message starts a Run.
 //
 // Defaults come from the Agent: an Identity Agent's `agent.list` row, or the
 // Team member's effective values from `project.show`.
 export function createSessionSettings(context) {
+  let unsaved = $state({});
+  let saving = $state(false);
+  const participant = createAutosaveParticipant({
+    getSnapshot: () => unsaved,
+    hasChanges: () => Object.keys(unsaved).length > 0,
+    save: async () => {
+      saving = true;
+      try {
+        for (const [key, entry] of Object.entries(unsaved)) {
+          const { shown, changes } = entry;
+          const succeeded =
+            shown.kind === 'draft'
+              ? await writeDefaults(shown, changes)
+              : await writeOverrides(shown, changes);
+          if (!succeeded) return false;
+          const remaining = { ...(unsaved[key]?.changes ?? {}) };
+          for (const [field, value] of Object.entries(changes)) {
+            if (remaining[field] === value) delete remaining[field];
+          }
+          const next = { ...unsaved };
+          if (Object.keys(remaining).length)
+            next[key] = { shown, changes: remaining };
+          else delete next[key];
+          unsaved = next;
+        }
+        return true;
+      } finally {
+        saving = false;
+      }
+    },
+  });
+  onDestroy(useAutosaveContext().register(participant));
+
+  function remember(shown, changes) {
+    unsaved = {
+      ...unsaved,
+      [shown.key]: {
+        shown,
+        changes: { ...(unsaved[shown.key]?.changes ?? {}), ...changes },
+      },
+    };
+    void participant.runSave();
+  }
+
+  async function writeDefaults(shown, changes) {
+    const { agentId, projectId } = parseAgentAddress(shown.agentAddress);
+    try {
+      if (projectId) {
+        for (const [field, value] of Object.entries(changes)) {
+          await setOverride(projectId, agentId, field, value);
+        }
+      } else {
+        const { workingProjectId, ...settings } = changes;
+        await updateAgent({
+          id: agentId,
+          ...settings,
+          ...(workingProjectId !== undefined
+            ? { root_project_id: workingProjectId }
+            : {}),
+        });
+      }
+      await context.refreshAgentDefaults(shown.agentAddress);
+      return true;
+    } catch (error) {
+      context.onError(
+        `${t('chat.sessionSettings.saveError')} ${error?.message ?? ''}`.trim(),
+        shown.key,
+      );
+      return false;
+    }
+  }
   // draft key -> { workingProjectId?, model, thinking_effort }. An absent
   // `workingProjectId` is the Agent's default Project; `null` the Workspace.
   let drafts = $state({});
   // Session key -> { workingProjectId, projectKnown, overrides } as last read
   // or written.
   let rows = $state({});
-  // Session key -> override fields being written ({ model: null } clears).
-  let pending = $state({});
   // The Model catalog (`{ models, connections }`), null until it answers.
   let catalog = $state.raw(null);
   let catalogFailed = $state(false);
@@ -41,19 +115,15 @@ export function createSessionSettings(context) {
   let rowRevision = $state(0);
   let lastInvalidationId = null;
   let requestedRowKey = '';
-  // Each Session owns its write revision and field-level reconciliation. Reads
-  // cannot establish ordering while a write runs; the final completion rereads
-  // the row. Independent fields keep their own pending and successful owners.
+  // Reads cannot establish ordering while a write runs; its completion rereads
+  // the row. Autosave serializes writes and owns the optimistic choices.
   const overrideWrites = {};
 
   function writesFor(key) {
     return (overrideWrites[key] ??= {
       key,
       revision: 0,
-      nextId: 0,
       active: 0,
-      owners: {},
-      committed: {},
     });
   }
 
@@ -96,6 +166,9 @@ export function createSessionSettings(context) {
       catalogFailed,
       defaultModel: defaults.model,
       defaultThinkingEffort: defaults.thinkingEffort,
+      saving,
+      pending: participant.hasChanges(),
+      save: () => participant.runSave('manual'),
     };
     const teamProject = teamProjectId
       ? { editable: false, known: true, team: true, value: teamProjectId }
@@ -114,17 +187,20 @@ export function createSessionSettings(context) {
               : defaults.rootProjectId,
           defaultValue: defaults.rootProjectId,
         },
-        model: draft.model ?? '',
-        thinkingEffort: draft.thinking_effort ?? '',
+        model: draft.model || defaults.model,
+        thinkingEffort: draft.thinking_effort ?? defaults.thinkingEffort,
       };
     }
     const row = rows[shown.key];
-    const changes = pending[shown.key] ?? {};
+    const changes = unsaved[shown.key]?.changes ?? {};
     const stored = row?.overrides ?? {};
     const override = (field) =>
       Object.hasOwn(changes, field)
         ? (changes[field] ?? '')
-        : text(stored[field]);
+        : field === 'thinking_effort' && stored.thinking_effort_default
+          ? ''
+          : text(stored[field]) ||
+            (field === 'model' ? defaults.model : defaults.thinkingEffort);
     return {
       ...base,
       project: teamProject ?? {
@@ -228,9 +304,12 @@ export function createSessionSettings(context) {
 
   $effect(() => {
     const shown = current;
+    // A default edit also captures settings of legacy Sessions on the server.
+    // Reread those rows before treating a changed start value as their choice.
+    const defaults = shown ? agentDefaults(shown.agentAddress) : null;
     const requestKey =
       shown?.kind === 'session'
-        ? `${shown.key}::${context.sessionsRefreshToken}::${rowRevision}`
+        ? `${shown.key}::${context.sessionsRefreshToken}::${rowRevision}::${JSON.stringify([defaults.model, defaults.thinkingEffort])}`
         : '';
     untrack(() => {
       if (!requestKey || requestKey === requestedRowKey) {
@@ -294,86 +373,43 @@ export function createSessionSettings(context) {
     const request = Object.fromEntries(
       Object.entries(changes).map(([field, value]) => [field, value || null]),
     );
-    const writeId = ++writes.nextId;
     writes.revision += 1;
     writes.active += 1;
-    for (const field of Object.keys(request)) {
-      writes.owners[field] = writeId;
-    }
-    pending = { ...pending, [key]: { ...(pending[key] ?? {}), ...request } };
     try {
       const result = await context.chatController.setSessionAgentOverrides(
         shown.agentAddress,
         shown.sessionId,
         request,
+        { remember: true },
       );
       const row = rows[writes.key];
-      const overrides = { ...(row?.overrides ?? {}) };
       const saved = isRecord(result?.agent_overrides)
         ? result.agent_overrides
         : {};
-      // A full reply may contain an obsolete snapshot of other fields. Keep
-      // evidence only for the fields this request wrote, without replacing a
-      // newer success or hiding a newer optimistic choice on the same field.
-      for (const field of Object.keys(request)) {
-        if ((writes.committed[field] ?? 0) > writeId) {
-          continue;
-        }
-        writes.committed[field] = writeId;
-        if (Object.hasOwn(saved, field)) {
-          overrides[field] = saved[field];
-        } else {
-          delete overrides[field];
-        }
-      }
       rows = {
         ...rows,
         [writes.key]: {
           workingProjectId: row?.workingProjectId ?? null,
           projectKnown: row?.projectKnown === true,
-          overrides,
+          overrides: saved,
         },
       };
-      dropPending(writes.key, writeId);
+      await context.refreshAgentDefaults(shown.agentAddress);
+      return true;
     } catch (error) {
-      if (!dropPending(writes.key, writeId)) {
-        return;
-      }
       context.onError(
         `${t('chat.sessionSettings.saveError')} ${error?.message ?? ''}`.trim(),
         writes.key,
       );
+      return false;
     } finally {
       writes.revision += 1;
       writes.active -= 1;
       if (writes.active === 0 && current?.key === writes.key) {
-        // Responses have no server revision, so concurrent same-field commits
-        // and invalidation reads need a snapshot taken after all writes settle.
-        // Also recover a dropped initial read after either success or failure.
+        // Recover any initial/invalidation read dropped while writing.
         rowRevision += 1;
       }
     }
-  }
-
-  function dropPending(key, writeId) {
-    const writes = writesFor(key);
-    const changes = { ...(pending[key] ?? {}) };
-    let dropped = false;
-    for (const field of Object.keys(changes)) {
-      if (writeId === undefined || writes.owners[field] === writeId) {
-        delete changes[field];
-        delete writes.owners[field];
-        dropped = true;
-      }
-    }
-    const next = { ...pending };
-    if (Object.keys(changes).length > 0) {
-      next[key] = changes;
-    } else {
-      delete next[key];
-    }
-    pending = next;
-    return dropped;
   }
 
   function selectOverrides(changes) {
@@ -383,17 +419,36 @@ export function createSessionSettings(context) {
     }
     if (shown.kind === 'draft') {
       updateDraft(shown.key, changes);
+      remember(shown, changes);
       return;
     }
-    void writeOverrides(shown, changes);
+    remember(shown, changes);
   }
 
   // An Identity Agent rename keeps its Sessions' and drafts' settings under
   // the new id.
   function renameAgent(oldAgentId, newAgentId) {
+    unsaved = Object.fromEntries(
+      Object.entries(unsaved).map(([key, entry]) => {
+        const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
+        return [
+          renamed,
+          {
+            ...entry,
+            shown: {
+              ...entry.shown,
+              key: renamed,
+              agentAddress:
+                entry.shown.agentAddress === oldAgentId
+                  ? newAgentId
+                  : entry.shown.agentAddress,
+            },
+          },
+        ];
+      }),
+    );
     drafts = renameAgentInKeys(drafts, oldAgentId, newAgentId);
     rows = renameAgentInKeys(rows, oldAgentId, newAgentId);
-    pending = renameAgentInKeys(pending, oldAgentId, newAgentId);
     for (const key of Object.keys(overrideWrites)) {
       const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
       if (renamed !== key) {
@@ -406,6 +461,10 @@ export function createSessionSettings(context) {
   }
 
   return {
+    flush: () => participant.flush(),
+    get hasPending() {
+      return saving || Object.keys(unsaved).length > 0;
+    },
     renameAgent,
     get view() {
       return view;
@@ -418,9 +477,10 @@ export function createSessionSettings(context) {
         return;
       }
       updateDraft(shown.key, { workingProjectId: value || null });
+      remember(shown, { workingProjectId: value || null });
     },
-    // '' returns to the Agent's Model. Keep an explicit effort on the nearest
-    // level the next Model offers, saving both choices in the same write.
+    // Keep the effort on the nearest level the next Model offers, saving both
+    // choices in the same write.
     selectModel(value) {
       const changes = { model: value };
       const effort = view?.thinkingEffort ?? '';
@@ -450,14 +510,23 @@ export function createSessionSettings(context) {
     // The draft with what its new Session should start with.
     draftWithSettings(draft) {
       const settings = drafts[draft.key] ?? {};
+      const defaults = agentDefaults(draft.agentAddress);
+      const effort = settings.thinking_effort ?? defaults.thinkingEffort;
       return {
         ...draft,
-        ...(settings.workingProjectId !== undefined
-          ? { workingProjectId: settings.workingProjectId }
+        ...(!parseAgentAddress(draft.agentAddress).projectId
+          ? {
+              workingProjectId:
+                settings.workingProjectId !== undefined
+                  ? settings.workingProjectId
+                  : defaults.rootProjectId,
+            }
           : {}),
         agentOverrides: {
-          model: settings.model || undefined,
-          thinking_effort: settings.thinking_effort || undefined,
+          model: settings.model || defaults.model || undefined,
+          ...(effort
+            ? { thinking_effort: effort }
+            : { thinking_effort_default: true }),
         },
       };
     },
@@ -482,15 +551,22 @@ export function createSessionSettings(context) {
             [
               ['model', draft.agentOverrides?.model],
               ['thinking_effort', draft.agentOverrides?.thinking_effort],
+              [
+                'thinking_effort_default',
+                !draft.agentOverrides?.thinking_effort,
+              ],
             ].filter(([, value]) => value),
           ),
         },
       };
       if (
-        settings.workingProjectId === draft.workingProjectId &&
-        (settings.model || undefined) === draft.agentOverrides?.model &&
-        (settings.thinking_effort || undefined) ===
-          draft.agentOverrides?.thinking_effort
+        Object.entries(settings).every(
+          ([field, value]) =>
+            value ===
+            (field === 'workingProjectId'
+              ? draft.workingProjectId
+              : draft.agentOverrides?.[field] || ''),
+        )
       ) {
         const next = { ...drafts };
         delete next[draft.key];
@@ -505,7 +581,6 @@ export function createSessionSettings(context) {
         updateDraft(draftKey, { model: '' });
       }
       if (sessionKey) {
-        dropPending(sessionKey);
         if (current?.key === sessionKey) {
           rowRevision += 1;
         }

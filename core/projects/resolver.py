@@ -135,6 +135,24 @@ class SessionMetadataStore(Protocol):
 
     def mutate_metadata(self, address: SessionAddress, mutation: Callable[[Any], None]) -> Any: ...
 
+    def ensure_metadata(
+        self,
+        address: SessionAddress,
+        mutation: Callable[[Any], None],
+        *,
+        create_missing: bool = False,
+    ) -> tuple[Any, Any]: ...
+
+    def list_addresses(
+        self,
+        project_id: str | None = None,
+        *,
+        agent_id: str | None = None,
+        exclude_owner_managed: bool = False,
+    ) -> list[SessionAddress]: ...
+
+    def get(self, address: SessionAddress) -> Any: ...
+
     async def run_async(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
 
 
@@ -537,6 +555,75 @@ class AgentResolver:
             await self._session_value_async(address, AGENT_OVERRIDES_META_KEY)
         )
 
+    def capture_session_settings(
+        self, address: SessionAddress, agent: RuntimeAgent
+    ) -> AgentOverrides:
+        """Fill uncaptured Model settings once, preserving concurrent explicit choices."""
+        if self._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+
+        def capture(metadata: Any) -> None:
+            stored = metadata.get(AGENT_OVERRIDES_META_KEY) or {}
+            settings = AgentOverrides.from_stored(stored).capture(agent)
+            metadata[AGENT_OVERRIDES_META_KEY] = {**stored, **settings.as_dict()}
+
+        _, updated = self._sessions.ensure_metadata(address, capture)
+        return AgentOverrides.from_stored(updated.get(AGENT_OVERRIDES_META_KEY))
+
+    def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
+        """Keep existing Sessions' choices before changing their Agent's start values.
+
+        Older Sessions can still inherit either value. Materialize those values
+        under the caller's configuration mutation guard before the default moves.
+        This does not validate availability: replacing a broken Model must work.
+        """
+        if self._sessions is None:
+            return
+        agent = self.resolve_agent(project_id, agent_id, require_model=False)
+        for address in self._sessions.list_addresses(
+            project_id, agent_id=agent_id, exclude_owner_managed=True
+        ):
+            self.capture_session_settings(address, agent)
+
+    async def capture_session_settings_async(
+        self, address: SessionAddress, agent: RuntimeAgent
+    ) -> AgentOverrides:
+        if self._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+        result: AgentOverrides = await self._sessions.run_async(
+            self.capture_session_settings, address, agent
+        )
+        return result
+
+    def remember_session_settings(
+        self, address: SessionAddress, changes: Mapping[str, Any]
+    ) -> AgentOverrides:
+        """Set this Session's choices and the Agent's start values for new Sessions."""
+        if set(changes) - {"model", "thinking_effort"}:
+            raise ValueError("Only model and thinking_effort can be remembered for new Sessions")
+        requested = AgentOverrides(
+            **{key: value for key, value in changes.items() if value is not None}
+        )
+        if requested.model is not None:
+            self.require_model_configured(requested.model)
+        if "model" in changes and changes["model"] is None:
+            raise ValueError("A remembered Model must be selected explicitly")
+        if self._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+        self._sessions.get(address)
+        self.preserve_agent_sessions(address.project_id, address.agent_id)
+        agent_changes = dict(changes)
+        if agent_changes.get("thinking_effort", False) is None:
+            agent_changes["thinking_effort"] = ""
+        if address.project_id is None:
+            self._agents.update(address.agent_id, **agent_changes)
+        else:
+            for field, value in agent_changes.items():
+                self._projects.set_override(address.project_id, address.agent_id, field, value)
+        self.update_session_overrides(address, changes)
+        agent = self.resolve_agent(address.project_id, address.agent_id, require_model=False)
+        return self.capture_session_settings(address, agent)
+
     def _session_value(self, address: SessionAddress, key: str) -> Any:
         """Return one metadata value of *address*, ``None`` for a missing Session."""
         if self._sessions is None:
@@ -589,7 +676,7 @@ class AgentResolver:
         vBot added survive. Every value is validated first, a Model also for
         usability, so an invalid change writes nothing.
         """
-        unknown = sorted(set(changes) - set(AGENT_OVERRIDE_FIELDS))
+        unknown = sorted(set(changes) - {*AGENT_OVERRIDE_FIELDS, "thinking_effort_default"})
         if unknown:
             raise ValueError("unknown Agent override: " + ", ".join(unknown))
         requested = AgentOverrides(
@@ -604,11 +691,17 @@ class AgentResolver:
         def mutate(metadata: Any) -> None:
             stored = metadata.get(AGENT_OVERRIDES_META_KEY)
             merged = dict(stored) if isinstance(stored, dict) else {}
+            if requested.thinking_effort_default:
+                merged.pop("thinking_effort", None)
             for name in changes:
+                if name == "thinking_effort":
+                    merged.pop("thinking_effort_default", None)
                 if name in normalized:
                     merged[name] = normalized[name]
                 else:
                     merged.pop(name, None)
+            if requested.thinking_effort_default:
+                merged["thinking_effort_default"] = True
             if merged:
                 metadata[AGENT_OVERRIDES_META_KEY] = merged
             else:

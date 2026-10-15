@@ -557,7 +557,7 @@ class ChatLoop:
                 session_id=new_session.session_id,
                 project_id=project_id,
                 actor=new_session.actor,
-                metadata=new_session.agent_overrides.session_metadata() or None,
+                metadata=new_session.agent_overrides.capture(agent).session_metadata(),
                 working_project_id=_stored_working_project(project_id, working_project_id),
             )
         elif session is None:
@@ -567,6 +567,10 @@ class ChatLoop:
                 create_missing=create_missing,
                 project_id=project_id,
                 working_project_id=_stored_working_project(project_id, working_project_id),
+            )
+        if new_session is None:
+            await self._dependencies.sessions.run_async(
+                resolver.capture_session_settings, session.address, agent
             )
         if edit_message_id is not None:
             if internal or not isinstance(content, str):

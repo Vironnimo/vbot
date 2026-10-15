@@ -1105,6 +1105,8 @@ class ToolExecutor:
                 vbot_root=config.vbot_root,
                 data_root=config.data_root,
                 iteration_number=config.iteration_number,
+                agent_model=config.agent_model,
+                agent_thinking_effort=config.agent_thinking_effort,
                 execution_owner=config.execution_owner,
                 cwd=config.cwd,
                 project_id=config.project_id,

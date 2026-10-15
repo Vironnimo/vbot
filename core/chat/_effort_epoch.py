@@ -13,10 +13,8 @@ The note renders as an effort update at its place in the request history
 mid-conversation keeps its prompt cache; every other route sends the effort now in
 effect as the request's effort.
 
-A change between Runs takes effect at the next Run's first request. A change during
-a Run takes effect at its next request, except one that turns reasoning on or off
-(to or from ``none`` or the provider default): Models reject or ignore that inside a
-Tool loop, so it waits for the next Run.
+A saved change takes effect at the next Run's first request. A Run keeps the
+settings it started with, including for Sub-Agents it starts.
 """
 
 from __future__ import annotations

@@ -165,11 +165,17 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         ...(root === undefined ? {} : { root }),
         ...(include_files ? { include_files: true } : {}),
       }),
-    setSessionAgentOverrides: (agentId, sessionId, agentOverrides) =>
+    setSessionAgentOverrides: (
+      agentId,
+      sessionId,
+      agentOverrides,
+      options = {},
+    ) =>
       call('session.set_agent_overrides', {
         agent_id: agentId,
         session_id: sessionId,
         agent_overrides: agentOverrides,
+        ...(options.remember ? { remember: true } : {}),
       }),
     listPrompts: (params = {}) => call('prompt.list', params),
     updatePromptBlock: (params) => call('prompt.update', params),

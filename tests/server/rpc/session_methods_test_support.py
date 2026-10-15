@@ -34,7 +34,7 @@ class FakeResolver:
 
     def resolve_agent(self, project_id: str | None, agent_id: str, **options: Any) -> Any:
         self.resolved.append((project_id, agent_id))
-        return SimpleNamespace(id=agent_id)
+        return SimpleNamespace(id=agent_id, model="stub/model", thinking_effort=None)
 
     async def resolve_agent_async(
         self, project_id: str | None, agent_id: str, **options: Any
@@ -109,6 +109,7 @@ class FakeSessions:
         project_id: Any = None,
         actor: str | None = None,
         working_project_id: Any = None,
+        metadata: Any = None,
     ) -> Any:
         self.created.append(
             {

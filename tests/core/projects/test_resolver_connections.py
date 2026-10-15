@@ -135,10 +135,20 @@ def test_session_overrides_persist_in_the_session_and_never_in_the_agent(
     session = sessions.create("identity")
     other = sessions.create("identity")
     address = SessionAddress(None, "identity", session.id)
-    # A field a newer vBot stored survives every update.
+    # Unknown fields survive. An older writer may have retained the default
+    # flag while setting an explicit effort, which must take precedence.
     sessions.mutate_metadata(
-        address, lambda metadata: metadata.update(agent_overrides={"future": True})
+        address,
+        lambda metadata: metadata.update(
+            agent_overrides={
+                "future": True,
+                "thinking_effort_default": True,
+                "thinking_effort": "low",
+            }
+        ),
     )
+    assert resolver.session_overrides(address).thinking_effort == "low"
+    assert resolver.session_overrides(address).thinking_effort_default is False
 
     resolver.update_session_overrides(
         address,
@@ -173,6 +183,50 @@ def test_session_overrides_persist_in_the_session_and_never_in_the_agent(
     ):
         assert resolved_elsewhere.model == "openai/gpt-5.2"
         assert resolved_elsewhere.thinking_effort == "low"
+
+
+@pytest.mark.parametrize("project_scope", [False, True], ids=["identity", "team"])
+def test_remembered_start_values_leave_other_sessions_and_provider_default_unchanged(
+    agents: AgentStore, projects: ProjectStore, repo: Path, project_scope: bool
+) -> None:
+    if project_scope:
+        _write_agent(repo, "worker.md", model="openai/gpt-5.2", reasoning_effort="high")
+        _project(projects, repo)
+    else:
+        agents.create("worker", model="openai/gpt-5.2", thinking_effort="high")
+    project_id = "vbot" if project_scope else None
+    resolver = _resolver(agents, projects, _openai_configured())
+    sessions = agents._session_manager()
+    # A Session from before settings were captured must also keep its values.
+    older = sessions.create("worker", project_id=project_id).address
+    current = sessions.create("worker", project_id=project_id).address
+    resolver.capture_session_settings(current, resolver.resolve_agent(project_id, "worker"))
+
+    resolver.remember_session_settings(
+        current, {"model": "openai/gpt-mini", "thinking_effort": None}
+    )
+    old_agent = resolver.resolve_agent(project_id, "worker", session_id=older.session_id)
+    assert (old_agent.model, old_agent.thinking_effort) == ("openai/gpt-5.2", "high")
+    new_agent = resolver.resolve_agent(project_id, "worker")
+    assert (new_agent.model, new_agent.thinking_effort) == ("openai/gpt-mini", "")
+    later = sessions.create(
+        "worker",
+        project_id=project_id,
+        metadata=AgentOverrides().capture(new_agent).session_metadata(),
+    ).address
+    # Reading the old Session did not change start values. A later edit does not
+    # turn a captured Provider default into an inherited effort.
+    resolver.remember_session_settings(current, {"thinking_effort": "low"})
+    assert resolver.resolve_agent(project_id, "worker").thinking_effort == "low"
+    assert (
+        resolver.resolve_agent(project_id, "worker", session_id=later.session_id).thinking_effort
+        == ""
+    )
+    assert resolver.session_overrides(later).thinking_effort_default is True
+    with pytest.raises(ModelConfigurationError):
+        resolver.remember_session_settings(current, {"model": "openai/ghost"})
+    assert resolver.resolve_agent(project_id, "worker").model == "openai/gpt-mini"
+    assert resolver.session_overrides(current).model == "openai/gpt-mini"
 
 
 def test_a_librarian_session_runs_on_the_skills_of_its_bound_agent(

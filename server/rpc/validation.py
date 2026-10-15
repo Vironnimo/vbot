@@ -240,14 +240,15 @@ def _optional_agent_overrides(
     key = f"{label}.agent_overrides"
     if not isinstance(raw, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key} must be an object")
-    unknown = sorted(set(raw) - set(AGENT_OVERRIDE_FIELDS))
+    supported = (*AGENT_OVERRIDE_FIELDS, "thinking_effort_default")
+    unknown = sorted(set(raw) - set(supported))
     if unknown:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"{key} has unsupported fields: "
             + ", ".join(unknown)
             + "; supported: "
-            + ", ".join(AGENT_OVERRIDE_FIELDS),
+            + ", ".join(supported),
         )
     if not allow_clear and any(value is None for value in raw.values()):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key} values must not be null here")

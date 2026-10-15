@@ -200,6 +200,7 @@ async def test_session_create_resolves_the_address_and_publishes_a_scoped_change
         "agent_id": "builder",
         "session_id": "new-session",
         "working_project_id": project_id,
+        "agent_overrides": {"model": "stub/model", "thinking_effort_default": True},
     }
     assert resolver.resolved == [(project_id, "builder")]
     # A Team Agent's Session works in its Team's Project and stores no other.
@@ -230,7 +231,12 @@ async def test_session_create_stores_an_explicit_id_and_makes_it_current(tmp_pat
         state, "session.create", agent_id="coder", session_id="session-one", make_current=True
     )
 
-    assert result == {"agent_id": "coder", "session_id": "session-one", "working_project_id": None}
+    assert result == {
+        "agent_id": "coder",
+        "session_id": "session-one",
+        "working_project_id": None,
+        "agent_overrides": {"model": "openai/gpt-5.2", "thinking_effort_default": True},
+    }
     address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
     assert state.runtime.chat_sessions.get(address).id == "session-one"
     assert state.runtime.agents.get("coder").current_session_id == "session-one"
@@ -294,11 +300,15 @@ async def test_session_create_refuses_a_working_project_it_cannot_use(
 
 
 @pytest.mark.asyncio
-async def test_session_create_stores_its_agent_overrides(tmp_path: Path) -> None:
+@pytest.mark.parametrize("effort", [{"thinking_effort": "high"}, {"thinking_effort_default": True}])
+async def test_session_create_stores_its_agent_overrides(
+    tmp_path: Path, effort: JsonObject
+) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agent_resolver.models.unusable.add("openai/ghost")
     sessions = state.runtime.chat_sessions
-    overrides = {"model": "openai/gpt-mini", "thinking_effort": "high", "temperature": 0.4}
+    state.runtime.agents.update("coder", thinking_effort="low")
+    overrides = {"model": "openai/gpt-mini", **effort, "temperature": 0.4}
 
     refused = await rpc_error(
         state,
@@ -348,7 +358,10 @@ async def test_project_session_creation_accepts_a_usable_session_model(tmp_path:
             agent_overrides={"model": "openai/gpt-mini"},
         )
         address = SessionAddress("vbot", "builder", "s1")
-        assert result["agent_overrides"] == {"model": "openai/gpt-mini"}
+        assert result["agent_overrides"] == {
+            "model": "openai/gpt-mini",
+            "thinking_effort_default": True,
+        }
         assert (
             runtime.sessions.metadata_value(address, "agent_overrides") == result["agent_overrides"]
         )
@@ -787,6 +800,18 @@ async def test_session_agent_overrides_change_only_the_fields_named(tmp_path: Pa
     )
     [row] = (await rpc_result(state, "session.list", agent_id="coder"))["sessions"]
     assert "agent_overrides" not in row
+
+    remembered = await rpc_result(
+        state,
+        "session.set_agent_overrides",
+        **session,
+        agent_overrides={"model": "openai/gpt-mini", "thinking_effort": "low"},
+        remember=True,
+    )
+    assert remembered["agent_overrides"] == {"model": "openai/gpt-mini", "thinking_effort": "low"}
+    assert state.runtime.agents.get("coder").model == "openai/gpt-mini"
+    assert state.runtime.agents.get("coder").thinking_effort == "low"
+    assert resource_changes(state, "agents")[-1]["kind"] == "agents"
 
 
 @pytest.mark.asyncio
