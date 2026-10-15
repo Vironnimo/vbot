@@ -60,7 +60,6 @@ from core.providers.reasoning import (
     REASONING_REPLAY_NONE,
     REASONING_REPLAY_TOOL_TURNS,
     ReasoningReplayPolicy,
-    split_inline_reasoning,
 )
 from core.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
@@ -1198,9 +1197,7 @@ def _assistant_message_from_response(
     tool_calls = _parse_response_tool_calls(response.get("tool_calls"))
     reasoning = _nullable_response_string(response, "reasoning")
     reasoning_meta = _response_reasoning_meta(response)
-    content, reasoning = split_inline_reasoning(
-        _nullable_response_string(response, "content"), reasoning
-    )
+    content = _nullable_response_string(response, "content")
     return ChatMessage.assistant(
         model=model,
         content=_sanitize_unpaired_surrogates(content) if content else content,

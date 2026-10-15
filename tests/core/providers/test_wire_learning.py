@@ -470,6 +470,12 @@ _OFF_RUNG_CHAT = replace(
             id="tag-literal-in-answer",
         ),
         pytest.param(
+            "none",
+            {"choices": [{"delta": {"content": "The delimiter is `</think>`."}}]},
+            False,
+            id="closing-tag-in-code-example",
+        ),
+        pytest.param(
             "none", {"choices": [{"delta": {"content": "Plain."}}]}, False, id="no-reasoning"
         ),
         pytest.param(

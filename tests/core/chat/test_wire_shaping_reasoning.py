@@ -23,7 +23,6 @@ from core.providers.reasoning import (
 from tests.core.chat.messages_test_support import FIXED_TIMESTAMP, FIXED_TIMING
 
 _SIGNED_META = {"content_blocks": [{"type": "thinking", "signature": "signed"}]}
-_ECHOED_HISTORY = "<reasoning_history>\nLet me look.\n</reasoning_history>\n"
 
 
 def _reasoning_answer(model: str, content: str | None, **fields: Any) -> ChatMessage:
@@ -371,69 +370,31 @@ def test_rebuilt_requests_restore_reasoning_only_for_live_in_run_turns() -> None
 @pytest.mark.parametrize(
     ("response", "content", "reasoning"),
     [
-        (
-            {"content": "<think>weigh options</think>The answer is 4."},
-            "The answer is 4.",
-            "weigh options",
-        ),
-        (
-            {"content": "<think>inline</think>Answer", "reasoning": "field reasoning"},
-            "Answer",
-            "field reasoning\ninline",
-        ),
-        ({"content": "<thinking>partial trace"}, None, "partial trace"),
-        ({"content": "<think>only thoughts</think>"}, None, "only thoughts"),
-        (
-            {"content": "Opened by the template.</think>[title=Greeting]"},
-            "[title=Greeting]",
-            "Opened by the template.",
-        ),
-        (
-            {"content": "<think>early</think>Text and </think> later.", "reasoning": "f"},
-            "Text and </think> later.",
-            "f\nearly",
-        ),
-        (
-            {"content": "Wrap your answer in <think>tags</think> like this."},
-            "Wrap your answer in <think>tags</think> like this.",
-            None,
-        ),
-        ({"content": "<think></think>Answer"}, "<think></think>Answer", None),
-        (
-            {"content": f"{_ECHOED_HISTORY}Lass mich schauen.", "reasoning": "Let me look."},
-            "Lass mich schauen.",
-            "Let me look.",
-        ),
-        ({"content": f"{_ECHOED_HISTORY}<think>real</think>Answer"}, "Answer", "real"),
-        ({"content": f"<think>real</think>{_ECHOED_HISTORY}Answer"}, "Answer", "real"),
-        (
-            {"content": "Do not wrap answers in <reasoning_history>tags</reasoning_history>."},
-            "Do not wrap answers in <reasoning_history>tags</reasoning_history>.",
-            None,
-        ),
         ({"content": "bad \ud800 pair"}, "bad \ufffd pair", None),
         ({"reasoning": "trace \udfff end", "content": "ok"}, "ok", "trace \ufffd end"),
         ({"content": "héllo wörld 🎉", "reasoning": "cléan"}, "héllo wörld 🎉", "cléan"),
+        (
+            {"content": "Answer </think> literally", "reasoning": "Plan"},
+            "Answer </think> literally",
+            "Plan",
+        ),
+        ({"content": "<think>An example</think>"}, "<think>An example</think>", None),
+        (
+            {"content": "<reasoning_history>literal</reasoning_history>"},
+            "<reasoning_history>literal</reasoning_history>",
+            None,
+        ),
     ],
     ids=[
-        "leading-think",
-        "appends-to-field-reasoning",
-        "unclosed-leading-block",
-        "thinking-only",
-        "closing-tag-without-opening",
-        "closing-tag-after-leading-block",
-        "tag-inside-answer",
-        "empty-block",
-        "echoed-history-discarded",
-        "history-before-think",
-        "think-before-history",
-        "history-inside-answer",
-        "surrogate-in-content",
-        "surrogate-in-reasoning",
-        "clean-unicode",
+        "content-surrogate",
+        "reasoning-surrogate",
+        "unicode",
+        "closing-tag",
+        "leading-tag",
+        "history-tag",
     ],
 )
-def test_response_ingestion_separates_leading_reasoning_and_replaces_surrogates(
+def test_response_ingestion_preserves_finalized_boundaries_and_replaces_surrogates(
     response: dict[str, Any], content: str | None, reasoning: str | None
 ) -> None:
     message = _assistant_message_from_response("ollama-cloud/qwen", response)

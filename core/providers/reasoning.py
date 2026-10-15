@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -732,79 +733,137 @@ _DISCARD_LEADING_TAG_NAMES = ("reasoning_history",)
 def split_inline_reasoning(
     content: str | None, reasoning: str | None
 ) -> tuple[str | None, str | None]:
-    """Move inline reasoning markup out of a Model's answer content.
+    """Separate inline thinking only when the Provider supplied no reasoning.
 
-    Every finished Model response passes through here (``core/chat/streaming.py``),
-    so Chat, Compaction and every other kernel request see the same answer, and
-    the wire learning detects inline reasoning with the same rule. Two shapes are reasoning:
+    Model-response finalization owns this fallback; Message construction must
+    not parse its result again. Native reasoning is authoritative. Without it,
+    consume leading thinking blocks (including truncated ones), or a template's
+    omitted opener up to its first unpaired closing tag. Never scan the answer
+    after consuming a leading thinking block for another orphan closing tag.
 
-    - Leading ``<think>`` / ``<thinking>`` / ``<reasoning>`` blocks. An
-      unclosed leading block is reasoning up to the truncation point.
-    - Text before a closing tag that has no opening tag in front of it: chat
-      templates that open the thinking block in the prompt leave only
-      ``...</think>answer`` in the content.
-
-    Literal tag text inside a normal answer survives, since its opening tag
-    precedes the closing one. Request-only ``<reasoning_history>`` wrappers are
-    discarded (adapters inject those on replay, and Models sometimes echo
-    them). Extracted reasoning is appended to *reasoning*. Returns
-    ``(content, reasoning)``; an empty block with no history markup changes
-    nothing.
+    Code examples, escaped tags and individually quoted tags are literal. An
+    unfinished code span/fence protects its remaining text too. Leading replay
+    ``reasoning_history`` wrappers are discarded, also with native reasoning.
     """
 
-    if not content:
+    if not content or "<" not in content:
         return (content, reasoning)
-    remaining = content
+    if reasoning and not content.lstrip().startswith("<reasoning_history>"):
+        return (content, reasoning)
+    tags = _inline_reasoning_tags(content)
+    cursor = 0
+    index = 0
     thinking_parts: list[str] = []
     discarded_history = False
-    orphan = _orphan_closing_thinking_tag(remaining)
-    if orphan is not None:
-        orphan_index, orphan_tag = orphan
-        thinking_parts.append(remaining[:orphan_index])
-        remaining = remaining[orphan_index + len(orphan_tag) + 3 :]
-    while True:
-        stripped = remaining.lstrip()
-        tag = next(
-            (
-                name
-                for name in (*_DISCARD_LEADING_TAG_NAMES, *INLINE_THINKING_TAG_NAMES)
-                if stripped.startswith(f"<{name}>")
-            ),
-            None,
-        )
-        if tag is None:
+    consumed_thinking = False
+    while index < len(tags):
+        opening = tags[index]
+        name = opening["name"]
+        is_history = name in _DISCARD_LEADING_TAG_NAMES
+        if (
+            content[cursor : opening.start()].strip()
+            or opening["closing"]
+            or (reasoning and not is_history)
+        ):
             break
-        is_history_markup = tag in _DISCARD_LEADING_TAG_NAMES
-        inner_start = len(remaining) - len(stripped) + len(tag) + 2
-        close_index = remaining.find(f"</{tag}>", inner_start)
-        if close_index == -1:
-            if is_history_markup:
-                discarded_history = True
-            else:
-                thinking_parts.append(remaining[inner_start:])
-            remaining = ""
-            break
-        if is_history_markup:
+        index += 1
+        while index < len(tags) and not (tags[index]["closing"] and tags[index]["name"] == name):
+            index += 1
+        closing = tags[index] if index < len(tags) else None
+        end = closing.start() if closing is not None else len(content)
+        if is_history:
             discarded_history = True
         else:
-            thinking_parts.append(remaining[inner_start:close_index])
-        remaining = remaining[close_index + len(tag) + 3 :]
+            consumed_thinking = True
+            thinking_parts.append(content[opening.end() : end])
+        cursor = closing.end() if closing is not None else len(content)
+        index += 1
+
+    orphan = False
+    if not reasoning and not consumed_thinking:
+        opened: set[str] = set()
+        for tag in tags[index:]:
+            name = tag["name"]
+            if name not in INLINE_THINKING_TAG_NAMES:
+                continue
+            if not tag["closing"]:
+                opened.add(name)
+            elif name not in opened:
+                thinking_parts.append(content[cursor : tag.start()])
+                cursor = tag.end()
+                orphan = True
+                break
+
     thinking = "\n".join(part for part in thinking_parts if part.strip())
     if not thinking.strip():
-        if not discarded_history and orphan is None:
+        if not discarded_history and not orphan:
             return (content, reasoning)
-        return (remaining.strip() or None, reasoning)
-    merged = f"{reasoning}\n{thinking}" if reasoning else thinking
-    return (remaining.strip() or None, merged)
+        return (content[cursor:].strip() or None, reasoning)
+    return (content[cursor:].strip() or None, thinking)
 
 
-def _orphan_closing_thinking_tag(content: str) -> tuple[int, str] | None:
-    """Return the first closing thinking tag no opening tag precedes, if any."""
-    first: tuple[int, str] | None = None
-    for name in INLINE_THINKING_TAG_NAMES:
-        close_index = content.find(f"</{name}>")
-        if close_index == -1 or f"<{name}>" in content[:close_index]:
+_CODE_FENCE = re.compile(
+    r"^(?P<quote>(?: {0,3}>[ \t]?)*)(?P<indent> *)"
+    r"(?P<list>(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?"
+    r"(?P<marker>`{3,}|~{3,})(?P<info>[^\r\n]*)"
+)
+_INDENTED_CODE = re.compile(r"^(?: {0,3}>[ \t]?)*(?: {4}|\t)")
+_INLINE_REASONING_TOKEN = re.compile(
+    r"(?P<ticks>`+)|<(?P<closing>/)?"
+    r"(?P<name>think|thinking|reasoning|reasoning_history)>"
+)
+_TAG_QUOTES = {'"': '"', "'": "'", "“": "”", "‘": "’", "«": "»"}
+
+
+def _inline_reasoning_tags(content: str) -> list[re.Match[str]]:
+    """Find delimiter candidates outside code, retaining original offsets."""
+    tags: list[re.Match[str]] = []
+    # Marker, blockquote depth and closing indentation relative to a list item.
+    fence: tuple[str, int, int] | None = None
+    ticks: str | None = None
+    offset = 0
+    for line in content.splitlines(keepends=True):
+        start, offset = offset, offset + len(line)
+        marker = _CODE_FENCE.match(line)
+        if ticks is None and marker is not None:
+            run, info = marker["marker"], marker["info"]
+            depth = marker["quote"].count(">")
+            indent = len(marker["indent"])
+            if fence is not None:
+                opening, quote_depth, max_indent = fence
+                if (
+                    depth == quote_depth
+                    and indent <= max_indent
+                    and not marker["list"]
+                    and run[0] == opening[0]
+                    and len(run) >= len(opening)
+                    and not info.strip()
+                ):
+                    fence = None
+                continue
+            if indent <= 3 and (run[0] != "`" or "`" not in info):
+                fence = (run, depth, 3 + len(marker["list"] or ""))
+                continue
+        if fence is not None or (ticks is None and _INDENTED_CODE.match(line)):
             continue
-        if first is None or close_index < first[0]:
-            first = (close_index, name)
-    return first
+        for token in _INLINE_REASONING_TOKEN.finditer(content, start, offset):
+            run = token["ticks"]
+            if ticks is not None:
+                if run == ticks:
+                    ticks = None
+                continue
+            # An odd backslash run escapes a delimiter or a code-span opener.
+            before = token.start()
+            while before > 0 and content[before - 1] == "\\":
+                before -= 1
+            if (token.start() - before) % 2:
+                continue
+            if run is not None:
+                ticks = run
+                continue
+            if token.start() > 0 and token.end() < len(content):
+                quote = _TAG_QUOTES.get(content[token.start() - 1])
+                if quote is not None and content[token.end()] == quote:
+                    continue
+            tags.append(token)
+    return tags

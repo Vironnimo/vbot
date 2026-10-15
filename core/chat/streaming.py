@@ -750,6 +750,21 @@ class StreamingAccumulator:
         self._finish_reason = terminal_outcome_from_response({"terminal_outcome": reason})
 
 
+def finalize_model_response(response: JsonObject) -> JsonObject:
+    """Finalize a completed Adapter response, like the streaming accumulator.
+
+    Both completed-send fallbacks use this boundary before creating Messages
+    or handing the response to another Model-task consumer. Do not mutate the
+    Adapter's response, or parse the resulting text again during ingestion.
+    """
+    result = dict(response)
+    content = result.get("content")
+    reasoning = result.get("reasoning")
+    if isinstance(content, str) and (reasoning is None or isinstance(reasoning, str)):
+        result["content"], result["reasoning"] = split_inline_reasoning(content, reasoning)
+    return result
+
+
 async def stream_model_response(
     adapter: Any,
     messages: list[JsonObject],
@@ -810,13 +825,9 @@ async def stream_model_response(
         if accumulator.partial_reasoning is not None:
             raise
         response = await adapter.send(messages, model_id=model_id, **request_options)
-        normalized: JsonObject = adapter.normalize_response(response, model_id=model_id)
-        content = normalized.get("content")
-        reasoning = normalized.get("reasoning")
-        if isinstance(content, str) and (reasoning is None or isinstance(reasoning, str)):
-            normalized["content"], normalized["reasoning"] = split_inline_reasoning(
-                content, reasoning
-            )
+        normalized = finalize_model_response(
+            adapter.normalize_response(response, model_id=model_id)
+        )
         if on_tool_calls is not None and normalized.get("tool_calls"):
             on_tool_calls(list(normalized["tool_calls"]))
         return normalized

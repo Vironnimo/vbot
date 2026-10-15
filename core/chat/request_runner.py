@@ -41,6 +41,7 @@ from core.chat.streaming import (
     StreamingVisibleDelta,
     StreamRecoveryAction,
     decide_stream_recovery,
+    finalize_model_response,
     iter_with_chunk_timeout,
 )
 from core.chat.wire_shaping import (
@@ -115,6 +116,7 @@ def _normalize_non_streaming_step(
     message_id: str | None = None,
 ) -> _AssistantStep:
     """Normalize one Provider response and build its canonical Assistant step."""
+    normalized = finalize_model_response(normalized)
     terminal_outcome = terminal_outcome_from_response(normalized)
     _check_empty_response(normalized, terminal_outcome)
     message = _assistant_message_from_response(
