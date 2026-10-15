@@ -17,10 +17,12 @@ from core.providers.wire_profile import MediaRules
 _HEADER_BYTES = 256 * 1024
 
 
-def prepare_message_images(
-    messages: list[dict[str, Any]], converter: ImageConverter, rules: MediaRules
-) -> list[dict[str, Any]]:
+def prepare_message_images(messages: Any, converter: ImageConverter, rules: MediaRules) -> Any:
     """Return request-only copies; callers run this in the request-body worker."""
+    # Explicit request extras own their shape. Only inspect recognizable Messages
+    # content; this preparation must not validate or rewrite arbitrary overrides.
+    if not isinstance(messages, list):
+        return messages
     dimension = rules.image_max_dimension
     if (
         rules.many_images_threshold is not None
@@ -87,7 +89,12 @@ def prepare_message_images(
                 )
         return prepared_blocks
 
-    return [{**message, "content": prepare_blocks(message.get("content"))} for message in messages]
+    return [
+        {**message, "content": prepare_blocks(message["content"])}
+        if isinstance(message, dict) and "content" in message
+        else message
+        for message in messages
+    ]
 
 
 def _image_blocks(messages: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
@@ -102,7 +109,8 @@ def _image_blocks(messages: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
                     yield from blocks_in(block.get("content"))
 
     for message in messages:
-        yield from blocks_in(message.get("content"))
+        if isinstance(message, dict):
+            yield from blocks_in(message.get("content"))
 
 
 def _dimensions(encoded: Any) -> tuple[int, int] | None:

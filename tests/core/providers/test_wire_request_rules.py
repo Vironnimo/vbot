@@ -177,15 +177,16 @@ async def _over_codex_websocket(request: Mapping[str, Any]) -> _Sent:
     ],
 )
 @pytest.mark.asyncio
+@pytest.mark.parametrize("extra_value", ["extra-body", {"custom": True}, [None, "custom", {}]])
 async def test_body_and_header_rules_reach_every_request_path(
-    capture: _Capture, built: str, replaced: str
+    capture: _Capture, built: str, replaced: str, extra_value: Any
 ) -> None:
     """``built`` is a key every request builds; ``replaced`` a built key ``extra_body`` replaces."""
 
     body, headers = await capture(
         {
             "body_defaults": {"vbot_default": {"tiers": ["flex"]}, built: "body-default"},
-            "extra_body": {"vbot_extra": {"on": True}, replaced: "extra-body"},
+            "extra_body": {"vbot_extra": {"on": True}, replaced: extra_value},
             "extra_headers": {"X-Wire-Extra": "on"},
         }
     )
@@ -193,5 +194,5 @@ async def test_body_and_header_rules_reach_every_request_path(
     assert body["vbot_default"] == {"tiers": ["flex"]}
     assert body[built] not in (None, "body-default")
     assert body["vbot_extra"] == {"on": True}
-    assert body[replaced] == "extra-body"
+    assert body[replaced] == extra_value
     assert headers["X-Wire-Extra"] == "on"
