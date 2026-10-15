@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from core.chat._boundaries import _finish_visible_boundary
 from core.chat._message_history import (
     _append_input_origin_note,
     _append_reply_surface_note,
@@ -76,6 +75,7 @@ from core.tools.scratch_areas import ScratchUnavailableError
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.chat._agentic_progression import AgenticProgression
@@ -208,7 +208,6 @@ class RunExecution:
             project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
         )
         internal = request.internal
-        _run_succeeded = True
         # The Runs domain logs the one terminal line; Chat supplies the route.
         run.model = parse_bare_model(agent.model)
         start_line_extras = ""
@@ -439,7 +438,6 @@ class RunExecution:
                             session_address.project_id,
                         )
             except ImageBudgetExceededError as exc:
-                _run_succeeded = False
                 await _persist_run_error(run, session, exc)
                 raise
 
@@ -460,17 +458,12 @@ class RunExecution:
             try:
                 return await self._progression._send_until_final(context, target)
             except (ProviderError, RunInterruptedError) as primary_exc:
-                try:
-                    (
-                        completed_assistant,
-                        chain_error,
-                    ) = await self._advance_fallback_chain(context, run, session, primary_exc)
-                except RunInterruptedError:
-                    _run_succeeded = False
-                    raise
+                (
+                    completed_assistant,
+                    chain_error,
+                ) = await self._advance_fallback_chain(context, run, session, primary_exc)
                 if completed_assistant is not None:
                     return completed_assistant
-                _run_succeeded = False
                 if not isinstance(chain_error, RunInterruptedError):
                     await _persist_run_error(run, session, chain_error)
                 if chain_error is primary_exc:
@@ -478,19 +471,12 @@ class RunExecution:
                     raise
                 raise chain_error from primary_exc
             except (ChatError, ConfigError, VBotError) as exc:
-                _run_succeeded = False
                 await _persist_run_error(run, session, exc)
                 raise
 
-            except asyncio.CancelledError:
-                raise
-            except BaseException:
-                _run_succeeded = False
-                raise
         except BaseException as exc:
             # Preparation can fail before Provider progression installs its own
             # handlers. Completion hooks and durable summaries need that failure too.
-            _run_succeeded = False
             if (
                 isinstance(exc, Exception)
                 and not isinstance(exc, RunInterruptedError)
@@ -502,16 +488,18 @@ class RunExecution:
                     _LOGGER.warning("Failed to persist error for run %s", run.id, exc_info=True)
             raise
         finally:
+            self._register_run_end(context)
+            await settle_before_cancelling(self._finish_run(context))
+
+    async def _finish_run(self, context: _RunExecutionContext) -> None:
+        run, session = context.run, context.session
+        try:
             # Detach and compute final statistics once, off the Event Loop. Run
             # cancellation must not skip worker admission or lose the result:
             # reverted edits still need their explicit zero terminal totals.
             try:
-                change_stats = await _finish_visible_boundary(
-                    _CHAT_TRANSFORM_WORKERS.run(
-                        self._dependencies.change_tracker.take_run_stats, (session_address, run.id)
-                    ),
-                    run,
-                    True,
+                change_stats = await _CHAT_TRANSFORM_WORKERS.run(
+                    self._dependencies.change_tracker.take_run_stats, (session.address, run.id)
                 )
                 if change_stats is not None:
                     run.terminal_payload_extras["change_stats"] = change_stats
@@ -521,13 +509,6 @@ class RunExecution:
                 )
             # The Run's completion deletes the stored draft; no write may follow it.
             await context.stream_draft.settle()
-            outcome: Literal["success", "error", "cancelled"]
-            if run.cancel_requested:
-                outcome = "cancelled"
-            elif _run_succeeded:
-                outcome = "success"
-            else:
-                outcome = "error"
             # Session usage totals ride every terminal event so accessors can
             # keep their session-level token/cache display current without
             # re-fetching history. Diagnostics only — never mask the outcome.
@@ -547,8 +528,16 @@ class RunExecution:
                     "Failed to aggregate Session Usage for run %s", run.id, exc_info=True
                 )
 
-            extension_registry = self._dependencies.get_extension_registry()
-            if extension_registry is not None:
+        finally:
+            await _close_adapter(context.primary_target.adapter)
+
+    def _register_run_end(self, context: _RunExecutionContext) -> None:
+        """Register both lifecycle notifications before asynchronous cleanup can suspend."""
+        run, request, session = context.run, context.request, context.session
+        extension_registry = self._dependencies.get_extension_registry()
+        if extension_registry is not None:
+
+            async def notify_extensions(status: RunStatus) -> None:
                 session.begin_defer_notes()
                 extension_ctx = HookContext(
                     session_id=run.session_id,
@@ -561,43 +550,47 @@ class RunExecution:
                         extension_ctx,
                         session_id=run.session_id,
                         agent_id=run.agent_id,
-                        outcome=outcome,
+                        outcome="success"
+                        if status == RunStatus.COMPLETED
+                        else "cancelled"
+                        if status == RunStatus.CANCELLED
+                        else "error",
                     )
                 finally:
-                    async with self._dependencies.sessions.write_lock(session_address):
+                    async with self._dependencies.sessions.write_lock(session.address):
                         await context.session_snapshot.flush_deferred_notes(session)
 
-            # A review forks only after the manager commits this Run. Forking
-            # during executor cleanup would exclude the still-running turn,
-            # including any Compaction checkpoints it just created.
-            if (
-                self._reflection_service is not None
-                and request.temporary_binding is None
-                and request.temporary_parent_binding is None
-                and run.execution_owner is None
-            ):
-                reflection_service = self._reflection_service
+            run.add_completion_finalizer(notify_extensions)
 
-                async def notify_reflection(status: RunStatus) -> None:
-                    try:
-                        reflection_service.notify_run_end(
-                            run,
-                            agent,
-                            internal=internal,
-                            outcome="success"
-                            if status == RunStatus.COMPLETED
-                            else "cancelled"
-                            if status == RunStatus.CANCELLED
-                            else "error",
-                        )
-                    except Exception:
-                        _LOGGER.warning(
-                            "Reflection run-end notification failed (run=%s)", run.id, exc_info=True
-                        )
+        # A review forks only after the manager commits this Run. Forking
+        # during executor cleanup would exclude the still-running turn,
+        # including any Compaction checkpoints it just created.
+        if (
+            self._reflection_service is not None
+            and request.temporary_binding is None
+            and request.temporary_parent_binding is None
+            and run.execution_owner is None
+        ):
+            reflection_service = self._reflection_service
 
-                run.add_completion_observer(notify_reflection)
+            async def notify_reflection(status: RunStatus) -> None:
+                try:
+                    reflection_service.notify_run_end(
+                        run,
+                        context.agent,
+                        internal=request.internal,
+                        outcome="success"
+                        if status == RunStatus.COMPLETED
+                        else "cancelled"
+                        if status == RunStatus.CANCELLED
+                        else "error",
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Reflection run-end notification failed (run=%s)", run.id, exc_info=True
+                    )
 
-            await _close_adapter(target.adapter)
+            run.add_completion_observer(notify_reflection)
 
     async def _announce_scratch(self, context: _RunExecutionContext) -> bool:
         """Tell a file-capable Run about its folder before its first Model request."""

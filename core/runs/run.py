@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Any, cast
 
 from core.event_stream import ReplayEventStream
+from core.runs._errors import detached_error
 from core.utils.errors import VBotError
 
 JsonObject = dict[str, Any]
@@ -381,6 +382,7 @@ class Run:
         self._execution_started = False
         self._completion_started = False
         self._cancel_callbacks: list[CancelCallback] = []
+        self._completion_finalizers: list[Callable[[RunStatus], Awaitable[None]]] = []
         self._completion_observers: list[Callable[[RunStatus], Awaitable[None]]] = []
         self._tool_cancel_callbacks: dict[
             str,
@@ -492,6 +494,23 @@ class Run:
         if self.status != RunStatus.RUNNING:
             return
         self._completion_observers.append(observer)
+
+    def add_completion_finalizer(self, finalizer: Callable[[RunStatus], Awaitable[None]]) -> None:
+        """Finalize execution after Stop closes, while Run history can still be written."""
+        if self.status != RunStatus.RUNNING or self._completion_started:
+            return
+        self._completion_finalizers.append(finalizer)
+
+    async def finalize_completion(self, status: RunStatus) -> list[str]:
+        """Run finalizers before the terminal commit; failures cannot strand a Run."""
+        errors = []
+        for finalizer in self._completion_finalizers:
+            try:
+                await finalizer(status)
+            except (Exception, asyncio.CancelledError) as exc:
+                errors.append(str(exc) or type(exc).__name__)
+                _LOGGER.exception("Run completion finalizer failed: %s", self.id)
+        return errors
 
     async def notify_completion(self, status: RunStatus) -> list[str]:
         errors = []
@@ -720,7 +739,7 @@ class Run:
         if self._admitted.is_set():
             return
         if self.error is not None:
-            raise self.error
+            raise detached_error(self.error)
         raise RunCancelledError(f"run ended before admission: {self.id}")
 
     def _mark_admitted(self) -> None:
@@ -732,9 +751,9 @@ class Run:
         if self.status == RunStatus.CANCELLED:
             raise RunCancelledError(f"run cancelled: {self.id}")
         if self.status == RunStatus.INTERRUPTED and self.error is not None:
-            raise self.error
+            raise detached_error(self.error)
         if self.status == RunStatus.FAILED and self.error is not None:
-            raise self.error
+            raise detached_error(self.error)
         return self.result
 
     def _settle(self) -> None:
@@ -750,6 +769,7 @@ class Run:
         sequences stay monotonic because nothing is ever renumbered.
         """
         self._cancel_callbacks.clear()
+        self._completion_finalizers.clear()
         self._completion_observers.clear()
         self._tool_background_callbacks.clear()
         self._tool_cancel_callbacks = {
@@ -789,7 +809,7 @@ class Run:
         """
         if self.status != RunStatus.RUNNING:
             return
-        self.error = error
+        self.error = detached_error(error)
         self.status = RunStatus.FAILED
         payload: JsonObject = {"status": self.status.value, "error": str(error)}
         if payload_extras:
@@ -816,7 +836,7 @@ class Run:
         if self.status != RunStatus.RUNNING:
             return
         self.result = error.result
-        self.error = error
+        self.error = detached_error(error)
         self.status = RunStatus.INTERRUPTED
         payload: JsonObject = {"status": self.status.value, "cause": error.cause}
         if payload_extras:

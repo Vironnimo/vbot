@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from core.providers.errors import ProviderOutcomeUnknownError
 from core.runs import (
     ChatRunManager,
     Run,
@@ -214,6 +215,78 @@ class _Resource:
         return None
 
 
+class _KeywordOSError(OSError):
+    __slots__ = ("detail",)
+
+    def __init__(self, message: str, *, detail: object) -> None:
+        super().__init__(13, message, "fixture")
+        self.detail = detail
+
+
+@pytest.mark.parametrize(
+    "kind", ["provider", "os", "keyword-os", "unicode", "name", "group", "interrupted"]
+)
+async def test_retained_errors_preserve_semantics_without_execution_or_waiter_frames(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Logging's separate contract test captures the original traceback. Pytest's
+    # retained LogRecords would themselves keep these execution frames alive.
+    monkeypatch.setattr("core.runs.run._LOGGER.error", lambda *args, **kwargs: None)
+    handles: list[weakref.ref[_Resource]] = []
+
+    def failure() -> Exception:
+        if kind == "provider":
+            return ProviderOutcomeUnknownError("unavailable", operation_key="fixture")
+        if kind == "os":
+            return OSError(13, "denied", "fixture")
+        if kind == "keyword-os":
+            return _KeywordOSError("denied", detail=None)
+        if kind == "unicode":
+            return UnicodeDecodeError("utf8", b"x", 0, 1, "invalid fixture")
+        if kind == "name":
+            return NameError("missing", name="fixture_id")
+        if kind == "group":
+            return ExceptionGroup("fixture", [ValueError("nested")])
+        return RunInterruptedError("network", result={"content": "partial"})
+
+    async def execute(_run: Run) -> None:
+        resource = _Resource()
+        handles.append(weakref.ref(resource))
+        try:
+            raise ValueError("cause")
+        except ValueError as cause:
+            error = failure()
+            error.add_note("fixture note")
+            # Cause/context graphs can contain cycles, including through a group.
+            cause.__cause__ = error
+            raise error from cause
+
+    manager = ChatRunManager()
+    run = await manager.start(SESSION, execute)
+    expected = failure()
+    for _ in range(2):
+        with pytest.raises(type(expected)) as caught:
+            await run.wait()
+        assert type(caught.value) is type(expected)
+        assert str(caught.value) == str(expected)
+        assert caught.value.__dict__ == {**expected.__dict__, "__notes__": ["fixture note"]}
+        for field in ("filename", "name", "detail", "encoding", "object", "start", "end"):
+            if hasattr(expected, field):
+                assert getattr(caught.value, field) == getattr(expected, field)
+        assert caught.value is not run.error
+        assert run.error is not None and run.error.__traceback__ is None
+        cause = run.error.__cause__
+        assert cause is not None and cause.__traceback__ is None
+        assert cause.__cause__ is run.error
+        assert run.error.__context__ is cause
+        if isinstance(run.error, BaseExceptionGroup):
+            assert run.error.exceptions[0].__traceback__ is None
+        del caught
+    gc.collect()
+    assert handles[0]() is None
+    await manager.aclose()
+
+
 def _register_resource(run: Run) -> weakref.ref[_Resource]:
     """Hand one resource to every Run callback registry; return only a weak handle."""
     resource = _Resource()
@@ -222,6 +295,7 @@ def _register_resource(run: Run) -> weakref.ref[_Resource]:
         resource.close()
 
     run.add_cancel_callback(resource.close)
+    run.add_completion_finalizer(observe)
     run.add_completion_observer(observe)
     run.begin_tool_call("call-active")
     run.register_tool_cancel("call-active", resource.close)

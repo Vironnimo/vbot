@@ -13,6 +13,7 @@ import pytest
 import core.tools.change_tracker as change_tracker_module
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.streaming import StreamingChunkTimeoutError
+from core.extensions import ExtensionRegistry
 from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.runs import (
     PROVIDER_REQUEST_STATUS_EVENT,
@@ -145,14 +146,33 @@ async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["user", "internal"])
-@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("cancel_at", [None, "adapter", "hook"])
 async def test_run_end_notifies_the_reflection_service(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str, cancel: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str, cancel_at: str | None
 ) -> None:
     runtime = _runtime(tmp_path, [_answer("Hello")])
     session = runtime.chat_sessions.get(SESSION)
     closing, release = asyncio.Event(), asyncio.Event()
+    hook_entered, hook_release = asyncio.Event(), asyncio.Event()
+    cancel = cancel_at == "adapter"
     forks: list[asyncio.Task[Any]] = []
+    extension_outcomes: list[str] = []
+
+    async def first_hook(ctx: Any, *, outcome: str, **_kwargs: Any) -> None:
+        extension_outcomes.append(outcome)
+        ctx.add_note("first hook")
+        if cancel_at == "hook":
+            hook_entered.set()
+            await hook_release.wait()
+
+    async def second_hook(ctx: Any, *, outcome: str, **_kwargs: Any) -> None:
+        extension_outcomes.append(outcome)
+        ctx.add_note("second hook")
+
+    extensions = ExtensionRegistry()
+    extensions.install_handler("first", "run_end", first_hook)
+    extensions.install_handler("second", "run_end", second_hook)
+    runtime.extensions = extensions
 
     async def close_adapter() -> None:
         closing.set()
@@ -188,14 +208,21 @@ async def test_run_end_notifies_the_reflection_service(
         session.for_run(run.id).append(checkpoint)
         if cancel:
             run.request_cancel("user")
-            release.set()
+        release.set()
+        if cancel_at == "hook":
+            await hook_entered.wait()
+            # The outcome already froze; this cannot interrupt either hook or
+            # turn their successful Run into a cancellation afterwards.
+            run.request_cancel("user")
+            hook_release.set()
+        if cancel:
             with pytest.raises(RunCancelledError):
                 await run.wait()
         else:
-            release.set()
             await run.wait()
     finally:
         release.set()
+        hook_release.set()
 
     # The loop reports the internal flag verbatim; the service is the one that gates it.
     assert len(reflection.calls) == 1
@@ -208,6 +235,11 @@ async def test_run_end_notifies_the_reflection_service(
     assert call["iteration_count"] == 1
     assert call["internal"] is (origin == "internal")
     assert call["outcome"] == ("cancelled" if cancel else "success")
+    assert extension_outcomes == [call["outcome"], call["outcome"]]
+    assert [message.content for message in session.load()[-3:-1]] == [
+        "first hook",
+        "second hook",
+    ]
     fork = await forks[0]
     assert fork.load_active() == session.load_active()
     assert checkpoint.id in {message.id for message in fork.load_active()}
