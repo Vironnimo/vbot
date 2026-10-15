@@ -5,12 +5,17 @@ from __future__ import annotations
 import re
 import runpy
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from core.database import marker as marker_module
+from core.database import read_marker
 from core.json_documents import render_json_document
 from core.settings import SETTINGS_FORMAT_VERSION, validate_settings_file
+from core.storage import layout as layout_module
 from core.storage.layout import (
     DATA_DIRECTORY_RELATIVE_PATHS,
     INITIAL_SETTINGS_DOCUMENT,
@@ -137,20 +142,84 @@ def _race_mkdir(
     monkeypatch.setattr(Path, "mkdir", racing_mkdir)
 
 
+def _race_root_publication(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    original = layout_module._publish_root
+
+    def publish(staging: Path, target: Path) -> None:
+        assert target == root
+        root.mkdir()
+        original(staging, target)
+
+    monkeypatch.setattr(layout_module, "_publish_root", publish)
+
+
 def test_initialize_losing_root_creation_race_never_writes_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = tmp_path / "data"
-    _race_mkdir(monkeypatch, data_dir)
+    _race_root_publication(monkeypatch, data_dir)
 
     result = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
 
-    # The concurrent creator owns the root and publishes its marker; the loser
-    # treats the root as existing and never manufactures authorization.
+    # An unrelated creator's empty directory stays unmarked, including on Linux
+    # where an ordinary rename could replace it with the staged directory.
     assert not (data_dir / "data-store.json").exists()
     assert data_dir / "data-store.json" not in result.created_files
     assert data_dir not in result.created_directories
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
+    assert list(tmp_path.iterdir()) == [data_dir]
+
+
+def test_concurrent_initializers_never_observe_an_unmarked_new_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    writing, release = threading.Event(), threading.Event()
+    original = marker_module.write_bootstrap_marker
+
+    def pause_first_writer(root: Path) -> marker_module.DataStoreMarker:
+        if not writing.is_set():
+            writing.set()
+            assert release.wait(5), "concurrent initializer did not finish"
+        return original(root)
+
+    monkeypatch.setattr(marker_module, "write_bootstrap_marker", pause_first_writer)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        first = workers.submit(initialize_data_directory, data_dir)
+        try:
+            assert writing.wait(5), "initializer did not reach its marker write"
+            assert not data_dir.exists()
+            second = initialize_data_directory(data_dir)
+            assert read_marker(data_dir) is not None
+        finally:
+            release.set()
+        first_result = first.result(timeout=5)
+
+    assert data_dir in second.created_directories
+    assert data_dir / "data-store.json" in second.created_files
+    assert data_dir not in first_result.created_directories
+    assert data_dir / "data-store.json" not in first_result.created_files
+    assert list(tmp_path.iterdir()) == [data_dir]
+
+
+def test_failed_marker_write_leaves_the_new_data_path_available_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    original = marker_module.write_bootstrap_marker
+
+    def failed_write(root: Path) -> marker_module.DataStoreMarker:
+        (root / "data-store.json").write_text("{", encoding="utf-8")
+        raise OSError("interrupted marker write")
+
+    monkeypatch.setattr(marker_module, "write_bootstrap_marker", failed_write)
+    with pytest.raises(OSError):
+        initialize_data_directory(data_dir)
+    assert list(tmp_path.iterdir()) == []
+
+    monkeypatch.setattr(marker_module, "write_bootstrap_marker", original)
+    initialize_data_directory(data_dir)
+    assert read_marker(data_dir) is not None
 
 
 @pytest.mark.parametrize("concurrent", [False, True])
@@ -159,7 +228,7 @@ def test_initialize_require_new_leaves_existing_root_untouched(
 ) -> None:
     data_dir = tmp_path / "data"
     if concurrent:
-        _race_mkdir(monkeypatch, data_dir)
+        _race_root_publication(monkeypatch, data_dir)
     else:
         data_dir.mkdir()
 

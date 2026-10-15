@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 _LOGGER = logging.getLogger("vbot.storage")
 
@@ -265,6 +268,64 @@ def _create_directory(path: Path) -> bool:
     return True
 
 
+def _publish_root(staging: Path, root: Path) -> None:
+    """Publish the marked root atomically, never replacing an existing entry."""
+    if sys.platform == "win32":
+        # Windows rename refuses even an empty existing directory.
+        staging.rename(root)
+        return
+    if sys.platform != "linux":
+        raise OSError(errno.ENOTSUP, "Atomic data-directory creation is unsupported", str(root))
+
+    import ctypes
+
+    # POSIX rename replaces an empty directory. Linux's no-replace form is
+    # essential here: an existing unmarked root must never be adopted.
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        rename = libc.renameat2
+    except AttributeError as exc:
+        raise OSError(errno.ENOTSUP, "Atomic data-directory creation is unsupported") from exc
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(staging), -100, os.fsencode(root), 1) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), str(root))
+    # The marker writer syncs the staged directory; persist its publication too.
+    descriptor = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _create_marked_root(root: Path) -> bool:
+    """A new root becomes visible only once its authorization marker is complete."""
+    try:
+        root.stat()
+    except FileNotFoundError:
+        pass
+    else:
+        return False
+
+    root.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=f".{root.name}.initializing-", dir=root.parent) as temporary:
+        staging = Path(temporary)
+        # Import at call time: storage is at the bottom of the import graph.
+        # The fallback also supports executing layout.py as a standalone script.
+        try:
+            from core.database.marker import write_bootstrap_marker
+        except ImportError:
+            _write_bootstrap_marker_fallback(staging)
+        else:
+            write_bootstrap_marker(staging)
+        try:
+            _publish_root(staging, root)
+        except FileExistsError:
+            return False
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class DataDirectoryInitializationResult:
     """Paths created by one non-destructive initialization call."""
@@ -292,24 +353,8 @@ def initialize_data_directory(
 
     created_directories: list[Path] = []
     created_files: list[Path] = []
-    if _create_directory(layout.root):
+    if _create_marked_root(layout.root):
         created_directories.append(layout.root)
-        # Only the initializer whose mkdir created the root publishes the
-        # bootstrap marker - immediately, so a crash before the remaining
-        # directories are created does not leave an existing root without
-        # authorization. An existing root, including one another process
-        # created concurrently, never manufactures authorization here.
-        # Import at call time: storage is at the bottom of the import graph
-        # (models.database imports this module), so no database-kernel import
-        # may run at module level here. The fallback handles ``python
-        # core/storage/layout.py`` invocations where ``core`` is not on
-        # ``sys.path``.
-        try:
-            from core.database.marker import write_bootstrap_marker
-        except ImportError:
-            _write_bootstrap_marker_fallback(layout.root)
-        else:
-            write_bootstrap_marker(layout.root)
         created_files.append(layout.data_store_marker_path)
     elif require_new:
         raise FileExistsError(f"Data-directory path already exists: {layout.root}")
