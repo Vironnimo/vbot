@@ -8,6 +8,9 @@ call (send or stream) carries it.
 
 from __future__ import annotations
 
+import base64
+import copy
+import io
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
@@ -15,8 +18,10 @@ from typing import Any
 
 import pytest
 import respx
+from PIL import Image
 
 from core.providers._wire_profile_files import parse_wire_profile_file
+from core.providers.wire_profile import thaw_json
 
 from . import anthropic_test_support as anthropic
 from . import ollama_test_support as ollama
@@ -195,3 +200,50 @@ async def test_body_and_header_rules_reach_every_request_path(
     assert body["vbot_extra"] == {"on": True}
     assert body[replaced] == "extra-body"
     assert headers["X-Wire-Extra"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_messages_image_preparation_preserves_opaque_overrides() -> None:
+    """Prepare recognized images after overrides without interpreting opaque entries."""
+    output = io.BytesIO()
+    Image.new("RGB", (8001, 1), "red").save(output, format="PNG")
+    image = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": base64.b64encode(output.getvalue()).decode("ascii"),
+        },
+    }
+    opaque = [None, "extension", {"extension": True}, {"type": "tool_result"}]
+    messages = [
+        *opaque,
+        {"role": "user", "content": [*opaque, image]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "image", "content": [*opaque, image]}
+            ],
+        },
+    ]
+    original = copy.deepcopy(messages)
+    adapter = anthropic.make_adapter()
+    _bind_request_rules(adapter, anthropic.MODEL_ID, {"extra_body": {"messages": messages}})
+
+    request = await anthropic.send_request(adapter, _MESSAGES)
+    sent = json.loads(request.content)["messages"]
+
+    assert sent[: len(opaque)] == opaque
+    for blocks in (sent[-2]["content"], sent[-1]["content"][0]["content"]):
+        assert blocks[: len(opaque)] == opaque
+        source = next(
+            block["source"]
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") == "image"
+        )
+        with Image.open(io.BytesIO(base64.b64decode(source["data"]))) as resized:
+            assert resized.size == (8000, 1)
+    assert messages == original
+    assert thaw_json(adapter.wire_profile(anthropic.MODEL_ID).request.extra_body) == {
+        "messages": original
+    }

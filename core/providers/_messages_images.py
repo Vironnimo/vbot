@@ -17,10 +17,12 @@ from core.providers.wire_profile import MediaRules
 _HEADER_BYTES = 256 * 1024
 
 
-def prepare_message_images(
-    messages: list[dict[str, Any]], converter: ImageConverter, rules: MediaRules
-) -> list[dict[str, Any]]:
+def prepare_message_images(messages: Any, converter: ImageConverter, rules: MediaRules) -> Any:
     """Return request-only copies; callers run this in the request-body worker."""
+    # Body overrides are free-form wire values, not canonical messages. Prepare
+    # recognizable content only; leave other shapes for the Provider to handle.
+    if not isinstance(messages, list):
+        return messages
     dimension = rules.image_max_dimension
     if (
         rules.many_images_threshold is not None
@@ -43,7 +45,7 @@ def prepare_message_images(
             if not isinstance(block, dict):
                 prepared_blocks.append(block)
                 continue
-            if block.get("type") == "tool_result":
+            if block.get("type") == "tool_result" and "content" in block:
                 prepared_blocks.append({**block, "content": prepare_blocks(block.get("content"))})
                 continue
             source = block.get("source")
@@ -87,10 +89,15 @@ def prepare_message_images(
                 )
         return prepared_blocks
 
-    return [{**message, "content": prepare_blocks(message.get("content"))} for message in messages]
+    return [
+        {**message, "content": prepare_blocks(message["content"])}
+        if isinstance(message, dict) and "content" in message
+        else message
+        for message in messages
+    ]
 
 
-def _image_blocks(messages: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+def _image_blocks(messages: list[Any]) -> Iterator[dict[str, Any]]:
     def blocks_in(content: Any) -> Iterator[dict[str, Any]]:
         if not isinstance(content, list):
             return
@@ -102,7 +109,8 @@ def _image_blocks(messages: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
                     yield from blocks_in(block.get("content"))
 
     for message in messages:
-        yield from blocks_in(message.get("content"))
+        if isinstance(message, dict):
+            yield from blocks_in(message.get("content"))
 
 
 def _dimensions(encoded: Any) -> tuple[int, int] | None:
