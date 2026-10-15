@@ -11,6 +11,7 @@ from cli._parser_common import (
     SERVER_COMMANDS,
     SERVER_HELP,
     _add_command_parser,
+    _TargetArgument,
 )
 
 
@@ -35,11 +36,13 @@ def _add_desktop_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     desktop_parser.add_argument(
         "--host",
+        action=_TargetArgument,
         metavar="<host>",
         help="Server host to open; omitted auto-connects to the last-used server",
     )
     desktop_parser.add_argument(
         "--port",
+        action=_TargetArgument,
         type=int,
         metavar="<port>",
         help="Server port to open; omitted auto-connects to the last-used server",
@@ -54,6 +57,7 @@ def _add_home_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     )
     home_parser.add_argument(
         "--data-dir",
+        action=_TargetArgument,
         help="Target data directory; defaults to VBOT_DATA_DIR, worktree marker, or ~/.vbot",
     )
 
@@ -154,6 +158,7 @@ def _add_doctor_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         )
         doctor_command_parser.add_argument(
             "--data-dir",
+            action=_TargetArgument,
             help=(
                 "Target vBot data directory; defaults to VBOT_DATA_DIR, worktree marker, or ~/.vbot"
             ),

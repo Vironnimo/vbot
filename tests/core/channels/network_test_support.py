@@ -18,7 +18,6 @@ from core.channels.mattermost import MattermostChannelAdapter
 from core.channels.slack import SlackChannelAdapter
 from core.channels.whatsapp import WhatsAppChannelAdapter
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
-from core.sessions import ChatSessionManager
 
 from .engine_test_support import (
     channel_state,
@@ -26,6 +25,7 @@ from .engine_test_support import (
     drain,
     ending_engine_on_stop,
     make_channel_engine,
+    make_sessions,
     make_trigger_service,
 )
 
@@ -119,7 +119,7 @@ def make_adapter(
 
     trigger = AsyncMock(side_effect=complete)
     trigger_service = make_trigger_service(trigger)
-    engine = make_channel_engine(tmp_path, config, trigger_service, ChatSessionManager(tmp_path))
+    engine = make_channel_engine(tmp_path, config, trigger_service, make_sessions(tmp_path))
     adapter = ending_engine_on_stop(_ADAPTER_CLASSES[platform])(
         config,
         engine,

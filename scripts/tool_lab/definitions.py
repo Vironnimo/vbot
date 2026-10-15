@@ -16,8 +16,10 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from core.chat.wire_shaping import model_facing_request
 from core.projects.resolver import runtime_agent_body
 from core.runtime.runtime import Runtime
+from core.tools.model_names import model_tool_name
 from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tools
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
 from scripts.tool_lab._lab_runtime import lab_runtime
@@ -66,15 +68,16 @@ async def collect(agent_id: str, *, include_all: bool = False) -> AgentView:
         )
         offered, definitions = tool_definitions(runtime, agent_id, include_all=include_all)
         left_out = on_demand_tools(agent, offered)
+        _, projected = model_facing_request([], list(definitions.values()))
         tools = tuple(
             ToolDefinition(
-                name,
+                str(definition["name"]),
                 definition,
                 estimate_json_tokens(definition)[0],
                 name in offered,
                 name in left_out,
             )
-            for name, definition in definitions.items()
+            for name, definition in zip(definitions, projected, strict=True)
         )
         return AgentView(agent_id, estimate_tokens(text)[0], blocks, tools)
 
@@ -136,7 +139,7 @@ def show(view: AgentView, name: str) -> str:
         if block.id == name:
             return f"== block {block.id} ({block.tokens} tokens)\n{block.text}"
     for tool in view.tools:
-        if tool.name == name:
+        if tool.name == model_tool_name(name):
             sent = json.dumps(tool.definition, ensure_ascii=False, indent=2)
             return (
                 f"== Tool {tool.name} ({tool.tokens} tokens)\n{readable(tool.definition)}\n\n"

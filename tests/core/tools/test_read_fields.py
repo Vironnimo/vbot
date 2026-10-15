@@ -322,7 +322,7 @@ async def test_notes_and_one_file_lists_read_that_file(project: Path, arguments:
         ),
         (
             {"path": "src/code.py", "paths": ["src/app.txt"]},
-            "Conflicting values for path; provide one intended value.",
+            'path is "src/code.py" and paths[0] is "src/app.txt"',
         ),
         # Two different paths are a conflict, not a choice.
         (

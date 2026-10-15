@@ -416,6 +416,9 @@ async def test_a_start_date_uses_the_shortest_covering_window(tmp_path: Path, br
             "words from the path in query.",
         ),
         ({"query": "python", "domains": [{"domain": "example.com"}]}, '"domains[0]" must be'),
+        ({"query": "python", "domains": [1]}, '"domains[0]"'),
+        ({"query": "python", "domains": 1}, '"domains"'),
+        ({"query": "python", "exclude_domains": [True]}, '"exclude_domains[0]"'),
         (
             {"query": "python", "domains": [f"site{index}.example" for index in range(11)]},
             '"domains" allows at most 10 items; received 11.',

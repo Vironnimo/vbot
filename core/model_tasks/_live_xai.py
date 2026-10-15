@@ -41,6 +41,7 @@ from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import OAuthRequestRecovery
 from core.utils.ids import new_id
 from core.utils.tls import shared_ssl_context
+from core.utils.workers import cancel_and_wait
 
 REALTIME_PATH = "/realtime"
 
@@ -181,9 +182,7 @@ class XaiLiveWire:
         except ConnectionClosed:
             pass
         finally:
-            timer.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await timer
+            await cancel_and_wait(timer)
         for normalized in self._session.finish():
             yield normalized
 

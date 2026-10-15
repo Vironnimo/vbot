@@ -238,7 +238,7 @@ def _inspection(args: argparse.Namespace) -> list[str] | None:
             return ["memory", "history", agent]
         return (
             [area, "list", agent, "--scope", args.scope]
-            if area == "memory"
+            if area == "memory" and args.scope is not None
             else [area, "list", agent]
         )
     if area == "config" and getattr(args, "path", None):

@@ -26,13 +26,11 @@
     shareOf,
     tileChange,
   } from '$lib/statisticsView.js';
-  import {
-    agentName,
-    barList,
-    costValue,
-    kpiTile,
-    originName,
-  } from './ReportPrimitives.svelte';
+  import AgentName from './report/AgentName.svelte';
+  import BarList from './report/BarList.svelte';
+  import CostValue from './report/CostValue.svelte';
+  import KpiTile from './report/KpiTile.svelte';
+  import OriginName from './report/OriginName.svelte';
 
   let { section } = $props();
 
@@ -315,15 +313,15 @@
 </script>
 
 {#snippet originCell(row)}
-  {@render originName(row.origin)}
+  <OriginName origin={row.origin} />
 {/snippet}
 
 {#snippet agentCell(row)}
-  {@render agentName(row.agent_id)}
+  <AgentName agentId={row.agent_id} />
 {/snippet}
 
 {#snippet costCell(row)}
-  {@render costValue(row.cost_usd)}
+  <CostValue amount={row.cost_usd} />
 {/snippet}
 
 {#snippet changesCell(row)}
@@ -368,13 +366,13 @@
 {/snippet}
 
 {#snippet errorAgent(entry)}
-  {@render agentName(entry.key)}
+  <AgentName agentId={entry.key} />
 {/snippet}
 
 <div class="stats-panel">
   <div class="stats-tiles stats-tiles--5">
     {#each tiles as tile (tile.label)}
-      {@render kpiTile(tile)}
+      <KpiTile {tile} />
     {/each}
   </div>
   {#if !previous}
@@ -496,16 +494,16 @@
             {#if (group.entries ?? []).length === 0}
               <p class="stats-note">{t('statistics.none')}</p>
             {:else}
-              {@render barList(
-                barEntries(group.entries.slice(0, 8)),
-                group.id === 'agent'
+              <BarList
+                entries={barEntries(group.entries.slice(0, 8))}
+                label={group.id === 'agent'
                   ? errorAgent
                   : group.id === 'kind'
                     ? errorKind
-                    : errorKey,
-                null,
-                group.title,
-              )}
+                    : errorKey}
+                valueText={null}
+                ariaLabel={group.title}
+              />
             {/if}
           </div>
         {/each}

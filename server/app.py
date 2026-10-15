@@ -19,6 +19,7 @@ from core.attachments.attachments import (
 from core.extensions.extensions import ExtensionUnavailableError
 from core.extensions.oauth_redirects import CALLBACK_PATH as OAUTH_CALLBACK_PATH
 from core.model_tasks import (
+    SpeechArtifactNotFoundError,
     SpeechConfigurationError,
     SpeechError,
     SpeechExecutionError,
@@ -1116,6 +1117,8 @@ def _stream_synthesis(speech_service: Any, text: str) -> AsyncGenerator[str]:
 
 
 def _speech_http_exception(error: SpeechError) -> HTTPException:
+    if isinstance(error, SpeechArtifactNotFoundError):
+        return HTTPException(status_code=404, detail=str(error))
     if isinstance(error, SpeechBusyError):
         return HTTPException(status_code=429, detail=str(error))
     if isinstance(error, SpeechInputError):

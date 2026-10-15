@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
 
+from core.attachments.images import ImageConverter
 from core.providers._http_shared import (
     PreparedRequest,
     RequestPlan,
@@ -54,6 +55,7 @@ from core.providers._messages_constants import (
     THINKING_BLOCK_TYPE,
     TOOL_USE_BLOCK_TYPE,
 )
+from core.providers._messages_images import prepare_message_images
 from core.providers._messages_stream import (
     AnthropicMessagesStreamDecoder,
 )
@@ -177,6 +179,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         | None = None,
     ) -> None:
         self._config = config
+        self._image_converter = ImageConverter()
         self._stamp_output_limit = stamp_output_limit
         self._token_getter = (
             StaticTokenGetter(token_getter) if isinstance(token_getter, str) else token_getter
@@ -440,6 +443,9 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         )
         # Cache stable prefixes last, after every other payload mutation, so the
         # markers land on the final system/messages that go on the wire.
+        payload["messages"] = prepare_message_images(
+            payload["messages"], self._image_converter, profile.media
+        )
         if rules.prompt_cache == "anthropic_breakpoints":
             _apply_prompt_caching(payload)
         return payload

@@ -337,10 +337,15 @@ class SessionStore:
         mutation: Callable[[JsonObject], None],
         *,
         expected_generation_id: str | None = None,
+        expected_first_user_sequence: int | None = None,
     ) -> tuple[JsonObject, JsonObject]:
         return self._execute_write(
             lambda connection: _store_mutations.mutate_metadata(
-                connection, address, mutation, expected_generation_id=expected_generation_id
+                connection,
+                address,
+                mutation,
+                expected_generation_id=expected_generation_id,
+                expected_first_user_sequence=expected_first_user_sequence,
             )
         )
 
@@ -805,6 +810,11 @@ class SessionStore:
             lambda connection: _store_history.active_user_message_count(
                 connection, address, limit=limit
             )
+        )
+
+    def single_active_user_message(self, address: SessionAddress) -> tuple[int, ChatMessage] | None:
+        return self._read_decoded(
+            lambda connection: _store_history.single_active_user_message(connection, address)
         )
 
     def tool_result_persisted(self, address: SessionAddress, tool_call_id: str) -> bool:

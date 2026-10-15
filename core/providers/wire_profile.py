@@ -601,6 +601,9 @@ class MediaRules:
     image_max_bytes: int | None = None
     request_max_bytes: int | None = None
     request_max_images: int | None = None
+    image_max_dimension: int | None = None
+    many_images_threshold: int | None = None
+    many_images_max_dimension: int | None = None
 
 
 @dataclass(frozen=True)

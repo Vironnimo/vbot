@@ -44,6 +44,8 @@ from core.tools._shell_results import (
     ToolNames,
     duration,
     ended_result,
+    exit_code_hex,
+    exit_code_text,
     lost_output,
     named_tools,
     output_location,
@@ -578,6 +580,8 @@ def _command_row(report: CommandReport, subagent: str | None) -> JsonObject:
         row["status"] = "exited"
         if report.exit_code is not None:
             row["exit_code"] = report.exit_code
+            if hexadecimal := exit_code_hex(report.exit_code):
+                row["exit_code_hex"] = hexadecimal
     if report.still_running:
         # The shell exited, but processes it started run on until stopped.
         row["still_running"] = [process_text(process) for process in report.still_running]
@@ -743,7 +747,9 @@ def background_tasks_detail_blocks(
         and not isinstance(exit_code, bool)
         and exit_code != 0
     ):
-        blocks.append(display_notice("warning", f"The command exited with code {exit_code}."))
+        blocks.append(
+            display_notice("warning", f"The command exited with code {exit_code_text(exit_code)}.")
+        )
     return blocks
 
 

@@ -9,7 +9,10 @@
     "media": {
       "types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"],
       "request_max_bytes": 32000000,
-      "request_max_images": 600
+      "request_max_images": 600,
+      "image_max_dimension": 8000,
+      "many_images_threshold": 20,
+      "many_images_max_dimension": 2000
     }
   },
   "rules": [

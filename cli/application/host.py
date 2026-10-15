@@ -146,7 +146,7 @@ class ApplicationFacade:
             self._monitor_target,
             _MonitorEvents(notifier, self._activity, sink),
             local=self._install.owns_server,
-            user_agent=f"vBot-Tray/{self._version() or 'unknown'}",
+            user_agent=f"vBot-Tray/{self._version() or 'unknown'} (Windows)",
             classify=self._classify_server if self._install.owns_server else None,
         )
         self._notifier, self._monitor = notifier, monitor

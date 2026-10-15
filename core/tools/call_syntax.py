@@ -11,7 +11,6 @@ fields, aliases, and words it accepts, and payload values stay unchanged.
 from __future__ import annotations
 
 import copy
-import json
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, override
@@ -177,10 +176,8 @@ def normalize_call_arguments(
             continue
         item = repaired[field]
         if field in normalized and not same_json_value(normalized[field], item):
-            (first_key, first), second = sent[field], (key, given)
-            raise ToolContractError(
-                f"Conflicting values for {field}: {first_key} is {_shown(first)} and "
-                f"{second[0]} is {_shown(second[1])}. Send only the intended one."
+            raise ToolContractError.conflicting_values(
+                field, sent[field], (key, given), tool_name=contract.name
             )
         normalized[field] = item
         sent.setdefault(field, (key, given))
@@ -205,15 +202,6 @@ def _argument_object(value: Any) -> dict[str, Any] | None:
         except ValueError, ToolContractError:
             return None
     return value if isinstance(value, dict) else None
-
-
-def _shown(value: Any) -> str:
-    """Quote a sent value as JSON, cut short enough to tell two values apart."""
-    try:
-        text = json.dumps(value, ensure_ascii=False)
-    except TypeError, ValueError:
-        text = repr(value)
-    return text if len(text) <= 40 else text[:37] + "..."
 
 
 def _format_key(value: str) -> str:

@@ -216,12 +216,14 @@ class LoopMonitor:
 
     async def aclose(self) -> None:
         """Cancel and await the monitor task, then join the watchdog thread."""
+        from core.utils.workers import cancel_and_wait
+
         task, self._task = self._task, None
-        if task is not None and not task.done():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-        self._stop_watchdog()
+        try:
+            if task is not None:
+                await cancel_and_wait(task)
+        finally:
+            self._stop_watchdog()
 
     def _stop_watchdog(self) -> None:
         self._gc.uninstall()

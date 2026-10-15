@@ -435,8 +435,21 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     status = await harness.run_pass()
     assert (status["last_pass"]["consolidation"], len(harness.started)) == ("unchanged", 4)
 
+    # Aging only removes previously reviewed candidates; unchanged survivors
+    # need no Model pass, including at the following scheduled check.
+    harness.now += _LATER
+    for name in ("deploy-web", "deploy-docs", "deploy-team"):
+        harness.usage[("main", name)] = SkillUse(
+            last_activated=format_canonical_timestamp(harness.now), count=1
+        )
+    status = await harness.run_pass()
+    assert status["last_pass"]["archived"] == 1
+    assert (status["last_pass"]["consolidation"], len(harness.started)) == ("unchanged", 4)
+    status = await harness.run_pass()
+    assert (status["last_pass"]["consolidation"], len(harness.started)) == ("unchanged", 4)
+
     # A single candidate is never consolidated.
-    for name in ("deploy-cli", "deploy-docs", "deploy-team"):
+    for name in ("deploy-docs", "deploy-team"):
         harness.authoring.delete(root, name, writer=_HUMAN)
     status = await harness.run_pass()
     assert (status["last_pass"]["consolidation"], len(harness.started)) == ("too_few", 4)

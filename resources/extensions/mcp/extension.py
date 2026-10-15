@@ -250,18 +250,21 @@ class MCPService:
         """
         if self._closed or self.runners.get(runner.id) is not runner:
             return
-        if catalog is not None:
+        removed = runner.id not in self.connections
+        if catalog is not None and not removed:
             self.catalogs.record(runner.id, catalog_summary(catalog))
             self._connection_changed(runner.id)
         parent = f"mcp_{runner.id}"
         about = self.connections.get(runner.id, runner.config).get("description")
-        disabled = MCP_MESSAGES["disabled"].format(connection=runner.id)
+        unavailable = MCP_MESSAGES["removed" if removed else "disabled"].format(
+            connection=runner.id
+        )
         # A remote Tool is ready while its connection is up; naming one before
         # tells the Agent why it cannot run and what to do. A disconnected one
         # can run again through the connection Tool, which reconnects.
-        enabled = bool(self.connections.get(runner.id, runner.config).get("enabled"))
+        enabled = bool(self.connections.get(runner.id, {}).get("enabled"))
         follower_hint = (
-            MCP_MESSAGES["disconnected"].format(connection=runner.id) if enabled else disabled
+            MCP_MESSAGES["disconnected"].format(connection=runner.id) if enabled else unavailable
         )
         declarations = [
             {
@@ -271,7 +274,7 @@ class MCPService:
                 "parameters": self.catalogs.parameters(runner.id),
                 "handler": self._handler(runner.id),
                 "ready": lambda: bool(self.connections.get(runner.id, {}).get("enabled")),
-                "readiness_hint": disabled,
+                "readiness_hint": unavailable,
                 "parallel_safe": False,
                 "open_input_schema": True,
                 "requires_opt_in": True,
@@ -288,7 +291,7 @@ class MCPService:
                     "description": description,
                     "parameters": parameters,
                     "handler": self._handler(runner.id, tool["name"], copy.deepcopy(parameters)),
-                    "ready": lambda: runner.state == "connected",
+                    "ready": lambda: enabled and runner.state == "connected",
                     "readiness_hint": follower_hint,
                     "readiness_retryable": enabled,
                     "parallel_safe": False,
@@ -961,6 +964,11 @@ class MCPService:
                     records[identifier] = config
                 await self._store_connections(records)
             if operation == "remove":
+                # Closing can yield while the old Tools are still registered.
+                # Publish the actual refusal before any concurrent call sees them.
+                runner = self.runners.get(identifier)
+                if runner is not None:
+                    self._publish(runner, runner.catalog or None)
                 self.catalogs.forget(identifier)
                 await self._stop(identifier)
                 self._forget_sign_in(identifier)

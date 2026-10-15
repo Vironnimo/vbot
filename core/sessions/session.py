@@ -391,6 +391,10 @@ class ChatSession:
     def active_user_message_count(self, *, limit: int = 2) -> int:
         return self._store.active_user_message_count(self.address, limit=limit)
 
+    def single_active_user_message(self) -> tuple[int, ChatMessage] | None:
+        """The sole current User entry's position and content from one snapshot."""
+        return self._store.single_active_user_message(self.address)
+
     def latest_note(self, content_prefix: str) -> ChatMessage | None:
         return self._store.latest_note(self.address, content_prefix=content_prefix)
 

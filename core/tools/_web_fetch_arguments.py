@@ -151,6 +151,7 @@ def _lift_next(arguments: dict[str, Any]) -> dict[str, Any]:
     """Accept the continuation object of a result as the call's own fields."""
     keys = [key for key in arguments if spelling(key) in _NEXT_KEYS]
     lifted = {key: value for key, value in arguments.items() if key not in keys}
+    sources = {key: (key, value) for key, value in lifted.items()}
     for key in keys:
         value = arguments[key]
         if isinstance(value, str):
@@ -170,10 +171,14 @@ def _lift_next(arguments: dict[str, Any]) -> dict[str, Any]:
             )
         for inner_key, inner in value.items():
             if inner_key in lifted and lifted[inner_key] != inner:
-                raise ToolContractError(
-                    f"Conflicting values for {inner_key}; provide one intended value."
+                raise ToolContractError.conflicting_values(
+                    inner_key,
+                    sources[inner_key],
+                    (f"{key}.{inner_key}", inner),
+                    tool_name="web_fetch",
                 )
             lifted[inner_key] = inner
+            sources.setdefault(inner_key, (f"{key}.{inner_key}", inner))
     return lifted
 
 

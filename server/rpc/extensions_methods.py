@@ -15,7 +15,7 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.payloads import history_message, projected_file_urls
-from server.rpc.validation import _reject_unsupported
+from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.extensions")
@@ -241,8 +241,8 @@ def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
     """
     _reject_unsupported(params, {"name", "key", "value"}, "extensions.set_secret")
 
-    name = _required_str(params, "name")
-    key = _required_str(params, "key")
+    name = _required_string(params, "name")
+    key = _required_string(params, "key")
     value = params.get("value", "")
     if not isinstance(value, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.set_secret value must be a string")
@@ -297,19 +297,10 @@ def _resolve_secret_field(state: Any, name: str, key: str) -> SettingsFieldDecla
     return field
 
 
-def _required_str(params: JsonObject, key: str) -> str:
-    value = params.get(key)
-    if not isinstance(value, str) or not value:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST, f"extensions.set_secret requires a '{key}' string"
-        )
-    return value
-
-
 async def _extension_operation(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"name", "operation", "arguments", "page"}, "extensions.operation")
-    name = _required_str(params, "name")
-    operation = _required_str(params, "operation")
+    name = _required_string(params, "name")
+    operation = _required_string(params, "operation")
     arguments = params.get("arguments", {})
     if not isinstance(arguments, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Operation arguments must be an object")
@@ -355,9 +346,9 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
         {"name", "page", "group_id", "run_id", "after_sequence"},
         "extensions.page_run",
     )
-    name = _required_str(params, "name")
-    group_id = _required_str(params, "group_id")
-    run_id = _required_str(params, "run_id")
+    name = _required_string(params, "name")
+    group_id = _required_string(params, "group_id")
+    run_id = _required_string(params, "run_id")
     after_sequence = params.get("after_sequence", 0)
     if (
         not isinstance(after_sequence, int)
@@ -412,10 +403,10 @@ async def _extension_page_cancel_tool(state: Any, params: JsonObject) -> JsonObj
         {"name", "page", "group_id", "run_id", "tool_call_id"},
         "extensions.page_cancel_tool",
     )
-    name = _required_str(params, "name")
-    group_id = _required_str(params, "group_id")
-    run_id = _required_str(params, "run_id")
-    tool_call_id = _required_str(params, "tool_call_id")
+    name = _required_string(params, "name")
+    group_id = _required_string(params, "group_id")
+    run_id = _required_string(params, "run_id")
+    tool_call_id = _required_string(params, "tool_call_id")
     registry = state.runtime.extensions
     if registry is None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
@@ -446,9 +437,9 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
         {"name", "page", "group_id", "participant_id", "query"},
         "extensions.page_history",
     )
-    name = _required_str(params, "name")
-    group_id = _required_str(params, "group_id")
-    participant_id = _required_str(params, "participant_id")
+    name = _required_string(params, "name")
+    group_id = _required_string(params, "group_id")
+    participant_id = _required_string(params, "participant_id")
     query = params.get("query", {})
     if not isinstance(query, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.page_history query must be an object")

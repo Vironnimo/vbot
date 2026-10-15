@@ -27,15 +27,13 @@
     totalTokens,
     usageRowLabel,
   } from '$lib/statisticsView.js';
-  import {
-    agentName,
-    barList,
-    costValue,
-    kpiTile,
-    modelCell,
-    originName,
-    tokenValue,
-  } from './ReportPrimitives.svelte';
+  import AgentName from './report/AgentName.svelte';
+  import BarList from './report/BarList.svelte';
+  import CostValue from './report/CostValue.svelte';
+  import KpiTile from './report/KpiTile.svelte';
+  import ModelCell from './report/ModelCell.svelte';
+  import OriginName from './report/OriginName.svelte';
+  import TokenValue from './report/TokenValue.svelte';
 
   let {
     section,
@@ -254,20 +252,24 @@
   ]);
 </script>
 
+{#snippet modelCell(row, column)}
+  <ModelCell {row} {column} />
+{/snippet}
+
 {#snippet agentCell(row)}
-  {@render agentName(row.agent_id)}
+  <AgentName agentId={row.agent_id} />
 {/snippet}
 
 {#snippet tokensCell(row)}
-  {@render tokenValue(totalTokens(row))}
+  <TokenValue value={totalTokens(row)} />
 {/snippet}
 
 {#snippet costCell(row)}
-  {@render costValue(row.cost_usd)}
+  <CostValue amount={row.cost_usd} />
 {/snippet}
 
 {#snippet originLabelCell(entry)}
-  {@render originName(entry.origin)}
+  <OriginName origin={entry.origin} />
 {/snippet}
 
 {#snippet allLink(dimension, label)}
@@ -287,7 +289,7 @@
 <div class="stats-panel">
   <div class="stats-tiles stats-tiles--6">
     {#each tiles as tile (tile.label)}
-      {@render kpiTile(tile)}
+      <KpiTile {tile} />
     {/each}
   </div>
   {#if !previous && !previousRuns}
@@ -314,13 +316,13 @@
       {#if originEntries.length === 0}
         <EmptyState density="compact" description={t('statistics.empty')} />
       {:else}
-        {@render barList(
-          originEntries,
-          originLabelCell,
-          (entry) =>
-            `${formatCost(entry.cost_usd, locale)} · ${formatShare(entry.cost_usd, totals.cost_usd, locale)}`,
-          t('statistics.overview.costByOrigin'),
-        )}
+        <BarList
+          entries={originEntries}
+          label={originLabelCell}
+          valueText={(entry) =>
+            `${formatCost(entry.cost_usd, locale)} · ${formatShare(entry.cost_usd, totals.cost_usd, locale)}`}
+          ariaLabel={t('statistics.overview.costByOrigin')}
+        />
       {/if}
     </section>
     <section class="stats-block">

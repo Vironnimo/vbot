@@ -72,6 +72,9 @@ _EMPTY_SCOPE_TEXT = "No entries yet."
 _BULLET_PREFIX = "- "
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _MAX_ENTRY_LENGTH = 2_000
+# A hand-edited file can exceed the normal entry budgets. Bound every Memory
+# read before decoding, as other prompt files do, and never rewrite a partial read.
+_MAX_FILE_BYTES = 128 * 1024
 # Per-scope total budget over the tool-managed entries (sum of normalized entry
 # content lengths), bounding how much pinned memory is injected into every prompt.
 # Both exceed _MAX_ENTRY_LENGTH so a single normal add into an empty scope always
@@ -1063,13 +1066,21 @@ def _read_entries(path: Path) -> list[str]:
 def _read_file(path: Path) -> bytes | None:
     """Return a memory file's content, or ``None`` when it does not exist yet."""
     try:
-        return path.read_bytes()
+        with path.open("rb") as handle:
+            content = handle.read(_MAX_FILE_BYTES + 1)
     except FileNotFoundError:
         return None
     except OSError as exc:
         raise MemoryError(
             f"failed to read memory file {model_path(path)}: {_os_error_text(exc)}"
         ) from exc
+    if len(content) > _MAX_FILE_BYTES:
+        raise MemoryError(
+            f"Memory file {model_path(path)} exceeds the {_MAX_FILE_BYTES // 1024} KiB limit. "
+            "Nothing was changed. Inspect and shorten this file with file tools or a text "
+            "editor before using Memory again."
+        )
+    return content
 
 
 def _decode_entries(path: Path, content: bytes | None) -> list[str]:

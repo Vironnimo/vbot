@@ -30,7 +30,8 @@ SCENARIO_DEADLINE_SECONDS = 10
 
 
 @pytest.mark.parametrize("cancelled", [False, True])
-async def test_completion_observer_abort_cannot_strand_committed_run(cancelled):
+@pytest.mark.parametrize("stage", ["finalizer", "observer"])
+async def test_completion_observer_abort_cannot_strand_committed_run(cancelled, stage):
     class ObserverAbort(BaseException):
         pass
 
@@ -49,11 +50,17 @@ async def test_completion_observer_abort_cannot_strand_committed_run(cancelled):
     manager = ChatRunManager(persistence=Persistence())
 
     async def observer(status):
-        assert committed[-1] == (run.id, status.value)
+        if stage == "observer":
+            assert committed[-1] == (run.id, status.value)
+        else:
+            assert committed == []
         raise failure
 
     async def execute(run):
-        run.add_completion_observer(observer)
+        if stage == "observer":
+            run.add_completion_observer(observer)
+        else:
+            run.add_completion_finalizer(observer)
         return "completed output"
 
     async def successor(run):

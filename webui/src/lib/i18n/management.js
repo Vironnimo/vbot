@@ -336,7 +336,7 @@ export default Object.freeze({
   'skills.revision.external': 'Changed outside vBot',
   'skills.revision.deleted': 'Deleted',
   'skills.revision.absorbed': 'Merged into {target}',
-  'skills.followed': '{items} moved along',
+  'skills.followed': 'Planned moves: {items}. Individual moves can fail.',
   'skills.followed.shared': 'share with {name}',
   'skills.followed.bootstrap': 'bootstrap job “{name}”',
   'skills.followed.cron': 'cron job “{name}”',
@@ -1003,6 +1003,14 @@ export default Object.freeze({
     'Included when enabled and non-empty.',
   'systemPrompt.blockList.ownerHint.tool':
     'Requires the {name} Tool to be available.',
+  'systemPrompt.blockList.ownerHint.toolPrefix':
+    'Requires an available Tool whose name starts with {prefix}.',
+  'systemPrompt.blockList.ownerHint.identity':
+    'Requires an Identity Agent with a Workspace.',
+  'systemPrompt.blockList.ownerHint.subagent_session':
+    'Included in Sessions linked to a Parent Agent.',
+  'systemPrompt.blockList.ownerHint.builtin':
+    'Included for the built-in {name} Agent.',
   'systemPrompt.blockList.ownerHint.extension':
     'Requires the {name} Extension to be active.',
   'systemPrompt.blockList.ownerHint.memory':
@@ -1146,6 +1154,8 @@ export default Object.freeze({
   'archive.problem.entryPurging':
     'It is being deleted permanently and can no longer be restored.',
   'archive.problem.payloadMissing': 'Its archived files are missing.',
+  'archive.problem.payloadUnavailable':
+    'Its archived files are unavailable. Restore access and try again.',
   'archive.problem.payloadInvalid': 'Its archived files cannot be read.',
   'archive.problem.olderFormat':
     'An older vBot version archived it in a format this version cannot restore.',

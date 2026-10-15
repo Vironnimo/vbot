@@ -16,6 +16,7 @@ from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
 from core.chat.messages import ChatMessage, InputOrigin
 from core.chat.wire_shaping import system_reminder_request_message
+from core.model_tasks.speech import SpeechError
 from core.providers.errors import NetworkError
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, RunCancelledError, RunKind, RunStatus
 from core.tools import ToolRegistry, tool_success
@@ -161,7 +162,10 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
 
 
 @pytest.mark.asyncio
-async def test_voice_input_persists_with_its_transcription(tmp_path: Path) -> None:
+@pytest.mark.parametrize("steering_transcription", ["success", "failure", "empty"])
+async def test_voice_input_persists_with_its_transcription(
+    tmp_path: Path, steering_transcription: str
+) -> None:
     # Speech-to-text runs before a voice message persists, whether it starts the
     # Run or steers it, so history, accessors and every request carry what was said.
     class Transcriber:
@@ -170,6 +174,14 @@ async def test_voice_input_persists_with_its_transcription(tmp_path: Path) -> No
 
         async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
             self.calls.append(filename)
+            if filename == "b.ogg":
+                assert not runtime.chat_sessions.write_lock(
+                    session_address("coder", "one")
+                ).locked()
+                if steering_transcription == "failure":
+                    raise SpeechError("transcription unavailable")
+                if steering_transcription == "empty":
+                    return SimpleNamespace(text="")
             return SimpleNamespace(text=f"words of {filename}")
 
     store = AttachmentStore(tmp_path)
@@ -195,11 +207,16 @@ async def test_voice_input_persists_with_its_transcription(tmp_path: Path) -> No
     session = runtime.chat_sessions.get(session_address("coder", "one"))
     users = [message for message in session.load() if message.role == "user"]
     assert [message.content for message in users] == [
-        [replace(block, transcription=f"words of {block.filename}")] for block in blocks
+        [replace(blocks[0], transcription="words of a.ogg")],
+        [replace(blocks[1], transcription="words of b.ogg")]
+        if steering_transcription == "success"
+        else [blocks[1]],
     ]
     # Each voice message is transcribed once; requests reuse the persisted text.
     assert transcriber.calls == ["a.ogg", "b.ogg"]
-    assert "words of b.ogg" in str(adapter.requests[1]["messages"])
+    assert ("words of b.ogg" in str(adapter.requests[1]["messages"])) is (
+        steering_transcription == "success"
+    )
 
 
 @pytest.mark.asyncio

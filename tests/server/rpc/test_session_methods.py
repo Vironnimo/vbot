@@ -802,6 +802,7 @@ async def test_session_link_channel_records_the_reply_target_for_the_channel_age
     assert refused["code"] == "channel_config_error"
     assert "tg-assistant" in refused["message"]
     assert sessions.saved_metadata == {key: {"persisted": "value"}}
+    assert resource_changes(state) == []
 
     result = await rpc_result(state, "session.link_channel", agent_id="assistant", **link)
 
@@ -816,6 +817,15 @@ async def test_session_link_channel_records_the_reply_target_for_the_channel_age
     # Linking changes metadata only: the Session itself is never loaded, so no
     # note or reminder is written into it.
     assert sessions.got == []
+
+    assert resource_changes(state, "sessions") == [
+        {
+            "kind": "sessions",
+            "scope": {"agent_id": "assistant", "project_id": None, "session_id": "s1"},
+        }
+    ]
+    await rpc_result(state, "session.link_channel", agent_id="assistant", **link)
+    assert len(resource_changes(state, "sessions")) == 1
 
 
 @pytest.mark.asyncio

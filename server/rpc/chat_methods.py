@@ -846,6 +846,8 @@ async def _mark_current_session(state: Any, agent_id: str, session_id: str) -> N
 async def _submit_chat(
     state: Any,
     params: JsonObject,
+    *,
+    method: str,
 ) -> Run | JsonObject:
     """Submit one accessor chat request and return its immediate disposition.
 
@@ -858,6 +860,11 @@ async def _submit_chat(
     (``session_id``) or a new one (``new_session``, see :func:`_chat_target`).
     """
 
+    _reject_unsupported(
+        params,
+        {"agent_id", "session_id", "new_session", "content", "input_origin", "file_mentions"},
+        method,
+    )
     agent_id, project_id = _required_agent_address(params, "agent_id")
     target = _chat_target(params, project_id)
     content = _parse_chat_content(params, "content")
@@ -1035,7 +1042,7 @@ async def _start_chat_in_new_session(
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
-    submission = await _submit_chat(state, params)
+    submission = await _submit_chat(state, params, method="chat.send")
     if isinstance(submission, dict):
         return submission
 
@@ -1052,7 +1059,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
-    submission = await _submit_chat(state, params)
+    submission = await _submit_chat(state, params, method="chat.stream")
     if isinstance(submission, dict):
         return submission
 

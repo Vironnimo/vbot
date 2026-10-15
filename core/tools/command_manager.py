@@ -371,16 +371,18 @@ class CommandManager:
             self._pending.pop(task, None)
         return CommandHandle(record.command_id, record.pid)
 
-    async def wait(self, command_id: str, *, seconds: float | None) -> CommandWaitOutcome:
+    async def wait(
+        self, command_id: str, *, seconds: float | None, check_idle: bool = False
+    ) -> CommandWaitOutcome:
         """Wait until the command ended (``ended``) or *seconds* passed.
 
-        A wait that passed returns ``idle`` when the command's processes were
+        With *check_idle*, a wait that passed returns ``idle`` when the command's processes were
         quiet over its last ``COMMAND_IDLE_WINDOW_SECONDS`` (no output, no new
         process, at most ``IDLE_CPU_SECONDS`` of CPU time, as for processes left
         running), else ``deadline``; a shorter wait is followed whole. None
         waits without a limit. Cancelling the wait changes nothing.
         """
-        return await self._get(command_id).wait(seconds)
+        return await self._get(command_id).wait(seconds, check_idle=check_idle)
 
     def to_background(self, command_id: str, *, deliver: bool) -> CommandReport:
         """List the command; with *deliver*, its result is delivered when it ends.

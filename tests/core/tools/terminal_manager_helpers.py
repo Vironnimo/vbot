@@ -261,6 +261,7 @@ async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFact
     factory = AdapterFactory()
     manager = TerminalManager(
         adapter_factory=factory,
+        program_probe=lambda _pid, _program: False,
         render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
@@ -284,6 +285,7 @@ async def delivering_manager() -> AsyncIterator[
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
+        program_probe=lambda _pid, _program: False,
         render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
@@ -308,6 +310,7 @@ async def clocked_manager() -> AsyncIterator[
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
+        program_probe=lambda _pid, _program: False,
         render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,

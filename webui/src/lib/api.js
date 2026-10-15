@@ -10,6 +10,7 @@ export {
   rpc,
   normalizeRpcError,
 } from './api/transport.js';
+export { invalidateCatalogReads } from './api/management.js';
 export {
   openFilePreview,
   getFilePreviewRevision,

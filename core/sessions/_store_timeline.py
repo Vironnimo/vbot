@@ -229,11 +229,16 @@ def _page_runs(
     if not run_keys:
         return ()
     floor = min(int(row["seq"]) for row in batch.rows)
+    visible_terminal = " OR ".join(_store_lineage.range_predicate("t") for _ in ranges) or "0"
+    terminal_params = [
+        value for view_range in ranges for value in _store_lineage.range_params(view_range)
+    ]
     runs = connection.execute(
         "SELECT r.run_key, r.run_id, r.status, r.start_seq, t.seq AS terminal_seq "
         "FROM runs AS r LEFT JOIN entries AS t ON t.entry_key = r.end_entry_key "
+        f"AND ({visible_terminal}) "
         "WHERE r.run_key IN (SELECT value FROM json_each(?)) ORDER BY r.start_seq, r.run_key",
-        (_store_values._key_list(run_keys),),
+        (*terminal_params, _store_values._key_list(run_keys)),
     ).fetchall()
     result = []
     for run in runs:

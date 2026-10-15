@@ -16,7 +16,7 @@ The hook set is closed: `run_start`, `context`, `tool_call`, `tool_result`, and 
 - `context(ctx, *, messages)` is an ordered transform pipeline. A handler returning a list replaces the effective messages for subsequent handlers; `None`, an invalid result, or a raised exception leaves the current messages unchanged.
 - `tool_call(ctx, *, tool_name, tool_call_id, input)` is an ordered decision pipeline. `Modify(input)` changes the effective input for later handlers and execution; `Deny(reason)` stops execution with the denying Extension recorded; `Replace(result)` stops execution only after Chat validates the candidate Tool result envelope. `None`, invalid returns, and isolated handler failures continue.
 - `tool_result(ctx, *, tool_name, tool_call_id, input, result)` is an ordered replacement pipeline over the normalized Tool result. A valid full result-envelope dict replaces the running result for later handlers; `None`, invalid envelopes, and isolated failures leave it unchanged. There is no shallow-merge patching.
-- `run_end(ctx, *, session_id, agent_id, outcome)` fires once on Run completion with Chat's terminal outcome.
+- `run_end(ctx, *, session_id, agent_id, outcome)` fires once after execution cleanup and after the Run manager freezes cancellation, before the terminal commit. Every handler sees the same execution outcome; Stop cannot interrupt this boundary or later change it. Added notes flush while the Run is still writable. A subsequent terminal persistence failure can still fail the Run.
 
 Chat owns exact fire-points, `Replace` validation, Tool lifecycle events, and how decisions become model-visible results. Changes therefore require reading `chat/run-execution.md` and the relevant tests as well as this reference.
 

@@ -250,8 +250,10 @@
           {/if}
           {#if scope.previewTokens !== null}
             {#if scope.previewToolTokens}
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the token breakdown here.) -->
               <span
                 class="sp-token-count"
+                tabindex="0"
                 use:tooltip={t('systemPrompt.preview.tokenBreakdownHint', {
                   count: scope.previewToolCount ?? 0,
                 })}
@@ -408,8 +410,10 @@
                         >{t('systemPrompt.blockList.off')}</Badge
                       >{/if}
                     {#if editor.isCustomBlock(block)}
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the block state explanation here.) -->
                       <span
                         class="tooltip-anchor"
+                        tabindex="0"
                         use:tooltip={t('systemPrompt.blockList.customHint')}
                       >
                         <Badge variant="info">
@@ -418,8 +422,10 @@
                       </span>
                     {/if}
                     {#if block.kind === 'data'}
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the block state explanation here.) -->
                       <span
                         class="tooltip-anchor"
+                        tabindex="0"
                         use:tooltip={t('systemPrompt.blockList.dataHint')}
                       >
                         <Badge variant="neutral">
@@ -428,8 +434,10 @@
                       </span>
                     {/if}
                     {#if scope.isAgentScope && editor.isInherited(block)}
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the block state explanation here.) -->
                       <span
                         class="tooltip-anchor"
+                        tabindex="0"
                         use:tooltip={t('systemPrompt.blockList.inheritedHint')}
                       >
                         <Badge variant="neutral">
@@ -437,8 +445,10 @@
                         </Badge>
                       </span>
                     {:else if block.editable && block.isModified}
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the block state explanation here.) -->
                       <span
                         class="tooltip-anchor"
+                        tabindex="0"
                         use:tooltip={t(
                           'systemPrompt.fragmentEditor.modifiedHint',
                         )}
@@ -449,8 +459,10 @@
                       </span>
                     {/if}
                     {#if block.editable && block.isDirty}
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the block state explanation here.) -->
                       <span
                         class="tooltip-anchor"
+                        tabindex="0"
                         use:tooltip={t('systemPrompt.fragmentEditor.dirtyHint')}
                       >
                         <Badge variant="warn">

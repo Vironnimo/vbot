@@ -454,9 +454,8 @@ def make_skill_manage_handler(
             # A missing target package on a mutate/delete action is not always an
             # unknown name: it may be a Skill the agent can see in another scope.
             # A global one an attended Agent changes; for the others report the
-            # scope instead of a bare not-found. ``create`` is excluded — it
-            # legitimately writes a private shadow over a shared-pool name, which
-            # is the established override path.
+            # scope instead of a bare not-found. ``create`` checks for a visible
+            # name collision under the authoring lock below.
             if call.action != "create" and (
                 find_skill_package_dir(target_root, call.name) is None
                 or target == "own"
@@ -485,6 +484,15 @@ def make_skill_manage_handler(
             # lands after a check cannot be overwritten by this write.
             hints: list[str] = []
             with authoring.exclusive():
+                if call.action == "create" and resolve_external_skill_scope is not None:
+                    scope = resolve_external_skill_scope(
+                        owner_id, call.name, context.skill_project_id
+                    )
+                    if scope not in (None, "own"):
+                        raise _RefusalError(
+                            "skill_write_rejected",
+                            _scope_rejection_message(call.name, scope, call.action),
+                        )
                 if call.action == "publish":
                     result, summary = _publish(call, writer, owner_id, global_root, publish_skill)
                 else:
@@ -1169,6 +1177,19 @@ def _unknown_skill_message(name: str, root: Path, *, own: bool = True) -> str:
 
 
 def _scope_rejection_message(name: str, scope: str, action: str = "delete") -> str:
+    if action == "create":
+        labels = {
+            "shared": "a Skill shared with you",
+            "global": "a global Skill",
+            "bundled": "a bundled Skill",
+            "project": "a Project Skill",
+            "external": "a Skill from a configured folder or an Extension",
+        }
+        return (
+            f"Nothing was changed. Skill '{name}' already exists as "
+            f"{labels.get(scope, 'a Skill outside your own Skills')}. "
+            "Use that Skill instead of creating a private copy."
+        )
     if scope == "shared":
         if action == "publish":
             return f"Skill '{name}' is shared with you; only its owner can make it global."
@@ -1268,7 +1289,9 @@ def _repair_name(arguments: dict[str, Any]) -> None:
         return
     current = arguments.get("file_path")
     if isinstance(current, str) and _package_path(current, text) != path:
-        raise ToolContractError("Conflicting values for file_path; provide one intended value.")
+        raise ToolContractError.conflicting_values(
+            "file_path", ("file_path", current), ("name", name), tool_name=SKILL_MANAGE_TOOL_NAME
+        )
     arguments["file_path"] = path
 
 
@@ -1284,8 +1307,11 @@ def _resolve_text(arguments: dict[str, Any]) -> None:
     texts = [value for value in supplied.values() if isinstance(value, str)]
     distinct = sorted({value for value in texts if value})
     if len(distinct) > 1:
-        names = " and ".join(sorted(supplied))
-        raise ToolContractError(f"Conflicting values for {target}: {names} differ; give one text.")
+        first = next((key, value) for key, value in supplied.items() if value == distinct[0])
+        second = next((key, value) for key, value in supplied.items() if value == distinct[1])
+        raise ToolContractError.conflicting_values(
+            target, first, second, tool_name=SKILL_MANAGE_TOOL_NAME
+        )
     if action not in ("patch", "create", "edit", "write_file"):
         # Other actions take no text; the handler refuses a nonempty one.
         if distinct:

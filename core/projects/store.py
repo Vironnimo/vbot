@@ -84,7 +84,7 @@ def _validate_project_id(project_id: str) -> str:
     and session-path call funnels through, not only at config validation.
     """
     if not is_valid_project_id(project_id):
-        raise ProjectError(f"Invalid project id: {project_id!r}")
+        raise InvalidProjectIdError(f"Invalid project id: {project_id!r}")
     return project_id
 
 

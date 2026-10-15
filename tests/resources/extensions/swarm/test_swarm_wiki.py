@@ -729,6 +729,15 @@ async def test_wiki_update_edits_apply_together_or_not_at_all(board):
     )
     assert refused["error"]["code"] == "invalid_arguments"
     assert (await stored(board, page_id))["revision"] == 3
+    # One-item edits are folded into the root fields; both forms explain a size refusal.
+    for field in ("old_text", "new_text"):
+        large = {"old_text": "| B02 | Cy |", "new_text": "| B02 | Dee |", field: "x" * 200_001}
+        for edits in ([large], [first, large]):
+            refused = await invoke(board, {"action": "update", "page_id": page_id, "edits": edits})
+            assert refused["error"]["code"] == "invalid_arguments"
+            message = refused["error"]["message"]
+            assert field in message and "200001" in message and "200000" in message
+            assert (await stored(board, page_id))["revision"] == 3
 
 
 @pytest.mark.asyncio
@@ -1040,9 +1049,15 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
     unnamed = await invoke(board, {"action": "update", "old_text": "Body", "new_text": "Body text"})
     assert (unnamed["data"]["page_id"], unnamed["data"]["revision"]) == ("w1", 2)
     assert unnamed["data"]["note"] == (
-        'page_id was omitted; old_text occurs only in w1 ("Release plan"), so that page was '
-        "updated."
+        'page_id was omitted; old_text occurs only in w1 ("Release plan"), so this call used '
+        "that page."
     )
+    unchanged = await invoke(
+        board, {"action": "update", "old_text": "Body text", "new_text": "Body text"}
+    )
+    assert unchanged["data"]["revision"] == 2
+    assert unchanged["data"]["status"].startswith("Nothing changed:")
+    assert unchanged["data"]["note"] == unnamed["data"]["note"]
     assert (await stored(board, "w1"))["content"] == "Body text"
     # Several pages or none: the update names them, newest change first, and changes nothing.
     for old_text, named in (

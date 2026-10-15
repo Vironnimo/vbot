@@ -651,7 +651,6 @@ class SessionTitleNotifier(Protocol):
         session_id: str,
         project_id: str | None,
         agent: Any,
-        content: str | list[ContentBlock],
         run_id: str,
     ) -> None:
         """Persist the local title and optionally schedule its Model replacement."""

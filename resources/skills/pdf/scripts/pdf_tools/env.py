@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import glob
 import importlib.util
 import os
@@ -10,8 +11,11 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Collection
+import time
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import BinaryIO
 
 from .common import SCRIPT, CommandError, tool_command
 
@@ -61,20 +65,64 @@ def use_private_environment(script: Path) -> None:
 
 def setup(install: bool, install_browser: bool) -> list[str]:
     if install or install_browser:
-        _install_packages()
-        if install_browser:
-            _install_playwright_browser()
-        python = environment_python()
-        completed = subprocess.run(
-            [str(python), tool_script(), "setup"],
-            env=dict(os.environ, **{REEXEC_MARKER: "1", "PYTHONIOENCODING": "utf-8"}),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        report = (completed.stdout + completed.stderr).strip().splitlines()
+        with _environment_lock():
+            _install_packages()
+            if install_browser:
+                _install_playwright_browser()
+            python = environment_python()
+            completed = subprocess.run(
+                [str(python), tool_script(), "setup"],
+                env=dict(os.environ, **{REEXEC_MARKER: "1", "PYTHONIOENCODING": "utf-8"}),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            report = (completed.stdout + completed.stderr).strip().splitlines()
         return ["Installed the Python packages into " + str(environment_root()), *report]
     return _report()
+
+
+@contextmanager
+def _environment_lock() -> Iterator[None]:
+    """Serialize setup across processes; the OS releases the lock if one exits."""
+    cache = environment_root().parent
+    cache.mkdir(parents=True, exist_ok=True)
+    # Keep this file outside the environment, including when a failed creation removes it.
+    # Never unlink it: waiters must continue locking the same file.
+    with (cache / "setup.lock").open("a+b") as handle:
+        while not _try_environment_lock(handle):
+            time.sleep(0.1)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _try_environment_lock(handle: BinaryIO) -> bool:
+    handle.seek(0)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            # Windows permits locking a byte beyond EOF, so no initialization write races.
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+            raise
+        return False
+    return True
 
 
 def tool_script() -> str:

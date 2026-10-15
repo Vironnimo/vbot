@@ -11,9 +11,12 @@ import json
 import random
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType
+from typing import BinaryIO
 
 import pytest
 from PIL import Image
@@ -62,6 +65,69 @@ def _blank_pdf(path: Path, widths: list[int]) -> Path:
     with path.open("wb") as handle:
         writer.write(handle)
     return path
+
+
+@pytest.mark.parametrize("hold_module", ["venv", "playwright"])
+def test_setup_serializes_shared_environment_changes(
+    hold_module: str, pdf: Run, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env = PDF_TOOLS["env"]
+    root = tmp_path / "env"
+    python = root / "python"
+    monkeypatch.setattr(env, "environment_root", lambda: root)
+    monkeypatch.setattr(env, "environment_python", lambda: python)
+    installing = threading.Event()
+    contended = threading.Event()
+    calls: list[tuple[int, str]] = []
+    try_lock = env._try_environment_lock
+
+    def record_contention(handle: BinaryIO) -> bool:
+        acquired: bool = try_lock(handle)
+        if not acquired:
+            contended.set()
+        return acquired
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[1] == "-m":
+            module = command[2]
+            calls.append((threading.get_ident(), module))
+            if module == hold_module and not installing.is_set():
+                installing.set()
+                assert contended.wait(2), "another installer must wait on the environment lock"
+            if module == "venv":
+                root.mkdir()
+                python.touch()
+        return subprocess.CompletedProcess(command, 0, "PDF tools ready.\n", "")
+
+    monkeypatch.setattr(env, "_try_environment_lock", record_contention)
+    monkeypatch.setattr(env.subprocess, "run", run)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(env.setup, True, True)
+        assert installing.wait(2)
+        second = workers.submit(env.setup, True, True)
+        first.result(timeout=3)
+        second.result(timeout=3)
+
+    assert [module for _, module in calls] == [
+        "venv",
+        "pip",
+        "pip",
+        "playwright",
+        "pip",
+        "pip",
+        "playwright",
+    ]
+    assert len({owner for owner, _ in calls[:4]}) == 1
+    assert len({owner for owner, _ in calls[4:]}) == 1
+    assert calls[0][0] != calls[-1][0]
+
+    def refuse_early_reexec(_script: Path) -> None:
+        pytest.fail("setup must acquire its lock before using the private environment")
+
+    monkeypatch.setattr(PDF_TOOLS["cli"], "use_private_environment", refuse_early_reexec)
+    flag = "--install" if hold_module == "venv" else "--install-browser"
+    code, _lines = pdf("setup", flag)
+    assert code == 0
 
 
 def _widths(path: Path) -> list[int]:

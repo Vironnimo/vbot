@@ -14,13 +14,11 @@
     runStatusVariant,
     totalTokens,
   } from '$lib/statisticsView.js';
-  import {
-    costValue,
-    dateCell,
-    originName,
-    sessionWithAgent,
-    tokenValue,
-  } from './ReportPrimitives.svelte';
+  import CostValue from './report/CostValue.svelte';
+  import DateCell from './report/DateCell.svelte';
+  import OriginName from './report/OriginName.svelte';
+  import SessionWithAgent from './report/SessionWithAgent.svelte';
+  import TokenValue from './report/TokenValue.svelte';
 
   let {
     rows = [],
@@ -108,12 +106,16 @@
   );
 </script>
 
+{#snippet dateCell(row, column)}
+  <DateCell {row} {column} />
+{/snippet}
+
 {#snippet runCell(row)}
-  {@render sessionWithAgent(row)}
+  <SessionWithAgent {row} />
 {/snippet}
 
 {#snippet originCell(row)}
-  {@render originName(row.origin)}
+  <OriginName origin={row.origin} />
 {/snippet}
 
 {#snippet statusCell(row)}
@@ -123,11 +125,11 @@
 {/snippet}
 
 {#snippet tokensCell(row)}
-  {@render tokenValue(totalTokens(row))}
+  <TokenValue value={totalTokens(row)} />
 {/snippet}
 
 {#snippet costCell(row)}
-  {@render costValue(row.cost_usd)}
+  <CostValue amount={row.cost_usd} />
 {/snippet}
 
 {#snippet modelCell(row)}

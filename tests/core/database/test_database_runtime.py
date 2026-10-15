@@ -12,7 +12,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -481,17 +481,19 @@ def test_without_wal_every_read_is_a_transaction_on_the_writer(
     database.checkpoint()  # A closed database has nothing to checkpoint either.
 
 
-@pytest.mark.parametrize("stage", ["idle", "checked-out", "inside-read"])
+@pytest.mark.parametrize("stage", ["idle", "checked-out", "inside-read", "reading-after-close"])
 def test_close_releases_every_connection_and_refuses_further_work(
     wal_database: Database, monkeypatch: pytest.MonkeyPatch, stage: str
 ) -> None:
     database = wal_database
     late_read = database.read()
     assert note_bodies(database) == []  # Leave a reader in the pool.
-    if stage == "inside-read":
+    if stage in ("inside-read", "reading-after-close"):
         # Shutdown closes checked-out readers without waiting for their callbacks.
-        with pytest.raises(DatabaseUnavailableError), database.read():
+        with pytest.raises(DatabaseUnavailableError), database.read() as reader:
             database.close()
+            if stage == "reading-after-close":
+                reader.execute("SELECT 1")
     elif stage == "checked-out":
         checked_out, release = threading.Event(), threading.Event()
         real_checkout = database._runtime._checkout_reader
@@ -525,6 +527,32 @@ def test_close_releases_every_connection_and_refuses_further_work(
         note_bodies(database)
     database.close()
     assert database.live_connection_count() == 0
+
+
+def test_a_slow_connection_close_keeps_other_databases_available(tmp_path: Path) -> None:
+    closing_started, release = threading.Event(), threading.Event()
+
+    class SlowClose(sqlite3.Connection):
+        @override
+        def close(self) -> None:
+            closing_started.set()
+            assert release.wait(5)
+            super().close()
+
+    path = tmp_path / "closing.db"
+    connection = connections_module.connect_tracked(
+        path, factory=SlowClose, check_same_thread=False
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        closing_connection = executor.submit(connection.close)
+        try:
+            assert closing_started.wait(5)
+            still_tracked = executor.submit(has_live_connection, path)
+            assert still_tracked.result(timeout=1)
+        finally:
+            release.set()
+        closing_connection.result(timeout=5)
+    assert not has_live_connection(path)
 
 
 @pytest.mark.parametrize("phase", ["opening", "closing"])

@@ -75,6 +75,11 @@ export function createPromptEditor(context) {
   // plain sentence explaining that render condition.
   function ownerHint(owner) {
     if (owner.startsWith('tool:')) {
+      if (owner.endsWith('*')) {
+        return t('systemPrompt.blockList.ownerHint.toolPrefix', {
+          prefix: owner.slice('tool:'.length, -1),
+        });
+      }
       return t('systemPrompt.blockList.ownerHint.tool', {
         name: owner.slice('tool:'.length),
       });
@@ -89,6 +94,15 @@ export function createPromptEditor(context) {
     }
     if (owner === 'channel') {
       return t('systemPrompt.blockList.ownerHint.channel');
+    }
+    if (owner === 'identity')
+      return t('systemPrompt.blockList.ownerHint.identity');
+    if (owner === 'subagent_session')
+      return t('systemPrompt.blockList.ownerHint.subagent_session');
+    if (owner.startsWith('builtin:')) {
+      return t('systemPrompt.blockList.ownerHint.builtin', {
+        name: owner.slice('builtin:'.length),
+      });
     }
     return t('systemPrompt.blockList.ownerHint.always');
   }

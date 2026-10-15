@@ -55,6 +55,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       Object.keys(params).length === 0
         ? call('model.list')
         : call('model.list', params),
+    invalidateCatalogReads: () => {},
     refreshModelDatabase: (params = {}) =>
       Object.keys(params).length === 0
         ? call('model.refresh_db')

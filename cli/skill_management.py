@@ -656,10 +656,13 @@ def format_skill_revision(revision: Mapping[str, Any]) -> list[str]:
             f"{_string_or_default(change.get('path'), '?')}"
         )
     target = _string_or_default(revision.get("absorbed_into"), "?")
-    for reference in _records(revision.get("followed")):
+    references = _records(revision.get("followed"))
+    for reference in references:
         text = _FOLLOWED_TEXT.get(str(reference.get("kind")), "{name}")
         name = _string_or_default(reference.get("name"), "?")
-        lines.append(f"  moved to {target}: {text.format(name=name)}")
+        lines.append(f"  planned move to {target}: {text.format(name=name)}")
+    if references:
+        lines.append("  Individual moves can fail; the merge's Tool result reports failures.")
     return lines
 
 

@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from core.runs import ChatRunManager
 from core.tools.command_manager import CommandNotFoundError
 from core.utils.log_viewer import LogViewer
+from core.utils.workers import cancel_and_wait
 from server._bind import ServerBindState
 from server._http_dependencies import FastAPIType
 from server.activity import ActivityMonitor
@@ -340,11 +340,8 @@ async def _shutdown_local_catalog_refresh(
     """Cancel the startup catalog-refresh task so shutdown never leaves it orphaned."""
     if task is None:
         return
-    task.cancel()
     try:
-        await task
-    except asyncio.CancelledError:
-        return
+        await cancel_and_wait(task)
     except Exception:
         logger.warning("Local model catalog refresh failed during shutdown", exc_info=True)
 
@@ -353,9 +350,7 @@ async def _shutdown_statistics_warmup(task: asyncio.Task[None] | None) -> None:
     """Cancel the optional derived-index warmup during server shutdown."""
     if task is None:
         return
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
+    await cancel_and_wait(task)
 
 
 async def _shutdown_log_viewer(log_viewer: LogViewer, logger: logging.Logger) -> None:

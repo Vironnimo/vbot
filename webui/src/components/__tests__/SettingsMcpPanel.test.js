@@ -56,11 +56,6 @@ vi.mock(
   'svelte',
   async () => import('../../../node_modules/svelte/src/index-client.js'),
 );
-vi.mock(
-  'svelte/reactivity',
-  async () =>
-    import('../../../node_modules/svelte/src/reactivity/index-client.js'),
-);
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpc));
 const { default: Panel } = await import('../settings/SettingsMcpPanel.svelte');
 let component;

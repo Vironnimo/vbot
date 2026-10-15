@@ -292,8 +292,12 @@ function createHistoryWatcher() {
     reads.push({
       before: body.params?.before ?? null,
       after: body.params?.after ?? null,
+      ok: Array.isArray(result?.messages),
       has_more: result?.has_more === true,
       messages: Array.isArray(result?.messages) ? result.messages.length : 0,
+      user_messages: Array.isArray(result?.messages)
+        ? result.messages.filter((message) => message.role === "user").length
+        : 0,
       rpc_ms: request.timing().responseEnd,
     });
     for (const wake of waiters) wake();
@@ -400,53 +404,30 @@ function nextFrames() {
 
 // Runs in the page: scrolls the timeline to its top the way a mouse wheel
 // does (the wheel event releases the follow pin, the scroll requests older
-// History) and resolves once new timeline items appeared and two more frames
-// rendered them, or after `timeoutMs` without new items.
-function scrollToOlderPage({ selector, timeoutMs }) {
+// History). Completion comes from chat.history, not DOM growth: a virtualized
+// timeline keeps a bounded number of mounted rows as older pages arrive.
+function scrollToOlderPage(selector) {
   const container = document.querySelector(selector);
   const content = container?.querySelector(".messages__content");
   if (!content) return { error: "the Chat timeline is not rendered" };
-  const before = content.childElementCount;
-  return new Promise((resolve) => {
-    const started = performance.now();
-    const observer = new MutationObserver(() => {
-      if (content.childElementCount <= before) return;
-      observer.disconnect();
-      clearTimeout(timer);
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() =>
-          resolve({
-            grew: true,
-            items: content.childElementCount,
-            page_ms: performance.now() - started,
-          }),
-        ),
-      );
-    });
-    const timer = setTimeout(() => {
-      observer.disconnect();
-      resolve({ grew: false, items: content.childElementCount });
-    }, timeoutMs);
-    observer.observe(content, { childList: true });
-    container.dispatchEvent(
-      new WheelEvent("wheel", {
-        deltaY: -container.clientHeight,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    // Already at the top, a one-pixel move still reaches the scroll handler.
-    container.scrollTop = container.scrollTop > 0 ? 0 : 1;
-  });
+  const started = performance.now();
+  container.dispatchEvent(
+    new WheelEvent("wheel", {
+      deltaY: -container.clientHeight,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  // Already at the top, a one-pixel move still reaches the scroll handler.
+  container.scrollTop = container.scrollTop > 0 ? 0 : 1;
+  return { started };
 }
 
-function timelineCounts(selector) {
+function timelineCounts({ selector, started = null }) {
   const content = document.querySelector(`${selector} .messages__content`);
   return {
     items: content ? content.childElementCount : 0,
-    user_messages: content
-      ? content.querySelectorAll(":scope > .timeline-item > .msg.user").length
-      : 0,
+    page_ms: started === null ? null : performance.now() - started,
   };
 }
 
@@ -460,6 +441,9 @@ async function scrollThroughHistory(page, cdp, history) {
   if (!initial) {
     return { error: "the WebUI did not read the Session's History", pages: [] };
   }
+  if (!initial.ok) {
+    return { error: "the initial History read failed", pages: [] };
+  }
   await page
     .locator(".chat-timeline-loading")
     .waitFor({ state: "detached", timeout: HISTORY_TIMEOUT_MS });
@@ -469,15 +453,13 @@ async function scrollThroughHistory(page, cdp, history) {
   const start = await readMetrics(cdp);
   const startedAt = Date.now();
   const pages = [];
+  let userMessages = initial.user_messages;
   let hasMore = initial.has_more;
   let error = null;
   let attempts = 0;
   while (hasMore && pages.length < MAX_PAGES) {
     const readsBefore = history.count();
-    const outcome = await page.evaluate(scrollToOlderPage, {
-      selector: TIMELINE,
-      timeoutMs: PAGE_TIMEOUT_MS,
-    });
+    const outcome = await page.evaluate(scrollToOlderPage, TIMELINE);
     if (outcome.error) {
       error = outcome.error;
       break;
@@ -485,7 +467,7 @@ async function scrollThroughHistory(page, cdp, history) {
     const read = await history.wait(
       readsBefore,
       (entry) => Boolean(entry.before),
-      outcome.grew ? PAGE_TIMEOUT_MS : 0,
+      PAGE_TIMEOUT_MS,
     );
     if (!read) {
       attempts += 1;
@@ -495,25 +477,35 @@ async function scrollThroughHistory(page, cdp, history) {
       }
       continue;
     }
+    if (!read.ok) {
+      error = "an older History read failed";
+      break;
+    }
+    await page.evaluate(nextFrames);
+    const rendered = await page.evaluate(timelineCounts, {
+      selector: TIMELINE,
+      started: outcome.started,
+    });
     attempts = 0;
     hasMore = read.has_more;
+    userMessages += read.user_messages;
     pages.push({
-      items: outcome.items,
+      items: rendered.items,
       messages: read.messages,
-      page_ms: outcome.grew ? outcome.page_ms : null,
+      page_ms: rendered.page_ms,
       rpc_ms: read.rpc_ms >= 0 ? read.rpc_ms : null,
     });
     emit({ event: "progress", phase: "scroll-through", pages: pages.length });
   }
   const end = await readMetrics(cdp);
   const measured = await page.evaluate(collectMeasurements);
-  const counts = await page.evaluate(timelineCounts, TIMELINE);
+  const counts = await page.evaluate(timelineCounts, { selector: TIMELINE });
   return {
     error,
     duration_ms: Date.now() - startedAt,
     pages,
     timeline_items: counts.items,
-    user_messages: counts.user_messages,
+    user_messages: userMessages,
     frames: measured?.frames ?? null,
     frame_gaps_ms: measured?.frame_gaps_ms ?? [],
     long_tasks_ms: (measured?.long_tasks ?? []).map(([, duration]) => duration),

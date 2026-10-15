@@ -406,6 +406,7 @@ class _Library:
     candidates: tuple[LibrarianCandidate, ...]
     fingerprint: str
     latest_revision: int = 0
+    aging_source_fingerprint: str | None = None
 
 
 @dataclass
@@ -912,8 +913,12 @@ class LibrarianService:
             active.consolidation = "disabled"
         elif len(library.candidates) < 2:
             active.consolidation = "too_few"
-        elif library.fingerprint == fingerprint:
+        elif fingerprint is not None and fingerprint in (
+            library.fingerprint,
+            library.aging_source_fingerprint,
+        ):
             active.consolidation = "unchanged"
+            fingerprint = library.fingerprint
         else:
             error = await self._consolidate(agent_id, library, active)
             if active.consolidation == "ran":
@@ -1018,7 +1023,10 @@ class LibrarianService:
             if not root.is_dir():
                 return _Library((), (), (), _fingerprint({}))
             records = self._authoring.records(root)
-            changed = _attended_changes(self._authoring.history(root, limit=_ALL_REVISIONS))
+            history = self._authoring.history(root, limit=_ALL_REVISIONS)
+            changed = _attended_changes(history)
+            before = librarian_candidates(self._authoring, root, usage=usage, records=records)
+            before_revisions = _latest_revisions(before, history)
             archived: list[str] = []
             revisions: list[int] = []
             for name, record in sorted(records.items()):
@@ -1046,12 +1054,19 @@ class LibrarianService:
                 records = self._authoring.records(root)
             candidates = librarian_candidates(self._authoring, root, usage=usage, records=records)
             history = self._authoring.history(root, limit=_ALL_REVISIONS)
+            latest = _latest_revisions(candidates, history)
+            # Removing already-reviewed candidates creates no new instructions
+            # to consolidate. An outside edit to a retained candidate still does.
+            only_aged = bool(archived) and latest == {
+                name: revision for name, revision in before_revisions.items() if name in latest
+            }
             return _Library(
                 tuple(archived),
                 tuple(revisions),
                 candidates,
-                _fingerprint(_latest_revisions(candidates, history)),
+                _fingerprint(latest),
                 max((revision.id for revision in history), default=0),
+                _fingerprint(before_revisions) if only_aged else None,
             )
 
     def _fingerprint_now(

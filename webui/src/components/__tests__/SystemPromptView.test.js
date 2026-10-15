@@ -147,11 +147,12 @@ describe('SystemPromptView blocks', () => {
       t('systemPrompt.fragmentEditor.dirtyIndicator'),
     );
     expect(hasCall('prompt.update')).toBe(false);
-    // The badge says what "unsaved" means here.
-    blockElement('core:intro')
+    // Keyboard users can reach the badge's explanation of "unsaved".
+    const dirtyHint = blockElement('core:intro')
       .querySelector('.badge--warn')
-      .closest('.tooltip-anchor')
-      .dispatchEvent(new MouseEvent('pointerenter'));
+      .closest('.tooltip-anchor');
+    dirtyHint.focus();
+    expect(document.activeElement).toBe(dirtyHint);
     await vi.advanceTimersByTimeAsync(300);
     expect(document.getElementById('app-tooltip').textContent).toBe(
       t('systemPrompt.fragmentEditor.dirtyHint'),

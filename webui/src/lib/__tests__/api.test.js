@@ -130,6 +130,39 @@ describe('rpc()', () => {
 // Each wrapper's wire contract: the RPC method (the first word of the case
 // label) and the params it sends, and the result it resolves to.
 describe('RPC wrappers', () => {
+  it('shares overlapping catalog reads until completion or invalidation', async () => {
+    const reads = [];
+    const fetch = vi.fn(() => new Promise((resolve) => reads.push(resolve)));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const first = api.listModels();
+      const shared = api.listModels();
+      const connections = api.listConnections();
+      const sharedConnections = api.listConnections();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(shared).toBe(first);
+      expect(sharedConnections).toBe(connections);
+      api.invalidateCatalogReads();
+      const current = api.listModels();
+      expect(fetch).toHaveBeenCalledTimes(3);
+      reads[0](jsonResponse({ ok: true, result: { models: ['old'] } }));
+      await first;
+      expect(api.listModels()).toBe(current);
+      reads[1](jsonResponse({ ok: true, result: { connections: [] } }));
+      reads[2](jsonResponse({ ok: true, result: { models: ['current'] } }));
+      await Promise.all([connections, current]);
+      fetch.mockResolvedValue(jsonResponse({ ok: true, result: RESULT }));
+      await api.listModels();
+      expect(fetch).toHaveBeenCalledTimes(4);
+      const own = { signal: new AbortController().signal };
+      await Promise.all([api.listModels({}, own), api.listModels({}, own)]);
+      expect(fetch).toHaveBeenCalledTimes(6);
+    } finally {
+      api.invalidateCatalogReads();
+      vi.unstubAllGlobals();
+    }
+  });
+
   const cursor = {
     active_sort: 2460000,
     agent_id: 'alpha',

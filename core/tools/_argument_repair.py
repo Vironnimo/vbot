@@ -571,6 +571,10 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> JsonObject:
     result: JsonObject = {}
     for key, value in pairs:
         if key in result:
+            if not same_json_value(result[key], value):
+                raise ToolContractError.conflicting_values(
+                    key, (f"{key} (first occurrence)", result[key]), (f"{key} (again)", value)
+                )
             raise ToolContractError(f"Duplicate JSON field {key}; provide one intended value.")
         result[key] = value
     return result

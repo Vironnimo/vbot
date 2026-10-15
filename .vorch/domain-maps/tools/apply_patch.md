@@ -725,7 +725,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   of its text do. Explicit no-newline markers apply only at EOF.
   Binary files may be moved or deleted without text decoding.
 - Writes reuse `atomic_write_bytes`; its optional `mode` carries source
-  permissions to a move destination. Its `before_replace` callback rechecks all
+  permission bits to a move destination. Replacing an existing Windows file
+  copies its DACL (including its inheritance/protection state), hidden, system
+  and not-content-indexed flags onto the adjacent staged file before publishing
+  it (`core.utils.atomic.preserve_windows_file_metadata`); a failure to preserve
+  that metadata aborts before replacement. Atomic replacement changes only the
+  named directory entry: other hard links keep the previous file and bytes.
+  Preserving shared hard-link content would require in-place writes, contrary
+  to the unchanged-original-on-write-failure contract. Its `before_replace` callback rechecks all
   current operation paths before each bounded retry of Windows replacement
   errors 5/32/33; completed entries are never replayed. Exhausted failures report
   retry eligibility and the actual attempt count. A destination is written and checked before

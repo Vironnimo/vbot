@@ -205,7 +205,8 @@ def _auth_failure() -> SpeechExecutionError:
             None,
             {
                 "code": "invalid_arguments",
-                "message": 'Conflicting values for text: text is "Hello" and input is '
+                "message": "generate_speech was not run: Conflicting values for text: "
+                'text is "Hello" and input is '
                 '"Goodbye". Send only the intended one.',
             },
             id="two-texts",

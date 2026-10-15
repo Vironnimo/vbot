@@ -315,12 +315,16 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
     field stays for validation.
     """
     result = dict(arguments)
+    sources = {key: (key, value) for key, value in arguments.items()}
     tokens: list[str] = []
 
-    def set_field(field: str, value: Any) -> None:
+    def set_field(field: str, value: Any, source: tuple[str, Any]) -> None:
         if field in result and result[field] != value:
-            raise ToolContractError(f"Conflicting values for {field}; provide one intended value.")
+            raise ToolContractError.conflicting_values(
+                field, sources[field], source, tool_name=SEARCH_FILES_TOOL_NAME
+            )
         result[field] = value
+        sources.setdefault(field, source)
 
     def unclear(key: str, value: Any, expected: str) -> ToolContractError:
         received = json.dumps(value, ensure_ascii=False)
@@ -336,7 +340,7 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
         word = _spelling(key)
         switch = _switch(value)
         if word == "regex" and isinstance(value, str) and switch is None:
-            set_field("pattern", value)
+            set_field("pattern", value, (key, value))
         elif letter in _SWITCH_LETTERS:
             if switch is None:
                 raise unclear(key, value, "true or false")
@@ -350,7 +354,9 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
             if switch is None:
                 raise unclear(key, value, "true or false")
             if switch:
-                set_field("output", "count" if letter == "c" or word == "count" else "files")
+                set_field(
+                    "output", "count" if letter == "c" or word == "count" else "files", (key, value)
+                )
         elif letter in _VALUED_LETTERS or word in _VALUED_WORDS:
             values = _values(value)
             if values is None:
@@ -363,11 +369,11 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
                 raise unclear(key, value, "a value or a list of values")
             tokens.extend(token for item in values for token in ("-g", "!" + item.lstrip("!")))
         elif letter in _FIELD_LETTERS:
-            set_field(_FIELD_LETTERS[letter], value)
+            set_field(_FIELD_LETTERS[letter], value, (key, value))
         elif word == "target" and isinstance(value, str) and _spelling(value) in _TARGET_VALUES:
             # Some search Tools select name matching with target="files".
             if _TARGET_VALUES[_spelling(value)] == "files" and "pattern" in result:
-                set_field("glob", result.pop("pattern"))
+                set_field("glob", result.pop("pattern"), sources["pattern"])
         else:
             continue
         del result[key]

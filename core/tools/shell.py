@@ -63,6 +63,7 @@ from core.tools._shell_results import (
     delivery_names,
     duration,
     ended_result,
+    exit_code_text,
     format_command_delivery,
     holding_stage,
     named_tools,
@@ -710,7 +711,11 @@ class ShellTool:
             context.background_registration_hook(move_to_background)
         context.on_cancel(cancel)
 
-        waiting = asyncio.ensure_future(self._commands.wait(command_id, seconds=call.wait_seconds))
+        waiting = asyncio.ensure_future(
+            self._commands.wait(
+                command_id, seconds=call.wait_seconds, check_idle=_CONSOLE_READS_WAIT
+            )
+        )
         moving = asyncio.ensure_future(moved.wait())
         try:
             await asyncio.wait({waiting, moving}, return_when=asyncio.FIRST_COMPLETED)
@@ -892,7 +897,9 @@ def shell_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> lis
         and not isinstance(exit_code, bool)
         and exit_code != 0
     ):
-        blocks.append(display_notice("warning", f"The command exited with code {exit_code}."))
+        blocks.append(
+            display_notice("warning", f"The command exited with code {exit_code_text(exit_code)}.")
+        )
     failed = data.get("failed_programs")
     if isinstance(failed, list) and failed:
         blocks.append(display_notice("warning", "; ".join(str(item) for item in failed)))

@@ -1,10 +1,10 @@
-// What moved with a Skill merged into another one: the server records its shares
+// What was planned to move with a merged Skill: the server records its shares
 // and the automations that triggered it on the merge (`followed`), and both the
 // Skill history and a Run's learning changes name them after "Merged into".
 import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
 
-// One moved reference in words, or '' for a kind this WebUI does not know.
+// One planned reference move in words, or '' for an unknown kind.
 function followedReferenceText(reference) {
   const { name } = reference;
   switch (reference.kind) {
@@ -21,7 +21,7 @@ function followedReferenceText(reference) {
   }
 }
 
-/** The moved references in words, or '' when nothing moved. */
+/** Planned reference moves in words, or '' when none were recorded. */
 export function skillFollowedText(followed) {
   const items = (Array.isArray(followed) ? followed : [])
     .filter(
@@ -33,8 +33,8 @@ export function skillFollowedText(followed) {
   return items.length ? t('skills.followed', { items: items.join(', ') }) : '';
 }
 
-/** "Merged into <target>", followed by what moved with the Skill. */
+/** "Merged into <target>", followed by the planned reference moves. */
 export function skillMergedText(text, followed) {
-  const moved = skillFollowedText(followed);
-  return moved ? `${text} · ${moved}` : text;
+  const planned = skillFollowedText(followed);
+  return planned ? `${text} · ${planned}` : text;
 }

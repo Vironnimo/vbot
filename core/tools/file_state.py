@@ -28,6 +28,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
+from core.utils.atomic import preserve_windows_file_metadata
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -248,8 +249,9 @@ def atomic_write_bytes(
     """Replace ``resolved`` atomically with ``payload``.
 
     The temporary file lives beside the target so ``os.replace`` stays on one
-    filesystem. Existing permission bits are copied before the replace; a new
-    file receives the ordinary umask-derived mode. Any failure removes the
+    filesystem. Existing permission bits, Windows DACL and hidden/system/indexing
+    flags are copied before the replace; a new file receives the ordinary
+    umask-derived mode. Other hard links keep the original file and content. Any failure removes the
     temporary file and leaves the original target intact. An explicit mode
     carries source permissions to a patch move's destination. A read-only target
     on Windows raises ``ReadOnlyFileError`` without retrying, because Windows
@@ -276,6 +278,7 @@ def atomic_write_bytes(
             os.fsync(handle.fileno())
         if final_mode is not None:
             os.chmod(temporary, final_mode)
+        preserve_windows_file_metadata(resolved, temporary)
         for attempt in range(len(_REPLACE_RETRY_DELAYS) + 1):
             if before_replace is not None:
                 before_replace()

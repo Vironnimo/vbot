@@ -65,6 +65,8 @@ Before each Model request, under the Session write lock and outside Tool dispatc
 
 After a final Assistant response, a pending steer forces another iteration. If that input is removed before delivery, the persisted final answer remains the Run result and no further Model request is made. Input selected after the last pending-input check, or left undelivered by cancel/error, stays queued and starts the next Run. Tests: `test_chat_loop_steering.py`, `tests/core/runs/test_runs_queue.py`, and `tests/server/rpc/test_chat_methods_queue.py`.
 
+Speech-to-text of each selected steering item runs once before its Session write lock and remains cancellable. The prepared content passes directly into the protected append, including failed or empty transcription attempts; persistence never retries speech-to-text from a missing attachment cache entry.
+
 ## Agent-facing text
 
 Each sentence of `STEERING_SYSTEM_REMINDER` (`_queued_input.py`) applies to the immediately following User message, not to later turns.

@@ -81,6 +81,7 @@ from core.providers.usage_history import (
 from core.utils.errors import ConfigError
 from core.utils.logging import get_logger
 from core.utils.tls import shared_ssl_context
+from core.utils.workers import cancel_and_wait
 
 __all__ = [
     "COPILOT_USAGE_CONNECTION",
@@ -242,14 +243,15 @@ class ProviderUsageService:
         task = self._history_task
         self.stop()
         if task is not None:
-            with suppress(asyncio.CancelledError):
-                await task
+            await cancel_and_wait(task)
 
     async def aclose(self) -> None:
         """Cancel and await the automatic sampler, then close an owned history database."""
 
-        await self.astop()
-        self._close_history()
+        try:
+            await self.astop()
+        finally:
+            self._close_history()
 
     @property
     def history_database(self) -> Database | None:

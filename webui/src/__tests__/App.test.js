@@ -216,11 +216,15 @@ describe('App', () => {
   });
 
   it('re-reads Extension input requests and Computer Use status only on their changes', async () => {
+    let pagesUnavailable = false;
     rpcMock.mockImplementation(
       createAppRpcMock({
         agents: ALPHA,
         methods: {
-          'extensions.pages': () => ({ pages: [] }),
+          'extensions.pages': () => {
+            if (pagesUnavailable) throw new Error('test-owned catalog failure');
+            return { pages: [] };
+          },
           'extensions.requests': () => ({ requests: [] }),
           'extensions.list': () => ({
             extensions: [{ name: 'computer_use', status: 'loaded' }],
@@ -275,6 +279,13 @@ describe('App', () => {
     await extensionsChanged(null);
     await waitForCondition(() =>
       expect(counts()).toEqual([requests + 2, status + 2]),
+    );
+    // A transient page-catalog failure cannot suppress unrelated surfaces'
+    // catch-up reads; those keep using their own Extension operations.
+    pagesUnavailable = true;
+    await extensionsChanged(null);
+    await waitForCondition(() =>
+      expect(counts()).toEqual([requests + 3, status + 3]),
     );
   });
 

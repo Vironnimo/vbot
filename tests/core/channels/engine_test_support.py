@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import ExitStack
 from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
@@ -65,6 +66,22 @@ CHANNEL_GROUP_REPLY_SURFACE = ReplySurface.channel(
 
 
 _CHANNEL_STATES: WeakValueDictionary[Path, ChannelStateStore] = WeakValueDictionary()
+_STORE_CLEANUP = ExitStack()
+
+
+def close_test_stores() -> None:
+    """Release every store opened by the builders, including failed constructions."""
+    try:
+        _STORE_CLEANUP.close()
+    finally:
+        _CHANNEL_STATES.clear()
+
+
+def make_sessions(data_dir: Path) -> ChatSessionManager:
+    """Build Sessions owned by the Channel test's store-cleanup fixture."""
+    sessions = ChatSessionManager(data_dir)
+    _STORE_CLEANUP.callback(sessions.close)
+    return sessions
 
 
 def channel_state(data_dir: Path, *channel_ids: str) -> ChannelStateStore:
@@ -80,6 +97,7 @@ def channel_state(data_dir: Path, *channel_ids: str) -> ChannelStateStore:
         if not (data_dir / "data-store.json").exists():
             write_bootstrap_marker(data_dir)
         state = ChannelStateStore.open(data_dir)
+        _STORE_CLEANUP.callback(state.close)
         _CHANNEL_STATES[key] = state
     state.adopt(dict.fromkeys(channel_ids or ("tg-assistant",)))
     return state
@@ -449,7 +467,7 @@ def make_engine(
     """
     if not (tmp_path / "data-store.json").exists():
         write_bootstrap_marker(tmp_path)
-    chat_sessions = ChatSessionManager(tmp_path)
+    chat_sessions = make_sessions(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
     trigger_service = make_trigger_service(
         trigger_mock,

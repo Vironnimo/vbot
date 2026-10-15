@@ -1,6 +1,6 @@
 """Bounded image validation and preparation, independent of Providers and Sessions.
 
-Callers supply accepted MIME types and known encoded-file byte ceilings. Original
+Callers supply accepted MIME types and known byte or dimension ceilings. Original
 files are never rewritten; results explain changed copies and any loss of detail.
 """
 
@@ -10,6 +10,7 @@ import hashlib
 import io
 import math
 import struct
+import threading
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -105,7 +106,7 @@ class PreparedImage:
         if self.size != self.original_size:
             details.append(
                 f"resized from {self.original_size[0]}x{self.original_size[1]} "
-                f"to {self.size[0]}x{self.size[1]} pixels to fit the byte limit"
+                f"to {self.size[0]}x{self.size[1]} pixels to fit the destination limits"
             )
         if self.lossy:
             details.append("lossy compression was used, so fine details may be reduced")
@@ -145,11 +146,12 @@ class ImageConverter:
     """Validate every image; preserve accepted bytes or prepare a bounded copy.
 
     Validation caches retain only hashes and dimensions. Converted-output caches
-    are byte-bounded and include destination formats and byte ceiling in the key.
-    All inspection, decoding, encoding and cache work uses one bounded worker.
+    are byte-bounded and include destination formats and limits in the key.
+    Inspection, decoding, encoding and cache work runs in bounded workers.
     """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._cache: OrderedDict[tuple[Any, ...], PreparedImage] = OrderedDict()
         self._cache_bytes = 0
         self._validated: OrderedDict[tuple[bytes, str], _ImageInfo] = OrderedDict()
@@ -161,12 +163,31 @@ class ImageConverter:
         supported_types: frozenset[str],
         *,
         max_output_bytes: int | None = None,
+        max_dimension: int | None = None,
     ) -> PreparedImage:
+        return await _WORKERS.run(
+            self.prepare, data, media_type, supported_types, max_output_bytes, max_dimension
+        )
+
+    def prepare(
+        self,
+        data: bytes,
+        media_type: str,
+        supported_types: frozenset[str],
+        max_output_bytes: int | None = None,
+        max_dimension: int | None = None,
+    ) -> PreparedImage:
+        """Blocking conversion for callers already running in a bounded worker.
+
+        Provider payload builders use this entrypoint after counting every image
+        in the final request. The lock also protects caches shared with convert().
+        """
         if max_output_bytes is not None and max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
-        return await _WORKERS.run(
-            self._prepare, data, media_type, supported_types, max_output_bytes
-        )
+        if max_dimension is not None and max_dimension <= 0:
+            raise ValueError("max_dimension must be positive")
+        with self._lock:
+            return self._prepare(data, media_type, supported_types, max_output_bytes, max_dimension)
 
     def _prepare(
         self,
@@ -174,17 +195,22 @@ class ImageConverter:
         media_type: str,
         supported_types: frozenset[str],
         max_bytes: int | None,
+        max_dimension: int | None,
     ) -> PreparedImage:
         digest = hashlib.sha256(data).digest()
         info = self._validate(data, media_type, digest)
-        if media_type in supported_types and (max_bytes is None or len(data) <= max_bytes):
+        if (
+            media_type in supported_types
+            and (max_bytes is None or len(data) <= max_bytes)
+            and (max_dimension is None or max(info.size) <= max_dimension)
+        ):
             return PreparedImage(data, media_type, info.size, info.size)
         targets = tuple(kind for kind in _FORMATS if kind in supported_types)
         if not targets:
             raise ImageConversionError("unsupported_target")
         if info.frames != 1:
             raise ImageConversionError("multiple_frames")
-        key = (digest, media_type, targets, max_bytes)
+        key = (digest, media_type, targets, max_bytes, max_dimension)
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]
@@ -202,7 +228,7 @@ class ImageConverter:
                     assert profiled is not None
                     converted = profiled
                     profile = converted.info.get("icc_profile")
-                result = self._fit(converted, targets, max_bytes, profile)
+                result = self._fit(converted, targets, max_bytes, profile, max_dimension)
         except (*_DECODE_ERRORS, ImageCms.PyCMSError) as exc:
             raise ImageConversionError() from exc
         if len(result.data) <= _CACHE_BYTES:
@@ -258,10 +284,17 @@ class ImageConverter:
         targets: tuple[str, ...],
         max_bytes: int | None,
         profile: bytes | None,
+        max_dimension: int | None,
     ) -> PreparedImage:
         image = original
-        # Full-size lossless output precedes JPEG. Only a concrete byte ceiling
-        # permits lower quality or resampling, always from the original pixels.
+        if max_dimension is not None and max(original.size) > max_dimension:
+            factor = max_dimension / max(original.size)
+            image = original.resize(
+                (max(1, int(original.width * factor)), max(1, int(original.height * factor))),
+                Image.Resampling.LANCZOS,
+            )
+        # Lossless output at the permitted dimensions precedes JPEG. A concrete
+        # byte ceiling permits further quality reduction or resampling.
         for attempt in range(9):
             smallest_overflow: int | None = None
             for target in targets:

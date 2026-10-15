@@ -59,11 +59,17 @@ class _SessionWriteLease:
     scope: SessionWriteLeaseScope | None = None
 
 
+@dataclass
+class _SessionWriteEntry:
+    lease: _SessionWriteLease
+    token: contextvars.Token[tuple[_SessionWriteEntry, ...]] | None = None
+
+
 class _SessionWriteLock:
     def __init__(self) -> None:
         self._held: _SessionWriteLease | None = None
         self._waiters: list[asyncio.Future[None]] = []
-        self._leases: contextvars.ContextVar[tuple[_SessionWriteLease, ...]] = (
+        self._leases: contextvars.ContextVar[tuple[_SessionWriteEntry, ...]] = (
             contextvars.ContextVar("session_write_lock_leases", default=())
         )
 
@@ -71,10 +77,12 @@ class _SessionWriteLock:
         return self._held is not None
 
     async def __aenter__(self) -> Self:
-        stack = tuple(lease for lease in self._leases.get() if lease.active)
+        stack = tuple(entry for entry in self._leases.get() if entry.lease.active)
         if stack:
-            stack[-1].holders += 1
-            self._leases.set((*stack, stack[-1]))
+            lease = stack[-1].lease
+            lease.holders += 1
+            entry = _SessionWriteEntry(lease)
+            entry.token = self._leases.set((*stack, entry))
             return self
         scope = _LEASE_SCOPE.get()
         while True:
@@ -95,15 +103,18 @@ class _SessionWriteLock:
                 await waiter
             finally:
                 self._waiters.remove(waiter)
-        self._leases.set((*stack, lease))
+        entry = _SessionWriteEntry(lease)
+        entry.token = self._leases.set((*stack, entry))
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
         stack = self._leases.get()
         if not stack:
             raise RuntimeError("session write lock exited without an active lease")
-        lease = stack[-1]
-        self._leases.set(stack[:-1])
+        entry = stack[-1]
+        assert entry.token is not None
+        self._leases.reset(entry.token)
+        lease = entry.lease
         lease.holders -= 1
         if lease.holders == 0:
             lease.active = False

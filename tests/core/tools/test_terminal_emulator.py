@@ -64,7 +64,23 @@ def test_observation_marks_highlighted_text_and_the_visible_cursor() -> None:
     assert hidden.cursor_line == hidden.screen_start_line + 3
 
 
-def test_observation_marks_faint_text_after_the_visible_cursor_as_a_suggestion() -> None:
+@pytest.mark.parametrize("columns", [30, 10])
+def test_observation_marks_faint_text_after_the_visible_cursor_as_a_suggestion(
+    columns: int,
+) -> None:
+    wrapped = TerminalEmulator(columns, 5, scrollback_lines=10)
+    wrapped.feed("PS> Get\x1b[2mChildItem -Name\r\nUnrelated\x1b[0m\x1b[1;8H")
+    expected = (
+        f"PS> Get{SUGGESTION_START}ChildItem -Name{SUGGESTION_END}\nUnrelated"
+        if columns == 30
+        else (
+            f"PS> Get{SUGGESTION_START}Chi{SUGGESTION_END}\n"
+            f"{SUGGESTION_START}ldItem -Na{SUGGESTION_END}\n"
+            f"{SUGGESTION_START}me{SUGGESTION_END}\nUnrelated"
+        )
+    )
+    assert wrapped.observe().screen == expected
+
     emulator = TerminalEmulator(30, 3, scrollback_lines=10)
     # PSReadLine draws its prediction faint after the typed text and moves the cursor back.
     emulator.feed("\x1b[2mPS\x1b[0m> Get-Chi\x1b[97;2;3mldItem -Name\x1b[0m\x1b[12G")

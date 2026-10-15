@@ -815,8 +815,8 @@ def cmd_delete(args: argparse.Namespace) -> int:
         print_error(f"worktree contents could not be checked: {exc}")
         return 1
 
-    # Without `.git`, `git -C` would resolve the enclosing repository. Only
-    # Git's registration can identify the branch of a verified empty leftover.
+    # Without `.git`, `git -C` would resolve the enclosing repository. Prefer
+    # Git's registration; the managed marker below can recover a pruned one.
     if checkout_present:
         worktree_branch = _read_worktree_branch_name(worktree_path)
     else:
@@ -849,6 +849,11 @@ def cmd_delete(args: argparse.Namespace) -> int:
         managed_branch = marker_data.get(MANAGED_BRANCH_KEY)
         if isinstance(managed_branch, bool) and managed_branch:
             delete_branch = worktree_branch == name
+            if not checkout_present and worktree_branch is None:
+                branch_status, _ = _run_command(
+                    ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{name}"]
+                )
+                delete_branch = branch_status == 0
 
     terminated_paths: list[str] = []
     leftover_path: Path | None = None

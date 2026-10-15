@@ -825,7 +825,14 @@ def _build_replay(values: Mapping[str, Any]) -> ReplayRules:
 def _build_media(values: Mapping[str, Any]) -> MediaRules:
     kwargs: dict[str, Any] = {
         key: values[key]
-        for key in ("image_max_bytes", "request_max_bytes", "request_max_images")
+        for key in (
+            "image_max_bytes",
+            "request_max_bytes",
+            "request_max_images",
+            "image_max_dimension",
+            "many_images_threshold",
+            "many_images_max_dimension",
+        )
         if key in values
     }
     if "types" in values:

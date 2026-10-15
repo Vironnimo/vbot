@@ -225,8 +225,7 @@ async def test_the_call_reaches_the_image_model(
         pytest.param(
             {"prompt": "a", "aspect_ratio": "  ", "resolution": ""},
             contract_refusal(
-                r'generate_image was not run: "aspect_ratio" must match the pattern .*\S.*; '
-                'received "  ".'
+                'generate_image was not run: "aspect_ratio" must not be blank; received "  ".'
             ),
             id="blank-options",
         ),

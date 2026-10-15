@@ -106,15 +106,15 @@ export function createAppExtensions(context) {
           extensionPages = Array.isArray(result?.pages) ? result.pages : [];
           updated = true;
           context.onPagesLoaded?.();
-          if (reload) {
-            // A replaced descriptor reloads its page first; only a page that
-            // stays open is asked to refresh. Every other subscriber
-            // refreshes too.
-            await tick();
-            invalidate(null);
-          }
         } catch {
           // Keep the last valid descriptors while a transient RPC error clears.
+        }
+        if (reload) {
+          // A replaced descriptor reloads its page first. Independently of
+          // catalog success, retained pages and the other Extension surfaces
+          // must catch up after a reconnect or an Extension reload.
+          await tick();
+          invalidate(null);
         }
       } while (extensionPagesRefreshQueued);
       return updated;

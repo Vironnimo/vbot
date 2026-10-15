@@ -209,16 +209,13 @@ export function createSwarmPageModel(host) {
       error = value;
     },
     navigate,
-    // A step to the Board that loads nothing; a revealed post loads only
-    // what it needs.
     stepToBoard() {
-      activeTab = 'board';
-      syncRoute({ step: true });
+      return openTab('board');
     },
     // A Wiki link from the Board; a page that cannot open shows why.
     async openWikiPage(id) {
       try {
-        openTab('wiki');
+        if (!(await openTab('wiki'))) return;
         await tick();
         await wikiPanel?.openPage(id);
       } catch (cause) {
@@ -326,11 +323,23 @@ export function createSwarmPageModel(host) {
       return true;
     }
     if (target?.profile) {
-      const profile =
+      let profile =
         target.profile === 'new'
           ? 'new'
           : profiles.find((item) => item.id === target.profile);
-      if (!profile) return profilesLoaded;
+      if (!profile) {
+        if (!profilesLoaded) return false;
+        try {
+          profile = (await call('profiles.get', { profile_id: target.profile }))
+            .profile;
+        } catch (cause) {
+          if (!disposed) error = failureText(cause);
+          return true;
+        }
+        if (disposed || routeTarget(route)?.profile !== target.profile)
+          return true;
+        if (!profile) return true;
+      }
       // By id: the editor and the list hold separate state proxies of a
       // saved profile.
       if (
@@ -388,9 +397,10 @@ export function createSwarmPageModel(host) {
     });
   }
 
-  function openTab(tab) {
-    showTab(tab);
-    syncRoute({ step: true });
+  async function openTab(tab) {
+    if (!selectedSwarm) return false;
+    if (tab !== activeTab) await stepTo(swarmRoute(selectedSwarm.id, tab));
+    return activeTab === tab;
   }
 
   function clearStartErrors(...fields) {

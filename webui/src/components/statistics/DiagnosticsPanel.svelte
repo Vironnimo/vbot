@@ -21,13 +21,11 @@
     formatTokens,
     shareOf,
   } from '$lib/statisticsView.js';
-  import {
-    agentName,
-    dateCell,
-    modelCell,
-    modelName,
-    sessionWithAgent,
-  } from './ReportPrimitives.svelte';
+  import AgentName from './report/AgentName.svelte';
+  import DateCell from './report/DateCell.svelte';
+  import ModelCell from './report/ModelCell.svelte';
+  import ModelName from './report/ModelName.svelte';
+  import SessionWithAgent from './report/SessionWithAgent.svelte';
 
   let { section } = $props();
 
@@ -358,6 +356,18 @@
   }
 </script>
 
+{#snippet agentName(agentId)}
+  <AgentName {agentId} />
+{/snippet}
+
+{#snippet dateCell(row, column)}
+  <DateCell {row} {column} />
+{/snippet}
+
+{#snippet modelCell(row, column)}
+  <ModelCell {row} {column} />
+{/snippet}
+
 {#snippet strategyCell(row)}
   <span use:tooltip={compactionStrategyTooltip(row.strategy)}
     >{compactionStrategyLabel(row.strategy)}</span
@@ -365,7 +375,7 @@
 {/snippet}
 
 {#snippet sessionCell(row)}
-  {@render sessionWithAgent(row)}
+  <SessionWithAgent {row} />
 {/snippet}
 
 {#snippet shareCell(row, column)}
@@ -386,7 +396,7 @@
 {/snippet}
 
 {#snippet burstModel(key)}
-  {@render modelName(key)}
+  <ModelName id={key} />
 {/snippet}
 
 {#snippet burstEntries(entries, name, label)}

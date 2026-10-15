@@ -898,6 +898,11 @@ class ChatRunManager:
             except BaseException as exc:
                 status, abort = RunStatus.CANCELLED, exc
             run._completion_started = True  # noqa: SLF001 - freeze outcome before the commit.
+            try:
+                notification_errors = await run.finalize_completion(status)
+            except BaseException as exc:
+                abort = exc
+                notification_errors = [str(exc) or type(exc).__name__]
             payload = terminal_extras()
             usage = getattr(result, "usage", None)
             if usage:
@@ -927,12 +932,12 @@ class ChatRunManager:
                 status, abort = RunStatus.CANCELLED, exc
                 payload["history_persisted"] = False
             try:
-                notification_errors = await run.notify_completion(status)
+                notification_errors.extend(await run.notify_completion(status))
             except BaseException as exc:
                 # Even process-level observer aborts must release the Session.
                 # Preserve the already committed outcome before propagating.
                 abort = exc
-                notification_errors = [str(exc) or type(exc).__name__]
+                notification_errors.append(str(exc) or type(exc).__name__)
             if notification_errors:
                 payload["completion_notification_errors"] = notification_errors
             if status == RunStatus.CANCELLED:

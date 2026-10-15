@@ -74,13 +74,13 @@ def _record_channel_changes(
     loops: list[asyncio.AbstractEventLoop] = []
     started: list[str] = []
     service = runtime.channel_service
-    update_channel = service.update_channel
+    change_config = service._change_config
 
-    async def recorded(channel_id: str, **fields: Any) -> None:
+    async def recorded(*args: Any, **fields: Any) -> None:
         loops.append(asyncio.get_running_loop())
-        await update_channel(channel_id, **fields)
+        await change_config(*args, **fields)
 
-    monkeypatch.setattr(service, "update_channel", recorded)
+    monkeypatch.setattr(service, "_change_config", recorded)
     monkeypatch.setattr(
         service, "start_channel", lambda channel_id, **_: started.append(channel_id)
     )

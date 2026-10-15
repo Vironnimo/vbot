@@ -36,6 +36,7 @@ from core.json_documents import (
 )
 from core.utils.atomic import atomic_write_text, write_new_bytes
 from core.utils.errors import TaskError
+from core.utils.file_status import is_file_strict
 from core.utils.ids import is_safe_id, new_id, write_id_file
 
 TASK_ARTIFACT_FORMAT_VERSION = 1
@@ -80,14 +81,22 @@ class TaskArtifactStore:
     """Blob + sidecar artifact storage for one task's artifact directory.
 
     *kind* names the task in error messages (currently ``"speech"``);
-    *error* is the task's configuration-error class used for every expected
-    failure so callers keep their domain error contract.
+    *error* is the task's configuration-error class; *not_found_error* can
+    distinguish missing artifacts from invalid or unreadable ones.
     """
 
-    def __init__(self, artifact_dir: str | Path, *, kind: str, error: type[TaskError]) -> None:
+    def __init__(
+        self,
+        artifact_dir: str | Path,
+        *,
+        kind: str,
+        error: type[TaskError],
+        not_found_error: type[TaskError] | None = None,
+    ) -> None:
         self._artifact_dir = Path(artifact_dir)
         self._kind = kind
         self._error = error
+        self._not_found_error = not_found_error or error
 
     def write(self, payload: bytes, *, extension: str, media_type: str) -> StoredArtifact:
         """Persist one blob and its sidecar; returns the stored artifact.
@@ -143,14 +152,14 @@ class TaskArtifactStore:
         )
 
     def read(self, artifact_id: str) -> StoredArtifact:
-        """Load one artifact by id; raises the task's error for every failure."""
+        """Load one artifact by id with the task's missing/configuration error types."""
         label = self._kind.capitalize()
         if not is_safe_id(artifact_id):
             raise self._error(f"Invalid {self._kind} artifact id")
         metadata_path = self._artifact_dir / f"{artifact_id}.json"
-        if not metadata_path.is_file() or metadata_path.is_symlink():
-            raise self._error(f"{label} artifact not found")
         try:
+            if not is_file_strict(metadata_path) or metadata_path.is_symlink():
+                raise self._not_found_error(f"{label} artifact not found")
             data = load_validated_json_file(
                 metadata_path, validate_task_artifact_metadata_data, missing_ok=False
             )
@@ -173,9 +182,9 @@ class TaskArtifactStore:
             if (
                 file_path.is_symlink()
                 or file_path.resolve().parent != self._artifact_dir.resolve()
-                or not file_path.is_file()
+                or not is_file_strict(file_path)
             ):
-                raise self._error(f"{label} artifact file not found")
+                raise self._not_found_error(f"{label} artifact file not found")
         except OSError as exc:
             raise self._error(f"{label} artifact file is unreadable") from exc
         return StoredArtifact(

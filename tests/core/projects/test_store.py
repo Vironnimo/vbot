@@ -516,7 +516,7 @@ def test_update_clears_a_field_with_its_empty_value(
         # A Project id is a storage path segment; traversal is refused.
         pytest.param(
             lambda store, repos: store.get("../somewhere"),
-            ProjectError,
+            InvalidProjectIdError,
             "Invalid project id: '../somewhere'",
             id="path-traversal",
         ),
@@ -824,7 +824,7 @@ def test_archive_files_rejects_a_path_traversal_id_and_leaves_the_sibling_untouc
     sibling.mkdir(parents=True)
     sibling.joinpath("keep.txt").write_text("important", encoding="utf-8")
 
-    with pytest.raises(ProjectError):
+    with pytest.raises(InvalidProjectIdError):
         store.archive_files("../secret", _payload(data_dir)).__enter__()
 
     assert sibling.is_dir()

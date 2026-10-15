@@ -8,8 +8,10 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import threading
 from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,7 @@ from core.database.recovery import (
     quarantine_root,
     write_incident,
 )
+from core.utils.timestamps import format_canonical_timestamp, parse_canonical_timestamp
 from tests.core.database.database_test_support import (
     NOTES_SCHEMA_SQL,
     add_note,
@@ -278,8 +281,9 @@ def test_a_newer_or_unreadable_database_is_never_replaced(
     assert not quarantine_root(data_dir).exists()
 
 
+@pytest.mark.parametrize("read_only_snapshot", [False, True])
 def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, read_only_snapshot: bool
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
     database = open_database(notes_spec(data_dir))
@@ -287,16 +291,24 @@ def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
     database.close()
     path = notes_spec(data_dir).path
     original = path.read_bytes()
+    source = snapshot / path.name
+    source_mode = source.stat().st_mode
+    if read_only_snapshot:
+        source.chmod(stat.S_IREAD)
 
-    with monkeypatch.context() as patched:
-        patched.setattr(
-            os,
-            "replace",
-            _failing_replace(lambda _source, target: _into_quarantine(target), PermissionError),
-        )
-        with pytest.raises(DatabaseUnavailableError):
-            restore_data_snapshot(data_dir, snapshot)
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(
+                os,
+                "replace",
+                _failing_replace(lambda _source, target: _into_quarantine(target), PermissionError),
+            )
+            with pytest.raises(DatabaseUnavailableError):
+                restore_data_snapshot(data_dir, snapshot)
+    finally:
+        source.chmod(source_mode)
     assert path.read_bytes() == original
+    assert not list(path.parent.glob(f".{path.name}.restore.*.tmp"))
     pending = read_incident(data_dir, "notes")
     assert pending is not None
     assert pending["verification"] == "pending"
@@ -310,9 +322,17 @@ def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
     assert path.read_bytes() == original
     assert read_incident(data_dir, "notes") == pending
 
+    later_failure = format_canonical_timestamp(
+        parse_canonical_timestamp(pending["possible_loss_interval"]["end"]) + timedelta(seconds=1)
+    )
+    monkeypatch.setattr(recovery_module, "utc_now_timestamp", lambda: later_failure)
     assert restore_data_snapshot(data_dir, snapshot).databases == ("notes",)
     assert read_maintenance(data_dir) is None
     assert stored_bodies(notes_spec(data_dir)) == ["saved"]
+    completed = read_incident(data_dir, "notes")
+    assert completed is not None
+    assert completed["incident_id"] == pending["incident_id"]
+    assert completed["possible_loss_interval"]["end"] == later_failure
 
 
 def test_incident_publication_failure_does_not_report_recovery(
@@ -487,7 +507,7 @@ def test_a_non_canonical_incident_timestamp_is_invalid_evidence(data_dir: Path) 
 
 
 @pytest.mark.parametrize("partial_install", [False, True])
-def test_a_restore_retry_keeps_the_original_quarantine_and_failure_time(
+def test_a_restore_retry_keeps_the_original_quarantine_and_covers_the_retry_time(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, partial_install: bool
 ) -> None:
     snapshot_with_notes(data_dir, "saved")
@@ -509,12 +529,20 @@ def test_a_restore_retry_keeps_the_original_quarantine_and_failure_time(
     if partial_install:
         path.write_bytes(b"damaged retry output")
 
+    later_failure = format_canonical_timestamp(
+        parse_canonical_timestamp(pending["possible_loss_interval"]["end"]) + timedelta(seconds=1)
+    )
+    monkeypatch.setattr(recovery_module, "utc_now_timestamp", lambda: later_failure)
     assert stored_bodies(notes_spec(data_dir)) == ["saved"]
     completed = read_incident(data_dir, "notes")
     assert completed is not None
     assert completed["verification"] == "ok"
-    for kept in ("incident_id", "cause", "possible_loss_interval", "quarantine"):
+    for kept in ("incident_id", "cause", "quarantine"):
         assert completed[kept] == pending[kept], kept
+    assert completed["possible_loss_interval"] == {
+        **pending["possible_loss_interval"],
+        "end": later_failure,
+    }
     assert (Path(completed["quarantine"]) / "notes.db").read_bytes() == b"damaged original"
 
 

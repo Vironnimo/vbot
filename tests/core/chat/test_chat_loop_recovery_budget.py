@@ -103,7 +103,10 @@ async def test_fatal_after_text_preserves_partial_without_another_request(tmp_pa
     )
     with pytest.raises(ProviderAuthError) as raised:
         await build_chat_loop(runtime).send("coder", "Work", session_id="test")
-    assert raised.value is error
+    assert type(raised.value) is type(error)
+    assert (raised.value.args, str(raised.value)) == (error.args, str(error))
+    assert raised.value.retryable is False
+    assert raised.value.__cause__ is None
     assert len(adapter.stream_requests) == 1
     history = runtime.chat_sessions.get(session_address("coder", "test")).load()
     assert history[1].content == "Partial"

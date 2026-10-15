@@ -163,8 +163,8 @@ class _PollingHealth:
 
     PTB retries an unanswered ``getUpdates`` forever. A failure reaches :meth:`failed`
     as the updater's ``error_callback``, which also replaces PTB's traceback per
-    attempt; PTB retries a timed-out poll without that callback, so the request built
-    by :func:`_observed_polling_request` reports timeouts and answers itself. The
+    attempt; PTB retries timed-out and rate-limited polls without that callback, so
+    :func:`_observed_polling_request` reports those failures and answers itself. The
     first unanswered poll opens an outage, every unanswered poll logs DEBUG, and the
     outage warns once it has lasted ``_POLLING_OUTAGE_SECONDS``; the next answered
     poll ends it, with one INFO line only after a warning. A rejected token is
@@ -202,7 +202,8 @@ class _PollingHealth:
             self._on_rejected()
         elif 200 <= status < 300:
             self._answered(started_at)
-        # Any other status reaches failed() through PTB's error callback.
+        # Other failures reach failed() through PTB's callback or the request's
+        # RetryAfter observer, since PTB retries that error without its callback.
 
     def _unanswered(self, error: BaseException) -> None:
         now = self.clock()
@@ -284,9 +285,21 @@ def _bot_request() -> Any:
 def _observed_polling_request(health: _PollingHealth) -> Any:
     """Build PTB's default ``getUpdates`` request, reporting each poll to ``health``."""
     httpx_request: Any = _load_telegram_request().HTTPXRequest
-    timed_out: Any = _load_telegram_error().TimedOut
+    telegram_error = _load_telegram_error()
+    timed_out: Any = telegram_error.TimedOut
+    retry_after: Any = telegram_error.RetryAfter
 
     class _ObservedPollingRequest(httpx_request):  # type: ignore[misc]
+        async def _request_wrapper(self, *args: Any, **kwargs: Any) -> bytes:
+            # PTB interprets Telegram's retry_after payload above do_request and
+            # handles that exception without invoking the updater's error callback.
+            try:
+                payload: bytes = await super()._request_wrapper(*args, **kwargs)
+            except retry_after as error:
+                health.failed(error)
+                raise
+            return payload
+
         async def do_request(self, *args: Any, **kwargs: Any) -> tuple[int, bytes]:
             started_at = health.clock()
             try:

@@ -60,8 +60,9 @@ def _fragment_storage() -> SimpleNamespace:
 
 
 class _AnsweredRun:
-    def __init__(self, answer: str) -> None:
+    def __init__(self, answer: str, session_id: str = "new-session") -> None:
         self._answer = answer
+        self.session_id = session_id
 
     async def wait(self) -> ChatMessage:
         return ChatMessage.assistant(content=self._answer, model="openai/gpt-5.2")
@@ -73,10 +74,13 @@ class _Trigger:
     def __init__(self, answer: str = "Handoff: finish the parser refactor.") -> None:
         self.answer = answer
         self.runs: list[dict[str, Any]] = []
+        self.fail_new_session = False
 
     async def trigger_run(self, agent_id: str, message: Any, **kwargs: Any) -> _AnsweredRun:
         self.runs.append({"agent_id": agent_id, "message": message, **kwargs})
-        return _AnsweredRun(self.answer)
+        if self.fail_new_session and kwargs.get("session_id") is None:
+            raise RuntimeError("Target admission refused")
+        return _AnsweredRun(self.answer, kwargs.get("session_id") or "new-session")
 
 
 class _Resolver:
@@ -267,12 +271,15 @@ async def test_handoff_starts_the_target_on_the_written_handoff_in_a_new_session
     working_project = (
         (source_project or source_working) if target_project is None else AGENT_DEFAULT_PROJECT
     )
-    assert handoff.sessions.created == [(target, target_project, working_project)]
+    # Session creation belongs to Chat's validated trigger admission, never to
+    # the command before the target has been admitted.
+    assert handoff.sessions.created == []
     assert receiver == {
         "agent_id": target,
         "message": handoff.trigger.answer,
-        "session_id": "new-session",
         "project_id": target_project,
+        "working_project_id": working_project,
+        "actor": "command",
         "internal": False,
         "reply_surface": WEBUI,
     }
@@ -327,6 +334,19 @@ async def test_handoff_is_refused_without_creating_a_session(
     assert handoff.sessions.created == []
     assert handoff.agents.updates == []
     assert (result.runs, result.navigation, handoff.changes) == ((), None, [])
+
+
+async def test_handoff_admission_failure_leaves_no_session_or_current_pointer() -> None:
+    handoff = _Handoff()
+    handoff.trigger.fail_new_session = True
+
+    with pytest.raises(RuntimeError):
+        await handoff.run("/handoff agent:reviewer")
+
+    assert len(handoff.trigger.runs) == 2
+    assert handoff.sessions.created == []
+    assert handoff.agents.updates == []
+    assert handoff.changes == []
 
 
 # ---------------------------------------------------------------------------

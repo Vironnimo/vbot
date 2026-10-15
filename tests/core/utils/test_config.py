@@ -17,6 +17,7 @@ from core.utils.config import (
     resolve_port,
     resolve_server_bind,
 )
+from core.utils.errors import ConfigError
 
 _PORT_SETTINGS = {"format_version": 1, "server_port": 8500}
 
@@ -240,7 +241,13 @@ def test_an_unusable_worktree_file_falls_to_the_default(
             "settings.server_port",
         ),
         (None, {"PORT": "8600", "SERVER_PORT": "8700"}, None, DEFAULT_PORT, "default"),
-        ("{", {}, None, DEFAULT_PORT, "default"),
+        ("{", {}, None, None, None),
+        ({"server_port": 8421}, {}, None, None, None),
+        ({"format_version": 1, "server_port": "invalid"}, {}, None, None, None),
+        ({**_PORT_SETTINGS, "PORT": "invalid"}, {}, None, 8500, "settings.server_port"),
+        ({"format_version": 1, "server_port": "invalid", "PORT": 8500}, {}, None, None, None),
+        ("{", {}, 8421, 8421, "cli"),
+        ("{", {"VBOT_SERVER_PORT": "8421"}, None, 8421, "VBOT_SERVER_PORT"),
     ],
     ids=[
         "cli-first",
@@ -249,7 +256,13 @@ def test_an_unusable_worktree_file_falls_to_the_default(
         "settings-uppercase-key-ignores-ambient-environment",
         "valid-port-next-to-invalid-setting",
         "default-ignores-ambient-environment",
-        "default-for-unreadable-settings",
+        "malformed-settings-refused",
+        "unversioned-settings-refused",
+        "invalid-port-refused",
+        "higher-priority-port-kept",
+        "invalid-higher-priority-port-refused",
+        "explicit-port-bypasses-malformed-settings",
+        "environment-port-bypasses-malformed-settings",
     ],
 )
 def test_server_bind_resolves_cli_then_environment_then_settings_then_default(
@@ -258,8 +271,8 @@ def test_server_bind_resolves_cli_then_environment_then_settings_then_default(
     settings: dict[str, Any] | str | None,
     environment: dict[str, str],
     explicit_port: int | None,
-    port: int,
-    source: str,
+    port: int | None,
+    source: str | None,
 ) -> None:
     monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
     for name, value in environment.items():
@@ -268,6 +281,13 @@ def test_server_bind_resolves_cli_then_environment_then_settings_then_default(
         text = settings if isinstance(settings, str) else json.dumps(settings)
         (tmp_path / "settings.json").write_text(text, encoding="utf-8")
     config = Config(data_dir=tmp_path)
+
+    if port is None:
+        with pytest.raises(ConfigError):
+            resolve_server_bind(config, host="0.0.0.0", explicit_port=explicit_port)
+        with pytest.raises(ConfigError):
+            resolve_port(config, explicit_port)
+        return
 
     assert resolve_server_bind(config, host="0.0.0.0", explicit_port=explicit_port) == {
         "listen_host": "0.0.0.0",

@@ -122,9 +122,17 @@ def test_area_aliases_parse_identically(alias, canonical):
         ["cron", "update", "job", "--session", "s", "--clear-session"],
         ["uninstall", "--app-only", "--data-only"],
         ["update", "--discard", "--stash"],
-        # Target options follow the action, and desktop never selects a data directory.
+        # Target options precede the area or follow the action, never split the command path.
         ["config", "--port", "8999", "get", "debug.enabled"],
         ["desktop", "--data-dir", "data"],
+        ["--data-dir", "data", "desktop"],
+        ["--host", "remote", "home"],
+        ["--port", "8421", "config", "get", "debug.enabled", "--port", "8420"],
+        ["--host", "remote", "agent", "list", "--host", "localhost"],
+        ["--data-dir", "first", "home", "--data-dir", "second"],
+        ["--port", "8421", "desktop", "--port", "8420"],
+        ["--port", "8421", "--port", "8420", "agent", "list"],
+        ["--port", "8421", "extensions", "demo", "export", "--port", "8420"],
     ],
 )  # fmt: skip
 def test_conflicting_or_misplaced_arguments_fail_before_dispatch(tokens):
@@ -133,9 +141,21 @@ def test_conflicting_or_misplaced_arguments_fail_before_dispatch(tokens):
     assert error.value.code == 2
 
 
-def test_target_options_after_the_action_are_kept():
-    args = parse_args(["config", "get", "debug.enabled", "--host", "remote", "--port", "8999"])
-    assert (args.host, args.port) == ("remote", 8999)
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        ["config", "get", "debug.enabled", "--host", "remote", "--port", "8999",
+         "--data-dir", "data"],
+        ["--host", "remote", "--port", "8999", "--data-dir", "data",
+         "config", "get", "debug.enabled"],
+        ["--host=remote", "--data-dir=data", "config", "get", "debug.enabled", "--port=8999"],
+        ["--port", "8999", "config", "get", "debug.enabled", "--host", "remote",
+         "--port", "8999", "--data-dir", "data"],
+    ],
+)  # fmt: skip
+def test_target_options_before_the_area_and_after_the_action_are_kept(tokens):
+    args = parse_args(tokens)
+    assert (args.host, args.port, args.data_dir) == ("remote", 8999, "data")
 
 
 @pytest.mark.parametrize(
@@ -146,6 +166,8 @@ def test_target_options_after_the_action_are_kept():
         ["provider", "custom"],
         ["data-store", "snapshot"],
         ["help", "skill", "file"],
+        ["--port", "8421", "agent"],
+        ["--port", "8421", "help", "skill", "file"],
     ],
 )
 def test_bare_groups_show_help_without_dispatch(tokens, capsys):
@@ -313,7 +335,14 @@ def test_extensions_action_first_retains_owner_arguments(modern, legacy):
         assert getattr(left, field) == getattr(right, field)
 
 
-@pytest.mark.parametrize("prefix", [["--output", "plain"], ["--output=plain"]])
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        ["--output", "plain"],
+        ["--output=plain"],
+        ["--port", "8421", "--output", "plain", "--host=remote"],
+    ],
+)
 def test_root_output_option_keeps_aliases_and_dynamic_extension_arguments(prefix):
     assert parse_args([*prefix, "providers", "custom", "list"]).output == "plain"
     args = parse_args([*prefix, "extensions", "demo", "export", "--output", "json"])
@@ -321,9 +350,11 @@ def test_root_output_option_keeps_aliases_and_dynamic_extension_arguments(prefix
     assert args.rest == ["export", "--output", "json"]
 
 
-def test_extension_run_separates_target_options_from_operation_options():
+@pytest.mark.parametrize("prefix", [[], ["--port", "9123", "--host", "192.0.2.8"]])
+def test_extension_run_separates_target_options_from_operation_options(prefix):
     args = parse_args(
         [
+            *prefix,
             "extensions",
             "run",
             "demo",

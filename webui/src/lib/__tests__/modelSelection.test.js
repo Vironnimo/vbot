@@ -384,8 +384,16 @@ describe('buildModelSelectOptions', () => {
   });
 
   it('reuses suitability and keeps one exact selected value without connection pins', () => {
+    const embeddingModel = {
+      id: 'demo/embedding',
+      capabilities: { task_types: ['text_embedding'] },
+    };
     const options = buildModelSelectOptions({
-      models: [catalogModel('demo/model', 'demo'), { id: 'demo/no-tools' }],
+      models: [
+        catalogModel('demo/model', 'demo'),
+        { id: 'demo/no-tools' },
+        embeddingModel,
+      ],
       modelOnly: true,
       selectedModelValue: 'demo/model',
     });
@@ -397,13 +405,16 @@ describe('buildModelSelectOptions', () => {
     expect(
       filterModelSelectOptions(options).map((option) => option.value),
     ).toEqual(['', 'demo/model']);
+    expect(filterModelSelectOptions(options, { showAll: true })).toEqual(
+      options,
+    );
     const unavailable = buildModelSelectOptions({
-      models: [],
+      models: [embeddingModel],
       modelOnly: true,
-      selectedModelValue: 'demo/removed',
+      selectedModelValue: 'demo/embedding',
     });
     expect(unavailable[1]).toMatchObject({
-      value: 'demo/removed',
+      value: 'demo/embedding',
       isUnavailable: true,
     });
   });

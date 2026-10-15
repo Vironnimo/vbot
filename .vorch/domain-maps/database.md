@@ -119,6 +119,8 @@ Schema design rules for every Generation 1 table and later addition: no enum CHE
 
 ## Constraints & Gotchas
 
+- Connection closure waits for SQLite outside the process-wide tracking lock; the connection remains registered until close succeeds, so a slow statement cannot block unrelated database tracking. A read interrupted by shutdown reports `DatabaseUnavailableError`, including a statement attempted on the already closed reader.
+- Retrying an interrupted restore retains its incident identity and original quarantine, but extends the possible-loss interval through the retry's failure detection: pending evidence cannot prove that no later writes occurred. Merely confirming an already installed snapshot preserves the original interval.
 - Rollback-journal mode serves reads on the serialized writer, and `backup()` holds the connection lock for the copy's duration; decode large results after the read transaction ends.
 - `backup()` uses one `VACUUM INTO` read transaction (cancellable via a progress handler), never a stepped `Connection.backup`, which restarts on every concurrent commit.
 - Quarantine, discard and restore refuse while this process still has a tracked connection to the file (`has_live_connection`); every connection goes through `connect_tracked`.

@@ -20,7 +20,7 @@ from . import wiki_text as text
 from ._board_view import call_text, spoken_list
 from ._extension_values import AgentCallError, Json, _call_request_id
 from ._store_values import wiki_number, wiki_ref
-from ._store_wiki import _FIELDS, _MAX_EDITS, MUTATIONS, query_words
+from ._store_wiki import _FIELDS, _MAX_EDITS, _TEXT_CHARS, MUTATIONS, query_words
 from ._wiki_emphasis import _FENCE, _code_spans
 from .agent_text import FIELD_IGNORED, LIMIT_CLAMPED, REPLAYED
 from .store import SwarmStore, SwarmStoreError
@@ -230,6 +230,8 @@ class WikiCall:
                 _nothing_changed(text.WIKI_NEEDS[key].format(**values)),
             )
 
+        for field in ("content", "old_text", "new_text"):
+            _check_text_limit(field, arguments.get(field))
         if action == "update" and "edits" in arguments:
             _check_edits(arguments)
         # run() finds the page that holds the text an update replaces.
@@ -835,6 +837,21 @@ def _check_edits(arguments: Json) -> None:
         key, values = problem
         raise AgentCallError(
             "invalid_arguments", _nothing_changed(text.WIKI_NEEDS[key].format(**values))
+        )
+    for number, item in enumerate(edits, 1):
+        for field, value in item.items():
+            _check_text_limit(f"edit {number} {field}", value)
+
+
+def _check_text_limit(field: str, value: Any) -> None:
+    if isinstance(value, str) and len(value) > _TEXT_CHARS:
+        raise AgentCallError(
+            "invalid_arguments",
+            _nothing_changed(
+                text.WIKI_NEEDS["text_long"].format(
+                    field=field, count=len(value), maximum=_TEXT_CHARS
+                )
+            ),
         )
 
 

@@ -65,6 +65,7 @@ RESTORABLE_KINDS = frozenset({ARCHIVE_KIND_AGENT, ARCHIVE_KIND_PROJECT, ARCHIVE_
 
 _PAYLOAD_PROBLEMS = {
     "payload_missing": "its files are missing",
+    "payload_unavailable": "its archived files are unavailable; restore access and retry",
     "payload_invalid": "its configuration file cannot be read",
     "older_format": "it was archived in an older format this vBot cannot read",
     "newer_format": "it was archived by a newer vBot",
@@ -194,7 +195,7 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]
         reroot_agents(services, facts.get("unrooted_agents") or (), target, entry.archived_at)
     for tree in entry.trees:
         path = stored_path(services, tree.path)
-        if not path.exists():
+        if not exists_strict(path):
             prune_empty_parents(services, path)
     ledger.finish_restore(entry.entry_key)
     return grant_agent_ids
@@ -394,10 +395,16 @@ def _payload_source(
 ) -> Path | None:
     tree = _tree(entry, role)
     source = None if tree is None else stored_path(services, tree.path)
-    if source is None or not source.is_dir():
+    problem = None
+    try:
+        if source is None or not is_dir_strict(source):
+            problem = "payload_missing"
+    except OSError:
+        problem = "payload_unavailable"
+    if problem is not None:
         findings.block(
-            "payload_missing",
-            _PAYLOAD_PROBLEMS["payload_missing"],
+            problem,
+            _PAYLOAD_PROBLEMS[problem],
             path=None if tree is None else tree.path,
             source_path=None if tree is None else tree.source_path,
         )
@@ -519,16 +526,23 @@ def _plan_workspace(
     """
     default = str(default_workspace_dir(services.data_dir, target).resolve())
     moved_tree = _tree(entry, ARCHIVE_TREE_WORKSPACE)
-    if moved_tree is not None and stored_path(services, moved_tree.path).is_dir():
+    try:
+        moved_present = moved_tree is not None and is_dir_strict(
+            stored_path(services, moved_tree.path)
+        )
+    except OSError:
+        _payload_problem("payload_unavailable", findings)
+        return None, None
+    if moved_tree is not None and moved_present:
         moved = stored_path(services, moved_tree.path)
         folder = (
             None
             if moved_tree.source_path is None
             else stored_path(services, moved_tree.source_path)
         )
-        if folder is not None and not os.path.lexists(folder):
+        if folder is not None and not exists_strict(folder, follow_symlinks=False):
             return None, (moved, folder)
-        if not os.path.lexists(source / "workspace"):
+        if not exists_strict(source / "workspace", follow_symlinks=False):
             findings.warn(
                 "workspace_path_taken",
                 f"the Workspace folder {folder} is in use; the archived Workspace becomes "
@@ -711,14 +725,18 @@ def _move_and_commit(
     except BaseException:
         if plan.workspace_move is not None:
             moved, destination = plan.workspace_move
-            if destination.is_dir() and not moved.exists():
+            if is_dir_strict(destination) and not exists_strict(moved):
                 move_tree(destination, moved)
         raise
 
 
 def _abort(services: ArchiveServices, plan: _Plan) -> None:
     """Return a failed restore's entry to ``archived`` once its files are back in the payload."""
-    if plan.source is not None and not plan.source.is_dir():
+    try:
+        source_returned = plan.source is None or is_dir_strict(plan.source)
+    except OSError:
+        source_returned = False
+    if not source_returned:
         _LOGGER.warning(
             "Restore left for recovery; its files did not go back (entry=%s)", plan.entry.entry_id
         )

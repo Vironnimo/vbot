@@ -241,7 +241,8 @@ class ConnectionRuntime:
     def read_ctx(self) -> Iterator[sqlite3.Connection]:
         """Yield one bounded read connection, or the serialized writer.
 
-        Errors raised by the caller's statements reach the caller unchanged.
+        Caller errors pass through, except a connection closed during the read
+        reports the database's shutdown as unavailability.
         """
         with (
             measure(self._read_metric, track=PERFORMANCE_TRACK, name=f"{self.name} read"),
@@ -279,11 +280,13 @@ class ConnectionRuntime:
                 if self._reader_access_closed:
                     raise DatabaseUnavailableError(f"{self.label} is closed")
                 connection.execute("COMMIT")
-        except BaseException:
+        except BaseException as exc:
             healthy = False
             with contextlib.suppress(BaseException):
                 if connection.in_transaction:
                     connection.execute("ROLLBACK")
+            if isinstance(exc, sqlite3.ProgrammingError) and self._reader_access_closed:
+                raise DatabaseUnavailableError(f"{self.label} is closed") from exc
             raise
         finally:
             if not (healthy and self._return_reader(connection)):

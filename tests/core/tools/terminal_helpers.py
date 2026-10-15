@@ -23,6 +23,7 @@ async def manager(tmp_path: Path) -> AsyncIterator[tuple[TerminalManager, Adapte
     factory = AdapterFactory()
     manager = TerminalManager(
         adapter_factory=factory,
+        program_probe=lambda _pid, _program: False,
         render_host=TerminalRenderHost.in_process(),
         temporary_files=TemporaryFileManager(
             tmp_path / "temp", retention={"terminals": timedelta(hours=1)}

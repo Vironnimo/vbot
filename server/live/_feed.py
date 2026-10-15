@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
-from contextlib import aclosing, suppress
+from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -14,6 +14,7 @@ from typing import Any
 from core.model_tasks.live import LiveRunNotice
 from core.projects import format_agent_address
 from core.runs import RUN_AGENT_ACTIVITY_FIELD
+from core.utils.workers import cancel_and_wait
 from server.events import (
     RUN_COMPLETED_SERVER_EVENT,
     RUN_FAILED_SERVER_EVENT,
@@ -97,11 +98,7 @@ class LiveRunFeed:
     async def aclose(self) -> None:
         """Stop following and discard notices not yet announced."""
         tasks, self._tasks = self._tasks, []
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
-            with suppress(asyncio.CancelledError):
-                await task
+        await cancel_and_wait(*tasks)
 
     async def _follow(self) -> None:
         after_sequence = self._after_sequence

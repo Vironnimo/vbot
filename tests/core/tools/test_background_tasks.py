@@ -340,7 +340,7 @@ async def test_status_shows_a_running_command_with_its_newest_output(
     output_file(status["next"])
     # Looking changes nothing.
     report = tasks.commands.manager.report(command_id)
-    assert (report.ended, report.delivers_result, process.tree.terminations) == (False, True, 0)
+    assert (report.ended, process.tree.terminations) == (False, 0)
     # From the third look on, the Session waiting for the result is told how often it looked.
     again = [data(await tasks.call({"action": "status", "id": command_id})) for _ in range(2)]
     assert "2 times" not in again[0]["next"]
@@ -348,21 +348,34 @@ async def test_status_shows_a_running_command_with_its_newest_output(
 
 
 @pytest.mark.parametrize("owner", [OWNER, CHILD], ids=["own", "subagent"])
+@pytest.mark.parametrize("exit_code", [0, 0xC0000005])
 @pytest.mark.asyncio
 async def test_status_of_an_ended_command_acknowledges_only_this_sessions_delivery(
-    tasks: Tasks, owner: SessionAddress
+    tasks: Tasks, owner: SessionAddress, exit_code: int
 ) -> None:
     command_id, process = await tasks.background(owner=owner)
     process.write("done\n")
-    process.exit(0)
+    process.exit(exit_code)
     await tasks.commands.finish(command_id)
     # Submitted, not yet handed over to the Session.
     assert len(tasks.commands.sink.submissions) == 1
 
-    status = data(await tasks.call({"action": "status", "id": command_id}))
+    listed = data(await tasks.call({"action": "list"}))["tasks"]
+    [row] = [task for task in listed if task["id"] == command_id]
+    result = await tasks.call({"action": "status", "id": command_id})
+    status = data(result)
     tasks.persist()
 
-    assert (status["status"], status["exit_code"], status["output"]) == ("exited", 0, "done")
+    assert (status["status"], status["exit_code"], status["output"]) == (
+        "exited",
+        exit_code,
+        "done",
+    )
+    hexadecimal = "0xC0000005" if exit_code == 0xC0000005 else None
+    assert row.get("exit_code_hex") == status.get("exit_code_hex") == hexadecimal
+    if hexadecimal:
+        shown = tasks.shown({"action": "status", "id": command_id}, result)
+        assert any(hexadecimal in block.get("text", "") for block in shown)
     output_file(status["next"])
     # The result showed the end to the Agent that waits for it; a Sub-Agent's stays.
     own = owner == OWNER

@@ -310,7 +310,6 @@ def main() -> int:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="replace")
-    use_private_environment(SCRIPT)
     # pypdf logs recoverable defects of input files; the commands report what matters.
     logging.getLogger("pypdf").setLevel(logging.ERROR)
     parser = _parser()
@@ -318,6 +317,10 @@ def main() -> int:
     if not arguments.command:
         parser.print_help()
         return 2
+    # Installation owns the lock before looking at a possibly half-created environment.
+    installing = arguments.command == "setup" and (arguments.install or arguments.install_browser)
+    if not installing:
+        use_private_environment(SCRIPT)
     try:
         print_lines(_run(arguments))
     except CommandError as error:

@@ -13,7 +13,56 @@ import pytest
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
 from core.utils.errors import VBotError
-from core.utils.workers import BoundedWorkerPool, OrderedWorker
+from core.utils.workers import BoundedWorkerPool, OrderedWorker, cancel_and_wait
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_caller", [False, True])
+@pytest.mark.parametrize("child_fails", [False, True])
+async def test_cancel_and_wait_drains_children_and_preserves_caller_cancellation(
+    cancel_caller: bool, child_fails: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    started = asyncio.Event()
+    cleaning = asyncio.Event()
+    release = asyncio.Event()
+
+    async def child() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+            if child_fails:
+                raise ValueError("child cleanup failed")
+
+    owned = asyncio.create_task(child())
+    await started.wait()
+    closing = asyncio.create_task(cancel_and_wait(owned))
+    await cleaning.wait()
+    if cancel_caller:
+        for _ in range(2):
+            closing.cancel()
+            await asyncio.sleep(0)
+            assert not closing.done()
+            assert not owned.done()
+    release.set()
+    if cancel_caller:
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+    elif child_fails:
+        with pytest.raises(ValueError):
+            await closing
+    else:
+        await closing
+    assert owned.done()
+    assert owned.cancelled() is not child_fails
+    if cancel_caller and child_fails:
+        assert any(
+            isinstance(record.exc_info[1], ValueError)
+            for record in caplog.records
+            if record.exc_info
+        )
 
 
 @pytest.fixture

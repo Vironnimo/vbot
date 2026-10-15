@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from core.utils.logging import get_logger
+from core.utils.workers import cancel_and_wait
 
 if TYPE_CHECKING:
     from core.chat.messages import ToolCall
@@ -151,9 +151,7 @@ class StreamDraft:
         try:
             timer, self._timer = self._timer, None
             if timer is not None:
-                timer.cancel()
-                with suppress(asyncio.CancelledError):
-                    await timer
+                await cancel_and_wait(timer)
             write = self._write
             if write is not None:
                 await asyncio.shield(write)

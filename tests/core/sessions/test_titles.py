@@ -121,19 +121,18 @@ async def _wait_for_background(service: SessionTitleService) -> None:
         await asyncio.gather(*tasks)
 
 
-def _notify(service: SessionTitleService, content: Any, run_id: str = "run-one") -> None:
+def _notify(service: SessionTitleService, run_id: str = "run-one") -> None:
     service.notify_user_message(
         agent_id="coder",
         session_id="session-one",
         project_id=None,
         agent=SimpleNamespace(model="openai/agent::main"),
-        content=content,
         run_id=run_id,
     )
 
 
-async def _title_first_message(service: SessionTitleService, content: Any) -> None:
-    _notify(service, content)
+async def _title_first_message(service: SessionTitleService) -> None:
+    _notify(service)
     await _wait_for_background(service)
 
 
@@ -163,19 +162,22 @@ async def test_aclose_cancels_and_drains_generated_title_tasks(manager) -> None:
     )
     _append_first_user(runtime, "A title request")
     service = SessionTitleService(cast(Any, runtime))
-    _notify(service, "A title request")
+    _notify(service)
     await started.wait()
 
     await service.aclose()
 
     assert service._background_tasks == set()
     assert adapter.closed is True
-    _notify(service, "late title request", run_id="run-two")
+    _notify(service, run_id="run-two")
     assert service._background_tasks == set()
 
 
 @pytest.mark.asyncio
-async def test_a_late_title_never_lands_on_a_new_session_at_the_same_address(manager) -> None:
+@pytest.mark.parametrize("change", ["archive", "edit", "append"])
+async def test_a_late_title_only_lands_while_its_first_user_entry_is_current(
+    manager, change
+) -> None:
     started, release = asyncio.Event(), asyncio.Event()
 
     class SlowAdapter(StubAdapter):
@@ -191,29 +193,50 @@ async def test_a_late_title_never_lands_on_a_new_session_at_the_same_address(man
     )
     _append_first_user(runtime, "Archived conversation")
     service = SessionTitleService(cast(Any, runtime))
-    _notify(service, "Archived conversation")
+    _notify(service)
     await started.wait()
 
-    await manager.archive(_address("coder", "session-one"))
-    _append_first_user(runtime, "New conversation")
+    if change == "archive":
+        await manager.archive(_address("coder", "session-one"))
+        _append_first_user(runtime, "New conversation")
+    else:
+        session = manager.get(_address("coder", "session-one"))
+        if change == "edit":
+            session.apply_edit(session.load_active()[0].id, [ChatMessage.user("New conversation")])
+        else:
+            session.append(ChatMessage.assistant(content="An answer", model="openai/agent"))
     release.set()
     await _wait_for_background(service)
 
-    assert "auto_title" not in _metadata(runtime)
+    if change == "append":
+        assert _metadata(runtime)["auto_title"] == "Generated title"
+    else:
+        assert "auto_title" not in _metadata(runtime)
 
 
 @pytest.mark.asyncio
-async def test_disabled_generation_keeps_local_title_without_adapter(manager) -> None:
+@pytest.mark.parametrize("edited_before_preparation", [False, True])
+async def test_disabled_generation_keeps_local_title_without_adapter(
+    manager, edited_before_preparation
+) -> None:
     runtime = StubRuntime(manager, enabled=False, adapters=[])
     content = "  Investigate\n login   failures in production  " + "x" * 50
     _append_first_user(runtime, content)
     service = SessionTitleService(cast(Any, runtime))
 
-    await _title_first_message(service, content)
+    _notify(service)
+    if edited_before_preparation:
+        session = manager.get(_address("coder", "session-one"))
+        session.apply_edit(session.load_active()[0].id, [ChatMessage.user("Replacement request")])
+    await _wait_for_background(service)
 
     metadata = _metadata(runtime)
     # The local title collapses whitespace and is capped at 40 characters.
-    assert metadata["auto_title"] == "Investigate login failures in productio…"
+    assert metadata["auto_title"] == (
+        "Replacement request"
+        if edited_before_preparation
+        else "Investigate login failures in productio…"
+    )
     assert metadata["auto_title_initialized"] is True
     assert runtime.adapter_calls == []
 
@@ -228,7 +251,7 @@ async def test_closed_session_database_skips_the_title_with_a_warning(
     service = SessionTitleService(cast(Any, runtime))
 
     with caplog.at_level(logging.WARNING, logger="vbot.sessions.titles"):
-        await _title_first_message(service, "Investigate login failures")
+        await _title_first_message(service)
 
     assert "Session title initialization failed" in caplog.text
     assert runtime.adapter_calls == []
@@ -270,7 +293,7 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     _append_first_user(runtime, content)
     service = SessionTitleService(cast(Any, runtime))
 
-    await _title_first_message(service, content)
+    await _title_first_message(service)
 
     assert runtime.adapter_calls == [("openai", "openai:cheap")]
     request = adapter.requests[0]
@@ -331,7 +354,7 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
     _append_first_user(runtime, "Please fix the scroll bug")
     service = SessionTitleService(cast(Any, runtime), usage_recorder=cast(Any, recorder))
 
-    await _title_first_message(service, "Please fix the scroll bug")
+    await _title_first_message(service)
 
     assert [request["thinking_effort"] for request in adapter.requests] == ["none", ""]
     assert [request["routing_sentinel"] for request in adapter.requests] == [
@@ -463,7 +486,7 @@ async def test_title_validation_preserves_fallback_and_logs_without_content_or_t
     service = SessionTitleService(cast(Any, runtime))
     caplog.set_level(logging.WARNING, logger="vbot.sessions.titles")
 
-    await _title_first_message(service, "Inspect session naming")
+    await _title_first_message(service)
 
     metadata = _metadata(runtime)
     assert metadata["auto_title"] == (
@@ -488,7 +511,7 @@ async def test_empty_title_model_selection_uses_resolved_agent_model(manager) ->
     _append_first_user(runtime, "Investigate login failure")
     service = SessionTitleService(cast(Any, runtime))
 
-    await _title_first_message(service, "Investigate login failure")
+    await _title_first_message(service)
 
     assert runtime.adapter_calls == [("openai", "openai:main")]
     assert adapter.requests[0]["model_id"] == "agent"
@@ -509,7 +532,7 @@ async def test_failed_configured_model_keeps_local_title_without_agent_retry(
     _append_first_user(runtime, "Investigate login failure")
     service = SessionTitleService(cast(Any, runtime))
 
-    await _title_first_message(service, "Investigate login failure")
+    await _title_first_message(service)
 
     assert runtime.adapter_calls == [("openai", "openai:cheap")]
     assert _metadata(runtime)["auto_title"] == "Investigate login failure"
@@ -537,7 +560,7 @@ async def test_existing_session_is_marked_without_backfill_or_model_request(
     )
     service = SessionTitleService(cast(Any, runtime))
 
-    _notify(service, "New request", run_id="run-two")
+    _notify(service, run_id="run-two")
     await _wait_for_background(service)
 
     metadata = _metadata(runtime)
@@ -553,7 +576,7 @@ async def test_manual_name_skips_model_but_preserves_local_title_underneath(mana
     runtime.chat_sessions.set_title(_address("coder", "session-one"), "Manual name")
     service = SessionTitleService(cast(Any, runtime))
 
-    await _title_first_message(service, "Investigate login failure")
+    await _title_first_message(service)
 
     metadata = _metadata(runtime)
     assert metadata["title"] == "Manual name"

@@ -15,6 +15,7 @@ from core.channels.config import (
     load_validated_channel_json,
 )
 from core.json_documents import JsonDocumentWriteError, document_change, write_json_document
+from core.utils.file_status import exists_strict, is_dir_strict, is_file_strict
 from core.utils.logging import get_logger, register_log_channel_ids
 
 _LOGGER = get_logger("channels")
@@ -34,22 +35,22 @@ class ChannelStorage:
         The platform is None when the config cannot be loaded; the load failure
         itself surfaces where the config is used.
         """
-        if not self._channels_dir.is_dir():
-            return {}
         platforms: dict[str, str | None] = {}
         try:
             for channel_dir in self._channels_dir.iterdir():
                 config_path = channel_dir / _CHANNEL_CONFIG_FILENAME
-                if not config_path.is_file():
-                    continue
                 try:
                     channel_id = _normalize_channel_id(channel_dir.name)
                 except ChannelConfigError:
                     continue
                 try:
+                    if not is_dir_strict(channel_dir) or not is_file_strict(config_path):
+                        continue
                     platforms[channel_id] = self._read_config(config_path).platform
-                except ChannelError:
+                except ChannelError, OSError:
                     platforms[channel_id] = None
+        except FileNotFoundError:
+            return {}
         except OSError as error:
             _LOGGER.warning("Cannot scan Channel configs in %s: %s", self._channels_dir, error)
         return dict(sorted(platforms.items()))
@@ -61,28 +62,25 @@ class ChannelStorage:
         than aborting the whole load: one corrupt ``channel.json`` must not block server
         startup or hide every other channel. Strict single-channel access stays in ``get``.
         """
-        if not self._channels_dir.exists():
-            return []
-
         configs: list[ChannelConfig] = []
         try:
             channel_directories = sorted(
                 self._channels_dir.iterdir(),
                 key=lambda path: path.name,
             )
+        except FileNotFoundError:
+            return []
         except OSError as error:
             _LOGGER.warning("Cannot scan Channel configs in %s: %s", self._channels_dir, error)
             return []
 
         for channel_dir in channel_directories:
-            if not channel_dir.is_dir():
-                continue
             config_path = channel_dir / _CHANNEL_CONFIG_FILENAME
-            if not config_path.is_file():
-                continue
             try:
+                if not is_dir_strict(channel_dir) or not is_file_strict(config_path):
+                    continue
                 configs.append(self._read_config(config_path))
-            except ChannelError as error:
+            except (ChannelError, OSError) as error:
                 _LOGGER.warning("Skipping invalid channel config %s: %s", config_path, error)
 
         return sorted(configs, key=lambda config: config.id)
@@ -110,11 +108,11 @@ class ChannelStorage:
         """Delete one channel directory from storage."""
         normalized_id = _normalize_channel_id(channel_id)
         channel_dir = self._channel_dir(normalized_id)
-        if not channel_dir.exists():
-            raise ChannelNotFoundError(f"Channel not found: {normalized_id}")
-        if not channel_dir.is_dir():
-            raise ChannelError(f"Channel path is not a directory: {channel_dir}")
         try:
+            if not exists_strict(channel_dir):
+                raise ChannelNotFoundError(f"Channel not found: {normalized_id}")
+            if not is_dir_strict(channel_dir):
+                raise ChannelError(f"Channel path is not a directory: {channel_dir}")
             with document_change(channel_dir):
                 shutil.rmtree(channel_dir)
         except OSError as error:
@@ -124,8 +122,11 @@ class ChannelStorage:
         """Load one channel config by id."""
         normalized_id = _normalize_channel_id(channel_id)
         config_path = self._channel_dir(normalized_id) / _CHANNEL_CONFIG_FILENAME
-        if not config_path.is_file():
-            raise ChannelNotFoundError(f"Channel not found: {normalized_id}")
+        try:
+            if not is_file_strict(config_path):
+                raise ChannelNotFoundError(f"Channel not found: {normalized_id}")
+        except OSError as error:
+            raise ChannelError(f"Cannot read {config_path}: {error}") from error
         return self._read_config(config_path)
 
     def _channel_dir(self, channel_id: str) -> Path:

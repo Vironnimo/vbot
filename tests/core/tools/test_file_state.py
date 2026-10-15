@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import threading
 from pathlib import Path
 
@@ -106,18 +107,32 @@ def test_path_locks_serialize_one_path_but_not_different_paths(
         assert thread.is_alive() is False
 
 
-def test_atomic_write_replaces_target_and_preserves_mode(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "windows_acl", [None, (False, False), (True, False), (False, True), (True, True)]
+)
+def test_atomic_write_replaces_target_and_preserves_mode(
+    tmp_path: Path, windows_acl: tuple[bool, bool] | None
+) -> None:
+    if windows_acl is not None and sys.platform != "win32":
+        pytest.skip("Windows attributes and DACL")
     file_root = tmp_path / "files"
     file_root.mkdir()
     target = file_root / "a.txt"
     target.write_bytes(b"before")
     target.chmod(0o640)
     original_mode = stat.S_IMODE(target.stat().st_mode)
+    metadata = None
+    if windows_acl is not None:
+        from tests.core.tools.file_state_test_support import windows_metadata
+
+        metadata = windows_metadata(target, protected=windows_acl[0], modern=windows_acl[1])
 
     atomic_write_bytes(target, b"after")
 
     assert target.read_bytes() == b"after"
     assert stat.S_IMODE(target.stat().st_mode) == original_mode
+    if metadata is not None:
+        assert windows_metadata(target) == metadata
     assert list(file_root.iterdir()) == [target]
 
 
@@ -140,8 +155,13 @@ def test_atomic_write_gives_new_files_the_umask_derived_mode(
 # A move destination receives the source's (here read-only) mode, so its
 # temporary copy is read-only too and must still be removed.
 @pytest.mark.parametrize(("existing", "mode"), [(True, None), (False, stat.S_IREAD)])
+@pytest.mark.parametrize("failure", ["replace", "metadata"])
 def test_failed_replacement_keeps_the_target_and_removes_the_temporary_copy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bool, mode: int | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing: bool,
+    mode: int | None,
+    failure: str,
 ) -> None:
     target = tmp_path / "a.txt"
     if existing:
@@ -150,7 +170,10 @@ def test_failed_replacement_keeps_the_target_and_removes_the_temporary_copy(
     def fail_replace(_source: Path, _target: Path) -> None:
         raise PermissionError("replace denied")
 
-    monkeypatch.setattr(file_state_module.os, "replace", fail_replace)
+    if failure == "replace":
+        monkeypatch.setattr(file_state_module.os, "replace", fail_replace)
+    else:
+        monkeypatch.setattr(file_state_module, "preserve_windows_file_metadata", fail_replace)
 
     with pytest.raises(PermissionError, match="replace denied"):
         atomic_write_bytes(target, b"after", mode=mode)

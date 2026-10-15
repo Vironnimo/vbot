@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -93,6 +94,7 @@ def test_write_lock_is_reentrant_for_child_tasks(manager) -> None:
     manager.create("coder", session_id=address.session_id)
 
     async def scenario() -> None:
+        original_context = set(contextvars.copy_context())
         async with manager.write_lock(address):
 
             async def child() -> None:
@@ -100,6 +102,8 @@ def test_write_lock_is_reentrant_for_child_tasks(manager) -> None:
                     manager.get(address).append(ChatMessage.note("child"))
 
             await asyncio.create_task(child())
+        assert set(contextvars.copy_context()) == original_context
+        assert not manager._write_locks
 
     asyncio.run(scenario())
     assert [message.content for message in manager.get(address).load()] == ["child"]

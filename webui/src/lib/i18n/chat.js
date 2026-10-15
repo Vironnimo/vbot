@@ -511,7 +511,7 @@ export default Object.freeze({
     'Delete session "{name}" permanently? It is deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
   'sessions.delete_error': 'The session could not be deleted.',
   'sessions.delete_busy':
-    'This Session cannot be deleted while a Run is active or queued. Wait until it finishes or stop it, then try again.',
+    'This Session or one of its Reflection Sessions has an active or queued Run. Wait until it finishes or stop it, then try again.',
   'sessions.delete_in_use':
     'This Session cannot be deleted while it is used by {references}. Choose another Session for each of them or delete them first.',
   'sessions.reference_cron': 'the Cron job "{name}"',

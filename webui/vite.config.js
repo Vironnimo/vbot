@@ -13,6 +13,16 @@ export default defineConfig({
     },
   },
   test: {
+    alias: [
+      {
+        // Vitest runs in Node, but our Svelte state models are browser code.
+        find: /^svelte\/reactivity$/,
+        replacement: path.resolve(
+          import.meta.dirname,
+          'node_modules/svelte/src/reactivity/index-client.js',
+        ),
+      },
+    ],
     setupFiles: ['src/__tests__/environment.support.js'],
   },
   build: {

@@ -33,6 +33,7 @@ from .engine_test_support import (
     ending_engine_on_stop,
     make_channel_engine,
     make_config,
+    make_sessions,
     make_trigger_service,
 )
 
@@ -350,7 +351,7 @@ def make_adapter(
 
     if not (tmp_path / "data-store.json").exists():
         write_bootstrap_marker(tmp_path)
-    chat_sessions = ChatSessionManager(tmp_path)
+    chat_sessions = make_sessions(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
 
     config = make_config(

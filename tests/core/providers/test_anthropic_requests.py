@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import copy
+import io
 import json
 
 import httpx
 import pytest
 import respx
+from PIL import Image, PngImagePlugin
 
 from core.providers import AnthropicCompatibleAdapter
 from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
@@ -513,6 +517,46 @@ async def test_tool_result_media_renders_inside_the_tool_result() -> None:
             ],
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "image_count,width,expected_width,metadata_bytes",
+    [(20, 2001, 2001, 0), (21, 2001, 2000, 0), (1, 8001, 8000, 300_000)],
+)
+@pytest.mark.asyncio
+async def test_images_fit_dimensions_for_the_complete_request(
+    image_count: int, width: int, expected_width: int, metadata_bytes: int
+) -> None:
+    output = io.BytesIO()
+    metadata = PngImagePlugin.PngInfo()
+    metadata.add_text("comment", "x" * metadata_bytes)
+    Image.new("RGB", (width, 1), "red").save(output, format="PNG", pnginfo=metadata)
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    image = {"type": "media", "base64": encoded, "media_type": "image/png"}
+    messages = [
+        {"role": "user", "content": [image] * (image_count - 1)},
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_image",
+            "content": '{"ok":true}',
+            TOOL_RESULT_CONTENT_BLOCKS_FIELD: [image],
+        },
+    ]
+    original = copy.deepcopy(messages)
+    payload = await sent_payload(make_adapter(), messages)
+    blocks = [
+        *payload["messages"][0]["content"],
+        *payload["messages"][1]["content"][0]["content"],
+    ]
+    sources = [block["source"] for block in blocks if block["type"] == "image"]
+    assert len(sources) == image_count
+    for source in sources:
+        with Image.open(io.BytesIO(base64.b64decode(source["data"]))) as actual:
+            assert actual.size == (expected_width, 1)
+    assert messages == original
+    assert sum(block["type"] == "text" for block in blocks) == (
+        1 if width == expected_width else image_count + 1
+    )
 
 
 # ---------------------------------------------------------------------------

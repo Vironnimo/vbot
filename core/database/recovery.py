@@ -92,6 +92,7 @@ from core.database.spec import (
 )
 from core.utils.file_status import exists_strict
 from core.utils.timestamps import is_canonical_timestamp, utc_now_timestamp
+from core.utils.tree_move import remove_tree
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -609,7 +610,7 @@ def _install_member(
         ) from exc
     finally:
         with suppress(OSError):
-            temporary.unlink()
+            remove_tree(temporary, within=data_dir)
 
 
 def _restore_member_locked(
@@ -649,7 +650,10 @@ def _restore_member_locked(
         # A fully rolled-back attempt only reserved this path; it holds no evidence.
         retained_quarantine = None
     if pending is not None:
-        failure_detected_at = pending["possible_loss_interval"]["end"]
+        # Reinstalling the snapshot can discard writes made since the pending
+        # attempt. Only confirmation of an already installed copy preserves
+        # that attempt's exact interval (_confirm_pending).
+        failure_detected_at = max(failure_detected_at, pending["possible_loss_interval"]["end"])
         cause = pending["cause"]
 
     def publish_pending(quarantine_path: Path | None) -> None:

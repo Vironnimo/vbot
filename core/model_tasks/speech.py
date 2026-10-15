@@ -58,6 +58,10 @@ class SpeechConfigurationError(SpeechError):
     """Raised when STT/TTS is not configured."""
 
 
+class SpeechArtifactNotFoundError(SpeechError):
+    """Raised when a requested speech artifact no longer exists."""
+
+
 class SpeechUnsupportedTargetError(SpeechError):
     """Raised when a configured speech target has no execution adapter."""
 
@@ -130,6 +134,7 @@ class SpeechService:
             DataDirectoryLayout(data_dir).speech,
             kind="speech",
             error=SpeechConfigurationError,
+            not_found_error=SpeechArtifactNotFoundError,
         )
         self._local_executor = local_executor or LocalSpeechExecutor(
             engines_dir=DataDirectoryLayout(data_dir).speech_engines

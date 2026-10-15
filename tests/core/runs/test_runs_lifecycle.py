@@ -340,6 +340,7 @@ async def test_wait_admitted_raises_the_error_of_a_failed_admission() -> None:
     persistence.release.set()
     with pytest.raises(RuntimeError, match="admission rejected"):
         await waiter
+    assert run.error is not None and run.error.__traceback__ is None
     assert run.status == RunStatus.FAILED
     assert executed == []
     # An unadmitted Run has no durable row to finish.

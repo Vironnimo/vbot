@@ -163,6 +163,9 @@ describe('archive view rules', () => {
   );
 
   it('words known restore problems with their facts and shows the server message for others', () => {
+    expect(restoreProblemText({ code: 'payload_unavailable' })).toBe(
+      t('archive.problem.payloadUnavailable'),
+    );
     expect(
       restoreProblemText({ code: 'scope_missing', project_id: 'vbot' }),
     ).toBe(t('archive.problem.projectMissing', { project: 'vbot' }));

@@ -28,15 +28,22 @@ VBOT_HEALTH = HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
 FOREIGN_HEALTH = HealthProbeResult(reachable=True, is_vbot=False, status_code=200)
 
 
+@pytest.mark.parametrize("prefix", [False, True])
 def test_home_prints_app_and_data_directories_without_a_server(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    prefix: bool,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
     def fail_resolve(**kwargs: object) -> ServerInstance:
         raise AssertionError(f"home must not resolve a server: {kwargs}")
 
-    exit_code = cli_main.run(["home", "--data-dir", "runtime-data"], resolve=fail_resolve)
+    argv = (
+        ["--data-dir", "runtime-data", "home"] if prefix else ["home", "--data-dir", "runtime-data"]
+    )
+    exit_code = cli_main.run(argv, resolve=fail_resolve)
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
@@ -70,15 +77,17 @@ def test_a_development_checkout_refuses_installation_lifecycle_commands(
         pytest.param((), id="recorded-target"),
     ],
 )
+@pytest.mark.parametrize("prefix", [False, True])
 def test_desktop_forwards_only_the_supplied_target_flags(
-    capsys: pytest.CaptureFixture[str], flags: tuple[str, ...]
+    capsys: pytest.CaptureFixture[str], flags: tuple[str, ...], prefix: bool
 ) -> None:
     launches: list[list[str]] = []
 
     def launch(launch_argv: Sequence[str]) -> None:
         launches.append(list(launch_argv))
 
-    exit_code = cli_main.run(["desktop", *flags], launch_desktop_fn=launch)
+    argv = [*flags, "desktop"] if prefix else ["desktop", *flags]
+    exit_code = cli_main.run(argv, launch_desktop_fn=launch)
 
     assert exit_code == 0
     assert launches == [list(flags)]
