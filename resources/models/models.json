@@ -7134,6 +7134,31 @@
       "release_date": "2026-10-06",
       "temperature": false
     },
+    "google/gemini-omni-1.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini",
+      "last_updated": "2026-08-27",
+      "max_output_tokens": 57920,
+      "name": "Gemini Omni 1.1 Flash",
+      "release_date": "2026-08-27",
+      "temperature": false
+    },
     "google/gemini-omni-flash-preview": {
       "capabilities": {
         "input_modalities": [
@@ -11631,6 +11656,34 @@
       "max_output_tokens": 262144,
       "name": "Nemotron 3.5 Lightning 30B A3B",
       "release_date": "2026-08-11",
+      "temperature": true
+    },
+    "nvidia/nemotron-3.5-super-vl-120b-a12b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "nemotron",
+      "last_updated": "2026-10-15",
+      "max_output_tokens": 8192,
+      "name": "Nemotron 3.5 Super VL 120B A12B",
+      "release_date": "2026-10-15",
       "temperature": true
     },
     "nvidia/nemotron-cascade-2-30b-a3b": {

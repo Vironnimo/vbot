@@ -160,6 +160,7 @@ _MODELS = {
     model.model_id: model
     for model in (
         _model("thinking-model", ReasoningCapabilities(True, REASONING_CONTROL_ON_OFF)),
+        _model("unknown-control", ReasoningCapabilities(True)),
         _model("plain-model", ReasoningCapabilities(False)),
         _model(
             "gpt-oss:20b",

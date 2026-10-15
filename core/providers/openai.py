@@ -67,6 +67,7 @@ from core.providers._openai_constants import (
     CodexWebSocketRoute,
 )
 from core.providers._openai_policy import (
+    _is_platform_chat_or_embedding_model,
     _normalize_catalog_raw,
     _optional_mapping,
     _string_set,
@@ -244,18 +245,21 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         raw: Mapping[str, Any],
         connection: ConnectionConfig | None,
     ) -> bool:
-        """Keep visible Codex entries and the Platform's embedding Models.
+        """Keep visible Codex entries and plausible Platform chat/embedding ids.
 
-        The Platform ``/models`` listing carries ids only; its chat, speech
-        and image Models are curated in ``openai.overrides.json``. Discovery
-        adds just the ``text-embedding-*`` Models, whose id is the fact.
+        New Platform chat Models inherit wire defaults. Known task endpoint
+        families remain outside this projection; curated task entries survive.
         """
 
         del cls
         if _is_codex_connection(connection):
             return raw.get("visibility") != "hide"
         model_id = raw.get("id")
-        return isinstance(model_id, str) and model_id.startswith(_PLATFORM_EMBEDDING_PREFIX)
+        return (
+            isinstance(model_id, str)
+            and bool(model_id.strip())
+            and _is_platform_chat_or_embedding_model(model_id)
+        )
 
     @classmethod
     @override
@@ -264,7 +268,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize one Codex ``/codex/models`` or Platform embedding entry."""
+        """Normalize a Codex or Platform chat/embedding listing entry."""
 
         model_id = raw.get("id")
         if isinstance(model_id, str) and model_id.startswith(_PLATFORM_EMBEDDING_PREFIX):
@@ -280,6 +284,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             )
         normalized_raw = _normalize_catalog_raw(raw)
         base_model = OpenAICompatibleAdapter.normalize_catalog_entry(normalized_raw, defaults)
+        if cls is OpenAIAdapter and raw.get("object") == "model":
+            # The public Model object reports identity/ownership, not capabilities.
+            # Keep missing facts unknown so catalog enrichment and wire defaults
+            # decide, rather than persisting Codex's assumed reasoning support.
+            return base_model
         capabilities = _optional_mapping(normalized_raw.get("capabilities"))
         supports = _optional_mapping(capabilities.get("supports"))
         raw_parameters = _string_set(normalized_raw.get("supported_parameters"))

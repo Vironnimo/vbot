@@ -20,6 +20,7 @@ import respx
 import core.models.discovery as discovery_module
 from core.models.discovery import ModelDiscoveryError, build_discovery_request, refresh_models
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.models.models_dev import ModelsDevCatalog
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.ollama import OllamaAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -333,6 +334,14 @@ async def test_connection_refresh_replaces_only_its_own_catalog_entries(tmp_path
                 "fetched_at": "2026-05-08T19:08:00+00:00",
                 "models": {
                     "gpt-5.2": _existing_model("GPT-5.2", ["api-key"]),
+                    "gpt-future": _existing_model("Future Platform Model", ["api-key"])
+                    | {
+                        "context_window": 1_050_000,
+                        "capabilities": {
+                            **model_data("unused")["capabilities"],
+                            "json_mode": False,
+                        },
+                    },
                     "stale": _existing_model("Stale Subscription Model", ["subscription"]),
                 },
             }
@@ -347,6 +356,14 @@ async def test_connection_refresh_replaces_only_its_own_catalog_entries(tmp_path
             json={
                 "models": [
                     {"slug": "gpt-5-codex", "display_name": "GPT-5 Codex", "visibility": "list"},
+                    {
+                        "slug": "gpt-future",
+                        "display_name": "Future Codex",
+                        "visibility": "list",
+                        "context_window": 272_000,
+                        "input_modalities": ["text", "image"],
+                        "supported_parameters": ["tools", "response_format", "reasoning"],
+                    },
                     {"slug": "codex-auto-review", "display_name": "Review", "visibility": "hide"},
                 ]
             },
@@ -358,17 +375,125 @@ async def test_connection_refresh_replaces_only_its_own_catalog_entries(tmp_path
     )
 
     written = read_models_file(resources_dir, "openai.json")["models"]
-    assert result["model_count"] == 2
+    assert result["model_count"] == 3
     assert {model_id: data["connections"] for model_id, data in written.items()} == {
         "gpt-5.2": ["api-key"],
         "gpt-5-codex": ["subscription"],
+        "gpt-future": ["api-key", "subscription"],
     }
     registry = ModelRegistry.load(resources_dir)
     assert registry.get("openai", "gpt-5.2").connections == ("api-key",)
     assert registry.get("openai", "gpt-5-codex").connections == ("subscription",)
+    shared = registry.get("openai", "gpt-future")
+    assert shared.context_window_for("api-key") == 1_050_000
+    assert shared.context_window_for("subscription") == 272_000
+    assert shared.context_window == 272_000
+    assert shared.capabilities.json_mode is True
     headers = route.calls.last.request.headers
     assert headers["Authorization"] == f"Bearer {access_token}"
     assert headers["chatgpt-account-id"] == "acct_openai"
+
+    # Reverse the refresh order: a sparse Platform listing plus a larger public
+    # limit must not rewrite the retained Subscription limit or its richer facts.
+    platform_config, platform = _openai_platform()
+    catalog = ModelsDevCatalog(
+        {
+            "models": {
+                "other/unrelated": {
+                    "reasoning": False,
+                    "modalities": {"input": ["text"], "output": ["text"]},
+                    "limit": {"context": 32768, "output": 4096},
+                }
+            },
+            "providers": {
+                "openai": {
+                    "models": {
+                        "gpt-future": {
+                            "reasoning": True,
+                            "modalities": {"input": ["text", "image"], "output": ["text"]},
+                            "limit": {"context": 1_050_000, "output": 128_000},
+                        }
+                    }
+                }
+            },
+        }
+    )
+    platform_route = respx.get("https://api.openai.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "gpt-future", "object": "model"}]})
+    )
+    await refresh_models(
+        platform_config,
+        API_KEY,
+        resources_dir,
+        credential_connection=platform,
+        models_dev_catalog=catalog,
+    )
+    shared = ModelRegistry.load(resources_dir).get("openai", "gpt-future")
+    assert shared.context_window_for("api-key") == 1_050_000
+    assert shared.context_window_for("subscription") == 272_000
+    assert shared.capabilities.json_mode is True
+    assert shared.capabilities.vision is True
+
+    # Without the public feed, carry forward this Connection's own earlier
+    # value, not the smaller Model fallback belonging to Subscription.
+    await refresh_models(platform_config, API_KEY, resources_dir, credential_connection=platform)
+    shared = ModelRegistry.load(resources_dir).get("openai", "gpt-future")
+    assert shared.context_window_for("api-key") == 1_050_000
+    assert shared.context_window_for("subscription") == 272_000
+    assert shared.capabilities.json_mode is True
+
+    # An actual reported change on that same Connection replaces its own limit
+    # and Provider-wide facts; missing facts alone never assert a new denial.
+    platform_route.mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "gpt-future",
+                        "object": "model",
+                        "context_window": 900_000,
+                        "json_mode": False,
+                    }
+                ]
+            },
+        )
+    )
+    await refresh_models(
+        platform_config,
+        API_KEY,
+        resources_dir,
+        credential_connection=platform,
+        models_dev_catalog=catalog,
+    )
+    shared = ModelRegistry.load(resources_dir).get("openai", "gpt-future")
+    assert shared.context_window_for("api-key") == 900_000
+    assert shared.context_window_for("subscription") == 272_000
+    assert shared.capabilities.json_mode is False
+
+    route.mock(return_value=httpx.Response(200, json={"models": []}))
+    await refresh_models(
+        config, access_token, resources_dir, credential_connection=config.connections[0]
+    )
+    remaining = read_models_file(resources_dir, "openai.json")["models"]["gpt-future"]
+    assert remaining["connections"] == ["api-key"]
+    assert remaining["context_window"] == 900_000
+    assert "connection_context_windows" not in remaining
+
+    # Without a canonical fallback, a newly serving Connection stays unknown;
+    # carry-forward must not copy the sibling Connection's private limit.
+    route.mock(
+        return_value=httpx.Response(
+            200, json={"models": [{"slug": "gpt-future", "visibility": "list"}]}
+        )
+    )
+    await refresh_models(
+        config, access_token, resources_dir, credential_connection=config.connections[0]
+    )
+    shared = ModelRegistry.load(resources_dir).get("openai", "gpt-future")
+    assert shared.context_window is None
+    assert shared.context_window_for("api-key") == 900_000
+    assert shared.context_window_for("subscription") is None
 
 
 def _secondary_openrouter() -> tuple[ProviderConfig, ConnectionConfig]:

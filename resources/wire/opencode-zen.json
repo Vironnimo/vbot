@@ -1,11 +1,8 @@
 {
   "format_version": 1,
-  "_comment": "OpenCode Zen gateway. One credential reaches four wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes and admits every Model it names a known package for (today the Messages, Responses and Gemini Models), a rule routes and admits the reviewed Chat Completions Models the catalog names no package for, and a Model with neither is refused. Free Models serve only OpenCode itself (FreeTierError) and retired Models are refused before sending; discovery writes none of these refused Models. Messages carries images and PDFs with prompt-cache breakpoints and sends only temperature when a request carries temperature and top_p (Claude Haiku 4.5 rejected both, live 2026-10-03); Chat Completions and Responses carry images only (Zen's converters establish no native document, audio or video forwarding there). Responses is stateless (store false) and takes only max_output_tokens and top_p. Gemini generateContent carries Gemini's inline media up to Zen's documented 20 MB request body and reasons at thinkingLevel; none asks for the lowest level.",
+  "_comment": "OpenCode Zen gateway. One credential reaches four wires. Exact catalog protocol hints override inferred family defaults; unfamiliar families use Chat Completions. Models are available unless an exact evidenced exception says otherwise, independent of a free suffix. Messages carries images and PDFs with prompt-cache breakpoints and sends only temperature when a request carries temperature and top_p (Claude Haiku 4.5 rejected both, live 2026-10-03); Chat Completions and Responses carry images only (Zen's converters establish no native document, audio or video forwarding there). Responses is stateless (store false) and takes only max_output_tokens and top_p. Gemini generateContent carries Gemini's inline media up to Zen's documented 20 MB request body and reasons at thinkingLevel; none asks for the lowest level.",
   "defaults": {
-    "admission": {
-      "state": "restricted",
-      "message": "This OpenCode Zen Model has no reviewed wire protocol in vBot; choose a listed OpenCode Zen Model."
-    }
+    "protocol": "chat_completions"
   },
   "protocols": {
     "chat_completions": {
@@ -56,65 +53,132 @@
       }
     }
   },
+  "family_defaults": [
+    {
+      "when": {"prefix": ["gpt-", "grok-", "muse-"]},
+      "set": {"protocol": "responses"},
+      "note": "Infer Responses for new versions of the gateway's existing GPT, Grok and Muse families; exact catalog protocol hints win."
+    },
+    {
+      "when": {"prefix": "gpt-"},
+      "set": {
+        "protocol": "responses",
+        "reasoning": {"floor": ["low", "medium", "high", "xhigh", "max"], "off": "lowest"}
+      },
+      "note": "New Zen GPT versions inherit the latest verified GPT6.1 effort controls when the catalog gives no ladder. This does not inherit GPT6.1's replay exception. Older Models keep their established off rendering below."
+    },
+    {
+      "when": {"prefix": ["claude-", "qwen"]},
+      "set": {"protocol": "messages"},
+      "note": "Infer Messages for Claude and Qwen when the catalog is silent. Qwen3.8 Max retains its exact Chat correction."
+    },
+    {
+      "when": {"prefix": "claude-"},
+      "set": {
+        "protocol": "messages",
+        "reasoning": {"floor": ["low", "medium", "high", "xhigh", "max"]}
+      },
+      "note": "New Zen Claude versions inherit the current Claude5.5 effort ladder when the catalog reports none; earlier budget controls retain their established fallback below."
+    },
+    {
+      "when": {"prefix": "gemini-"},
+      "set": {
+        "protocol": "gemini",
+        "reasoning": {"floor": ["low", "medium", "high"]}
+      },
+      "note": "Infer native Gemini and the current Gemini4 Argon effort ladder for new versions. Exact catalog protocol and ladder facts win."
+    },
+    {
+      "when": {"prefix": "muse-"},
+      "set": {
+        "protocol": "responses",
+        "reasoning": {"floor": ["minimal", "low", "medium", "high", "xhigh"]}
+      },
+      "note": "New Zen Muse versions inherit the current Muse Spark1.3 effort ladder when the catalog reports none."
+    },
+    {
+      "when": {"prefix": ["deepseek-", "glm-"]},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {"floor": ["low", "high", "max"]}
+      },
+      "note": "New Zen DeepSeek and GLM versions inherit the current V4.1 Flash and GLM5.3 effort ladder. This keeps Zen's effort-only control; no Go thinking switch is inferred."
+    },
+    {
+      "when": {"prefix": "kimi-"},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {"floor": ["max"]}
+      },
+      "note": "New Zen Kimi versions inherit the current K3 max-only effort ladder. Earlier K2 Models retain their established fallback below; Go's distinct controls are not copied."
+    },
+    {
+      "when": {"prefix": "mistral-large-"},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {"supported": true, "floor": ["none", "high"]},
+        "replay": {"fidelity": "meta_only"}
+      },
+      "note": "New Zen Mistral Large versions inherit Large4's none/high effort ladder and native-state-only replay, verified 2026-10-14. Catalog support and ladder facts win; another protocol suppresses these Chat defaults."
+    },
+    {
+      "when": {"prefix": "qwen", "suffix": ["-max", "-max-free"]},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {"dialect": "thinking_toggle", "unset": "enabled"},
+        "response": {
+          "reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]
+        }
+      },
+      "note": "New Zen Qwen Max versions inherit the latest 3.8 Max Chat route and binary thinking switch. A catalog Messages hint wins and suppresses these Chat defaults; older 3.7 Max keeps its established Messages route below."
+    }
+  ],
   "rules": [
     {
-      "when": {
-        "npm": [
-          "@ai-sdk/anthropic",
-          "@ai-sdk/google",
-          "@ai-sdk/openai",
-          "@ai-sdk/openai-compatible"
-        ]
-      },
-      "set": {"admission": {"state": "available", "message": null}},
-      "note": "The catalog protocol hint routes these Models (Anthropic: Messages, Google: Gemini generateContent, OpenAI: Responses, OpenAI-compatible: Chat Completions), so they are usable."
+      "when": {"ids": ["glm-5.1", "kimi-k2.6", "kimi-k2.7-code"]},
+      "set": {"reasoning": {"floor": ["low", "medium", "high"]}},
+      "note": "Preserve the earlier Zen GLM and Kimi Models' established fallback where their catalog supplies no effort ladder; later versions inherit the current family ladder."
     },
     {
-      "when": {"suffix": "-free"},
-      "set": {
-        "admission": {
-          "state": "restricted",
-          "message": "This OpenCode Zen free Model is only available inside OpenCode. Choose a supported Zen Model or an OpenCode Go Model. Another API key does not enable access to this Model from vBot."
-        }
-      },
-      "note": "Free Models answer every vBot request with FreeTierError (HTTP 403), also those the catalog gives a protocol hint."
-    },
-    {
-      "when": {"ids": ["big-pickle"]},
-      "set": {
-        "admission": {
-          "state": "restricted",
-          "message": "This OpenCode Zen free Model is only available inside OpenCode. Choose a supported Zen Model or an OpenCode Go Model. Another API key does not enable access to this Model from vBot."
-        }
-      },
-      "note": "Big Pickle is a free Model without the -free suffix."
+      "when": {"ids": ["claude-haiku-4-5", "claude-sonnet-4-5"]},
+      "set": {"reasoning": {"floor": ["minimal", "low", "medium", "high", "xhigh", "max"]}},
+      "note": "Preserve the fallback used by these earlier Zen Claude budget controls; current Claude generations start at low."
     },
     {
       "when": {
         "ids": [
-          "deepseek-v4-flash",
-          "deepseek-v4-flash-vision-exp",
-          "deepseek-v4-pro",
-          "deepseek-v4.1-flash",
-          "glm-5.1",
-          "glm-5.2",
-          "glm-5.3",
-          "glm-5.3-flash",
-          "kimi-k2.6",
-          "kimi-k2.7-code",
-          "kimi-k3",
-          "minimax-m2.7",
-          "minimax-m3",
-          "qwen3.8-max",
-          "space-bunny-free",
-          "mistral-large-4"
+          "gpt-5", "gpt-5-nano", "gpt-5.1", "gpt-5.2", "gpt-5.3-codex", "gpt-5.3-codex-spark",
+          "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.4-pro", "gpt-5.5", "gpt-5.5-pro",
+          "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol"
         ]
       },
+      "set": {"reasoning": {"off": "auto"}},
+      "note": "Preserve existing Zen GPT off requests: Models with a reported none rung disable reasoning; the others omit the control. New versions inherit the current GPT6.1 minimum-effort behavior."
+    },
+    {
+      "when": {"ids": ["qwen3.7-max"]},
+      "set": {"protocol": "messages"},
+      "note": "Zen's earlier Qwen3.7 Max uses Messages, unlike the current Qwen Max generation (official endpoint table read 2026-10-15)."
+    },
+    {
+      "when": {"ids": ["fledge-alpha-free", "longcat-2.5-preview-free", "mimo-v2.6-flash-free"]},
       "set": {
-        "protocol": "chat_completions",
-        "admission": {"state": "available", "message": null}
+        "admission": {
+          "state": "restricted",
+          "message": "This Model rejected vBot access on OpenCode Zen. Choose another Model or Connection."
+        }
       },
-      "note": "Zen's Model table serves these Models on Chat Completions (/chat/completions); the catalog names no package for them. Space Bunny is usable despite its -free suffix, so this rule comes after the free-Model rule."
+      "note": "Exact FreeTierError observations: MiMo on 2026-09-22, LongCat on 2026-09-28, Fledge on 2026-10-02. No restriction is inferred for other free Models."
+    },
+    {
+      "when": {"ids": ["jev-1.13", "jev-1.13-free"]},
+      "set": {
+        "admission": {
+          "state": "restricted",
+          "message": "This Model requires the System One endpoint, which this Connection does not support."
+        }
+      },
+      "note": "Jev exposes structured decisions through /systemone, not a supported chat wire."
     },
     {
       "when": {
@@ -142,6 +206,7 @@
     {
       "when": {"ids": ["qwen3.8-max"]},
       "set": {
+        "protocol": "chat_completions",
         "reasoning": {"dialect": "thinking_toggle", "unset": "enabled"},
         "response": {
           "reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]

@@ -139,6 +139,27 @@ def _chat_url(connection_id: str) -> str:
             {"max_tokens": 250_000, "reasoning_effort": "medium"},
             id="plan-router-caps-output",
         ),
+        pytest.param(
+            "direct-api",
+            "step-future",
+            {"thinking_effort": "high"},
+            {"reasoning_effort": "high"},
+            id="future-chat-model-uses-defaults",
+        ),
+        pytest.param(
+            "step-plan",
+            "step-future-free",
+            {},
+            {},
+            id="future-free-model-uses-defaults",
+        ),
+        pytest.param(
+            "direct-api",
+            "step-audio-2",
+            {},
+            {},
+            id="audio-chat-model-is-not-a-task-only-route",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -171,6 +192,15 @@ async def test_request_follows_the_model_policy(
         pytest.param(
             "direct-api", "step-router-v1", {}, "only through the Step Plan", id="router-direct"
         ),
+        pytest.param("direct-api", "step-tts-2", {}, "audio or realtime", id="speech-route"),
+        pytest.param(
+            "step-plan",
+            "stepaudio-3-realtime-preview",
+            {},
+            "audio or realtime",
+            id="realtime-route",
+        ),
+        pytest.param("direct-api", "step-image-edit-2", {}, "retired", id="retired-image-route"),
         pytest.param("direct-api", "step-3.7-flash", {"temperature": 2.1}, "temperature"),
         pytest.param("direct-api", "step-3.7-flash", {"top_p": 0}, "top_p"),
         pytest.param(

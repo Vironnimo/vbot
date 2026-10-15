@@ -1,7 +1,7 @@
 """Shared configuration, Models and wire helpers for the OpenAI Adapter tests.
 
-Covers the ``api-key`` connection (``/chat/completions`` fallback and public
-``/responses``) and the ``subscription`` connection (Codex Responses over SSE
+Covers the ``api-key`` connection (public ``/responses`` and legacy
+``/chat/completions``) and the ``subscription`` connection (Codex Responses over SSE
 or WebSocket with ``connection_mode="codex_responses"``).
 """
 

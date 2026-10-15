@@ -64,6 +64,21 @@ MODELS["plain-model"] = Model(
     context_window=128000,
     max_output_tokens=8192,
 )
+MODELS["kimi-k-next"] = KimiAdapter.normalize_catalog_entry({"id": "kimi-k-next"})
+MODELS["kimi-k-next-ladder"] = Model(
+    model_id="kimi-k-next-ladder",
+    name="Future Kimi with a reported ladder",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=True,
+        reasoning=ReasoningCapabilities(
+            supported=True, control="levels", levels=("medium", "high")
+        ),
+    ),
+    context_window=None,
+    max_output_tokens=None,
+)
 
 
 def _adapter(connection: str) -> KimiAdapter:
@@ -169,6 +184,38 @@ async def _sent_body(
             {"thinking": {"type": "disabled"}},
             False,
             id="coding-k2.7-none-routes-without-thinking",
+        ),
+        pytest.param(
+            "platform",
+            "kimi-k-next",
+            {"thinking_effort": "medium"},
+            {"reasoning_effort": "high", "thinking": ABSENT},
+            True,
+            id="future-platform-model-inherits-current-effort-ladder",
+        ),
+        pytest.param(
+            "platform",
+            "kimi-k-next",
+            {"thinking_effort": "none"},
+            {"reasoning_effort": "low", "thinking": ABSENT},
+            True,
+            id="future-platform-model-cannot-disable-thinking",
+        ),
+        pytest.param(
+            "platform",
+            "kimi-k-next-ladder",
+            {"thinking_effort": "none"},
+            {"reasoning_effort": "medium", "thinking": ABSENT},
+            True,
+            id="future-platform-off-uses-lowest-exact-catalog-rung",
+        ),
+        pytest.param(
+            "coding",
+            "kimi-k-next",
+            {"thinking_effort": "none"},
+            {"thinking": {"type": "disabled"}, "reasoning_effort": ABSENT},
+            False,
+            id="future-coding-model-keeps-connection-off-toggle",
         ),
         pytest.param(
             "platform",

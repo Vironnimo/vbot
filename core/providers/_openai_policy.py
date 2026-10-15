@@ -1,9 +1,62 @@
-"""OpenAI catalog normalization helpers (Codex ``/codex/models`` entries)."""
+"""OpenAI Platform catalog admission and Codex catalog normalization."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+
+
+def _is_platform_chat_or_embedding_model(model_id: str) -> bool:
+    """Admit new ids except recognizable non-chat endpoint families.
+
+    Platform ``/models`` reports ids, not endpoint compatibility. These task
+    families need their own normalization and request builders; they must not
+    acquire chat capabilities from the sparse-listing default. Unknown names
+    remain eligible. Fine-tunes inherit the task of their base Model.
+    """
+
+    base_id = model_id.split(":", 2)[1] if model_id.startswith("ft:") else model_id
+    if base_id.startswith(_PLATFORM_NON_CHAT_PREFIXES) or base_id in {
+        "ada",
+        "babbage",
+        "curie",
+        "davinci",
+    }:
+        return False
+    # GPT chat audio is a Chat Completions Model; only these task-specific
+    # components identify incompatible speech, realtime or legacy endpoints.
+    return not (
+        base_id.startswith("gpt-")
+        and {"realtime", "transcribe", "tts", "instruct"}.intersection(base_id.split("-"))
+    )
+
+
+_PLATFORM_NON_CHAT_PREFIXES = (
+    "dall-e-",
+    "gpt-image-",
+    "chatgpt-image-",
+    "gpt-realtime",
+    "gpt-live",
+    "gpt-transcribe",
+    "tts-",
+    "whisper-",
+    "sora-",
+    "omni-moderation-",
+    "text-moderation-",
+    "text-davinci-",
+    "text-curie-",
+    "text-babbage-",
+    "text-ada-",
+    "code-davinci-",
+    "code-cushman-",
+    "davinci-",
+    "babbage-",
+    "curie-",
+    "ada-",
+    "text-search-",
+    "text-similarity-",
+    "code-search-",
+)
 
 
 def _normalize_catalog_raw(raw: Mapping[str, Any]) -> Mapping[str, Any]:

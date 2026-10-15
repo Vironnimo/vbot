@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
+from core.models.models import ReasoningCapabilities
 from core.providers.reasoning import (
     REASONING_REPLAY_FIDELITY_META_ONLY,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
@@ -24,6 +26,7 @@ from .opencode_go_test_support import (
     RESPONSES_URL,
     bundled_go,
     go_adapter,
+    go_model,
     go_request,
     success_response,
 )
@@ -49,6 +52,20 @@ def _sent_payload(route: respx.Route) -> dict[str, Any]:
         ("deepseek-v4.1-flash", "max", {"type": "enabled"}, "max", ("effort", "max")),
         ("deepseek-flash", "high", {"type": "enabled"}, "high", ("effort", "high")),
         ("deepseek-flash", "none", {"type": "disabled"}, None, ("off", None)),
+        # Future versions inherit the current family behavior without catalog facts.
+        ("deepseek-v99-flash-free", None, {"type": "enabled"}, None, ("on", None)),
+        ("deepseek-v99-flash-free", "none", {"type": "disabled"}, None, ("off", None)),
+        ("deepseek-v99-flash-free", "medium", {"type": "enabled"}, "low", ("effort", "low")),
+        # Existing older V4 Models keep their established effort-only controls.
+        ("deepseek-v4-flash", None, None, None, ("default", None)),
+        ("deepseek-v4-flash", "high", None, "high", ("effort", "high")),
+        ("kimi-k99", "none", None, "low", ("effort", "low")),
+        ("kimi-k99", "max", None, "max", ("effort", "max")),
+        ("glm-99", "medium", None, "low", ("effort", "low")),
+        ("glm-99", "max", None, "max", ("effort", "max")),
+        ("mimo-v99", "none", {"type": "disabled"}, None, ("off", None)),
+        ("mimo-v99", "high", {"type": "enabled"}, None, ("on", None)),
+        ("longcat-99", None, {"type": "enabled"}, None, ("on", None)),
         # MiMo V2.6: a binary toggle without an effort ladder.
         ("mimo-v2.6-flash", None, {"type": "enabled"}, None, ("on", None)),
         ("mimo-v2.6-flash", "none", {"type": "disabled"}, None, ("off", None)),
@@ -130,8 +147,23 @@ async def test_profile_thinking_controls_replace_the_effort_ladder(
     ("model_id", "effort", "reasoning"),
     [
         pytest.param(RESPONSES_MODEL, "none", {"effort": "none", "summary": "auto"}, id="off-rung"),
+        pytest.param(
+            "gpt-future", "none", {"effort": "none", "summary": "auto"}, id="future-gpt-off-rung"
+        ),
+        pytest.param(
+            "gpt-future", "max", {"effort": "max", "summary": "auto"}, id="future-gpt-latest-ladder"
+        ),
         pytest.param("muse-spark-1.3-contributor", "none", None, id="no-off-rung-omits"),
         pytest.param("grok-4.6", "none", {"effort": "low", "summary": "auto"}, id="minimum-rung"),
+        pytest.param(
+            "grok-future", "none", {"effort": "low", "summary": "auto"}, id="future-minimum-rung"
+        ),
+        pytest.param(
+            "grok-future",
+            "xhigh",
+            {"effort": "xhigh", "summary": "auto"},
+            id="future-latest-ladder",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -148,6 +180,37 @@ async def test_responses_wire_never_sends_an_unsupported_off_effort(
         )
 
     assert _sent_payload(route).get("reasoning") == reasoning
+
+
+@pytest.mark.parametrize("model_id", ["grok-future", "kimi-k99"])
+@pytest.mark.asyncio
+async def test_inferred_minimum_effort_follows_the_new_models_reported_ladder(
+    model_id: str,
+) -> None:
+    model = go_model(model_id)
+    model = replace(
+        model,
+        capabilities=replace(
+            model.capabilities,
+            reasoning=ReasoningCapabilities(
+                supported=True, control="levels", levels=("medium", "high")
+            ),
+        ),
+    )
+    adapter = go_adapter(model_lookup=lambda _: model)
+    wire = "responses" if model_id.startswith("grok-") else "chat"
+    url = RESPONSES_URL if wire == "responses" else CHAT_URL
+
+    with respx.mock:
+        route = respx.post(url).mock(return_value=success_response(wire, streaming=False))
+        await adapter.send(
+            [{"role": "user", "content": "hello"}], model_id=model_id, thinking_effort="none"
+        )
+    await adapter.aclose()
+
+    payload = _sent_payload(route)
+    effort = payload["reasoning"]["effort"] if wire == "responses" else payload["reasoning_effort"]
+    assert effort == "medium"
 
 
 # ---------------------------------------------------------------------------

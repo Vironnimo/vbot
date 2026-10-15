@@ -28,7 +28,7 @@ CHAT_MODEL = "deepseek-v4-flash"
 WIRE_MODELS = (RESPONSES_MODEL, MESSAGES_MODEL, CHAT_MODEL, GEMINI_MODEL)
 
 # The catalog protocol hint (models.dev AI SDK package) that routes the hinted Models;
-# the reviewed Chat Model has none and is routed by a wire profile rule.
+# the Chat Model has none and uses the Provider default.
 NPM = {
     RESPONSES_MODEL: "@ai-sdk/openai",
     MESSAGES_MODEL: "@ai-sdk/anthropic",

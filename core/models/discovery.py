@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from core.models.assembly import REASONING_CONTROL_FIELDS
+from core.models.assembly import REASONING_CONTROL_FIELDS, load_canonical_layer
 from core.models.models import (
     Model,
     ModelRegistry,
@@ -65,6 +65,9 @@ from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("models.discovery")
 _HeaderSource = dict[str, str] | Callable[[], Awaitable[dict[str, str]]]
+_CATALOG_IDENTITY_FIELDS = frozenset(
+    {"id", "object", "created", "owned_by", "root", "parent", "permission", "name"}
+)
 
 
 class ModelDiscoveryError(VBotError):
@@ -257,6 +260,7 @@ async def refresh_models(
         catalog = models_dev_catalog
 
         normalized_models: dict[str, Model] = {}
+        sparse_models: dict[str, Model] = {}
         for raw_model in raw_models:
             if not raw_filter.accepts(raw_model):
                 continue
@@ -293,6 +297,11 @@ async def refresh_models(
                 continue
             if model_filter.accepts(model):
                 normalized_models[model.model_id] = model
+                if (
+                    set(raw_model) <= _CATALOG_IDENTITY_FIELDS
+                    and "chat" in model.capabilities.task_types
+                ):
+                    sparse_models[model.model_id] = model
 
         # A provider may need per-model detail calls to fill capabilities the
         # listing endpoint omits (e.g. Ollama's POST /api/show for tool/vision/
@@ -360,7 +369,17 @@ async def refresh_models(
             normalized_models,
             provider_config,
             catalog,
-            existing_models,
+            _models_for_connection_enrichment(
+                existing_models,
+                credential_connection.id if credential_connection is not None else None,
+            ),
+            previous_canonical=(
+                load_canonical_layer(
+                    models_dir / "models.json", models_dir / "models.overrides.json"
+                )
+                if catalog is None
+                else {}
+            ),
         )
         projected_models = _admitted_models(
             projected_models,
@@ -371,7 +390,16 @@ async def refresh_models(
         )
         connection_id = credential_connection.id if credential_connection is not None else None
         tagged_fresh = _tag_fresh_models(projected_models, connection_id)
-        final_models = _merge_models_by_connection(existing_models, tagged_fresh, connection_id)
+        final_models = _merge_models_by_connection(
+            existing_models,
+            tagged_fresh,
+            connection_id,
+            capability_defaults={
+                model_id: _model_to_data(model)["capabilities"]
+                for model_id, model in sparse_models.items()
+                if normalized_models.get(model_id) is model
+            },
+        )
         output_data = {
             "provider_id": provider_config.id,
             "source": "discovery",
@@ -411,6 +439,8 @@ def _project_provider_models(
     provider_config: ProviderConfig,
     catalog: ModelsDevCatalog | None,
     previous_models: Mapping[str, Mapping[str, Any]],
+    *,
+    previous_canonical: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """Serialize provider models to data and enrich each from models.dev.
 
@@ -421,34 +451,67 @@ def _project_provider_models(
     ``reasoning_options`` differ from the lab spec. No cross-file merge — this is
     the pure provider projection.
 
-    When models.dev is unavailable, a wire id the current catalog already holds
+    When models.dev or its exact Provider entry is unavailable, a known wire id
     keeps the facts an earlier enrichment gave it (``previous_models``): an
-    outage must not strip pricing, limits, canonical joins or the protocol hint
-    that routes and admits a gateway Model.
+    outage must not strip pricing, limits, canonical joins or the protocol hint.
     """
 
     projected: dict[str, dict[str, Any]] = {}
     models_dev_id = provider_config.effective_models_dev_id()
     for wire_id, model in normalized_models.items():
         data = _model_to_data(model)
-        if catalog is not None:
+        if wire_id in previous_models and (
+            catalog is None or catalog.provider_model(models_dev_id, wire_id) is None
+        ):
+            previous = previous_models[wire_id]
+            canonical_id = previous.get("canonical") or wire_id
+            canonical: Mapping[str, Any] | None
+            if catalog is not None:
+                canonical = catalog.models.get(canonical_id)
+                canonical_support = (
+                    canonical.get("reasoning") if isinstance(canonical, Mapping) else None
+                )
+            else:
+                # Check the surviving layer only to decide whether inheritance
+                # is still safe; never copy canonical overrides into discovery.
+                canonical = previous_canonical.get(canonical_id)
+                capabilities = (
+                    canonical.get("capabilities") if isinstance(canonical, Mapping) else None
+                )
+                reasoning = (
+                    capabilities.get("reasoning") if isinstance(capabilities, Mapping) else None
+                )
+                canonical_support = (
+                    reasoning.get("supported") if isinstance(reasoning, Mapping) else None
+                )
+            _carry_forward_enrichment(
+                data,
+                previous,
+                provider_config.id,
+                inherit_reasoning=(
+                    isinstance(canonical, Mapping)
+                    and (
+                        model.capabilities.reasoning.supported is not True
+                        or canonical_support is True
+                    )
+                ),
+            )
+        elif catalog is not None:
             _enrich_provider_model(data, provider_config.id, models_dev_id, wire_id, catalog)
-        elif wire_id in previous_models:
-            _carry_forward_enrichment(data, previous_models[wire_id], provider_config.id)
         projected[wire_id] = data
     return projected
 
 
 def _carry_forward_enrichment(
-    data: dict[str, Any], previous: Mapping[str, Any], provider_id: str
+    data: dict[str, Any], previous: Mapping[str, Any], provider_id: str, *, inherit_reasoning: bool
 ) -> None:
     """Keep what ``_enrich_provider_model`` added to ``previous``, under its own rules.
 
     Fill, don't overwrite: a fact the endpoint reported now wins over the
     earlier value, modalities only widen, and an adapter-reported reasoning
     control is kept. Otherwise the reasoning control description is taken as
-    one unit from ``previous`` - including its absence, which lets a canonical
-    ladder flow through at load - while adapter facts outside it stay.
+    one unit from ``previous`` - including its absence when a canonical ladder
+    can still flow through at load - while adapter facts outside it stay.
     """
 
     for key in ("canonical", "pricing"):
@@ -481,7 +544,9 @@ def _carry_forward_enrichment(
             if direction == "input_modalities":
                 capabilities["vision"] = "image" in earlier
     current = capabilities.get("reasoning")
-    if isinstance(current, dict) and current.get("control") is not None:
+    if isinstance(current, dict) and (
+        current.get("supported") is False or current.get("control") is not None
+    ):
         return
     adapter_facts = (
         {key: value for key, value in current.items() if key not in REASONING_CONTROL_FIELDS}
@@ -498,6 +563,17 @@ def _carry_forward_enrichment(
         if isinstance(earlier_reasoning, Mapping)
         else {}
     )
+    if not earlier_control and not inherit_reasoning:
+        # The surviving canonical record may be missing or contradict the
+        # endpoint. Keep the fresh flag (including unknown) so this Model loads.
+        return
+    if (
+        isinstance(current, dict)
+        and current.get("supported") is True
+        and earlier_control
+        and earlier_control.get("supported") is not True
+    ):
+        return
     if earlier_control or adapter_facts:
         capabilities["reasoning"] = {**earlier_control, **adapter_facts}
     else:
@@ -514,8 +590,8 @@ def _admitted_models(
     """Keep the Models the Provider's wire profile admits on this Connection.
 
     Admission is judged on the projected Model: a rule may depend on a fact
-    enrichment just added (the models.dev protocol hint decides which OpenCode
-    Zen Models have a reviewed wire). A restricted or retired Model is not
+    enrichment just added, such as an exact catalog protocol hint. Missing
+    compatibility evidence is not a denial. A restricted or retired Model is not
     written, so it never appears in the Model DB.
     """
 
@@ -589,15 +665,14 @@ def _enrich_provider_model(
     * projects the Model's own AI SDK package (models.dev per-model
       ``provider.npm``) into ``metadata.<provider>.npm``, the catalog protocol
       hint of wire profiles;
-    * when models.dev reports a ladder that *deviates* from the lab spec, sets
-      the reasoning control description to that deviating block (provider layer
-      wins at load);
+    * keeps an endpoint-reported reasoning denial or control; otherwise fills
+      a missing control from models.dev's ladder when it *deviates* from the lab
+      spec (the provider layer wins at load);
     * when the model joins the canonical layer and does NOT deviate, keeps an
       adapter-reported control description (one with a ``control``) and drops
-      only a bare ``supported`` flag, so the canonical lifted ladder is
-      inherited at load. Adapters default that flag when the endpoint is silent,
-      so it is not a reported fact and must not shadow the canonical ladder (the
-      assembly takes the control description as one unit).
+      an unknown or matching positive ``supported`` flag, so the richer canonical
+      ladder is inherited at load. An explicit endpoint flag never yields to a
+      contradictory canonical flag.
 
     Reasoning facts outside the control description (``mandatory``) are always
     kept: they are adapter facts that no models.dev or canonical source carries.
@@ -671,20 +746,37 @@ def _enrich_provider_model(
     if not isinstance(capabilities, dict):
         return
     current = capabilities.get("reasoning")
+    if isinstance(current, dict) and (
+        current.get("supported") is False or current.get("control") is not None
+    ):
+        return
     adapter_facts = (
         {key: value for key, value in current.items() if key not in REASONING_CONTROL_FIELDS}
         if isinstance(current, dict)
         else {}
     )
     if deviating is not None:
+        if (
+            isinstance(current, dict)
+            and current.get("supported") is True
+            and deviating.get("supported") is not True
+        ):
+            return
         capabilities["reasoning"] = {**deviating, **adapter_facts}
         return
-    # No deviation: let the canonical ladder flow through at load by dropping a
-    # bare adapter flag — but only when a canonical join exists to inherit from
-    # (an explicit pointer, or the wire-id is itself a canonical id). An adapter
-    # that reported a control keeps its whole block.
+    current_supported = current.get("supported") if isinstance(current, dict) else None
+    md_reasoning = provider_reasoning_supported(
+        catalog, models_dev_id=models_dev_id, wire_id=wire_id
+    )
+    # No deviation: let the canonical ladder flow through at load by dropping an
+    # unknown or matching positive flag, only at an existing canonical join.
+    # A reported control or negative flag has already been kept above.
     if _has_canonical_join(catalog, pointer, wire_id):
-        if isinstance(current, dict) and current.get("control") is not None:
+        canonical = catalog.models.get(pointer or wire_id)
+        canonical_support = canonical.get("reasoning") if isinstance(canonical, Mapping) else None
+        reported_support = current_supported if current_supported is not None else md_reasoning
+        if reported_support is not None and reported_support is not canonical_support:
+            capabilities["reasoning"] = {**adapter_facts, "supported": reported_support}
             return
         if adapter_facts:
             capabilities["reasoning"] = adapter_facts
@@ -695,13 +787,9 @@ def _enrich_provider_model(
     # whose wire-id cannot reach the canonical layer): still project the bare
     # models.dev ``reasoning`` flag, so a model the feed marks reasoning-capable
     # but with no published control ladder is not flattened to the endpoint's
-    # default ``supported: false``. The effort then snaps against the adapter floor.
-    md_reasoning = provider_reasoning_supported(
-        catalog, models_dev_id=models_dev_id, wire_id=wire_id
-    )
-    current_supported = current.get("supported") if isinstance(current, dict) else False
-    if md_reasoning and not current_supported:
-        capabilities["reasoning"] = {**adapter_facts, "supported": True}
+    # unknown support. The effort then snaps against the adapter floor.
+    if md_reasoning is not None and current_supported is None:
+        capabilities["reasoning"] = {**adapter_facts, "supported": md_reasoning}
 
 
 def _has_canonical_join(catalog: ModelsDevCatalog, pointer: str | None, wire_id: str) -> bool:
@@ -713,7 +801,7 @@ def _has_canonical_join(catalog: ModelsDevCatalog, pointer: str | None, wire_id:
     """
 
     if pointer is not None:
-        return True
+        return pointer in catalog.models
     return wire_id in catalog.models
 
 
@@ -936,13 +1024,18 @@ def _merge_models_by_connection(
     existing_models: Mapping[str, dict[str, Any]],
     fresh_models: Mapping[str, dict[str, Any]],
     connection_id: str | None,
+    *,
+    capability_defaults: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Combine fresh discovery output with existing catalog models.
 
     Models are partitioned by the ``connections`` allowlist. A refresh replaces
     only the selected Connection's membership and preserves every other
     membership on the same wire id; a fresh shared entry unions those retained
-    memberships back in. Passing ``connection_id=None`` (no selected Connection)
+    memberships back in, retaining their exact Context limits. Capability facts
+    remain Provider-wide: identity-only listings do not replace them with their
+    unchanged normalizer defaults. Fresh reported/enriched fields still win.
+    Passing ``connection_id=None`` (no selected Connection)
     falls back to a full overwrite for backward compatibility with
     non-Connection-aware callers.
     """
@@ -962,6 +1055,9 @@ def _merge_models_by_connection(
         if remaining_connections:
             retained = dict(model_data)
             retained["connections"] = remaining_connections
+            _set_connection_contexts(
+                retained, _connection_contexts(model_data, remaining_connections)
+            )
             merged[model_id] = retained
 
     for model_id, fresh_model in fresh_models.items():
@@ -969,10 +1065,81 @@ def _merge_models_by_connection(
         retained_model = merged.get(model_id)
         retained_connections = retained_model.get("connections") if retained_model else None
         fresh_connections = data.get("connections")
-        if isinstance(retained_connections, list) and isinstance(fresh_connections, list):
+        if (
+            retained_model is not None
+            and isinstance(retained_connections, list)
+            and isinstance(fresh_connections, list)
+        ):
             data["connections"] = list(dict.fromkeys([*retained_connections, *fresh_connections]))
+            contexts = _connection_contexts(retained_model, retained_connections)
+            contexts.update(_connection_contexts(fresh_model, fresh_connections))
+            _set_connection_contexts(data, contexts)
+        elif isinstance(fresh_connections, list) and "connection_context_windows" in data:
+            _set_connection_contexts(data, _connection_contexts(data, fresh_connections))
+        previous = existing_models.get(model_id)
+        baseline = (capability_defaults or {}).get(model_id)
+        if previous is not None and baseline is not None:
+            previous_capabilities = previous.get("capabilities")
+            fresh_capabilities = data.get("capabilities")
+            if isinstance(previous_capabilities, Mapping) and isinstance(
+                fresh_capabilities, Mapping
+            ):
+                data["capabilities"] = {
+                    key: copy.deepcopy(previous_capabilities[key])
+                    if key != "task_types"
+                    and value == baseline.get(key)
+                    and key in previous_capabilities
+                    else value
+                    for key, value in fresh_capabilities.items()
+                }
         merged[model_id] = data
     return merged
+
+
+def _connection_contexts(data: Mapping[str, Any], connections: list[str]) -> dict[str, int | None]:
+    """Capture effective limits before another Connection changes the fallback."""
+
+    specific = data.get("connection_context_windows")
+    limits = specific if isinstance(specific, Mapping) else {}
+    result: dict[str, int | None] = {}
+    for connection in connections:
+        value = limits.get(connection, data.get("context_window"))
+        result[connection] = (
+            value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+        )
+    return result
+
+
+def _models_for_connection_enrichment(
+    models: Mapping[str, dict[str, Any]], connection_id: str | None
+) -> Mapping[str, dict[str, Any]]:
+    """Carry the refreshed Connection's earlier limit, never a sibling's fallback."""
+
+    if connection_id is None:
+        return models
+    result: dict[str, dict[str, Any]] = {}
+    for model_id, data in models.items():
+        connections = data.get("connections")
+        context = (
+            None
+            if isinstance(connections, list) and connections and connection_id not in connections
+            else _connection_contexts(data, [connection_id])[connection_id]
+        )
+        result[model_id] = {**data, "context_window": context}
+    return result
+
+
+def _set_connection_contexts(data: dict[str, Any], contexts: Mapping[str, int | None]) -> None:
+    """Keep exact Connection limits and an honest conservative Model fallback."""
+
+    known = {connection: limit for connection, limit in contexts.items() if limit is not None}
+    common = min(known.values()) if known and len(known) == len(contexts) else None
+    data["context_window"] = common
+    exceptions = {connection: limit for connection, limit in known.items() if limit != common}
+    if exceptions:
+        data["connection_context_windows"] = exceptions
+    else:
+        data.pop("connection_context_windows", None)
 
 
 def _tag_fresh_models(

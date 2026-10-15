@@ -543,7 +543,7 @@ _ZERO_REASONING_USAGE = {
 @pytest.mark.parametrize(
     ("adapter_factory", "returned", "sent_effort", "warns"),
     [
-        pytest.param(make_adapter, {}, "high", True, id="swallowed"),
+        pytest.param(lambda: make_adapter(model=catalog_model()), {}, "high", True, id="swallowed"),
         pytest.param(
             lambda: make_adapter(model=catalog_model(reasoning=False)),
             {},
@@ -552,14 +552,14 @@ _ZERO_REASONING_USAGE = {
             id="catalog-non-reasoning-renders-no-effort",
         ),
         pytest.param(
-            make_adapter,
+            lambda: make_adapter(model=catalog_model()),
             {"reasoning_content": "Thinking it through."},
             "high",
             False,
             id="returned-readable-reasoning",
         ),
         pytest.param(
-            make_adapter,
+            lambda: make_adapter(model=catalog_model()),
             {"reasoning_details": [{"type": "reasoning.text", "text": "Thinking."}]},
             "high",
             False,

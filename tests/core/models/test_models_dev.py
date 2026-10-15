@@ -202,6 +202,19 @@ def test_provider_sections_supply_the_facts_bare_endpoints_omit(
         )
         is False
     )
+    assert (
+        provider_reasoning_supported(
+            ModelsDevCatalog(
+                {
+                    "models": catalog.models,
+                    "providers": {**catalog.providers, "new": {"models": {"m": {}}}},
+                }
+            ),
+            models_dev_id="new",
+            wire_id="m",
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -267,6 +280,7 @@ async def test_canonical_refresh_prices_provider_files_without_credentials(
         "cache_read": 0.2,
     }
     raw["providers"]["openai"]["models"]["text-embedding-3-small"] = {"cost": {"input": 0.02}}
+    raw["providers"]["openai"]["models"]["price-removed"] = {}
     models_dir = tmp_path / "models"
     models_dir.mkdir()
     path = models_dir / "gateway.json"
@@ -282,6 +296,12 @@ async def test_canonical_refresh_prices_provider_files_without_credentials(
                         "pricing": {
                             "source": "models.dev:openai/gpt-5.5-guess",
                             "rates": {"input": 99},
+                        }
+                    },
+                    "price-removed": {
+                        "pricing": {
+                            "source": "models.dev:openai/price-removed",
+                            "rates": {"input": 1},
                         }
                     },
                     # The Provider's own catalog price wins over models.dev.
@@ -303,7 +323,8 @@ async def test_canonical_refresh_prices_provider_files_without_credentials(
 
     models = json.loads(path.read_text(encoding="utf-8"))["models"]
     assert models["gpt-5.5"]["pricing"]["rates"] == {"input": 2, "output": 8, "cache_read": 0.2}
-    assert "pricing" not in models["gpt-5.5-guess"]
+    assert models["gpt-5.5-guess"]["pricing"]["rates"] == {"input": 99}
+    assert "pricing" not in models["price-removed"]
     assert models["text-embedding-3-small"]["pricing"]["rates"] == {"input": 0.03}
     canonical = json.loads((models_dir / "models.json").read_text(encoding="utf-8"))
     assert canonical["models"]["openai/gpt-5.5"]["pricing"]["rates"]["input"] == 2

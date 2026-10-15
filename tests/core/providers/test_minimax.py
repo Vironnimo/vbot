@@ -96,28 +96,44 @@ async def _sent_request(
 
 
 @pytest.mark.parametrize(
-    ("model_id", "effort", "thinking", "reasoning_split"),
+    ("model_id", "effort", "thinking", "reasoning_split", "reasoning_effort"),
     [
-        pytest.param("MiniMax-M3", "high", {"type": "adaptive"}, True, id="m3-active-is-adaptive"),
-        pytest.param("MiniMax-M3", "none", {"type": "disabled"}, ABSENT, id="m3-none-disables"),
-        pytest.param("MiniMax-M2.7", "high", ABSENT, True, id="m2-reasons-without-control"),
+        pytest.param(
+            "MiniMax-M3", "high", {"type": "adaptive"}, True, ABSENT, id="m3-active-is-adaptive"
+        ),
+        pytest.param(
+            "MiniMax-M3", "none", {"type": "disabled"}, ABSENT, ABSENT, id="m3-none-disables"
+        ),
+        pytest.param("MiniMax-M2.7", "high", ABSENT, True, ABSENT, id="m2-reasons-without-control"),
+        pytest.param("MiniMax-M2.7", "none", ABSENT, True, ABSENT, id="m2-cannot-disable-thinking"),
+        pytest.param("MiniMax-M-next", "max", ABSENT, ABSENT, "max", id="future-model-effort"),
+        pytest.param(
+            "MiniMax-M-next", "none", ABSENT, ABSENT, "low", id="future-model-lowest-effort"
+        ),
+        pytest.param(
+            "MiniMax-M-next", None, ABSENT, ABSENT, ABSENT, id="future-model-provider-default"
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_direct_wire_renders_thinking_and_never_openai_reasoning_controls(
-    model_id: str, effort: str, thinking: Any, reasoning_split: Any
+async def test_direct_wire_renders_controls_for_the_model_generation(
+    model_id: str, effort: str | None, thinking: Any, reasoning_split: Any, reasoning_effort: Any
 ) -> None:
     request = await _sent_request(
         _adapter("chat"), CHAT_URL, HELLO, model_id=model_id, thinking_effort=effort
     )
     body = json.loads(request.content)
 
-    for key, value in (("thinking", thinking), ("reasoning_split", reasoning_split)):
+    for key, value in (
+        ("thinking", thinking),
+        ("reasoning_split", reasoning_split),
+        ("reasoning_effort", reasoning_effort),
+    ):
         if value is ABSENT:
             assert key not in body, key
         else:
             assert body[key] == value, key
-    for key in ("reasoning_effort", "reasoning", "include_reasoning"):
+    for key in ("reasoning", "include_reasoning"):
         assert key not in body, key
 
 
@@ -138,6 +154,24 @@ async def test_output_limit_defaults_to_the_recommended_ceiling_not_the_flat_def
     )
 
     assert json.loads(request.content)["max_tokens"] == max_tokens
+
+
+@pytest.mark.asyncio
+async def test_future_direct_model_uses_current_output_field_and_sampling_range() -> None:
+    request = await _sent_request(
+        _adapter("chat"),
+        CHAT_URL,
+        HELLO,
+        model_id="MiniMax-M-next",
+        temperature=2,
+        max_tokens=1024,
+        max_completion_tokens=512,
+    )
+    body = json.loads(request.content)
+
+    assert body["max_completion_tokens"] == 512
+    assert "max_tokens" not in body
+    assert body["temperature"] == 2
 
 
 @pytest.mark.asyncio

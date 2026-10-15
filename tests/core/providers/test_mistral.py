@@ -72,7 +72,8 @@ def _catalog_model(
 
 CATALOG = {
     "mistral-medium-latest": _catalog_model("mistral-medium-latest", reasoning=False),
-    "mistral-medium-3-5": _catalog_model("mistral-medium-3-5", levels=("low", "medium", "high")),
+    "mistral-medium-3-5": _catalog_model("mistral-medium-3-5", levels=("none", "high")),
+    "mistral-future": _catalog_model("mistral-future", levels=("low", "medium", "high")),
     "magistral-small-latest": _catalog_model("magistral-small-latest"),
 }
 
@@ -107,7 +108,7 @@ def _raw_model(
     model_id: str = "mistral-large-latest",
     completion_chat: bool = True,
     function_calling: bool = True,
-    reasoning: bool = False,
+    reasoning: bool | None = False,
     vision: bool = True,
     archived: bool = False,
     max_context_length: int | None = 128000,
@@ -125,6 +126,8 @@ def _raw_model(
     }
     if max_context_length is not None:
         raw["max_context_length"] = max_context_length
+    if reasoning is None:
+        raw["capabilities"].pop("reasoning")
     return raw
 
 
@@ -163,6 +166,11 @@ def test_chat_catalog_entry_maps_capabilities() -> None:
             _raw_model(model_id="mistral-small-2603", reasoning=True),
             {"reasoning": True, "parameters": ("reasoning", "response_format", "tools")},
             id="reasoning-flag",
+        ),
+        pytest.param(
+            _raw_model(reasoning=None),
+            {"reasoning": None, "parameters": ("response_format", "tools")},
+            id="missing-reasoning-is-unknown",
         ),
         pytest.param(
             _raw_model(function_calling=False, vision=False),
@@ -240,15 +248,17 @@ def test_non_chat_embed_ids_become_embedding_models(model_id: str) -> None:
         pytest.param(False, "mistral-large-latest", "max", "high", id="max"),
         pytest.param(False, "mistral-large-latest", "none", "none", id="none"),
         pytest.param(False, "mistral-large-latest", None, ABSENT, id="no-effort"),
-        # A multi-level catalog ladder still collapses onto the binary wire.
-        pytest.param(True, "mistral-medium-3-5", "medium", "high", id="feed-ladder"),
+        pytest.param(True, "mistral-medium-3-5", "medium", "high", id="current-catalog-ladder"),
+        pytest.param(True, "mistral-future", "medium", "medium", id="future-catalog-ladder-wins"),
+        pytest.param(False, "zai-glm-next", "max", "max", id="hosted-glm-family-effort"),
+        pytest.param(False, "zai-glm-next", "none", "low", id="hosted-glm-family-lowest-effort"),
         pytest.param(True, "magistral-small-latest", "high", "high", id="catalog-reasoning"),
         pytest.param(True, "mistral-medium-latest", "high", ABSENT, id="reasoning-unsupported"),
     ],
 )
 @respx.mock
 @pytest.mark.asyncio
-async def test_reasoning_is_a_binary_effort_toggle(
+async def test_reasoning_uses_catalog_ladder_or_provider_family_default(
     catalog: bool,
     model_id: str,
     effort: str | None,

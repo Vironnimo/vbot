@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-14T09:37:03.677071+00:00",
+  "fetched_at": "2026-10-15T12:31:06.749022+00:00",
   "models": {
     "deepseek-v4-pro:0813": {
       "capabilities": {
@@ -13,6 +13,7 @@
         "reasoning": {
           "control": "levels",
           "levels": [
+            "low",
             "high",
             "max"
           ],

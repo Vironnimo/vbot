@@ -17,7 +17,9 @@ from core.providers.openai_compatible import (
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
-MODEL_ID = "gpt-5.2"
+# Keep this codec fixture on a real Chat Completions family. GPT-5.2 uses
+# Responses and its exact Platform policy must not stand in for generic Chat.
+MODEL_ID = "gpt-4.1"
 API_KEY = "test-api-key-12345"
 
 

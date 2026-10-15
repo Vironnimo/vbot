@@ -695,7 +695,17 @@ async def test_custom_provider_wire_block_shapes_requests_live(
         )
         provider = _custom_provider_payload()
         provider["models"]["chat-model"]["capabilities"]["reasoning"] = True
-        provider["wire"] = {"defaults": {"reasoning": {"dialect": "thinking_toggle"}}}
+        provider["wire"] = {
+            "family_defaults": [
+                {
+                    "when": {"prefix": "chat-", "connections": "default"},
+                    "set": {
+                        "protocol": "chat_completions",
+                        "reasoning": {"dialect": "thinking_toggle", "floor": ["low", "high"]},
+                    },
+                }
+            ]
+        }
         await rpc_result(state, "provider.custom_save", provider=provider, api_key="secret")
         adapter = runtime.get_adapter(ConnectionRef("local-ai", "local-ai:default"))
         assert isinstance(adapter, OpenAICompatibleAdapter)
@@ -709,9 +719,21 @@ async def test_custom_provider_wire_block_shapes_requests_live(
         assert toggled["thinking"] == {"type": "enabled"}
         assert "reasoning_effort" not in toggled
         assert model["wire_profiles"]["default"]["reasoning_dialect"] == "thinking_toggle"
+        assert model["wire_profiles"]["default"]["wire_status"] == "inferred"
         assert adapter.describe_reasoning_render("chat-model", "high") == (
             ReasoningIntent(REASONING_INTENT_ON)
         )
+
+        # Existing rules remain corrections above explicit catalog facts after a live save.
+        provider["models"]["chat-model"]["capabilities"]["reasoning"] = False
+        provider["wire"]["rules"] = [
+            {"when": {"prefix": "chat-"}, "set": {"reasoning": {"supported": True}}}
+        ]
+        await rpc_result(state, "provider.custom_save", provider=provider)
+        corrected = await sent_payload(
+            adapter, url=url, model_id="chat-model", thinking_effort="high"
+        )
+        assert corrected["thinking"] == {"type": "enabled"}
 
         refused = await rpc_error(
             state,
@@ -733,6 +755,7 @@ async def test_custom_provider_wire_block_shapes_requests_live(
         )
 
         # Without a block, the same Adapter falls back to the protocol defaults.
+        provider["models"]["chat-model"]["capabilities"]["reasoning"] = True
         await rpc_result(state, "provider.custom_save", provider={**provider, "wire": None})
         effort = await sent_payload(adapter, url=url, model_id="chat-model", thinking_effort="high")
 

@@ -34,6 +34,7 @@ from .discovery_test_support import (
     OPENROUTER_MODELS_URL,
     OPENROUTER_VIDEO_MODELS_URL,
     api_key_connection,
+    fixture_models_dev_catalog,
     github_copilot_config,
     keyless_connection,
     model_data,
@@ -48,7 +49,7 @@ from .discovery_test_support import (
 @respx.mock
 @pytest.mark.asyncio
 async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_path: Path) -> None:
-    """Zen admits a Model its protocol hint or a reviewed rule routes, unless free or retired.
+    """New Models use defaults; only exact known restrictions deny admission.
 
     A refresh without models.dev keeps what earlier enrichment projected.
     """
@@ -100,6 +101,7 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
                             "name": "Gemini 3.5 Flash",
                             "family": "gemini",
                             "limit": {"context": 1_048_576, "output": 65_536},
+                            "cost": {"input": 1, "output": 2},
                             "modalities": modalities,
                             "reasoning": True,
                             "tool_call": True,
@@ -123,6 +125,7 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
         "glm-5.1",
         "glm-5",
         "unreviewed-future-model",
+        "deepseek-future-free",
         "muse-spark-1.3-contributor-free",
         "mimo-v2.6-flash-free",
     ]
@@ -145,9 +148,16 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
 
     written = read_models_file(resources_dir, "opencode-zen.json")["models"]
     gemini = written["gemini-3.5-flash"]
-    assert counts == [3, 3]
+    assert counts == [6, 6]
     assert route.call_count == 2
-    assert set(written) == {"gemini-3.5-flash", "claude-future-6", "glm-5.1"}
+    assert set(written) == {
+        "gemini-3.5-flash",
+        "claude-future-6",
+        "glm-5.1",
+        "unreviewed-future-model",
+        "deepseek-future-free",
+        "muse-spark-1.3-contributor-free",
+    }
     assert gemini["connections"] == ["api-key", "account"]
     assert (gemini["context_window"], gemini["max_output_tokens"]) == (1_048_576, 65_536)
     assert gemini["capabilities"]["input_modalities"] == modalities["input"]
@@ -166,6 +176,9 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
         "gemini-3.5-flash": ("gemini", "available"),
         "claude-future-6": ("messages", "available"),
         "glm-5.1": ("chat_completions", "available"),
+        "unreviewed-future-model": ("chat_completions", "available"),
+        "deepseek-future-free": ("chat_completions", "available"),
+        "muse-spark-1.3-contributor-free": ("responses", "available"),
     }
     assert profiles["claude-future-6"].provenance["protocol"] == "catalog_hint"
     await adapter.aclose()
@@ -187,6 +200,56 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
 
     after_outage = read_models_file(resources_dir, "opencode-zen.json")["models"]
     assert without_connection_order(after_outage) == without_connection_order(written)
+
+    # A successful public feed can also omit one exact entry. Earlier facts
+    # survive for Models the live endpoint still lists, but fresh facts win.
+    route.mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": model_id,
+                        **(
+                            {
+                                "context_window": 200000,
+                                "max_output_tokens": 10000,
+                                "reasoning": {"supported": False},
+                            }
+                            if model_id == "gemini-3.5-flash"
+                            else {}
+                        ),
+                    }
+                    for model_id in live_ids
+                ]
+            },
+        )
+    )
+    await refresh_models(
+        config,
+        "api-key-secret",
+        resources_dir,
+        credential_connection=config.get_connection("api-key"),
+        models_dev_catalog=fixture_models_dev_catalog(),
+    )
+    after_partial = read_models_file(resources_dir, "opencode-zen.json")["models"]
+    refreshed_gemini = after_partial["gemini-3.5-flash"]
+    assert set(after_partial) == set(written)
+    assert (refreshed_gemini["context_window"], refreshed_gemini["max_output_tokens"]) == (
+        200000,
+        10000,
+    )
+    assert refreshed_gemini["capabilities"]["reasoning"] == {"supported": False}
+    assert refreshed_gemini["metadata"] == gemini["metadata"]
+    assert refreshed_gemini["pricing"] == gemini["pricing"]
+    assert refreshed_gemini["capabilities"]["input_modalities"] == modalities["input"]
+    loaded = ModelRegistry.load(resources_dir)
+    new_model = loaded.get("opencode-zen", "deepseek-future-free")
+    assert new_model.context_window is None
+    assert new_model.max_output_tokens is None
+    assert new_model.pricing is None
+    assert new_model.capabilities.tools is True
+    assert "chat" in new_model.capabilities.task_types
 
 
 @respx.mock
@@ -405,7 +468,7 @@ async def test_stepfun_direct_refresh_keeps_other_connection_memberships(tmp_pat
         defaults={"temperature": 0.5},
         context_window=256000,
     )
-    live_ids = ["step-3.7-flash", "step-router-v1", "stepaudio-2.5-chat"]
+    live_ids = ["step-3.7-flash", "step-router-v1", "step-tts-2", "step-future"]
     route = respx.get("https://api.stepfun.com/v1/models").mock(
         return_value=httpx.Response(200, json={"data": [{"id": item} for item in live_ids]})
     )
@@ -415,11 +478,12 @@ async def test_stepfun_direct_refresh_keeps_other_connection_memberships(tmp_pat
     )
 
     written = read_models_file(resources_dir, "stepfun.json")["models"]
-    assert result["model_count"] == 3
+    assert result["model_count"] == 4
     assert {model_id: data["connections"] for model_id, data in written.items()} == {
         "step-3.7-flash": ["step-plan", "direct-api"],
         "step-3.5-flash": ["step-plan"],
         "step-router-v1": ["step-plan"],
+        "step-future": ["direct-api"],
     }
     assert route.calls.last.request.headers["authorization"] == "Bearer direct-token"
 
@@ -481,9 +545,10 @@ async def test_xai_subscription_uses_plain_oauth_discovery(tmp_path: Path) -> No
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_openai_platform_discovers_only_its_embedding_models(tmp_path: Path) -> None:
-    """The Platform listing carries bare ids; chat, speech and image Models stay
-    curated, so only ``text-embedding-*`` ids become text embedding Models."""
+async def test_openai_platform_discovers_new_chat_models_and_typed_embeddings(
+    tmp_path: Path,
+) -> None:
+    """Sparse chat entries stay selectable; known task endpoints do not become chat."""
 
     resources_dir = tmp_path / "resources"
     models_dir = resources_dir / "models"
@@ -492,7 +557,10 @@ async def test_openai_platform_discovers_only_its_embedding_models(tmp_path: Pat
         json.dumps(
             {
                 "provider_id": "openai",
-                "models": {"gpt-5-codex": model_data() | {"connections": ["subscription"]}},
+                "models": {
+                    "gpt-5-codex": model_data() | {"connections": ["subscription"]},
+                    "subscription-only": model_data() | {"connections": ["subscription"]},
+                },
             }
         ),
         encoding="utf-8",
@@ -505,7 +573,30 @@ async def test_openai_platform_discovers_only_its_embedding_models(tmp_path: Pat
         base_url="https://api.openai.com/v1",
         connections=[platform],
     )
-    live_ids = ["gpt-5.2", "whisper-1", "text-embedding-3-small", "text-embedding-ada-002"]
+    chat_ids = [
+        "gpt-5.2",
+        "gpt-5-codex",
+        "gpt-future",
+        "unknown-future-model",
+        "gpt-future-2027-01-01",
+        "ft:gpt-future:org:custom:id",
+        "gpt-audio",
+    ]
+    embedding_ids = ["text-embedding-3-small", "text-embedding-ada-002"]
+    task_ids = [
+        "whisper-1",
+        "gpt-image-2",
+        "gpt-realtime-2",
+        "gpt-live-1",
+        "gpt-4o-transcribe",
+        "gpt-4o-mini-tts",
+        "omni-moderation-latest",
+        "davinci-002",
+        "gpt-3.5-turbo-instruct",
+        "sora-2",
+        "ft:davinci-002:org:custom:id",
+    ]
+    live_ids = [*chat_ids, *embedding_ids, *task_ids]
     route = respx.get("https://api.openai.com/v1/models").mock(
         return_value=httpx.Response(
             200, json={"data": [{"id": item, "object": "model"} for item in live_ids]}
@@ -516,11 +607,19 @@ async def test_openai_platform_discovers_only_its_embedding_models(tmp_path: Pat
 
     written = read_models_file(resources_dir, "openai.json")["models"]
     assert {model_id: data["connections"] for model_id, data in written.items()} == {
-        "gpt-5-codex": ["subscription"],
-        "text-embedding-3-small": ["api-key"],
-        "text-embedding-ada-002": ["api-key"],
+        **{model_id: ["api-key"] for model_id in [*chat_ids, *embedding_ids]},
+        "gpt-5-codex": ["subscription", "api-key"],
+        "subscription-only": ["subscription"],
     }
     registry = ModelRegistry.load(resources_dir, custom_providers={})
+    for model_id in chat_ids:
+        model = registry.get("openai", model_id)
+        assert "chat" in model.capabilities.task_types
+        assert model.capabilities.tools is True
+        if model_id != "gpt-5-codex":
+            assert model.capabilities.reasoning.supported is None
+            assert model.context_window is None
+            assert model.max_output_tokens is None
     small = registry.get("openai", "text-embedding-3-small")
     assert small.capabilities.task_types == ("text_embedding",)
     assert small.capabilities.supported_parameters == ("dimensions",)
@@ -606,7 +705,10 @@ async def test_ollama_enriches_tags_through_api_show(tmp_path: Path) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_direct_ollama_cloud_catalog_is_remote_and_public(tmp_path: Path) -> None:
+@pytest.mark.parametrize("thinking_values", [None, [False, "low", "high"]])
+async def test_direct_ollama_cloud_catalog_is_remote_and_public(
+    tmp_path: Path, thinking_values: list[Any] | None
+) -> None:
     connection = api_key_connection(
         "OLLAMA_API_KEY", mode="cloud", catalog_requires_credentials=False
     )
@@ -625,12 +727,36 @@ async def test_direct_ollama_cloud_catalog_is_remote_and_public(tmp_path: Path) 
             json={
                 "capabilities": ["completion", "tools", "thinking"],
                 "model_info": {"general.architecture": "glm5.1", "glm5.1.context_length": 202752},
+                **(
+                    {"thinking": {"values": thinking_values}} if thinking_values is not None else {}
+                ),
             },
         )
     )
 
+    catalog = fixture_models_dev_catalog()
+    catalog = ModelsDevCatalog(
+        {
+            "models": catalog.models,
+            "providers": {
+                **catalog.providers,
+                "ollama-cloud": {
+                    "models": {
+                        "glm-5.1": {
+                            "reasoning": True,
+                            "reasoning_options": [{"type": "effort", "values": ["high", "max"]}],
+                        }
+                    }
+                },
+            },
+        }
+    )
     result = await refresh_models(
-        config, "", tmp_path / "resources", credential_connection=connection
+        config,
+        "",
+        tmp_path / "resources",
+        credential_connection=connection,
+        models_dev_catalog=catalog,
     )
 
     model = ModelRegistry.load(tmp_path / "resources").get("ollama-cloud", "glm-5.1")
@@ -638,6 +764,10 @@ async def test_direct_ollama_cloud_catalog_is_remote_and_public(tmp_path: Path) 
     assert model.metadata["ollama"] == {"remote": True}
     assert model.connections == ("api-key",)
     assert model.context_window == 202752
+    assert model.capabilities.reasoning.control == "levels"
+    assert model.capabilities.reasoning.levels == (
+        ("low", "high") if thinking_values is not None else ("high", "max")
+    )
     assert "Authorization" not in tags_route.calls.last.request.headers
     assert "Authorization" not in show_route.calls.last.request.headers
 

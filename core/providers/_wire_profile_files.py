@@ -290,6 +290,7 @@ def validate_partial_profile(
     report: WireIssueReport,
     allow_protocol: bool = True,
     protocols: Sequence[str] | None = None,
+    family_default: bool = False,
 ) -> PartialProfile:
     """Validate one partial profile, dropping (and reporting) every invalid value.
 
@@ -311,6 +312,17 @@ def validate_partial_profile(
                 lambda value: isinstance(value, str) and value in spoken,
                 "a protocol this Provider's Adapter speaks (" + ", ".join(spoken) + ")",
             ),
+        }
+    if family_default:
+        schema = {
+            **schema,
+            "reasoning": {
+                **schema["reasoning"],
+                "levels": _Leaf(
+                    lambda _value: False,
+                    "reasoning.floor instead of explicit levels in a family default",
+                ),
+            },
         }
     if not allow_protocol and "protocol" in raw:
         report(f"{where}: 'protocol' is not allowed here, ignoring it")
@@ -454,11 +466,14 @@ class WireProfileFile:
     defaults: PartialProfile = field(default_factory=lambda: _EMPTY)
     protocols: Mapping[str, PartialProfile] = field(default_factory=lambda: _EMPTY)
     connections: Mapping[str, PartialProfile] = field(default_factory=lambda: _EMPTY)
+    family_defaults: tuple[WireRule, ...] = ()
     rules: tuple[WireRule, ...] = ()
     models: Mapping[str, WireModelEntry] = field(default_factory=lambda: _EMPTY)
 
 
-_BODY_FIELDS = frozenset({"defaults", "protocols", "connections", "rules", "models"})
+_BODY_FIELDS = frozenset(
+    {"defaults", "protocols", "connections", "family_defaults", "rules", "models"}
+)
 
 
 @dataclass(frozen=True)
@@ -607,17 +622,14 @@ def _parse_body(
         raw.get("connections", {}), where=f"{prefix}connections", report=report, limits=limits
     )
 
-    rules: list[WireRule] = []
-    raw_rules = raw.get("rules", [])
-    if isinstance(raw_rules, list):
-        for index, raw_rule in enumerate(raw_rules):
-            rule = _parse_rule(
-                index, raw_rule, where=f"{prefix}rules[{index}]", report=report, limits=limits
-            )
-            if rule is not None:
-                rules.append(rule)
-    else:
-        report(f"{prefix}rules: expected a list, ignoring it")
+    family_defaults = _parse_rules(
+        raw.get("family_defaults", []),
+        where=f"{prefix}family_defaults",
+        report=report,
+        limits=limits,
+        family_default=True,
+    )
+    rules = _parse_rules(raw.get("rules", []), where=f"{prefix}rules", report=report, limits=limits)
 
     models: dict[str, WireModelEntry] = {}
     raw_models = raw.get("models", {})
@@ -638,7 +650,8 @@ def _parse_body(
         defaults=defaults,
         protocols=MappingProxyType(protocols),
         connections=connections,
-        rules=tuple(rules),
+        family_defaults=family_defaults,
+        rules=rules,
         models=MappingProxyType(models),
     )
 
@@ -665,8 +678,40 @@ def _parse_connection_map(
     return MappingProxyType(result)
 
 
+def _parse_rules(
+    raw: Any,
+    *,
+    where: str,
+    report: WireIssueReport,
+    limits: _Limits,
+    family_default: bool = False,
+) -> tuple[WireRule, ...]:
+    if not isinstance(raw, list):
+        report(f"{where}: expected a list, ignoring it")
+        return ()
+    rules = []
+    for index, raw_rule in enumerate(raw):
+        rule = _parse_rule(
+            index,
+            raw_rule,
+            where=f"{where}[{index}]",
+            report=report,
+            limits=limits,
+            family_default=family_default,
+        )
+        if rule is not None:
+            rules.append(rule)
+    return tuple(rules)
+
+
 def _parse_rule(
-    index: int, raw: Any, *, where: str, report: WireIssueReport, limits: _Limits
+    index: int,
+    raw: Any,
+    *,
+    where: str,
+    report: WireIssueReport,
+    limits: _Limits,
+    family_default: bool = False,
 ) -> WireRule | None:
     if not isinstance(raw, Mapping):
         report(f"{where}: expected an object, ignoring the rule")
@@ -683,8 +728,21 @@ def _parse_rule(
             )
             return None
     values = validate_partial_profile(
-        raw.get("set", {}), where=f"{where}.set", report=report, protocols=limits.protocols
+        raw.get("set", {}),
+        where=f"{where}.set",
+        report=report,
+        protocols=limits.protocols,
+        family_default=family_default,
     )
+    raw_values = raw.get("set")
+    if (
+        family_default
+        and isinstance(raw_values, Mapping)
+        and "protocol" in raw_values
+        and "protocol" not in values
+    ):
+        # Dropping an invalid scope must not turn this into an all-protocol default.
+        return None
     note = raw.get("note", "")
     return WireRule(
         index=index, when=matcher, values=values, note=note if isinstance(note, str) else ""

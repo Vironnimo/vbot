@@ -15,16 +15,20 @@ Profiles are resolved per ``(provider, connection, model id)`` from layers:
    or the ``wire`` block of a Custom Provider).
 3. ``protocols[<protocol>]`` of that file.
 4. ``connections[<connection>]`` of that file.
-5. Catalog-derived values (reasoning capability, reported wire hints).
-6. Matching ``rules`` in file order.
-7. Observations learned from live traffic (learnable fields only).
-8. The Model entry's ``set``.
-9. The Model entry's ``connections[<connection>]``.
+5. Matching ``family_defaults`` in file order. An entry with ``set.protocol``
+   applies only on that protocol; an entry without it applies on every protocol.
+   A fallback reasoning ladder uses ``floor``, never explicit ``levels``.
+6. Catalog-derived values (reasoning capability, reported wire hints).
+7. Matching ``rules`` in file order (explicit corrections, unchanged by inference).
+8. Observations learned from live traffic (learnable fields only).
+9. The Model entry's ``set``.
+10. The Model entry's ``connections[<connection>]``.
 
 The protocol itself is decided first, from the Model entry (its Connection
 block, then its ``set``), the last matching rule, the catalog protocol hint,
-the Connection, the file defaults and the Adapter's default protocol, in that
-order; a value the Adapter does not speak is reported and skipped. The
+the last matching family default, the Connection, the file defaults and the
+Adapter's default protocol, in that order; a value the Adapter does not speak
+is reported and skipped. The
 catalog protocol hint is the Model's own AI SDK package from models.dev
 (``metadata.<provider>.npm``): ``@ai-sdk/anthropic`` names Messages,
 ``@ai-sdk/openai`` Responses, ``@ai-sdk/google`` Gemini and
@@ -35,7 +39,7 @@ Every resolved field remembers which layer set it (``WireProfile.provenance``),
 and the profile carries a status: ``verified`` when its Model entry records a
 verification for this Connection, ``configured`` when a Model entry or a rule
 naming the Model id shaped it, ``inferred`` when only defaults, catalog facts
-(the protocol hint included), observations and pattern rules did.
+(the protocol hint included), family defaults, observations and pattern rules did.
 """
 
 from __future__ import annotations

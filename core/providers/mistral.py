@@ -66,7 +66,8 @@ class MistralAdapter(OpenAICompatibleAdapter):
                 max_output_tokens=None,
             )
 
-        reasoning_supported = capabilities_raw.get("reasoning", False) is True
+        reported_reasoning = capabilities_raw.get("reasoning")
+        reasoning_supported = reported_reasoning if isinstance(reported_reasoning, bool) else None
         vision_supported = capabilities_raw.get("vision", False) is True
         tools_supported = capabilities_raw.get("function_calling", False) is True
         audio_transcription_supported = capabilities_raw.get("audio_transcription", False) is True

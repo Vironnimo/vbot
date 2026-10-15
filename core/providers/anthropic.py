@@ -111,7 +111,8 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
         caps = _catalog_mapping(raw, "capabilities")
         thinking = _catalog_mapping(caps, "thinking")
         thinking_types = _catalog_mapping(thinking, "types")
-        reasoning_supported = thinking.get("supported") is True
+        reported_reasoning = thinking.get("supported")
+        reasoning_supported = reported_reasoning if isinstance(reported_reasoning, bool) else None
         adaptive = _catalog_supported(thinking_types, "adaptive")
         enabled = _catalog_supported(thinking_types, "enabled")
         effort_levels = tuple(
@@ -120,7 +121,7 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
             if _catalog_supported(_catalog_mapping(caps, "effort"), level)
         )
         control, levels = _anthropic_reasoning_control(
-            reasoning_supported,
+            reasoning_supported is True,
             adaptive=adaptive,
             enabled=enabled,
             effort_levels=effort_levels,
@@ -150,7 +151,7 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
             metadata={
                 ANTHROPIC_METADATA_KEY: {
                     SUPPORTS_TEMPERATURE_METADATA_FIELD: _anthropic_supports_temperature(
-                        reasoning_supported,
+                        reasoning_supported is True,
                         adaptive=adaptive,
                         enabled=enabled,
                     )

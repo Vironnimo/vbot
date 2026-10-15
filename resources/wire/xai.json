@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "xAI Responses on the API-key and SuperGrok Connections (no live verification in this checkout; the shapes keep the pre-profile wire). Optional parameters are limited to the xAI set and, when the catalog lists supported parameters, to those it lists (max_tokens counts as listed with max_output_tokens). Effort none asks a Model without a none rung for its lowest rung, because those Models cannot disable reasoning. Only JPEG and PNG images are carried.",
+  "_comment": "xAI Responses on the API-key and SuperGrok Connections. New Models infer the current Grok low/medium/high/xhigh effort ladder; exact catalog ladders and older fixed-reasoning exceptions win. Optional parameters are limited to the xAI set and, when the catalog lists supported parameters, to those it lists (max_tokens counts as listed with max_output_tokens). Effort none asks for the lowest rung because current Models cannot disable reasoning. Only JPEG and PNG images are carried. Family defaults are inferred, not live-verified.",
   "defaults": {
     "request": {
       "allowed_parameters": [
@@ -13,9 +13,16 @@
       ],
       "options": {"narrow_to_catalog_parameters": true}
     },
-    "reasoning": {"off": "lowest"},
+    "reasoning": {"floor": ["low", "medium", "high", "xhigh"], "off": "lowest"},
     "media": {"types": ["image/jpeg", "image/png"]}
   },
+  "rules": [
+    {
+      "when": {"ids": ["grok-build-0.1", "grok-4.20-0309-reasoning"]},
+      "set": {"reasoning": {"floor": []}},
+      "note": "These older fixed-reasoning Models accept no effort control; new versions inherit the current Grok ladder."
+    }
+  ],
   "models": {
     "grok-4.3": {
       "set": {"reasoning": {"off": "omit"}},
