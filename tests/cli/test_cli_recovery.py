@@ -91,10 +91,11 @@ def test_syntax_errors_suggest_public_tokens_without_dispatch(tokens, expected, 
     assert "--help" in error
 
 
-def test_unknown_flag_does_not_echo_its_value_or_other_positional_secrets(capsys):
+@pytest.mark.parametrize("prefix", [[], ["--port", "8421"]])
+def test_unknown_flag_does_not_echo_its_value_or_other_positional_secrets(prefix, capsys):
     secret = "credential-sentinel-$()"
     with pytest.raises(SystemExit) as done:
-        main.run(["provider", "key", "set", "openai", secret, "--prot=" + secret])
+        main.run([*prefix, "provider", "key", "set", "openai", secret, "--prot=" + secret])
     assert done.value.code == 2
     assert secret not in capsys.readouterr().err
 
@@ -121,6 +122,7 @@ def test_invalid_choices_retain_the_allowed_tokens(tokens, choices, capsys):
         (["prompt", "reset", "system", "--scope", "agent:demo"], "agent:demo"),
         (["skill", "delete", "demo", "--scope", "agent:a", "--yes"], "agent:a"),
         (["memory", "remove", "a", "1", "--scope", "user", "--yes"], "user"),
+        (["memory", "list", "a"], None),
     ],
 )
 def test_inspection_keeps_content_scope(tmp_path, tokens, scope):
