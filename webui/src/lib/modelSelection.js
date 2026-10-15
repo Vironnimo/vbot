@@ -65,14 +65,19 @@ function modelSuitability(model) {
     model?.effective_context_window ?? model?.context_window ?? null;
 
   if (effectiveWindow === null || effectiveWindow === undefined) {
-    // Unknown context is hidden by default but badged honestly as unknown,
-    // never as "below 32k".
+    // Unknown context remains selectable with an honest badge; missing catalog
+    // facts do not establish that a Model is unsuitable.
     reasons.push(SUITABILITY_REASON_CONTEXT_UNKNOWN);
   } else if (effectiveWindow < SUITABLE_MIN_CONTEXT) {
     reasons.push(SUITABILITY_REASON_BELOW_MIN_CONTEXT);
   }
 
-  return { suitable: reasons.length === 0, reasons };
+  return {
+    suitable: reasons.every(
+      (reason) => reason === SUITABILITY_REASON_CONTEXT_UNKNOWN,
+    ),
+    reasons,
+  };
 }
 
 export function filterModelSelectOptions(
@@ -173,21 +178,12 @@ function suitabilityFields(model) {
   const unreachableLabel =
     model?.reachable === false ? t('models.filter.unreachable') : '';
 
-  if (suitable) {
-    return unreachableLabel
-      ? {
-          suitable: true,
-          suitabilityReasons: [],
-          secondaryLabel: unreachableLabel,
-        }
-      : { suitable: true, suitabilityReasons: [] };
-  }
-
   const badge = suitabilityBadgeLabel(reasons);
+  const secondaryLabel = [badge, unreachableLabel].filter(Boolean).join(' · ');
   return {
-    suitable: false,
+    suitable,
     suitabilityReasons: reasons,
-    secondaryLabel: unreachableLabel ? `${badge} · ${unreachableLabel}` : badge,
+    ...(secondaryLabel ? { secondaryLabel } : {}),
   };
 }
 

@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
-from core.models.models import REASONING_CONTROL_LEVELS, REASONING_CONTROL_ON_OFF
+from core.models.models import (
+    REASONING_CONTROL_LEVELS,
+    REASONING_CONTROL_ON_OFF,
+    ReasoningCapabilities,
+)
 from core.providers.errors import ProviderError
 from core.providers.ollama import OllamaAdapter
 from tests.core.providers.ollama_test_support import CLOUD_CONFIG, LOCAL_CONFIG
@@ -176,27 +180,66 @@ async def test_show_fills_capabilities_and_the_exact_architecture_window() -> No
 
 
 @pytest.mark.parametrize(
-    ("model_id", "control", "levels"),
+    ("model_id", "values", "expected"),
     [
-        ("kimi-k2.6:cloud", REASONING_CONTROL_ON_OFF, ()),
+        ("kimi-k2.6:cloud", None, ReasoningCapabilities(supported=True)),
         pytest.param(
-            "gpt-oss:20b", REASONING_CONTROL_LEVELS, ("low", "medium", "high"), id="gpt-oss-levels"
+            "gpt-oss:20b",
+            None,
+            ReasoningCapabilities(True, REASONING_CONTROL_LEVELS, ("low", "medium", "high")),
+            id="gpt-oss-fallback-levels",
+        ),
+        pytest.param(
+            "glm-future",
+            [False, "high", "max"],
+            ReasoningCapabilities(True, REASONING_CONTROL_LEVELS, ("high", "max")),
+            id="reported-levels",
+        ),
+        pytest.param(
+            "gpt-oss:future",
+            ["high", "max"],
+            ReasoningCapabilities(True, REASONING_CONTROL_LEVELS, ("high", "max")),
+            id="reported-levels-beat-name-fallback",
+        ),
+        pytest.param(
+            "future-toggle",
+            [False, True],
+            ReasoningCapabilities(True, REASONING_CONTROL_ON_OFF),
+            id="reported-toggle",
+        ),
+        pytest.param(
+            "future-non-thinker",
+            [False],
+            ReasoningCapabilities(False),
+            id="reported-denial",
+        ),
+        pytest.param(
+            "future-controls",
+            ["provider-specific"],
+            ReasoningCapabilities(True),
+            id="unknown-control-names-do-not-invent-a-ladder",
         ),
     ],
 )
 @pytest.mark.asyncio
 async def test_thinking_capability_maps_to_the_model_reasoning_control(
-    model_id: str, control: str, levels: tuple[str, ...]
+    model_id: str, values: list[Any] | None, expected: ReasoningCapabilities
 ) -> None:
     base = OllamaAdapter.normalize_catalog_entry({"model": model_id})
-    show = {"capabilities": ["completion", "tools", "thinking"], "model_info": {}}
+    show = {
+        "capabilities": ["completion", "tools", "thinking"],
+        "model_info": {},
+        **({"thinking": {"values": values}} if values is not None else {}),
+    }
 
     enriched = await OllamaAdapter.enrich_discovered_models({model_id: base}, _show(show))
 
     reasoning = enriched[model_id].capabilities.reasoning
-    assert reasoning.supported is True
-    assert reasoning.control == control
-    assert reasoning.levels == levels
+    assert reasoning == expected
+    assert (
+        OllamaAdapter.normalize_catalog_entry({"model": model_id, **show}).capabilities.reasoning
+        == expected
+    )
 
 
 @pytest.mark.asyncio

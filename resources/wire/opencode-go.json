@@ -1,7 +1,8 @@
 {
   "format_version": 1,
-  "_comment": "OpenCode Go gateway. One API key reaches four wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes the Messages, Responses and native Gemini Models (Grok 4.7 on Responses live low-effort smoke verified), a rule routes the Messages Models the catalog names no package for, and every other Model speaks Chat Completions. Every wire carries the x-opencode-session prompt-cache affinity header (Adapter code). Chat replays readable reasoning_content only (OpenCode's own client never replays reasoning_details) and gives every historical Tool Call a reasoning_content carrier, empty when the call had no readable Reasoning: DeepSeek's thinking mode rejects a Tool Call without it. Responses is stateless (store false), takes only max_output_tokens (max_tokens maps onto it) and top_p, and structured output on every Model; its default ladder has no none rung because the gateway rejected an explicit none (live 2026-08-25), so only a Model whose ladder lists none sends it. Models that cannot stop reasoning get their cheapest rung for none. Replay scope is full_history, also where an upstream preserved-thinking contract is stronger than a particular gateway measurement; only Qwen replays tool_turns. GLM 5.3 Flash drops calls to Tools outside the request's Tool list, so Tools announced mid-Session are listed there.",
+  "_comment": "OpenCode Go gateway. One API key reaches four wires. Exact catalog protocol hints override inferred family defaults; unfamiliar families use Chat Completions. Every wire carries the x-opencode-session prompt-cache affinity header (Adapter code). Chat replays readable reasoning_content only (OpenCode's own client never replays reasoning_details) and gives every historical Tool Call a reasoning_content carrier, empty when the call had no readable Reasoning: DeepSeek's thinking mode rejects a Tool Call without it. Responses is stateless (store false), takes only max_output_tokens (max_tokens maps onto it) and top_p, and structured output on every Model; its default ladder has no none rung because the gateway rejected an explicit none (live 2026-08-25), so only a Model whose ladder lists none sends it. Models that cannot stop reasoning get their cheapest rung for none. Replay scope is full_history, also where an upstream preserved-thinking contract is stronger than a particular gateway measurement; only Qwen replays tool_turns. GLM 5.3 Flash drops calls to Tools outside the request's Tool list, so Tools announced mid-Session are listed there.",
   "defaults": {
+    "protocol": "chat_completions",
     "replay": {"scope": "full_history"}
   },
   "protocols": {
@@ -61,16 +62,120 @@
       }
     }
   },
+  "family_defaults": [
+    {
+      "when": {"prefix": ["gpt-", "grok-", "muse-"]},
+      "set": {"protocol": "responses"},
+      "note": "Infer Responses for new versions of the gateway's existing GPT, Grok and Muse families; exact catalog protocol hints win."
+    },
+    {
+      "when": {"prefix": "gpt-"},
+      "set": {
+        "protocol": "responses",
+        "reasoning": {"floor": ["none", "low", "medium", "high", "xhigh", "max"]}
+      },
+      "note": "New Go GPT versions inherit the current GPT Luna effort ladder when the catalog reports no ladder."
+    },
+    {
+      "when": {"prefix": ["claude-", "minimax-", "qwen"]},
+      "set": {"protocol": "messages"},
+      "note": "Go serves these families on Messages. This is a fallback for missing catalog hints, scoped to this Provider."
+    },
+    {
+      "when": {"prefix": "claude-"},
+      "set": {
+        "protocol": "messages",
+        "reasoning": {"floor": ["low", "medium", "high", "xhigh", "max"]}
+      },
+      "note": "New Go Claude versions inherit the current Claude Haiku5.5 effort ladder when the catalog reports none."
+    },
+    {
+      "when": {"prefix": "gemini-"},
+      "set": {
+        "protocol": "gemini",
+        "reasoning": {"floor": ["low", "medium", "high"]}
+      },
+      "note": "Infer native Gemini and the current Gemini4 Argon Contributor effort ladder for new versions. Exact catalog protocol and ladder facts win."
+    },
+    {
+      "when": {"prefix": "deepseek-"},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {
+          "dialect": "thinking_toggle_with_effort",
+          "floor": ["low", "high", "max"],
+          "unset": "enabled",
+          "options": {"switch_with_effort": true}
+        },
+        "response": {
+          "reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]
+        }
+      },
+      "note": "New DeepSeek versions inherit the current Go Flash thinking switch and fallback effort ladder. Exact catalog support, ladder and response-field facts win; older V4 ids retain their existing controls below."
+    },
+    {
+      "when": {"prefix": "grok-"},
+      "set": {
+        "protocol": "responses",
+        "reasoning": {"floor": ["low", "medium", "high", "xhigh"], "off": "lowest"}
+      },
+      "note": "Infer the current Go Grok effort controls for new versions; none asks for the lowest supported effort instead of the Provider's higher default."
+    },
+    {
+      "when": {"prefix": "glm-"},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {"floor": ["low", "high", "max"]}
+      },
+      "note": "New Go GLM versions inherit the current GLM5.3 effort ladder when the catalog reports none. The earlier GLM5.1 fallback remains explicit below."
+    },
+    {
+      "when": {"prefix": "kimi-"},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {"floor": ["low", "high", "max"], "off": "lowest"},
+        "response": {
+          "reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]
+        }
+      },
+      "note": "New Kimi generations inherit the current Go K3 effort controls. Exact earlier K2 controls remain corrections; reported ladders and response fields override these defaults."
+    },
+    {
+      "when": {"prefix": ["mimo-", "longcat-"]},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {"dialect": "thinking_toggle", "unset": "enabled"}
+      },
+      "note": "New versions inherit the latest Go MiMo V2.6 and LongCat 2.5 binary thinking controls. Earlier versions with different controls remain exact exceptions."
+    }
+  ],
   "rules": [
+    {
+      "when": {"ids": ["glm-5.1"]},
+      "set": {"reasoning": {"floor": ["low", "medium", "high"]}},
+      "note": "Preserve Go GLM5.1's established effort-only fallback; its catalog supplies no ladder. Later versions inherit the current GLM5.3 ladder."
+    },
     {
       "when": {"prefix": ["gpt-"]},
       "set": {"request": {"allowed_parameters": ["max_tokens", "max_output_tokens"]}},
       "note": "The GPT Models (gpt-5.6-luna, gpt-6-luna) answer top_p with HTTP 400 {\"model\": ...}, which names no parameter, so it cannot be learned; Grok and Muse Spark accept it (live 2026-10-03)."
     },
     {
-      "when": {"ids": ["minimax-m2.5", "qwen3.6-plus", "qwen3.7-max"]},
-      "set": {"protocol": "messages"},
-      "note": "The gateway serves these MiniMax and Qwen Models on Anthropic Messages (/messages), but the catalog names no package for them."
+      "when": {"ids": ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro"]},
+      "set": {
+        "reasoning": {
+          "dialect": "reasoning_effort",
+          "floor": ["low", "medium", "high"],
+          "unset": "omit",
+          "options": {}
+        }
+      },
+      "note": "Preserve the existing effort-only controls of these older Go V4 Models. The inferred current-family switch is for new versions, not a re-verification of legacy routes."
+    },
+    {
+      "when": {"ids": ["mimo-v2.5", "mimo-v2.5-pro", "longcat-2.0"]},
+      "set": {"reasoning": {"dialect": "reasoning_effort", "unset": "omit"}},
+      "note": "Preserve these earlier Go Models' existing effort-only rendering; the current family default does not re-verify legacy controls."
     },
     {
       "when": {"ids": ["hy3", "hy4-preview", "kimi-k2.6", "kimi-k3"]},
@@ -109,13 +214,13 @@
     {
       "when": {"ids": ["kimi-k2.6"]},
       "set": {
-        "reasoning": {"dialect": "thinking_toggle", "unset": "enabled", "options": {"keep": "all"}}
+        "reasoning": {"dialect": "thinking_toggle", "floor": ["low", "medium", "high"], "unset": "enabled", "off": "auto", "options": {"keep": "all"}}
       },
       "note": "Kimi K2.6 switches thinking on or off and keeps every earlier thinking turn (keep all) while enabled."
     },
     {
       "when": {"ids": ["kimi-k2.7-code"]},
-      "set": {"reasoning": {"dialect": "thinking_toggle", "unset": "enabled", "off": "enabled"}},
+      "set": {"reasoning": {"dialect": "thinking_toggle", "floor": ["low", "medium", "high"], "unset": "enabled", "off": "enabled"}},
       "note": "Kimi K2.7 Code always thinks: the request always enables thinking and sends no effort."
     },
     {

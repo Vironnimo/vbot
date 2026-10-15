@@ -2,6 +2,21 @@
 
 Read this reference before adding, re-validating, or changing a Provider, Connection/Wire, endpoint, Model capability, Reasoning control, Reasoning Replay policy, media contract, Tool behavior, Usage normalization, or request limit. Its purpose is to prove what the selected Provider path actually delivers to a Model and then prove that vBot preserves that behavior end to end.
 
+## Inferred defaults versus verification
+
+The user decision of 2026-10-15 makes newly listed chat Models selectable through
+Provider/Connection/family defaults without a per-version compatibility audit.
+Exact catalog facts and explicit corrective rules outrank inferred family
+behavior (`providers.md` -> Defaults and concrete exceptions). Missing evidence
+is not an access denial, and a name suffix is not proof of a restriction.
+
+The full workflow below applies when claiming verified compatibility or adding
+an evidence-based exception. A default inferred from the Provider contract and
+known family behavior remains `inferred`; deterministic route, precedence and
+request tests protect it without pretending to prove a future Model's live
+behavior. Preserve and compare existing verified targets when changing shared
+defaults. Live access failures stay specific to their tested target.
+
 ## Completion condition
 
 A compatibility audit is complete only when the exact scoped Provider/Connection/Model combinations have evidence for every capability vBot claims, the raw wire and actual vBot Adapter/history path agree, durable facts are encoded in the correct source, regression tests protect the result, and unknowns remain explicitly unknown. A successful request, plausible answer, generated catalog, third-party implementation, or serializer unit test alone cannot satisfy this condition.
@@ -15,7 +30,7 @@ Record the following before the first request:
 - Claimed capabilities to verify: Reasoning, Reasoning control, Reasoning Replay, streaming, Usage, Tools, media, structured output, sampling controls, Context, output limit, and error behavior as applicable.
 - Material request variants required by the Provider contract, especially streaming vs non-streaming, Tools present vs absent, Tool continuation vs a later Run, and stateful vs stateless endpoints.
 - Existing vBot profile values and their source: Provider config, generated Model catalog, override file, Adapter code, or default policy.
-- The Provider's current documented Model table and live discovery ids, diffed against every hand-maintained endpoint/control profile. A newly discovered id must not inherit an unverified fallback route merely because catalog generation succeeded.
+- The Provider's current documented Model table and live discovery ids, diffed against every hand-maintained endpoint/control profile. A newly discovered id may inherit an inferred family or Provider route; catalog generation does not turn that route into verified compatibility.
 
 Keep upstream Model capabilities separate from gateway capabilities. A Model card describes the Model; the selected Provider and endpoint determine what vBot can actually send, receive, and replay.
 
@@ -165,7 +180,7 @@ Put each fact in its durable owner:
 - The Provider's wire file `resources/wire/<provider>.json` for every wire decision: protocol, Reasoning control and off spelling, response and replay carriers, replay scope and fidelity, media types, listing announced Tools, parameter rules, admission.
 - Provider/Model override files for verified durable catalog facts omitted or misstated by generated feeds (names, gateway limits, Reasoning ladders); never wire decisions.
 - Generated Model catalogs only through their refresh pipeline; never hand-edit them. After compatibility changes, refresh the complete tracked Model DB by default: the refresh already selects only usable Providers and Connections, and the resulting files must form one coherent snapshot. Use a Provider-scoped refresh only for an explicitly scoped diagnostic, never as the final catalog refresh for a completed compatibility change.
-- Per-Model wire-file rules for every documented or discovered id whose endpoint, Reasoning control, or carrier differs from the safe default. Reconcile this set whenever the catalog changes, and protect the complete current endpoint matrix with a regression test so a new Model cannot silently take the fallback wire.
+- Provider/Connection/family defaults for reusable behavior, and exact wire-file corrections for concrete differences from those defaults. Protect known endpoint behavior plus synthetic future versions and unknown ids, including exact catalog facts overriding family inference. A new id does not require an individual rule or verification record.
 - Focused unit tests for exact request fields, response carriers, policy precedence, normalization, and limits.
 - Provider-specific reference for dated Provider/Model observations, endpoint decisions, exceptions, and remaining unknowns.
 - This reference for the generic verification method; never copy the whole workflow into one Provider's reference.

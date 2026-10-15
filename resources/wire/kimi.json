@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "Kimi Chat Completions on the Coding Plan and the Platform. Sampling and foreign reasoning controls are never sent; exactly one output limit goes out as max_completion_tokens. Reasoning is controlled per Model family (K3 reasoning_effort ladder, K2.x thinking toggle); history replays readable reasoning_content and drops it whenever the request turns thinking off. Images and mp4/mov/webm video are carried natively.",
+  "_comment": "Kimi Chat Completions on the Coding Plan and the Platform. New Models infer the current K3 low/high/max effort ladder, with the Coding Plan's separate off toggle; explicit K2.x rules retain their thinking controls. Sampling and foreign reasoning controls are never sent; exactly one output limit goes out as max_completion_tokens. History replays readable reasoning_content and drops it whenever the request turns thinking off. Images and mp4/mov/webm video are carried natively.",
   "defaults": {
     "request": {
       "output_limit_field": "max_completion_tokens",
@@ -15,7 +15,12 @@
         "output_config": {"mode": "drop"}
       }
     },
-    "reasoning": {"dialect": "none"},
+    "reasoning": {
+      "dialect": "thinking_toggle_with_effort",
+      "floor": ["low", "high", "max"],
+      "snap": "up",
+      "off": "lowest"
+    },
     "replay": {"fidelity": "readable_only", "strip_when_off": true},
     "media": {
       "types": [
@@ -30,7 +35,7 @@
     }
   },
   "connections": {
-    "coding-plan": {"media": {"request_max_bytes": 83886080}},
+    "coding-plan": {"reasoning": {"off": "auto"}, "media": {"request_max_bytes": 83886080}},
     "api-key": {"media": {"request_max_bytes": 100000000}},
     "api-key-cn": {"media": {"request_max_bytes": 100000000}}
   },
@@ -61,7 +66,14 @@
     {
       "when": {"ids": ["kimi-k2.6"]},
       "set": {
-        "reasoning": {"dialect": "thinking_toggle", "unset": "enabled", "options": {"keep": "all"}}
+        "reasoning": {
+          "dialect": "thinking_toggle",
+          "floor": ["low", "medium", "high"],
+          "snap": "down",
+          "unset": "enabled",
+          "off": "auto",
+          "options": {"keep": "all"}
+        }
       },
       "note": "K2.6 thinks unless thinking is disabled and keeps every earlier thinking trace."
     },
@@ -77,6 +89,8 @@
       "set": {
         "reasoning": {
           "dialect": "thinking_toggle",
+          "floor": ["low", "medium", "high"],
+          "snap": "down",
           "unset": "enabled",
           "off": "enabled",
           "options": {"keep": "all"}

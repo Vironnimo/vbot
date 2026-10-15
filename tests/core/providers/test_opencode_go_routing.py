@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from copy import deepcopy
 from typing import Any
 from unittest.mock import AsyncMock
@@ -123,18 +122,43 @@ async def test_each_wire_follows_the_profile_and_carries_identification_and_affi
         assert "x-api-key" not in request.headers
 
 
+@pytest.mark.parametrize(
+    ("model_id", "wire", "path"),
+    [
+        ("unlisted-future", "chat", "chat/completions"),
+        ("unlisted-future-free", "chat", "chat/completions"),
+        ("deepseek-v99-flash-free", "chat", "chat/completions"),
+        ("kimi-k99", "chat", "chat/completions"),
+        ("gpt-99", "responses", "responses"),
+        ("grok-99", "responses", "responses"),
+        ("muse-spark-99", "responses", "responses"),
+        ("claude-future", "messages", "messages"),
+        ("minimax-m99", "messages", "messages"),
+        ("qwen99", "messages", "messages"),
+        ("gemini-future", "gemini", "models/gemini-future:generateContent"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_unlisted_model_takes_the_chat_wire() -> None:
-    """An id the wire profile does not route never guesses a native wire."""
-    model_id = f"unlisted-{uuid.uuid4().hex}"
-
+async def test_unlisted_models_inherit_their_family_or_provider_wire(
+    model_id: str, wire: str, path: str
+) -> None:
+    """A new version needs no catalog facts or exact profile before its first request."""
+    adapter = go_adapter()
     with respx.mock:
-        routes = _mock_all_wires(streaming=False)
-        await go_adapter().send(HELLO, model_id=model_id)
+        route = respx.post(f"{go_config().base_url}/{path}").mock(
+            return_value=success_response(wire, streaming=False)
+        )
+        await adapter.send(HELLO, model_id=model_id, thinking_effort="minimal")
+    await adapter.aclose()
 
-    assert routes["chat"].call_count == 1
-    assert not routes["messages"].called
-    assert not routes["responses"].called
+    assert route.call_count == 1
+    assert adapter.wire_profile(model_id).status == "inferred"
+    if wire != "gemini":
+        assert json.loads(route.calls.last.request.content)["model"] == model_id
+    if model_id in ("claude-future", "gemini-future"):
+        assert adapter.describe_reasoning_render(model_id, "minimal").effort_level == "low"
+    if model_id == "muse-spark-99":
+        assert adapter.describe_reasoning_render(model_id, "minimal").effort_level == "minimal"
 
 
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])

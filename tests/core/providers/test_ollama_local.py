@@ -142,6 +142,8 @@ async def test_options_carry_only_set_values_and_the_enforced_local_window(
     [
         pytest.param("thinking-model", "high", True, id="on-off-on"),
         pytest.param("thinking-model", "none", False, id="on-off-off"),
+        pytest.param("unknown-control", "high", True, id="unknown-control-on"),
+        pytest.param("unknown-control", "none", False, id="unknown-control-off"),
         pytest.param("thinking-model", None, None, id="no-effort-keeps-provider-default"),
         pytest.param("plain-model", "high", None, id="non-thinking-model-rejects-think"),
         pytest.param("unknown-model", "high", None, id="unknown-support-omits-think"),

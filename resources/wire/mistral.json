@@ -1,10 +1,20 @@
 {
   "format_version": 1,
-  "_comment": "Mistral Chat Completions. Reasoning is binary: every active effort is sent as reasoning_effort 'high' and off as 'none'. Tool-call ids must be exactly nine alphanumerics. History replays the captured content chunks only, never a readable text field. The vision FAQ documents at most 8 images per request (another page says it depends on the Model).",
+  "_comment": "Mistral Chat Completions. The default reasoning ladder is none/high; hosted zai-glm Models infer low/high/max. Exact catalog ladders win over both defaults. Tool-call ids must be exactly nine alphanumerics. History replays the captured content chunks only, never a readable text field. The vision FAQ documents at most 8 images per request (another page says it depends on the Model).",
   "defaults": {
     "request": {"tool_call_ids": "mistral"},
-    "reasoning": {"levels": ["none", "high"], "off": "none"},
+    "reasoning": {"floor": ["none", "high"], "off": "none"},
     "replay": {"fidelity": "meta_only"},
     "media": {"request_max_images": 8}
-  }
+  },
+  "family_defaults": [
+    {
+      "when": {"prefix": "zai-glm-"},
+      "set": {
+        "protocol": "chat_completions",
+        "reasoning": {"floor": ["low", "high", "max"], "off": "lowest"}
+      },
+      "note": "Mistral's hosted GLM contract uses low/high/max and cannot disable thinking; inferred from zai-glm-5-3."
+    }
+  ]
 }

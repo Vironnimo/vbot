@@ -304,7 +304,7 @@ describe('buildModelSelectOptions', () => {
       ['no-tools', false, ['noTools'], noTools],
       ['small-effective', false, ['belowMinContext'], belowMinContext],
       ['exactly-32k', true, [], undefined],
-      ['unknown', false, ['contextUnknown'], t('models.filter.contextUnknown')],
+      ['unknown', true, ['contextUnknown'], t('models.filter.contextUnknown')],
       ['small-raw', false, ['belowMinContext'], belowMinContext],
       ['down', true, [], unreachable],
       [
@@ -314,6 +314,9 @@ describe('buildModelSelectOptions', () => {
         `${noTools} · ${belowMinContext} · ${unreachable}`,
       ],
     ]);
+    expect(
+      filterModelSelectOptions(options).map((option) => option.value),
+    ).toEqual(['', 'big', 'exactly-32k', 'unknown', 'down']);
   });
 
   it('marks a Model with the latest verification of its usable Connections', () => {

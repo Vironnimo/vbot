@@ -237,7 +237,9 @@ class OllamaAdapter(ProviderAdapter):
         return Model(
             model_id=model_id,
             name=model_id,
-            capabilities=_ollama_capabilities(model_id, _capability_names(raw.get("capabilities"))),
+            capabilities=_ollama_capabilities(
+                model_id, _capability_names(raw.get("capabilities")), raw.get("thinking")
+            ),
             context_window=(
                 _positive_int(details.get("context_length"))
                 if isinstance(details, Mapping)

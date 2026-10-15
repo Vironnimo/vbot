@@ -125,6 +125,12 @@ def test_catalog_entry_maps_listing_facts_onto_a_model() -> None:
             True,
             id="non-reasoning",
         ),
+        pytest.param(
+            {"id": "claude-future", "display_name": "Future Claude"},
+            ReasoningCapabilities(supported=None),
+            True,
+            id="missing-thinking-is-unknown",
+        ),
     ],
 )
 def test_catalog_reasoning_control_and_sampling_follow_live_thinking_caps(

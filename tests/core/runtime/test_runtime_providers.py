@@ -241,7 +241,12 @@ def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
     models = shared_runtime.models.list_for_provider("opencode-zen")
     gemini = shared_runtime.models.get("opencode-zen", "gemini-3.5-flash")
 
-    assert {model.model_id for model in models} >= {"gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"}
+    assert {model.model_id for model in models} >= {
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "claude-opus-5-5",
+        "big-pickle",
+    }
     assert all(
         shared_runtime.models.get("opencode-zen", model_id).connections == ("api-key", "account")
         for model_id in ("gpt-6-sol", "gpt-6-luna", "claude-opus-5-5")
@@ -252,7 +257,6 @@ def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
     assert gemini.capabilities.input_modalities == ("text", "image", "video", "audio", "pdf")
     assert {model.model_id for model in models}.isdisjoint(
         {
-            "big-pickle",
             "mimo-v2.6-flash-free",
             "claude-opus-4-1",
             "minimax-m2.5",

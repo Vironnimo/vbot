@@ -357,6 +357,10 @@ def _refresh_provider_prices(
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         for wire_id, record in payload.get("models", {}).items():
+            if catalog.provider_model(catalog_id, wire_id) is None:
+                # A missing entry is no price update; discovery keeps earlier
+                # enrichment for this exact Model while the public feed has a gap.
+                continue
             if _provider_catalog_price(record.get("pricing")):
                 # The Provider's own catalog price wins; its discovery refreshes it.
                 continue
@@ -652,17 +656,16 @@ def provider_reasoning_supported(
 
     models.dev marks each provider model reasoning-capable with a top-level
     ``reasoning`` boolean (independent of whether it publishes a control ladder in
-    ``reasoning_options``). A gateway model whose wire-id cannot reach the
-    canonical layer would otherwise keep the endpoint's default ``supported:
-    false`` even when the feed says it can reason; the caller projects this flag so
-    the capability survives without a hand override. Returns ``None`` when the
-    provider section has no entry for ``wire_id``.
+    ``reasoning_options``). The caller fills unknown endpoint support with this
+    exact fact, without treating an absent flag as a denial. Returns ``None``
+    when the provider section has no entry or no boolean reasoning flag.
     """
 
     provider_model = catalog.provider_model(models_dev_id, wire_id)
     if provider_model is None:
         return None
-    return bool(provider_model.get("reasoning"))
+    supported = provider_model.get("reasoning")
+    return supported if isinstance(supported, bool) else None
 
 
 def provider_family(

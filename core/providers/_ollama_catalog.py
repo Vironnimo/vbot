@@ -22,6 +22,7 @@ from core.providers._ollama_constants import (
     OLLAMA_GPT_OSS_EFFORTS,
     OLLAMA_METADATA_KEY,
 )
+from core.providers.reasoning import THINKING_EFFORT_RANKS
 
 
 def _enrich_from_show(model: Model, show_response: Mapping[str, Any]) -> Model:
@@ -31,7 +32,9 @@ def _enrich_from_show(model: Model, show_response: Mapping[str, Any]) -> Model:
         model_id=model.model_id,
         name=model.name,
         capabilities=_ollama_capabilities(
-            model.model_id, _capability_names(show_response.get("capabilities"))
+            model.model_id,
+            _capability_names(show_response.get("capabilities")),
+            show_response.get("thinking"),
         ),
         context_window=_context_window_from_show(show_response),
         max_output_tokens=model.max_output_tokens,
@@ -49,7 +52,9 @@ def _capability_names(raw_capabilities: Any) -> set[str]:
     return {name for name in raw_capabilities if isinstance(name, str)}
 
 
-def _ollama_capabilities(model_id: str, capability_names: set[str]) -> Capabilities:
+def _ollama_capabilities(
+    model_id: str, capability_names: set[str], thinking_metadata: Any = None
+) -> Capabilities:
     """Project Ollama capability names into vBot capabilities.
 
     ``embedding`` marks a Model that returns vectors through the embeddings
@@ -67,7 +72,7 @@ def _ollama_capabilities(model_id: str, capability_names: set[str]) -> Capabilit
         tools=_CAPABILITY_TOOLS in capability_names,
         json_mode=False,
         reasoning=_ollama_reasoning_capabilities(
-            model_id, _CAPABILITY_THINKING in capability_names
+            model_id, _CAPABILITY_THINKING in capability_names, thinking_metadata
         ),
         input_modalities=("text", "image") if vision else ("text",),
         output_modalities=("text", "embeddings") if embedding else ("text",),
@@ -77,7 +82,27 @@ def _ollama_capabilities(model_id: str, capability_names: set[str]) -> Capabilit
 def _ollama_reasoning_capabilities(
     model_id: str,
     thinking: bool,
+    metadata: Any,
 ) -> ReasoningCapabilities:
+    # /api/show reports controls separately from the "thinking" capability.
+    # That capability alone says nothing about toggle versus effort levels.
+    values = metadata.get("values") if isinstance(metadata, Mapping) else None
+    if isinstance(values, list) and values:
+        if all(value is False for value in values):
+            return ReasoningCapabilities(supported=False)
+        levels = tuple(
+            value
+            for value in values
+            if isinstance(value, str) and value in THINKING_EFFORT_RANKS and value != "none"
+        )
+        if levels:
+            return ReasoningCapabilities(
+                supported=True, control=REASONING_CONTROL_LEVELS, levels=levels
+            )
+        if any(value is True for value in values):
+            return ReasoningCapabilities(supported=True, control=REASONING_CONTROL_ON_OFF)
+        if any(isinstance(value, str) and value for value in values):
+            return ReasoningCapabilities(supported=True)
     if not thinking:
         return ReasoningCapabilities(supported=False)
     if _is_gpt_oss_model(model_id):
@@ -86,7 +111,7 @@ def _ollama_reasoning_capabilities(
             control=REASONING_CONTROL_LEVELS,
             levels=OLLAMA_GPT_OSS_EFFORTS,
         )
-    return ReasoningCapabilities(supported=True, control=REASONING_CONTROL_ON_OFF)
+    return ReasoningCapabilities(supported=True)
 
 
 def _is_gpt_oss_model(model_id: str) -> bool:

@@ -535,10 +535,12 @@ _REASONING_WIRE_FIELDS = (*sorted(REASONING_PARAMETER_NAMES), "thinking", "budge
 @pytest.mark.parametrize(
     ("config", "model", "kwargs", "expected_effort"),
     [
-        pytest.param(OPENAI_CONFIG, None, {"thinking_effort": "minimal"}, "low", id="snaps-up"),
-        pytest.param(OPENAI_CONFIG, None, {"thinking_effort": "medium"}, "medium", id="exact"),
-        pytest.param(OPENAI_CONFIG, None, {"thinking_effort": "max"}, "high", id="snaps-down"),
-        pytest.param(OPENAI_CONFIG, None, {"reasoning_effort": "max"}, "high", id="raw-kwarg"),
+        pytest.param(
+            NO_DEFAULTS_CONFIG, None, {"thinking_effort": "minimal"}, "low", id="snaps-up"
+        ),
+        pytest.param(NO_DEFAULTS_CONFIG, None, {"thinking_effort": "medium"}, "medium", id="exact"),
+        pytest.param(NO_DEFAULTS_CONFIG, None, {"thinking_effort": "max"}, "high", id="snaps-down"),
+        pytest.param(NO_DEFAULTS_CONFIG, None, {"reasoning_effort": "max"}, "high", id="raw-kwarg"),
         pytest.param(
             OPENAI_CONFIG,
             catalog_model(control="levels", levels=("high", "xhigh")),

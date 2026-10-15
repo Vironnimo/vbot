@@ -40,7 +40,7 @@ from .openai_test_support import (
 )
 
 # ---------------------------------------------------------------------------
-# api-key connection: Chat Completions fallback and public Responses
+# api-key connection: public Responses defaults and legacy Chat Completions
 # ---------------------------------------------------------------------------
 
 
@@ -70,10 +70,10 @@ from .openai_test_support import (
     ],
 )
 @pytest.mark.asyncio
-async def test_api_key_fallback_posts_chat_completions_without_codex_routing(
+async def test_api_key_legacy_chat_posts_chat_completions_without_codex_routing(
     completion, outcome
 ) -> None:
-    """Unprofiled Models use ``/chat/completions``; Codex headers and context stay off."""
+    """Legacy chat keeps its endpoint; Codex headers and context stay off."""
 
     adapter = platform_adapter()
     context = adapter.request_context_kwargs(
@@ -109,6 +109,84 @@ async def test_api_key_fallback_posts_chat_completions_without_codex_routing(
         "tool_calls": None,
         **outcome,
     }
+
+
+@pytest.mark.parametrize(
+    ("model_id", "endpoint", "reasoning_fact"),
+    [
+        pytest.param("future-platform-model", PLATFORM_RESPONSES_URL, None, id="unknown-family"),
+        pytest.param(
+            "future-platform-model",
+            PLATFORM_RESPONSES_URL,
+            False,
+            id="explicit-catalog-non-reasoning-beats-modern-default",
+        ),
+        pytest.param("gpt-99-sol", PLATFORM_RESPONSES_URL, None, id="new-generation"),
+        pytest.param("gpt-6.2-sol-2026-12-01", PLATFORM_RESPONSES_URL, None, id="new-snapshot"),
+        pytest.param(
+            "ft:gpt-6.2-sol:org:custom:abc", PLATFORM_RESPONSES_URL, None, id="modern-fine-tune"
+        ),
+        pytest.param("gpt-4", CHAT_COMPLETIONS_URL, None, id="original-legacy-gpt"),
+        pytest.param("gpt-4o-2024-08-06", CHAT_COMPLETIONS_URL, None, id="legacy-snapshot"),
+        pytest.param(
+            "ft:gpt-4o-2024-08-06:org:custom:abc",
+            CHAT_COMPLETIONS_URL,
+            None,
+            id="legacy-fine-tune",
+        ),
+        pytest.param(
+            "ft:gpt-4o-2024-08-06:org:custom:abc",
+            CHAT_COMPLETIONS_URL,
+            True,
+            id="legacy-fine-tune-explicit-catalog-reasoning",
+        ),
+        pytest.param("gpt-audio-2", CHAT_COMPLETIONS_URL, None, id="chat-audio-family"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_platform_listed_models_inherit_current_defaults_or_legacy_family_routes(
+    model_id: str, endpoint: str, reasoning_fact: bool | None
+) -> None:
+    model = OpenAIAdapter.normalize_catalog_entry(
+        {"id": model_id, "object": "model", "supports_reasoning": reasoning_fact}
+    )
+    adapter = platform_adapter(model_lookup=lambda _model_id: model)
+    try:
+        with respx.mock:
+            route = respx.post(endpoint).mock(
+                return_value=httpx.Response(200, json={"output": [], "choices": []})
+            )
+            await adapter.send(
+                SAMPLE_MESSAGES, model_id=model_id, thinking_effort="max", tools=CODEX_TOOLS
+            )
+
+        profile = adapter.wire_profile(model_id)
+        assert profile.status == "inferred"
+        request = route.calls.last.request
+        payload = json.loads(request.content)
+        assert payload["model"] == model_id
+        assert "OpenAI-Beta" not in request.headers
+        assert "chatgpt-account-id" not in request.headers
+        if endpoint == PLATFORM_RESPONSES_URL:
+            if reasoning_fact is False:
+                assert "reasoning" not in payload
+            else:
+                assert payload["reasoning"] == {"effort": "max", "summary": "auto"}
+            assert payload["store"] is False
+            assert payload["max_output_tokens"] > 0
+            assert "messages" not in payload
+            assert all(tool["strict"] is False for tool in payload["tools"])
+        else:
+            assert payload["messages"] == SAMPLE_MESSAGES
+            assert "store" not in payload
+            if reasoning_fact is True:
+                assert payload["reasoning_effort"] == "high"
+            else:
+                assert "reasoning_effort" not in payload
+            assert "reasoning" not in payload
+            assert all(tool["function"]["strict"] is False for tool in payload["tools"])
+    finally:
+        await adapter.aclose()
 
 
 @pytest.mark.asyncio
@@ -273,7 +351,7 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
                 "strict": False,
             }
         ],
-        "reasoning": {"effort": "xhigh", "summary": "auto"},
+        "reasoning": {"effort": "max", "summary": "auto"},
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "json_object"}},
         "store": False,
@@ -399,19 +477,33 @@ def test_codex_discovery_headers_add_account_routing_and_beta_headers() -> None:
 @pytest.mark.parametrize(
     ("levels", "effort", "expected"),
     [
-        pytest.param(None, "xhigh", "xhigh", id="no-catalog-keeps-subscription-effort"),
-        pytest.param((), "xhigh", "xhigh", id="catalog-without-ladder-uses-subscription-floor"),
-        pytest.param(("low", "medium"), "xhigh", "medium", id="catalog-ladder-wins"),
+        pytest.param(None, "max", "max", id="unknown-model-inherits-current-maximum"),
+        pytest.param((), "max", "max", id="sparse-future-catalog-inherits-current-maximum"),
+        pytest.param((), "none", "low", id="sparse-future-catalog-inherits-current-minimum"),
+        pytest.param(
+            ("medium", "high"), "none", "medium", id="catalog-minimum-overrides-inferred-off"
+        ),
+        pytest.param(("low", "medium"), "max", "medium", id="catalog-ladder-wins"),
     ],
 )
 @pytest.mark.asyncio
 async def test_codex_effort_snaps_to_the_model_ladder_or_the_subscription_floor(
     levels, effort, expected
 ) -> None:
-    model_lookup = ladder_model_lookup(levels) if levels is not None else None
-    adapter = codex_adapter(model_lookup=model_lookup)
+    model_id = "future-codex-model"
+    if levels == ():
+        model = OpenAIAdapter.normalize_catalog_entry({"slug": model_id})
+        adapter = codex_adapter(model_lookup=lambda _model_id: model)
+    else:
+        adapter = codex_adapter(
+            model_lookup=ladder_model_lookup(levels) if levels is not None else None
+        )
 
-    payload = await codex_payload(adapter, thinking_effort=effort)
+    try:
+        payload = await codex_payload(adapter, model_id=model_id, thinking_effort=effort)
+        assert adapter.wire_profile(model_id).status == "inferred"
+    finally:
+        await adapter.aclose()
 
     assert payload["reasoning"] == {"effort": expected, "summary": "auto"}
 
@@ -462,6 +554,23 @@ async def test_codex_gpt6_uses_catalog_efforts_and_verified_minimum(
     ("model_id", "make_adapter", "send_payload", "effort", "wire_effort"),
     [
         pytest.param(
+            "gpt-5.6-luna", codex_adapter, codex_payload, "none", None, id="gpt56-luna-codex-off"
+        ),
+        pytest.param(
+            "gpt-5.6-sol", codex_adapter, codex_payload, "none", None, id="gpt56-sol-codex-off"
+        ),
+        pytest.param(
+            "gpt-5.6-terra", codex_adapter, codex_payload, "none", None, id="gpt56-terra-codex-off"
+        ),
+        pytest.param(
+            "gpt-5.2",
+            platform_adapter,
+            platform_payload,
+            "max",
+            "xhigh",
+            id="gpt52-platform-preserves-legacy-floor",
+        ),
+        pytest.param(
             "gpt-6-sol",
             platform_adapter,
             platform_payload,
@@ -497,10 +606,10 @@ async def test_codex_gpt6_uses_catalog_efforts_and_verified_minimum(
     ],
 )
 @pytest.mark.asyncio
-async def test_gpt6_sol_renders_catalog_effort_per_connection(
+async def test_bundled_openai_models_render_catalog_effort_or_their_legacy_floor(
     model_id, make_adapter, send_payload, effort, wire_effort
 ) -> None:
-    """Bundled GPT-6 profiles select Responses and the supported effort per Connection."""
+    """Catalog efforts win; an older Model without a ladder keeps its exact floor."""
 
     adapter = make_adapter(model_lookup=bundled_model_lookup())
     try:
@@ -511,7 +620,10 @@ async def test_gpt6_sol_renders_catalog_effort_per_connection(
         await adapter.aclose()
 
     assert payload["model"] == model_id
-    assert payload["reasoning"] == {"effort": wire_effort, "summary": "auto"}
+    if wire_effort is None:
+        assert "reasoning" not in payload
+    else:
+        assert payload["reasoning"] == {"effort": wire_effort, "summary": "auto"}
     assert payload["store"] is False
     assert all(tool["strict"] is False for tool in payload["tools"])
 

@@ -126,6 +126,16 @@ def test_invalid_values_are_reported_and_omitted_individually() -> None:
                 {"when": {"prefix": "x-"}, "set": {"reasoning": {"dialect": "none"}}},
                 {"when": {"colour": "red"}, "set": {}},
             ],
+            "family_defaults": [
+                {
+                    "when": {"prefix": "m"},
+                    "set": {"reasoning": {"levels": ["low"], "floor": ["low", "high"]}},
+                },
+                {
+                    "when": {"prefix": "n"},
+                    "set": {"protocol": "invalid", "reasoning": {"dialect": "none"}},
+                },
+            ],
             "models": {"m": {"set": {"replay": {"scope": "forever"}}, "verified": {"date": "x"}}},
         },
         source="acme.json",
@@ -142,7 +152,9 @@ def test_invalid_values_are_reported_and_omitted_individually() -> None:
     assert [rule.index for rule in parsed.rules] == [0]
     assert dict(parsed.models["m"].values) == {"replay": {}}
     assert parsed.models["m"].verification is None
-    assert len(issues) == 7
+    assert len(issues) == 9
+    assert len(parsed.family_defaults) == 1
+    assert dict(parsed.family_defaults[0].values["reasoning"]) == {"floor": ("low", "high")}
     assert any("tool_schema" in issue for issue in issues)
     assert any("extra_body.stream" in issue for issue in issues)
     assert any("colour" in issue for issue in issues)
@@ -175,6 +187,22 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
             },
             "protocols": {"chat_completions": {"request": {"output_limit_cap": 2000}}},
             "connections": {"api-key": {"request": {"body_defaults": {"b": 2}}}},
+            "family_defaults": [
+                {
+                    "when": {"prefix": "m", "connections": "api-key"},
+                    "set": {
+                        "protocol": "chat_completions",
+                        "request": {"body_defaults": {"b": 3}},
+                        "reasoning": {
+                            "supported": True,
+                            "mandatory": True,
+                            "control": "on_off",
+                            "floor": ["low", "medium", "high"],
+                        },
+                        "replay": {"scope": "none", "history_field": "thinking"},
+                    },
+                }
+            ],
             "rules": [
                 {"when": {"prefix": "m"}, "set": {"replay": {"scope": "current_run"}}},
                 {"when": {"ids": ["other"]}, "set": {"replay": {"scope": "none"}}},
@@ -186,7 +214,7 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
                 }
             },
         },
-        {"m": model},
+        {"m": model, "m-disabled": _model("m-disabled", supported=False)},
         observed=ObservedFacts(reasoning_field="reasoning", rejected_parameters=("top_k",)),
     )
 
@@ -198,8 +226,8 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
     assert profile.source_of("request.output_limit_field") == "protocol"
     assert profile.request.output_limit_cap == 3000
     assert profile.source_of("request.output_limit_cap") == "model_connection"
-    assert dict(profile.request.body_defaults) == {"a": 1, "b": 2}
-    assert profile.source_of("request.body_defaults.b") == "connections"
+    assert dict(profile.request.body_defaults) == {"a": 1, "b": 3}
+    assert profile.source_of("request.body_defaults.b") == "family_default[0]"
     # The catalog control beats file defaults; rules beat the catalog.
     assert profile.reasoning.control == "levels"
     assert profile.source_of("reasoning.control") == "catalog"
@@ -215,6 +243,13 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
     assert profile.response.reasoning_fields == ("thinking",)
     assert profile.source_of("response.reasoning_fields") == "model"
     assert profile.status == "configured"
+
+    # Inference is scoped to the Connection; observations do not leak across it either.
+    assert _resolve(profiles, "m", "other").request.body_defaults == {"a": 1, "b": 1}
+    disabled = _resolve(profiles, "m-disabled")
+    assert disabled.reasoning.supported is False
+    assert disabled.reasoning.mandatory is False
+    assert disabled.reasoning.plan("high") == ReasoningIntent("default")
 
 
 @pytest.mark.parametrize(
@@ -253,9 +288,32 @@ def test_protocol_follows_precedence_and_skips_protocols_the_adapter_cannot_spea
         "format_version": 1,
         "defaults": {"protocol": "responses"},
         "connections": {"subscription": {"protocol": "messages"}},
+        "family_defaults": [
+            {
+                "when": {"prefix": "next-", "connections": "api-key"},
+                "set": {
+                    "protocol": "messages",
+                    "reasoning": {"dialect": "anthropic_thinking"},
+                    "replay": {"history_field": "family-thinking"},
+                },
+            },
+            {
+                "when": {"prefix": "next-special-", "connections": "api-key"},
+                "set": {"protocol": "chat_completions"},
+            },
+            {
+                "when": {"prefix": "next-"},
+                "set": {"request": {"output_limit_cap": 1000}},
+            },
+            {
+                "when": {"prefix": "unspoken-"},
+                "set": {"protocol": "gemini", "reasoning": {"dialect": "none"}},
+            },
+        ],
         "rules": [
             {"when": {"prefix": "claude-"}, "set": {"protocol": "messages"}},
             {"when": {"ids": ["claude-x"]}, "set": {"protocol": "gemini"}},
+            {"when": {"ids": ["next-corrected"]}, "set": {"protocol": "chat_completions"}},
         ],
         "models": {"gpt-y": {"connections": {"subscription": {"protocol": "chat_completions"}}}},
     }
@@ -268,6 +326,8 @@ def test_protocol_follows_precedence_and_skips_protocols_the_adapter_cannot_spea
             "compat": "@ai-sdk/openai-compatible",
             "undeclared": "@ai-sdk/google",
             "unmapped": "@ai-sdk/mistral",
+            "next-hinted": "@ai-sdk/openai",
+            "next-corrected": "@ai-sdk/openai",
         }.items()
     }
     profiles, issues = _profiles(document, hinted)
@@ -285,7 +345,24 @@ def test_protocol_follows_precedence_and_skips_protocols_the_adapter_cannot_spea
     # A hint the Adapter cannot speak, or a package without a protocol, is no data issue.
     assert protocol("undeclared") == ("responses", "defaults")
     assert protocol("unmapped") == ("responses", "defaults")
-    assert issues and all("'gemini' from rule[1]" in issue for issue in issues)
+    assert protocol("next-future") == ("messages", "family_default[0]")
+    assert protocol("next-future", "subscription") == ("messages", "connections")
+    assert (
+        _resolve(profiles, "next-future", "subscription").replay.history_field != "family-thinking"
+    )
+    assert protocol("next-special-future") == ("chat_completions", "family_default[1]")
+    assert _resolve(profiles, "next-special-future").reasoning.dialect == "reasoning_effort"
+    assert protocol("next-hinted") == ("responses", "catalog_hint")
+    hinted_profile = _resolve(profiles, "next-hinted")
+    assert hinted_profile.reasoning.dialect == "responses_reasoning"
+    assert hinted_profile.replay.history_field != "family-thinking"
+    assert hinted_profile.request.output_limit_cap == 1000
+    assert protocol("next-corrected") == ("chat_completions", "rule[2]")
+    assert protocol("unspoken-future") == ("responses", "defaults")
+    assert _resolve(profiles, "unspoken-future").reasoning.dialect == "responses_reasoning"
+    assert len(issues) == 2
+    assert any("'gemini' from rule[1]" in issue for issue in issues)
+    assert any("'gemini' from family_default[3]" in issue for issue in issues)
 
     bare, _ = _profiles(None, protocols=("ollama_chat",))
     assert _resolve(bare, "anything").protocol == "ollama_chat"
@@ -340,6 +417,7 @@ def test_status_reflects_verification_entries_and_explicit_rules() -> None:
             {"when": {"prefix": "p-"}, "set": {}},
             {"when": {"ids": ["listed"]}, "set": {}},
         ],
+        "family_defaults": [{"when": {"ids": ["inferred-alias"]}, "set": {}}],
         "models": {
             "checked": {"verified": {"date": "2026-10-02", "connections": ["api-key"]}},
             "entry": {"set": {}},
@@ -353,6 +431,7 @@ def test_status_reflects_verification_entries_and_explicit_rules() -> None:
     assert _resolve(profiles, "entry").status == "configured"
     assert _resolve(profiles, "listed").status == "configured"
     assert _resolve(profiles, "p-1").status == "inferred"
+    assert _resolve(profiles, "inferred-alias").status == "inferred"
     assert _resolve(profiles, "p-1").known_model is False
     # The listing accessor answers the same without resolving the profile.
     for model_id, connection in (
@@ -361,6 +440,7 @@ def test_status_reflects_verification_entries_and_explicit_rules() -> None:
         ("entry", "api-key"),
         ("listed", "api-key"),
         ("p-1", "api-key"),
+        ("inferred-alias", "api-key"),
     ):
         profile = _resolve(profiles, model_id, connection)
         assert profiles.status("acme", connection, model_id) == (

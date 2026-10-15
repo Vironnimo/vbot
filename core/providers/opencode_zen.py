@@ -136,8 +136,8 @@ class OpenCodeZenAdapter(OpenAIAdapter):
     The wire profile (``resources/wire/opencode-zen.json``) routes each Model
     to Chat Completions or Responses (the inherited codecs), Anthropic Messages
     (an inner Messages adapter sharing this Adapter's client and wire
-    profiles) or Gemini ``generateContent``, and admits only reviewed Models:
-    free Models are restricted to OpenCode itself and retired Models are
+    profiles) or Gemini ``generateContent``. New Models inherit Provider and
+    family defaults; only concrete profile restrictions and retirements are
     refused before any request.
     """
 

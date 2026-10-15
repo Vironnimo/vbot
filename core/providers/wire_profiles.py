@@ -69,6 +69,7 @@ LAYER_PROTOCOL = "protocol"
 LAYER_FILE_DEFAULTS = "defaults"
 LAYER_FILE_PROTOCOL = "protocols"
 LAYER_FILE_CONNECTION = "connections"
+LAYER_FAMILY_DEFAULT = "family_default"
 LAYER_CATALOG = "catalog"
 LAYER_CATALOG_HINT = "catalog_hint"
 LAYER_RULE = "rule"
@@ -416,7 +417,8 @@ class _Resolution:
         file = self.file
         entry = file.models.get(self.model_id) if file is not None else None
         rules = self._matching_rules()
-        protocol, protocol_layer = self._protocol(entry, rules)
+        family_defaults = self._matching_family_defaults()
+        protocol, protocol_layer = self._protocol(entry, rules, family_defaults)
         self.provenance["protocol"] = protocol_layer
 
         self._apply(PROTOCOL_DEFAULTS[protocol], LAYER_PROTOCOL)
@@ -424,6 +426,9 @@ class _Resolution:
             self._apply(file.defaults, LAYER_FILE_DEFAULTS)
             self._apply(file.protocols.get(protocol, _EMPTY), LAYER_FILE_PROTOCOL)
             self._apply(file.connections.get(self.connection_id, _EMPTY), LAYER_FILE_CONNECTION)
+        for rule in family_defaults:
+            if rule.values.get("protocol", protocol) == protocol:
+                self._apply(rule.values, f"{LAYER_FAMILY_DEFAULT}[{rule.index}]")
         self._apply_catalog(protocol)
         for rule in rules:
             self._apply(rule.values, f"{LAYER_RULE}[{rule.index}]")
@@ -454,7 +459,10 @@ class _Resolution:
     # -- protocol -------------------------------------------------------------
 
     def _protocol(
-        self, entry: WireModelEntry | None, rules: Sequence[WireRule]
+        self,
+        entry: WireModelEntry | None,
+        rules: Sequence[WireRule],
+        family_defaults: Sequence[WireRule],
     ) -> tuple[Protocol, str]:
         candidates: list[tuple[Any, str]] = []
         if entry is not None:
@@ -470,6 +478,10 @@ class _Resolution:
         hinted = self._hinted_protocol()
         if hinted is not None:
             candidates.append((hinted, LAYER_CATALOG_HINT))
+        for rule in reversed(family_defaults):
+            candidates.append(
+                (rule.values.get("protocol"), f"{LAYER_FAMILY_DEFAULT}[{rule.index}]")
+            )
         if self.file is not None:
             candidates.append(
                 (
@@ -507,6 +519,11 @@ class _Resolution:
         if self.file is None:
             return ()
         return tuple(rule for rule in self.file.rules if self._matches(rule.when))
+
+    def _matching_family_defaults(self) -> tuple[WireRule, ...]:
+        if self.file is None:
+            return ()
+        return tuple(rule for rule in self.file.family_defaults if self._matches(rule.when))
 
     def _matches(self, when: RuleMatcher) -> bool:
         model = self.model
@@ -568,8 +585,10 @@ class _Resolution:
         budget_max = reasoning.budget_max
         if isinstance(budget_max, int) and not isinstance(budget_max, bool) and budget_max > 0:
             reasoning_values["budget_max"] = budget_max
-        if reasoning.mandatory:
-            reasoning_values["mandatory"] = True
+        if reasoning.mandatory or self.provenance.get("reasoning.mandatory", "").startswith(
+            f"{LAYER_FAMILY_DEFAULT}["
+        ):
+            reasoning_values["mandatory"] = reasoning.mandatory
         if reasoning_values:
             partial["reasoning"] = reasoning_values
 
@@ -604,10 +623,14 @@ class _Resolution:
             # Echo the observed field back only where the wire opts in and the
             # carrier is a generic default; catalog hints and rules know better.
             replay = self.values.get("replay", {})
+            history_source = self.provenance.get("replay.history_field", "")
             if (
                 replay.get("echo_response_field") is True
                 and replay.get("history_field") is not None
-                and self.provenance.get("replay.history_field") in _GENERIC_LAYERS
+                and (
+                    history_source in _GENERIC_LAYERS
+                    or history_source.startswith(f"{LAYER_FAMILY_DEFAULT}[")
+                )
             ):
                 partial["replay"] = {"history_field": field}
         if facts.reasoning_returned and self.values.get("reasoning", {}).get("supported") is None:
@@ -850,6 +873,7 @@ __all__ = [
     "LAYER_CATALOG_HINT",
     "LAYER_FILE_CONNECTION",
     "LAYER_FILE_DEFAULTS",
+    "LAYER_FAMILY_DEFAULT",
     "LAYER_FILE_PROTOCOL",
     "LAYER_MODEL",
     "LAYER_MODEL_CONNECTION",

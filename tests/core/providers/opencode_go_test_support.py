@@ -167,7 +167,10 @@ def bundled_go() -> tuple[OpenCodeGoAdapter, Callable[[str], Model | None], Prov
     assert config is not None
 
     def lookup(model_id: str) -> Model | None:
-        return registry.get("opencode-go", model_id)
+        try:
+            return registry.get("opencode-go", model_id)
+        except KeyError:
+            return None
 
     return OpenCodeGoAdapter(config, "test-token", model_lookup=lookup), lookup, config
 

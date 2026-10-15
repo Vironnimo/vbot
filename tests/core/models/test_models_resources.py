@@ -89,8 +89,10 @@ def test_every_bundled_model_loads_with_typed_facts(registry: ModelRegistry) -> 
                 capabilities.vision,
                 capabilities.tools,
                 capabilities.json_mode,
-                capabilities.reasoning.supported,
             )
+        ), model.model_id
+        assert capabilities.reasoning.supported is None or isinstance(
+            capabilities.reasoning.supported, bool
         ), model.model_id
         assert isinstance(capabilities.reasoning.levels, tuple)
         assert capabilities.reasoning.control in (None, "levels", "on_off", "budget")

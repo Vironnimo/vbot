@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "OpenAI first-party wire. The api-key Connection speaks Chat Completions unless a Model entry selects public Responses; the subscription Connection is the ChatGPT Codex Responses endpoint for every Model. Chat Completions accepts reasoning_effort 'none', wants explicit non-strict Tool schemas and carries images, wav/mp3 audio and PDF documents. Public Responses accepts max_output_tokens and top_p as its only optional parameters, carries images and PDF documents, and treats a Model the catalog does not know as a reasoning Model. Codex rejects every optional parameter (so no output limit is budgeted), carries images only and never receives the 'none' effort.",
+  "_comment": "OpenAI first-party wire. The api-key Connection defaults new Models to public Responses; legacy GPT-3/GPT-4 and chat-audio families keep Chat Completions. These are inferred defaults, not per-Model verification. The subscription Connection is ChatGPT Codex Responses for every Model. Chat Completions accepts reasoning_effort 'none', wants explicit non-strict Tool schemas and carries images, wav/mp3 audio and PDF documents. Public Responses carries images and PDF documents and treats unknown reasoning support as supported. Codex rejects every optional parameter (so no output limit is budgeted), carries images only and never receives the 'none' effort.",
   "protocols": {
     "chat_completions": {
       "request": {"tool_schema": "explicit_non_strict"},
@@ -24,13 +24,54 @@
     }
   },
   "connections": {
+    "api-key": {
+      "protocol": "responses"
+    },
     "subscription": {
       "protocol": "responses",
       "request": {"allowed_parameters": []},
-      "reasoning": {"off": "omit"},
+      "reasoning": {"floor": ["low", "medium", "high", "xhigh", "max"], "off": "lowest"},
       "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
     }
   },
+  "family_defaults": [
+    {
+      "when": {"connections": ["api-key"]},
+      "set": {
+        "protocol": "responses",
+        "reasoning": {"floor": ["low", "medium", "high", "xhigh", "max"]}
+      },
+      "note": "New Platform Models inherit the current Responses contract and latest general reasoning ladder. Concrete catalog efforts and explicit exceptions still win. Inferred from the official Model catalog and GPT-6.1 Sol, 2026-10-15; not a live verification of new ids."
+    },
+    {
+      "when": {
+        "prefix": [
+          "gpt-3.5-",
+          "gpt-4-",
+          "gpt-4.",
+          "gpt-4o",
+          "chatgpt-4o",
+          "ft:gpt-3.5-",
+          "ft:gpt-4:",
+          "ft:gpt-4-",
+          "ft:gpt-4.",
+          "ft:gpt-4o"
+        ],
+        "connections": ["api-key"]
+      },
+      "set": {"protocol": "chat_completions", "reasoning": {"supported": false}},
+      "note": "Preserve established non-reasoning legacy chat routes, including dated snapshots and fine-tunes. An explicit catalog reasoning capability overrides this family inference."
+    },
+    {
+      "when": {"ids": ["gpt-4"], "connections": ["api-key"]},
+      "set": {"protocol": "chat_completions", "reasoning": {"supported": false}}
+    },
+    {
+      "when": {"prefix": ["gpt-audio"], "connections": ["api-key"]},
+      "set": {"protocol": "chat_completions", "reasoning": {"supported": false}},
+      "note": "The official GPT-Audio Model contract is non-reasoning Chat Completions with text/audio input and output. New audio variants inherit that route below explicit catalog capability facts."
+    }
+  ],
   "rules": [
     {
       "when": {"ids": ["gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"], "connections": ["api-key"]},
@@ -40,7 +81,13 @@
   ],
   "models": {
     "gpt-5.2": {
-      "connections": {"api-key": {"protocol": "responses"}}
+      "connections": {
+        "api-key": {
+          "protocol": "responses",
+          "reasoning": {"floor": ["low", "medium", "high", "xhigh"]}
+        }
+      },
+      "note": "Preserve the existing GPT-5.2 effort floor when its catalog carries no ladder; newer Platform defaults must not silently widen this legacy target."
     },
     "gpt-5.5": {
       "connections": {"api-key": {"protocol": "responses"}}
@@ -53,18 +100,24 @@
     },
     "gpt-5.6-luna": {
       "connections": {
-        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}}
-      }
+        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}},
+        "subscription": {"reasoning": {"off": "omit"}}
+      },
+      "note": "Preserve the legacy Codex off rendering; new subscription Models inherit the current low effort default."
     },
     "gpt-5.6-sol": {
       "connections": {
-        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}}
-      }
+        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}},
+        "subscription": {"reasoning": {"off": "omit"}}
+      },
+      "note": "Preserve the legacy Codex off rendering; new subscription Models inherit the current low effort default."
     },
     "gpt-5.6-terra": {
       "connections": {
-        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}}
-      }
+        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}},
+        "subscription": {"reasoning": {"off": "omit"}}
+      },
+      "note": "Preserve the legacy Codex off rendering; new subscription Models inherit the current low effort default."
     },
     "gpt-6-astra": {
       "connections": {"subscription": {"reasoning": {"off": "low"}}},

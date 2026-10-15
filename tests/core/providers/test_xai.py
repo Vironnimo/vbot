@@ -80,6 +80,7 @@ def _model(
 
 
 MODELS = {
+    "grok-next": _model("grok-next", reasoning=True),
     "grok-4.5": _model("grok-4.5", reasoning=True, levels=("low", "medium", "high")),
     "grok-4.3": _model("grok-4.3", reasoning=True, levels=("none", "low", "medium", "high")),
     "grok-4.20-0309-reasoning": _model("grok-4.20-0309-reasoning", reasoning=True),
@@ -159,6 +160,18 @@ async def test_request_carries_cache_affinity_tier_and_model_output_limit(
 @pytest.mark.parametrize(
     ("model_id", "request_kwargs", "expected"),
     [
+        pytest.param(
+            "grok-next",
+            {"thinking_effort": "max"},
+            {"reasoning": {"effort": "xhigh", "summary": "auto"}, "include": ENCRYPTED_REASONING},
+            id="future-grok-inherits-current-generation-effort-ladder",
+        ),
+        pytest.param(
+            "grok-next",
+            {"thinking_effort": "none"},
+            {"reasoning": {"effort": "low", "summary": "auto"}, "include": ENCRYPTED_REASONING},
+            id="future-grok-cannot-disable-reasoning",
+        ),
         pytest.param(
             "grok-4.5",
             {"thinking_effort": "none"},
