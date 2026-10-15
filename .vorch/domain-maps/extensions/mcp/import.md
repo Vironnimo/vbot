@@ -7,7 +7,7 @@ Read for work on the MCP `import` management operation, `resources/extensions/mc
 `parse_setup(text, ids)` turns setup text written for other MCP clients into `ImportDraft`s. It is pure: it reads no saved connection and no credential, so a clash with a saved connection appears only as the preview's `conflict`. Text over `MAX_SETUP_CHARACTERS` (200000) or empty text is refused; a leading BOM is ignored.
 
 Recognized input:
-- TOML when a `[mcp_servers` table appears (Codex `config.toml`).
+- TOML when a `[mcp_servers` table or `mcp_servers = ...` assignment appears (Codex `config.toml`, including inline tables).
 - JSON, or JSONC (comments, trailing commas), starting with `{`, `[` or `"`; a fragment such as `"name": {...},` copied out of a larger file is read as an object. Server maps under `mcpServers` (Claude Desktop, Cursor, Claude Code, Windsurf, Gemini CLI, Cline), `servers` with VS Code `inputs` (also nested under `mcp` in VS Code user settings), `context_servers` (Zed, including its earlier `command: {path, args, env}` form) or `mcp_servers`; a single server object; an object whose values are all server objects; an array of server objects with `name`.
 - Any other text: one entry per line (`\`, `^` and backtick continuations joined, shell prompts `$ `, `> `, `PS ...> ` stripped, `#` lines skipped). A line is `claude mcp add` or `gemini mcp add` (`-t/--transport`, `-e/--env`, `-H/--header` read; other options reported as ignored), `claude mcp add-json <name> <json>`, `code --add-mcp <json>`, a single URL, or a command line with leading `NAME=value` assignments, optionally after `env`. `split_command_line` keeps Windows paths: a backslash escapes only a quote or whitespace.
 

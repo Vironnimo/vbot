@@ -255,22 +255,32 @@ def _shape(item: dict[str, Any]) -> dict[str, Any]:
             },
             id="claude-mcp-add",
         ),
-        pytest.param(
-            _CODEX,
-            {
-                "linear": {
-                    "id": "linear",
-                    "transport": "http",
-                    "target": "https://mcp.linear.app/mcp",
-                    "args": [],
-                    "environment": {},
-                    "credentials": [("Authorization", "MCP_LINEAR_AUTHORIZATION", "missing")],
-                    "enabled": False,
-                    "selected": True,
+        *[
+            pytest.param(
+                source,
+                {
+                    "linear": {
+                        "id": "linear",
+                        "transport": "http",
+                        "target": "https://mcp.linear.app/mcp",
+                        "args": [],
+                        "environment": {},
+                        "credentials": [("Authorization", "MCP_LINEAR_AUTHORIZATION", "missing")],
+                        "enabled": False,
+                        "selected": True,
+                    },
                 },
-            },
-            id="codex-toml",
-        ),
+                id=f"codex-toml-{form}",
+            )
+            for form, source in (
+                ("table", _CODEX),
+                (
+                    "inline",
+                    'mcp_servers = { linear = { url = "https://mcp.linear.app/mcp", '
+                    'bearer_token_env_var = "LINEAR_TOKEN" } }',
+                ),
+            )
+        ],
     ],
 )
 async def test_preview_reads_each_client_format_without_saving(host, monkeypatch, source, expected):
