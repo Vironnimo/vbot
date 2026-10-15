@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, override
+from typing import Any, cast, override
 
 import pytest
 
@@ -20,10 +20,12 @@ from core.model_tasks.speech import SpeechError
 from core.providers.errors import NetworkError
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, RunCancelledError, RunKind, RunStatus
 from core.tools import ToolRegistry, tool_success
+from tests.core.chat.chat_loop_compaction_test_support import compaction_runtime
 from tests.core.chat.chat_loop_support import (
     PolicyStubAdapter,
     StubAdapter,
     StubAgent,
+    StubCompactionService,
     StubRuntime,
     build_chat_loop,
     build_request_messages,
@@ -378,18 +380,20 @@ async def test_withdrawn_steering_input_keeps_the_final_answer(tmp_path: Path) -
 
     withdrawals: list[asyncio.Task[None]] = []
     adapter = WithdrawingAdapter([{"content": "Final", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/gpt-5.2"), adapter=adapter
-    )
+    runtime = compaction_runtime(tmp_path, adapter=adapter, context_window=1_000_000)
     runtime.chat_sessions.create("coder", session_id="one")
     manager = runtime.chat_run_manager
-    loop = build_chat_loop(runtime)
+    service = StubCompactionService(should_auto=False)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
     run = await loop.start_run("coder", "Original", session_id="one")
     result = await asyncio.wait_for(run.wait(), 10)
     await asyncio.gather(*withdrawals)
     assert run.status == RunStatus.COMPLETED
     assert result.content == "Final"
     assert len(adapter.requests) == 1
+    # Only the first request evaluates Compaction. The withdrawn input needs
+    # neither another Agent request nor an automatic Compaction attempt.
+    assert len(service.should_auto_calls) == 1
     history = runtime.chat_sessions.get(address).load()
     assert [m.content for m in history if m.role == "user"] == ["Original"]
     assert not _steering_notes(history)

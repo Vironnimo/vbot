@@ -84,6 +84,8 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     window: int,
     reason: str,
 ) -> None:
+    # Exact before/after assertions must not race the tokenizer's cold load.
+    monkeypatch.setattr("core.utils.tokens._load_estimation_encoding", lambda: None)
     runtime = compaction_runtime(tmp_path, context_window=window)
     monkeypatch.setattr(runtime.adapter, "minimum_output_tokens", lambda *_args: reservation)
     agent = runtime.agents.get("coder")
@@ -195,11 +197,11 @@ async def test_automatic_compaction_boundaries_never_reload_complete_history(
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
     await (await loop.start_run("coder", "Go", session_id="session-one")).wait()
 
-    # Before the first request, after the Tool batch and after the final answer each
-    # compacted, yet only the Run-start snapshot read the complete history.
-    assert len(service.compacted_contents) == 3
+    # Each needed Model request compacted, yet only the Run-start snapshot
+    # read the complete history. The final answer triggers no further work.
+    assert len(service.compacted_contents) == 2
     assert complete_reads == [None]
-    assert persisted_roles(session.load_active()).count("compaction_checkpoint") == 3
+    assert persisted_roles(session.load_active()).count("compaction_checkpoint") == 2
     # Every request carries the Session's one prompt-cache affinity across checkpoints.
     affinities = [
         affinity_before,
@@ -266,7 +268,7 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(tmp_path
             },
             {"content": "AUTO_DONE", "usage": usage, "tool_calls": None},
         ],
-        summaries=["SUMMARY ONE", "SUMMARY TWO", "SUMMARY THREE"],
+        summaries=["SUMMARY ONE", "SUMMARY TWO"],
     )
     runtime = real_compaction_runtime(
         tmp_path,
@@ -290,12 +292,11 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(tmp_path
     persisted = session.load()
     checkpoints = [message for message in persisted if message.role == "compaction_checkpoint"]
     assert assistant.content == "AUTO_DONE"
-    assert adapter.events == ["agent", "compaction"] * 3
-    assert runtime.storage.prompt_fragment_reads == ["compaction.md"] * 3
-    assert persisted_roles(persisted)[-8:] == [
+    assert adapter.events == ["agent", "compaction"] * 2 + ["agent"]
+    assert runtime.storage.prompt_fragment_reads == ["compaction.md"] * 2
+    assert persisted_roles(persisted)[-7:] == [
         *("assistant", "tool", "compaction_checkpoint") * 2,
         "assistant",
-        "compaction_checkpoint",
     ]
     for ordinal, checkpoint in enumerate(checkpoints, start=1):
         projection = checkpoint.projection
@@ -322,7 +323,6 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(tmp_path
     assert "FIRST_TOOL_PAYLOAD" not in compaction_requests[0]
     assert "FIRST_TOOL_PAYLOAD" in compaction_requests[1]
     assert "SECOND_TOOL_PAYLOAD" not in compaction_requests[1]
-    assert "SECOND_TOOL_PAYLOAD" in compaction_requests[2]
     third_agent_request = adapter.requests[2]["messages"]
     assert "CURRENT_USER_MARKER" in json.dumps(third_agent_request)
     assert "SECOND_TOOL_PAYLOAD" in json.dumps(third_agent_request)
@@ -332,8 +332,8 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(tmp_path
         "tool",
     ]
     final_projection = json.dumps(checkpoints[-1].projection)
-    assert "SUMMARY THREE" in final_projection
-    assert "SUMMARY ONE" not in final_projection and "SUMMARY TWO" not in final_projection
+    assert "SUMMARY TWO" in final_projection
+    assert "SUMMARY ONE" not in final_projection
 
 
 _CONTINUATION_POLICY: JsonObject = {
@@ -341,6 +341,125 @@ _CONTINUATION_POLICY: JsonObject = {
     "trigger": {"type": "input_tokens", "tokens": 1},
     "strategy": {"type": "continuation"},
 }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+async def test_automatic_compaction_waits_for_the_next_runs_request(
+    tmp_path: Path, strategy: str
+) -> None:
+    adapter = RecordingCompactionAdapter(
+        [
+            {"content": "LONG_FINAL " * 8_000},
+            {"content": "NEXT_ANSWER"},
+        ],
+        summaries=["SUMMARY"],
+    )
+    runtime = real_compaction_runtime(
+        tmp_path,
+        adapter,
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 10_000},
+            "strategy": {
+                "type": strategy,
+                **({"tail_tokens": 1} if strategy == "summary_tail" else {}),
+            },
+        },
+    )
+    session = runtime.chat_sessions.create("coder", session_id="one")
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
+
+    first = await loop.start_run("coder", "First", session_id=session.id)
+    await first.wait()
+
+    assert adapter.events == ["agent"]
+    assert not any(message.role == "compaction_checkpoint" for message in session.load())
+    assert first.terminal_payload_extras["context_usage"]["tokens"] > 10_000
+
+    second = await loop.start_run("coder", "Continue", session_id=session.id)
+    assert (await second.wait()).content == "NEXT_ANSWER"
+
+    assert adapter.events == ["agent", "compaction", "agent"]
+    assert persisted_roles(session.load()) == [
+        "user",
+        "assistant",
+        "user",
+        "compaction_checkpoint",
+        "assistant",
+    ]
+    checkpoint = next(
+        message for message in session.load() if message.role == "compaction_checkpoint"
+    )
+    assert checkpoint.run_id == second.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+@pytest.mark.parametrize("tool_step", [False, True], ids=["after-answer", "after-tools"])
+async def test_automatic_compaction_counts_delivered_steering_before_the_next_request(
+    tmp_path: Path, strategy: str, tool_step: bool
+) -> None:
+    steering = "STEER_MARKER " + "new " * 7_000
+
+    class SteeringAdapter(RecordingCompactionAdapter):
+        @override
+        async def send(
+            self, messages: list[JsonObject], *, model_id: str, **kwargs: Any
+        ) -> JsonObject:
+            if not self.requests:
+                item = await loop.queue_run("coder", steering, session_id="one")
+                runtime.chat_run_manager.steer_queued("coder", "one", item.item_id, project_id=None)
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = SteeringAdapter(
+        [
+            {
+                "content": "First answer",
+                "tool_calls": [{"id": "probe", "name": "probe", "arguments": {}}]
+                if tool_step
+                else None,
+            },
+            {"content": "STEER_DONE"},
+        ],
+        summaries=["SUMMARY_WITH_STEERING"],
+    )
+    runtime = real_compaction_runtime(
+        tmp_path,
+        adapter,
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 8_000},
+            "strategy": {
+                "type": strategy,
+                **({"tail_tokens": 1} if strategy == "summary_tail" else {}),
+            },
+        },
+        tools=_probe_tools(),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="one")
+    session.append(ChatMessage.user("old " * 6_000))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Old answer"))
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
+
+    run = await loop.start_run("coder", "Start", session_id=session.id)
+    assert (await run.wait()).content == "STEER_DONE"
+
+    assert adapter.events == ["agent", "compaction", "agent"]
+    assert run.iteration_count == 2
+    history = session.load()
+    checkpoint = next(message for message in history if message.role == "compaction_checkpoint")
+    steered = next(message for message in history if message.content == steering)
+    assert steered.run_id == checkpoint.run_id == run.id
+    assert history.index(steered) < history.index(checkpoint)
+    if tool_step:
+        assert next(
+            i for i, message in enumerate(history) if message.role == "tool"
+        ) < history.index(steered)
+    if strategy == "summary_tail":
+        assert steering in json.dumps(adapter.requests[1]["messages"])
+    else:
+        assert steering in json.dumps(adapter.stream_requests[0]["messages"])
 
 
 @pytest.mark.asyncio

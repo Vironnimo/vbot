@@ -123,7 +123,6 @@ class ChatLoop:
             dependencies,
             self._requests,
             progression,
-            self._compaction_runs,
             compaction_service,
             reflection_service,
             session_title_service,
