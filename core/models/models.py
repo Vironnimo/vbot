@@ -136,8 +136,7 @@ class Capabilities:
     * ``parameters`` — mapping of wire parameter name to a typed spec:
       ``{"type": "enum", "values": [...]}``, ``{"type": "range", "min": n,
       "max": n}``, ``{"type": "boolean"}`` (the parameter is supported,
-      value free-form), or ``{"type": "model"}`` (a tool-capable chat Model
-      id of the same Provider that the selected Connection allows). A spec
+      value free-form), or ``{"type": "string"}``. A spec
       may carry an optional ``default`` value that the option builder uses
       when it is among the offered choices.
     * ``passthrough`` — mapping of upstream provider slug to the list of
