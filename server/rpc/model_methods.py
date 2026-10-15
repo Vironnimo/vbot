@@ -525,7 +525,11 @@ def start_installation_catalog_restore(state: Any) -> asyncio.Task[None] | None:
     runtime_models_dir = runtime.storage.layout.models
     if read_model_database_manifest(runtime_models_dir) is not None:
         return None
-    condition = "incompatible" if runtime_models_dir.exists() else "missing"
+    condition = (
+        "incompatible"
+        if runtime_models_dir.exists() and any(runtime_models_dir.iterdir())
+        else "missing"
+    )
     provider_ids = [
         provider_id
         for provider_id in runtime.providers.list_ids()
