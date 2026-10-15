@@ -265,6 +265,28 @@ async def settle_before_cancelling[SettledResult](
     return future.result()
 
 
+async def cancel_and_wait(*tasks: asyncio.Task[Any]) -> None:
+    """Cancel owned tasks and drain them before propagating caller cancellation.
+
+    Cancellation of a child is expected; cancellation of this caller remains
+    authoritative. Retrieve every child's failure, even when an earlier child
+    failed, and propagate the first failure when the caller was not cancelled.
+    """
+    if not tasks:
+        return
+    for task in tasks:
+        task.cancel()
+
+    async def drain() -> None:
+        await asyncio.wait(tasks)
+        errors = [task.exception() for task in tasks if not task.cancelled()]
+        for error in errors:
+            if error is not None:
+                raise error
+
+    await settle_before_cancelling(drain())
+
+
 async def finish_despite_cancel[FinishedResult](work: Awaitable[FinishedResult]) -> FinishedResult:
     """Await *work* and return its result, even when the caller is cancelled meanwhile.
 

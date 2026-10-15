@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from core.performance import PerformanceService
-from core.performance._monitor import StallRecord, StallThread, code_path, render_stack
+from core.performance._monitor import LoopMonitor, StallRecord, StallThread, code_path, render_stack
 
 WATCHDOG_THREAD = "vbot-performance-watchdog"
 SPINNER_THREAD = "test-spinner"
@@ -340,26 +340,51 @@ def _monitor_resources(service: PerformanceService) -> tuple[asyncio.Task, threa
 
 
 @pytest.mark.asyncio
-async def test_stop_and_aclose_end_the_monitor_task_and_watchdog_thread(tmp_path: Path) -> None:
+@pytest.mark.parametrize("close", ["stop", "aclose", "cancel_aclose"])
+async def test_stop_and_aclose_end_the_monitor_task_and_watchdog_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close: str
+) -> None:
     collection_callbacks = len(gc.callbacks)
-    for close_async in (False, True):
-        service = _fast_service(tmp_path)
-        service.start()
-        await asyncio.sleep(0.05)
-        task, thread = _monitor_resources(service)
-        assert service.monitoring
-        assert thread.name == WATCHDOG_THREAD and thread.is_alive()
+    started, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    run = LoopMonitor._run  # noqa: SLF001 - controlled monitor cleanup boundary.
 
-        if close_async:
-            await service.aclose()
-        else:
-            service.stop()
-            await asyncio.sleep(0)
+    async def monitor_run(monitor: LoopMonitor) -> None:
+        started.set()
+        try:
+            await run(monitor)
+        finally:
+            cleaning.set()
+            await release.wait()
 
-        assert not service.monitoring
-        assert task.done()
-        assert not thread.is_alive()
-        assert len(gc.callbacks) == collection_callbacks
+    monkeypatch.setattr(LoopMonitor, "_run", monitor_run)
+    if close != "cancel_aclose":
+        release.set()
+    service = _fast_service(tmp_path)
+    service.start()
+    await started.wait()
+    task, thread = _monitor_resources(service)
+    assert service.monitoring
+    assert thread.name == WATCHDOG_THREAD and thread.is_alive()
+
+    if close == "cancel_aclose":
+        closing = asyncio.create_task(service.aclose())
+        await cleaning.wait()
+        closing.cancel()
+        await asyncio.sleep(0)
+        assert not closing.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+    elif close == "aclose":
+        await service.aclose()
+    else:
+        service.stop()
+        await asyncio.sleep(0)
+
+    assert not service.monitoring
+    assert task.done()
+    assert not thread.is_alive()
+    assert len(gc.callbacks) == collection_callbacks
 
 
 def test_watchdog_exits_when_its_event_loop_closes_without_stop(tmp_path: Path) -> None:

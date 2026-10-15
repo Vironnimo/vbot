@@ -441,13 +441,18 @@ class PerformanceService:
 
     async def aclose(self) -> None:
         """Discard the active recording, finish pending writes and stop monitoring."""
+        from core.utils.workers import settle_before_cancelling
+
+        await settle_before_cancelling(self._close())
+
+    async def _close(self) -> None:
+        from core.utils.workers import cancel_and_wait
+
         self._discard_recording()
         await self._monitor.aclose()
         task, self._history_task = self._history_task, None
         if task is not None:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+            await cancel_and_wait(task)
         if self._window is not None:
             await self._write_window(REASON_SHUTDOWN)
         if self._finishing:
