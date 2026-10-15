@@ -234,7 +234,6 @@ class CommandRecord:
                 facts.running if facts is not None and self.ended and not self.finished else ()
             ),
             background=self._background,
-            delivers_result=self._delivering,
             elapsed_seconds=max(0.0, ended_at - self.started_at),
             not_run=(
                 self._not_run_codes.get(self._exit_code)

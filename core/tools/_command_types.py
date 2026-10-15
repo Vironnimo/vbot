@@ -153,8 +153,6 @@ class CommandReport:
     still_running: tuple[RunningProcess, ...]
     # Moved to the background: listed, with status events.
     background: bool
-    # The result is delivered as a new message when the command ends.
-    delivers_result: bool
     # From the start until the command ended, or until the report was taken.
     elapsed_seconds: float
     # Why the shell ran nothing of the command, once it exited with a code the

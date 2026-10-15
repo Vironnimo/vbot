@@ -340,7 +340,7 @@ async def test_status_shows_a_running_command_with_its_newest_output(
     output_file(status["next"])
     # Looking changes nothing.
     report = tasks.commands.manager.report(command_id)
-    assert (report.ended, report.delivers_result, process.tree.terminations) == (False, True, 0)
+    assert (report.ended, process.tree.terminations) == (False, 0)
     # From the third look on, the Session waiting for the result is told how often it looked.
     again = [data(await tasks.call({"action": "status", "id": command_id})) for _ in range(2)]
     assert "2 times" not in again[0]["next"]

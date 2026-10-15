@@ -678,10 +678,9 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
         # stop's reason stays for the end the kill causes. Either way the
         # Agent's call showed no end, so the end is delivered.
         running = harness.manager.report(command_id)
-        assert (running.status, running.stop_reason, running.delivers_result) == (
+        assert (running.status, running.stop_reason) == (
             "running",
             "agent" if kill_sent else None,
-            True,
         )
         if then == "stop-again":
             # A lifecycle close goes on: the failure is logged and the command stays live.
@@ -731,7 +730,7 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
     # Reported at once: the server publishes `running` before the shell call's
     # result that hands the command off.
     assert harness.changes == [command_id]
-    assert (moved.ended, moved.background, moved.delivers_result) == (False, True, True)
+    assert (moved.ended, moved.background) == (False, True)
     assert harness.manager.status(command_id) == "running"
     assert [row.owner for row in harness.manager.commands([OWNER, CHILD])] == [CHILD]
     assert harness.manager.commands([OWNER]) == []
@@ -776,7 +775,7 @@ async def test_a_command_that_ended_before_moving_to_the_background_delivers_not
 
     report = harness.manager.to_background(command_id, deliver=True)
 
-    assert (report.ended, report.delivers_result) == (True, False)
+    assert report.ended
     assert harness.sink.submissions == []
 
 
