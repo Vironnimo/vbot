@@ -1289,15 +1289,15 @@ class TerminalEmulator:
         """Return the screen as the Agent is shown it, with its change signature."""
         screen = self._screen
         cursor = screen.cursor
-        suggestion_row = None if cursor.hidden else cursor.y
-        lines = [
-            _marked_row(
-                screen.buffer[y],
-                screen.columns,
-                suggestion_from=cursor.x if y == suggestion_row else None,
-            )
-            for y in range(screen.lines)
-        ]
+        suggestion_from = None
+        lines = []
+        for y in range(screen.lines):
+            line = screen.buffer[y]
+            if not cursor.hidden and y == cursor.y:
+                suggestion_from = cursor.x
+            lines.append(_marked_row(line, screen.columns, suggestion_from=suggestion_from))
+            if suggestion_from is not None:
+                suggestion_from = 0 if getattr(line, "wrapped", False) else None
         while lines and not lines[-1]:
             lines.pop()
         position = None if cursor.hidden else (cursor.y + 1, min(cursor.x + 1, screen.columns))
@@ -1636,7 +1636,7 @@ def _marked_row(line: Any, columns: int, *, suggestion_from: int | None) -> str:
     """A row's text as the Agent reads it, with marks around what it cannot see as text.
 
     Reverse-video runs stand between the highlight marks. From column
-    *suggestion_from* on (the visible cursor's, on its row), faint text
+    *suggestion_from* on (the visible cursor's, then zero on its wrapped rows), faint text
     stands between the suggestion marks: a prediction or placeholder that
     Enter does not submit. Blank cells at the end of the row are left out,
     also inside a highlighted run, which keeps at least one.
