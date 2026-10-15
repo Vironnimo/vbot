@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
 from core.channels import _delivery
+from core.channels._observations import ChannelObservationInbox
 from core.channels.adapter import (
     ChannelAdapter,
     DeniedChatFacts,
@@ -112,9 +113,12 @@ class ChannelService:
         try:
             for reset_id in self._state.adopt(self._storage.platforms()):
                 _LOGGER.info("Channel state reset for a new platform (channel=%s)", reset_id)
+            self._storage.load_all()
         except BaseException:
             self._state.close()
             raise
+        self._observations = ChannelObservationInbox(self._state, chat_sessions, self._storage.get)
+        self._observation_tasks: set[asyncio.Task[None]] = set()
         self._whatsapp_setup_tasks: dict[str, asyncio.Task[None]] = {}
         self._whatsapp_setup_states: dict[str, dict[str, Any]] = {}
         self._whatsapp_operations: dict[str, asyncio.Lock] = {}
@@ -157,7 +161,8 @@ class ChannelService:
             return
 
         self._started = True
-        for config in self._storage.load_all():
+        self._recover_observations()
+        for config in self._storage.snapshot():
             if config.enabled:
                 try:
                     self.start_channel(config.id)
@@ -227,6 +232,14 @@ class ChannelService:
         pending_tasks = _unique_pending_tasks(tasks)
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
+        # Runs still own their Session leases until Runtime stops Chat next.
+        # The inbox is durable; never wait for those leases during shutdown.
+        observations = tuple(self._observation_tasks)
+        for task in observations:
+            task.cancel()
+        if observations:
+            await asyncio.gather(*observations, return_exceptions=True)
+        self._observation_tasks.clear()
 
     def start_channel(
         self,
@@ -246,7 +259,7 @@ class ChannelService:
             config = replace(config_override)
             config.validate()
         else:
-            config = self._storage.get(normalized_id)
+            config = self._storage.cached(normalized_id)
 
         self._validate_agent_exists(config.agent_id)
         self._cancel_restart_task(normalized_id)
@@ -418,10 +431,10 @@ class ChannelService:
     def list_channels(self) -> list[ChannelConfig]:
         """Return all persisted channels, enabled and disabled.
 
-        Blocking: reads every ``channel.json``. Event Loop callers use
-        ``list_channels_async``.
+        Reads the owner's published configuration snapshot without disk I/O.
+        ``list_channels_async`` refreshes that snapshot from current files.
         """
-        return self._storage.load_all()
+        return self._storage.snapshot()
 
     async def list_channels_async(self) -> list[ChannelConfig]:
         """Return all persisted channels, read on the state database's worker pool.
@@ -485,22 +498,22 @@ class ChannelService:
         self._require_idle(config.id)
         had_enabled_channels = self.has_enabled_channels()
 
-        try:
-            self._storage.get(config.id)
-        except ChannelNotFoundError:
-            pass
-        else:
-            raise ChannelConfigError(f"Channel already exists: {config.id}")
-
-        self._preflight_adapter_start(config)
-        persisted = False
-
-        def persist() -> None:
-            nonlocal persisted
-            self._persist_created_channel(config)
-            persisted = True
-
         with self._config_change(config.id):
+            try:
+                await self.get_channel(config.id)
+            except ChannelNotFoundError:
+                pass
+            else:
+                raise ChannelConfigError(f"Channel already exists: {config.id}")
+
+            self._preflight_adapter_start(config)
+            persisted = False
+
+            def persist() -> None:
+                nonlocal persisted
+                self._persist_created_channel(config)
+                persisted = True
+
             try:
                 await self._state.database.run_async(persist)
                 if config.enabled:
@@ -599,14 +612,7 @@ class ChannelService:
         delete settles.
         """
         normalized_id = _normalize_channel_id(channel_id)
-        config = self._storage.get(normalized_id)
         self._require_idle(normalized_id)
-        if config.platform in {"whatsapp", "slack", "mattermost"} and (
-            self._is_running(normalized_id) or self._is_stop_in_progress(normalized_id)
-        ):
-            raise ChannelError(
-                "Disable the Channel and wait for shutdown or setup to finish before removing it"
-            )
         had_enabled_channels = self.has_enabled_channels()
         removed = False
 
@@ -619,8 +625,20 @@ class ChannelService:
 
         try:
             with self._config_change(normalized_id):
+                config = await self.get_channel(normalized_id)
+                if config.platform in {"whatsapp", "slack", "mattermost"} and (
+                    self._is_running(normalized_id) or self._is_stop_in_progress(normalized_id)
+                ):
+                    raise ChannelError(
+                        "Disable the Channel and wait for shutdown or setup "
+                        "to finish before removing it"
+                    )
                 self.stop_channel(normalized_id)
                 self._pending_start_requests.pop(normalized_id, None)
+                self._release_config_lease(normalized_id)
+                stopping = self._adapter_stop_tasks.get(normalized_id)
+                if stopping is not None:
+                    await asyncio.shield(stopping)
                 await self._state.database.run_async(remove)
         finally:
             # The worker settles before a cancellation arrives here, so a
@@ -692,7 +710,7 @@ class ChannelService:
 
     def has_enabled_channels(self) -> bool:
         """Return whether a valid Agent owns at least one enabled Channel config."""
-        for config in self._storage.load_all():
+        for config in self._storage.snapshot():
             if not config.enabled:
                 continue
             try:
@@ -760,6 +778,8 @@ class ChannelService:
             command_dispatcher=self._command_dispatcher,
             conversation_pointers=self._state,
             pending_replies=self._state,
+            observation_inbox=self._observations,
+            previous_observations=tuple(self._observation_tasks),
             run_button_binding_registry=self._state if config.platform == "telegram" else None,
             access_registry=self._state,
         )
@@ -830,7 +850,7 @@ class ChannelService:
         from core.channels._whatsapp_setup import bridge_ready
         from core.channels.whatsapp import WhatsAppChannelAdapter
 
-        config = self._storage.get(channel_id)
+        config = await self.get_channel(channel_id)
         if config.platform != "whatsapp":
             raise ChannelConfigError("This operation requires a WhatsApp Channel")
         adapter = self._adapters.get(config.id)
@@ -881,7 +901,7 @@ class ChannelService:
             if existing is not None and not existing.done():
                 return status
             if (
-                self._storage.get(channel_id).enabled
+                (await self.get_channel(channel_id)).enabled
                 or self._is_running(channel_id)
                 or self._is_stop_in_progress(channel_id)
             ):
@@ -1204,6 +1224,8 @@ class ChannelService:
             # After the adapter: its last inbound handling still reached the engine.
             try:
                 await engine.stop()
+                if self._started:
+                    self._recover_observations(engine)
             except Exception:
                 _LOGGER.error(
                     "Channel conversation engine stop failed (channel=%s)",
@@ -1222,6 +1244,8 @@ class ChannelService:
             return
 
         try:
+            if config_override is None:
+                config_override = await self.get_channel(channel_id)
             self.start_channel(
                 channel_id,
                 reset_backoff=reset_backoff,
@@ -1236,6 +1260,23 @@ class ChannelService:
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
+
+    def _recover_observations(self, engine: ChannelConversationEngine | None = None) -> None:
+        loop = _get_running_loop_or_none()
+        if loop is None:
+            return
+        task = loop.create_task(
+            self._observations.recover(
+                exclude_owners=lambda: {
+                    active.observation_owner for active in self._engines.values()
+                }
+            )
+            if engine is None
+            else engine.recover_observations(),
+            name="channels:observed-context",
+        )
+        self._observation_tasks.add(task)
+        task.add_done_callback(self._observation_tasks.discard)
 
     def _on_stop_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
         if self._adapter_stop_tasks.get(channel_id) is task:
@@ -1424,7 +1465,8 @@ class ChannelService:
         outage = self._adapter_outages.get(channel_id)
         if outage is not None:
             outage.restarts += 1
-        self.start_channel(channel_id, reset_backoff=False)
+        config = await self.get_channel(channel_id)
+        self.start_channel(channel_id, reset_backoff=False, config_override=config)
 
     def _restart_delay_seconds(self, attempt: int) -> float:
         # Cap the exponent before converting to float, even after years offline.
@@ -1442,7 +1484,7 @@ class ChannelService:
             return False
 
         try:
-            config = self._storage.get(channel_id)
+            config = self._storage.cached(channel_id)
         except ChannelNotFoundError:
             return False
         except ChannelError:

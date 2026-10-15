@@ -151,9 +151,17 @@ def test_channel_storage_crud_round_trip(tmp_path: Path) -> None:
     storage.save(initial)
     loaded = storage.get(initial.id)
     listed = storage.load_all()
+    assert storage.snapshot() == [initial]
     storage.save(updated)
+    assert storage.cached(initial.id) == updated
+    detached = storage.snapshot()
+    detached[0].allowed_chat_ids.append("caller-only")
+    assert storage.cached(initial.id).allowed_chat_ids == ["12345"]
     reloaded = storage.get(initial.id)
     storage.delete(initial.id)
+    assert storage.snapshot() == []
+    with pytest.raises(ChannelNotFoundError):
+        storage.cached(initial.id)
 
     assert loaded.to_dict() == initial.to_dict()
     assert [item.id for item in listed] == [initial.id]
@@ -299,6 +307,12 @@ async def test_an_invalid_config_is_skipped_by_listings_and_refused_when_read_al
         assert not isinstance(refused.value, ChannelNotFoundError)
         with pytest.raises(ChannelNotFoundError):
             await service.get_channel("tg-missing")
+        # Prompt and Tool registration read the published owner view without I/O.
+        assert [config.id for config in service.list_channels()] == ["tg-valid"]
+        assert service.has_enabled_channels()
+        with pytest.raises(ChannelError) as cached_refused:
+            service._storage.cached("tg-broken")
+        assert not isinstance(cached_refused.value, ChannelNotFoundError)
     finally:
         service.close()
 

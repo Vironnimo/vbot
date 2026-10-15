@@ -4,9 +4,10 @@
 group access, conversation routing pointers, Run-button origin bindings,
 inbound receipts, the replies a Channel still owes its conversations and the
 Telegram polling watermark. ``channel.json`` stays the
-configuration document. Every state table references the ``channels`` registry,
-so a Channel's rows exist only while it is registered and leave with it in one
-cascading delete. The registry records the platform whose ids the state holds,
+configuration document. Routing/access/reply tables reference the ``channels``
+registry and leave with it in one cascading delete. The transient observation
+inbox survives removing that transport until accepted context reached Sessions.
+The registry records the platform whose ids the state holds,
 and the polling watermark names the Telegram bot whose update ids it counts.
 """
 
@@ -113,6 +114,28 @@ CREATE TABLE channel_pending_replies (
   PRIMARY KEY (channel_id, reply_id),
   FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
+
+-- Accepted background context survives even deletion of its Channel. It is removed
+-- only after canonical Session history recorded the batch with an idempotency receipt.
+CREATE TABLE channel_observation_inbox (
+  delivery_id TEXT PRIMARY KEY,
+  admission_order INTEGER NOT NULL DEFAULT 0,
+  owner TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  conversation_json TEXT NOT NULL,
+  notes_json TEXT NOT NULL,
+  generation_id TEXT NOT NULL,
+  fallback_session_id TEXT,
+  routed INTEGER NOT NULL DEFAULT 0
+) STRICT, WITHOUT ROWID;
+
+-- Readers: startup recovery and an ended engine's FIFO-ordered route freeze.
+CREATE INDEX channel_observation_inbox_by_owner
+  ON channel_observation_inbox (owner, admission_order);
+CREATE INDEX channel_observation_inbox_by_order
+  ON channel_observation_inbox (admission_order);
 
 -- bot_id: the Telegram bot whose update ids the watermark counts; another
 -- bot's ids form an independent sequence. A NULL bot_id applies to no bot.

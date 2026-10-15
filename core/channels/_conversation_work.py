@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from uuid import uuid4
 
 from core.channels.adapter import (
     ConversationFacts,
@@ -122,6 +123,7 @@ class _QueuedInboundMedia:
 class _QueuedObservedMessage:
     conversation: ConversationFacts
     note: str
+    delivery_id: str = field(default_factory=lambda: uuid4().hex)
     admission: WaitingWorkAdmission | None = None
     following_notes: tuple[str, ...] = ()
     pending: _PendingItem | None = None

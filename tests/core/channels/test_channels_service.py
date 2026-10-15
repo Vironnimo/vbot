@@ -367,7 +367,7 @@ async def test_config_changes_persist_off_the_event_loop_before_touching_the_ada
     loop_thread = threading.get_ident()
     release = threading.Event()
     saves: list[tuple[bool, bool]] = []
-    real_save = service._storage.save
+    real_save = service._storage._save
 
     def held_save(config: Any) -> None:
         saves.append((config.enabled, threading.get_ident() != loop_thread))
@@ -375,13 +375,16 @@ async def test_config_changes_persist_off_the_event_loop_before_touching_the_ada
         real_save(config)
 
     monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
-    monkeypatch.setattr(service._storage, "save", held_save)
+    monkeypatch.setattr(service._storage, "_save", held_save)
     try:
         enabling = asyncio.create_task(service.enable_channel("tg-assistant"))
         await wait_until(lambda: saves == [(True, True)])
         # The Event Loop keeps serving; the adapter waits for the write and
         # every other change of this Channel is refused meanwhile.
         assert not service.is_running("tg-assistant")
+        # Readers never acquire the writer's file-I/O lock or expose its pending save.
+        assert not service.list_channels()[0].enabled
+        assert not service.has_enabled_channels()
         with pytest.raises(ChannelError, match="current change of this Channel"):
             await service.disable_channel("tg-assistant")
         with pytest.raises(ChannelError, match="current change of this Channel"):
@@ -395,6 +398,8 @@ async def test_config_changes_persist_off_the_event_loop_before_touching_the_ada
         await wait_until(lambda: saves[-1] == (False, True))
         # Persist before disrupting the healthy adapter.
         assert service.is_running("tg-assistant")
+        assert service.list_channels()[0].enabled
+        assert service.has_enabled_channels()
         with pytest.raises(ChannelError, match="current change of this Channel"):
             await service.update_channel("tg-assistant", observe_unaddressed=True)
         release.set()

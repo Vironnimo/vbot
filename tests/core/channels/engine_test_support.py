@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock
 from weakref import WeakValueDictionary
 
 from core.channels import ChannelConfig
+from core.channels._observations import ChannelObservationInbox
 from core.channels.adapter import (
     ChannelAccessRegistry,
     ChannelAdapter,
@@ -409,6 +410,7 @@ def make_channel_engine(
         command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
         conversation_pointers=state,
         pending_replies=state,
+        observation_inbox=ChannelObservationInbox(state, chat_sessions),
         run_button_binding_registry=run_button_binding_registry,
         access_registry=access_registry
         or cast(ChannelAccessRegistry, MemoryChannelAccessRegistry([])),
