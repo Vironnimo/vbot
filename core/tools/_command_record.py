@@ -17,7 +17,7 @@ ordinary end. Processes still running at the end keep the record live until
 they end or are stopped, by vBot or from outside; the record is finished once
 none runs.
 
-A wait that passes follows the processes over its last
+A wait with idle detection follows the processes over its last
 ``COMMAND_IDLE_WINDOW_SECONDS`` and says whether they were quiet in the same
 sense (``idle``); nothing else follows them while the shell runs.
 """
@@ -254,11 +254,14 @@ class CommandRecord:
         if self._on_output is not None:
             self._progress_task = self._task(self._publish_progress(), "progress")
 
-    async def wait(self, seconds: float | None) -> CommandWaitOutcome:
+    async def wait(self, seconds: float | None, *, check_idle: bool = False) -> CommandWaitOutcome:
         if seconds is None:
             await self._ended.wait()
             return "ended"
         if seconds <= 0:
+            return "ended" if self.ended else "deadline"
+        if not check_idle:
+            await self._wait_or_sleep(self._ended, seconds)
             return "ended" if self.ended else "deadline"
         deadline = self._services.monotonic() + seconds
         # Only the end of the wait follows the processes.
@@ -694,8 +697,7 @@ class CommandRecord:
             if not self._facts_failing:
                 self._facts_failing = True
                 _LOGGER.warning(
-                    "Could not inspect the processes of command %s; it stays live until "
-                    "they are confirmed ended",
+                    "Could not inspect the processes of command %s; process activity is unknown",
                     self.command_id,
                     exc_info=True,
                 )

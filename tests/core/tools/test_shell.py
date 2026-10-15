@@ -543,17 +543,20 @@ async def test_a_command_still_running_when_the_wait_passes_continues_and_delive
         arguments["timeout"] = timeout
     call = shell.call(arguments)
     process = await shell.started()
+    queries = 0
+    facts = process.tree.facts
+
+    def observed_facts() -> ProcessTreeFacts:
+        nonlocal queries
+        queries += 1
+        if run == "silent-busy":
+            # Work without output: each look at the tree finds more CPU time.
+            process.tree.cpu_seconds += 1.0
+        return facts()
+
+    monkeypatch.setattr(process.tree, "facts", observed_facts)
     if run == "prints":
         process.write("step 1\n")
-    elif run == "silent-busy":
-        # Work without output: each look at the tree finds more CPU time.
-        facts = process.tree.facts
-
-        def working() -> ProcessTreeFacts:
-            process.tree.cpu_seconds += 1.0
-            return facts()
-
-        monkeypatch.setattr(process.tree, "facts", working)
 
     result = data(await shell.returned(call, step=5 if wait > 60 else 0.5))
     command_id = result["command_id"]
@@ -566,6 +569,7 @@ async def test_a_command_still_running_when_the_wait_passes_continues_and_delive
     log_file(result["next"])
     # Only a silent command whose processes are idle on Windows may wait for the console.
     assert ("console input" in result["next"]) is (run == "silent-idle")
+    assert (queries == 0) is run.endswith("posix")
     # Nothing stops a command for taking long: it is listed and keeps running.
     await shell.commands.advance(3 * SHELL_MAX_WAIT_SECONDS, step=30)
     report = shell.manager.report(command_id)

@@ -711,7 +711,11 @@ class ShellTool:
             context.background_registration_hook(move_to_background)
         context.on_cancel(cancel)
 
-        waiting = asyncio.ensure_future(self._commands.wait(command_id, seconds=call.wait_seconds))
+        waiting = asyncio.ensure_future(
+            self._commands.wait(
+                command_id, seconds=call.wait_seconds, check_idle=_CONSOLE_READS_WAIT
+            )
+        )
         moving = asyncio.ensure_future(moved.wait())
         try:
             await asyncio.wait({waiting, moving}, return_when=asyncio.FIRST_COMPLETED)
