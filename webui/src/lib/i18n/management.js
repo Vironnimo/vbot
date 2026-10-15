@@ -336,7 +336,7 @@ export default Object.freeze({
   'skills.revision.external': 'Changed outside vBot',
   'skills.revision.deleted': 'Deleted',
   'skills.revision.absorbed': 'Merged into {target}',
-  'skills.followed': '{items} moved along',
+  'skills.followed': 'Planned moves: {items}. Individual moves can fail.',
   'skills.followed.shared': 'share with {name}',
   'skills.followed.bootstrap': 'bootstrap job “{name}”',
   'skills.followed.cron': 'cron job “{name}”',

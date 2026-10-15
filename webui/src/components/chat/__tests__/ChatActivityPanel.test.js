@@ -705,7 +705,7 @@ describe('ChatActivityPanel', () => {
     ).toEqual([
       'Added User Memory Prefers short answers.',
       'Created deploy SKILL.md, references/hosts.md',
-      'Archived old-deploy Undone Merged into deploy · calendar event “Weekly review” moved along',
+      'Archived old-deploy Undone Merged into deploy · Planned moves: calendar event “Weekly review”. Individual moves can fail.',
     ]);
 
     // The undo asks first; Keep returns to the summary without undoing.

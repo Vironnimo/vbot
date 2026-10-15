@@ -481,7 +481,7 @@ class SkillAuthoringService:
         ``reason`` is ``deleted`` by default and ``absorbed`` with
         ``absorbed_into``, another Skill in the same home that now holds this
         Skill's instructions; ``inactive`` marks a Skill retired for disuse.
-        ``followed`` names what moves to ``absorbed_into`` with the Skill (its
+        ``followed`` names what is planned to move to ``absorbed_into`` (its
         shares, the automations that trigger it); the history records it and the
         caller moves it. The reported changes delete every package file; the
         archived package keeps them for ``restore`` until ``purge``.

@@ -12,9 +12,8 @@ each written version of a file once.
 ``baseline`` records a Skill found without history (its whole package, origin
 from ``metadata.vbot.author``); ``external`` records files changed outside the
 Skill write owner, noticed before the next write or history read of that Skill.
-An ``archive`` revision of a Skill merged into another one lists what moved to
-that Skill with it (``followed``): its shares and the automations that triggered
-it.
+An ``archive`` revision of a Skill merged into another one lists what was planned
+to move with it (``followed``): its shares and the automations that triggered it.
 A line that is not a readable revision (a torn write, a hand edit) is skipped
 with a warning; an append after a last line without its newline starts a new
 line, so the fragment stays separate and the new revision stays readable.
@@ -133,7 +132,8 @@ class SkillRevision:
     archived package involved. ``origin``/``created_at``/``pinned`` carry a
     Skill's provenance where a revision starts or restores it. ``followed``
     lists, on the archive revision of a Skill merged into ``absorbed_into``,
-    what moved to that Skill with it.
+    what was planned to move with it. The merge's Tool result reports failures;
+    the history does not confirm those moves.
     """
 
     id: int

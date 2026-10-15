@@ -1375,7 +1375,7 @@ describe('Skills manager', () => {
     click(button('Open session', section()));
     expect(onOpenSession).toHaveBeenCalledWith('librarian', 'lib-1');
     expect(texts('.skills-librarian .skills-history__what')).toEqual([
-      'Merged into deploy · share with Coder, cron job “Nightly” moved along',
+      'Merged into deploy · Planned moves: share with Coder, cron job “Nightly”. Individual moves can fail.',
       'Changed',
       'Retired as unused',
     ]);

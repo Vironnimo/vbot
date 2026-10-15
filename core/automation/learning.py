@@ -65,7 +65,7 @@ class LearningChange:
     Skill change sums up what
     the Run did to one Skill: ``kind`` is ``created``, ``changed`` (its
     ``SKILL.md``), ``archived`` (``absorbed_into`` names the Skill that took
-    over its instructions, ``followed`` what moved to that Skill with it),
+    over its instructions, ``followed`` the planned reference moves),
     ``file_written`` or ``file_removed``; ``files`` lists the changed package
     files. ``revisions`` are the history revisions behind the change; ``undone``
     says they were taken back. Undoing a merge restores the Skill but moves
