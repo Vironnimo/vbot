@@ -28,8 +28,9 @@ opens the microphone and returns it when it ends, so the slow creation of the
 echo canceller happens once per process, in the background. A capture waits
 at most ``echo_stage_wait`` seconds for a stage still being created, then
 listens through a pass-through stage in state ``starting`` and attaches the
-stage at a block boundary once it is ready (with an ``echo_attached`` gap when
-that changes the recording rate). A disabled setting uses a pass-through
+stage at a block boundary once it is ready. While it starts, pass-through audio
+uses the echo stage's 48 kHz recording rate, so attachment loses no recording.
+A disabled setting uses a pass-through
 stage in state ``off``; no pool, an unavailable library or a failing stage
 fall back to a pass-through stage in state ``unavailable`` for the rest of
 the capture, and a failed stage is never returned to the pool. Only the
@@ -74,6 +75,9 @@ RECONNECT_INTERVAL_SECONDS = 30.0
 
 ECHO_STAGE_WAIT_SECONDS = 0.5
 """How long a starting capture waits for an echo stage still being created."""
+
+ECHO_RECORDING_SAMPLE_RATE = 48000
+"""Stable recording rate while the WebRTC echo stage initializes."""
 
 _MAX_CONSECUTIVE_READ_FAILURES = 3
 
@@ -223,21 +227,30 @@ class EchoStagePool:
 class PassThroughEchoStage:
     """An echo stage that returns the microphone audio unchanged."""
 
-    def __init__(self, state: str) -> None:
+    def __init__(self, state: str, *, output_rate: int | None = None) -> None:
         self.state = state
         self.rate = 0
+        self._output_rate = output_rate
+        self._resampler: Any = None
 
     def open(self, capture_rate: int) -> None:
-        self.rate = capture_rate
+        self.rate = self._output_rate or capture_rate
+        self._resampler = _create_resampler(capture_rate, self.rate)
 
     def process(self, mic: np.ndarray, arrival: float) -> np.ndarray:
-        return mic
+        if self._resampler is None:
+            return mic
+        return np.asarray(self._resampler.resample_chunk(mic), dtype=np.int16)
 
     def flush(self) -> np.ndarray:
-        return np.zeros(0, dtype=np.int16)
+        empty = np.zeros(0, dtype=np.int16)
+        if self._resampler is None:
+            return empty
+        return np.asarray(self._resampler.resample_chunk(empty, last=True), dtype=np.int16)
 
     def reset(self) -> None:
-        return None
+        if self._resampler is not None:
+            self._resampler.clear()
 
     def close(self) -> None:
         return None
@@ -740,7 +753,7 @@ class AudioCapture:
             return PassThroughEchoStage(ECHO_UNAVAILABLE)
         logger.info("Echo cancellation is still starting; listening without it meanwhile")
         self._awaiting_stage = True
-        return PassThroughEchoStage(ECHO_STARTING)
+        return PassThroughEchoStage(ECHO_STARTING, output_rate=ECHO_RECORDING_SAMPLE_RATE)
 
     def _attach_ready_stage(self) -> None:
         """Replace the ``starting`` pass-through once the pool has the stage (between blocks)."""
@@ -758,6 +771,7 @@ class AudioCapture:
         self._borrowed_stage = stage
         pass_through_rate = self._stage_rate
         resampler = self._resampler
+        self._emit(self._stage.flush())
         self._stage = stage
         self._stage_rate = 0  # the pass-through holds nothing to close
         self._prepare_stage(capture_format.sample_rate)
@@ -818,10 +832,10 @@ def _to_int16(samples: np.ndarray, dtype: str) -> np.ndarray:
     return np.asarray(samples, dtype=np.int16)
 
 
-def _create_resampler(source_rate: int) -> Any:
+def _create_resampler(source_rate: int, output_rate: int = DETECTION_SAMPLE_RATE) -> Any:
     """A stateful int16 resampler to 16 kHz, or ``None`` when no projection is needed."""
-    if source_rate in (0, DETECTION_SAMPLE_RATE):
+    if source_rate in (0, output_rate):
         return None
     import soxr  # type: ignore[import-untyped]
 
-    return soxr.ResampleStream(source_rate, DETECTION_SAMPLE_RATE, 1, dtype="int16")
+    return soxr.ResampleStream(source_rate, output_rate, 1, dtype="int16")
