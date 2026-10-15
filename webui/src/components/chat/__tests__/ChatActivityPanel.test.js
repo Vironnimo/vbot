@@ -10,10 +10,6 @@ vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('svelte/reactivity', async () => {
-  return import('../../../../node_modules/svelte/src/reactivity/index-client.js');
-});
-
 const { default: ChatActivityPanel } =
   await import('../ChatActivityPanel.svelte');
 

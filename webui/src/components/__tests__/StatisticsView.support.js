@@ -12,11 +12,6 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-// The report cache is a SvelteMap; the client build keeps it reactive.
-vi.mock('svelte/reactivity', async () => {
-  return import('../../../node_modules/svelte/src/reactivity/index-client.js');
-});
-
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: StatisticsView } = await import('../StatisticsView.svelte');

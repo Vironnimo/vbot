@@ -21,10 +21,6 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('svelte/reactivity', async () => {
-  return import('../../../node_modules/svelte/src/reactivity/index-client.js');
-});
-
 vi.mock('$lib/api.js', () => ({
   listArchiveEntries: (...args) => listMock(...args),
   showArchiveEntry: (...args) => showMock(...args),

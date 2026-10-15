@@ -41,11 +41,6 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-// Provider details open through a SvelteSet, which needs the client build.
-vi.mock('svelte/reactivity', async () => {
-  return import('../../../node_modules/svelte/src/reactivity/index-client.js');
-});
-
 const { default: SettingsView } = await import('../SettingsView.svelte');
 
 function clickButton(label) {

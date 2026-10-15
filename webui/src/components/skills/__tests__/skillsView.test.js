@@ -19,11 +19,6 @@ vi.mock(
   async () => import('../../../../node_modules/svelte/src/index-client.js'),
 );
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
-vi.mock(
-  'svelte/reactivity',
-  async () =>
-    import('../../../../node_modules/svelte/src/reactivity/index-client.js'),
-);
 const { default: SkillsView } = await import('../SkillsView.svelte');
 
 const entry = (id, name, extra = {}) => ({
