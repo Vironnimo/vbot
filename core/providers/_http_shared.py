@@ -558,8 +558,11 @@ class _StreamLineDecoder:
         self._pending_crlf = False
 
     def decode(self, text: str) -> list[str]:
+        if not text:
+            return []
         if self._pending_crlf and text.startswith("\n"):
             text = text[1:]
+        self._pending_crlf = False
         if not text:
             return []
         self._pending_crlf = text.endswith("\r")
@@ -663,9 +666,9 @@ def decode_response_json(response: httpx.Response, context: str) -> dict[str, An
     """
     try:
         decoded = response.json()
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
         raise ProviderError(
-            f"{context} sent malformed JSON in response: {exc.msg}",
+            f"{context} sent malformed JSON in response: {exc}",
             retryable=False,
         ) from exc
     if not isinstance(decoded, dict):

@@ -172,7 +172,14 @@ async def test_history_import_deduplicates_calls_and_retains_archive_and_fork_sp
             model="p/m", kind="chat", agent_id="agent", session_id=fork.id
         )
         usage = await recorder.finish(call_id, {"input_tokens": 7, "output_tokens": 2})
-        seed_history(fork, [ChatMessage.assistant(model="p/m", content="secret", usage=usage)])
+        seed_history(
+            fork,
+            [
+                ChatMessage.assistant(model="p/m", content="secret", usage=usage),
+                ChatMessage.assistant(model="p/m", content="caption"),
+                replace(ChatMessage.assistant(model="p/m", content="partial"), interrupted=True),
+            ],
+        )
         await sessions.archive(origin.address)
         recorder.import_session_history(sessions)
         revision, records = read_ledger(recorder)

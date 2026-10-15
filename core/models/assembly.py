@@ -386,8 +386,6 @@ def _read_models_map(path: Path, report: ModelDataIssueReport) -> dict[str, Any]
     layer, so absence is not an error — it yields an empty layer.
     """
 
-    if not path.exists():
-        return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, Mapping):
@@ -395,6 +393,8 @@ def _read_models_map(path: Path, report: ModelDataIssueReport) -> dict[str, Any]
         models = data.get("models", {})
         if not isinstance(models, dict):
             raise ValueError("'models' must be an object")
+    except FileNotFoundError:
+        return {}
     except (OSError, UnicodeError, ValueError) as exc:
         report(f"Ignoring invalid Model DB canonical file '{path}': {exc}")
         return {}

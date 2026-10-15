@@ -32,7 +32,8 @@ TOOL_IDENTITY = re.compile(
 )
 # A message line that attributes the commit to an AI tool.
 ATTRIBUTION_LINE = re.compile(
-    r"^\s*(?:co-authored-by:|claude-session:|.*generated (?:with|by) \[?(?:claude|codex))",
+    r"^\s*(?:co-authored-by:|claude-session:|"
+    r"(?:\U0001f916\s*)?generated (?:with|by) \[?(?:claude|codex)\b)",
     re.IGNORECASE,
 )
 NO_COMMIT = "0" * 40
@@ -144,8 +145,12 @@ def check_identity() -> int:
 def strip_message(path: Path) -> int:
     message = path.read_text(encoding="utf-8")
     cleaned = clean_message(message)
+    if message.strip() and not cleaned.strip():
+        print("Commit blocked: removing attribution would leave an empty message.", file=sys.stderr)
+        print(REMEDY, file=sys.stderr)
+        return 1
     if cleaned != message:
-        path.write_text(cleaned, encoding="utf-8")
+        path.write_text(cleaned, encoding="utf-8", newline="\n")
     return 0
 
 

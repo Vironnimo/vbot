@@ -16,6 +16,7 @@ import pytest
 
 from cli import _server_target, server_management
 from cli.server_management import (
+    UNRECORDED_SERVER_MESSAGE,
     UNRESPONSIVE_LISTENER_MESSAGE,
     HealthProbeResult,
     ServerInstance,
@@ -428,17 +429,27 @@ def test_probes_request_the_wildcard_target_directly_on_loopback_without_proxies
 
 
 @pytest.mark.parametrize(
-    ("health", "ok", "message", "webui"),
+    ("health", "recorded", "ok", "message", "webui"),
     [
         pytest.param(
             HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+            True,
             True,
             "running",
             WebUIProbeResult(True, 200),
             id="running",
         ),
         pytest.param(
+            HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+            False,
+            False,
+            UNRECORDED_SERVER_MESSAGE,
+            WebUIProbeResult(False),
+            id="another-data-directory",
+        ),
+        pytest.param(
             HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+            False,
             False,
             "port occupied by non-vBot process",
             WebUIProbeResult(False),
@@ -446,6 +457,7 @@ def test_probes_request_the_wildcard_target_directly_on_loopback_without_proxies
         ),
         pytest.param(
             HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+            False,
             True,
             "not running",
             WebUIProbeResult(False),
@@ -460,6 +472,7 @@ def test_probes_request_the_wildcard_target_directly_on_loopback_without_proxies
                 unresponsive=True,
             ),
             False,
+            False,
             UNRESPONSIVE_LISTENER_MESSAGE,
             None,
             id="unresponsive",
@@ -470,16 +483,27 @@ def test_get_status_reports_health_and_probes_the_webui_only_for_vbot(
     instance: ServerInstance,
     monkeypatch: pytest.MonkeyPatch,
     health: HealthProbeResult,
+    recorded: bool,
     ok: bool,
     message: str,
     webui: WebUIProbeResult | None,
 ) -> None:
     monkeypatch.setattr(server_management, "probe_health_patiently", lambda _instance: health)
     monkeypatch.setattr(
-        server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
+        server_management,
+        "_resolve_control_process",
+        lambda _instance: object() if recorded else None,
     )
+    probes: list[ServerInstance] = []
+
+    def webui_probe(target: ServerInstance) -> WebUIProbeResult:
+        probes.append(target)
+        return WebUIProbeResult(True, 200)
+
+    monkeypatch.setattr(server_management, "probe_webui", webui_probe)
 
     result = get_status(instance)
 
     assert (result.ok, result.message, result.health, result.webui) == (ok, message, health, webui)
-    assert result.log_path == instance.log_path
+    assert probes == ([instance] if recorded else [])
+    assert result.log_path == (None if message == UNRECORDED_SERVER_MESSAGE else instance.log_path)

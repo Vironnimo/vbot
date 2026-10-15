@@ -30,6 +30,7 @@ from core.models.assembly import (
 )
 from core.models.database import OVERRIDES_FILE_SUFFIX, select_model_database_files
 from core.models.pricing import TokenPricing
+from core.utils.file_status import is_dir_strict
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
@@ -135,8 +136,7 @@ class Capabilities:
     * ``parameters`` — mapping of wire parameter name to a typed spec:
       ``{"type": "enum", "values": [...]}``, ``{"type": "range", "min": n,
       "max": n}``, ``{"type": "boolean"}`` (the parameter is supported,
-      value free-form), or ``{"type": "model"}`` (a tool-capable chat Model
-      id of the same Provider that the selected Connection allows). A spec
+      value free-form), or ``{"type": "string"}``. A spec
       may carry an optional ``default`` value that the option builder uses
       when it is among the offered choices.
     * ``passthrough`` — mapping of upstream provider slug to the list of
@@ -625,7 +625,15 @@ class ModelRegistry:
         # an empty generated ``<provider>.json`` file just to make the override
         # discoverable.
         try:
-            override_files = sorted(bundled_models_dir.glob(f"*{OVERRIDES_FILE_SUFFIX}"))
+            override_files = (
+                sorted(
+                    path
+                    for path in bundled_models_dir.iterdir()
+                    if path.name.endswith(OVERRIDES_FILE_SUFFIX)
+                )
+                if is_dir_strict(bundled_models_dir)
+                else []
+            )
         except OSError as exc:
             report(f"Could not scan Model DB override files in '{bundled_models_dir}': {exc}")
             override_files = []

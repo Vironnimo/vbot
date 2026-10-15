@@ -726,7 +726,15 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         if query.mode == "reference":
             text = reference_text(binary, query.reference_args, context, budget)
             return tool_success({"content": text})
-        roots = _resolve_roots(query, cwd)
+        try:
+            roots = _resolve_roots(query, cwd)
+        except OSError as error:
+            target = path_label(Path(error.filename), cwd) if error.filename else "the search paths"
+            return tool_failure(
+                "search_error",
+                f"Nothing was searched. Could not check {target}: {os_error_reason(error)}. "
+                "Check access to this path and retry.",
+            )
         missing = _missing_warnings(query, roots, cwd, context.offers, arguments.get("args"))
         if not roots.paths:
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))

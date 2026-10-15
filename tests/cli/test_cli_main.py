@@ -11,6 +11,7 @@ import pytest
 from cli import _commands
 from cli import main as cli_main
 from cli.server_management import (
+    UNRECORDED_SERVER_MESSAGE,
     UNRESPONSIVE_LISTENER_MESSAGE,
     CommandResult,
     HealthProbeResult,
@@ -218,6 +219,21 @@ URL = "http://127.0.0.1:8420"
         ),
         pytest.param(
             "status",
+            TARGET_FLAGS,
+            FLAGGED_TARGET,
+            {
+                "ok": False,
+                "message": UNRECORDED_SERVER_MESSAGE,
+                "health": VBOT_HEALTH,
+                "webui": WebUIProbeResult(available=False),
+            },
+            0,
+            ("running: no", "webui: unavailable", f"conflict: {UNRECORDED_SERVER_MESSAGE}"),
+            f"[ERROR] The target vBot server is not running at {URL}; {UNRECORDED_SERVER_MESSAGE}.",
+            id="status-another-data-directory",
+        ),
+        pytest.param(
+            "status",
             (),
             DEFAULT_TARGET,
             {
@@ -279,7 +295,9 @@ def test_server_commands_resolve_the_target_and_print_the_status_frame(
     for line in shown:
         assert line in lines
     # Stop reports neither log nor WebUI; start omits an unknown WebUI state, status never.
-    assert (f"log_path: {instance.log_path}" in lines) is (command != "stop")
+    assert (f"log_path: {instance.log_path}" in lines) is (
+        command != "stop" and result["message"] != UNRECORDED_SERVER_MESSAGE
+    )
     webui_shown = any(line.startswith("webui:") for line in lines)
     assert webui_shown is (command == "status" or "webui" in result)
     assert lines[-1] == completion

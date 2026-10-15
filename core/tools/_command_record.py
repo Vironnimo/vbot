@@ -157,6 +157,7 @@ class CommandRecord:
         self._finished = asyncio.Event()
         # vBot confirmed the kill of every process of the command.
         self._killed = asyncio.Event()
+        self._kills: set[asyncio.Future[Any]] = set()
         self._interrupted = False
         self._stop_lock = asyncio.Lock()
         self._progress = asyncio.Event()
@@ -428,12 +429,9 @@ class CommandRecord:
             if self.finished:
                 return True
             self._freeze_exits()
-            try:
-                await self._services.run_blocking(self._tree.terminate)
-            except OSError:
+            if await self._kill() is not None:
                 self._log_abandoned(await self._services.run_blocking(self._running_now))
                 return False
-            self._killed.set()
             return True
         finally:
             self._abandon()
@@ -692,6 +690,10 @@ class CommandRecord:
         self._changed()
 
     def _release(self) -> None:
+        # The supervisor can observe exit before a worker confirms its kill.
+        # Keep both handles alive until every admitted kill finishes.
+        if any(not task.done() for task in self._kills):
+            return
         self._output.close()
         if self._log_lease is not None:
             self._log_lease.finish()
@@ -703,6 +705,8 @@ class CommandRecord:
 
     async def _tree_facts(self) -> ProcessTreeFacts | None:
         """The command's processes now, without the console host; None when unknown."""
+        if self.finished:
+            return self._facts
         try:
             facts: ProcessTreeFacts = await self._services.run_blocking(self._tree.facts)
         except Exception:
@@ -764,6 +768,8 @@ class CommandRecord:
         Once begun, the kill runs to its end even when the caller is cancelled.
         """
         kill = asyncio.ensure_future(self._services.run_blocking(self._tree.terminate))
+        self._kills.add(kill)
+        kill.add_done_callback(self._release_after_kill)
         try:
             await asyncio.shield(kill)
         except asyncio.CancelledError:
@@ -773,6 +779,11 @@ class CommandRecord:
             return error
         self._killed.set()
         return None
+
+    def _release_after_kill(self, kill: asyncio.Future[Any]) -> None:
+        self._kills.discard(kill)
+        if self.finished:
+            self._release()
 
     async def _stop_error(self, failure: OSError) -> CommandStopError:
         """The error of a kill that was not confirmed, naming the processes still running."""

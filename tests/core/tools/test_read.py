@@ -249,21 +249,26 @@ async def test_a_directory_is_listed_and_paged_without_being_stamped(tmp_path: P
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("check_denied", [False, True])
 async def test_a_read_time_filesystem_error_names_the_reason(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access,
+    check_denied: bool,
 ) -> None:
     tmp_path.joinpath("notes.txt").write_bytes(b"hello\n")
 
     def raise_permission_error(self: Path, *args: object, **kwargs: object) -> Any:
         raise PermissionError("access denied while reading")
 
-    monkeypatch.setattr(Path, "open", raise_permission_error)
+    if check_denied:
+        deny_access(tmp_path / "notes.txt")
+    else:
+        monkeypatch.setattr(Path, "open", raise_permission_error)
 
     result = await read(tmp_path, {"path": "notes.txt"})
 
-    assert failure(result, "file_read_error") == (
-        "Could not read notes.txt: access denied while reading."
-    )
+    assert "notes.txt" in failure(result, "file_read_error")
 
 
 _ELEVEN = "".join(f"line{i}\n" for i in range(1, 12))

@@ -20,6 +20,7 @@ from core.tools._search_results import (
 from core.tools._swarm_references import wiki_page_call
 from core.tools._tool_context import _path_argument
 from core.tools.search import _expand_brace_alternations
+from core.utils.file_status import exists_strict, is_dir_strict
 
 _GLOB_CHARACTERS = re.compile(r"[*?\[]")
 
@@ -50,7 +51,7 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
                 "the working directory."
             )
         resolved = _absolute(text, cwd)
-        if os.path.lexists(resolved):
+        if _exists(resolved):
             _add(roots.paths, resolved)
             continue
         alternatives = _existing_alternatives(text, cwd)
@@ -171,6 +172,16 @@ def _absolute(text: str, cwd: Path) -> Path:
     return Path(os.path.abspath(cwd / Path(text).expanduser()))
 
 
+def _exists(path: Path) -> bool:
+    try:
+        return exists_strict(path, follow_symlinks=False)
+    except OSError as error:
+        # Windows rejects glob characters as a literal path before interpretation.
+        if getattr(error, "winerror", None) == 123 and _GLOB_CHARACTERS.search(str(path)):
+            return False
+        raise
+
+
 def _add(paths: list[Path], path: Path) -> None:
     if all(os.path.normcase(path) != os.path.normcase(known) for known in paths):
         paths.append(path)
@@ -187,7 +198,7 @@ def _existing_alternatives(text: str, cwd: Path) -> list[Path]:
     if len(alternatives) < 2 or not all(alternatives):
         return []
     paths = [_absolute(alternative, cwd) for alternative in alternatives]
-    return paths if all(os.path.lexists(path) for path in paths) else []
+    return paths if all(_exists(path) for path in paths) else []
 
 
 def _glob_root(text: str, cwd: Path, query: SearchQuery) -> Path | None:
@@ -197,7 +208,7 @@ def _glob_root(text: str, cwd: Path, query: SearchQuery) -> Path | None:
     parts = Path(text).parts
     fixed = next(index for index, part in enumerate(parts) if _GLOB_CHARACTERS.search(part))
     base = _absolute(str(Path(*parts[:fixed])) if fixed else ".", cwd)
-    if not base.is_dir():
+    if not is_dir_strict(base):
         return None
     remainder = "/".join(parts[fixed:])
     try:

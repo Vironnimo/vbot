@@ -207,7 +207,7 @@ async def test_session_move_reroutes_pending_attention_to_new_owner(
     await eventually(lambda: len(trigger.submissions) == 1)
     target = TerminalOwner("project-b", "agent-b", "session-a")
 
-    assert manager.transfer_scope(owner(), target) == 1
+    assert await manager.transfer_scope(owner(), target) == 1
     await eventually(lambda: len(trigger.submissions) == 2)
 
     assert trigger.submissions[0][0] == ("agent-a", "session-a")

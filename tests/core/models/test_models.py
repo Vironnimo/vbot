@@ -566,13 +566,14 @@ def test_model_directory_scan_failure_does_not_raise(
     def fail_scan(*_args: object, **_kwargs: object) -> list[Path]:
         raise OSError("scan failed")
 
-    monkeypatch.setattr(Path, "glob", fail_scan)
+    monkeypatch.setattr("os.scandir", fail_scan)
 
     with caplog.at_level(logging.WARNING, logger="vbot.models"):
         registry = ModelRegistry.load(tmp_path)
 
     assert registry.query(ModelQuery()) == []
     assert str(models_dir) in caplog.text
+    assert ModelRegistry.validate(tmp_path)
 
 
 # ---------------------------------------------------------------------------

@@ -941,6 +941,7 @@ class AgenticProgression:
                     break
 
                 finalization_violation = context.tool_progress.finalization_reason is not None
+                end_after_tools = False
                 finalization_request_reason: str | None = None
                 tool_iteration_limit = self._tool_iteration_limit(context)
                 tool_limit_reached = (
@@ -1154,11 +1155,9 @@ class AgenticProgression:
                             messages.extend(continuation_messages)
                             tool_request_messages.extend(continuation_messages)
                             await context.session_snapshot.refresh(session)
-                        if decision.end:
-                            return assistant_message
+                        end_after_tools = decision.end
                     elif tool_dispatch_context.turn_end_requested:
-                        run.raise_if_cancelled()
-                        return assistant_message
+                        end_after_tools = True
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
                     # The forceful task.cancel() in Run.request_cancel persists
@@ -1217,6 +1216,9 @@ class AgenticProgression:
                 ),
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
+
+            if end_after_tools:
+                return assistant_message
 
             if finalization_violation:
                 context.tool_progress.finalization_violations += 1

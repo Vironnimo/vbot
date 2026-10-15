@@ -15,7 +15,12 @@ from cli._progress import ProgressPrinter, Status, current_progress, status_line
 from cli._recovery import format_command, recovery_guidance
 from cli.formatting import output_mode
 from cli.parser import parse_args
-from cli.server_management import NON_VBOT_LISTENER_MESSAGE, CommandResult, ServerInstance
+from cli.server_management import (
+    NON_VBOT_LISTENER_MESSAGE,
+    UNRECORDED_SERVER_MESSAGE,
+    CommandResult,
+    ServerInstance,
+)
 from core.utils.errors import ConfigError
 
 if TYPE_CHECKING:
@@ -305,6 +310,8 @@ def _result_message(result: CommandResult) -> str:
 def _server_completion_message(command: str, result: CommandResult) -> str:
     reason = _result_message(result).rstrip(".")
     url = result.instance.url
+    if command == "status" and result.message == UNRECORDED_SERVER_MESSAGE:
+        return f"The target vBot server is not running at {url}; {reason}."
     if command == "status" and _is_non_vbot_conflict(result):
         return (
             f"The vBot server is not running at {url}; the port is occupied by a non-vBot process."
@@ -345,12 +352,17 @@ def exit_code_for(command: str, result: CommandResult) -> int:
 
     if result.ok:
         return SUCCESS_EXIT_CODE
-    if command == "status" and _is_non_vbot_conflict(result):
+    if command == "status" and result.message in {
+        NON_VBOT_LISTENER_MESSAGE,
+        UNRECORDED_SERVER_MESSAGE,
+    }:
         return SUCCESS_EXIT_CODE
     return FAILURE_EXIT_CODE
 
 
 def _running_text(result: CommandResult) -> str:
+    if result.message == UNRECORDED_SERVER_MESSAGE:
+        return "no"
     if result.health and result.health.is_vbot:
         return "yes"
     if result.message in {"already running", "running", "started"}:
@@ -402,8 +414,11 @@ def _status_output_lines(result: CommandResult) -> list[str]:
         f"url: {result.instance.url}",
         f"webui: {_webui_text(result)}",
         f"data_dir: {result.instance.data_dir}",
-        f"log_path: {_log_path_text(result)}",
     ]
+    if result.message == UNRECORDED_SERVER_MESSAGE:
+        lines.append(f"conflict: {result.message}")
+    else:
+        lines.append(f"log_path: {_log_path_text(result)}")
     if _is_non_vbot_conflict(result):
         lines.append("conflict: port occupied by non-vBot process")
     return lines

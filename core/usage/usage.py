@@ -447,6 +447,10 @@ class UsageRecorder:
                 for record in batch:
                     usage = _usage_fields(record["usage"])
                     existing_id = (record["usage"] or {}).get("usage_call_id")
+                    if not (isinstance(existing_id, str) and existing_id) and not any(
+                        key in usage for key in (*_COUNTERS, "cost", "reported_cost_usd")
+                    ):
+                        continue
                     identity = (
                         f"{source_id}/{record['generation_id']}/"
                         f"{record['entry_key']}/{record['message_id']}"

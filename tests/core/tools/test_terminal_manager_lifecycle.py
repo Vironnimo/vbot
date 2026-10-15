@@ -68,7 +68,7 @@ async def test_session_move_transfers_attachment_and_only_an_agent_terminals_lif
     with pytest.raises(TerminalNotOwnedError):
         manager.terminal(agent_started.terminal_id, target)
 
-    assert manager.transfer_scope(owner(), target) == 2
+    assert await manager.transfer_scope(owner(), target) == 2
 
     moved_agent = manager.terminal(agent_started.terminal_id, target)
     moved_manual = manager.terminal(manual_id, target)
@@ -105,7 +105,7 @@ async def test_identity_agent_rename_moves_only_that_agents_scopes_and_keeps_pro
         for scope in (TerminalOwner("project-a", "coder", "session-a"), owner())
     ]
 
-    assert manager.transfer_agent_scope("coder", "researcher") == 2
+    assert await manager.transfer_agent_scope("coder", "researcher") == 2
 
     renamed = TerminalOwner(None, "researcher", "session-a")
     moved = terminal_info(manager, agent_started.terminal_id)
@@ -119,8 +119,51 @@ async def test_identity_agent_rename_moves_only_that_agents_scopes_and_keeps_pro
         current = terminal_info(manager, info.terminal_id)
         assert (current.lifecycle_owner, current.attachment) == (info.owner, info.owner)
     # A reverted rename moves the same scopes back.
-    assert manager.transfer_agent_scope("researcher", "coder") == 2
+    assert await manager.transfer_agent_scope("researcher", "coder") == 2
     assert terminal_info(manager, agent_started.terminal_id).attachment == started_by
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_rename", [False, True])
+async def test_transfer_includes_a_terminal_still_starting(
+    tmp_path: Path,
+    agent_rename: bool,
+) -> None:
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    adapter = FakeTerminalAdapter()
+
+    def factory(*_args: Any, **_kwargs: Any) -> FakeTerminalAdapter:
+        loop.call_soon_threadsafe(entered.set)
+        release.wait()
+        return adapter
+
+    manager = _manager(factory)
+    source = TerminalOwner(None, "coder", "session-a")
+    target = TerminalOwner(None, "researcher", "session-a" if agent_rename else "session-b")
+    starting = asyncio.create_task(
+        manager.spawn(source, ["fake"], cwd=tmp_path, env=None, origin_run_id="run-a")
+    )
+    try:
+        await entered.wait()
+        moving = asyncio.create_task(
+            manager.transfer_agent_scope("coder", "researcher")
+            if agent_rename
+            else manager.transfer_scope(source, target)
+        )
+        await asyncio.sleep(0)
+        assert not moving.done()
+        release.set()
+        assert await moving == 1
+        started = await starting
+        assert manager.terminal(started.terminal_id, target).lifecycle_owner == target
+        assert await manager.close_scope(target) == 1
+        assert not adapter.alive
+    finally:
+        release.set()
+        await starting
+        await manager.aclose()
 
 
 @pytest.mark.asyncio

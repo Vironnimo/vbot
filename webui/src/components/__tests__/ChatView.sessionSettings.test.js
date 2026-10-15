@@ -5,15 +5,18 @@ import {
   agentPill,
   createAgent,
   createChatRpcMock,
+  findButtonByText,
   findNewSessionButton,
   flushSync,
   getSessionMock,
   handledCommand,
+  listedSessions,
   projectChatProps,
   rpcCalls,
   rpcMock,
   runningRun,
   sendComposerMessage,
+  sessionListButton,
   settle,
   setupChatViewTestSuite,
   showProjectMock,
@@ -426,6 +429,67 @@ describe('ChatView Session settings', () => {
       sendComposerMessage('Saved now');
       await waitForCondition(() => rpcCalls('chat.stream').length === 1);
     });
+
+    it.each(['session', 'agent', 'draft'])(
+      'keeps a failed save in its own conversation while another %s saves and sends',
+      async (destination) => {
+        const agents = [
+          createAgent(),
+          createAgent({ id: 'beta', name: 'Beta' }),
+        ];
+        const base = settingsRpcMock({
+          agents,
+          sessionMessages: { 'session-2': [] },
+          streamHandler: (params) => ({
+            ...runningRun('run-other'),
+            session_id: params.session_id || 'created-other',
+          }),
+        });
+        rpcMock.mockImplementation((method, params) => {
+          if (
+            method === 'session.set_agent_overrides' &&
+            params.agent_id === 'alpha' &&
+            params.session_id === 'session-1'
+          )
+            return Promise.reject(new Error('save-failure-sentinel'));
+          return base(method, params);
+        });
+        listedSessions({ id: 'session-2', title: 'Other conversation' });
+        await chat.mountChat({
+          projects: PROJECTS,
+          preserveSessionSelection: true,
+        });
+        await choose('Model', MINI);
+        await waitForCondition(() => footer()?.textContent.includes('Save'));
+        expect(rpcCalls('session.set_agent_overrides')).toHaveLength(1);
+
+        if (destination === 'agent') agentPill('Beta').click();
+        else if (destination === 'draft') findNewSessionButton().click();
+        else {
+          sessionListButton().click();
+          await waitForCondition(() =>
+            Boolean(findButtonByText('Other conversation')),
+          );
+          findButtonByText('Other conversation').click();
+        }
+        flushSync();
+        await waitForCondition(
+          () => footer() && !footer().textContent.includes('Save'),
+        );
+        await choose('Model', R1);
+        sendComposerMessage('Send from the other conversation');
+        await waitForCondition(() => rpcCalls('chat.stream').length === 1);
+        expect(
+          rpcCalls('session.set_agent_overrides').filter(
+            (params) =>
+              params.agent_id === 'alpha' && params.session_id === 'session-1',
+          ),
+        ).toHaveLength(1);
+        expect(
+          testChatStateRefs[0].sessions['alpha::session-1'].actionError,
+        ).toContain('save-failure-sentinel');
+      },
+    );
 
     it('writes Model and effort changes at once and offers the levels of the effective Model', async () => {
       let stored = { model: SONNET };

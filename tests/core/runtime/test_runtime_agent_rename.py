@@ -193,16 +193,16 @@ async def test_a_live_rename_moves_every_reference_or_none(
         move_terminals = runtime.terminal_manager.transfer_agent_scope
         move_commands = runtime.command_manager.transfer_agent_scope
 
-        def record_terminal_move(agent_id: str, new_agent_id: str) -> int:
+        async def record_terminal_move(agent_id: str, new_agent_id: str) -> int:
             terminal_moves.append((agent_id, new_agent_id))
-            return move_terminals(agent_id, new_agent_id)
+            return await move_terminals(agent_id, new_agent_id)
 
-        def record_command_move(agent_id: str, new_agent_id: str) -> int:
+        async def record_command_move(agent_id: str, new_agent_id: str) -> int:
             command_moves.append((agent_id, new_agent_id))
             if fails and new_agent_id == "researcher":
                 # The last step fails after every reference moved.
                 raise OSError("command scope is read-only")
-            return move_commands(agent_id, new_agent_id)
+            return await move_commands(agent_id, new_agent_id)
 
         monkeypatch.setattr(runtime.terminal_manager, "transfer_agent_scope", record_terminal_move)
         monkeypatch.setattr(runtime.command_manager, "transfer_agent_scope", record_command_move)

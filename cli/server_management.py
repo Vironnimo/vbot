@@ -746,6 +746,14 @@ def get_status(instance: ServerInstance) -> CommandResult:
 
     health = probe_health_patiently(instance)
     if health.is_vbot:
+        if classify_server(instance, health=health) != "running":
+            return CommandResult(
+                ok=False,
+                message=UNRECORDED_SERVER_MESSAGE,
+                instance=instance,
+                health=health,
+                webui=WebUIProbeResult(available=False),
+            )
         return CommandResult(
             ok=True,
             message="running",
