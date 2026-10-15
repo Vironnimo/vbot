@@ -127,23 +127,32 @@ async def test_samples_read_an_inclusive_window_oldest_first(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("read", ["samples", "latest_sampled_at"])
 async def test_async_reads_run_off_the_event_loop(
-    store: ProviderUsageHistoryStore, monkeypatch: pytest.MonkeyPatch
+    store: ProviderUsageHistoryStore, read: str
 ) -> None:
     assert await store.append("2026-07-01T00:00:00+00:00", [_snapshot()]) is True
-    open_read = store.database.read
     reader_threads: list[int] = []
 
-    def recording_read() -> Any:
-        reader_threads.append(threading.get_ident())
-        return open_read()
+    def record_query(statement: str) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            reader_threads.append(threading.get_ident())
 
-    monkeypatch.setattr(store.database, "read", recording_read)
+    # Observe SQL on the sole pooled reader, independent of whether the store
+    # uses a synchronous read in its worker or the kernel's retrying read_async.
+    with store.database.read() as connection:
+        connection.set_trace_callback(record_query)
 
-    assert len(await store.samples()) == 1
-    assert await store.latest_sampled_at() is not None
+    try:
+        if read == "samples":
+            assert len(await store.samples()) == 1
+        else:
+            assert await store.latest_sampled_at() is not None
+    finally:
+        with store.database.read() as connection:
+            connection.set_trace_callback(None)
 
-    assert len(reader_threads) == 2
+    assert reader_threads
     assert threading.get_ident() not in reader_threads
 
 
