@@ -683,7 +683,7 @@ def _normalize_cwd(cwd: str | os.PathLike[str]) -> Any:
     try:
         return normalize_cwd(cwd)
     except ValueError as exc:
-        raise ProjectError(f"cwd must be a non-empty path: {exc}") from exc
+        raise ProjectError(str(exc)) from exc
 
 
 def _validate_project_id(project_id: Any) -> str:
