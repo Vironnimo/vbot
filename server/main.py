@@ -9,6 +9,7 @@ import gc
 import logging
 import os
 import signal
+import socket
 import sys
 import time
 from contextlib import suppress
@@ -124,6 +125,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         log_manager: LogManager | None = None
         server_holder: dict[str, Any] = {}
+        ready_runtime: Any = None
         shutdown_event = asyncio.Event()
         try:
 
@@ -156,8 +158,9 @@ def main(argv: list[str] | None = None) -> None:
                 asyncio.get_running_loop().call_later(0.5, request_shutdown)
 
             def on_ready(runtime: Any) -> None:
+                nonlocal ready_runtime
                 _prepare_for_serving()
-                lifecycle.started(runtime)
+                ready_runtime = runtime
 
             def on_stopped(runtime_stopped_cleanly: bool) -> None:
                 lifecycle.stopped(
@@ -196,13 +199,21 @@ def main(argv: list[str] | None = None) -> None:
             )
             _enable_crash_log(config.data_dir)
             server = uvicorn.Server(uvicorn_config)
+            uvicorn_startup = server.startup
             uvicorn_handle_exit = server.handle_exit
+
+            async def startup(sockets: list[socket.socket] | None = None) -> None:
+                await uvicorn_startup(sockets=sockets)
+                # Lifespan readiness precedes binding; only a bound server serves.
+                if server.started:
+                    lifecycle.started(ready_runtime)
 
             def handle_exit(sig: int, frame: FrameType | None) -> None:
                 lifecycle.request_stop("signal", signal=_signal_name(sig))
                 shutdown_event.set()
                 uvicorn_handle_exit(sig, frame)
 
+            server.startup = startup  # type: ignore[method-assign]
             server.handle_exit = handle_exit  # type: ignore[method-assign]
             server_holder["server"] = server
             lifecycle.starting_app()

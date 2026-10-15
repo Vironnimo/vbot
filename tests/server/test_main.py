@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 from collections.abc import Callable
@@ -66,6 +67,17 @@ def _patch_serving(
             self.config = config
             self.should_exit = False
             self.started = False
+            self.bind_failure = False
+
+        async def startup(self, sockets=None) -> None:
+            self.config.app["on_ready"](_READY_RUNTIME)
+            log_path = resolve_daily_log_path(self.config.app["config"].data_dir)
+            if log_path.exists():
+                assert " - Server started (" not in log_path.read_text(encoding="utf-8")
+            if self.bind_failure:
+                self.config.app["on_stopped"](True)
+                raise SystemExit(uvicorn.server.STARTUP_FAILURE)
+            self.started = True
 
         def handle_exit(self, sig: int, frame: object) -> None:
             self.should_exit = True
@@ -112,7 +124,7 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
 
     def run(server: Any) -> None:
         app = server.config.app
-        app["on_ready"](_READY_RUNTIME)
+        asyncio.run(server.startup())
         if action == "restart_failure":
             with pytest.raises(RuntimeError):
                 app["request_restart"]()
@@ -219,8 +231,8 @@ def _serve_until(cause: str) -> Callable[[Any], None]:
         if cause == "startup_failed_returning":
             # Older uvicorn versions return from run() instead.
             return
-        app["on_ready"](_READY_RUNTIME)
-        server.started = True
+        server.bind_failure = cause == "startup_failed_bind"
+        asyncio.run(server.startup())
         if cause == "signal":
             server.handle_exit(signal.SIGINT, None)
         else:
@@ -238,6 +250,7 @@ def _serve_until(cause: str) -> Callable[[Any], None]:
         ("control", "[INFO] vbot.server - Server stopped (reason=control initiator=tray_quit "),
         ("signal", "[INFO] vbot.server - Server stopped (reason=signal signal=SIGINT "),
         ("startup_failed", "[WARN] vbot.server - Server stopped (reason=startup_failed "),
+        ("startup_failed_bind", "[WARN] vbot.server - Server stopped (reason=startup_failed "),
         (
             "startup_failed_returning",
             "[WARN] vbot.server - Server stopped (reason=startup_failed ",
@@ -283,6 +296,7 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
     # Supervisors such as the generated systemd unit do not restart for these statuses.
     exit_code = {
         "startup_failed": STARTUP_FAILED_EXIT_CODE,
+        "startup_failed_bind": STARTUP_FAILED_EXIT_CODE,
         "startup_failed_returning": STARTUP_FAILED_EXIT_CODE,
         "shutdown_failed": SHUTDOWN_FAILED_EXIT_CODE,
     }.get(cause)
