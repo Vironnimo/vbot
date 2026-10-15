@@ -778,7 +778,7 @@ def _add_archive_filter_arguments(parser: argparse.ArgumentParser, *, selects: s
 def _add_tui_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser(
         "tui",
-        help="Open the interactive full-screen terminal chat",
+        help=AREA_HELP["tui"],
         description=(
             "Open the full-screen terminal chat for conversations and background activity. "
             "Requires an interactive terminal. Use vbot chat for one message or piped input. "

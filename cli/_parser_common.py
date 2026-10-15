@@ -108,6 +108,7 @@ AREA_HELP = {
     "archive": "List, inspect, restore and permanently delete archived Agents, Projects "
     "and Sessions",
     "chat": "Send one message to an Agent Session and print the answer",
+    "tui": "Open the interactive full-screen terminal chat",
     "data-store": (
         "Inspect, snapshot, verify, recover, and release the canonical SQLite databases, "
         "and restore configuration backups"
