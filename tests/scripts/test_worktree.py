@@ -516,20 +516,14 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_install_failure
             return 1, "install failed"
         return 0, ""
 
-    removed_paths = []
-
-    def fake_rmtree(path, ignore_errors):
-        removed_paths.append((Path(path), ignore_errors))
-
     monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module.shutil, "rmtree", fake_rmtree)
 
     result = module.cmd_create(argparse.Namespace(name=name, from_branch=None))
 
     assert result == 1
     assert (["git", "worktree", "remove", "--force", str(worktree_path)], None) in commands
     assert (["git", "branch", "-D", name], None) in commands
-    assert removed_paths == [(data_dir, True)]
+    assert not data_dir.exists()
 
 
 def test_cmd_create_refuses_preexisting_data_dir_before_creating_worktree(tmp_path, monkeypatch):
