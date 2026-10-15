@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ import pytest
 from core.channels import (
     ChannelConfig,
     ChannelConfigError,
+    ChannelError,
     ChannelNotFoundError,
     ChannelStorage,
     managed_channel_token_env_var,
@@ -250,8 +252,13 @@ async def test_channel_ids_with_path_components_never_reach_the_filesystem(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["invalid", "unreadable-file", "unreadable-directory"])
 async def test_an_invalid_config_is_skipped_by_listings_and_refused_when_read_alone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    deny_access: Callable[[Path], None],
+    failure: str,
 ) -> None:
     storage = ChannelStorage(tmp_path)
     storage.save(make_config("tg-valid"))
@@ -264,6 +271,13 @@ async def test_an_invalid_config_is_skipped_by_listings_and_refused_when_read_al
         encoding="utf-8",
     )
     service = make_service(tmp_path)
+    if failure != "invalid":
+        deny_access(broken_dir / "channel.json" if failure == "unreadable-file" else broken_dir)
+    assert storage.platforms() == {"tg-broken": None, "tg-valid": "telegram"}
+    if failure == "unreadable-directory":
+        with pytest.raises(ChannelError) as undeletable:
+            storage.delete("tg-broken")
+        assert not isinstance(undeletable.value, ChannelNotFoundError)
     loop_thread = threading.get_ident()
     off_loop_reads: list[bool] = []
 
@@ -280,8 +294,9 @@ async def test_an_invalid_config_is_skipped_by_listings_and_refused_when_read_al
         with caplog.at_level(logging.WARNING):
             listed = await service.list_channels_async()
         valid = await service.get_channel("tg-valid")
-        with pytest.raises(ChannelConfigError, match="enabled"):
+        with pytest.raises(ChannelError) as refused:
             await service.get_channel("tg-broken")
+        assert not isinstance(refused.value, ChannelNotFoundError)
         with pytest.raises(ChannelNotFoundError):
             await service.get_channel("tg-missing")
     finally:
