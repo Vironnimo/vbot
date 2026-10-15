@@ -119,6 +119,14 @@ async def test_replay_exports_session_edits_and_classifies_their_replay(tmp_path
         stats, sessions = await replay.export_corpus(
             live / "sessions.db", corpus, dispatch=dispatch, admit=Filters()
         )
+        # A historical context-only hunk is invalid now, but must remain one
+        # refused case rather than aborting every later replay in the corpus.
+        refused = await dispatch(
+            {"patch": _patch("*** Update File: src/app.py", "@@", " context only")},
+            {"cwd/src/app.py": "context only\n"},
+            {"cwd/src/app.py"},
+        )
+        assert not refused.ok and refused.error_code == "invalid_arguments"
         results = [
             result
             async for result in replay.replay_cases(

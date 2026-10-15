@@ -52,6 +52,7 @@ from core.runtime.runtime import Runtime
 from core.tools import ToolContext, ToolContractError
 from core.tools._line_diff import line_opcodes
 from core.tools._patch_report import edit_outcome
+from core.tools._patch_syntax import _PatchError
 from core.tools.apply_patch import patch_targets
 from core.tools.arguments import split_text_lines
 from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor, _checked_arguments
@@ -176,7 +177,7 @@ class Dispatcher:
             )
             for call_target in _call_targets(tool, normalized):
                 _contained_path(context.resolve_path(call_target), workspace)
-        except ToolContractError as error:
+        except (ToolContractError, _PatchError) as error:
             return Dispatched(False, "failed", "invalid_arguments", str(error), {})
         except (OSError, ValueError) as error:
             return Dispatched(False, "failed", "replay_scope", f"Nothing was replayed. {error}", {})
