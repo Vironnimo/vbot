@@ -412,6 +412,9 @@ def load_webview() -> WebviewModule:
     _windows.configure_dpi()
     try:
         webview = importlib.import_module("webview")
+        from desktop.bridge import configure_bridge_logging
+
+        configure_bridge_logging()
         _windows.configure_winforms()
         return webview
     except ImportError as exc:
