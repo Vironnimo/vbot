@@ -147,6 +147,8 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
 @pytest.mark.parametrize(
     ("method", "params", "named_field"),
     [
+        ("chat.send", {"session_id": "s1", "dry_run": True}, "dry_run"),
+        ("chat.stream", {"new_session": {}, "dry_run": True}, "dry_run"),
         ("chat.send", {"session_id": "s1", "content": 123}, None),
         (
             "chat.stream",
