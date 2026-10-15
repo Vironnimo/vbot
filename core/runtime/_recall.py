@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ from core.recall.passage_index import INDEX_DIR_NAME, INDEX_FILE_NAME
 from core.runs import ChatRunManager, Run, RunStatus
 from core.runtime.interfaces import LoggerProtocol
 from core.sessions import ChatSessionManager
+from core.settings.normalizers import normalize_recall_settings
 from core.settings.settings import effective_timezone_name
 from core.storage.storage import StorageManager
 from core.tools import (
@@ -146,9 +147,15 @@ class RecallIntegration:
             extensions.apply_recall_backends(registry)
         return registry
 
-    def _create_recall_backend(self, registry: RecallBackendRegistry) -> RecallBackend:
-        settings = self._storage.load_recall_settings()
-        backend_name = settings["backend"]
+    def _create_recall_backend(
+        self, registry: RecallBackendRegistry, settings: Mapping[str, Any] | None = None
+    ) -> RecallBackend:
+        recall = (
+            self._storage.load_recall_settings()
+            if settings is None
+            else normalize_recall_settings(settings.get("recall"))
+        )
+        backend_name = recall["backend"]
         context = RecallBackendContext(
             data_dir=self._storage.data_dir,
             sessions=self._chat_sessions,
@@ -183,7 +190,7 @@ class RecallIntegration:
         self.backend_name = DEFAULT_RECALL_BACKEND
         return registry.create(DEFAULT_RECALL_BACKEND, context)
 
-    def reload_recall_backend(self) -> None:
+    def reload_recall_backend(self, settings: Mapping[str, Any] | None = None) -> None:
         """Reload Session Recall tools from the current persisted backend setting.
 
         Rebuilds the registry from ``with_builtins()`` and re-applies extension
@@ -193,7 +200,7 @@ class RecallIntegration:
         recall_registry = self._build_recall_backend_registry()
         self._recall_backend_registry = recall_registry
         previous = self.backend
-        self.backend = self._create_recall_backend(recall_registry)
+        self.backend = self._create_recall_backend(recall_registry, settings)
         self.indexer.set_enabled(self.backend_name in SEMANTIC_RECALL_BACKENDS)
         if self._tools is not None:
             self._tools.unregister("session_search")
@@ -273,7 +280,9 @@ class RecallIntegration:
         if self.logger is not None:
             self.logger.warning("Recall backend could not close cleanly: %s", error)
 
-    def _recover_recall_backend_if_deactivated(self, removed_backend_names: set[str]) -> None:
+    def _recover_recall_backend_if_deactivated(
+        self, removed_backend_names: set[str], settings: Mapping[str, Any] | None = None
+    ) -> None:
         """Fall the active recall backend back to the default if its provider left.
 
         If a deactivated extension provided the *currently-selected* recall backend,
@@ -286,7 +295,9 @@ class RecallIntegration:
         """
         if not removed_backend_names or self._storage is None:
             return
-        active_backend = self._storage.load_recall_settings()["backend"]
+        if settings is None:
+            settings = self._storage.load_settings()
+        active_backend = normalize_recall_settings(settings.get("recall"))["backend"]
         if active_backend not in removed_backend_names:
             # Removed declarations must leave the selectable catalog even when
             # the active backend can remain intact.
@@ -299,7 +310,7 @@ class RecallIntegration:
                 active_backend,
                 DEFAULT_RECALL_BACKEND,
             )
-        self.reload_recall_backend()
+        self.reload_recall_backend(settings)
 
     def available_recall_backends(self) -> list[str]:
         """Return all selectable recall backend names (built-ins + extensions)."""

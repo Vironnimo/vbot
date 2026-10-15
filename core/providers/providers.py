@@ -20,11 +20,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from core.utils.errors import ConfigError, ProviderError
+from core.utils.workers import BoundedWorkerPool
 
 _LOGGER = logging.getLogger("vbot.providers")
+_PROVIDER_RELOAD_WORKERS = BoundedWorkerPool(name="provider-reload", max_workers=2)
 _PROVIDER_CONFIG_ERRORS = (
     ConfigError,
     KeyError,
@@ -515,6 +518,8 @@ class ProviderRegistry:
 
     def __init__(self, configs: dict[str, ProviderConfig]) -> None:
         self._configs: dict[str, ProviderConfig] = configs
+        self._reload_lock = Lock()
+        self._reload_generation = 0
 
     # ------------------------------------------------------------------
     # Factory
@@ -605,11 +610,40 @@ class ProviderRegistry:
     ) -> None:
         """Reload bundled and Custom Provider configs in place."""
 
-        self._configs = self._assemble_configs(
+        generation = self._begin_reload()
+        configs = self._assemble_configs(
             resources_dir,
             custom_providers or {},
             tolerate_invalid=tolerate_invalid,
         )
+        self._adopt(configs, generation)
+
+    async def reload_async(
+        self,
+        resources_dir: Path,
+        *,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+        tolerate_invalid: bool = False,
+    ) -> None:
+        """Assemble configuration off-loop and publish the complete catalog on its caller."""
+        generation = self._begin_reload()
+        configs = await _PROVIDER_RELOAD_WORKERS.run(
+            self._assemble_configs,
+            resources_dir,
+            custom_providers or {},
+            tolerate_invalid=tolerate_invalid,
+        )
+        self._adopt(configs, generation)
+
+    def _begin_reload(self) -> int:
+        with self._reload_lock:
+            self._reload_generation += 1
+            return self._reload_generation
+
+    def _adopt(self, configs: dict[str, ProviderConfig], generation: int) -> None:
+        with self._reload_lock:
+            if generation == self._reload_generation:
+                self._configs = configs
 
     @classmethod
     def _assemble_configs(

@@ -17,6 +17,7 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import threading
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
@@ -218,6 +219,13 @@ class ManagedLoggerProxyHandler(logging.Handler):
     @override
     def emit(self, record: logging.LogRecord) -> None:
         message = redact_live_websocket_path(record.getMessage())
+        error = sys.exception()
+        if (
+            record.levelno >= logging.ERROR
+            and getattr(error, "_vbot_startup_failure_logged", False)
+            and (record.exc_info or message.startswith("Traceback (most recent call last):"))
+        ):
+            return
         level = record.levelno
         if level == logging.INFO and WEBSOCKET_HANDSHAKE_RESPONSE_PATTERN.search(message) is None:
             level = logging.DEBUG

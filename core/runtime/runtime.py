@@ -10,30 +10,12 @@ import asyncio
 import os
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from core.agents.agents import AgentStore
-from core.agents.temporary import TemporaryAgentRegistry
-from core.archive import ArchiveService
-from core.attachments import AttachmentStore
-from core.automation import (
-    AutomationReferences,
-    BootstrapService,
-    CronService,
-    LearningChanges,
-    LibrarianService,
-    ReflectionService,
-    TriggerService,
-)
-from core.calendar import CalendarService
-from core.channels import ChannelService
-from core.chat import ChatLoop, CommandDispatcher
 from core.chat.errors import ChatError
 from core.chat.status_report import StatusWireProfile
-from core.chat.streaming import stream_model_response
-from core.database import Database, SnapshotBarrier, UnregisteredDatabase
+from core.database import SnapshotBarrier, UnregisteredDatabase
 from core.debug import ProviderDebugRecorder
 from core.extensions import (
     ExtensionRegistry,
@@ -43,52 +25,32 @@ from core.extensions import (
 from core.extensions.oauth_redirects import OAuthRedirects
 from core.extensions.operations import ExtensionHost
 from core.extensions.runtime import ExtensionRuntime
-from core.memory import MemoryService
-from core.model_tasks import (
-    EmbeddingService,
-    ImageService,
-    MusicService,
-    SpeechService,
-    TaskModelService,
-    VideoService,
-)
-from core.model_tasks.decisions import DecisionService
-from core.model_tasks.live import LiveVoiceService
-from core.models.models import Model, ModelRegistry
-from core.performance import PerformanceService
-from core.projects import (
-    AgentResolver,
-    ProjectStore,
-)
+from core.models.models import Model
 from core.prompts import (
     SkillPromptRegistry,
-    SystemPromptManager,
 )
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import ConnectionRef, split_connection_id
 from core.providers.adapter import ProviderAdapter
-from core.providers.providers import ProviderRegistry
 from core.providers.reasoning import ReasoningIntent
 from core.providers.runtime import ProviderRuntime
 from core.providers.token_getter import TokenGetter
-from core.providers.token_store import TokenStore
-from core.providers.usage import ProviderUsageService
 from core.providers.wire_observations import ObservedFacts
 from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
-from core.recall import RecallBackend
-from core.runs import ChatRunManager, RunNotFoundError
+from core.runs import RunNotFoundError
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
     rename_identity_agent,
 )
-from core.runtime._bootstrap import RuntimeStartupSummary, bootstrap, start_event_loop_service
+from core.runtime._bootstrap import bootstrap, start_event_loop_service
 from core.runtime._config_backups import ConfigBackupSchedule
 from core.runtime._configuration import _resolve_data_dir, _resolve_resources_path
 from core.runtime._extension_host import ExtensionHostFactory
+from core.runtime._extension_sampling import sample_extension
 from core.runtime._prompt_blocks import refresh_prompt_blocks
 from core.runtime._recall import RecallIntegration
-from core.runtime._service_access import _StartedService
+from core.runtime._service_graph import RuntimeServiceGraph
 from core.runtime._settings import SettingsChangeEffects, apply_settings_change
 from core.runtime._shutdown import run_shutdown, run_shutdown_async
 from core.runtime._skill_merge import SkillMergeServices, follow_skill_merge
@@ -96,50 +58,30 @@ from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
     LoggerProtocol,
-    ProviderCredentialResolverProtocol,
 )
-from core.runtime.keep_awake import KeepAwakeController
-from core.sessions import ChatSessionManager
-from core.sessions.titles import SessionTitleService
 from core.settings.paths import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 from core.settings.settings import effective_timezone_name
 from core.skills.authoring import (
     ArchivedSkill,
-    SkillAuthoringService,
     SkillReference,
     SkillWriter,
     SkillWriteResult,
 )
-from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
-from core.statistics import StatisticsIndex
-from core.storage.storage import StorageManager
-from core.subagents import SubAgentCoordinator
 from core.tools import (
-    ChangeTracker,
-    FileReadState,
-    UpdateHandoffs,
     register_skill_manage_tool,
     register_skill_tool,
 )
-from core.tools.command_manager import CommandManager
-from core.tools.live import LiveToolHosts
-from core.tools.scratch_areas import ScratchAreas
-from core.tools.terminal_manager import TerminalManager
-from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
-from core.tools.web_fetch import PageBrowser
-from core.usage import UsageRecorder
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
-from core.utils.version import BuildIdentity
 
 # Windows environment variable names are case-insensitive. The data-dir `.env`
 # fallback follows the same rule there, matching Skill `env` requirements.
 _ENVIRONMENT_NAMES_IGNORE_CASE = os.name == "nt"
 
 
-class Runtime:
+class Runtime(RuntimeServiceGraph):
     """Bootstraps and manages the vBot application lifecycle.
 
     Constructor injection via :class:`ConfigProtocol` keeps the
@@ -184,79 +126,6 @@ class Runtime:
         self.oauth_redirects = OAuthRedirects()
         self._clear_service_references()
 
-    def _clear_service_references(self) -> None:
-        """Initialize or release every service reference in one lifecycle-owned place."""
-        self._skill_reload_generation = object()
-        self._skill_reload_required = False
-        self._extension_host_factory: ExtensionHostFactory | None = None
-        self._started: bool = False
-        self._started_at: datetime | None = None
-        self._startup_id: str | None = None
-        self._build: BuildIdentity | None = None
-        self._startup_summary: RuntimeStartupSummary | None = None
-        self._provider_runtime: ProviderRuntime | None = None
-        self._providers: ProviderRegistry | None = None
-        self._provider_credentials: ProviderCredentialResolverProtocol | None = None
-        self._provider_usage: ProviderUsageService | None = None
-        self._performance: PerformanceService | None = None
-        self._token_store: TokenStore | None = None
-        self._fallback_environment: dict[str, str] = {}
-        self._models: ModelRegistry | None = None
-        self._model_tasks: TaskModelService | None = None
-        self._speech: SpeechService | None = None
-        self._image: ImageService | None = None
-        self._video: VideoService | None = None
-        self._music: MusicService | None = None
-        self._embeddings: EmbeddingService | None = None
-        self._decisions: DecisionService | None = None
-        self._live_voice: LiveVoiceService | None = None
-        self._live_tool_hosts: LiveToolHosts | None = None
-        self._storage: StorageManager | None = None
-        self._attachment_store: AttachmentStore | None = None
-        self._keep_awake: KeepAwakeController | None = None
-        self._page_browser: PageBrowser | None = None
-        self._agents: AgentStore | None = None
-        self._tools: ToolRegistry | None = None
-        self._memory_service: MemoryService | None = None
-        self._file_state: FileReadState | None = None
-        self._update_handoffs: UpdateHandoffs | None = None
-        self._terminal_manager: TerminalManager | None = None
-        self._command_manager: CommandManager | None = None
-        self._scratch_areas: ScratchAreas | None = None
-        self._skills: SkillRegistry | None = None
-        self._skill_authoring: SkillAuthoringService | None = None
-        self._skill_policy: SkillPolicyService | None = None
-        self._skill_runtime: SkillRuntime | None = None
-        self._extensions: ExtensionRegistry | None = None
-        self._extension_runtime: ExtensionRuntime | None = None
-        self._chat_sessions: ChatSessionManager | None = None
-        self._statistics_index: StatisticsIndex | None = None
-        self._usage_recorder: UsageRecorder | None = None
-        self._projects: ProjectStore | None = None
-        self._agent_resolver: AgentResolver | None = None
-        self._temporary_agents: TemporaryAgentRegistry | None = None
-        self._recall: RecallIntegration | None = None
-        self._channel_service: ChannelService | None = None
-        self._cron_service: CronService | None = None
-        self._calendar_service: CalendarService | None = None
-        self._bootstrap_service: BootstrapService | None = None
-        self._automation_references: AutomationReferences | None = None
-        self._archive: ArchiveService | None = None
-        self._config_backups: ConfigBackupSchedule | None = None
-        self._trigger_service: TriggerService | None = None
-        self._reflection_service: ReflectionService | None = None
-        self._learning_changes: LearningChanges | None = None
-        self._librarian_service: LibrarianService | None = None
-        self._session_title_service: SessionTitleService | None = None
-        self._subagent_coordinator: SubAgentCoordinator | None = None
-        self._chat_loop: ChatLoop | None = None
-        self._command_dispatcher: CommandDispatcher | None = None
-        self._chat_run_manager: ChatRunManager | None = None
-        self.chat_runs: ChatRunManager | None = None
-        self._system_prompts: SystemPromptManager | None = None
-        self._change_tracker: ChangeTracker | None = None
-        self._tool_prompt_blocks: ToolPromptBlockRegistry | None = None
-
     def start(self) -> None:
         """Start the dependency-ordered service graph, cleaning up a failed bootstrap."""
         if self._close_task is not None and not self._close_task.done():
@@ -285,6 +154,7 @@ class Runtime:
                     sample=self._sample_extension,
                     resolve_agent=self.agent_resolver.resolve_agent,
                     resolve_tool_agent=self._extension_tool_agent,
+                    resolve_tool_agent_async=self._extension_tool_agent_async,
                     store_attachment=self.attachment_store.store,
                     resolve_credential=self.resolve_environment_credential,
                     set_credential=self._set_extension_credential,
@@ -396,66 +266,11 @@ class Runtime:
             context.project_id, context.agent_id, session_id=context.session_id
         )
 
-    async def _sample_extension(self, context: Any, request: dict[str, Any]) -> dict[str, Any]:
-        from core.chat.model_resolution import resolve_agent_model_target
+    async def _extension_tool_agent_async(self, context: Any) -> Any:
+        return await self.chat_sessions.run_async(self._extension_tool_agent, context)
 
-        agent = self._extension_tool_agent(context)
-        provider_id, model_id, connection_id = resolve_agent_model_target(self, agent)
-        adapter = self.get_adapter(ConnectionRef(provider_id, connection_id))
-        options = {
-            key: request[key]
-            for key in ("stop_sequences", "tool_choice")
-            if request.get(key) is not None
-        }
-        owner = context.execution_owner
-        recorder = self.usage_recorder
-        call_id = None
-        usage = None
-        reported: dict[str, Any] = {}
-        outcome = "failed"
-        try:
-            call_id = await recorder.start(
-                model=f"{provider_id}/{model_id}",
-                kind="extension_sampling",
-                connection_id=connection_id,
-                agent_id=context.agent_id,
-                session_id=context.session_id,
-                project_id=context.project_id,
-                run_id=context.run_id,
-                owner_name=owner.extension if owner else None,
-                group_id=owner.group_id if owner else None,
-            )
-            normalized = await stream_model_response(
-                adapter,
-                request["messages"],
-                model_id=model_id,
-                tools=request.get("tools"),
-                max_tokens=request["max_tokens"],
-                temperature=request.get("temperature")
-                if request.get("temperature") is not None
-                else agent.temperature,
-                on_usage=reported.update,
-                **options,
-                **adapter.request_context_kwargs(
-                    agent_id=context.agent_id,
-                    session_id=context.session_id,
-                    project_id=context.project_id,
-                ),
-            )
-            usage = normalized.get("usage")
-            outcome = "completed"
-        except asyncio.CancelledError:
-            outcome = "cancelled"
-            raise
-        finally:
-            try:
-                if call_id is not None:
-                    await recorder.finish(
-                        call_id, usage if usage is not None else reported or None, status=outcome
-                    )
-            finally:
-                await adapter.aclose()
-        return {"model": f"{provider_id}/{model_id}", **normalized}
+    async def _sample_extension(self, context: Any, request: dict[str, Any]) -> dict[str, Any]:
+        return await sample_extension(self, context, request)
 
     def activate_bootstrap(self) -> None:
         """Start eligible Bootstrap Runs after the serving lifespan is ready."""
@@ -823,13 +638,14 @@ class Runtime:
             self, previous, current, refresh_sections=refresh_sections
         )
 
-    def reload_keep_awake(self) -> None:
+    def reload_keep_awake(self, settings: Mapping[str, Any] | None = None) -> None:
         """Apply the persisted ``keep_awake`` setting to the running process."""
 
         self._ensure_started()
         if self._storage is None or self._keep_awake is None:
             return
-        settings = self._storage.load_settings()
+        if settings is None:
+            settings = self._storage.load_settings()
         self._keep_awake.set_enabled(settings.get("keep_awake") is True)
 
     def timezone_name(self) -> str:
@@ -838,18 +654,20 @@ class Runtime:
             return "UTC"
         return effective_timezone_name(self._storage.load_settings())
 
-    def reload_timezone(self) -> None:
+    def reload_timezone(self, settings: Mapping[str, Any] | None = None) -> None:
         """Apply the persisted timezone to all live wall-clock services."""
         self._ensure_started()
-        timezone_name = self.timezone_name()
+        timezone_name = (
+            self.timezone_name() if settings is None else effective_timezone_name(dict(settings))
+        )
         if self._cron_service is not None:
             self._cron_service.set_timezone(timezone_name)
         if self._calendar_service is not None:
             self._calendar_service.set_timezone(timezone_name)
 
-    def reload_recall_backend(self) -> None:
+    def reload_recall_backend(self, settings: Mapping[str, Any] | None = None) -> None:
         """Reload Session Recall Tools from persisted settings and current Extensions."""
-        self._recall_operations().reload_recall_backend()
+        self._recall_operations().reload_recall_backend(settings)
 
     def _set_extension_registry(self, registry: ExtensionRegistry) -> None:
         self._extensions = registry
@@ -868,9 +686,11 @@ class Runtime:
         """Deactivate newly disabled Extensions through the serialized live layer."""
         await self._extension_operations().apply_disabled_change(newly_disabled)
 
-    def _recover_recall_backend_if_deactivated(self, removed_backend_names: set[str]) -> None:
+    def _recover_recall_backend_if_deactivated(
+        self, removed_backend_names: set[str], settings: Mapping[str, Any] | None = None
+    ) -> None:
         if self._recall is not None:
-            self._recall._recover_recall_backend_if_deactivated(removed_backend_names)
+            self._recall._recover_recall_backend_if_deactivated(removed_backend_names, settings)
 
     def available_recall_backends(self) -> list[str]:
         """Return selectable Recall backends from built-ins and live Extensions."""
@@ -1042,17 +862,32 @@ class Runtime:
 
     def reload_environment_credentials(self) -> None:
         """Reload shared credential fallback values from the data-dir `.env`."""
-
         self._ensure_started()
-        data_dir_credentials = self.storage.load_environment()
-        self._fallback_environment = dict(data_dir_credentials)
-        self.provider_credentials.reload_fallback_credentials(data_dir_credentials)
-        self._skill_operations().reload_environment(data_dir_credentials)
+        generation = self._credential_reload_generation = object()
+        self._apply_environment_credentials(self.storage.load_environment(), generation=generation)
+
+    async def reload_environment_credentials_async(self) -> None:
+        """Read credentials off-loop before updating the live resolver and Skill snapshots."""
+        self._ensure_started()
+        generation = self._credential_reload_generation = object()
+        load_environment = self.storage.load_environment
+        credentials = await _RUNTIME_WORKERS.run(load_environment)
+        self._apply_environment_credentials(credentials, generation=generation)
+
+    def _apply_environment_credentials(
+        self, credentials: Mapping[str, str], *, generation: object
+    ) -> None:
+        if not self._started or generation is not self._credential_reload_generation:
+            return
+        self._fallback_environment = dict(credentials)
+        self.provider_credentials.reload_fallback_credentials(credentials)
+        self._skill_operations().reload_environment(dict(credentials))
 
     def reload_custom_providers(self) -> None:
         """Reload Settings-owned Provider, Model and wire profile overlays in place."""
 
         self._ensure_started()
+        self._provider_reload_generation = object()
         resources_path = _resolve_resources_path(self.config)
         custom_providers = self.storage.load_custom_providers_settings()
         self.providers.reload(
@@ -1067,6 +902,25 @@ class Runtime:
         )
         self._provider_operations().reload_custom_wire_profiles(custom_providers)
 
+    async def reload_custom_providers_async(self) -> None:
+        """Read persisted Provider overlays off-loop and publish registries on the caller."""
+        self._ensure_started()
+        generation = self._provider_reload_generation = object()
+        storage, providers, models = self.storage, self.providers, self.models
+        provider_runtime = self._provider_operations()
+        resources_path = _resolve_resources_path(self.config)
+        custom = await _RUNTIME_WORKERS.run(storage.load_custom_providers_settings)
+        if not self._started or generation is not self._provider_reload_generation:
+            return
+        await providers.reload_async(resources_path, custom_providers=custom, tolerate_invalid=True)
+        if not self._started or generation is not self._provider_reload_generation:
+            return
+        await models.reload_async(
+            resources_path, runtime_models_dir=storage.layout.models, custom_providers=custom
+        )
+        if self._started and generation is self._provider_reload_generation:
+            provider_runtime.reload_custom_wire_profiles(custom)
+
     # ------------------------------------------------------------------
     # Read-only registry access
     # ------------------------------------------------------------------
@@ -1075,125 +929,6 @@ class Runtime:
     def config(self) -> ConfigProtocol:
         """The injected configuration. Available before ``start()``."""
         return self._config
-
-    providers: _StartedService[ProviderRegistry] = _StartedService(
-        lambda runtime: runtime._providers, "Provider registry not available"
-    )
-
-    models: _StartedService[ModelRegistry] = _StartedService(
-        lambda runtime: runtime._models, "Model registry not available"
-    )
-
-    provider_credentials: _StartedService[ProviderCredentialResolverProtocol] = _StartedService(
-        lambda runtime: runtime._provider_credentials, "Provider credential service not available"
-    )
-
-    model_tasks: _StartedService[TaskModelService] = _StartedService(
-        lambda runtime: runtime._model_tasks, "Task-model service not available"
-    )
-
-    speech: _StartedService[SpeechService] = _StartedService(
-        lambda runtime: runtime._speech, "Speech service not available"
-    )
-
-    image: _StartedService[ImageService] = _StartedService(
-        lambda runtime: runtime._image, "Image service not available"
-    )
-
-    video: _StartedService[VideoService] = _StartedService(
-        lambda runtime: runtime._video, "Video service not available"
-    )
-
-    music: _StartedService[MusicService] = _StartedService(
-        lambda runtime: runtime._music, "Music service not available"
-    )
-
-    live_voice: _StartedService[LiveVoiceService] = _StartedService(
-        lambda runtime: runtime._live_voice, "Live voice service not available"
-    )
-
-    embeddings: _StartedService[EmbeddingService] = _StartedService(
-        lambda runtime: runtime._embeddings, "Embedding service not available"
-    )
-
-    token_store: _StartedService[TokenStore] = _StartedService(
-        lambda runtime: runtime._token_store, "Token store not available"
-    )
-
-    storage: _StartedService[StorageManager] = _StartedService(
-        lambda runtime: runtime._storage, "Storage service not available"
-    )
-
-    build: _StartedService[BuildIdentity] = _StartedService(
-        lambda runtime: runtime._build, "Build identity not available"
-    )
-
-    attachment_store: _StartedService[AttachmentStore] = _StartedService(
-        lambda runtime: runtime._attachment_store, "Attachment store not available"
-    )
-
-    @property
-    def startup_summary(self) -> RuntimeStartupSummary:
-        """What this Runtime served when its startup finished."""
-
-        self._ensure_started()
-        assert self._startup_summary is not None
-        return self._startup_summary
-
-    @property
-    def speech_upload_max_size_bytes(self) -> int:
-        """Maximum accepted uploaded audio size for speech transcription."""
-
-        self._ensure_started()
-        return self._speech_upload_max_size_bytes
-
-    agents: _StartedService[AgentStore] = _StartedService(
-        lambda runtime: runtime._agents, "Agent service not available"
-    )
-
-    memory: _StartedService[MemoryService] = _StartedService(
-        lambda runtime: runtime._memory_service, "Memory service not available"
-    )
-
-    tools: _StartedService[ToolRegistry] = _StartedService(
-        lambda runtime: runtime._tools, "Tool service not available"
-    )
-
-    update_handoffs: _StartedService[UpdateHandoffs] = _StartedService(
-        lambda runtime: runtime._update_handoffs, "Update handoff service not available"
-    )
-
-    terminal_manager: _StartedService[TerminalManager] = _StartedService(
-        lambda runtime: runtime._terminal_manager, "Terminal manager service not available"
-    )
-
-    command_manager: _StartedService[CommandManager] = _StartedService(
-        lambda runtime: runtime._command_manager, "Command manager service not available"
-    )
-
-    file_read_state: _StartedService[FileReadState] = _StartedService(
-        lambda runtime: runtime._file_state, "File read state service not available"
-    )
-
-    change_tracker: _StartedService[ChangeTracker] = _StartedService(
-        lambda runtime: runtime._change_tracker, "Change tracker service not available"
-    )
-
-    scratch_areas: _StartedService[ScratchAreas] = _StartedService(
-        lambda runtime: runtime._scratch_areas, "Scratch Areas are not available"
-    )
-
-    skills: _StartedService[SkillRegistry] = _StartedService(
-        lambda runtime: runtime._skills, "Skill service not available"
-    )
-
-    skill_authoring: _StartedService[SkillAuthoringService] = _StartedService(
-        lambda runtime: runtime._skill_authoring, "Skill authoring service not available"
-    )
-
-    skill_policy: _StartedService[SkillPolicyService] = _StartedService(
-        lambda runtime: runtime._skill_policy, "Skill policy service not available"
-    )
 
     async def _dispatch_channel_interaction(
         self, event: InteractionEvent, responder: InteractionResponder
@@ -1209,42 +944,6 @@ class Runtime:
             return False
         return await self._extensions.dispatch_channel_interaction(event, responder)
 
-    @property
-    def extensions(self) -> ExtensionRegistry | None:
-        return self._extensions
-
-    @property
-    def snapshot_barrier(self) -> SnapshotBarrier:
-        """Keeps data snapshots apart from this Runtime's compound mutations.
-
-        Every change of a canonical database together with a durable JSON
-        document enters it shared as one unit; a data snapshot of this data
-        directory passes it to ``create_data_snapshot``.
-        """
-        return self._snapshot_barrier
-
-    def canonical_databases(self) -> tuple[Database, ...]:
-        """Every canonical database this Runtime has open.
-
-        Data snapshots copy these through their open handles and data-store
-        status reads their owner health; registered databases that are not
-        open here are read from their files.
-        """
-        databases: list[Database] = []
-        if self._chat_sessions is not None:
-            databases.append(self._chat_sessions.database)
-        if self._usage_recorder is not None:
-            databases.append(self._usage_recorder.database)
-        if self._provider_usage is not None:
-            provider_usage = self._provider_usage.history_database
-            if provider_usage is not None:
-                databases.append(provider_usage)
-        if self._channel_service is not None:
-            databases.append(self._channel_service.database)
-        if self._extension_host_factory is not None:
-            databases.extend(self._extension_host_factory.databases.open_databases())
-        return tuple(databases)
-
     async def unregister_extension_database(self, name: str) -> UnregisteredDatabase:
         """Release a registered Extension database whose Extension was removed.
 
@@ -1253,103 +952,6 @@ class Runtime:
         ``ExtensionDatabases.unregister``).
         """
         return await self._host_operations().databases.unregister(name)
-
-    chat_sessions: _StartedService[ChatSessionManager] = _StartedService(
-        lambda runtime: runtime._chat_sessions, "Chat session service not available"
-    )
-
-    statistics_index: _StartedService[StatisticsIndex] = _StartedService(
-        lambda runtime: runtime._statistics_index, "Statistics index is not available"
-    )
-
-    usage_recorder: _StartedService[UsageRecorder] = _StartedService(
-        lambda runtime: runtime._usage_recorder, "Usage accounting is not available"
-    )
-
-    subagents: _StartedService[SubAgentCoordinator] = _StartedService(
-        lambda runtime: runtime._subagent_coordinator, "Sub-agent coordinator is not available"
-    )
-
-    projects: _StartedService[ProjectStore] = _StartedService(
-        lambda runtime: runtime._projects, "Project service not available"
-    )
-
-    agent_resolver: _StartedService[AgentResolver] = _StartedService(
-        lambda runtime: runtime._agent_resolver, "Agent resolver service not available"
-    )
-
-    recall_backend: _StartedService[RecallBackend] = _StartedService(
-        lambda runtime: runtime._recall.backend if runtime._recall is not None else None,
-        "Recall backend is not available",
-    )
-
-    recall: _StartedService[RecallIntegration] = _StartedService(
-        lambda runtime: runtime._recall, "Recall is not available"
-    )
-
-    chat_run_manager: _StartedService[ChatRunManager] = _StartedService(
-        lambda runtime: runtime._chat_run_manager, "Chat run manager service not available"
-    )
-
-    command_dispatcher: _StartedService[CommandDispatcher] = _StartedService(
-        lambda runtime: runtime._command_dispatcher, "Command dispatcher service not available"
-    )
-
-    chat_loop: _StartedService[ChatLoop] = _StartedService(
-        lambda runtime: runtime._chat_loop, "Chat loop service not available"
-    )
-
-    trigger_service: _StartedService[TriggerService] = _StartedService(
-        lambda runtime: runtime._trigger_service, "Trigger service not available"
-    )
-
-    reflection: _StartedService[ReflectionService] = _StartedService(
-        lambda runtime: runtime._reflection_service, "Reflection service not available"
-    )
-
-    learning_changes: _StartedService[LearningChanges] = _StartedService(
-        lambda runtime: runtime._learning_changes, "Learning changes service not available"
-    )
-
-    librarian: _StartedService[LibrarianService] = _StartedService(
-        lambda runtime: runtime._librarian_service, "Librarian service not available"
-    )
-
-    channel_service: _StartedService[ChannelService] = _StartedService(
-        lambda runtime: runtime._channel_service, "Channel service not available"
-    )
-
-    cron_service: _StartedService[CronService] = _StartedService(
-        lambda runtime: runtime._cron_service, "Cron service not available"
-    )
-
-    calendar_service: _StartedService[CalendarService] = _StartedService(
-        lambda runtime: runtime._calendar_service, "Calendar service not available"
-    )
-
-    bootstrap_service: _StartedService[BootstrapService] = _StartedService(
-        lambda runtime: runtime._bootstrap_service, "Bootstrap service not available"
-    )
-
-    automation_references: _StartedService[AutomationReferences] = _StartedService(
-        lambda runtime: runtime._automation_references, "Automation references not available"
-    )
-
-    archive: _StartedService[ArchiveService] = _StartedService(
-        lambda runtime: runtime._archive, "Archive is not available"
-    )
-
-    provider_usage: _StartedService[ProviderUsageService] = _StartedService(
-        lambda runtime: runtime._provider_usage, "Provider usage service not available"
-    )
-
-    performance: _StartedService[PerformanceService] = _StartedService(
-        lambda runtime: runtime._performance, "Performance service not available"
-    )
-
-    system_prompts: _StartedService[SystemPromptManager] = _StartedService(
-        lambda runtime: runtime._system_prompts, "System prompt service not available"
-    )
 
     # ------------------------------------------------------------------
     # Adapter factory
@@ -1501,7 +1103,3 @@ class Runtime:
     def get_model(self, provider_id: str, model_id: str) -> Model:
         """Look up one Model through the live Provider-owned registry view."""
         return self._provider_operations().get_model(provider_id, model_id)
-
-    def _ensure_started(self) -> None:
-        if not self._started:
-            raise RuntimeError("Runtime not started — call start() first")
