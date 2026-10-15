@@ -251,7 +251,12 @@ class ToolContext:
                 f"character (U+0000), which no file path can contain. Remove it and call "
                 f"{name} again."
             )
-        candidate = Path(_path_argument(path, windows=os.name == "nt")).expanduser()
+        spelling = _path_argument(path, windows=os.name == "nt")
+        candidate = Path(spelling)
+        # Windows invents a sibling home for ~name; that spelling is an ordinary
+        # filename here. An explicitly relative ./~name is literal on every host.
+        if str(spelling).startswith("~") and (os.name != "nt" or candidate.parts[0] == "~"):
+            candidate = candidate.expanduser()
         target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
         if follow_final_link or target.name in {"", ".", ".."}:
             return target.resolve()

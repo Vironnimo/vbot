@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,30 @@ async def _run_one(
 
 
 # --- The call's ToolContext ------------------------------------------------------
+
+
+@pytest.mark.parametrize("spelling", ["~", "~/file.txt", "./~file.txt", "~$Report.docx"])
+@pytest.mark.asyncio
+async def test_tool_paths_expand_home_without_retargeting_literal_names(tmp_path, spelling):
+    if spelling == "~$Report.docx" and os.name != "nt":
+        pytest.skip("POSIX retains its named-user home syntax")
+    registry = ToolRegistry()
+    seen = []
+
+    def probe(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        seen.append(context.resolve_path(spelling))
+        return tool_success({})
+
+    registry.register("probe", "Probe paths.", {"type": "object"}, probe)
+    await _run_one(registry, "probe", workspace=tmp_path)
+    expected = (
+        Path.home() / spelling[2:]
+        if spelling.startswith("~/")
+        else Path.home()
+        if spelling == "~"
+        else tmp_path / spelling
+    )
+    assert seen == [expected.resolve()]
 
 
 @pytest.mark.asyncio

@@ -146,7 +146,13 @@ def warning_for_written_file(path: Path, content: str) -> str | None:
     checker = _checker_for(path)
     if checker is None:
         return None
-    problem = checker(content)
+    try:
+        problem = checker(content)
+    except (RecursionError, MemoryError) as error:
+        return (
+            "The change was applied, but the syntax check could not finish "
+            f"({type(error).__name__})."
+        )
     if problem is None:
         return None
     return _with_excerpt(
@@ -165,10 +171,17 @@ def warning_for_edited_file(path: Path, before: str, after: str) -> str | None:
     checker = _checker_for(path)
     if checker is None:
         return None
-    problem = checker(after)
-    if problem is None:
-        return None
-    if checker(before) is None:
+    try:
+        problem = checker(after)
+        if problem is None:
+            return None
+        already_invalid = checker(before) is not None
+    except (RecursionError, MemoryError) as error:
+        return (
+            "The change was applied, but the syntax check could not finish "
+            f"({type(error).__name__})."
+        )
+    if not already_invalid:
         # The file parsed before this edit and does not now — the edit broke it.
         return _with_excerpt(
             f"Syntax check failed after this edit: {problem.message}", problem, after
