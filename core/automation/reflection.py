@@ -46,6 +46,7 @@ from core.runs import RunKind
 from core.sessions import SUBAGENT_SESSION_META_KEY, SessionAddress
 from core.tools.availability import MEMORY_TOOL_NAME, SKILL_MANAGE_TOOL_NAME, resolve_tool_access
 from core.tools.model_names import model_tool_name
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool, finish_despite_cancel
 
@@ -645,8 +646,10 @@ def _scope_dimensions(scope: ReflectionScope) -> tuple[bool, bool]:
 
 
 def _review_tool_denial_resolver(scope: ReflectionScope) -> Callable[[str], str | None]:
-    """Deny every Tool outside the scope with a result naming the scope's Tools."""
-    return tool_denial_resolver(REFLECTION_TOOL_RESTRICTIONS[scope], REVIEW_TOOL_DENIAL_MESSAGE)
+    """Allow the scope's Tools and their definition loader, which grants no access."""
+    return tool_denial_resolver(
+        (*REFLECTION_TOOL_RESTRICTIONS[scope], LOAD_TOOLS_TOOL_NAME), REVIEW_TOOL_DENIAL_MESSAGE
+    )
 
 
 def _tool_list(names: Sequence[str]) -> str:

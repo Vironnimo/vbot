@@ -28,9 +28,18 @@ from core.runs import ChatRunManager, Run, RunKind
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import StorageManager
 from core.tools.availability import ToolAccess
+from core.tools.load_tools import register_load_tools_tool
 from core.tools.memory import MEMORY_TOOL_PARAMETERS
 from core.tools.skill import SKILL_TOOL_PARAMETERS
 from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
+from core.tools.tools import ToolContext, ToolRegistry, tool_success
+from tests.core.chat.chat_loop_support import build_chat_loop, history
+from tests.core.chat.chat_loop_tools_test_support import (
+    final,
+    tool_results,
+    tool_runtime,
+    tool_turn,
+)
 from tests.core.sessions.history_fixtures import admit_run
 
 # Registered Tools, with the activation the Tools domain declares for them.
@@ -1145,16 +1154,9 @@ async def test_run_review_narrows_to_the_callable_scope_or_refuses_before_forkin
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("scope", "callable_tools"),
-    [
-        ("memory", "`memory`"),
-        ("skill", "`skill` and `skill_manage`"),
-        ("combined", "`memory`, `skill`, and `skill_manage`"),
-    ],
-)
+@pytest.mark.parametrize("scope", ["memory", "skill", "combined"])
 async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
-    tmp_path: Path, scope: str, callable_tools: str
+    tmp_path: Path, scope: ReflectionScope
 ) -> None:
     bundled = StorageManager(data_dir=tmp_path / "data")
     service, _sessions, loop = _make_service()
@@ -1169,10 +1171,9 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
     assert ("does not mark as read-only; all other Skills are read-only" in review["message"]) == (
         "skill_manage" in tools
     )
-    boundary = "in this review. This review"
-    # The production brief names exactly the Tools its Run can call: backticked
-    # identifiers are Tool names unless they are parameters of those Tools or
-    # values those parameters take. ``skill_manage`` accepts ``absorbed_into``
+    # The brief names the scope's Tools; shared Tool-loading guidance supplies
+    # the loader. Backticked identifiers are Tool names unless they are parameters
+    # of those Tools or values those parameters take. ``skill_manage`` accepts ``absorbed_into``
     # without advertising it; the briefs that need it teach it.
     properties = [
         (name, schema)
@@ -1185,14 +1186,52 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
     values = {value for _name, schema in properties for value in schema.get("enum", ())}
     identifiers = {token for token in review["message"].split("`")[1::2] if token.isidentifier()}
     assert identifiers - parameters - values == set(tools)
-    # Any other Tool is refused before it runs, naming what the review can call.
+    # The loader can describe permitted Tools without granting another capability.
     deny = review["tool_denial_resolver"]
-    assert [deny(tool) for tool in tools] == [None] * len(tools)
-    for other in sorted({"read", *REFLECTION_TOOL_RESTRICTION} - set(tools)):
-        assert deny(other) == (
-            f"Nothing was run: `{other}` is not available {boundary} "
-            f"can call only {callable_tools}. Do not retry this call."
-        )
+    all_tools = ["read", *REFLECTION_TOOL_RESTRICTION]
+    dispatched: list[str] = []
+
+    def record(context: ToolContext, _arguments: dict[str, Any]) -> dict[str, Any]:
+        dispatched.append(context.tool_name)
+        return tool_success({"tool": context.tool_name})
+
+    registry = ToolRegistry()
+    register_load_tools_tool(registry)
+    descriptions = {name: f"{name} definition sentinel." for name in all_tools}
+    for name in all_tools:
+        registry.register(name, descriptions[name], {"type": "object"}, record)
+    runtime = tool_runtime(
+        tmp_path / "chat",
+        registry,
+        [
+            tool_turn(("load", "load_tools", {"names": all_tools})),
+            tool_turn(*[(name, name) for name in all_tools]),
+            final("done"),
+        ],
+        allowed_tools=all_tools,
+        tool_loading={"on_demand": True, "always_loaded": []},
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run(
+        "coder",
+        review["message"],
+        session_id="session-one",
+        internal=True,
+        run_kind=review["run_kind"],
+        tool_restriction=tools,
+        tool_denial_resolver=deny,
+    )
+    await run.wait()
+    loaded, *results = tool_results(history(runtime))
+    assert loaded["ok"], loaded
+    for name, result in zip(all_tools, results, strict=True):
+        if name in tools:
+            assert descriptions[name] in loaded["data"]["content"]
+            assert result == tool_success({"tool": name})
+        else:
+            assert descriptions[name] not in loaded["data"]["content"]
+            assert result["error"]["code"] == "tool_not_allowed"
+    assert sorted(dispatched) == sorted(tools)
 
 
 _TOOL_PARAMETERS: dict[str, Any] = {
