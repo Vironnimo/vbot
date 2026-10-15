@@ -216,7 +216,7 @@ describe('ProjectsView list and selection', () => {
     // A non-clean report surfaces a collapsed summary at the top of the Team
     // section; the findings themselves stay hidden until expanded.
     expect(document.body.textContent).toContain(
-      t('projects.report.findingCount', { count: 1 }),
+      t('projects.report.findingCountOne'),
     );
     expect(document.body.textContent).not.toContain('model not configured');
     buttonWithTextContent('Show details').click();
