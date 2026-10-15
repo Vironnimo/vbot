@@ -36,11 +36,12 @@ An empty scope list produces no blank scope.
 Client registration, in order: a pre-registered client from the configuration
 (``oauth_client_id``, an optional ``oauth_client_secret`` credential reference,
 ``oauth_scopes``), else dynamic registration. Client ID metadata documents are
-not offered: vBot has no public HTTPS address to publish one at, and such a
-document could not list each installation's loopback redirect URI. A
-pre-registered client is bound to the authorization server of its first sign-in;
-when the server later names another one, sign-in fails instead of presenting
-the client to it.
+not offered: choosing and hosting a stable public HTTPS client identity remains
+open. A shared document can cover loopback IP callbacks with the same host and
+path across installation ports (RFC 8252 sections 7.3 and 8.4); other callback
+hosts or paths need matching entries. A pre-registered client is bound to the
+authorization server of its first sign-in; when the server later names another
+one, sign-in fails instead of presenting the client to it.
 
 The browser round trip is a pending input showing the authorization URL. When
 the server receives OAuth redirects (``host.oauth_redirects``), the browser's
