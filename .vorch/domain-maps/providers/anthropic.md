@@ -24,6 +24,7 @@ The live `/models` listing is authoritative and rich - each entry carries `max_i
 
 ## Wire Contract
 
+- Canonical `tool_choice` strings become Messages objects: `auto`, `none` and `any` retain their type; `required` becomes `any`. Native objects retain every field (`test_anthropic_requests.py`).
 - System-role messages are removed from the conversation array and merged into top-level `system`. Multiple string system messages are joined with blank lines; system content blocks are concatenated as blocks.
 - User content uses Anthropic content blocks. Consecutive canonical `tool` messages become one user message containing multiple `tool_result` blocks.
 - The Messages renderer derives native Tool failure signaling only from the exact canonical Tool Result envelope: `ok: false` adds `is_error: true`, while successful and legacy/non-envelope Results omit the flag. The block's content is the Result's Model-facing text (see `request-policy.md`); canonical Session history keeps the JSON envelope. This is an Adapter-owned target-wire projection.
