@@ -649,7 +649,10 @@ def _restore_member_locked(
         # A fully rolled-back attempt only reserved this path; it holds no evidence.
         retained_quarantine = None
     if pending is not None:
-        failure_detected_at = pending["possible_loss_interval"]["end"]
+        # Reinstalling the snapshot can discard writes made since the pending
+        # attempt. Only confirmation of an already installed copy preserves
+        # that attempt's exact interval (_confirm_pending).
+        failure_detected_at = max(failure_detected_at, pending["possible_loss_interval"]["end"])
         cause = pending["cause"]
 
     def publish_pending(quarantine_path: Path | None) -> None:
