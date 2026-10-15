@@ -1154,6 +1154,8 @@ export default Object.freeze({
   'archive.problem.entryPurging':
     'It is being deleted permanently and can no longer be restored.',
   'archive.problem.payloadMissing': 'Its archived files are missing.',
+  'archive.problem.payloadUnavailable':
+    'Its archived files are unavailable. Restore access and try again.',
   'archive.problem.payloadInvalid': 'Its archived files cannot be read.',
   'archive.problem.olderFormat':
     'An older vBot version archived it in a format this version cannot restore.',

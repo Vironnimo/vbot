@@ -65,6 +65,10 @@ class FakeSessions:
             "marked_read": True,
         }
         self.archived: list[tuple[str, str, str | None]] = []
+        self.archived_members: dict[int, tuple[Any, ...]] = {}
+        self.archive_ledger = SimpleNamespace(
+            members=lambda entry_key, **_kwargs: self.archived_members[entry_key]
+        )
         self.got: list[tuple[str, str, str | None]] = []
         self.forked: list[dict[str, Any]] = []
         # Rows the Session listing fakes return; default keeps the existing
@@ -136,6 +140,9 @@ class FakeSessions:
             self.archive_started.set()
         if self.archive_release is not None:
             await self.archive_release.wait()
+        self.archived_members[len(self.archived)] = tuple(
+            SimpleNamespace(address=member) for member in (address, *self.review_forks(address))
+        )
         return ArchiveEntryRef(entry_key=len(self.archived), entry_id=f"arc_{address.session_id}")
 
     def newest_session_id(self, agent_id: str, project_id: str | None = None) -> str | None:

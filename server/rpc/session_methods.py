@@ -214,7 +214,8 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
         except RunAdmissionBlockedError as exc:
             raise RpcError(
                 RPC_ERROR_SESSION_BUSY,
-                f"cannot delete session with an active or queued run: {session_id}",
+                "This Session or one of its Reflection Sessions has an active or queued Run. "
+                "Wait until it finishes or stop it, then try again.",
             ) from exc
         next_session_id = outcome.next_session_id
         if project_id is not None:
@@ -225,18 +226,19 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
     # Same emit point as session.create/rename: other windows on this agent
     # refresh their list (and the current marking), scoped to the agent. The
-    # scope also names the archived Session and its landing so windows still
+    # scope names each archived Session and its landing so windows still
     # displaying or holding it release it and follow, like the deleting window.
-    publish_resource_changed(
-        state,
-        RESOURCE_KIND_SESSIONS,
-        scope={
-            "agent_id": agent_id,
-            "project_id": project_id,
-            "deleted_session_id": session_id,
-            "next_session_id": next_session_id,
-        },
-    )
+    for archived_address in outcome.addresses:
+        publish_resource_changed(
+            state,
+            RESOURCE_KIND_SESSIONS,
+            scope={
+                "agent_id": archived_address.agent_id,
+                "project_id": archived_address.project_id,
+                "deleted_session_id": archived_address.session_id,
+                "next_session_id": next_session_id,
+            },
+        )
     # Re-aiming the identity current pointer is an agent-config change, so refresh
     # agent state in other windows (the current marking + return-to-current path).
     if outcome.was_current:

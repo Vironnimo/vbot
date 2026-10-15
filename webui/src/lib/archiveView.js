@@ -341,6 +341,8 @@ export function restoreProblemText(problem, { warning = false } = {}) {
       return entryBusyText(problem);
     case 'payload_missing':
       return t('archive.problem.payloadMissing');
+    case 'payload_unavailable':
+      return t('archive.problem.payloadUnavailable');
     case 'payload_invalid':
       return t('archive.problem.payloadInvalid');
     case 'older_format':

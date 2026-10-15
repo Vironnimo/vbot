@@ -458,6 +458,7 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     archived = await world.service.archive_session(session)
 
     assert (archived.was_current, archived.next_session_id) == (True, "other")
+    assert archived.addresses == (session, review)
     assert world.agents.get("coder").current_session_id == "other"
     assert not world.sessions.exists(session) and not world.sessions.exists(review)
     assert world.commands.closed == [("session", session), ("session", review)]
@@ -798,8 +799,11 @@ async def test_an_entry_taken_before_the_claim_is_skipped_or_gone(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payload_state", ["missing", "unavailable"])
 async def test_entries_list_with_labels_and_show_their_sessions_files_and_restorability(
     world: ArchiveWorld,
+    deny_access: Callable[[Path], None],
+    payload_state: str,
 ) -> None:
     world.agents.create("manager")
     coder = agent_with_session(world, "coder", "Coder Agent")
@@ -809,7 +813,10 @@ async def test_entries_list_with_labels_and_show_their_sessions_files_and_restor
     session_entry = await world.service.archive_session(notes)
 
     page = await world.service.list(ArchiveEntryFilter())
-    shutil.rmtree(world.payload(agent_entry.entry_id, "agent"))
+    if payload_state == "missing":
+        shutil.rmtree(world.payload(agent_entry.entry_id, "agent"))
+    else:
+        deny_access(world.payload(agent_entry.entry_id, "agent").parent)
     agent_detail = await world.service.show(agent_entry.entry_id)
     session_detail = await world.service.show(session_entry.entry_id)
 
@@ -820,9 +827,13 @@ async def test_entries_list_with_labels_and_show_their_sessions_files_and_restor
     assert [member.address.session_id for member in agent_detail.sessions] == [
         coder.current_session_id
     ]
-    assert agent_detail.files == "missing"
-    assert agent_detail.listing.not_restorable_reason == "payload_missing"
-    assert [problem.code for problem in agent_detail.restore.blockers] == ["payload_missing"]
+    assert agent_detail.files == payload_state
+    assert agent_detail.listing.not_restorable_reason == f"payload_{payload_state}"
+    assert [problem.code for problem in agent_detail.restore.blockers] == [
+        f"payload_{payload_state}"
+    ]
+    with pytest.raises(ArchiveNotRestorableError):
+        await world.service.restore(agent_entry.entry_id)
     assert (session_detail.files, session_detail.restore.possible) == ("none", True)
     assert agent_detail.user_folders == session_detail.user_folders == ()
 

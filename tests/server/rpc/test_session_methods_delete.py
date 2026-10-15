@@ -21,6 +21,7 @@ from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_erro
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_review", [False, True])
 @pytest.mark.parametrize(
     ("current_session_id", "refreshed_kinds"),
     [
@@ -31,10 +32,19 @@ from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_erro
     ],
 )
 async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current(
-    current_session_id: str, refreshed_kinds: list[str]
+    current_session_id: str,
+    refreshed_kinds: list[str],
+    with_review: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state, resolver, sessions = stub_session_state()
     state._agent_current["current_session_id"] = current_session_id
+    if with_review:
+        monkeypatch.setattr(
+            sessions,
+            "review_forks",
+            lambda _address: (SessionAddress(None, "builder", "review"),),
+        )
 
     result = await rpc_result(state, "session.delete", agent_id="builder", session_id="s1")
 
@@ -50,13 +60,19 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
     assert resolver.resolved == [(None, "builder")]
     # Archived (not hard-deleted) under the identity scope.
     assert sessions.archived == [("builder", "s1", None)]
-    assert state.runtime.terminal_manager.closed_scopes == [TerminalOwner(None, "builder", "s1")]
+    assert state.runtime.terminal_manager.closed_scopes == [
+        TerminalOwner(None, "builder", "s1"),
+        *([TerminalOwner(None, "builder", "review")] if with_review else []),
+    ]
     # Identity pointer re-aimed through the shared seam; the landing is its result.
     assert state._resets == [("builder", "s1")]
     # Dropped from the recall index immediately.
     assert state._recall_removals == [("builder", "s1", None)]
     events = resource_changes(state)
-    assert [event["kind"] for event in events] == refreshed_kinds
+    assert [event["kind"] for event in events] == [
+        *(["sessions"] if with_review else []),
+        *refreshed_kinds,
+    ]
     # Other windows learn which Session was archived and where to land.
     assert events[0]["scope"] == {
         "agent_id": "builder",
@@ -64,6 +80,11 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
         "deleted_session_id": "s1",
         "next_session_id": "landing",
     }
+    if with_review:
+        assert events[1]["scope"] == {
+            **events[0]["scope"],
+            "deleted_session_id": "review",
+        }
 
 
 @pytest.mark.asyncio

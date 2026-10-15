@@ -81,6 +81,7 @@ class SessionArchiveOutcome:
     address: SessionAddress
     next_session_id: str | None
     was_current: bool
+    addresses: tuple[SessionAddress, ...]
 
 
 @dataclass(frozen=True)

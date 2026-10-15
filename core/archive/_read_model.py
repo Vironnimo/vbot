@@ -23,6 +23,7 @@ from core.sessions import (
     ArchiveEntryFilter,
     ArchiveEntryNotFoundError,
 )
+from core.utils.file_status import exists_strict, is_dir_strict
 
 if TYPE_CHECKING:
     from core.archive.archive import ArchiveServices
@@ -68,10 +69,15 @@ def show(services: ArchiveServices, entry_id: str, session_limit: int) -> Archiv
         raise ArchiveEntryNotFoundError(entry_id)
     if not entry.trees:
         files = "none"
-    elif all(stored_path(services, tree.path).exists() for tree in entry.trees):
-        files = "present"
     else:
-        files = "missing"
+        try:
+            files = (
+                "present"
+                if all(exists_strict(stored_path(services, tree.path)) for tree in entry.trees)
+                else "missing"
+            )
+        except OSError:
+            files = "unavailable"
     marked = entry.facts.get("user_folders")
     named = set(marked) if isinstance(marked, list) else set()
     workspace = entry.facts.get("workspace")
@@ -144,6 +150,9 @@ def _not_restorable_reason(services: ArchiveServices, entry: ArchiveEntry) -> st
         return "payload_invalid"
     role = _PAYLOAD_ROLES[entry.kind]
     trees = [tree for tree in entry.trees if tree.role == role]
-    if not trees or not all(stored_path(services, tree.path).is_dir() for tree in trees):
-        return "payload_missing"
+    try:
+        if not trees or not all(is_dir_strict(stored_path(services, tree.path)) for tree in trees):
+            return "payload_missing"
+    except OSError:
+        return "payload_unavailable"
     return None

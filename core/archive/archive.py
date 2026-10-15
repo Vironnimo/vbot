@@ -298,6 +298,10 @@ class ArchiveService:
             # Archiving the rows and moving the current pointer is one unit for data snapshots.
             async with services.snapshot_barrier.compound_mutation_async():
                 ref = await sessions.archive(address)
+                archived_members = await sessions.run_async(
+                    sessions.archive_ledger.members, ref.entry_key, limit=None
+                )
+                archived_addresses = tuple(member.address for member in archived_members)
                 next_session_id = None
                 if address.project_id is None:
                     agent = await sessions.run_async(
@@ -322,7 +326,7 @@ class ArchiveService:
             actor,
         )
         return SessionArchiveOutcome(
-            ref.entry_id, address, next_session_id, removed_current is not None
+            ref.entry_id, address, next_session_id, removed_current is not None, archived_addresses
         )
 
     # -- Restore -----------------------------------------------------------------
