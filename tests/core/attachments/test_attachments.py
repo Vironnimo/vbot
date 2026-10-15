@@ -396,6 +396,7 @@ def test_set_transcription_persists_and_keeps_unknown_sidecar_fields(tmp_path: P
         {"media_type": "application/x-unknown"},
         {"media_type": []},
         {"media_type": {}},
+        None,
     ],
     ids=[
         "newer-version",
@@ -404,28 +405,35 @@ def test_set_transcription_persists_and_keeps_unknown_sidecar_fields(tmp_path: P
         "unstored-type",
         "array-media-type",
         "object-media-type",
+        "unreadable",
     ],
 )
 def test_sidecar_that_fails_to_load_is_unavailable_and_never_rewritten(
-    tmp_path: Path, change: dict[str, object]
+    tmp_path: Path, change: dict[str, object] | None, deny_access, monkeypatch
 ) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
     sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
-    payload = {**json.loads(sidecar_path.read_text(encoding="utf-8")), **change}
+    unreadable = change is None
+    payload = {**json.loads(sidecar_path.read_text(encoding="utf-8")), **(change or {})}
     payload = {key: value for key, value in payload.items() if value is not None}
     original = json.dumps(payload)
     sidecar_path.write_text(original, encoding="utf-8")
+    if unreadable:
+        deny_access(sidecar_path)
 
-    with pytest.raises(AttachmentError):
+    with pytest.raises(AttachmentError) as failed:
         store.get(record.id)
+    assert not isinstance(failed.value, AttachmentNotFoundError)
+    assert isinstance(failed.value.__cause__, OSError) == unreadable
     with pytest.raises(AttachmentError):
         store.set_transcription(record.id, "hello world")
 
+    monkeypatch.undo()
     assert sidecar_path.read_text(encoding="utf-8") == original
     report = validate_attachment_metadata_file(sidecar_path)
-    assert not report.ok
-    if "media_type" in change:
+    assert report.ok == unreadable
+    if change and "media_type" in change:
         assert [(item.severity, item.path) for item in report.diagnostics] == [
             ("error", "$.media_type")
         ]

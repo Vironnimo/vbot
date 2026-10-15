@@ -297,17 +297,18 @@ class AttachmentStore:
 
         normalized_id = _normalize_attachment_id(attachment_id)
         sidecar_path = self._sidecar_path(normalized_id)
-        if not sidecar_path.exists():
-            raise AttachmentNotFoundError(f"Attachment not found: {normalized_id}")
-
         try:
             data = load_validated_json_file(
-                sidecar_path, validate_attachment_metadata_data, missing_ok=False
+                sidecar_path, validate_attachment_metadata_data, missing_ok=True
             )
-        except OSError as exc:
-            raise AttachmentError(f"Cannot read attachment metadata {sidecar_path}: {exc}") from exc
         except JsonConfigValidationError as exc:
+            if isinstance(exc.__cause__, OSError):
+                raise AttachmentError(
+                    f"Cannot read attachment metadata {sidecar_path}: {exc.__cause__}"
+                ) from exc.__cause__
             raise AttachmentError(f"Invalid attachment metadata: {exc}") from exc
+        if data is None:
+            raise AttachmentNotFoundError(f"Attachment not found: {normalized_id}")
 
         metadata = strip_unknown_fields(data, ATTACHMENT_METADATA_SHAPE)
         if metadata["id"].lower() != normalized_id:
