@@ -191,51 +191,44 @@ async def _execute_handoff(
         if target_project_id is None
         else AGENT_DEFAULT_PROJECT
     )
-    target_session = await _command_session_io(
-        sessions,
-        "create_async",
-        "create",
+    target_run = await trigger_service.trigger_run(
         target_agent_id,
+        handoff_text,
         project_id=target_project_id,
         actor="command",
         working_project_id=working_project_id,
+        internal=False,
+        reply_surface=context.reply_surface,
     )
+    target_session_id = target_run.session_id
     if target_project_id is None:
         agents = _require_dependency(agents, "AgentStore")
         await _COMMAND_WORKERS.run(
             agents.update,
             target_agent_id,
-            current_session_id=target_session.id,
+            current_session_id=target_session_id,
         )
-    change = _session_change(target_project_id, target_agent_id, target_session.id)
+    change = _session_change(target_project_id, target_agent_id, target_session_id)
     context.report_change(change)
-    target_run = await trigger_service.trigger_run(
-        target_agent_id,
-        handoff_text,
-        session_id=target_session.id,
-        project_id=target_project_id,
-        internal=False,
-        reply_surface=context.reply_surface,
-    )
     _LOGGER.info(
         "Session handoff created "
         "(source_agent=%s source_session=%s target_agent=%s target_session=%s)",
         format_agent_address(context.agent_id, context.project_id),
         context.session_id,
         target_display,
-        target_session.id,
+        target_session_id,
     )
     return CommandOutcome(
         command="handoff",
         feedback=CommandFeedback(
             kind="notice",
-            text=f"Handoff sent to {target_display}, session {target_session.id}.",
+            text=f"Handoff sent to {target_display}, session {target_session_id}.",
         ),
-        facts={"session_id": target_session.id, "agent_id": target_display},
+        facts={"session_id": target_session_id, "agent_id": target_display},
         navigation=CommandNavigation(
             kind="offer_session",
             agent_id=target_agent_id,
-            session_id=target_session.id,
+            session_id=target_session_id,
             project_id=target_project_id,
         ),
         runs=(CommandRun(role="follow_up", run=target_run),),

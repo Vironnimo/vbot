@@ -27,15 +27,27 @@ def make_queued_item(run: Run | None = None) -> SimpleNamespace:
     return SimpleNamespace(future=future)
 
 
-@pytest.mark.parametrize("project_id", [None, "vbot"])
-async def test_trigger_run_without_session_starts_in_a_new_session(project_id: str | None) -> None:
+@pytest.mark.parametrize(
+    ("project_id", "session_options"),
+    [
+        (None, {}),
+        ("vbot", {}),
+        (None, {"working_project_id": "work", "actor": "command"}),
+        (None, {"working_project_id": None, "actor": "command"}),
+    ],
+)
+async def test_trigger_run_without_session_starts_in_a_new_session(
+    project_id: str | None, session_options: dict[str, Any]
+) -> None:
     runtime = SimpleNamespace(chat_sessions=SimpleNamespace(create=Mock()))
     chat_loop = SimpleNamespace(
         start_run_in_new_session=AsyncMock(return_value=make_run("run-one", "coder", "new"))
     )
     trigger_service = TriggerService(cast(Any, chat_loop), cast(Any, Mock()), cast(Any, runtime))
 
-    run = await trigger_service.trigger_run("coder", "Start automated work", project_id=project_id)
+    run = await trigger_service.trigger_run(
+        "coder", "Start automated work", project_id=project_id, **session_options
+    )
 
     # The chat loop creates the Session (under the project anchor when scoped).
     runtime.chat_sessions.create.assert_not_called()
@@ -45,6 +57,7 @@ async def test_trigger_run_without_session_starts_in_a_new_session(project_id: s
         sender=None,
         reply_surface=None,
         project_id=project_id,
+        **session_options,
     )
     assert run.id == "run-one"
 

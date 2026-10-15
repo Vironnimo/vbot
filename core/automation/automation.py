@@ -22,7 +22,7 @@ from core.runs import (
     RunStatus,
     WaitingWorkAdmission,
 )
-from core.sessions import SessionAddress
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -944,6 +944,8 @@ class TriggerService:
         sender: MessageSender | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+        actor: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         max_tool_iterations: int | None = None,
@@ -962,6 +964,8 @@ class TriggerService:
         (``ChatLoop.start_run``); ``None`` keeps the loop's limit.
         ``context_note`` is stored as a note right before the message, for
         context the Model reads with it.
+        With no ``session_id``, ``working_project_id`` and ``actor`` select the
+        new Session's working Project and creation attribution, as in Chat.
         """
         tool_kwargs = _optional_tool_kwargs(
             tool_restriction,
@@ -969,6 +973,11 @@ class TriggerService:
             max_tool_iterations,
         )
         if session_id is None:
+            session_kwargs: dict[str, Any] = {}
+            if working_project_id is not AGENT_DEFAULT_PROJECT:
+                session_kwargs["working_project_id"] = working_project_id
+            if actor is not None:
+                session_kwargs["actor"] = actor
             try:
                 if internal:
                     return await self._chat_loop.start_run_in_new_session(
@@ -977,6 +986,7 @@ class TriggerService:
                         internal=True,
                         reply_surface=reply_surface,
                         project_id=project_id,
+                        **session_kwargs,
                         **tool_kwargs,
                         **_optional_run_kwargs(
                             input_persisted_hook,
@@ -991,6 +1001,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
+                    **session_kwargs,
                     **tool_kwargs,
                     **_optional_run_kwargs(
                         input_persisted_hook,
