@@ -312,8 +312,9 @@ async def test_old_string_copied_with_errors_resembling_several_places_is_refuse
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool_name", ["edit", "apply_patch"])
 @pytest.mark.parametrize(("copied_indent", "file_indent"), [("    ", "    "), ("  ", "\t")])
+@pytest.mark.parametrize("indent_only", [False, True])
 async def test_a_copied_rewrite_keeps_its_explicit_indentation(
-    tmp_path, tool_name, copied_indent, file_indent
+    tmp_path, tool_name, copied_indent, file_indent, indent_only
 ):
     before = (
         "def receive():\n"
@@ -335,13 +336,31 @@ async def test_a_copied_rewrite_keeps_its_explicit_indentation(
         "            output = None\n"
         "    return output\n"
     )
+    if indent_only:
+        before = (
+            "def receive(enabled):\n"
+            "    output = 0\n"
+            "    if enabled:\n"
+            "        output = 0\n"
+            "        # report the failure through normal handling\n"
+            "        output += 1\n"
+            "    return output\n"
+        )
+        after = before.replace("        output += 1", "    output += 1")
     old = before.replace("the failure", "the transient failure").replace("    ", copied_indent)
     new = after.replace("    ", copied_indent)
+    if indent_only:
+        old = before.replace("failure", "faliure").replace("    ", copied_indent)
     if tool_name == "edit":
         arguments = {"path": "a.py", "edits": [{"old_string": old, "new_string": new}]}
     else:
         body = "\n".join(
-            [*("-" + line for line in old.splitlines()), *("+" + line for line in new.splitlines())]
+            [
+                " " + old.splitlines()[0],
+                *("-" + line for line in old.splitlines()[1:-1]),
+                *("+" + line for line in new.splitlines()[1:-1]),
+                " " + old.splitlines()[-1],
+            ]
         )
         arguments = {"patch": update("@@\n" + body, "a.py")}
     path = tmp_path / "a.py"
