@@ -1,0 +1,129 @@
+# Session Goals
+
+The user's `/goal` and the automatic Runs that pursue it, owned by
+`core/automation/goals.py::GoalService`. The Agent's side is the `update_goal`
+Tool (`tools/update_goal.md`). Design record and research: the git-ignored plan
+`.vorch/plans/session-goals.md` (2026-10-15).
+
+## State
+
+One goal per Session, in open Session metadata `goal`
+(`SESSION_GOAL_META_KEY`): `objective`, `status`, `pause_reason`, `turns`
+(automatic Runs since the last set, resume or reactivation), `max_turns`,
+`status_run_id` (the Run whose `update_goal` set the status), `created_at`,
+`updated_at`. Forks strip it; an Agent Takeover keeps it, paused; `/handoff`
+does not carry it. Session summaries (`session.get`, `session.list`) expose
+`objective`, `status`, `pause_reason`, `turns` and `max_turns` as `goal`.
+
+| Status | Meaning | Leaves it |
+|---|---|---|
+| `active` | Automatic Runs continue. | `update_goal`, a kernel pause, `/goal pause`, `/goal clear` |
+| `blocked` | The Agent needs the user. | The next completed `user` or `channel` Run that is not internal and is not the Run that blocked it: `active` with `turns` 0 |
+| `paused` | Stopped until `/goal resume`; `pause_reason` says why. | `/goal resume` (`turns` 0) |
+| `complete` | The Agent reported it done. | `/goal resume`, a new `/goal <objective>` |
+
+Pause reasons: `user` (`/goal pause`), `agent` (`update_goal` `paused`), and the
+kernel's `stop`, `run_failed`, `no_progress`, `limit`, `restart`, `takeover`.
+A kernel pause writes one note (`The goal was paused because <reason>. The user
+can resume it with /goal resume.`); `user` and `agent` write none, since the one
+who paused already knows. Background results never resume a paused or blocked
+goal.
+
+## Continuation
+
+`install()` registers a `ChatRunManager` start callback and a completion
+observer on every Run. After the Run's terminal commit, a spawned decision runs:
+
+1. No goal: nothing. `cancelled` with a reason other than `shutdown`: pause
+   `stop`. `failed` or `interrupted`: pause `run_failed`.
+2. `blocked`: reactivate only for a reactivating Run (table above).
+3. Not `active`: nothing.
+4. An automatic goal Run with no successful Tool call other than `update_goal`
+   (`Run.succeeded_tool_call_names`): pause `no_progress`. User Runs and
+   background-result Runs are not judged.
+5. `turns >= max_turns`: pause `limit`.
+6. Queued input for the Session: nothing; that Run's end decides again.
+7. Running work whose result wakes the Session (a direct Sub-Agent child with
+   activity, or `CommandManager.has_pending_delivery`): wait. The result's Run
+   decides again; a fallback continues after `GOAL_WAIT_FALLBACK_SECONDS`
+   (10 minutes), because a command such as a dev server never ends.
+8. Otherwise count the turn and start an internal `system` Run through
+   `ChatLoop.start_run` with the Session's latest reply surface and the input
+   `GOAL_CONTINUE_TEXT`, or `GOAL_LAST_TURN_TEXT` for the turn that reaches the
+   limit. A Channel surface relays the Run through `set_run_relay`. A start that
+   loses the Session to another Run uncounts the turn; a failed start pauses
+   `run_failed`.
+
+Goal Run ids are tracked in memory only. A Runtime start pauses every `active`
+goal with `restart` before any Run starts (`pause_after_restart`), so no goal
+continues unattended after a crash or update.
+
+## Commands
+
+`/goal` is a Built-in of `CommandDispatcher` that delegates to
+`GoalService.execute_command` (`chat/commands.md`). It is unavailable in group
+conversations (user decision 2026-10-15).
+
+- `/goal <objective> [--max N]` sets or replaces the goal (`--max` 1 to 200,
+  default 30, user decision 2026-10-15) and starts the first Run as an internal
+  `user` Run whose input is the goal-set note. Refused while a Run of the
+  Session is active: `Stop the current turn first, then set the goal.` It can
+  create a new Session.
+- `/goal` reports `Goal (<status or pause reason>): <objective>` and
+  `Automatic turns: N of M.`
+- `/goal pause`, `/goal resume`, `/goal clear` are immediate. `resume` works
+  from `paused` and `complete` and starts an internal `user` Run with
+  `GOAL_RESUMED_TEXT` when the Session is idle.
+- `/stop` always pauses an open goal with `stop`, also without an active Run,
+  so an automatic Run that has not started yet cannot continue it.
+
+## Chat and Compaction
+
+Chat grants `update_goal` as a Session Grant while the goal is `active`,
+`blocked` or `paused` (`has_open_goal`). While it is open, the Compaction
+finalizer keeps the latest note starting with `SESSION_GOAL_NOTE_PREFIX` (the
+goal-set note) verbatim after the summary; pause notes and per-turn inputs are
+not retained.
+
+## WebUI
+
+`ComposerGoal.svelte` shows the goal above the composer from the Session's
+`session.get` row: status or pause reason, objective, turns, and buttons that
+send `/goal pause|resume|clear` through the ordinary send path. Every goal change
+publishes `resource_changed(sessions)` for the Session through
+`add_changed_callback`, which rereads the row.
+
+## Deviations from the plan
+
+- No `RunKind.GOAL`: automatic Runs are `system`, Runs from set and resume are
+  internal `user` Runs; the in-memory id set marks goal Runs.
+- The goal-set note is found by its prefix, not by a note id in metadata.
+- The indicator sits above the composer, not in the chat header.
+
+## Agent-facing text
+
+The kernel notes are English constants in `goals.py`; the objective is the only
+user text, quoted with `quote_external_value`. What each status means lives only
+in the `update_goal` definition; reasons for those sentences:
+`tools/update_goal.md`.
+
+| Text | Reason |
+|---|---|
+| `The user set a goal for this session with /goal:` + quoted objective | The Agent must know what to pursue; quoting keeps it user data, not kernel voice. |
+| `When your turn ends while the goal is active, vBot starts your next turn automatically, until you mark the goal complete or blocked with update_goal.` | Without it Agents ask "Shall I continue?" or wrap up each turn as finished (Goose, Hermes). It names only complete and blocked: naming paused invites pausing on the Agent's own initiative. |
+| `Your previous turn ended while the goal is still active. Continue with the next step toward it.` | Without it the Agent reads a turn without user text as a new request and recaps instead of working. A standing rule never goes into this repeated reminder. |
+| `This is the last automatic turn; ... end your reply with what is done and what remains.` | Without it the pause cuts the work off mid-step and the user gets no account of what remains. |
+| `The user resumed the goal. Continue with the next step toward it.` | Input of a Run the user started without text; without it the Agent cannot tell why it runs. |
+| `The goal was paused because <reason>. The user can resume it with /goal resume.` | When the user later asks why work stopped, the Agent can only answer from it. Written as a fact, not a state that can change after the note. |
+
+## Source and tests
+
+- `core/automation/goals.py`; `tests/core/automation/test_goals.py` (continuation,
+  every pause reason, blocked reactivation, waiting, commands, restart).
+- Grant and Compaction retention: `core/chat/_run_state.py`,
+  `core/chat/_request_builder.py`, `core/chat/_scratch_context.py`;
+  `tests/core/chat/test_chat_goal_session.py`.
+- Wiring: `core/runtime/_bootstrap.py` (`_goal_work_pending`), shutdown step
+  `goals`, server bridge in `server/_app_lifecycle.py`.
+- WebUI: `webui/src/components/chat/ComposerGoal.svelte`,
+  `ChatView.sessionSettings.test.js`.

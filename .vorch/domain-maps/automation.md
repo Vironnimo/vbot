@@ -4,7 +4,13 @@ Programmatic Run triggering, time- and startup-based scheduling, background self
 
 ## Overview
 
-`TriggerService` is the kernel bridge for non-WebUI producers starting normal chat Runs: cron jobs, Bootstrap jobs, channels, maintenance work, coalesced background-completion delivery. It owns no second execution path - it calls Chat and uses the same `ChatRunManager` guard and FIFO as browser sends. `CronService` owns persisted time-based and calendar-event-based jobs under `<data_dir>/cron/jobs.json`; `BootstrapService` owns startup-triggered jobs under `<data_dir>/bootstrap/jobs.json`, activated by the server only after the lifespan reaches application-ready. Server RPCs and the CLI are thin clients; scheduling behavior lives in this domain. Bootstrap deliberately has no Agent Tool or WebUI surface. `ReflectionService` owns background self-improvement reviews (shared fork-review orchestration plus the automatic cadence). `LearningChanges` (`core/automation/learning.py`) reads and undoes the Memory and Skill changes of one Run. `LibrarianService` (`core/automation/librarian.py`) curates each Identity Agent's own Skills on a schedule (-> Librarian).
+`TriggerService` is the kernel bridge for non-WebUI producers starting normal chat Runs: cron jobs, Bootstrap jobs, channels, maintenance work, coalesced background-completion delivery. It owns no second execution path - it calls Chat and uses the same `ChatRunManager` guard and FIFO as browser sends. `CronService` owns persisted time-based and calendar-event-based jobs under `<data_dir>/cron/jobs.json`; `BootstrapService` owns startup-triggered jobs under `<data_dir>/bootstrap/jobs.json`, activated by the server only after the lifespan reaches application-ready. Server RPCs and the CLI are thin clients; scheduling behavior lives in this domain. Bootstrap deliberately has no Agent Tool or WebUI surface. `ReflectionService` owns background self-improvement reviews (shared fork-review orchestration plus the automatic cadence). `LearningChanges` (`core/automation/learning.py`) reads and undoes the Memory and Skill changes of one Run. `LibrarianService` (`core/automation/librarian.py`) curates each Identity Agent's own Skills on a schedule (-> Librarian). `GoalService` (`core/automation/goals.py`) owns Session Goals: `/goal` and the automatic Runs that pursue one (-> References).
+
+## Terms
+
+### Session Goal
+
+An objective the user sets for one Session with `/goal`. While it is active, the end of each completed Run starts the next automatic Run until the Agent marks it complete, blocked or paused with `update_goal` or the kernel pauses it. Not a Cron job or Bootstrap job: it has no schedule and lives in Session metadata.
 
 ## Interfaces
 
@@ -142,4 +148,5 @@ Read these only when your task matches - not by default.
 
 - Choosing how background producers inform the Model (persisted notes vs internal triggers) -> `model-communication.md`
 - Running, extending or interpreting the learning evaluation of reviews, `/learn` and Librarian passes (fixture fidelity and deviations, case schema, scoring, text packs, reports, compare) -> `automation/learning-evaluation.md`
+- Session Goals: `/goal`, automatic goal Runs and their pauses, the goal metadata, the goal note across Compaction, or the WebUI goal bar -> `automation/goals.md`
 - Changing or debugging Librarian passes (schedule and first pass, aging rule, consolidation Run setup and candidates, pass Sessions, `librarian.json` state and pass history, `librarian.status`/`librarian.run`/`librarian.overview`, CLI, the Librarian brief) -> `automation/librarian.md`

@@ -17,7 +17,7 @@ Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 **Not:** A permission - policy answers "may this Agent use it", readiness answers "can it run right now". Also not stored Extension state: the Extensions tab's waiting status is a derived display value.
 
 ### Session Grant
-**Definition:** A capability Chat derives while building one Session's request state and carries through provider definitions and dispatch. Example: an Extension's private Tools appear only in a Session its temporary binding grants them to (`extensions.md`).
+**Definition:** A capability Chat derives while building one Session's request state and carries through provider definitions and dispatch. Examples: an Extension's private Tools appear only in a Session its temporary binding grants them to (`extensions.md`); `update_goal` appears while the Session's goal is open (`tools/update_goal.md`).
 **Not:** A Run-local input, Agent/Project configuration, catalog choice, or permission to address another Session.
 
 ### Definition Profile
@@ -111,4 +111,5 @@ Read these only when your task matches - not by default.
 
 - Launching or killing OS child processes (windowless flags, Job/guardian containment, tree kill in `core/utils/processes.py`) -> `tools/os-processes.md`
 - Classifying texts through the configured Decision Model (`classify`) -> `tools/classify.md`
+- The `update_goal` Tool of a Session Goal: its grant, results and texts -> `tools/update_goal.md`
 - On-demand Tools: the `load_tools` Tool, its results and argument reading, and how its caller supplies loadable Tools -> `tools/load_tools.md`
