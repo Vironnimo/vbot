@@ -109,13 +109,14 @@ class _Harness:
 
     async def settle(self) -> None:
         """Wait until no Run is active and every goal decision has run."""
-        for _ in range(2000):
-            await asyncio.sleep(0)
-            if not self.runs.active_runs() and not self.goals._tasks:  # noqa: SLF001
-                await asyncio.sleep(0)
-                if not self.runs.active_runs() and not self.goals._tasks:  # noqa: SLF001
-                    return
-        raise AssertionError("goal Runs did not settle")
+        while True:
+            runs = self.runs.active_runs()
+            decisions = list(self.goals._tasks)  # noqa: SLF001 - drain this harness's decisions.
+            if not runs and not decisions:
+                return
+            # A decision may start another Run, whose completion spawns another
+            # decision. Wait for each snapshot instead of racing Session workers.
+            await asyncio.gather(*(run.wait() for run in runs), *decisions, return_exceptions=True)
 
     async def user_run(self, turn: Turn = _works) -> None:
         """A message the user sends: a visible user Run."""
@@ -134,12 +135,29 @@ def _marks(goals: GoalService, status: Any) -> Turn:
     return turn
 
 
-async def test_goal_runs_automatically_until_the_agent_marks_it_complete(tmp_path: Path) -> None:
+async def test_goal_runs_automatically_until_the_agent_marks_it_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     harness = _Harness(tmp_path)
     harness.loop.turns = [_works, _works, _marks(harness.goals, "complete")]
 
     await harness.command("Ship <the> release")
-    await harness.settle()
+    read_started, release_read = asyncio.Event(), asyncio.Event()
+    metadata_value_async = harness.sessions.metadata_value_async
+
+    async def held_read(address: SessionAddress, key: str) -> Any:
+        read_started.set()
+        await release_read.wait()
+        return await metadata_value_async(address, key)
+
+    monkeypatch.setattr(harness.sessions, "metadata_value_async", held_read)
+    async with asyncio.TaskGroup() as tasks:
+        settling = tasks.create_task(harness.settle())
+        try:
+            await read_started.wait()
+            assert not settling.done()
+        finally:
+            release_read.set()
 
     first, *automatic = harness.loop.started
     # The user's command starts the first Run; the objective stays quoted user text.
@@ -193,7 +211,7 @@ async def test_the_kernel_pauses_an_automatic_turn_that_cannot_go_on(
 
     async def cancelled(run: Run) -> None:
         harness.runs.cancel_by_session("coder", "session-one", project_id=None, reason="user")
-        await asyncio.sleep(1)
+        await asyncio.Event().wait()
 
     automatic = {"fail": fails, "cancel": cancelled}.get(turn, turn)
     harness.loop.turns = [_works, automatic]
