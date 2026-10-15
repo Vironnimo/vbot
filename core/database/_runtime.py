@@ -38,8 +38,7 @@ _LOGGER = logging.getLogger("vbot.database")
 
 WRITE_PATIENCE_S = 20.0
 READ_CONNECTION_LIMIT = 8
-# Page cache per connection, in KiB. The writer also serves every read in
-# rollback-journal mode; pooled readers exist only in WAL mode. Ceiling per
+# Page cache per connection, in KiB. Pooled readers exist in both journal modes. Ceiling per
 # database: 64 MiB + READ_CONNECTION_LIMIT x 16 MiB = 192 MiB, reached only
 # when every connection has read that many distinct pages.
 WRITER_CACHE_KIB = 64 * 1024
@@ -58,12 +57,17 @@ _LOCK_WAIT_SPAN_MIN_MS = 1.0
 Synchronous = Literal["FULL", "NORMAL", "OFF"]
 
 
+class _ReadBusyError(DatabaseUnavailableError):
+    """A read may be retried as a whole on a worker, never inside its callback."""
+
+
 class ConnectionRuntime:
     """Own every live writer and reader connection for one database file.
 
     One serialized writer runs whole transactions under ``BEGIN IMMEDIATE`` with
     jittered busy retry; a bounded LIFO pool of read-only connections serves
-    reads in WAL mode, and the writer serves them in rollback-journal mode.
+    reads in both journal modes. Synchronous reads never wait for contention;
+    ``execute_read`` retries a complete read callback within its budget.
     Each write attempt is measured as ``sqlite.<name>.write`` after
     ``sqlite.<name>.write_wait`` for the connection lock; each read transaction,
     including the caller's work, as ``sqlite.<name>.read``.
@@ -136,7 +140,9 @@ class ConnectionRuntime:
                 if self._connection_setup is not None:
                     self._connection_setup(connection)
                 connection.execute("PRAGMA foreign_keys=ON")
-                connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+                # Runtime retry owns the complete wait budget, including local
+                # lock admission. SQLite must not add an unbudgeted native wait.
+                connection.execute("PRAGMA busy_timeout=0")
                 connection.execute(f"PRAGMA cache_size=-{WRITER_CACHE_KIB}")
                 verify(connection)
                 wal_active = apply_wal_with_fallback(connection, db_label=self.label) == "wal"
@@ -184,7 +190,7 @@ class ConnectionRuntime:
         while True:
             try:
                 waiting = time.perf_counter()
-                with self._lock:
+                with self._write_admission(deadline, patience_s):
                     record_span(
                         self._write_wait_metric,
                         waiting,
@@ -224,6 +230,31 @@ class ConnectionRuntime:
                     raise translated from exc
                 raise
 
+    @contextlib.contextmanager
+    def _write_admission(self, deadline: float, patience_s: float) -> Iterator[None]:
+        if not self._lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise DatabaseUnavailableError(f"{self.label} write stayed busy for {patience_s:.1f}s")
+        try:
+            yield
+        finally:
+            self._lock.release()
+
+    def execute_read[Result](
+        self,
+        operation: Callable[[sqlite3.Connection], Result],
+        *,
+        patience_s: float = WRITE_PATIENCE_S,
+    ) -> Result:
+        """Retry a side-effect-free read callback within one contention budget."""
+        deadline = time.monotonic() + patience_s
+        while True:
+            try:
+                with self.read_ctx() as connection:
+                    return operation(connection)
+            except _ReadBusyError:
+                if not self._sleep_before_retry(deadline, patience_s):
+                    raise
+
     @staticmethod
     def _sleep_before_retry(deadline: float, patience_s: float) -> bool:
         now = time.monotonic()
@@ -239,22 +270,29 @@ class ConnectionRuntime:
 
     @contextlib.contextmanager
     def read_ctx(self) -> Iterator[sqlite3.Connection]:
-        """Yield one bounded read connection, or the serialized writer.
+        """Yield one bounded read connection without waiting for contention.
 
         Caller errors pass through, except a connection closed during the read
         reports the database's shutdown as unavailability.
         """
-        with (
-            measure(self._read_metric, track=PERFORMANCE_TRACK, name=f"{self.name} read"),
-            self._read_transaction() as connection,
-        ):
-            yield connection
+        try:
+            with (
+                measure(self._read_metric, track=PERFORMANCE_TRACK, name=f"{self.name} read"),
+                self._read_transaction() as connection,
+            ):
+                yield connection
+        except sqlite3.Error as exc:
+            if classify_unavailable(exc):
+                raise _ReadBusyError(f"{self.label} read is busy") from exc
+            raise
 
     @contextlib.contextmanager
     def _read_transaction(self) -> Iterator[sqlite3.Connection]:
         connection = self._checkout_reader()
         if connection is None:
-            with self._lock:
+            if not self._lock.acquire(blocking=False):
+                raise _ReadBusyError(f"{self.label} read is busy")
+            try:
                 with self._reader_lock:
                     if self._reader_access_closed:
                         raise DatabaseUnavailableError(f"{self.label} is closed")
@@ -268,6 +306,8 @@ class ConnectionRuntime:
                         if writer.in_transaction:
                             writer.execute("ROLLBACK")
                     raise
+            finally:
+                self._lock.release()
             return
         healthy = True
         try:
@@ -296,8 +336,6 @@ class ConnectionRuntime:
         with self._reader_lock:
             if self._reader_access_closed or self._writer is None:
                 raise DatabaseUnavailableError(f"{self.label} is closed")
-            if not self._wal_active:
-                return None
             if self._reader_open_failed_at and (
                 time.monotonic() - self._reader_open_failed_at < READ_OPEN_RETRY_SECONDS
             ):
@@ -320,7 +358,7 @@ class ConnectionRuntime:
                     uri=True,
                     isolation_level=None,
                     check_same_thread=False,
-                    timeout=5.0,
+                    timeout=0.0,
                 )
                 connection.row_factory = sqlite3.Row
                 if self._connection_setup is not None:
@@ -336,9 +374,10 @@ class ConnectionRuntime:
                 generation = int(connection.execute("PRAGMA user_version").fetchone()[0])
                 if generation != self._format_generation:
                     raise DatabaseCorruptError(f"{self.label}: reader format generation mismatch")
-            except BaseException:
-                with self._reader_lock:
-                    self._reader_open_failed_at = time.monotonic()
+            except BaseException as exc:
+                if not classify_unavailable(exc):
+                    with self._reader_lock:
+                        self._reader_open_failed_at = time.monotonic()
                 return None
             with self._reader_lock:
                 if self._reader_access_closed:
@@ -385,7 +424,9 @@ class ConnectionRuntime:
 
     def checkpoint(self) -> None:
         """Run a non-blocking checkpoint without changing journal mode."""
-        with self._lock:
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
             if self._writer is None or self._closed or not self._wal_active:
                 return
             try:
@@ -405,6 +446,8 @@ class ConnectionRuntime:
                     type(exc).__name__,
                     exc,
                 )
+        finally:
+            self._lock.release()
 
     def backup(
         self,
@@ -415,12 +458,10 @@ class ConnectionRuntime:
         """Write one consistent copy of the live database to ``destination``.
 
         The copy is a single ``copy_database`` pass from a read-only connection,
-        so committing writers can neither restart nor tear it. With WAL the reader
-        works from its own snapshot while writers and readers continue. In
-        rollback-journal mode that reader's lock would block every commit and
-        let short-budget writes fail as busy, so the copy holds this runtime's
-        connection lock instead: writes and reads queue in Python until the copy
-        finishes. The copy is not synced to disk: the caller makes it durable when
+        so committing writers can neither restart nor tear it. It never owns the
+        writer's transaction lock. WAL writers can commit during the copy; a
+        rollback-journal commit waits within its own patience budget while other
+        readers continue. The copy is not synced to disk: the caller makes it durable when
         it needs to, outside any freeze it holds. Returns ``False`` when
         ``cancelled`` stopped the copy.
         """
@@ -437,14 +478,14 @@ class ConnectionRuntime:
         temporary = destination.with_name(
             f".{destination.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         )
-        admission: contextlib.AbstractContextManager[Any] = (
-            contextlib.nullcontext() if self.wal_active() else self._lock
-        )
         try:
-            with admission:
-                with self._lock:
-                    if self._writer is None or self._closed:
-                        raise DatabaseUnavailableError(f"{self.label} is closed")
+            # Admission shares reader lifecycle protection, not the writer's
+            # transaction lock. Shutdown waits until the copy closes its source.
+            with self._reader_lock:
+                if self._reader_access_closed or self._writer is None:
+                    raise DatabaseUnavailableError(f"{self.label} is closed")
+                self._reader_io_pending += 1
+            try:
                 source = connect_tracked(
                     readonly_sqlite_uri(self.path),
                     tracking_path=self.path,
@@ -457,6 +498,10 @@ class ConnectionRuntime:
                     copied = copy_database(source, temporary, cancelled=cancelled)
                 finally:
                     source.close()
+            finally:
+                with self._reader_condition:
+                    self._reader_io_pending -= 1
+                    self._reader_condition.notify_all()
             if not copied or (cancelled is not None and cancelled()):
                 remove_database_files(temporary)
                 return False
@@ -501,8 +546,7 @@ class ConnectionRuntime:
         return self._closed
 
     def wal_active(self) -> bool:
-        with self._lock:
-            return self._wal_active
+        return self._wal_active
 
     def live_connection_count(self) -> int:
         return tracked_connection_count(self.path)
