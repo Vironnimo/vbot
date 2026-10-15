@@ -63,6 +63,7 @@ from core.tools._shell_results import (
     delivery_names,
     duration,
     ended_result,
+    exit_code_text,
     format_command_delivery,
     holding_stage,
     named_tools,
@@ -892,7 +893,9 @@ def shell_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> lis
         and not isinstance(exit_code, bool)
         and exit_code != 0
     ):
-        blocks.append(display_notice("warning", f"The command exited with code {exit_code}."))
+        blocks.append(
+            display_notice("warning", f"The command exited with code {exit_code_text(exit_code)}.")
+        )
     failed = data.get("failed_programs")
     if isinstance(failed, list) and failed:
         blocks.append(display_notice("warning", "; ".join(str(item) for item in failed)))

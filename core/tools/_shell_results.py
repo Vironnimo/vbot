@@ -271,7 +271,8 @@ def ended_result(
     """The result data of an ended command, fields in order and omitted when empty.
 
     ``status`` (``exited``, ``stopped`` or ``not_run``), ``exit_code`` (of a
-    command that exited by itself), ``stopped_because``, ``not_run_because``,
+    command that exited by itself), its optional ``exit_code_hex``,
+    ``stopped_because``, ``not_run_because``,
     ``output``, ``failed_programs``, ``hint``, and for processes it left running
     ``command_id``, ``still_running`` and ``next``. *subagent* is the Sub-Agent
     whose Session ran the command when an Agent above it reads the result.
@@ -290,6 +291,8 @@ def ended_result(
         data = {"status": "exited"}
         if report.exit_code is not None:
             data["exit_code"] = report.exit_code
+            if hexadecimal := exit_code_hex(report.exit_code):
+                data["exit_code_hex"] = hexadecimal
     output = command_output_text(report)
     if output:
         data["output"] = output
@@ -307,6 +310,16 @@ def ended_result(
             f"{processes_text(report.still_running)}. {leftovers_stop(report, names)}"
         )
     return data
+
+
+def exit_code_hex(code: int) -> str | None:
+    """The diagnostic spelling of a high-bit Windows process exit value."""
+    return f"0x{code:08X}" if 0x80000000 <= code <= 0xFFFFFFFF else None
+
+
+def exit_code_text(code: int) -> str:
+    hexadecimal = exit_code_hex(code)
+    return f"{code} ({hexadecimal})" if hexadecimal else str(code)
 
 
 def failed_programs(report: CommandReport) -> tuple[str, ...]:
@@ -551,6 +564,13 @@ def format_command_delivery(report: CommandReport, *, names: ToolNames = _names_
     else:
         status = f"exited with code {report.exit_code} after {ran}."
     lines = [f"{COMMAND_STATUS_NOTE_MARKER}{report.command_id} ({report.label}) {status}"]
+    if (
+        report.stop_reason is None
+        and report.exit_code is not None
+        and (hexadecimal := exit_code_hex(report.exit_code))
+    ):
+        # Keep the durable status line readable by earlier versions.
+        lines.append(f"Exit code (hex): {hexadecimal}")
     if report.description:
         # The label names the purpose; the Agent needs the exact command too.
         lines.append(f"Command: {_capped(report.command, _DELIVERY_COMMAND_CHARS)}")
@@ -658,6 +678,8 @@ __all__ = [
     "delivery_names",
     "duration",
     "ended_result",
+    "exit_code_hex",
+    "exit_code_text",
     "failed_programs",
     "failure_hint",
     "format_command_delivery",

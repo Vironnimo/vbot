@@ -289,6 +289,7 @@ def note(content: str) -> Any:
         # One failed program whose code is the exit code repeats it.
         ((ProgramExit("git.exe", 128),), 128, None),
         ((ProgramExit("app.exe", 0xC0000005),), 0xC0000005, None),
+        ((), 0xC0000005, None),
         (
             (ProgramExit("git.exe", 128), ProgramExit("python.exe", 128)),
             128,
@@ -311,9 +312,14 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
 
     result = data(await shell.returned(call))
     expected: JsonObject = {"status": "exited", "exit_code": exit_code, "output": "compiling\ndone"}
+    if exit_code == 0xC0000005:
+        expected["exit_code_hex"] = "0xC0000005"
     if failed_programs is not None:
         expected["failed_programs"] = failed_programs
     assert result == expected
+    if exit_code == 0xC0000005:
+        shown = shell_detail_blocks({"command": "build --all"}, tool_success(result))
+        assert any("0xC0000005" in block.get("text", "") for block in shown)
     command, env = launched(shell.launcher)
     assert command == "build --all"
     # No input, no terminal: PowerShell cannot prompt.
@@ -1108,17 +1114,21 @@ async def test_update_handoff_token_is_claimable_exactly_while_the_command_runs(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("exit_code", [2, 0xC0000005])
 async def test_statuses_of_background_commands_fold_from_results_and_deliveries(
     shell: Shell,
+    exit_code: int,
 ) -> None:
     call = shell.call({"command": "serve", "description": "Serve (dev)"})
     process = await shell.started()
     running = await shell.returned(call)
     command_id = data(running)["command_id"]
-    process.exit(2)
+    process.exit(exit_code)
     await shell.commands.finish(command_id)
     # A delivery named by its description shows the command as well.
-    assert shell.sink.bodies[0].splitlines()[1] == "Command: serve"
+    assert "Command: serve" in shell.sink.bodies[0].splitlines()
+    if exit_code == 0xC0000005:
+        assert "Exit code (hex): 0xC0000005" in shell.sink.bodies[0].splitlines()
     # The user stops a background command whose label has parentheses after a minute.
     stopped_id = data(
         await shell.call(
