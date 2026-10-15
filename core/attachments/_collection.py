@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from core.attachments.attachments import AttachmentError, AttachmentNotFoundError
 from core.database import DatabaseError
+from core.storage.layout import DataDirectoryLayout
 from core.utils.file_status import is_link_status, stat_or_none
 from core.utils.logging import get_logger
 
@@ -28,7 +29,7 @@ def collect_session_orphans(store: AttachmentStore, sessions: ChatSessionManager
         if status is not None and (
             is_link_status(status)
             or not stat.S_ISDIR(status.st_mode)
-            or root.resolve() != store._data_dir.resolve() / "artifacts" / "attachments"
+            or root.resolve() != DataDirectoryLayout(store._data_dir.resolve()).attachments
         ):
             raise AttachmentError("Attachment collection requires its canonical directory")
     except (AttachmentError, DatabaseError, OSError) as exc:
