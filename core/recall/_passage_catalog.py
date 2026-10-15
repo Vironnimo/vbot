@@ -11,8 +11,9 @@ A Passage is stored once per Recall scope (project and Agent), identified by
 its text and exact boundaries, however many Sessions show it. A fork and its
 origin build identical Passages over the history they share, so the shared
 history is one set of rows. ``passage_views`` names every Session that shows a
-Passage and whether the Session *owns* it: its last Message is one of the
-Session's own entries rather than history that precedes its fork point.
+Passage and whether the Session *owns* its canonical entry rather than
+inheriting it. Windows never cross entry boundaries, so neither branch's
+continuation can change the windows of their shared entries.
 
 Search reports each Passage for one candidate Session, by the rule store search
 applies to entries: the owner when it is a candidate, else the newest candidate
@@ -303,16 +304,20 @@ def plan_refresh(
 def _session_passages(
     session_id: str, previous: SessionVersion | None, batch: SessionReadBatch
 ) -> SessionPassages:
-    passages = tuple(build_session_passages(batch.active_messages))
-    position = {str(message.id): index for index, message in enumerate(batch.active_messages)}
+    passages: list[Passage] = []
+    owned: list[bool] = []
+    for position, message in enumerate(batch.active_messages):
+        windows = build_session_passages([message])
+        passages.extend(windows)
+        # Public Message ids can repeat. Ownership follows the canonical view
+        # position, never a map keyed by those ids.
+        owned.extend([position >= batch.inherited_count] * len(windows))
     return SessionPassages(
         session_id=session_id,
         previous=previous,
         version=(batch.cursor.generation_id, batch.cursor.history_revision),
-        passages=passages,
-        owned=tuple(
-            position.get(passage.end_message_id, 0) >= batch.inherited_count for passage in passages
-        ),
+        passages=tuple(passages),
+        owned=tuple(owned),
     )
 
 

@@ -95,20 +95,9 @@ def _history_high_water(connection: sqlite3.Connection) -> int:
 
 
 def _message_is_searchable(message: ChatMessage) -> bool:
-    """Test index eligibility without materializing large Message search text."""
-    from core.recall.canonical import (
-        SESSION_RECALL_CONVERSATION_ROLES,
-        is_recall_artifact_message,
-    )
-    from core.sessions.history import is_skill_context_note
+    from core.sessions.search_content import message_is_searchable
 
-    if (
-        message.role not in SESSION_RECALL_CONVERSATION_ROLES
-        or is_recall_artifact_message(message)
-        or is_skill_context_note(message)
-    ):
-        return False
-    return bool(message.content)
+    return message_is_searchable(message)
 
 
 def _fts_table_exists(connection: sqlite3.Connection, table: str = FTS_TABLE) -> bool:

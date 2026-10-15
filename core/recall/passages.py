@@ -7,14 +7,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from core.recall.canonical import (
+from core.sessions.search_content import (
     SESSION_RECALL_DEFAULT_ROLES,
-    is_recall_artifact_message,
+    message_is_searchable,
     message_search_text,
 )
-from core.sessions import is_skill_context_note
 
-PASSAGE_POLICY_VERSION = 1
+PASSAGE_POLICY_VERSION = 2
 PASSAGE_TARGET_CHARS = 1500
 PASSAGE_OVERLAP_CHARS = 200
 
@@ -35,16 +34,6 @@ class Passage:
     end_offset: int
 
 
-@dataclass(frozen=True)
-class _Fragment:
-    message_id: str
-    timestamp: str
-    role: str
-    text: str
-    stream_start: int
-    stream_end: int
-
-
 def build_session_passages(
     messages: Iterable[Any],
     *,
@@ -52,123 +41,44 @@ def build_session_passages(
     target_chars: int = PASSAGE_TARGET_CHARS,
     overlap_chars: int = PASSAGE_OVERLAP_CHARS,
 ) -> list[Passage]:
-    """Keep summaries separate so a hit never presents a summary as verbatim text."""
-    passages: list[Passage] = []
-    pending: list[Any] = []
-    for message in messages:
-        if getattr(message, "role", "") == "compaction_checkpoint":
-            passages.extend(
-                _build_passages(
-                    pending, roles=roles, target_chars=target_chars, overlap_chars=overlap_chars
-                )
-            )
-            pending = []
-            passages.extend(
-                _build_passages(
-                    [message], roles=roles, target_chars=target_chars, overlap_chars=overlap_chars
-                )
-            )
-        else:
-            pending.append(message)
-    passages.extend(
-        _build_passages(
-            pending, roles=roles, target_chars=target_chars, overlap_chars=overlap_chars
-        )
-    )
-    return passages
+    """Build entry-anchored windows; adjacent entries cannot change their identity.
 
-
-def _build_passages(
-    messages: Iterable[Any],
-    *,
-    roles: tuple[str, ...],
-    target_chars: int,
-    overlap_chars: int,
-) -> list[Passage]:
-    """Split eligible Session text into overlapping Passages without source truncation."""
-
+    Forks share canonical entries, not a concatenated conversation string. A
+    window crossing entries would change when either branch continues and make
+    shared history searchable twice. Each entry therefore owns its windows;
+    the result's canonical conversation context supplies adjacent turns.
+    """
     if target_chars <= 0:
         raise ValueError("target_chars must be positive")
     if overlap_chars < 0 or overlap_chars >= target_chars:
         raise ValueError("overlap_chars must be non-negative and smaller than target_chars")
 
-    stream_parts: list[str] = []
-    fragments: list[_Fragment] = []
-    stream_length = 0
-    for message in messages:
-        if getattr(message, "role", "") not in roles:
-            continue
-        if is_skill_context_note(message) or is_recall_artifact_message(message):
-            continue
-        text = message_search_text(message)
-        if not text:
-            continue
-        if stream_parts:
-            separator = "\n\n"
-            stream_parts.append(separator)
-            stream_length += len(separator)
-        start = stream_length
-        stream_parts.append(text)
-        stream_length += len(text)
-        fragments.append(
-            _Fragment(
-                message_id=str(message.id),
-                timestamp=str(message.timestamp),
-                role=str(message.role),
-                text=text,
-                stream_start=start,
-                stream_end=stream_length,
-            )
-        )
-
-    if not fragments:
-        return []
-    stream = "".join(stream_parts)
     passages: list[Passage] = []
     step = target_chars - overlap_chars
-    window_start = 0
-    first_index = 0
-    end_index = 0
-    while window_start < len(stream):
-        window_end = min(window_start + target_chars, len(stream))
-        # Both window boundaries only advance. Walk each fragment at most once
-        # per boundary instead of searching the whole Session for every window.
-        while first_index < len(fragments) and fragments[first_index].stream_end <= window_start:
-            first_index += 1
-        while end_index < len(fragments) and fragments[end_index].stream_start < window_end:
-            end_index += 1
-        if first_index < end_index:
-            first = fragments[first_index]
-            last = fragments[end_index - 1]
-            start_offset = max(window_start - first.stream_start, 0)
-            end_offset = min(window_end - last.stream_start, len(last.text))
-            text = stream[window_start:window_end]
+    for message in messages:
+        if getattr(message, "role", "") not in roles or not message_is_searchable(message):
+            continue
+        text = message_search_text(message)
+        for start in range(0, len(text), step):
+            end = min(start + target_chars, len(text))
+            identity = f"v{PASSAGE_POLICY_VERSION}\0{message.id}\0{start}\0{end}".encode()
             passages.append(
                 Passage(
-                    passage_id=_passage_id(first, last, start_offset, end_offset),
-                    text=text,
-                    start_message_id=first.message_id,
-                    end_message_id=last.message_id,
-                    start_timestamp=first.timestamp,
-                    end_timestamp=last.timestamp,
-                    start_role=first.role,
-                    end_role=last.role,
-                    start_offset=start_offset,
-                    end_offset=end_offset,
+                    passage_id=hashlib.sha256(identity).hexdigest()[:32],
+                    text=text[start:end],
+                    start_message_id=str(message.id),
+                    end_message_id=str(message.id),
+                    start_timestamp=str(message.timestamp),
+                    end_timestamp=str(message.timestamp),
+                    start_role=str(message.role),
+                    end_role=str(message.role),
+                    start_offset=start,
+                    end_offset=end,
                 )
             )
-        if window_end >= len(stream):
-            break
-        window_start += step
+            if end == len(text):
+                break
     return passages
-
-
-def _passage_id(first: _Fragment, last: _Fragment, start_offset: int, end_offset: int) -> str:
-    identity = (
-        f"v{PASSAGE_POLICY_VERSION}\0{first.message_id}\0{start_offset}\0"
-        f"{last.message_id}\0{end_offset}"
-    ).encode()
-    return hashlib.sha256(identity).hexdigest()[:32]
 
 
 __all__ = [

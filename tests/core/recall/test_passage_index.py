@@ -35,7 +35,7 @@ from core.recall._passage_catalog import (
     SessionPassages,
     text_hash,
 )
-from core.recall.passages import Passage
+from core.recall.passages import PASSAGE_POLICY_VERSION, Passage
 from core.sessions import ChatSession, ChatSessionManager
 from tests.core.recall.recall_test_support import (
     HybridBackendFactory,
@@ -220,7 +220,7 @@ async def test_passage_index_opens_as_the_current_disposable_projection(
     assert reopened.path == tmp_path / "recall" / "passage_index.sqlite"
     assert identity["application_id"] == APPLICATION_IDS["recall_index"]
     assert identity["database_name"] == "recall_index"
-    assert identity["projection_version"] == "1"
+    assert identity["projection_version"] == str(PASSAGE_POLICY_VERSION)
     # A stale or unreadable index is discarded, never migrated.
     assert (identity["database_id"] == old_identity["database_id"]) is (damage is None)
     assert set(indexed) == ({"one"} if damage is None else set())
@@ -884,8 +884,14 @@ async def test_literal_search_reports_shared_fork_history_once(
     source = sessions.create("coder", session_id="source")
     for day in range(1, 4):
         source.append(ChatMessage.user(f"needle story {day} " * 120, timestamp=timestamp(day)))
+    source.append(ChatMessage.user("shared needle tail", timestamp=timestamp(3)))
     older = await sessions.fork(source.address)
     newer = await sessions.fork(source.address)
+    # Every branch grows after the shared prefix, including a short tail that
+    # formerly crossed the fork point and duplicated shared retrieval text.
+    source.append(ChatMessage.user("origin continuation", timestamp=timestamp(4)))
+    older.append(ChatMessage.user("older continuation", timestamp=timestamp(5)))
+    newer.append(ChatMessage.user("newer continuation", timestamp=timestamp(6)))
 
     complete = await recall.search_page(request("needle", limit=20))
     without_origin = await recall.search_page(
@@ -893,6 +899,7 @@ async def test_literal_search_reports_shared_fork_history_once(
     )
 
     assert complete.hits
+    assert sum(hit.text == "shared needle tail" for hit in complete.hits) == 1
     assert {hit.session_id for hit in complete.hits} == {"source"}
     assert {hit.session_id for hit in without_origin.hits} == {newer.id}
     assert [hit.passage_id for hit in without_origin.hits] == [
@@ -999,4 +1006,4 @@ async def test_busy_index_fails_the_search_without_discarding_it(
 
     assert _identity(recall.index.path)["database_id"] == identity["database_id"]
     page = await recall.search_page(request("needle"))
-    assert len(page.hits) == 1 and "needle two" in page.hits[0].text
+    assert {hit.text for hit in page.hits} == {"needle one", "needle two"}

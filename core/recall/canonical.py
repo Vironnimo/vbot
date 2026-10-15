@@ -8,7 +8,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
 from core.recall.recall import (
     RecallMatchMode,
     RecallOrder,
@@ -24,22 +23,28 @@ from core.sessions import (
     SessionSearchHit,
     recall_visibilities,
 )
+from core.sessions.search_content import (
+    RECALL_TOOL_RESULT_NAMES as RECALL_TOOL_RESULT_NAMES,
+)
+from core.sessions.search_content import (
+    SESSION_RECALL_CONVERSATION_ROLES as SESSION_RECALL_CONVERSATION_ROLES,
+)
+from core.sessions.search_content import (
+    SESSION_RECALL_DEFAULT_ROLES as SESSION_RECALL_DEFAULT_ROLES,
+)
+from core.sessions.search_content import (
+    content_block_to_text as content_block_to_text,
+)
+from core.sessions.search_content import (
+    content_to_text as content_to_text,
+)
+from core.sessions.search_content import (
+    is_recall_artifact_message as is_recall_artifact_message,
+)
+from core.sessions.search_content import (
+    message_search_text as message_search_text,
+)
 
-# Roles indexed by the Sessions-owned canonical search projection.
-SESSION_RECALL_CONVERSATION_ROLES = (
-    "user",
-    "assistant",
-    "tool",
-    "error",
-    "compaction_checkpoint",
-)
-# Ordinary recall searches conversation content and labeled summaries.
-# Tool Results and operational errors require explicit lower-level diagnostic reads.
-SESSION_RECALL_DEFAULT_ROLES = (
-    "user",
-    "assistant",
-    "compaction_checkpoint",
-)
 SESSION_RECALL_MATCH_MODES: tuple[RecallMatchMode, ...] = (
     "all_terms",
     "any_term",
@@ -86,14 +91,6 @@ SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
     "substring; synonyms and paraphrases do not match. Matches "
     "are newest first."
 )
-
-# Names of the built-in recall tools whose results are persisted into sessions
-# as ``role="tool"`` messages. Indexing or returning those results creates a
-# feedback loop where every search matches its own prior output, so they are
-# excluded from recall (the canonical scan and semantic
-# index). Keep the retired ``session_read`` name for historical results too.
-# Recall owns this stored-history policy rather than importing the Tool layer.
-RECALL_TOOL_RESULT_NAMES = frozenset({"session_search", "session_read"})
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
@@ -275,46 +272,6 @@ def message_hit(hit: SessionSearchHit, request: RecallSearchRequest) -> RecallSe
         match_start=match_start,
         match_end=match_end,
     )
-
-
-def is_recall_artifact_message(message: Any) -> bool:
-    """True for a persisted Session Recall Tool result.
-
-    Such a message is derived recall output, not conversation content. Indexing
-    or returning it makes a search match its own prior results, so it is
-    excluded from matches, context/bookends, and the semantic index.
-    """
-
-    return (
-        getattr(message, "role", "") == "tool"
-        and getattr(message, "name", None) in RECALL_TOOL_RESULT_NAMES
-    )
-
-
-def message_search_text(message: Any) -> str:
-    return content_to_text(message.content)
-
-
-def content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "\n".join(content_block_to_text(block) for block in content)
-    return ""
-
-
-def content_block_to_text(block: Any) -> str:
-    if isinstance(block, TextBlock):
-        return block.text
-    if isinstance(block, MediaBlock) and block.transcription is not None:
-        return f"{block.filename} {block.media_type}\n{block.transcription}"
-    if isinstance(block, (FileBlock, MediaBlock)):
-        return f"{block.filename} {block.media_type}"
-    if isinstance(block, FileMentionBlock):
-        # Index the mentioned path only: the snapshot text is repo content, not
-        # conversation content, and would bloat the recall index.
-        return block.path
-    return ""
 
 
 def text_matches_search_request(text: str, request: RecallSearchRequest) -> bool:

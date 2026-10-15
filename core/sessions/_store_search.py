@@ -317,7 +317,7 @@ class _Check:
         matches: Callable[[str], bool],
         limit: int,
     ) -> None:
-        from core.recall.canonical import (
+        from core.sessions.search_content import (
             RECALL_TOOL_RESULT_NAMES,
             SESSION_RECALL_CONVERSATION_ROLES,
         )
