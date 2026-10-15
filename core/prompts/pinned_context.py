@@ -232,7 +232,8 @@ def _pinned_epoch_text(
         {text_key: text, **qualifiers},
         lambda current: matching_text(current) is not None,
     )
-    return matching_text(pinned) or text
+    winner = matching_text(pinned)
+    return text if winner is None else winner
 
 
 def pinned_working_project_context(

@@ -71,6 +71,28 @@ def test_initial_prompt_files_are_stamped_once(tmp_path: Path, mode: Any) -> Non
         )
 
 
+@pytest.mark.parametrize("winner", ["", "earlier snapshot"])
+def test_first_prompt_build_uses_the_concurrent_winning_snapshot(tmp_path, monkeypatch, winner):
+    from core.prompts.pinned_context import pinned_soul_context
+    from tests.core.prompts.prompts_test_support import _agent, _facade_manager
+
+    (tmp_path / "SOUL.md").write_text("LATER_SNAPSHOT", encoding="utf-8")
+    agent = _agent(tmp_path)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=cast(Any, agent), adapter=StubAdapter([]))
+    runtime.system_prompts = _facade_manager(tmp_path)
+    runtime.chat_sessions.create(agent.id, session_id="s1")
+    dependencies = build_chat_loop(runtime)._dependencies
+    ensure = runtime.chat_sessions.ensure_prompt_pin
+
+    def first_writer(address, slot, value, matches):
+        ensure(address, slot, {"text": winner}, matches)
+        return ensure(address, slot, value, matches)
+
+    monkeypatch.setattr(runtime.chat_sessions, "ensure_prompt_pin", first_writer)
+    assert pinned_soul_context(dependencies, agent.id, "s1", agent, None) == winner
+    assert pinned_soul_context(dependencies, agent.id, "s1", agent, None) == winner
+
+
 @pytest.mark.parametrize(
     "before,after",
     [
