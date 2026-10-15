@@ -15,9 +15,11 @@ from core.providers.token_getter import (
     TokenGetter,
 )
 from core.utils.errors import ConfigError
+from core.utils.workers import BoundedWorkerPool
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_OAUTH_NOT_SUPPORTED, RpcError
 
 JsonObject = dict[str, Any]
+_PROVIDER_ACCESS_WORKERS = BoundedWorkerPool(name="provider-access", max_workers=4)
 
 
 def _provider_has_credentials(runtime: Any, provider_id: str) -> bool:
@@ -61,13 +63,20 @@ async def _runtime_provider_credential(
     connection: Any,
 ) -> AsyncIterator[str | TokenGetter]:
     if getattr(connection, "type", "") != "oauth" or getattr(connection, "oauth", None) is None:
-        yield str(runtime.provider_credentials.get_credentials(provider_id, connection_id))
+        yield str(
+            await _PROVIDER_ACCESS_WORKERS.run(
+                runtime.provider_credentials.get_credentials, provider_id, connection_id
+            )
+        )
         return
 
     token_store = _runtime_token_store(runtime)
     _local_connection_id, requested_account_id = split_connection_id(provider_id, connection_id)
-    account_id = runtime.provider_credentials.resolve_account_id(
-        provider_id, connection.id, account_id=requested_account_id
+    account_id = await _PROVIDER_ACCESS_WORKERS.run(
+        runtime.provider_credentials.resolve_account_id,
+        provider_id,
+        connection.id,
+        account_id=requested_account_id,
     )
     getter = OAuthTokenGetter(
         token_store, provider_id, connection.id, connection.oauth, account_id=account_id
@@ -108,7 +117,9 @@ async def _discovery_credential(
     )
     async with credential_context as credential_value:
         yield (
-            _copilot_discovery_connection(runtime, provider_id, connection_id, connection),
+            await _PROVIDER_ACCESS_WORKERS.run(
+                _copilot_discovery_connection, runtime, provider_id, connection_id, connection
+            ),
             credential_value,
         )
 

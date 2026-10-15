@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from shutil import copy2
@@ -16,8 +17,13 @@ import pytest
 import respx
 
 from core.database import write_bootstrap_marker
-from core.models.database import read_model_database_manifest, write_model_database_manifest
+from core.models.database import (
+    ModelDatabaseRefresh,
+    read_model_database_manifest,
+    write_model_database_manifest,
+)
 from core.models.discovery import ModelDiscoveryError
+from core.models.models import ModelRegistry
 from core.providers.accounts import ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.errors import NetworkError, ProviderAuthError
@@ -163,6 +169,26 @@ async def test_model_refresh_uses_started_runtime_storage_paths(
         params = {"provider_id": "openrouter", "target": target}
         if target == "system":
             params["expected_resources_dir"] = str(resources_dir)
+        loop_thread = threading.get_ident()
+        operations: list[str] = []
+
+        def off_loop(name: str, operation: Any) -> Any:
+            def run(*args: Any, **kwargs: Any) -> Any:
+                assert threading.get_ident() != loop_thread
+                operations.append(name)
+                return operation(*args, **kwargs)
+
+            return run
+
+        for name in ("begin_runtime_model_database_refresh", "begin_system_model_database_refresh"):
+            monkeypatch.setattr(
+                model_methods, name, off_loop("stage", getattr(model_methods, name))
+            )
+        monkeypatch.setattr(ModelRegistry, "validate", off_loop("validate", ModelRegistry.validate))
+        for name in ("commit", "discard"):
+            monkeypatch.setattr(
+                ModelDatabaseRefresh, name, off_loop(name, getattr(ModelDatabaseRefresh, name))
+            )
 
         # The started Runtime's LogManager stops propagation to the root logger.
         models_logger = logging.getLogger("vbot.models")
@@ -175,6 +201,7 @@ async def test_model_refresh_uses_started_runtime_storage_paths(
             models_logger.removeHandler(caplog.handler)
 
         assert result["invalid_entry_count"] == 1
+        assert set(operations) == {"stage", "validate", "commit", "discard"}
         assert [
             "openrouter/retired-model" in record.getMessage()
             for record in caplog.records
@@ -201,6 +228,57 @@ async def test_model_refresh_uses_started_runtime_storage_paths(
         assert set(manifest.catalogs) == {"openrouter.json"}
     finally:
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_discovery")
+@pytest.mark.parametrize("cancel_during", ["stage", "commit"])
+async def test_refresh_cancellation_settles_publication_and_discards_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_during: str
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    staged: list[ModelDatabaseRefresh] = []
+    begin = model_methods.begin_runtime_model_database_refresh
+    commit = ModelDatabaseRefresh.commit
+
+    def pause() -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+
+    def stage(*args: Any, **kwargs: Any) -> ModelDatabaseRefresh:
+        result = begin(*args, **kwargs)
+        staged.append(result)
+        if cancel_during == "stage":
+            pause()
+        return result
+
+    def publish(self: ModelDatabaseRefresh, *args: Any, **kwargs: Any) -> Any:
+        result = commit(self, *args, **kwargs)
+        if cancel_during == "commit":
+            pause()
+        return result
+
+    monkeypatch.setattr(model_methods, "begin_runtime_model_database_refresh", stage)
+    monkeypatch.setattr(ModelDatabaseRefresh, "commit", publish)
+    task = asyncio.create_task(rpc_result(state, "model.refresh_db", provider_id="openrouter"))
+    try:
+        await entered.wait()
+        task.cancel()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(staged) == 1
+    assert not staged[0].resources_dir.exists()
+    if cancel_during == "commit":
+        assert state.runtime.models.get("openrouter", "fresh-model").name == "Fresh Model"
+    else:
+        assert not state.runtime.storage.layout.models.exists()
 
 
 @pytest.mark.asyncio
