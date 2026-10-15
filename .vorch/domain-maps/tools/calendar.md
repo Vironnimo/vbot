@@ -16,6 +16,7 @@ Manages the local calendar through `CalendarService`: events and their occurrenc
 
 - Times without an offset are server-local. The start form decides the event kind: a date makes an all-day event, a local date-time a timed one. `end` is exclusive (an all-day event ending on the 12th has the 13th as `end`); an all-day end on the start day means that one day. Create without `end` gives 1 hour or 1 day; update without `end` keeps the event's length (`CalendarService.update_event`), also for an occurrence.
 - `id` is an event id or an occurrence id `<event id>_YYYYMMDD[THHMM]` (`calendar.md`). With an occurrence id, update changes and delete removes only that occurrence; an `rrule` there is refused with the series id. `list` with an `id` (unadvertised; the not-found hint uses it) shows that event even when none of its occurrences falls in the window.
+- On update, an explicit `""` for `description` or `location` clears that field; an omitted field keeps its value. This also holds when the action is inferred from the id and changes.
 - `rrule` is RFC 5545 RRULE text; `""` on update stops the repetition, on create it is dropped. The service validates the rule.
 - Windows are half-open: `time_min` defaults to now (to the minute), `time_max` to 30 days later for list and 7 days for find_free_time, on the local wall clock. A bound is a date (local midnight) or a date-time (local unless it carries an offset). A window spans at most `MAX_WINDOW_DAYS` (62) days; a longer one is refused with the longest window from the same start. The unadvertised `when` phrase (`today`, `this week`, `next month`, `2030-01`, `a..b`; `core/calendar/when.py`) sets the whole window and is refused next to `time_min`/`time_max`.
 - `query` matches case-insensitively in title, description and location of each occurrence. `duration` on find_free_time is the minimum free span; each span shown is the whole gap (`CalendarService.find_free_slots`, at most `FIND_FREE_MAX_RESULTS` 10, a note says when more follows or none was found). find_free_time ignores cron jobs.
@@ -44,7 +45,7 @@ Manages the local calendar through `CalendarService`: events and their occurrenc
 
 ## Agent-facing text
 
-Shared reason for every row (user decision 2026-10-08): minimal, trained shapes; calendar API conventions from Google Calendar v3 / Google Calendar MCP servers. The definition is 400 estimated tokens (`python -m scripts.tool_lab definitions --all`; 370 before the redesign, which had fewer parameters and the action machinery). `description` and `location` carry no text: their names say it.
+Shared reason for every row (user decision 2026-10-08): minimal, trained shapes; calendar API conventions from Google Calendar v3 / Google Calendar MCP servers. The description and location parameter texts state how to clear a stored value; their names explain the fields themselves.
 
 | Text | Reason |
 |---|---|
@@ -54,6 +55,7 @@ Shared reason for every row (user decision 2026-10-08): minimal, trained shapes;
 | id: `For a repeating event, an occurrence id changes or deletes only that occurrence.` | The only way to touch one occurrence (Google instances); list shows those ids. |
 | id: `Required for update and delete.` | The one rule the schema cannot express per action. |
 | title: `Required for create.` | Same. |
+| description/location: `On update, "" clears the description.` / `On update, "" clears the location.` | Distinguishes clearing a value from omitting it. |
 | start: `Local date-time such as 2030-01-10T15:00, or a date such as 2030-01-10 for an all-day event.` | One example per form; the form decides the event kind, so no `all_day` flag is needed. Local because no zone parameter exists. |
 | start: `Required for create.` | Per-action requirement. |
 | end: `Same form as start, exclusive: for an all-day event the day after the last day.` | Google/iCal convention Models know; stating it prevents the classic off-by-one, and results show the last day. |

@@ -545,6 +545,8 @@ def _omit_placeholders(arguments: dict[str, Any]) -> None:
     """Drop optional values that stand for nothing, such as "none" or "<title>"."""
     for name in ("id", "title", "description", "location", "start", "end", "query", WHEN_FIELD):
         item = arguments.get(name)
+        if name in {"description", "location"} and item == "":
+            continue  # An explicit empty value clears this field on update.
         if isinstance(item, str) and (is_placeholder(item) or _TEMPLATE.match(item)):
             del arguments[name]
 
