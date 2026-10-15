@@ -620,16 +620,37 @@ describe('AgentsView', () => {
       100,
     );
 
-    // Selecting the reasoning model narrows the thinking-effort options to its
-    // ladder (default inherit + none + the levels).
+    openSimpleDropdown('agent-create-thinking-effort');
+    selectSimpleOption('agent-create-thinking-effort', 'medium');
+    // Selecting the reasoning model narrows the ladder and snaps medium to high.
     await openSearchableDropdown('agent-create-model');
     selectSearchableOption('agent-create-model', 'openai/gpt-5.2');
     await flushAsyncUpdates();
+    expect(
+      document
+        .getElementById('agent-create-thinking-effort')
+        .textContent.trim(),
+    ).toBe('high');
 
     openSimpleDropdown('agent-create-thinking-effort');
     const labels = simpleOptionLabels('agent-create-thinking-effort');
     expect(labels).toHaveLength(4);
     expect(labels.slice(1)).toEqual(['none', 'high', 'xhigh']);
+    const modal = getDialog(t('agents.create'));
+    setTextInputValueWithin(modal, 0, 'bravo');
+    modal
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitForCondition(
+      () => rpcMock.mock.calls.some(([method]) => method === 'agent.create'),
+      100,
+    );
+    expect(
+      rpcMock.mock.calls.find(([method]) => method === 'agent.create')[1],
+    ).toMatchObject({
+      model: 'openai/gpt-5.2::api-key',
+      thinking_effort: 'high',
+    });
   });
 
   it('reorders agents with Alt+Arrow keys, keeps focus and persists the roster revision', async () => {

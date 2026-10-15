@@ -9,6 +9,7 @@
   import {
     reasoningForModelValue,
     effortOptionsForReasoning,
+    effortForReasoning,
     samplingRecommendationsForModelValue,
   } from '$lib/agentForm.js';
   import SearchableDropdown from '../SearchableDropdown.svelte';
@@ -173,6 +174,13 @@
     formValues.model = modelSelectionValue(
       selection.model,
       selection.connectionLocalId,
+    );
+    formValues.thinking_effort = effortForReasoning(
+      formValues.thinking_effort,
+      reasoningForModelValue(
+        formValues.model || inheritedModelValue(),
+        availableModels,
+      ),
     );
   }
 

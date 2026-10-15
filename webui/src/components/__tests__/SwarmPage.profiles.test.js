@@ -263,9 +263,23 @@ describe('Swarm profile settings', () => {
     expect(document.getElementById('swarm-instructions').value).toBe(prompt);
   });
 
-  it('filters Models and resets incompatible reasoning when the Model changes', async () => {
-    const { bridge } = createBridge();
+  it('filters Models and snaps reasoning when the Model changes', async () => {
+    const { bridge, operation } = createBridge();
+    extendCatalog(operation, (catalog) => {
+      catalog.models.push({
+        id: 'demo/medium',
+        name: 'Medium',
+        context_window: 128000,
+        capabilities: {
+          tools: true,
+          reasoning: { supported: true, levels: ['medium'] },
+        },
+      });
+    });
     await openNewProfile(bridge);
+    await vi.waitFor(() =>
+      expect(document.getElementById('swarm-model-0')).not.toBeNull(),
+    );
     document.getElementById('swarm-model-0').click();
     await tick();
     const search = document.querySelector(
@@ -282,8 +296,20 @@ describe('Swarm profile settings', () => {
     document.querySelector('[role="option"]').click();
     await tick();
     expect(document.getElementById('swarm-effort-0').disabled).toBe(true);
+    await choose('swarm-model-0', 'demo/medium');
+    await choose('swarm-effort-0', 'medium');
     await choose('swarm-model-0', 'demo/model');
-    await choose('swarm-effort-0', 'high');
+    expect(document.getElementById('swarm-effort-0').textContent.trim()).toBe(
+      'low',
+    );
+    fill('swarm-profile-name', 'Mapped reasoning');
+    fill('swarm-directory', 'C:/work');
+    button(CREATE_SWARM).click();
+    await settle(20);
+    expect(lastSaved(operation).participants).toEqual([
+      { model: 'demo/model', count: 2, thinking_effort: 'low' },
+    ]);
+    await reopenEditor(bridge);
     await choose('swarm-model-0', 'demo/plain');
     expect(document.getElementById('swarm-effort-0').textContent.trim()).toBe(
       t('swarm.profile.providerDefault'),

@@ -7,6 +7,7 @@ import {
   buildAgentTargetCatalog,
   createAgentFormValues,
   effortOptionsForReasoning,
+  effortForReasoning,
   normalizeAgentForm,
   reasoningForModelValue,
 } from '../agentForm.js';
@@ -379,5 +380,22 @@ describe('thinking-effort gating', () => {
     expect(
       effortOptionsForReasoning({ ...reasoning, mandatory: true }),
     ).toEqual(['', 'high', 'xhigh']);
+  });
+
+  it.each([
+    ['medium', { levels: ['high', 'xhigh'] }, 'high'],
+    ['medium', { levels: ['high', 'low'] }, 'low'],
+    ['max', { levels: ['low', 'high'] }, 'high'],
+    ['minimal', { levels: ['none', 'high'] }, 'high'],
+    ['high', { levels: ['low', 'high'] }, 'high'],
+    ['', { levels: ['low', 'high'] }, ''],
+    ['none', { levels: ['low', 'high'] }, 'none'],
+    ['none', { mandatory: true, levels: ['high'] }, ''],
+    ['high', { supported: false }, ''],
+    ['medium', null, 'medium'],
+    ['medium', { levels: [] }, 'medium'],
+    ['medium', { levels: ['none'] }, ''],
+  ])('maps %j onto %j as %j', (effort, capabilities, expected) => {
+    expect(effortForReasoning(effort, capabilities)).toBe(expected);
   });
 });

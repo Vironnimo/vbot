@@ -18,6 +18,7 @@
   } from '../../../../webui/src/lib/modelSelection.js';
   import {
     effortOptionsForReasoning,
+    effortForReasoning,
     reasoningForModelValue,
   } from '../../../../webui/src/lib/agentForm.js';
   import { participantCount } from './pagePresentation.js';
@@ -70,14 +71,10 @@
 
   function selectModel(row, value) {
     row.model = value;
-    if (
-      reasoningForModelValue(value, models)?.supported === false ||
-      !effortOptions(value).some(
-        (option) => option.value === (row.thinking_effort ?? ''),
-      )
-    ) {
-      row.thinking_effort = '';
-    }
+    row.thinking_effort = effortForReasoning(
+      row.thinking_effort,
+      reasoningForModelValue(value, models),
+    );
   }
 
   // A saved Team agent the Project no longer offers stays visible as such.

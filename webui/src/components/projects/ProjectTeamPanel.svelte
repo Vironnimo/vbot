@@ -25,6 +25,7 @@
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
   import {
     effortOptionsForReasoning,
+    effortForReasoning,
     reasoningForModelValue,
     samplingRecommendationsForModelValue,
   } from '$lib/agentForm.js';
@@ -138,6 +139,20 @@
       'model',
       modelSelectionValue(selection.model, selection.connectionLocalId),
     );
+    const member = projectsState.activeTeam.find(
+      (entry) => entry.agent_id === agentId,
+    );
+    const draft = overrideDraft(agentId);
+    const effort = effortForReasoning(
+      draft.thinking_effort,
+      reasoningForModelValue(
+        draft.model || member?.effective?.model?.value,
+        projectsState.availableModels,
+      ),
+    );
+    if (effort !== draft.thinking_effort) {
+      updateOverrideDraft(agentId, 'thinking_effort', effort);
+    }
   }
 
   function effectiveDisplay(member, field) {
