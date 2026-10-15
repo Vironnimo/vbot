@@ -120,6 +120,7 @@ def test_presence_logs_one_connect_and_disconnect_per_logical_window(
         (_FIREFOX_LINUX, "Firefox", "Linux"),
         (_SAFARI_MAC, "Safari", "macOS"),
         (_EDGE_WINDOWS, "Edge", "Windows"),
+        ("vBot-Tray/0.5.0 (Windows)", "vBot", "Windows"),
         ("", UNKNOWN_LABEL, UNKNOWN_LABEL),
         ("curl/8.4.0", UNKNOWN_LABEL, UNKNOWN_LABEL),
     ],

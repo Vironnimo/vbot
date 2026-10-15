@@ -210,6 +210,8 @@ def _browser_and_os(user_agent: str) -> tuple[str, str]:
 
 def _browser_from_user_agent(user_agent: str) -> str:
     agent = user_agent or ""
+    if agent.startswith("vBot-Tray/"):
+        return "vBot"
     # Order matters: Edge/Opera UAs also carry "Chrome", Chrome also carries
     # "Safari", so the more specific token has to win first.
     if "Edg" in agent:
