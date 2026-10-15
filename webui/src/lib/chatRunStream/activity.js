@@ -175,6 +175,7 @@ export function createRunActivityProjection({
       ...sourceState.reflectionTasks,
       [event.run_id]: {
         sessionId: event.session_id,
+        agentId: event.agent_id,
         runKind: event.run_kind,
         status: terminalStatus ?? 'running',
         // The start timestamp stays the Run's first-seen time; a terminal
@@ -269,6 +270,7 @@ export function createRunActivityProjection({
         ...sourceState.reflectionTasks,
         [runId]: {
           sessionId: activeRun.session_id,
+          agentId: agentAddress,
           runKind: activeRun.run_kind,
           status: 'running',
           startedAt: activeRun.started_at ?? '',

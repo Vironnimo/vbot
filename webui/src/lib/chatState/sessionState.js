@@ -166,6 +166,17 @@ export function renameAgentInState(state, oldAgentId, newAgentId) {
       sessionState.agentId = newAgentId;
       sessionState.key = sessionKey(newAgentId, sessionState.sessionId);
     }
+    // A moved source can still show reviews owned by the renamed Agent.
+    for (const [runId, review] of Object.entries(
+      sessionState.reflectionTasks,
+    )) {
+      if (review.agentId === oldAgentId) {
+        sessionState.reflectionTasks[runId] = {
+          ...review,
+          agentId: newAgentId,
+        };
+      }
+    }
     sessions[sessionState.key] = sessionState;
   }
   state.sessions = sessions;
