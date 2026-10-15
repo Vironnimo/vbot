@@ -300,6 +300,7 @@ async def command_harness(
     max_live: int = 3,
     sink: FakeSink | None = None,
     run_blocking: Callable[..., Awaitable[Any]] = run_inline,
+    checkpoint_store: Any = None,
 ) -> AsyncIterator[Harness]:
     """A started manager over fakes, with its log files under *tmp_path*; closed after.
 
@@ -318,6 +319,7 @@ async def command_harness(
         run_blocking=run_blocking,
         max_live=max_live,
         output_host=InterpreterHost.in_process(),
+        checkpoint_store=checkpoint_store,
     )
     harness = Harness(manager, launcher, clock, sink, tmp_path)
     manager.add_changed_callback(harness.changes.append)

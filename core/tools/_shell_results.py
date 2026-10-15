@@ -204,6 +204,10 @@ _STOP_TEXTS: dict[StopReason, str] = {
     "user": "the user stopped it.",
     "run_cancelled": "the turn that started it was cancelled.",
     "shutdown": "vBot shut down.",
+    "server_restart": (
+        "vBot stopped unexpectedly. The command's outcome is unknown; "
+        "inspect its effects before repeating it."
+    ),
     # Read by the Session that ran it and by Agents above it.
     "scope": "it was stopped together with all other work of the Session that ran it.",
 }
@@ -557,7 +561,9 @@ def format_command_delivery(report: CommandReport, *, names: ToolNames = _names_
             f"{not_run[0]}"
         )
     ran = duration(report.elapsed_seconds)
-    if report.stop_reason is not None:
+    if report.stop_reason == "server_restart":
+        status = f"was stopped after an unknown duration: {stopped_because(report, delivery=True)}"
+    elif report.stop_reason is not None:
         status = f"was stopped after {ran}: {stopped_because(report, delivery=True)}"
     elif report.exit_code is None:
         status = f"exited after {ran}; its exit code is unknown."

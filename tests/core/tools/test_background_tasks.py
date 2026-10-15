@@ -1002,6 +1002,7 @@ async def test_background_commands_are_never_terminals(
     runtime = Runtime(Config(data_dir=tmp_path), safe_startup_mode="test")
     runtime.start()
     try:
+        runtime.chat_sessions.create(OWNER.agent_id, OWNER.session_id, OWNER.project_id)
         allowed = [SHELL_TOOL_NAME, BACKGROUND_TASKS_TOOL_NAME, "terminal"]
 
         async def call(tool_name: str, arguments: JsonObject) -> JsonObject:

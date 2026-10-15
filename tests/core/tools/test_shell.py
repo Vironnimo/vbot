@@ -634,6 +634,31 @@ async def test_run_in_background_returns_at_once_and_delivers(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("background", [True, False])
+async def test_checkpoint_failure_reports_the_command_that_already_started(
+    shell: Shell,
+    monkeypatch: pytest.MonkeyPatch,
+    background: bool,
+) -> None:
+    async def failed_checkpoint() -> None:
+        raise OSError("checkpoint disk unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(shell.manager, "flush", failed_checkpoint)
+        call = shell.call({"command": "build", "run_in_background": background, "timeout": 1})
+        process = await shell.started()
+        result = data(await shell.returned(call))
+        assert result["status"] == "running"
+        assert shell.manager.report(result["command_id"]).pid == process.pid
+        assert "already started" in result["notes"][0]
+        assert "notification is not guaranteed" in result["notes"][0]
+        assert "effects before repeating" in result["notes"][0]
+        assert stop_calls(result["next"]) == [{"action": "stop", "id": result["command_id"]}]
+        assert "arrives" not in result["next"]
+        assert len(shell.launcher.processes) == 1
+
+
+@pytest.mark.asyncio
 async def test_running_output_is_the_newest_lines_and_its_log_file_has_every_line(
     shell: Shell,
 ) -> None:
