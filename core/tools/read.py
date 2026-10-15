@@ -7,6 +7,7 @@ import codecs
 import io
 import json
 import os
+import stat
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.file_status import stat_or_none
 
 # A NUL byte within this leading window marks a file as binary (the classic
 # heuristic): text — even non-UTF-8 text shown with replacement chars — has none.
@@ -207,7 +209,13 @@ def make_read_handler(
         cwd = _call_cwd(context)
         label = _path_label(resolved, cwd)
 
-        if not resolved.exists():
+        try:
+            status = stat_or_none(resolved)
+        except OSError as error:
+            return tool_failure(
+                "file_read_error", f"Could not read {label}: {os_error_reason(error)}."
+            )
+        if status is None:
             positions = {
                 name: arguments[name]
                 for name in ("offset", "limit")
@@ -217,13 +225,13 @@ def make_read_handler(
             return tool_failure(
                 "file_not_found", missing_file_message(resolved, cwd, elsewhere=page)
             )
-        if resolved.is_dir():
+        if stat.S_ISDIR(status.st_mode):
             if arguments.get("pattern") is not None:
                 return tool_failure(
                     "invalid_arguments", _directory_search_message(arguments, label)
                 )
             return _list_directory(resolved, arguments, label)
-        if not resolved.is_file():
+        if not stat.S_ISREG(status.st_mode):
             return tool_failure("not_a_file", f"{label} is neither a file nor a directory.")
 
         # Capture the stamp before reading bytes, but record it only after a

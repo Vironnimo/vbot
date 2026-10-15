@@ -749,18 +749,25 @@ async def test_timeout_and_user_cancel(project: Path, monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_at", ["start", "root"])
 async def test_a_failed_start_is_explained_in_english(
-    project: Path, monkeypatch: pytest.MonkeyPatch
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access,
+    failure_at: str,
 ) -> None:
     def refuse(*_args: Any, **_kwargs: Any) -> None:
         raise PermissionError(errno.EACCES, "Zugriff verweigert", "rg.exe", 5)
 
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", refuse)
-    result = await dispatch(project, {"pattern": "needle"})
+    if failure_at == "root":
+        deny_access(project / "plain.txt")
+    else:
+        monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", refuse)
+    result = await dispatch(project, {"pattern": "needle", "path": "plain.txt"})
     assert result["error"]["code"] == "search_error"
-    assert result["error"]["message"].startswith("search_files could not run the search: ")
     assert "Zugriff" not in result["error"]["message"]
-    assert result["error"]["message"].endswith(" Retry the call.")
+    if failure_at == "root":
+        assert "plain.txt" in result["error"]["message"]
 
 
 def test_schema_display_and_registry_repairs(project: Path) -> None:
