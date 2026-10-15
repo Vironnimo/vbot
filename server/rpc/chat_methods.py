@@ -1140,6 +1140,18 @@ async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True, "stopped": stopped}
 
 
+async def _chat_work(state: Any, params: JsonObject) -> JsonObject:
+    """Current stoppable work of the complete Session subtree, without History."""
+    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.work")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+    try:
+        return cast(JsonObject, await state.runtime.subagents.work_snapshot(address))
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
 def _session_command(state: Any, params: JsonObject, method: str) -> CommandReport:
     """The background command ``command_id`` of the Session ``session_id``.
 
@@ -1417,6 +1429,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.edit": _edit_chat,
         "chat.cancel": _cancel_chat,
         "chat.stop_all": _stop_all_chat,
+        "chat.work": _chat_work,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.stop_command": _stop_command_chat,
         "chat.command_output": _command_output_chat,

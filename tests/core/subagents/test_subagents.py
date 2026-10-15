@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ import pytest_asyncio
 import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
+from core.database import DatabaseUnavailableError
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
 from core.runs import (
     Run,
@@ -40,6 +42,7 @@ from core.subagents._constants import (
     FACTS_NOTHING_RUNNING_TEXT,
     MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
 )
+from core.tools.terminal_manager import TerminalOwner
 from tests.core.subagents.subagents_test_support import (
     SubAgentHarness,
     address,
@@ -782,7 +785,15 @@ async def test_a_tree_stop_stops_its_background_commands_without_delivery(
 
     if user_stop:
         # Stop all: the Session's own commands and those of every Sub-Agent below it.
+        assert await harness.coordinator.work_snapshot(harness.parent) == {
+            "run_active": False,
+            "background_work_running": True,
+        }
         assert await harness.coordinator.stop_tree(harness.parent) == 2
+        assert await harness.coordinator.work_snapshot(harness.parent) == {
+            "run_active": False,
+            "background_work_running": False,
+        }
         stopped = [own, childs]
     else:
         result = await harness.background_tasks({"action": "stop", "id": child["id"]})
@@ -799,6 +810,75 @@ async def test_a_tree_stop_stops_its_background_commands_without_delivery(
         f"command:{ended}"
     ]
     assert commands.sink.cancellations == [f"command:{ended}"]
+
+
+@pytest.mark.parametrize("work_kind", ["run", "queued", "terminal", "pending-terminal"])
+async def test_work_snapshot_finds_live_descendants_without_loading_history(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, work_kind: str
+) -> None:
+    child = await harness.spawn("child")
+    child_session = harness.subagent_session(child["id"])
+    deep = await harness.spawn("deep", child_session)
+    deep_session = harness.subagent_session(deep["id"])
+    await harness.settle()
+    assert (await harness.coordinator.work_snapshot(harness.parent))[
+        "background_work_running"
+    ] is False
+    if work_kind == "run":
+        harness.loop.hold("continued")
+        await harness.start_turn(deep_session, "continued")
+    elif work_kind == "queued":
+        real_queued = harness.manager.list_queued
+        monkeypatch.setattr(
+            harness.manager,
+            "list_queued",
+            lambda agent_id, session_id, *, project_id: (
+                [object()]
+                if SessionAddress(project_id, agent_id, session_id) == deep_session
+                else real_queued(agent_id, session_id, project_id=project_id)
+            ),
+        )
+    else:
+        owner = TerminalOwner(
+            deep_session.project_id, deep_session.agent_id, deep_session.session_id
+        )
+        harness.runtime.terminal_manager = SimpleNamespace(
+            busy_addresses=lambda: {deep_session} if work_kind == "pending-terminal" else set(),
+            list_terminals=lambda: (
+                [SimpleNamespace(finished_at=None, lifecycle_owner=None, attachment=owner)]
+                if work_kind == "terminal"
+                else []
+            ),
+        )
+    try:
+        assert await harness.coordinator.work_snapshot(harness.parent) == {
+            "run_active": False,
+            "background_work_running": True,
+        }
+        # An unrelated Project with the same agent/session strings is separate.
+        other = SessionAddress("other-project", harness.parent.agent_id, harness.parent.session_id)
+        assert (await harness.coordinator.work_snapshot(other))["background_work_running"] is False
+    finally:
+        harness.runtime.terminal_manager = None
+        monkeypatch.undo()
+
+
+async def test_work_snapshot_refuses_unreadable_tree_instead_of_reporting_idle(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    child = await harness.spawn("child")
+    await harness.settle()
+    child_session = harness.subagent_session(child["id"])
+    original = harness.sessions.get_metadata
+
+    def read_metadata(target: SessionAddress) -> dict[str, Any]:
+        if target == child_session:
+            raise DatabaseUnavailableError("injected busy read")
+        return original(target)
+
+    monkeypatch.setattr(harness.sessions, "get_metadata", read_metadata)
+    with pytest.raises(DatabaseUnavailableError):
+        await harness.coordinator.work_snapshot(harness.parent)
 
 
 async def test_stop_all_includes_a_child_whose_admission_is_in_flight(

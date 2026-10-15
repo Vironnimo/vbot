@@ -64,6 +64,12 @@ Agent create/update/rename/delete likewise enter through the reference lock befo
 
 ## Invariants & conventions
 
+`chat.work {agent_id, session_id}` projects the SubAgentCoordinator's complete live
+Session subtree (`run_active`, `background_work_running`) independently of paged
+History. It shares the exact scope of `chat.stop_all`, including nested work and
+Terminal attachments; the root's own Queue remains outside Stop all. Accessors
+refresh it from existing Run, command, Queue and Terminal events and reconnects.
+
 - Both Settings mutation surfaces, and the `task_model.update`/`task_model.patch_options` binding mutations, call `Runtime.apply_settings_change` after persistence under the shared `_settings_mutation_lock`; RPC handlers own validation/projection and publish Command/Extension and Skill invalidation from its `SettingsChangeEffects` result, never decide which live reload subsumes another.
 - The server is an edge, not a second business layer: validate/map, call the owning domain, coordinate cross-domain mutations only where the public operation requires it, publish invalidation after success.
 - The browser-origin guard runs before routing on HTTP and WebSocket: foreign/opaque/malformed/duplicate origins fail closed. A concrete bind accepts its configured origin; a wildcard bind accepts an IP-literal Origin only when it exactly matches the request scheme, Host authority, and configured port, which preserves LAN IPv4/IPv6 access without admitting DNS-rebinding hostnames. Origin-less requests (CLI, Desktop Voice) stay valid. Never replace this with CORS response headers - they do not stop CORS-simple requests.

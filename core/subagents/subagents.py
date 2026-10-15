@@ -430,6 +430,49 @@ class SubAgentCoordinator:
         # Without stopped_by the Session the user works in is always stopped.
         return stopped or 0
 
+    async def work_snapshot(self, address: SessionAddress) -> dict[str, bool]:
+        """Project Stop all's live scope, independently of loaded History.
+
+        The root's own Queue is retained by Stop all and does not make background
+        work stoppable. Descendant Queues, commands and Terminal attachments do.
+        An unavailable tree read propagates instead of reporting an idle tree.
+        """
+        runtime = self._runtime
+        sessions = runtime.chat_sessions
+        async with self._admission_lock:
+            links = await sessions.run_async(descendants, sessions, address, strict=True)
+            below = {link.session for link in links}
+            tree = {address, *below}
+            run_active = (
+                runtime.chat_run_manager.active_run(
+                    agent_id=address.agent_id,
+                    session_id=address.session_id,
+                    project_id=address.project_id,
+                )
+                is not None
+            )
+            background = any(is_working(runtime, child) for child in below)
+            commands = runtime.command_manager
+            if commands is not None:
+                background |= bool(commands.busy_addresses() & below) or any(
+                    not report.finished for report in commands.commands([address])
+                )
+                if not run_active:
+                    background |= address in commands.busy_addresses()
+            terminals = runtime.terminal_manager
+            if terminals is not None:
+                background |= bool(terminals.busy_addresses() & tree) or any(
+                    info.finished_at is None
+                    and any(
+                        owner is not None
+                        and SessionAddress(owner.project_id, owner.agent_id, owner.session_id)
+                        in tree
+                        for owner in (info.lifecycle_owner, info.attachment)
+                    )
+                    for info in terminals.list_terminals()
+                )
+            return {"run_active": run_active, "background_work_running": background}
+
     async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
         """Return *caller*'s Sub-Agents at every depth, breadth first, as they are now.
 
@@ -958,7 +1001,7 @@ class SubAgentCoordinator:
         # Cancel every captured Run while admissions are still excluded, so a
         # descendant cannot create or resume work during another Run's cleanup.
         async with self._admission_lock:
-            below = await sessions.run_async(descendants, sessions, root)
+            below = await sessions.run_async(descendants, sessions, root, strict=True)
             addresses = [root, *(link.session for link in below)]
             for address in addresses:
                 if address != root or clear_root_queue:

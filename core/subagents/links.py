@@ -65,13 +65,20 @@ def find_link(sessions: ChatSessionManager, subagent_id: str) -> SubAgentLink | 
     return read_link(sessions, address) if address is not None else None
 
 
-def children(sessions: ChatSessionManager, parent: SessionAddress) -> list[SubAgentLink]:
+def children(
+    sessions: ChatSessionManager, parent: SessionAddress, *, strict: bool = False
+) -> list[SubAgentLink]:
     """Return the Sub-Agents linked directly to *parent*, oldest first."""
-    links = (read_link(sessions, address) for address in sessions.subagent_children(parent))
+    links = (
+        read_link(sessions, address, strict=strict)
+        for address in sessions.subagent_children(parent)
+    )
     return [link for link in links if link is not None and link.parent == parent]
 
 
-def descendants(sessions: ChatSessionManager, root: SessionAddress) -> list[SubAgentLink]:
+def descendants(
+    sessions: ChatSessionManager, root: SessionAddress, *, strict: bool = False
+) -> list[SubAgentLink]:
     """Walk the complete subtree breadth first.
 
     Control operations need every descendant regardless of historical tree size.
@@ -81,7 +88,7 @@ def descendants(sessions: ChatSessionManager, root: SessionAddress) -> list[SubA
     seen = {root}
     pending = deque([root])
     while pending:
-        for link in children(sessions, pending.popleft()):
+        for link in children(sessions, pending.popleft(), strict=strict):
             if link.session in seen:
                 continue
             seen.add(link.session)
