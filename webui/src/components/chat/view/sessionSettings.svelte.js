@@ -1,4 +1,5 @@
 import { onDestroy, untrack } from 'svelte';
+import { SvelteMap } from 'svelte/reactivity';
 
 import { effortForReasoning, reasoningForModelValue } from '$lib/agentForm.js';
 import { parseAgentAddress } from '$lib/agentAddress.js';
@@ -29,37 +30,54 @@ import {
 // Team member's effective values from `project.show`.
 export function createSessionSettings(context) {
   let unsaved = $state({});
-  let saving = $state(false);
-  const participant = createAutosaveParticipant({
-    getSnapshot: () => unsaved,
-    hasChanges: () => Object.keys(unsaved).length > 0,
-    save: async () => {
-      saving = true;
-      try {
-        for (const [key, entry] of Object.entries(unsaved)) {
+  let saving = $state({});
+  const saves = new SvelteMap();
+  const autosave = useAutosaveContext();
+  onDestroy(() => {
+    for (const save of saves.values()) save.unregister();
+  });
+
+  function saveFor(key) {
+    if (saves.has(key)) return saves.get(key).participant;
+    // The owner follows an Agent rename even while its write is in flight.
+    const owner = { key };
+    const participant = createAutosaveParticipant({
+      getSnapshot: () => unsaved[owner.key],
+      hasChanges: () => Boolean(unsaved[owner.key]),
+      save: async () => {
+        const entry = unsaved[owner.key];
+        if (!entry) return true;
+        saving = { ...saving, [owner.key]: true };
+        try {
           const { shown, changes } = entry;
           const succeeded =
             shown.kind === 'draft'
               ? await writeDefaults(shown, changes)
               : await writeOverrides(shown, changes);
           if (!succeeded) return false;
+          const key = owner.key;
           const remaining = { ...(unsaved[key]?.changes ?? {}) };
           for (const [field, value] of Object.entries(changes)) {
             if (remaining[field] === value) delete remaining[field];
           }
           const next = { ...unsaved };
           if (Object.keys(remaining).length)
-            next[key] = { shown, changes: remaining };
+            next[key] = { shown: unsaved[key].shown, changes: remaining };
           else delete next[key];
           unsaved = next;
+          return true;
+        } finally {
+          const next = { ...saving };
+          delete next[owner.key];
+          saving = next;
         }
-        return true;
-      } finally {
-        saving = false;
-      }
-    },
-  });
-  onDestroy(useAutosaveContext().register(participant));
+      },
+    });
+    owner.participant = participant;
+    owner.unregister = autosave.register(participant);
+    saves.set(key, owner);
+    return participant;
+  }
 
   function remember(shown, changes) {
     unsaved = {
@@ -69,7 +87,7 @@ export function createSessionSettings(context) {
         changes: { ...(unsaved[shown.key]?.changes ?? {}), ...changes },
       },
     };
-    void participant.runSave();
+    void saveFor(shown.key).runSave();
   }
 
   async function writeDefaults(shown, changes) {
@@ -166,9 +184,9 @@ export function createSessionSettings(context) {
       catalogFailed,
       defaultModel: defaults.model,
       defaultThinkingEffort: defaults.thinkingEffort,
-      saving,
-      pending: participant.hasChanges(),
-      save: () => participant.runSave('manual'),
+      saving: saving[shown.key] === true,
+      pending: Boolean(unsaved[shown.key]),
+      save: () => saveFor(shown.key).runSave('manual'),
     };
     const teamProject = teamProjectId
       ? { editable: false, known: true, team: true, value: teamProjectId }
@@ -449,6 +467,15 @@ export function createSessionSettings(context) {
     );
     drafts = renameAgentInKeys(drafts, oldAgentId, newAgentId);
     rows = renameAgentInKeys(rows, oldAgentId, newAgentId);
+    saving = renameAgentInKeys(saving, oldAgentId, newAgentId);
+    for (const [key, save] of saves) {
+      const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
+      if (renamed !== key) {
+        save.key = renamed;
+        saves.delete(key);
+        saves.set(renamed, save);
+      }
+    }
     for (const key of Object.keys(overrideWrites)) {
       const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
       if (renamed !== key) {
@@ -461,10 +488,9 @@ export function createSessionSettings(context) {
   }
 
   return {
-    flush: () => participant.flush(),
-    get hasPending() {
-      return saving || Object.keys(unsaved).length > 0;
-    },
+    flush: (key) =>
+      saves.get(key)?.participant.flush() ?? Promise.resolve(true),
+    hasPending: (key) => saves.get(key)?.participant.hasPending() ?? false,
     renameAgent,
     get view() {
       return view;

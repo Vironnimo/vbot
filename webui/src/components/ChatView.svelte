@@ -539,7 +539,10 @@
     if (draft) {
       const submissionDraft = sessionSettings.draftWithSettings(draft);
       return async (content, options = {}) => {
-        if (sessionSettings.hasPending && !(await sessionSettings.flush()))
+        if (
+          sessionSettings.hasPending(submissionDraft.key) &&
+          !(await sessionSettings.flush(submissionDraft.key))
+        )
           return false;
         return await actions.sendDraft(
           agent,
@@ -554,7 +557,10 @@
       return null;
     }
     return async (content, options = {}) => {
-      if (sessionSettings.hasPending && !(await sessionSettings.flush()))
+      if (
+        sessionSettings.hasPending(sessionState.key) &&
+        !(await sessionSettings.flush(sessionState.key))
+      )
         return false;
       return await actions.sendStream(agent, sessionState, content, options);
     };
