@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
+import os
 import shutil
 import sys
 from collections.abc import Mapping, Sequence
@@ -28,9 +29,10 @@ from core.tools._command_launch import (
 from core.tools._interpreter_host import InterpreterHost
 from core.tools._powershell import powershell_bootstrap, powershell_request
 from core.tools.command_manager import CommandManager
-from core.tools.process_tree import ProcessTree, ProcessTreeTracker
+from core.tools.process_tree import ProcessTree, ProcessTreeTracker, track_process_tree
 from core.tools.scratch_areas import ScratchFolder
 from core.tools.shell_environment import RunIdentity, command_environment
+from core.utils import processes as process_utils
 from tests.core.tools.command_manager_helpers import (
     OWNER,
     FakeClock,
@@ -43,6 +45,42 @@ from tests.core.tools.command_manager_helpers import (
 
 ARGV = ("shell", "--bootstrap")
 BASE = {"PATH": "/bin"}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper ownership")
+@pytest.mark.asyncio
+async def test_shell_exit_and_detached_descendant_lifetime_are_independent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # A daemon changes Session and double-forks before the shell exits. Its
+    # output pipe stays open, but the shell's exit must reach the owner now.
+    read_fd, write_fd = os.pipe()
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
+    command = (
+        "import os,time\n"
+        "if os.fork(): os._exit(7)\n"
+        "os.setsid()\n"
+        "if os.fork(): os._exit(0)\n"
+        "print(os.getpid(), flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    shell = await launch_pipe_process(
+        [sys.executable, "-c", command], tmp_path, os.environ, track_process_tree
+    )
+    try:
+        descendant = int(await asyncio.wait_for(shell.read(), 5))
+        assert await asyncio.wait_for(shell.wait(), 5) == 7
+        facts = await asyncio.to_thread(shell.tree.facts)
+        assert descendant in {process.pid for process in facts.running}
+        await asyncio.to_thread(shell.tree.terminate)
+        assert not (await asyncio.to_thread(shell.tree.facts)).running
+        assert not Path(f"/proc/{descendant}").exists()
+    finally:
+        await asyncio.to_thread(shell.tree.terminate)
+        shell.close()
+        os.close(read_fd)
+        os.close(write_fd)
 
 
 def _tracker(pid: int) -> ProcessTree:

@@ -68,6 +68,7 @@ import psutil  # type: ignore[import-untyped]
 
 from core.utils.logging import get_logger
 from core.utils.processes import (
+    GuardedChildExit,
     create_subprocess_exec,
     guarded_process_launch,
     subprocess_creation_flags,
@@ -90,11 +91,16 @@ class PipeCommandProcess:
     """A command process started on pipes; with a request, its stdin is still open."""
 
     def __init__(
-        self, process: asyncio.subprocess.Process, tree: ProcessTree, writer: int | None = None
+        self,
+        process: asyncio.subprocess.Process,
+        tree: ProcessTree,
+        writer: int | None = None,
+        child_exit: GuardedChildExit | None = None,
     ) -> None:
         self._process = process
         self._tree = tree
         self._writer = writer
+        self._child_exit = child_exit
 
     @property
     def pid(self) -> int:
@@ -111,6 +117,10 @@ class PipeCommandProcess:
         return await stdout.read(_READ_BYTES)
 
     async def wait(self) -> int:
+        if self._child_exit is not None:
+            code = await self._child_exit.wait()
+            if code is not None:
+                return code
         return await wait_for_exit(self._process)
 
     def interrupt(self) -> bool:
@@ -136,6 +146,8 @@ class PipeCommandProcess:
 
     def close(self) -> None:
         self._close_writer()
+        if self._child_exit is not None:
+            self._child_exit.close()
         transport = cast(Any, self._process)._transport
         if transport is not None:
             # The process has exited; closing only releases the transport.
@@ -169,6 +181,12 @@ class PipeCommandProcess:
     def kill(self) -> None:
         """End the process tree now and release it: a shell no command claimed."""
         self._close_writer()
+        if sys.platform != "win32":
+            # Killing the root transport first would abandon the guardian's
+            # escaped descendants. A refused stop retains its custody.
+            self._tree.terminate()
+            self.close()
+            return
         with contextlib.suppress(OSError):
             # The kill-on-close Job ends every process in it.
             self._tree.close()
@@ -229,6 +247,7 @@ async def launch_pipe_process(
         trees.append(tree)
 
     writer: int | None = None
+    child_exit: GuardedChildExit | None = None
     try:
         if sys.platform == "win32":
             stdin, writer = os.pipe()
@@ -251,19 +270,26 @@ async def launch_pipe_process(
                 # The process holds its own copy of the reading end.
                 os.close(stdin)
         else:
-            launch = guarded_process_launch(argv, env=env)
-            process = await create_subprocess_exec(
-                *launch.argv,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                cwd=cwd,
-                env=dict(env),
-                start_new_session=True,
-                pass_fds=launch.pass_fds,
-                on_created=created,
-            )
+            launch = guarded_process_launch(argv, env=env, report_exit=True)
+            child_exit = launch.child_exit
+            try:
+                process = await create_subprocess_exec(
+                    *launch.argv,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=cwd,
+                    env=dict(env),
+                    start_new_session=True,
+                    pass_fds=launch.pass_fds,
+                    on_created=created,
+                )
+            finally:
+                if child_exit is not None:
+                    child_exit.spawned()
     except BaseException:
+        if child_exit is not None:
+            child_exit.close()
         if writer is not None:
             os.close(writer)
         for tree in trees:
@@ -271,7 +297,7 @@ async def launch_pipe_process(
                 tree.terminate()
             tree.close()
         raise
-    return PipeCommandProcess(process, trees[0], writer)
+    return PipeCommandProcess(process, trees[0], writer, child_exit)
 
 
 class _Shell(CommandProcess, Protocol):
